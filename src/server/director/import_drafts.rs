@@ -6,7 +6,7 @@
 use super::plan::Templates;
 use super::*;
 use psf_guard_director_core::{
-    framing::{Mosaic, PanelSize, TangentPlane},
+    framing::{plane_angle_at, Layout, Mosaic, PanelSize, TangentPlane},
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{
@@ -148,10 +148,44 @@ fn clusters(values: &[f64], tolerance: f64) -> Vec<f64> {
 /// A grid the targets form along the camera axes, with each target's cell.
 struct Grid {
     center: IcrsPosition,
+    /// The framing's angle the targets were placed at.
+    angle: f64,
     mosaic: Mosaic,
     /// Per target, in input order: zero-based row from the top and column
     /// from the left, as Director numbers panels.
     cells: Vec<(u32, u32)>,
+}
+
+/// The framing's angle the targets were placed at. An activation gives each
+/// panel the framing's angle turned by north's lean at its center, so read
+/// back on the plane about `center` they agree on one angle. Targets that
+/// share one stored angle, as N.I.N.A. and activations before per-panel
+/// angles wrote them, keep it.
+fn framing_angle(targets: &[SourceTarget], center: IcrsPosition) -> f64 {
+    let first = targets[0].rotation_degrees;
+    let uniform = targets.iter().all(|target| {
+        let apart = (target.rotation_degrees - first).rem_euclid(360.0);
+        apart.min(360.0 - apart) < 1e-3
+    });
+    if uniform {
+        return first;
+    }
+    let base = plane_angle_at(center, targets[0].center, first);
+    let mut turns: Vec<f64> = targets
+        .iter()
+        .map(|target| {
+            let angle = plane_angle_at(center, target.center, target.rotation_degrees);
+            (angle - base + 180.0).rem_euclid(360.0) - 180.0
+        })
+        .collect();
+    turns.sort_by(f64::total_cmp);
+    let middle = turns.len() / 2;
+    let turn = if turns.len() % 2 == 1 {
+        turns[middle]
+    } else {
+        (turns[middle - 1] + turns[middle]) / 2.0
+    };
+    (base + turn).rem_euclid(360.0)
 }
 
 /// The index of the cluster `value` falls in. `starts` holds each cluster's
@@ -190,8 +224,9 @@ fn grid_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> Option<Gri
     for target in targets {
         offsets.push(plane.project(target.center)?);
     }
-    // Camera frame: up along the position angle, right a quarter turn on.
-    let (sin, cos) = first.rotation_degrees.to_radians().sin_cos();
+    // Camera frame: up along the framing's angle, right a quarter turn on.
+    let angle = framing_angle(targets, center);
+    let (sin, cos) = angle.to_radians().sin_cos();
     let along_x: Vec<f64> = offsets.iter().map(|o| -o[0] * cos + o[1] * sin).collect();
     let along_y: Vec<f64> = offsets.iter().map(|o| o[0] * sin + o[1] * cos).collect();
     let tolerance = panel
@@ -240,6 +275,7 @@ fn grid_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> Option<Gri
     };
     Some(Grid {
         center,
+        angle,
         mosaic: Mosaic {
             rows: rows_n,
             columns: columns_n,
@@ -251,9 +287,9 @@ fn grid_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> Option<Gri
 
 /// The mosaic grid the targets form, seen along the camera axes: rows by
 /// columns when every target sits on one, else a single panel.
-fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosition, Mosaic) {
+fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosition, Mosaic, f64) {
     match grid_layout(targets, panel) {
-        Some(grid) => (grid.center, grid.mosaic),
+        Some(grid) => (grid.center, grid.mosaic, grid.angle),
         None => (
             targets[0].center,
             Mosaic {
@@ -261,6 +297,7 @@ fn infer_layout(targets: &[SourceTarget], panel: Option<PanelSize>) -> (IcrsPosi
                 columns: 1,
                 overlap_percent: 20,
             },
+            targets[0].rotation_degrees,
         ),
     }
 }
@@ -305,7 +342,7 @@ fn forms_one_framing(targets: &[SourceTarget], panel: Option<PanelSize>) -> bool
     if targets.len() < 2 {
         return true;
     }
-    let (_, mosaic) = infer_layout(targets, panel);
+    let (_, mosaic, _) = infer_layout(targets, panel);
     mosaic.rows * mosaic.columns == targets.len() as u32
 }
 
@@ -433,13 +470,12 @@ pub(super) fn read_drafts(
         targets.truncate(1);
     }
     if missing.framing {
-        let (center, mosaic) = infer_layout(&targets, panel);
+        // The grid Target Scheduler's targets form, as the panels it makes.
+        let (center, mosaic, angle) = infer_layout(&targets, panel);
+        let layout = Layout::grid(mosaic);
         let extent = panel.map(|p| {
-            let keep = 1.0 - f64::from(mosaic.overlap_percent) / 100.0;
-            (
-                p.width_degrees + p.width_degrees * keep * f64::from(mosaic.columns - 1),
-                p.height_degrees + p.height_degrees * keep * f64::from(mosaic.rows - 1),
-            )
+            let (across, up) = layout.span();
+            (p.width_degrees * across, p.height_degrees * up)
         });
         let view_fov = extent
             .map(|(w, h)| (w.max(h * 4.0 / 3.0) * 1.6).clamp(0.5, 40.0))
@@ -449,8 +485,8 @@ pub(super) fn read_drafts(
             revision: 0,
             target_name: shared_name(&targets, project_name),
             center,
-            position_angle_degrees: targets[0].rotation_degrees,
-            mosaic,
+            position_angle_degrees: angle,
+            layout,
             panel_rig_id: panel.is_some().then_some(rig),
             panel,
             shown_rig_ids: vec![],
@@ -762,11 +798,32 @@ pub(super) fn refresh_drafts(
     let mut changed = false;
     if let Some(mut framing) = drafts.framing {
         framing.project_id = project_id;
-        // How the person looks at it stays theirs.
+        // How the person looks at it stays theirs, and so do the edits that
+        // change nothing activation writes: locks (with a locked panel's
+        // shot geometry) and the minimum overlap. They leave the plan
+        // following, so a refresh must not drop them.
         if let Some(stored) = &stored_framing {
             framing.survey_id = stored.survey_id.clone();
             framing.view_fov_degrees = stored.view_fov_degrees;
             framing.shown_rig_ids = stored.shown_rig_ids.clone();
+            framing.layout.min_overlap_percent = stored.layout.min_overlap_percent;
+            // A locked panel Target Scheduler no longer has is the plan's
+            // own to keep: it stops following rather than lose it.
+            if stored
+                .layout
+                .panels
+                .iter()
+                .any(|panel| panel.locked && framing.layout.panel(&panel.id).is_none())
+            {
+                store.forget_draft_import(project_id)?;
+                return Ok(false);
+            }
+            for panel in &mut framing.layout.panels {
+                if let Some(kept) = stored.layout.panel(&panel.id) {
+                    panel.locked = kept.locked;
+                    panel.measured = kept.measured.clone().filter(|_| kept.locked);
+                }
+            }
         }
         let expected = stored_framing.as_ref().map_or(0, |stored| stored.revision);
         match store.save_framing_draft(&framing, expected) {
@@ -774,7 +831,10 @@ pub(super) fn refresh_drafts(
                 changed |= saved.revision != expected;
                 record.framing_revision = saved.layout_revision;
             }
-            Err(StoreError::Conflict) => {
+            // A save made here meanwhile, or Target Scheduler moving a panel
+            // the plan has locked: the plan keeps its own and stops
+            // following.
+            Err(StoreError::Conflict | StoreError::InvalidInput) => {
                 store.forget_draft_import(project_id)?;
                 return Ok(false);
             }
@@ -867,7 +927,7 @@ mod tests {
                 0.0,
             ),
         ];
-        let (center, mosaic) = infer_layout(&targets, None);
+        let (center, mosaic, _) = infer_layout(&targets, None);
         assert_eq!((mosaic.rows, mosaic.columns), (2, 2));
         assert!((center.dec_degrees - 61.35).abs() < 0.05, "{center:?}");
     }
@@ -883,7 +943,7 @@ mod tests {
             width_degrees: 2.0,
             height_degrees: 1.5,
         };
-        let (center, mosaic) = infer_layout(&targets, Some(panel));
+        let (center, mosaic, _) = infer_layout(&targets, Some(panel));
         assert_eq!(
             (mosaic.rows, mosaic.columns, mosaic.overlap_percent),
             (1, 2, 20)
@@ -891,7 +951,7 @@ mod tests {
         assert!((center.ra_degrees - 37.2).abs() < 1e-3, "{center:?}");
         assert_eq!(shared_name(&targets, "Heart Nebula"), "Heart");
         // Without a panel size the grid still counts, the overlap does not.
-        let (_, loose) = infer_layout(&targets, None);
+        let (_, loose, _) = infer_layout(&targets, None);
         assert_eq!(
             (loose.rows, loose.columns, loose.overlap_percent),
             (1, 2, 0)
@@ -902,7 +962,7 @@ mod tests {
             target("B", 12.0, 3.0, 0.0),
             target("C", 20.0, -5.0, 0.0),
         ];
-        let (first, single) = infer_layout(&scattered, Some(panel));
+        let (first, single, _) = infer_layout(&scattered, Some(panel));
         assert_eq!((single.rows, single.columns), (1, 1));
         assert_eq!(first.ra_degrees, 10.0);
         assert_eq!(shared_name(&scattered, "Scattered"), "Scattered");

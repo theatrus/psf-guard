@@ -4,6 +4,31 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- A plan's mosaic panels are placed one by one. A framed target that already
+  has frames stays locked where they were shot, and **Mosaic panels** adds
+  panels beside it or round the whole mosaic to the north, east, south, west
+  or a corner, as a ring, or by filling holes. With **Panel** you drag one
+  panel on the sky: it settles at the minimum overlap, shows what it shares
+  with its neighbours, and a drop that would leave a gap or too thin an
+  overlap goes back unless you hold Alt or press **Place anyway**. Arrow
+  keys nudge the chosen panel, and panel edits undo. Activation adds a Target Scheduler target per new
+  panel in the same project and leaves the shot one alone, and the Library
+  shows the panels as one mosaic whatever their shape. Saved grids open
+  unchanged, as the panels they made.
+- A shot mosaic panel is drawn where its frames were taken, with the field
+  and angle they were shot with, read from their plate solves, else their
+  headers, else the plan; the sky says which. New panels use the rig's
+  current field and meet a shot panel at its real edges. Each panel is now
+  shot at its own camera angle, the plan's turned by north's lean at its
+  center, so wide northern mosaics stay square; targets already shot keep
+  their angle. A panel can also be turned on its own with its handle, `[`
+  and `]`, or a typed turn. Every rig gets each panel's angle, rotator or
+  not. A rig framed on its own gets the same panel tools.
+- Activation no longer takes over an existing Target Scheduler target with
+  frames that sits more than a quarter of a panel from the panel it would
+  stand for: the panel gets a new target, the frames stay where they were
+  shot, and the preview says how far away the old target is.
+
 - A **Calibration** page shows a database's calibration library: its sessions
   by night, kind and settings, each frame as a picture drawn for its kind,
   and a flat divided by the rest of its session so that drying dew stands

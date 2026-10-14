@@ -5,10 +5,32 @@
 use super::*;
 use psf_guard_director_core::{
     bandpass::{default_exposure_seconds, BandpassKind, ExposureContext},
-    framing::{FramingPreview, FramingRequest},
+    framing::{FramingPreview, FramingRequest, LayoutIssue, LayoutIssueKind},
     optics::FieldOfView,
 };
+
+/// A layout issue in a few words, for warnings and refusals.
+pub(super) fn describe_issue(issue: &LayoutIssue) -> String {
+    let percent = issue
+        .percent
+        .map(|value| format!("{value:.0}%"))
+        .unwrap_or_default();
+    let pair = issue.panels.join(" and ");
+    match issue.kind {
+        LayoutIssueKind::ThinOverlap => format!("{pair} overlap by only {percent}"),
+        LayoutIssueKind::Gap => format!("{pair} leave a gap of {percent} of a panel"),
+        LayoutIssueKind::Isolated => format!("{pair} overlaps no other panel by the minimum"),
+        LayoutIssueKind::Disconnected => format!(
+            "the panels fall into {} groups that do not overlap, starting at {}",
+            issue.panels.len(),
+            issue.panels.join(", ")
+        ),
+    }
+}
+use crate::server::database_context::DatabaseContext;
+use psf_guard_director_core::framing::{MeasuredGeometry, PanelPlacement};
 use psf_guard_director_meta::{framing::FramingDraft, profile::RigProfile, site_profile::RigSite};
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) async fn preview(
@@ -53,10 +75,74 @@ pub(super) async fn put_draft(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let view = enabled(&state)?
-        .run(move |store| {
+    let service = enabled(&state)?;
+    let catalogs: Vec<Arc<DatabaseContext>> = state
+        .databases
+        .read()
+        .map_err(|_| Error::Internal)?
+        .values()
+        .cloned()
+        .collect();
+    let instance_id = service.instance_id;
+    // Only the server reads frames, so the shot geometry a locked panel is
+    // drawn from is the server's own reading, written here whatever the
+    // body carries: a client never has to echo it, and a reading that moved
+    // on since the editor last asked cannot make a save fail. A panel no
+    // frame speaks for now keeps the reading it had; an unlocked panel is
+    // planned and has none.
+    let draft = if draft.layout.has_locked()
+        || draft.rig_framings.iter().any(|own| own.layout.has_locked())
+    {
+        service
+            .clone()
+            .with_reader(move |store| {
+                let stored = store.framing_draft(id)?;
+                let mut keying = draft.clone();
+                for_each_panel(&mut keying, |rig, panel| {
+                    panel.measured = stored
+                        .as_ref()
+                        .and_then(|stored| measured_in(stored, rig, &panel.id));
+                });
+                let mosaic =
+                    super::mosaic::collect_for(store, id, &catalogs, instance_id, Some(&keying))?;
+                let mut draft = draft;
+                for_each_panel(&mut draft, |rig, panel| {
+                    panel.measured = if panel.locked {
+                        mosaic
+                            .measured()
+                            .iter()
+                            .find(|m| m.framing_rig_id == rig && m.panel_id == panel.id)
+                            .map(|m| m.geometry.clone())
+                            .or_else(|| {
+                                stored
+                                    .as_ref()
+                                    .and_then(|stored| measured_in(stored, rig, &panel.id))
+                            })
+                    } else {
+                        None
+                    };
+                });
+                Ok::<_, Error>(draft)
+            })
+            .await?
+    } else {
+        let mut draft = draft;
+        for_each_panel(&mut draft, |_, panel| panel.measured = None);
+        draft
+    };
+    let view = service
+        .with_writer(move |store| -> Result<DraftView, Error> {
             let project = store.project(id)?.ok_or(StoreError::NotFound)?;
             let expected = draft.revision;
+            // Said here with the panels' names; the store refuses it too.
+            if let Some(stored) = store.framing_draft(id)?
+                && stored.revision == expected
+            {
+                let moved = stored.locked_moves(&draft);
+                if !moved.is_empty() {
+                    return Err(Error::Refused(locked_refusal(store, &moved)?));
+                }
+            }
             let saved = store.save_framing_draft(&draft, expected)?;
             Ok(DraftView {
                 project,
@@ -65,6 +151,72 @@ pub(super) async fn put_draft(
         })
         .await?;
     Ok(Json(ApiResponse::success(view)))
+}
+
+/// Every panel of a draft's framings, with the rig framed on its own it
+/// belongs to (`None` for the shared framing).
+fn for_each_panel(
+    draft: &mut FramingDraft,
+    mut visit: impl FnMut(Option<Uuid>, &mut PanelPlacement),
+) {
+    for panel in &mut draft.layout.panels {
+        visit(None, panel);
+    }
+    for own in &mut draft.rig_framings {
+        let rig = own.rig_id;
+        for panel in &mut own.layout.panels {
+            visit(Some(rig), panel);
+        }
+    }
+}
+
+/// A panel's stored shot geometry, in the shared framing or a rig's own.
+fn measured_in(draft: &FramingDraft, rig: Option<Uuid>, id: &str) -> Option<MeasuredGeometry> {
+    let layout = match rig {
+        Some(rig) => &draft.rig_framing(rig)?.layout,
+        None => &draft.layout,
+    };
+    layout.panel(id)?.measured.clone()
+}
+
+/// Why a save that would move locked panels is refused, in words: each
+/// panel by id, a rig's own by the rig's name, and what holds them.
+fn locked_refusal(store: &MetaStore, moved: &[String]) -> Result<String, Error> {
+    let mut shared = Vec::new();
+    let mut own: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for entry in moved {
+        match entry
+            .split_once(':')
+            .and_then(|(rig, id)| Uuid::parse_str(rig).ok().map(|rig| (rig, id)))
+        {
+            Some((rig, id)) => {
+                let name = store
+                    .rig(rig)?
+                    .map_or_else(|| "a rig".to_owned(), |rig| rig.name);
+                own.entry(name).or_default().push(id.to_owned());
+            }
+            None => shared.push(entry.clone()),
+        }
+    }
+    let list = |ids: &[String]| {
+        format!(
+            "panel{} {}",
+            if ids.len() == 1 { "" } else { "s" },
+            ids.join(", ")
+        )
+    };
+    let mut parts = Vec::new();
+    if !shared.is_empty() {
+        parts.push(list(&shared));
+    }
+    for (name, ids) in &own {
+        parts.push(format!("{} of {name}'s own framing", list(ids)));
+    }
+    Ok(format!(
+        "Locked {} would move. A locked panel keeps its place, its turn, and the center, camera angle and panel size it was placed with, including a shared center or angle a rig's own framing follows. Unlock {} first.",
+        parts.join(" and "),
+        if moved.len() == 1 { "it" } else { "them" },
+    ))
 }
 
 #[derive(Serialize)]

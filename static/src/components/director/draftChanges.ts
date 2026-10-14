@@ -1,6 +1,7 @@
-import type { DirectorContribution, DirectorGoal, DirectorPlanDraft } from '../../api/directorTypes';
+import type { DirectorContribution, DirectorGoal, DirectorLayout, DirectorMosaic, DirectorPlanDraft } from '../../api/directorTypes';
 import { formatDegrees, type FramingState } from './framingModel';
 import { KNOWN_BANDPASSES, PURPOSES } from './planModel';
+import { asGrid, findPanel, turnOf } from './mosaicLayout';
 
 /** What the save bar says changed: a few words per change, against the
  *  state the section loaded with. */
@@ -16,6 +17,32 @@ function separationArcmin(a: { ra_degrees: number; dec_degrees: number }, b: { r
   return Math.acos(Math.min(1, Math.max(-1, cos))) / rad * 60;
 }
 
+/** What changed in a framing's panels: a grid resized reads as a grid, and
+ *  panels placed one by one by name. */
+export function describeLayoutChanges(before: DirectorLayout, after: DirectorLayout): string[] {
+  const was = asGrid(before);
+  const now = asGrid(after);
+  // A lock is no place, so a grid locked by hand is still the same grid.
+  const locks = after.panels.flatMap(panel => { const old = findPanel(before, panel.id); return old && old.locked !== panel.locked ? [`${panel.id} ${panel.locked ? 'locked' : 'unlocked'}`] : []; });
+  if (was && now) {
+    const grid = (m: DirectorMosaic) => `${m.rows}×${m.columns}, ${m.overlap_percent}% overlap`;
+    return [...(same(was, now) ? [] : [`mosaic ${grid(was)} → ${grid(now)}`]), ...locks];
+  }
+  const changes: string[] = [];
+  const list = (ids: string[]) => ids.length > 3 ? `${ids.slice(0, 3).join(', ')} and ${ids.length - 3} more` : ids.join(', ');
+  const added = after.panels.filter(panel => !findPanel(before, panel.id)).map(panel => panel.id);
+  const removed = before.panels.filter(panel => !findPanel(after, panel.id)).map(panel => panel.id);
+  const moved = after.panels.filter(panel => { const old = findPanel(before, panel.id); return !!old && (Math.abs(old.x - panel.x) > 1e-9 || Math.abs(old.y - panel.y) > 1e-9); }).map(panel => panel.id);
+  const turned = after.panels.filter(panel => { const old = findPanel(before, panel.id); return !!old && Math.abs(turnOf(old) - turnOf(panel)) > 1e-9; }).map(panel => panel.id);
+  if (added.length) changes.push(`panel${added.length === 1 ? '' : 's'} ${list(added)} added`);
+  if (removed.length) changes.push(`panel${removed.length === 1 ? '' : 's'} ${list(removed)} removed`);
+  if (moved.length) changes.push(`panel${moved.length === 1 ? '' : 's'} ${list(moved)} moved`);
+  if (turned.length) changes.push(`panel${turned.length === 1 ? '' : 's'} ${list(turned)} turned`);
+  changes.push(...locks);
+  if (before.min_overlap_percent !== after.min_overlap_percent) changes.push(`minimum overlap ${before.min_overlap_percent}% → ${after.min_overlap_percent}%`);
+  return changes;
+}
+
 export function describeFramingChanges(before: FramingState | null, after: FramingState | null, rigName: (id: string) => string = id => id): string[] {
   if (!before || !after) return [];
   const changes: string[] = [];
@@ -25,10 +52,7 @@ export function describeFramingChanges(before: FramingState | null, after: Frami
     changes.push(moved < 1 ? `target moved ${Math.round(moved * 60)}″` : `target moved ${Math.round(moved * 10) / 10}′`);
   }
   if (before.positionAngle !== after.positionAngle) changes.push(`camera angle ${angle(before.positionAngle)} → ${angle(after.positionAngle)}`);
-  if (!same(before.mosaic, after.mosaic)) {
-    const grid = (m: FramingState['mosaic']) => `${m.rows}×${m.columns}, ${m.overlap_percent}% overlap`;
-    changes.push(`mosaic ${grid(before.mosaic)} → ${grid(after.mosaic)}`);
-  }
+  changes.push(...describeLayoutChanges(before.layout, after.layout));
   if (before.panelRigId !== after.panelRigId) changes.push(`panel rig ${before.panelRigId ? rigName(before.panelRigId) : 'none'} → ${after.panelRigId ? rigName(after.panelRigId) : 'none'}`);
   else if (!same(before.panel, after.panel)) {
     const size = (p: FramingState['panel']) => p ? `${formatDegrees(p.width_degrees)} × ${formatDegrees(p.height_degrees)}` : 'none';

@@ -4,6 +4,7 @@
 //! the operator reviews is what Apply commits. Captures and grades are never
 //! touched; removed panels leave their targets behind.
 
+use super::framing::describe_issue;
 use super::*;
 use crate::{
     commands::sync::{sync_remote, RemoteDirection, RemoteSyncOptions},
@@ -11,10 +12,7 @@ use crate::{
     server::peers::registered_peers,
     ts_schema::new_guid,
 };
-use psf_guard_director_core::{
-    bandpass::frames_for_hours,
-    framing::{FramingRequest, Panel},
-};
+use psf_guard_director_core::{bandpass::frames_for_hours, framing::Panel};
 use psf_guard_director_meta::{
     activation::{
         ActivatedPlan, ActivatedRig, ActivatedTarget, Activation, InactiveRig, RemotePush,
@@ -472,19 +470,12 @@ async fn execute_guarded(
                 "Save a plan with at least one objective first.",
             ))?;
         // The shared framing's panels; a rig framed on its own has its own.
-        let panels = match framing.panel {
-            Some(panel) => FramingRequest {
-                center: framing.center,
-                position_angle_degrees: framing.position_angle_degrees,
-                panel,
-                mosaic: framing.mosaic,
-                overlays: vec![],
-                view: None,
+        let (panels, layout_issues) = match framing.shared_request() {
+            Some(request) => {
+                let preview = request.preview().map_err(|_| Error::Invalid)?;
+                (preview.panels, preview.issues)
             }
-            .preview()
-            .map_err(|_| Error::Invalid)?
-            .panels,
-            None => vec![],
+            None => (vec![], vec![]),
         };
         let mut by_rig: BTreeMap<Uuid, Vec<&Contribution>> = BTreeMap::new();
         // A plan saved before duplicates were refused may hold two
@@ -542,7 +533,12 @@ async fn execute_guarded(
         }
         // Every objective should have some rig on every shared panel; say
         // where not. A rig framed on its own covers its own grid.
-        let mut coverage_warnings = Vec::new();
+        // A layout short of its minimum overlap is the operator's call, not
+        // a refusal: it is said with the coverage.
+        let mut coverage_warnings: Vec<String> = layout_issues
+            .iter()
+            .map(|issue| format!("Panels: {}.", describe_issue(issue)))
+            .collect();
         let on_shared = |c: &&&Contribution| framing.rig_framing(c.rig_id).is_none();
         for objective in &plan.objectives {
             let uncovered: Vec<&str> = panels
@@ -655,17 +651,13 @@ async fn execute_guarded(
                 // A separate framing sized from the rig's own field is only
                 // laid out here; one the core refuses (too wide a mosaic)
                 // is this rig's warning, not a refused request.
-                match (FramingRequest {
-                    center: layout.center,
-                    position_angle_degrees: layout.position_angle_degrees,
-                    panel: layout.panel,
-                    mosaic: layout.mosaic,
-                    overlays: vec![],
-                    view: None,
-                })
-                .preview()
-                {
-                    Ok(preview) => preview.panels,
+                match layout.request().preview() {
+                    Ok(preview) => {
+                        warnings.extend(preview.issues.iter().map(|issue| {
+                            format!("Its separate framing: {}.", describe_issue(issue))
+                        }));
+                        preview.panels
+                    }
                     Err(error) => {
                         reports.push(RigReport {
                             rig,
@@ -1497,8 +1489,12 @@ struct Inputs<'a> {
     project: &'a NamedIdentity,
     framing: &'a FramingDraft,
     plan: &'a PlanDraft,
-    /// This rig's panels, from its own framing or the shared one.
+    /// This rig's panels, from its own framing or the shared one, each with
+    /// the camera angle to shoot it at.
     panels: &'a [Panel],
+    /// The framing's angle, which each panel's own angle is told against.
+    /// Every rig gets each panel's own angle, rotator or not: planning sets
+    /// the rotation, and reaching it belongs to execution.
     position_angle_degrees: f64,
     contributions: &'a [&'a Contribution],
     /// The last activation set this rig's project Inactive when the rig was
@@ -1819,6 +1815,22 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             }
         })
         .collect();
+    // The panel each of the project's targets stands for, named as the
+    // framing taken in from them names its panels (a lone target is `r1c1`,
+    // targets on a grid are its cells): a panel drawn where its frames were
+    // shot sits a little off its target's coordinates, so its target is
+    // found by the panel it stands for, not by place.
+    let stands_for: BTreeMap<String, i64> = match Uuid::parse_str(&project_guid) {
+        Ok(project) if inputs.collaboration.is_none() => {
+            let found = super::mosaic::project_targets(tx, project)?;
+            super::mosaic::linked_panel_ids(tx, project, &found)?
+                .into_iter()
+                .zip(found)
+                .map(|(panel_id, (row, _, _))| (panel_id, row))
+                .collect()
+        }
+        _ => BTreeMap::new(),
+    };
     let mut targets = Vec::new();
     for panel in inputs
         .panels
@@ -1835,14 +1847,24 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         };
         let ra_hours = panel.footprint.center.ra_degrees / 15.0;
         let dec = panel.footprint.center.dec_degrees;
-        let rotation = inputs
-            .collaboration
-            .and_then(|a| a.rotation(&panel.footprint.id))
-            .unwrap_or(inputs.position_angle_degrees);
+        // Each panel's own angle: the framing's plus its turn, plus north's
+        // lean at its center, so its up runs where the framing drew it; as
+        // shot for a panel measured from its frames.
+        let rotation = match inputs.collaboration {
+            Some(a) => a
+                .rotation(&panel.footprint.id)
+                .unwrap_or(inputs.position_angle_degrees),
+            None => panel.position_angle_degrees,
+        };
         let detail = format!(
-            "{} {}, angle {rotation:.1}°",
+            "{} {}, {}",
             format_ra(ra_hours),
-            format_dec(dec)
+            format_dec(dec),
+            describe_angle(
+                rotation,
+                (inputs.collaboration.is_none()).then_some(panel),
+                inputs.position_angle_degrees,
+            )
         );
         let owned: Option<String> = tx
             .query_row(
@@ -1874,10 +1896,43 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                             dec0.unwrap_or(f64::NAN),
                             rot0.unwrap_or(f64::NAN),
                         );
-                        let same = (ra0 - ra_hours).abs() < 1e-7
-                            && (dec0 - dec).abs() < 1e-6
-                            && (rot0 - rotation).abs() < 1e-3
-                            && epoch0 == 2;
+                        // A locked panel with frames keeps its target as it
+                        // was shot: the place and angle the frames were
+                        // taken at, whatever the plan draws now.
+                        let kept = panel.locked
+                            && frames > 0
+                            && epoch0 == 2
+                            && ra0.is_finite()
+                            && dec0.is_finite()
+                            && rot0.is_finite();
+                        // Frames shot before panels took north's lean were
+                        // shot at the framing's angle; the target keeps it.
+                        // A new target, made when the panel moved far, has
+                        // no frames and takes the panel's own angle.
+                        let unleaned = frames > 0
+                            && inputs.collaboration.is_none()
+                            && planned_angle(rot0, inputs.position_angle_degrees, panel);
+                        let in_place = if unleaned { rot0 } else { rotation };
+                        let same = kept
+                            || ((ra0 - ra_hours).abs() < 1e-7
+                                && (dec0 - dec).abs() < 1e-6
+                                && angle_apart(rot0, in_place) < 1e-3
+                                && epoch0 == 2);
+                        let in_place_detail = if kept {
+                            format!(
+                                "{} {}, angle {rot0:.1}°, kept where its frames were shot",
+                                format_ra(ra0),
+                                format_dec(dec0)
+                            )
+                        } else if unleaned {
+                            format!(
+                                "{} {}, angle {rot0:.1}° as its frames were shot",
+                                format_ra(ra_hours),
+                                format_dec(dec)
+                            )
+                        } else {
+                            detail.clone()
+                        };
                         // A panel whose place moved by more than a quarter of
                         // its size (a grid grown or shrunk, a new center)
                         // is other sky. Moving a target that has frames
@@ -1915,14 +1970,14 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                             if !same {
                                 tx.execute(
                                     "UPDATE target SET ra=?2, dec=?3, rotation=?4, epochcode=2, projectid=?5 WHERE guid=?1",
-                                    params![guid, ra_hours, dec, rotation, project_row_id],
+                                    params![guid, ra_hours, dec, in_place, project_row_id],
                                 )?;
                             }
                             changes.push(Change {
                                 kind: "target",
                                 action: if same { "unchanged" } else { "update" },
                                 name: name0.clone(),
-                                detail,
+                                detail: in_place_detail,
                             });
                             shown = name0;
                             guid
@@ -1943,64 +1998,137 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             // Nothing owned yet: a target already in this project (imported
             // from Target Scheduler, or made by hand) is taken over rather
             // than doubled.
-            None => match if inputs.collaboration.is_some() {
-                None
-            } else {
-                adoptable_target(tx, project_row_id, &name, ra_hours, dec, !mosaic)?
-            } {
-                Some(found) => {
-                    // Director writes J2000 coordinates and plans the target,
-                    // so a JNOW or switched-off target is put right too; the
-                    // program only serves J2000 targets that are on.
-                    let placed = (found.ra_hours - ra_hours).abs() < 1e-7
-                        && (found.dec - dec).abs() < 1e-6
-                        && (found.rotation - rotation).abs() < 1e-3;
-                    let same = placed && found.epochcode == 2 && found.active;
-                    if !same {
-                        tx.execute(
+            None => {
+                let found = if inputs.collaboration.is_some() {
+                    None
+                } else {
+                    adoptable_target(
+                        tx,
+                        project_row_id,
+                        &name,
+                        stands_for.get(&panel.footprint.id).copied(),
+                        PanelPlace {
+                            ra_hours,
+                            dec,
+                            side_degrees: panel_side_degrees(panel),
+                        },
+                        !mosaic,
+                    )?
+                };
+                // A target with frames sits where they were shot. Taking it
+                // over from further than a quarter of the panel would move
+                // the frames with it, so it is left as it is and the panel
+                // gets a new target, as an owned target that moved far does.
+                let left_alone = found.as_ref().and_then(|found| {
+                    let kept = panel.locked
+                        && found.frames > 0
+                        && found.epochcode == 2
+                        && found.ra_hours.is_finite()
+                        && found.dec.is_finite()
+                        && found.rotation.is_finite();
+                    let moved =
+                        separation_degrees(found.ra_hours * 15.0, found.dec, ra_hours * 15.0, dec);
+                    let far = !moved.is_finite() || moved > 0.25 * panel_side_degrees(panel);
+                    (!kept && found.frames > 0 && far)
+                        .then(|| (found.name.clone(), found.frames, moved))
+                });
+                let found = if left_alone.is_some() { None } else { found };
+                match found {
+                    Some(found) => {
+                        // Director writes J2000 coordinates and plans the target,
+                        // so a JNOW or switched-off target is put right too; the
+                        // program only serves J2000 targets that are on.
+                        // A locked panel with frames keeps the target where
+                        // they were shot.
+                        let kept = panel.locked
+                            && found.frames > 0
+                            && found.epochcode == 2
+                            && found.ra_hours.is_finite()
+                            && found.dec.is_finite()
+                            && found.rotation.is_finite();
+                        // Frames shot at the framing's angle keep it.
+                        let unleaned = found.frames > 0
+                            && planned_angle(found.rotation, inputs.position_angle_degrees, panel);
+                        let (ra_hours, dec, rotation) = if kept {
+                            (found.ra_hours, found.dec, found.rotation)
+                        } else if unleaned {
+                            (ra_hours, dec, found.rotation)
+                        } else {
+                            (ra_hours, dec, rotation)
+                        };
+                        let detail = if kept {
+                            format!(
+                                "{} {}, angle {rotation:.1}°, kept where its frames were shot",
+                                format_ra(ra_hours),
+                                format_dec(dec)
+                            )
+                        } else if unleaned {
+                            format!(
+                                "{} {}, angle {rotation:.1}° as its frames were shot",
+                                format_ra(ra_hours),
+                                format_dec(dec)
+                            )
+                        } else {
+                            detail.clone()
+                        };
+                        let placed = (found.ra_hours - ra_hours).abs() < 1e-7
+                            && (found.dec - dec).abs() < 1e-6
+                            && angle_apart(found.rotation, rotation) < 1e-3;
+                        let same = placed && found.epochcode == 2 && found.active;
+                        if !same {
+                            tx.execute(
                             "UPDATE target SET ra=?2, dec=?3, rotation=?4, epochcode=2, active=1 WHERE guid=?1",
                             params![found.guid, ra_hours, dec, rotation],
                         )?;
-                    }
-                    let mut notes = Vec::new();
-                    if found.epochcode != 2 {
-                        notes.push("now J2000");
-                    }
-                    if !found.active {
-                        notes.push("turned on");
-                    }
-                    let notes = if notes.is_empty() {
-                        String::new()
-                    } else {
-                        format!("; {}", notes.join(", "))
-                    };
-                    changes.push(Change {
-                        kind: "target",
-                        action: if same { "unchanged" } else { "adopt" },
-                        name: found.name.clone(),
-                        detail: if same {
-                            format!("already in Target Scheduler at {detail}")
-                        } else if placed {
-                            format!("takes over the existing target at {detail}{notes}")
+                        }
+                        let mut notes = Vec::new();
+                        if found.epochcode != 2 {
+                            notes.push("now J2000");
+                        }
+                        if !found.active {
+                            notes.push("turned on");
+                        }
+                        let notes = if notes.is_empty() {
+                            String::new()
                         } else {
-                            format!("takes over the existing target, moving it to {detail}{notes}")
-                        },
-                    });
-                    shown = found.name;
-                    found.guid
-                }
-                None => {
-                    let guid = new_guid();
-                    insert_target(tx, &guid, &name, ra_hours, dec, rotation, project_row_id)?;
-                    changes.push(Change {
+                            format!("; {}", notes.join(", "))
+                        };
+                        changes.push(Change {
+                            kind: "target",
+                            action: if same { "unchanged" } else { "adopt" },
+                            name: found.name.clone(),
+                            detail: if same {
+                                format!("already in Target Scheduler at {detail}")
+                            } else if placed {
+                                format!("takes over the existing target at {detail}{notes}")
+                            } else {
+                                format!(
+                                    "takes over the existing target, moving it to {detail}{notes}"
+                                )
+                            },
+                        });
+                        shown = found.name;
+                        found.guid
+                    }
+                    None => {
+                        let guid = new_guid();
+                        insert_target(tx, &guid, &name, ra_hours, dec, rotation, project_row_id)?;
+                        changes.push(Change {
                         kind: "target",
                         action: "create",
                         name: name.clone(),
-                        detail,
+                        detail: match &left_alone {
+                            Some((other, frames, moved)) => format!(
+                                "{detail}; the existing target {other} sits {} away with its {frames} frames, so it is left as it is",
+                                format_distance(*moved)
+                            ),
+                            None => detail,
+                        },
                     });
-                    guid
+                        guid
+                    }
                 }
-            },
+            }
         };
         tx.execute(
             "INSERT INTO psf_guard_director_target(target_guid,project_guid,panel_id,framing_revision) VALUES(?1,?2,?3,?4)
@@ -2794,28 +2922,46 @@ struct Adoptable {
     rotation: f64,
     epochcode: i64,
     active: bool,
+    /// Frames its exposure plans have taken.
+    frames: i64,
+}
+
+/// Where a panel sits, as Target Scheduler stores it, and its shorter side.
+struct PanelPlace {
+    ra_hours: f64,
+    dec: f64,
+    side_degrees: f64,
 }
 
 /// The existing target a panel should take over, if any: the one with the
-/// panel's name, else the one at the panel's place (within a quarter of an
-/// arcminute, an import's round trip), else, for a single-panel framing,
-/// the project's only unowned target. Ownership is by GUID, so a match
+/// panel's name, else the one that stands for the panel (`stands_for`), else
+/// the one at the panel's place (within a quarter of an arcminute, an
+/// import's round trip), else, for a single-panel framing, the project's
+/// only unowned target. The one the panel stands for counts only within a
+/// quarter of the panel side. Ownership is by GUID, so a match
 /// without one refuses the rig.
 fn adoptable_target(
     tx: &Connection,
     project_row_id: i64,
     name: &str,
-    ra_hours: f64,
-    dec: f64,
+    stands_for: Option<i64>,
+    place: PanelPlace,
     single_panel: bool,
 ) -> Result<Option<Adoptable>, RigError> {
+    let PanelPlace {
+        ra_hours,
+        dec,
+        side_degrees: panel_side,
+    } = place;
     let mut statement = tx.prepare(
-        "SELECT Id, guid, name, ra, dec, rotation, IFNULL(epochcode, 2), COALESCE(active, 1) FROM target
+        "SELECT Id, guid, name, ra, dec, rotation, IFNULL(epochcode, 2), COALESCE(active, 1),
+                (SELECT IFNULL(SUM(acquired), 0) FROM exposureplan WHERE targetid = target.Id)
+         FROM target
          WHERE projectid=?1
            AND (guid IS NULL OR guid NOT IN (SELECT target_guid FROM psf_guard_director_target))
          ORDER BY Id",
     )?;
-    type Row = (i64, Option<String>, String, f64, f64, f64, i64, bool);
+    type Row = (i64, Option<String>, String, f64, f64, f64, i64, bool, i64);
     let rows: Vec<Row> = statement
         .query_map([project_row_id], |row| {
             Ok((
@@ -2828,6 +2974,7 @@ fn adoptable_target(
                 row.get::<_, Option<f64>>(5)?.unwrap_or(f64::NAN),
                 row.get(6)?,
                 row.get::<_, i64>(7)? != 0,
+                row.get(8)?,
             ))
         })?
         .collect::<Result<_, _>>()?;
@@ -2839,10 +2986,20 @@ fn adoptable_target(
         (row.3 - ra_hours).abs() * 15.0 * 60.0 < 0.25 && (row.4 - dec).abs() * 60.0 < 0.25
     });
     let only = (single_panel && rows.len() == 1).then_some(0);
-    let Some(index) = by_name.or(by_place).or(only) else {
+    // The target the panel stands for, if it is near the panel: a lone
+    // target is `r1c1` whatever the layout, and that is no claim on a
+    // target a whole panel or a constellation away.
+    let by_panel = stands_for.and_then(|id| {
+        rows.iter().position(|row| {
+            row.0 == id
+                && separation_degrees(row.3 * 15.0, row.4, ra_hours * 15.0, dec)
+                    <= 0.25 * panel_side
+        })
+    });
+    let Some(index) = by_name.or(by_panel).or(by_place).or(only) else {
         return Ok(None);
     };
-    let (row_id, guid, found_name, found_ra, found_dec, found_rotation, epochcode, active) =
+    let (row_id, guid, found_name, found_ra, found_dec, found_rotation, epochcode, active, frames) =
         rows[index].clone();
     let guid = match guid {
         Some(guid) if !guid.is_empty() => guid,
@@ -2856,6 +3013,7 @@ fn adoptable_target(
         rotation: found_rotation,
         epochcode,
         active,
+        frames,
     }))
 }
 
@@ -3247,6 +3405,62 @@ fn format_distance(degrees: f64) -> String {
         format!("{degrees:.2}°")
     } else {
         format!("{:.1}′", degrees * 60.0)
+    }
+}
+
+/// How far apart two angles are, the short way round.
+fn angle_apart(a: f64, b: f64) -> f64 {
+    let apart = (a - b).rem_euclid(360.0);
+    apart.min(360.0 - apart)
+}
+
+/// Whether a stored angle is the framing's plus the panel's own turn, with
+/// no lean for where the panel sits: what activations wrote before panels
+/// took north's lean, and N.I.N.A. writes for every panel of a mosaic.
+fn planned_angle(stored: f64, framing: f64, panel: &Panel) -> bool {
+    if !stored.is_finite() || panel.measured.is_some() {
+        return false;
+    }
+    let apart = (stored - framing - panel.angle_offset_degrees).rem_euclid(360.0);
+    apart.min(360.0 - apart) < 1e-3
+}
+
+/// A panel's camera angle for the activation preview, with what it is made
+/// of: the framing's angle, the panel's own turn and north's lean at its
+/// center; or as shot, for a panel measured from its frames.
+fn describe_angle(rotation: f64, panel: Option<&Panel>, framing: f64) -> String {
+    let Some(panel) = panel else {
+        return format!("angle {rotation:.1}°");
+    };
+    if let Some(measured) = &panel.measured {
+        let from = match measured.source {
+            psf_guard_director_core::framing::MeasuredSource::Solved => "solved frames",
+            psf_guard_director_core::framing::MeasuredSource::Header => "frame headers",
+            psf_guard_director_core::framing::MeasuredSource::Plan => "the target as planned",
+        };
+        return format!("angle {rotation:.1}° as shot, from {from}");
+    }
+    let signed = |degrees: f64| {
+        let wrapped = (degrees + 180.0).rem_euclid(360.0) - 180.0;
+        format!(
+            "{}{:.1}°",
+            if wrapped < 0.0 { "−" } else { "+" },
+            wrapped.abs()
+        )
+    };
+    let turn = panel.angle_offset_degrees;
+    let lean = (rotation - framing - turn + 180.0).rem_euclid(360.0) - 180.0;
+    let mut parts = vec![format!("framing {framing:.1}°")];
+    if turn.abs() >= 0.05 {
+        parts.push(format!("turned {}", signed(turn)));
+    }
+    if lean.abs() >= 0.05 {
+        parts.push(format!("north here {}", signed(lean)));
+    }
+    if parts.len() == 1 {
+        format!("angle {rotation:.1}°")
+    } else {
+        format!("angle {rotation:.1}° ({})", parts.join(", "))
     }
 }
 

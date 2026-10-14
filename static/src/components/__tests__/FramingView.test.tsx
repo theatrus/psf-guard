@@ -11,6 +11,7 @@ import { usePageDrafts } from '../director/pageDraftsState';
 import type { DirectorFramingDraft, DirectorMosaicPreview } from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
 import { angleAt, moveBy, offsetFrom, skyAtStage, stackMatrix, thumbnailFov, toStage, viewAt } from '../director/framingModel';
+import { gridLayout } from '../director/mosaicLayout';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rigA = { rig: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'RedCat', revision: 1 }, catalog_slug: 'redcat', catalog_name: 'RedCat 61',
@@ -27,6 +28,8 @@ const mosaic: DirectorMosaicPreview = { project: { id: 'project', name: 'Androme
   { panel_id: 'r1c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g1', target_id: 7, target_name: 'M31 r1c1', progress: { desired: 72, acquired: 40, accepted: 36 }, status: 'ready', preview: solvedStack, stacks: [solvedStack, oiiiStack] },
   { panel_id: 'r2c1', rig: rigA.rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', target_guid: 'g2', target_id: 8, target_name: 'M31 r2c1', progress: { desired: 72, acquired: 0, accepted: 0 }, status: 'no_stack', preview: null, stacks: [] },
 ] };
+/** The same panels before anything was shot: none of them is locked by its frames. */
+const unshot: DirectorMosaicPreview = { ...mosaic, panels: mosaic.panels.map(panel => ({ ...panel, progress: panel.progress && { ...panel.progress, acquired: 0, accepted: 0 } })) };
 
 function fixture(existing: DirectorFramingDraft | null = null) {
   const saves: DirectorFramingDraft[] = [];
@@ -45,7 +48,7 @@ function fixture(existing: DirectorFramingDraft | null = null) {
       { id: 'finkbeiner_halpha', name: 'Finkbeiner H-alpha composite', hips: 'CDS/P/Finkbeiner', kind: 'narrowband', bandpass: 'H-alpha', attribution: 'Finkbeiner via CDS' },
     ]))),
     http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB]))),
-    http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok(mosaic))),
+    http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok(unshot))),
     http.post('/api/director/v1/projects/project/feasibility', () => HttpResponse.json(ok({ center: seed.center, target_name: 'M31', nights: 7, rigs: [], warnings: ['No rig has a site yet, so nothing can be timed.'] }))),
     http.get('/api/director/v1/sky/cutout', ({ request }) => {
       cutouts.push(new URL(request.url).search);
@@ -148,7 +151,7 @@ describe('Framing view', () => {
     expect(await screen.findByText('Saved framing revision 1.')).toBeInTheDocument();
     expect(saves).toHaveLength(1);
     expect(saves[0]).toMatchObject({ project_id: 'project', revision: 0, target_name: 'M31', panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 },
-      mosaic: { rows: 2, columns: 1, overlap_percent: 15 }, shown_rig_ids: [rigA.rig.id], survey_id: 'dss2_color' });
+      layout: gridLayout({ rows: 2, columns: 1, overlap_percent: 15 }), shown_rig_ids: [rigA.rig.id], survey_id: 'dss2_color' });
     // The view widened on its own to show the whole footprint.
     expect(saves[0].view_fov_degrees).toBeGreaterThan(5.38);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
@@ -158,7 +161,7 @@ describe('Framing view', () => {
 
   it('starts from a saved draft, switches survey, and pans without moving the target', async () => {
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 3, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 2, overlap_percent: 10 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'finkbeiner_halpha', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 2, overlap_percent: 10 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'finkbeiner_halpha', view_fov_degrees: 6, updated_at_ms: 1 };
     const { cutouts, saves } = fixture(stored); mount();
     expect(await screen.findByLabelText('Target name')).toHaveValue('Heart');
     expect(screen.getByLabelText('Survey')).toHaveValue('finkbeiner_halpha');
@@ -178,7 +181,7 @@ describe('Framing view', () => {
     const resting = screen.getByTestId('framing-sky').getAttribute('transform')!;
     expect(resting).toMatch(/^matrix\(/);
     fireEvent.pointerDown(stage, { button: 0, clientX: 500, clientY: 400, pointerId: 1 });
-    fireEvent.pointerMove(stage, { clientX: 400, clientY: 400, pointerId: 1 });
+    fireEvent.pointerMove(stage, { buttons: 1, clientX: 400, clientY: 400, pointerId: 1 });
     const moved = screen.getByTestId('framing-sky').getAttribute('transform')!;
     expect(moved).toMatch(/^matrix\(/);
     expect(moved).not.toBe(resting);
@@ -207,7 +210,7 @@ describe('Framing view', () => {
     await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
     // Inside the rectangle (the mock puts its corners at ±2.69° × ±1.8° around the center): drag 100 px east.
     fireEvent.pointerDown(stage, pointer(512, 384));
-    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 412, clientY: 384 });
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 412, clientY: 384 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
     const ra = Number((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value);
     expect(ra).toBeGreaterThan(seed.center.ra_degrees);
@@ -219,7 +222,7 @@ describe('Framing view', () => {
     const handle = document.querySelector('.framing-rotate circle')!;
     const hx = Number(handle.getAttribute('cx')); const hy = Number(handle.getAttribute('cy'));
     fireEvent.pointerDown(stage, pointer(hx, hy));
-    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 300, clientY: 384 });
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 300, clientY: 384 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
     // The angle is read on the target's own plane. The stage projects about
     // the view center, which is still the seed, and from the moved target the
@@ -244,34 +247,39 @@ describe('Framing view', () => {
     // C925 has no optics, so its own framing starts from the shared size.
     const c925 = () => screen.getByRole('group', { name: 'C925 data' });
     fireEvent.click(within(c925()).getByRole('button', { name: 'Frame separately' }));
-    // Its editor opens in its own card.
+    // Its editor opens in its own card, and the panel tools work on its panels.
     expect(within(c925()).getByTestId('framing-own-rig')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Mosaic panels · C925 data' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('C925 data columns'), { target: { value: '3' } });
     fireEvent.click(screen.getByLabelText('C925 data follows the shared angle'));
     fireEvent.change(screen.getByLabelText('C925 data camera angle degrees'), { target: { value: '90' } });
-    const own = screen.getByTestId('framing-rig-panels');
-    expect(own.querySelectorAll('polygon')).toHaveLength(3);
-    expect(own).toHaveTextContent('C925 data r1c1');
+    const own = () => screen.getByTestId('framing-panels');
+    expect(own()).toHaveAttribute('data-framing', 'rig');
+    expect(own().querySelectorAll('polygon')).toHaveLength(3);
+    expect(own()).toHaveTextContent('r1c1');
     expect(screen.getByTestId('framing-own-extent')).toHaveTextContent('3 panels');
-    // The shared framing is untouched: one panel for RedCat.
-    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    // The shared framing is untouched and stays in sight: one panel for RedCat.
+    expect(screen.getByTestId('framing-shared-panels').querySelectorAll('polygon')).toHaveLength(1);
     // Its center follows the shared one until it is given one of its own.
     expect(screen.getByLabelText('C925 data follows the shared center')).toBeChecked();
     expect(screen.getByLabelText('C925 data right ascension degrees')).toHaveValue(seed.center.ra_degrees);
-    const before = own.querySelector('polygon')!.getAttribute('points');
+    const before = own().querySelector('polygon')!.getAttribute('points');
     fireEvent.change(screen.getByLabelText('C925 data right ascension degrees'), { target: { value: '12' } });
     expect(screen.getByLabelText('C925 data follows the shared center')).not.toBeChecked();
-    expect(screen.getByTestId('framing-rig-panels').querySelector('polygon')!.getAttribute('points')).not.toBe(before);
+    expect(own().querySelector('polygon')!.getAttribute('points')).not.toBe(before);
     // The shared target did not move with it.
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(seed.center.ra_degrees);
     fireEvent.click(within(c925()).getByRole('button', { name: 'Done' }));
     expect(screen.queryByTestId('framing-own-rig')).not.toBeInTheDocument();
+    // Done, it is drawn in its own colour again, and the tools are the shared framing's.
+    expect(screen.getByTestId('framing-rig-panels').querySelectorAll('polygon')).toHaveLength(3);
+    expect(own()).toHaveAttribute('data-framing', 'shared');
     // Its card says what it shoots; the shared grid is still one panel.
     expect(c925()).toHaveTextContent('Separate framing · 1 × 3, 20% · 90° · moved center');
     expect(screen.getByLabelText('Mosaic columns')).toHaveValue(1);
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
-    expect(saves[0].rig_framings).toEqual([{ rig_id: rigB.rig.id, center: { ra_degrees: 12, dec_degrees: seed.center.dec_degrees }, position_angle_degrees: 90, mosaic: { rows: 1, columns: 3, overlap_percent: 20 }, panel: { width_degrees: 5.38, height_degrees: 3.6 } }]);
+    expect(saves[0].rig_framings).toEqual([{ rig_id: rigB.rig.id, center: { ra_degrees: 12, dec_degrees: seed.center.dec_degrees }, position_angle_degrees: 90, layout: gridLayout({ rows: 1, columns: 3, overlap_percent: 20 }), panel: { width_degrees: 5.38, height_degrees: 3.6 } }]);
     // One tick puts it back in step with the shared center.
     fireEvent.click(within(c925()).getByRole('button', { name: 'Edit' }));
     fireEvent.click(screen.getByLabelText('C925 data follows the shared center'));
@@ -324,7 +332,9 @@ describe('Framing view', () => {
   });
 
   it('draws each solved stack where its plate solve puts it and lists every panel', async () => {
-    fixture(); mount();
+    fixture();
+    server.use(http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok(mosaic))));
+    mount();
     await waitFor(() => expect(screen.getByTestId('framing-stacks')).toBeInTheDocument());
     expect(screen.getByText(/r1c1, RedCat 61: 36\/72 frames accepted; Ha stack placed by its solve\./)).toBeInTheDocument();
     expect(screen.getByText(/r2c1, RedCat 61: 0\/72 frames accepted; no stack yet\./)).toBeInTheDocument();
@@ -430,7 +440,7 @@ describe('Framing view', () => {
 
   it('goes back to the saved framing after a search, and only while something differs', async () => {
     const draft: DirectorFramingDraft = { project_id: 'project', revision: 3, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.45 }, position_angle_degrees: 15,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 8, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 8, updated_at_ms: 1 };
     fixture(draft); mount();
     expect(await screen.findByLabelText('Target name')).toHaveValue('Heart');
     expect(screen.getByRole('button', { name: 'Back to saved framing' })).toBeDisabled();
@@ -458,7 +468,7 @@ describe('Framing view', () => {
 
   it('opens a draft saved on an online survey on the offline map that stands in for it', async () => {
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
     const { cutouts } = fixture(stored);
     server.use(http.get('/api/director/v1/sky/surveys', () => HttpResponse.json(ok(offlineSurveys))));
     mount();
@@ -523,7 +533,7 @@ describe('Framing view', () => {
     // sky from the left, which is east, under the rectangle: RA grows.
     const polygonBefore = document.querySelector('.framing-panel polygon')!.getAttribute('points');
     fireEvent.pointerDown(stage, pointer(100, 700));
-    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 200, clientY: 700 });
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 200, clientY: 700 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
     expect(ra()).toBeGreaterThan(before.ra);
     expect(viewLine()).not.toBe(before.view);
@@ -531,7 +541,7 @@ describe('Framing view', () => {
     // Shift-drag looks around: the view moves and the target stays.
     const held = ra();
     fireEvent.pointerDown(stage, { ...pointer(100, 700), shiftKey: true });
-    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 200, clientY: 700 });
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 200, clientY: 700 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
     expect(ra()).toBe(held);
     expect(document.querySelector('.framing-panel polygon')!.getAttribute('points')).not.toBe(polygonBefore);
@@ -647,7 +657,7 @@ describe('Framing view', () => {
     // A draft saved on an online survey opens on the offline map that
     // stands in for it: that is the view's choice, not an unsaved edit.
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'nsns_ohs', view_fov_degrees: 6, updated_at_ms: 1 };
     fixture(stored);
     server.use(http.get('/api/director/v1/sky/surveys', () => HttpResponse.json(ok(offlineSurveys))));
     const drafts = mountOnPage();
@@ -664,7 +674,7 @@ describe('Framing view', () => {
   it('keeps a survey picked by hand in this browser and never calls it an edit', async () => {
     // The layer is how the sky is shown, not part of what is planned.
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
     fixture(stored);
     const drafts = mountOnPage();
     await waitFor(() => expect(screen.getByLabelText('Survey')).toHaveValue('dss2_color'));
@@ -686,7 +696,7 @@ describe('Framing view', () => {
 
   it('shows coordinates and angles to the places that matter, and saves them whole', async () => {
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'Medusa Nebula', center: { ra_degrees: 112.26128933333334, dec_degrees: 13.246830369444444 }, position_angle_degrees: 218.8412345,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 0.5727744486363814, height_degrees: 0.3828274803946109 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 1.6164391178182103, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 0.5727744486363814, height_degrees: 0.3828274803946109 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 1.6164391178182103, updated_at_ms: 1 };
     const { saves } = fixture(stored);
     mount();
     expect(await screen.findByLabelText('Right ascension degrees')).toHaveValue(112.26129);
@@ -793,7 +803,11 @@ describe('Framing view', () => {
       shootingRigIds={[rigB.rig.id]} onToggleRig={() => {}} /></QueryClientProvider>);
     await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
     fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Frame separately' }));
-    // Only C925's own panels are left: no rig shoots the shared rectangle.
+    // Only C925's own panels are left, being edited: no rig shoots the shared rectangle.
+    expect(screen.getByTestId('framing-panels')).toHaveAttribute('data-framing', 'rig');
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    expect(screen.queryByTestId('framing-shared-panels')).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Done' }));
     expect(screen.getByTestId('framing-rig-panels').querySelectorAll('polygon')).toHaveLength(1);
     expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(0);
   });
@@ -803,7 +817,7 @@ describe('Framing view', () => {
     // nothing to list, so it must not say the framing is unsaved.
     const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107' };
     const stored: DirectorFramingDraft = { project_id: 'project', revision: 2, target_name: 'M33', center: { ra_degrees: 23.46, dec_degrees: 30.66 }, position_angle_degrees: 0,
-      mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [rigA.rig.id, rigC.rig.id], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
+      layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, shown_rig_ids: [rigA.rig.id, rigC.rig.id], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
     fixture(stored);
     server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigC]))));
     const drafts = mountOnPage();
@@ -842,7 +856,7 @@ describe('Framing view', () => {
   const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107',
     field_of_view: { width_degrees: 1.2, height_degrees: 0.8, pixel_scale_arcsec: 1.9, focal_ratio: 7 } };
   const heart: DirectorFramingDraft = { project_id: 'project', revision: 3, target_name: 'Heart', center: { ra_degrees: 38.2, dec_degrees: 61.5 }, position_angle_degrees: 0,
-    mosaic: { rows: 1, columns: 1, overlap_percent: 20 }, panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
+    layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel_rig_id: null, panel: { width_degrees: 2, height_degrees: 1.5 }, shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 6, updated_at_ms: 1 };
   /** The view on the planning page, with the rigs that shoot the plan. */
   function mountWithRigs(shooting: string[]) {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -862,7 +876,7 @@ describe('Framing view', () => {
     // through a view the sky turns by the angle being changed, they spun the
     // camera from 35° to 331.8°.
     fireEvent.pointerDown(stage, pointer(hx, hy));
-    for (let step = 1; step <= 10; step += 1) fireEvent.pointerMove(stage, { pointerId: 1, clientX: hx + 3 * step, clientY: hy });
+    for (let step = 1; step <= 10; step += 1) fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: hx + 3 * step, clientY: hy });
     fireEvent.pointerUp(stage, { pointerId: 1 });
     const expected = angleAt(seed.center, skyAtStage(viewAt(seed.center, seed.center, 35), valueOf('View width degrees'), hx + 30, hy));
     expect(valueOf('Position angle degrees')).toBeCloseTo(expected, 0);
@@ -890,7 +904,7 @@ describe('Framing view', () => {
     // Look away from the target, and turn the camera: an edit to save.
     const stage = laidOutStage();
     fireEvent.pointerDown(stage, pointer(100, 700));
-    fireEvent.pointerMove(stage, { pointerId: 1, clientX: 300, clientY: 600 });
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 300, clientY: 600 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
     const panned = screen.getByTestId('framing-view-center').textContent!;
     expect(panned).not.toContain('02h 32m 48.0s');
@@ -953,7 +967,7 @@ describe('Framing view', () => {
     expect(screen.queryByTestId('framing-problem')).not.toBeInTheDocument();
     fireEvent.click(button());
     await waitFor(() => expect(saves).toHaveLength(1));
-    expect(saves[0]).toMatchObject({ center: { ra_degrees: 0, dec_degrees: 90 }, mosaic: { columns: 2 }, panel: { width_degrees: 5 } });
+    expect(saves[0]).toMatchObject({ center: { ra_degrees: 0, dec_degrees: 90 }, layout: { panels: [{ id: 'r1c1' }, { id: 'r1c2' }] }, panel: { width_degrees: 5 } });
   });
 
   it('gives the page\'s save bar the reason a framing cannot be saved', async () => {
@@ -1006,7 +1020,7 @@ describe('Framing view', () => {
     expect(screen.queryByTestId('framing-rotate-handle')).not.toBeInTheDocument();
     const stage = laidOutStage();
     fireEvent.pointerDown(stage, pointer(hx, hy));
-    fireEvent.pointerMove(stage, { pointerId: 1, clientX: hx + 200, clientY: hy + 100 });
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: hx + 200, clientY: hy + 100 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(35);
   });
@@ -1069,8 +1083,8 @@ describe('Framing view', () => {
   it('dims the separate framing of a rig that is off and leaves it in place, and lists one whose rig is gone', async () => {
     const gone = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
     fixture({ ...heart, center: seed.center, view_fov_degrees: 20, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 }, rig_framings: [
-      { rig_id: rigB.rig.id, center: { ra_degrees: seed.center.ra_degrees, dec_degrees: seed.center.dec_degrees + 4 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 0 }, panel: { width_degrees: 1, height_degrees: 1 } },
-      { rig_id: gone, center: null, position_angle_degrees: null, mosaic: { rows: 1, columns: 2, overlap_percent: 0 }, panel: { width_degrees: 1, height_degrees: 1 } },
+      { rig_id: rigB.rig.id, center: { ra_degrees: seed.center.ra_degrees, dec_degrees: seed.center.dec_degrees + 4 }, position_angle_degrees: 0, layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 0 }), panel: { width_degrees: 1, height_degrees: 1 } },
+      { rig_id: gone, center: null, position_angle_degrees: null, layout: gridLayout({ rows: 1, columns: 2, overlap_percent: 0 }), panel: { width_degrees: 1, height_degrees: 1 } },
     ] });
     mountWithRigs([rigA.rig.id]);
     await waitFor(() => expect(screen.getAllByTestId('framing-rig-panels')).toHaveLength(2));
@@ -1083,13 +1097,13 @@ describe('Framing view', () => {
     const points = polygon.getAttribute('points')!.split(' ').map(pair => pair.split(',').map(Number));
     const [x, y] = [points.reduce((sum, [px]) => sum + px, 0) / 4, points.reduce((sum, [, py]) => sum + py, 0) / 4];
     fireEvent.pointerDown(stage, pointer(x, y));
-    fireEvent.pointerMove(stage, { pointerId: 1, clientX: x + 100, clientY: y + 50 });
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: x + 100, clientY: y + 50 });
     fireEvent.pointerUp(stage, { pointerId: 1 });
     expect(valueOf('C925 data declination degrees')).toBe(at);
     expect(screen.getByTestId('framing-view-center')).not.toHaveTextContent('00h 42m 44.3s');
     // A rig gone from the list has no card; its framing is listed so it can go.
     const orphans = screen.getByRole('list', { name: 'Framings of rigs not listed' });
-    expect(orphans).toHaveTextContent('Rig not listed · separate framing, 1 × 2');
+    expect(orphans).toHaveTextContent('Rig not listed · separate framing, 2 panels');
     fireEvent.click(within(orphans).getByRole('button', { name: 'Remove' }));
     expect(screen.queryByRole('list', { name: 'Framings of rigs not listed' })).not.toBeInTheDocument();
     expect(screen.getAllByTestId('framing-rig-panels')).toHaveLength(1);
@@ -1136,5 +1150,507 @@ describe('Framing view', () => {
     const east = skyAtStage(viewAt({ ra_degrees: 10, dec_degrees: 0 }, { ra_degrees: 10, dec_degrees: 0 }), 4, 256, 384);
     expect(east.ra_degrees).toBeCloseTo(11, 3);
     expect(moveBy({ ra_degrees: 359.5, dec_degrees: 89.9 }, 1, 1).dec_degrees).toBe(90);
+  });
+});
+
+describe('Mosaic panels', () => {
+  beforeEach(() => {
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:stage'), revokeObjectURL: vi.fn() }));
+    window.localStorage.clear();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** M31 framed with RedCat at 35°, its panels as given. */
+  const placed = (panels: Array<{ id: string; x: number; y: number; locked: boolean }>): DirectorFramingDraft => ({ project_id: 'project', revision: 3, target_name: 'M31', center: seed.center,
+    position_angle_degrees: 35, layout: { min_overlap_percent: 20, panels }, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 },
+    shown_rig_ids: [], survey_id: 'dss2_color', view_fov_degrees: 20, updated_at_ms: 1 });
+  const stageOf = () => {
+    const stage = screen.getByTestId('framing-stage');
+    stage.setPointerCapture = vi.fn();
+    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1024, height: 768, right: 1024, bottom: 768, x: 0, y: 0, toJSON: () => ({}) });
+    Object.defineProperty(stage, 'clientWidth', { value: 1024, configurable: true });
+    return stage;
+  };
+  /** A panel's middle on the stage, from its drawn corners. */
+  const middle = (id: string): [number, number] => {
+    const points = document.querySelector(`[data-panel-id='${id}'] polygon`)!.getAttribute('points')!.split(' ').map(pair => pair.split(',').map(Number));
+    return [points.reduce((sum, [x]) => sum + x, 0) / 4, points.reduce((sum, [, y]) => sum + y, 0) / 4];
+  };
+
+  it('holds a panel with frames where they were shot and adds panels round it', async () => {
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    // The framed target has 40 frames: it is locked, and so are the center and angle.
+    server.use(http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok({ ...mosaic, panels: [mosaic.panels[0]] }))));
+    mount();
+    await waitFor(() => expect(document.querySelector("[data-panel-id='r1c1']")).toHaveAttribute('data-panel-state', 'locked'));
+    expect(screen.getByLabelText('Right ascension degrees')).toBeDisabled();
+    expect(screen.getByLabelText('Position angle degrees')).toBeDisabled();
+    expect(screen.getByTestId('framing-held')).toHaveTextContent('Locked panels hold the center and camera angle');
+    expect(screen.queryByLabelText('Mosaic rows')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ })).toHaveTextContent('40 frames');
+    // A column east, then a row north across both.
+    fireEvent.click(screen.getByRole('button', { name: "Add a column on the mosaic's east side" }));
+    expect(await screen.findByText(/Added p2 on the E side/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: "Add a row on the mosaic's north side" }));
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(4);
+    expect(screen.queryByTestId('framing-issues')).not.toBeInTheDocument();
+    // Undo takes the row back, redo puts it again.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo panel change' }));
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Redo panel change' }));
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(4);
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    const [first, east, ...north] = saves[0].layout.panels;
+    expect(first).toEqual({ id: 'r1c1', x: 0, y: 0, locked: true });
+    // At 35° east is the camera's left: 80% of a panel that way.
+    expect(east.id).toBe('p2'); expect(east.x).toBeCloseTo(-0.8, 9); expect(east.y).toBe(0);
+    expect(north.map(panel => panel.y.toFixed(3))).toEqual(['0.800', '0.800']);
+    expect(saves[0].center).toEqual(seed.center);
+  });
+
+  it('drags one panel, settles it at the minimum, refuses a thin overlap and places it with Alt', async () => {
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Drag moves one panel' }));
+    const stage = stageOf();
+    // The locked panel stays put however it is dragged: the drag looks
+    // around instead, so both panels slide together.
+    const [lx, ly] = middle('r1c1');
+    const apart = middle('p2')[0] - lx;
+    fireEvent.pointerDown(stage, pointer(lx, ly));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: lx + 60, clientY: ly });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: lx + 60, clientY: ly });
+    expect(Math.abs(middle('p2')[0] - middle('r1c1')[0] - apart)).toBeLessThan(5);
+    expect(screen.getByText(/r1c1 is locked/)).toBeInTheDocument();
+    // From the locked panel's middle to p2's is 80% of a panel width on the stage.
+    const [ax, ay] = middle('r1c1');
+    const [bx, by] = middle('p2');
+    const along = [(bx - ax) / 0.8, (by - ay) / 0.8];
+    // A little further out is pulled back to the minimum overlap.
+    const nudge = (share: number) => [bx + along[0] * share, by + along[1] * share];
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: nudge(0.02)[0], clientY: nudge(0.02)[1] });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: nudge(0.02)[0], clientY: nudge(0.02)[1] });
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    // Well past it leaves 8% overlap: refused, and the panel goes back.
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1] });
+    expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-panel-state', 'invalid');
+    expect(screen.getByTestId('framing-overlap')).toHaveAttribute('data-short', 'true');
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1] });
+    expect(screen.getByText(/Not placed: r1c1 and p2 overlap by only 8%/)).toBeInTheDocument();
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    // Alt places it anyway, flagged.
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1], altKey: true });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1], altKey: true });
+    expect(screen.getByText(/Placed p2 off the rule/)).toBeInTheDocument();
+    expect(screen.getByTestId('framing-issues')).toHaveTextContent('r1c1 and p2 overlap by only 8%, under the 20% minimum');
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].layout.panels[1].x).toBeCloseTo(-0.92, 2);
+  });
+
+  it('nudges, locks, removes and undoes the chosen panel from the keyboard', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /p2/ }));
+    expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-selected', 'true');
+    expect(screen.getAllByTestId('framing-add-handle')).toHaveLength(8);
+    const stage = stageOf();
+    const before = middle('p2');
+    fireEvent.keyDown(stage, { key: 'ArrowUp', shiftKey: true });
+    expect(middle('p2')).not.toEqual(before);
+    fireEvent.keyDown(stage, { key: 'z', ctrlKey: true });
+    expect(middle('p2')[0]).toBeCloseTo(before[0], 3);
+    fireEvent.keyDown(stage, { key: 'l', code: 'KeyL' });
+    expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-panel-state', 'locked');
+    fireEvent.keyDown(stage, { key: 'Delete' });
+    expect(screen.getByText('p2 is locked: unlock it to remove it.')).toBeInTheDocument();
+    fireEvent.keyDown(stage, { key: 'l', code: 'KeyL' });
+    fireEvent.keyDown(stage, { key: 'Delete' });
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    fireEvent.keyDown(stage, { key: 'z', ctrlKey: true });
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2);
+    // A + on the chosen panel's side adds one there.
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
+    const handle = screen.getAllByTestId('framing-add-handle')[1].getAttribute('transform')!.match(/translate\(([-\d.]+) ([-\d.]+)\)/)!.slice(1).map(Number);
+    fireEvent.pointerDown(stage, pointer(handle[0], handle[1]));
+    fireEvent.pointerUp(stage, pointer(handle[0], handle[1]));
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(3);
+    expect(screen.getByText('Added p3 beside r1c1.')).toBeInTheDocument();
+  });
+
+  /** The chosen panel's turn handle on the stage. */
+  const turnHandleAt = (): [number, number] => {
+    const circle = screen.getByTestId('framing-turn-handle').querySelector('circle')!;
+    return [Number(circle.getAttribute('cx')), Number(circle.getAttribute('cy'))];
+  };
+  /** A point a quarter turn round `around`, at the same distance as `from`, by `degrees` on screen. */
+  const swung = (around: [number, number], from: [number, number], degrees: number): [number, number] => {
+    const rad = (degrees * Math.PI) / 180;
+    const dx = from[0] - around[0]; const dy = from[1] - around[1];
+    return [around[0] + dx * Math.cos(rad) - dy * Math.sin(rad), around[1] + dx * Math.sin(rad) + dy * Math.cos(rad)];
+  };
+
+  it('turns the chosen panel by its handle, springs a turn back that leaves the rule short, and turns it anyway with Alt', async () => {
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }, { id: 'p2', x: -0.75, y: 0, locked: false }]));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /p2/ }));
+    // A locked panel has no turn handle; the chosen unlocked one has.
+    const stage = stageOf();
+    const centre = middle('p2');
+    const handle = turnHandleAt();
+    // A small turn keeps the overlap: the strip and its share follow it live.
+    fireEvent.pointerDown(stage, pointer(handle[0], handle[1]));
+    const small = swung(centre, handle, -4);
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: small[0], clientY: small[1] });
+    expect(screen.getByTestId('framing-overlap')).not.toHaveAttribute('data-short');
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: small[0], clientY: small[1] });
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent(/Turned p2 [+−]\d+\.\d° from the framing/);
+    expect(screen.getByLabelText('p2 turn degrees')).not.toHaveValue(0);
+    // Near the framing angle it settles on it.
+    fireEvent.pointerDown(stage, pointer(turnHandleAt()[0], turnHandleAt()[1]));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: handle[0] + 0.5, clientY: handle[1] });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: handle[0] + 0.5, clientY: handle[1] });
+    expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(0);
+    // Far round it leaves the panels short of the minimum: it springs back.
+    fireEvent.pointerDown(stage, pointer(handle[0], handle[1]));
+    const far = swung(centre, handle, -28);
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: far[0], clientY: far[1] });
+    expect(screen.getByTestId('framing-overlap')).toHaveAttribute('data-short', 'true');
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: far[0], clientY: far[1] });
+    expect(screen.getByText(/Not turned: r1c1 and p2 overlap by only/)).toBeInTheDocument();
+    expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(0);
+    // Alt turns it anyway, flagged.
+    fireEvent.pointerDown(stage, pointer(handle[0], handle[1]));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: far[0], clientY: far[1], altKey: true });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: far[0], clientY: far[1], altKey: true });
+    expect(screen.getByText(/Turned p2 off the rule/)).toBeInTheDocument();
+    const turn = Number((screen.getByLabelText('p2 turn degrees') as HTMLInputElement).value);
+    expect(Math.abs(turn)).toBeGreaterThan(20);
+    // Undo takes the turn back; the panel editor puts it back to the framing angle too.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo panel change' }));
+    expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Redo panel change' }));
+    expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(Number(turn.toFixed(2)));
+    fireEvent.click(screen.getByRole('button', { name: 'Framing angle' }));
+    expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(0);
+    fireEvent.change(screen.getByLabelText('p2 turn degrees'), { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].layout.panels[1]).toEqual({ id: 'p2', x: -0.75, y: 0, locked: false, angle_offset_degrees: 3 });
+    expect(saves[0].layout.panels[0]).toEqual({ id: 'r1c1', x: 0, y: 0, locked: true });
+  });
+
+  it('turns the chosen panel with [ and ], refuses a locked one, and sets its angle whatever turns the camera', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }, { id: 'p2', x: -0.75, y: 0, locked: false }]));
+    // RedCat turns its camera by hand; planning sets the angle all the same.
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ ...rigA, profile: { optics: { value: { sensor_width_px: 6248, sensor_height_px: 4176, pixel_size_um: 3.76, focal_length_mm: 250, aperture_mm: 51, rotation: { mode: 'manual', angle_degrees: 0 } } } } }, rigB]))));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    const stage = stageOf();
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
+    expect(screen.queryByTestId('framing-turn-handle')).not.toBeInTheDocument();
+    fireEvent.keyDown(stage, { key: ']', code: 'BracketRight' });
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('r1c1 is locked: it keeps the angle it was shot at.');
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /p2/ }));
+    expect(screen.getByTestId('framing-turn-handle')).toBeInTheDocument();
+    fireEvent.keyDown(stage, { key: ']', code: 'BracketRight' });
+    fireEvent.keyDown(stage, { key: '}', code: 'BracketRight', shiftKey: true });
+    expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(11);
+    fireEvent.keyDown(stage, { key: '[', code: 'BracketLeft' });
+    expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(10);
+    // Each panel says its own camera angle, and nothing about how the rig reaches it.
+    expect(screen.getByTestId('framing-chosen-angle')).toHaveTextContent(/Camera angle here \d+\.\d° east of north, turned \+10\.0° from the framing\./);
+    expect(screen.queryByText(/by hand/)).not.toBeInTheDocument();
+    fireEvent.keyDown(stage, { key: 'z', ctrlKey: true });
+    expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(11);
+  });
+
+  it('draws a shot panel where its frames say, labels where that comes from, and places new panels against its real edges', async () => {
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    // Twelve solved frames say the framed target was shot with a wider camera, turned 1.5°.
+    const shotGeometry = { center: { ra_degrees: seed.center.ra_degrees + 0.05, dec_degrees: seed.center.dec_degrees + 0.02 }, position_angle_degrees: 36.5, size: { width_degrees: 6.2, height_degrees: 4.1 }, source: 'solved' as const, size_source: 'solved' as const, frames: 12 };
+    server.use(http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok({ ...mosaic, panels: [mosaic.panels[0]], measured: [{ framing_rig_id: null, panel_id: 'r1c1', geometry: shotGeometry }] }))));
+    mount();
+    await waitFor(() => expect(document.querySelector("[data-panel-id='r1c1']")).toHaveAttribute('data-shot', 'solved'));
+    expect(screen.getByTestId('framing-panel-shot')).toHaveTextContent('from 12 solved frames');
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
+    expect(screen.getByTestId('framing-chosen-shot')).toHaveTextContent('Drawn as shot, from 12 solved frames: 6.20° × 4.10° at 36.5°.');
+    // A column east of it overlaps the wider shot panel by the minimum of its side, not of the plan's.
+    fireEvent.click(screen.getByRole('button', { name: "Add a column on the mosaic's east side" }));
+    expect(await screen.findByText(/Added p2 on the E side/)).toBeInTheDocument();
+    expect(screen.queryByTestId('framing-issues')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    // Saved quietly with the shot geometry the server read, locked.
+    expect(saves[0].layout.panels[0]).toEqual({ id: 'r1c1', x: 0, y: 0, locked: true, measured: shotGeometry });
+    expect(saves[0].layout.panels[1].x).toBeLessThan(-0.8);
+  });
+
+  it('gives a rig framed on its own the panel tools, and keeps its locks', async () => {
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Frame separately' }));
+    expect(screen.getByRole('group', { name: 'Mosaic panels · C925 data' })).toBeInTheDocument();
+    // Its own panels grow, are chosen, turned and undone with the shared framing's tools.
+    fireEvent.click(screen.getByRole('button', { name: "Add a column on the mosaic's east side" }));
+    expect(await screen.findByText(/Added p2 on the E side/)).toBeInTheDocument();
+    expect(screen.getByTestId('framing-panels').querySelectorAll('polygon')).toHaveLength(2);
+    expect(screen.getByTestId('framing-shared-panels').querySelectorAll('polygon')).toHaveLength(1);
+    const stage = stageOf();
+    fireEvent.keyDown(stage, { key: ']', code: 'BracketRight', shiftKey: true });
+    expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(10);
+    fireEvent.keyDown(stage, { key: 'l', code: 'KeyL' });
+    expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-panel-state', 'locked');
+    // Its locked panel holds its center and angle.
+    expect(screen.getByLabelText('C925 data right ascension degrees')).toBeDisabled();
+    expect(screen.getByLabelText('C925 data camera angle degrees')).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    const own = saves[0].rig_framings![0];
+    expect(own.layout.panels.map(panel => [panel.id, panel.locked, panel.angle_offset_degrees ?? 0])).toEqual([['r1c1', false, 0], ['p2', true, 10]]);
+    // The shared framing is as it was.
+    expect(saves[0].layout.panels).toEqual([{ id: 'r1c1', x: 0, y: 0, locked: false }]);
+  });
+  it('says a lock or unlock on a grid panel is unsaved on the plan page', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    const drafts = mountOnPage();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Lock' }));
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    expect(drafts.current!.sections[0].changes).toEqual(['r1c1 locked']);
+  });
+
+  it('reads the panels again after a save, after a refused one, and on Reload', async () => {
+    let mosaicGets = 0;
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }]));
+    server.use(http.get('/api/director/v1/projects/project/mosaic', () => { mosaicGets += 1; return HttpResponse.json(ok(unshot)); }));
+    mount();
+    await waitFor(() => expect(mosaicGets).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(mosaicGets).toBe(2));
+    server.use(http.put('/api/director/v1/projects/project/framing', () => HttpResponse.json({ success: false, data: null, error: 'Locked panel r1c1 would move.' }, { status: 422 })));
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(mosaicGets).toBe(3));
+    expect(await screen.findByText(/Locked panel r1c1 would move/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reload framing' }));
+    await waitFor(() => expect(mosaicGets).toBe(4));
+  });
+
+  it('holds the shared center and angle for a rig framed on its own that follows them with locked panels', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Frame separately' }));
+    fireEvent.click(screen.getByRole('button', { name: "Add a column on the mosaic's east side" }));
+    expect(await screen.findByText(/Added p2 on the E side/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Right ascension degrees')).toBeEnabled();
+    fireEvent.keyDown(stageOf(), { key: 'l', code: 'KeyL' });
+    expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-panel-state', 'locked');
+    // Its locked panels sit on the shared center and angle, so they hold them.
+    expect(screen.getByLabelText('Right ascension degrees')).toBeDisabled();
+    expect(screen.getByLabelText('Position angle degrees')).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: 'Find a target' })).toBeDisabled();
+    expect(screen.getByTestId('framing-held')).toHaveTextContent('Locked panels of C925 data follow the shared center and camera angle');
+    // A locked planned panel off its center holds its panel size.
+    expect(screen.getByLabelText('C925 data panel width degrees')).toBeDisabled();
+    // Taking a center of its own where it is moves nothing, so it may; going back to the shared one may not.
+    const follows = screen.getByLabelText('C925 data follows the shared center');
+    expect(follows).toBeEnabled();
+    fireEvent.click(follows);
+    expect(follows).not.toBeChecked();
+    expect(follows).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Move to view center' })).toBeDisabled();
+    expect(screen.getByLabelText('Right ascension degrees')).toBeEnabled();
+    expect(screen.getByLabelText('Position angle degrees')).toBeDisabled();
+    expect(screen.getByLabelText('C925 data follows the shared angle')).toBeEnabled();
+  });
+
+  it('ignores a second pointer during a drag, offers to place a refused drop anyway, and puts the panel back on a cancel, Escape or a lost release', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Drag moves one panel' }));
+    const stage = stageOf();
+    const [ax, ay] = middle('r1c1');
+    const [bx, by] = middle('p2');
+    const along = [(bx - ax) / 0.8, (by - ay) / 0.8];
+    const far = [bx + along[0] * 0.12, by + along[1] * 0.12];
+    // A second finger lands and lifts mid-drag: the drag carries on and is checked.
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: far[0], clientY: far[1] });
+    fireEvent.pointerDown(stage, { button: 0, pointerId: 2, clientX: 900, clientY: 700 });
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 2, clientX: 950, clientY: 720 });
+    fireEvent.pointerUp(stage, { pointerId: 2, clientX: 950, clientY: 720 });
+    expect(middle('p2')[0]).toBeCloseTo(far[0], 0);
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: far[0], clientY: far[1] });
+    expect(screen.getByText(/Not placed: r1c1 and p2 overlap by only 8%/)).toBeInTheDocument();
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    // The notice offers to place it anyway, as one step to undo.
+    fireEvent.click(screen.getByRole('button', { name: 'Place anyway' }));
+    expect(screen.getByText(/Placed p2 off the rule: r1c1 and p2 overlap by only 8%/)).toBeInTheDocument();
+    expect(middle('p2')[0]).toBeCloseTo(far[0], 0);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo panel change' }));
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    // A cancelled touch puts it back unchecked.
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: far[0], clientY: far[1] });
+    fireEvent.pointerCancel(stage, { pointerId: 1 });
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Put p2 back.');
+    // So does Escape.
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: far[0], clientY: far[1] });
+    fireEvent.keyDown(stage, { key: 'Escape' });
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: far[0], clientY: far[1] });
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    // A move with no button held means the release was lost: the drag ends there.
+    fireEvent.pointerDown(stage, pointer(bx, by));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: bx + 5, clientY: by });
+    fireEvent.pointerMove(stage, { buttons: 0, pointerId: 1, clientX: bx + 200, clientY: by + 100 });
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: bx + 200, clientY: by + 100 });
+    expect(middle('p2')[0]).toBeCloseTo(bx, 1);
+    expect(screen.getByRole('button', { name: 'Undo panel change' })).toBeDisabled();
+  });
+
+  it('starts a fresh panel history after Discard and Back to saved framing', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    const drafts = mountOnPage();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: "Add a column on the mosaic's east side" }));
+    fireEvent.click(screen.getByRole('button', { name: "Add a row on the mosaic's north side" }));
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    drafts.current!.discardAll();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    expect(screen.getByRole('button', { name: 'Undo panel change' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: "Add a column on the mosaic's east side" }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to saved framing' }));
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Undo panel change' })).toBeDisabled();
+  });
+
+  it('leaves keys pressed on a button over the sky to that button, and says why the last panel stays', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    // The notice is there before it has words, so its first are heard.
+    expect(screen.getByTestId('framing-mosaic-notice')).toBeEmptyDOMElement();
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /p2/ }));
+    const zoom = screen.getByRole('button', { name: 'Zoom in' });
+    fireEvent.keyDown(zoom, { key: 'Delete' });
+    fireEvent.keyDown(zoom, { key: 'l', code: 'KeyL' });
+    fireEvent.keyDown(zoom, { key: 'ArrowLeft' });
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2);
+    expect(document.querySelector("[data-panel-id='p2']")).not.toHaveAttribute('data-panel-state', 'locked');
+    const stage = stageOf();
+    fireEvent.keyDown(stage, { key: 'Delete' });
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1);
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
+    fireEvent.keyDown(stage, { key: 'Delete' });
+    const notice = screen.getByTestId('framing-mosaic-notice');
+    const first = within(notice).getByText('r1c1 is the only panel: a framing keeps one.');
+    // The same words said again are a new announcement.
+    fireEvent.keyDown(stage, { key: 'Delete' });
+    expect(within(notice).getByText('r1c1 is the only panel: a framing keeps one.')).not.toBe(first);
+    // With the panel let go, adding beside it is not offered as chosen.
+    fireEvent.click(screen.getByRole('button', { name: 'Beside r1c1' }));
+    expect(screen.getByRole('button', { name: 'Beside r1c1' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
+    expect(screen.getByRole('button', { name: 'Beside a panel' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Whole mosaic' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('puts a panel moved before its frames were known back where it was saved, locked', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    const saved = middle('p2');
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /p2/ }));
+    fireEvent.keyDown(stageOf(), { key: 'ArrowUp', shiftKey: true });
+    expect(Math.hypot(middle('p2')[0] - saved[0], middle('p2')[1] - saved[1])).toBeGreaterThan(5);
+    // Frames for p2 turn up when the panels are read again.
+    server.use(http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok({ ...unshot, panels: [unshot.panels[0], { ...unshot.panels[1], panel_id: 'p2', progress: { desired: 72, acquired: 6, accepted: 6 } }] }))));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload framing' }));
+    await waitFor(() => expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-panel-state', 'locked'));
+    expect(middle('p2')[0]).toBeCloseTo(saved[0], 1);
+    expect(middle('p2')[1]).toBeCloseTo(saved[1], 1);
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('p2 has frames, so it went back to the saved place and is locked.');
+  });
+
+  it('keeps frames on the framing they were shot under until a separate framing is saved', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    server.use(http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok({ ...mosaic, panels: [mosaic.panels[0]] }))));
+    mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelector("[data-panel-id='r1c1']")).toHaveAttribute('data-panel-state', 'locked'));
+    fireEvent.click(within(screen.getByRole('group', { name: 'RedCat 61' })).getByRole('button', { name: 'Frame separately' }));
+    // Its own panels are a new plan: nothing was shot under them yet.
+    expect(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ })).not.toHaveTextContent('40 frames');
+    // The shared panel keeps its frames and its lock.
+    fireEvent.click(within(screen.getByRole('group', { name: 'RedCat 61' })).getByRole('button', { name: 'Done' }));
+    expect(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ })).toHaveTextContent('40 frames');
+    expect(document.querySelector("[data-panel-id='r1c1']")).toHaveAttribute('data-panel-state', 'locked');
+  });
+
+  it('takes a press on a handle within a fingertip on a phone-sized stage', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    mount();
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
+    const stage = screen.getByTestId('framing-stage');
+    stage.setPointerCapture = vi.fn();
+    stage.getBoundingClientRect = () => ({ left: 0, top: 0, width: 390, height: 292, right: 390, bottom: 292, x: 0, y: 0, toJSON: () => ({}) });
+    Object.defineProperty(stage, 'clientWidth', { value: 390, configurable: true });
+    // The west side's handle, in stage units, and 40 units (15 CSS pixels) below it.
+    const [hx, hy] = screen.getAllByTestId('framing-add-handle')[3].getAttribute('transform')!.match(/translate\(([-\d.]+) ([-\d.]+)\)/)!.slice(1).map(Number);
+    const k = 1024 / 390;
+    fireEvent.pointerDown(stage, pointer(hx / k, (hy + 40) / k));
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: hx / k, clientY: (hy + 40) / k });
+    expect(await screen.findByText(/Added p2 beside r1c1/)).toBeInTheDocument();
+  });
+
+  it('looks around instead of moving a held center when the sky is dragged', async () => {
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }]));
+    mount();
+    await waitFor(() => expect(document.querySelector("[data-panel-id='r1c1']")).toHaveAttribute('data-panel-state', 'locked'));
+    fireEvent.click(screen.getByRole('button', { name: 'Drag moves the sky' }));
+    const stage = stageOf();
+    const ra = (screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value;
+    const view = screen.getByTestId('framing-view-center').textContent;
+    fireEvent.pointerDown(stage, pointer(100, 100));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: 300, clientY: 200 });
+    expect((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value).toBe(ra);
+    expect(screen.getByTestId('framing-view-center').textContent).not.toBe(view);
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels hold the mosaic where it is');
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].center).toEqual(seed.center);
+  });
+
+  it('holds the shared center against a sky drag for a rig framed on its own that follows it', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Frame separately' }));
+    fireEvent.click(screen.getByRole('button', { name: "Add a column on the mosaic's east side" }));
+    expect(await screen.findByText(/Added p2 on the E side/)).toBeInTheDocument();
+    const stage = stageOf();
+    fireEvent.keyDown(stage, { key: 'l', code: 'KeyL' });
+    fireEvent.click(screen.getByRole('button', { name: 'Drag moves the sky' }));
+    const ra = (screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value;
+    fireEvent.pointerDown(stage, pointer(100, 100));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: 300, clientY: 200 });
+    expect((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value).toBe(ra);
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels of C925 data hold the mosaic where it is');
   });
 });

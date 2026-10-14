@@ -77,6 +77,41 @@ async fn framing_previews_are_stateless_and_drafts_use_compare_and_set() {
     assert_eq!(second["data"]["draft"]["revision"], 2);
     let (_, read) = call(&f.app, "GET", &path, Value::Null, None).await;
     assert_eq!(read["data"]["draft"]["position_angle_degrees"], 40.0);
+    // A grid sent the old way comes back as the panels it makes.
+    assert_eq!(read["data"]["draft"]["layout"]["panels"][0]["id"], "r1c1");
+    assert!(read["data"]["draft"].get("mosaic").is_none());
+
+    // Lock the framed panel and add one east of it, as the workspace does.
+    let mut grown = read["data"]["draft"].clone();
+    grown["layout"]["panels"][0]["locked"] = json!(true);
+    grown["layout"]["panels"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "p3", "x": -0.85, "y": 0.0, "locked": false}));
+    let (status, grown) = call(&f.app, "PUT", &path, grown, None).await;
+    assert_eq!(status, StatusCode::OK, "{grown}");
+    let grown = grown["data"]["draft"].clone();
+    assert_eq!(grown["layout"]["panels"].as_array().unwrap().len(), 3);
+    // Turning the camera would move the locked panel: refused, with its name.
+    let mut turned = grown.clone();
+    turned["position_angle_degrees"] = json!(45.0);
+    let (status, refused) = call(&f.app, "PUT", &path, turned, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("r1c1"),
+        "{refused}"
+    );
+    // The preview names a placement short of the minimum overlap.
+    let mut thin = request.clone();
+    thin.as_object_mut().unwrap().remove("mosaic");
+    thin["layout"] = json!({"min_overlap_percent": 20, "panels": [
+        {"id": "r1c1", "x": 0.0, "y": 0.0, "locked": true},
+        {"id": "p2", "x": 0.95, "y": 0.0, "locked": false},
+    ]});
+    let (status, preview) = call(&f.app, "POST", "/framing/preview", thin, None).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["data"]["issues"][0]["kind"], "thin_overlap");
+    assert_eq!(preview["data"]["panels"][0]["locked"], true);
 }
 
 #[tokio::test]

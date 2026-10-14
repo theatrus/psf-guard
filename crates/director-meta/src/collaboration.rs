@@ -229,7 +229,9 @@ impl MetaStore {
                     dec_degrees: f64::from(region.icrs_dec_mas) / mas,
                 },
                 position_angle_degrees: f64::from(region.position_angle_mas) / mas,
-                mosaic: psf_guard_director_core::framing::Mosaic::SINGLE,
+                layout: psf_guard_director_core::framing::Layout::grid(
+                    psf_guard_director_core::framing::Mosaic::SINGLE,
+                ),
                 panel_rig_id: Some(rig),
                 panel,
                 shown_rig_ids: vec![],

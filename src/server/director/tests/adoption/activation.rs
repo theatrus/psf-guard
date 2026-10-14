@@ -1,6 +1,6 @@
 use super::*;
 use psf_guard_director_core::{
-    framing::{Mosaic, PanelSize},
+    framing::{Layout, Mosaic, PanelSize},
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{
@@ -382,6 +382,42 @@ pub(super) struct Activated {
     pub(super) db: Connection,
 }
 
+/// Where the 2 x 1 Heart grid's panels land, in Target Scheduler's hours
+/// and degrees, and the angle each is shot at, laid out the way activation
+/// lays them out.
+fn heart_places() -> Vec<(f64, f64, f64)> {
+    psf_guard_director_core::framing::FramingRequest {
+        center: IcrsPosition {
+            ra_degrees: 38.2,
+            dec_degrees: 61.45,
+        },
+        position_angle_degrees: 15.0,
+        panel: PanelSize {
+            width_degrees: 2.0,
+            height_degrees: 1.5,
+        },
+        layout: Layout::grid(Mosaic {
+            rows: 2,
+            columns: 1,
+            overlap_percent: 20,
+        }),
+        overlays: vec![],
+        view: None,
+    }
+    .preview()
+    .unwrap()
+    .panels
+    .iter()
+    .map(|panel| {
+        (
+            panel.footprint.center.ra_degrees / 15.0,
+            panel.footprint.center.dec_degrees,
+            panel.position_angle_degrees,
+        )
+    })
+    .collect()
+}
+
 pub(super) async fn activated() -> Activated {
     let f = Fixture::new();
     let path = f._dir.path().join("rig.sqlite");
@@ -442,11 +478,11 @@ pub(super) async fn activated() -> Activated {
                         dec_degrees: 61.45,
                     },
                     position_angle_degrees: 15.0,
-                    mosaic: Mosaic {
+                    layout: Layout::grid(Mosaic {
                         rows: 2,
                         columns: 1,
                         overlap_percent: 20,
-                    },
+                    }),
                     panel_rig_id: Some(rig),
                     panel: Some(PanelSize {
                         width_degrees: 2.0,
@@ -578,7 +614,21 @@ async fn activation_previews_without_writing_then_applies_and_updates_in_place()
     assert_eq!(applied["data"]["activation_revision"], 1);
     assert_eq!(applied["data"]["rigs"][0]["applied"], true);
     assert_eq!(count("SELECT count(*) FROM project WHERE name='Heart Nebula' AND state=1 AND isMosaic=1 AND profileId='profile-a'"), 1);
-    assert_eq!(count("SELECT count(*) FROM target WHERE name IN ('IC 1805 r1c1','IC 1805 r2c1') AND rotation=15.0"), 2);
+    // Each panel is shot at the framing's angle turned by north's lean at
+    // its center: the two straddle the framing's 15°, by about equal turns.
+    let (low, high, mean): (f64, f64, f64) = a
+        .db
+        .query_row(
+            "SELECT min(rotation), max(rotation), avg(rotation) FROM target WHERE name IN ('IC 1805 r1c1','IC 1805 r2c1')",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert!(
+        low < 15.0 && high > 15.0 && high - low < 1.0,
+        "{low} {high}"
+    );
+    assert!((mean - 15.0).abs() < 0.05, "{mean}");
     assert_eq!(count("SELECT count(*) FROM exposureplan WHERE desired=72 AND exposure=300.0 AND exposureTemplateId=1 AND acquired=0 AND accepted=0"), 2);
     assert_eq!(count("SELECT count(*) FROM ruleweight"), 8);
     assert_eq!(count("SELECT count(*) FROM psf_guard_director_target"), 2);
@@ -660,7 +710,7 @@ async fn activation_previews_without_writing_then_applies_and_updates_in_place()
     assert_eq!(count("SELECT count(*) FROM project"), 1);
     assert_eq!(count("SELECT count(*) FROM target"), 2);
     assert_eq!(
-        count("SELECT count(*) FROM target WHERE name='Heart top' AND rotation=18.0"),
+        count("SELECT count(*) FROM target WHERE name='Heart top' AND abs(rotation - 18.0) < 1.0 AND rotation <> 18.0"),
         1
     );
     assert_eq!(
@@ -892,11 +942,16 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
         [source.to_string()],
     )
     .unwrap();
-    for (id, name) in [(1, "IC 1805 r1c1"), (2, "IC 1805 r2c1")] {
+    // Where the panels were shot: a target with frames is taken over only
+    // where it sits.
+    for ((id, name), (ra_hours, dec, _)) in [(1, "IC 1805 r1c1"), (2, "IC 1805 r2c1")]
+        .into_iter()
+        .zip(heart_places())
+    {
         a.db.execute(
             "INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
-             VALUES (?1, ?2, 1, 0.0, 0.0, 2, 0.0, 100, 1, ?3)",
-            rusqlite::params![id, name, Uuid::new_v4().to_string()],
+             VALUES (?1, ?2, 1, ?3, ?4, 2, 0.0, 100, 1, ?5)",
+            rusqlite::params![id, name, ra_hours, dec, Uuid::new_v4().to_string()],
         )
         .unwrap();
     }
@@ -1138,36 +1193,7 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
         [source.to_string()],
     )
     .unwrap();
-    // Where the panels land, laid out the way activation lays them out.
-    let places: Vec<(f64, f64)> = psf_guard_director_core::framing::FramingRequest {
-        center: IcrsPosition {
-            ra_degrees: 38.2,
-            dec_degrees: 61.45,
-        },
-        position_angle_degrees: 15.0,
-        panel: PanelSize {
-            width_degrees: 2.0,
-            height_degrees: 1.5,
-        },
-        mosaic: Mosaic {
-            rows: 2,
-            columns: 1,
-            overlap_percent: 20,
-        },
-        overlays: vec![],
-        view: None,
-    }
-    .preview()
-    .unwrap()
-    .panels
-    .iter()
-    .map(|panel| {
-        (
-            panel.footprint.center.ra_degrees / 15.0,
-            panel.footprint.center.dec_degrees,
-        )
-    })
-    .collect();
+    let places = heart_places();
     assert_eq!(places.len(), 2);
     a.db.execute(
         "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
@@ -1177,8 +1203,13 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
     .unwrap();
     a.db.execute(
         "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
-         VALUES ('Lower half', 1, ?1, ?2, 2, 15.0, 100, 1, ?3)",
-        rusqlite::params![places[1].0, places[1].1, Uuid::new_v4().to_string()],
+         VALUES ('Lower half', 1, ?1, ?2, 2, ?3, 100, 1, ?4)",
+        rusqlite::params![
+            places[1].0,
+            places[1].1,
+            places[1].2,
+            Uuid::new_v4().to_string()
+        ],
     )
     .unwrap();
     a.db.execute(
@@ -1255,10 +1286,20 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
         "the other project is untouched"
     );
     assert_eq!(
-        count("SELECT count(*) FROM target WHERE name='Lower half' AND rotation=15.0"),
+        count(&format!(
+            "SELECT count(*) FROM target WHERE name='Lower half' AND abs(rotation - {}) < 1e-6",
+            places[1].2
+        )),
         1
     );
-    assert_eq!(count("SELECT count(*) FROM target WHERE name='IC 1805 r1c1' AND projectid=1 AND rotation=15.0 AND ra>2.0"), 1, "named target moved");
+    assert_eq!(
+        count(&format!(
+            "SELECT count(*) FROM target WHERE name='IC 1805 r1c1' AND projectid=1 AND abs(rotation - {}) < 1e-6 AND ra>2.0",
+            places[0].2
+        )),
+        1,
+        "named target moved"
+    );
     assert_eq!(
         count("SELECT count(*) FROM target WHERE projectid=2 AND ra=0.0"),
         1,
@@ -1289,11 +1330,11 @@ async fn a_single_panel_plan_takes_over_the_projects_only_target_by_any_name() {
     {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
-        framing.mosaic = Mosaic {
+        framing.layout = Layout::grid(Mosaic {
             rows: 1,
             columns: 1,
             overlap_percent: 20,
-        };
+        });
         let revision = framing.revision;
         store.save_framing_draft(&framing, revision).unwrap();
     }
@@ -1450,11 +1491,11 @@ async fn a_rig_framed_on_its_own_gets_its_own_panels_and_angle() {
                 dec_degrees: 61.45,
             }),
             position_angle_degrees: Some(90.0),
-            mosaic: Mosaic {
+            layout: Layout::grid(Mosaic {
                 rows: 1,
                 columns: 3,
                 overlap_percent: 10,
-            },
+            }),
             panel: Some(PanelSize {
                 width_degrees: 1.0,
                 height_degrees: 0.8,
@@ -2449,11 +2490,11 @@ async fn a_target_moved_in_target_scheduler_moves_the_framing() {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
         let revision = framing.revision;
-        framing.mosaic = Mosaic {
+        framing.layout = Layout::grid(Mosaic {
             rows: 1,
             columns: 1,
             overlap_percent: 20,
-        };
+        });
         store.save_framing_draft(&framing, revision).unwrap();
     }
     activate_now(&a.f, a.project, "first").await;
@@ -2494,11 +2535,11 @@ async fn a_second_length_made_in_nina_is_turned_off_unless_taken_into_the_plan()
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
         let revision = framing.revision;
-        framing.mosaic = Mosaic {
+        framing.layout = Layout::grid(Mosaic {
             rows: 1,
             columns: 1,
             overlap_percent: 20,
-        };
+        });
         store.save_framing_draft(&framing, revision).unwrap();
     }
     activate_now(&a.f, a.project, "first").await;
@@ -3072,7 +3113,10 @@ async fn work_the_plan_no_longer_asks_for_is_turned_off() {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
         let revision = framing.revision;
-        framing.mosaic.rows = 1;
+        framing.layout = Layout::grid(Mosaic {
+            rows: 1,
+            ..framing.layout.as_grid().unwrap()
+        });
         store.save_framing_draft(&framing, revision).unwrap();
     }
     let data = activate_now(&a.f, a.project, "panel removed").await;
@@ -3239,7 +3283,12 @@ async fn a_grid_change_gives_a_moved_panel_with_frames_a_new_target() {
     activate_now(&a.f, a.project, "2 rows").await;
     assert_eq!(count("SELECT count(*) FROM target"), 2);
     a.db.execute("UPDATE exposureplan SET acquired=5 WHERE targetid=(SELECT Id FROM target WHERE name='IC 1805 r1c1')", []).unwrap();
-    edit_framing(&a.f, a.project, |framing| framing.mosaic.rows = 3);
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout = Layout::grid(Mosaic {
+            rows: 3,
+            ..framing.layout.as_grid().unwrap()
+        })
+    });
     let data = activate_now(&a.f, a.project, "3 rows").await;
     let details: Vec<String> = data["rigs"][0]["changes"]
         .as_array()
@@ -3281,6 +3330,109 @@ async fn a_grid_change_gives_a_moved_panel_with_frames_a_new_target() {
     );
 }
 
+/// A framed target with frames, kept locked, and panels placed beside it
+/// that form no grid: Target Scheduler gets one more target per panel in the
+/// same project, now a mosaic, and the shot target is left as it was. The
+/// Library reads the panels as one mosaic from Director's record.
+#[tokio::test]
+async fn panels_added_round_a_locked_target_become_targets_of_their_own() {
+    use psf_guard_director_core::framing::PanelPlacement;
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout = Layout::single(20);
+    });
+    activate_now(&a.f, a.project, "one panel").await;
+    let (first_guid, first_ra, first_dec): (String, f64, f64) =
+        a.db.query_row("SELECT guid, ra, dec FROM target", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap();
+    assert_eq!(count("SELECT isMosaic FROM project"), 0);
+    a.db.execute("UPDATE exposureplan SET acquired=12, accepted=10", [])
+        .unwrap();
+
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout.panels[0].locked = true;
+        // East of it at the minimum overlap, and north of it.
+        framing
+            .layout
+            .panels
+            .push(PanelPlacement::at("p2", -0.8, 0.0));
+        framing
+            .layout
+            .panels
+            .push(PanelPlacement::at("p3", 0.0, 0.8));
+    });
+    let data = activate_now(&a.f, a.project, "three panels").await;
+    let targets: Vec<String> = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "target")
+        .map(|c| {
+            format!(
+                "{} {}",
+                c["action"].as_str().unwrap(),
+                c["name"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        targets,
+        vec![
+            "unchanged IC 1805",
+            "create IC 1805 p2",
+            "create IC 1805 p3"
+        ],
+        "{data}"
+    );
+    // One project, now a mosaic, with a target per panel.
+    assert_eq!(count("SELECT count(*) FROM project"), 1);
+    assert_eq!(count("SELECT isMosaic FROM project"), 1);
+    assert_eq!(count("SELECT count(*) FROM target"), 3);
+    // The shot target is where it was, with its frames.
+    let (ra, dec, acquired): (f64, f64, i64) = a
+        .db
+        .query_row(
+            "SELECT t.ra, t.dec, e.acquired FROM target t JOIN exposureplan e ON e.targetid = t.Id WHERE t.guid=?1",
+            [&first_guid],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((ra, dec, acquired), (first_ra, first_dec, 12));
+    // The east panel is east of it by 80% of a panel width along the camera.
+    let east_ra: f64 =
+        a.db.query_row("SELECT ra FROM target WHERE name='IC 1805 p2'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(east_ra > first_ra, "east is the larger right ascension");
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM psf_guard_director_target WHERE panel_id IN ('r1c1','p2','p3')"
+        ),
+        3
+    );
+    let project_row = count("SELECT Id FROM project") as i32;
+    let mosaic = crate::server::mosaic_scope::project_mosaic(&a.db, project_row)
+        .unwrap()
+        .expect("the panels read as one mosaic");
+    assert_eq!(mosaic.panels.len(), 3);
+    assert_eq!((mosaic.rows, mosaic.columns), (2, 2));
+    // A second activation finds nothing to change.
+    let again = activate_now(&a.f, a.project, "again").await;
+    assert!(
+        again["rigs"][0]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["kind"] == "target")
+            .all(|c| c["action"] == "unchanged"),
+        "{again}"
+    );
+}
+
 /// Taking over a target puts it right for Director: J2000 coordinates and
 /// switched on, since the program serves only those. A Draft project linked
 /// to the plan goes Active on its first activation.
@@ -3288,7 +3440,12 @@ async fn a_grid_change_gives_a_moved_panel_with_frames_a_new_target() {
 async fn taking_over_a_jnow_target_in_a_draft_project_puts_both_right() {
     let a = activated().await;
     let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
-    edit_framing(&a.f, a.project, |framing| framing.mosaic.rows = 1);
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout = Layout::grid(Mosaic {
+            rows: 1,
+            ..framing.layout.as_grid().unwrap()
+        })
+    });
     let source = Uuid::new_v4();
     a.db.execute(
         "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
@@ -3479,4 +3636,339 @@ async fn a_detach_asks_before_dropping_work_and_then_leaves_the_project_alone() 
         1
     );
     assert_eq!(count(&format!("SELECT count(*) FROM exposureplan e JOIN target t ON t.Id=e.targetid JOIN project p ON p.Id=t.projectid WHERE p.guid='{guid}' AND e.enabled=1")), 2);
+}
+
+/// A rig framed on its own, with panels placed one by one, one of them
+/// turned, activated with the rig's camera on a rotator, turned by hand
+/// between sessions, or fixed. Each panel is shot at its own angle: the
+/// framing's, plus its turn, plus north's lean at its center. Planning
+/// always sets the rotation; how the rig reaches it is execution's concern,
+/// so every rig gets the same angles written and the same preview, and the
+/// angles land in the rig's own project.
+async fn activate_own_turned_panels(
+    rotation: psf_guard_director_core::optics::Rotation,
+) -> (Vec<(String, String)>, Vec<(String, f64)>, Vec<String>) {
+    use psf_guard_director_core::{
+        framing::{FramingRequest, PanelPlacement},
+        optics::Optics,
+    };
+    use psf_guard_director_meta::{
+        framing::RigFraming,
+        profile::{Reported, RigProfile, Source},
+    };
+    let a = activated().await;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut profile = store
+            .rig_profile(a.rig)
+            .unwrap()
+            .unwrap_or_else(|| RigProfile::empty(a.rig, 1));
+        let revision = profile.revision;
+        profile.optics = Some(Reported {
+            value: Optics {
+                sensor_width_px: 6248,
+                sensor_height_px: 4176,
+                pixel_size_um: 3.76,
+                focal_length_mm: 250.0,
+                aperture_mm: Some(51.0),
+                rotation,
+            },
+            source: Source::Manual {},
+            reported_at_ms: 1,
+        });
+        store.save_rig_profile(&profile, revision).unwrap();
+    }
+    let mut turned = PanelPlacement::at("p2", -0.85, 0.0);
+    turned.angle_offset_degrees = 12.0;
+    let own = RigFraming {
+        rig_id: a.rig,
+        center: Some(IcrsPosition {
+            ra_degrees: 39.2,
+            dec_degrees: 61.45,
+        }),
+        position_angle_degrees: Some(30.0),
+        layout: Layout {
+            min_overlap_percent: 10,
+            panels: vec![PanelPlacement::at("r1c1", 0.0, 0.0), turned],
+        },
+        panel: Some(PanelSize {
+            width_degrees: 2.0,
+            height_degrees: 1.4,
+        }),
+    };
+    edit_framing(&a.f, a.project, |framing| {
+        framing.rig_framings = vec![own.clone()];
+    });
+    // Where the core lays the rig's panels out, and the angle of each.
+    let laid = FramingRequest {
+        center: own.center.unwrap(),
+        position_angle_degrees: 30.0,
+        panel: own.panel.unwrap(),
+        layout: own.layout.clone(),
+        overlays: vec![],
+        view: None,
+    }
+    .preview()
+    .unwrap();
+    let angle = |id: &str| {
+        laid.panels
+            .iter()
+            .find(|p| p.footprint.id == id)
+            .unwrap()
+            .position_angle_degrees
+    };
+    // The centered panel at the framing's angle; the turned one by its turn
+    // and north's lean a degree and a half east at +61°, about Δα·sin δ.
+    assert!((angle("r1c1") - 30.0).abs() < 1e-9);
+    let lean = angle("p2") - 42.0;
+    assert!(lean > 2.0 && lean < 3.5, "{lean}");
+
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let details: Vec<(String, String)> = preview["data"]["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "target")
+        .map(|c| {
+            (
+                c["name"].as_str().unwrap().to_owned(),
+                c["detail"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let detail = |name: &str| {
+        details
+            .iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("{name}: {preview}"))
+            .1
+            .clone()
+    };
+    assert!(
+        detail("IC 1805 r1c1").ends_with("angle 30.0°"),
+        "{details:?}"
+    );
+    assert!(
+        detail("IC 1805 p2").ends_with(&format!(
+            "angle {:.1}° (framing 30.0°, turned +12.0°, north here +{:.1}°)",
+            angle("p2"),
+            lean
+        )),
+        "{details:?}"
+    );
+
+    activate_now(&a.f, a.project, "turned panels").await;
+    let stored: Vec<(String, f64)> = ["IC 1805 r1c1", "IC 1805 p2"]
+        .iter()
+        .map(|name| {
+            let rotation: f64 =
+                a.db.query_row(
+                    "SELECT rotation FROM target WHERE name = ?1",
+                    [name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            ((*name).to_owned(), rotation)
+        })
+        .collect();
+    assert!((stored[0].1 - 30.0).abs() < 1e-9);
+    assert!((stored[1].1 - angle("p2")).abs() < 1e-9);
+
+    // Read back, Target Scheduler's targets say the framing's angle: the
+    // lean is taken off again, so nothing is offered to take in.
+    let (status, again) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    (details, stored, actions(&again["data"], "target"))
+}
+
+#[tokio::test]
+async fn every_rig_gets_each_panels_own_angle_whatever_turns_its_camera() {
+    use psf_guard_director_core::optics::Rotation;
+    let rotator = activate_own_turned_panels(Rotation::Rotator {}).await;
+    assert_eq!(rotator.2, ["unchanged", "unchanged"]);
+    for rotation in [
+        Rotation::Manual { angle_degrees: 0.0 },
+        Rotation::Fixed {
+            angle_degrees: 90.0,
+        },
+    ] {
+        let other = activate_own_turned_panels(rotation).await;
+        // The same preview and the same angles written, to the bit.
+        assert_eq!(other.0, rotator.0, "{rotation:?}");
+        assert_eq!(other.1, rotator.1, "{rotation:?}");
+        assert_eq!(other.2, rotator.2, "{rotation:?}");
+        // Planning never says how the camera gets there.
+        assert!(
+            other
+                .0
+                .iter()
+                .all(|(_, detail)| !detail.contains("by hand") && !detail.contains("rotator")),
+            "{:?}",
+            other.0
+        );
+    }
+}
+
+/// Targets shot before panels took north's lean were shot at the framing's
+/// angle. Activating again keeps that angle for a target with frames, so
+/// its new frames match the old; a target without frames takes the lean.
+#[tokio::test]
+async fn a_target_shot_at_the_framings_angle_keeps_it() {
+    let a = activated().await;
+    activate_now(&a.f, a.project, "first").await;
+    // As an activation before per-panel angles left them.
+    a.db.execute_batch(
+        "UPDATE target SET rotation = 15.0;
+         UPDATE exposureplan SET acquired = 4 WHERE targetid = (SELECT Id FROM target WHERE name = 'IC 1805 r1c1');",
+    )
+    .unwrap();
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let changes: Vec<(String, String, String)> = preview["data"]["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "target")
+        .map(|c| {
+            (
+                c["name"].as_str().unwrap().to_owned(),
+                c["action"].as_str().unwrap().to_owned(),
+                c["detail"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(changes[0].0, "IC 1805 r1c1");
+    assert_eq!(changes[0].1, "unchanged", "{changes:?}");
+    assert!(
+        changes[0]
+            .2
+            .ends_with("angle 15.0° as its frames were shot"),
+        "{changes:?}"
+    );
+    assert_eq!(changes[1].1, "update", "{changes:?}");
+    assert!(changes[1].2.contains("north here"), "{changes:?}");
+}
+
+/// A linked project's lone target with frames is the framed panel `r1c1`.
+/// Drawn where its solves put it, the panel sits a few arcminutes off the
+/// target's coordinates and under another name; activation still takes the
+/// target over by the panel it stands for, keeps it where it was shot, and
+/// adds a target only for the new panel.
+#[tokio::test]
+async fn a_shot_panel_takes_over_the_target_it_stands_for() {
+    use psf_guard_director_core::framing::{MeasuredGeometry, MeasuredSource, PanelPlacement};
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    let source = Uuid::new_v4();
+    a.db.execute(
+        "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)
+         VALUES (1, 'profile-a', 'Heart by hand', '', 1, 1, 0, 0, ?1)",
+        [source.to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'The Heart', 1, ?1, 61.45, 2, 15.0, 100, 1, ?2)",
+        rusqlite::params![38.2 / 15.0, Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, guid)
+         VALUES ('profile-a', 300, 72, 12, 10, 1, 1, ?1)",
+        [Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    let catalog = crate::catalog_identity::read(&a.db).unwrap().unwrap().id;
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store
+            .link_catalog_project(&psf_guard_director_meta::catalog::ProjectMapping {
+                catalog_id: catalog,
+                source_project_guid: source,
+                source_profile_id: "profile-a".into(),
+                project_id: a.project,
+                rig_id: a.rig,
+            })
+            .unwrap();
+    }
+    edit_framing(&a.f, a.project, |framing| {
+        // Locked where the grid had it: a lock holds the place it is given at.
+        let mut shot = PanelPlacement::at("r1c1", 0.0, 0.4);
+        shot.locked = true;
+        shot.measured = Some(MeasuredGeometry {
+            center: IcrsPosition {
+                ra_degrees: 38.27,
+                dec_degrees: 61.48,
+            },
+            position_angle_degrees: 16.0,
+            size: PanelSize {
+                width_degrees: 2.3,
+                height_degrees: 1.6,
+            },
+            source: MeasuredSource::Solved,
+            size_source: MeasuredSource::Solved,
+            frames: 12,
+        });
+        framing.layout = Layout {
+            min_overlap_percent: 20,
+            panels: vec![shot, PanelPlacement::at("p2", -0.85, 0.4)],
+        };
+    });
+    let data = activate_now(&a.f, a.project, "shot panel").await;
+    let targets: Vec<(String, String, String)> = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "target")
+        .map(|c| {
+            (
+                c["action"].as_str().unwrap().to_owned(),
+                c["name"].as_str().unwrap().to_owned(),
+                c["detail"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(targets.len(), 2, "{data}");
+    assert_eq!(targets[0].0, "unchanged", "{targets:?}");
+    assert_eq!(targets[0].1, "The Heart");
+    assert!(
+        targets[0].2.contains("kept where its frames were shot"),
+        "{targets:?}"
+    );
+    assert_eq!(
+        (targets[1].0.as_str(), targets[1].1.as_str()),
+        ("create", "IC 1805 p2")
+    );
+    // The shot target stays where it was, frames and all; one new target.
+    assert_eq!(count("SELECT count(*) FROM target"), 2);
+    assert_eq!(
+        count(&format!(
+            "SELECT count(*) FROM target WHERE Id = 1 AND rotation = 15.0 AND abs(ra - {}) < 1e-9",
+            38.2 / 15.0
+        )),
+        1
+    );
+    assert_eq!(count("SELECT count(*) FROM exposureplan WHERE targetid = 1 AND acquired = 12 AND enabled = 1"), 1);
 }

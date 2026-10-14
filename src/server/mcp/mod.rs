@@ -1281,7 +1281,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "A plan's framing draft: centre, rotation, panels for a mosaic, and the rig each panel uses."
+        description = "A plan's framing draft: centre, rotation, the mosaic's panels (each with its id, place and lock), and the rig whose field sizes them."
     )]
     async fn get_framing(
         &self,
@@ -1426,7 +1426,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Save a plan's framing: send the whole object get_framing returned under `draft`, changed (centre, rotation, mosaic, panel rigs). Refuses a stale revision."
+        description = "Save a plan's framing: send the whole object get_framing returned under `draft`, changed (centre, rotation, `layout` panels with their places, turns (`angle_offset_degrees`) and locks, panel rigs). The server writes each locked panel's `measured` geometry from its frames on every save, whatever is sent. Refuses a stale revision, and a change that would move or turn a locked panel or move the centre, angle or panel size under one."
     )]
     async fn save_framing(
         &self,
@@ -1483,7 +1483,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Preview activating a plan: exactly what would be written to each rig's Target Scheduler database (projects, targets, exposure plans, templates, limits) and a `preview_digest`. Writes nothing. apply_activation takes the digest."
+        description = "Preview activating a plan: exactly what would be written to each rig's Target Scheduler database (projects, targets, exposure plans, templates, limits) and a `preview_digest`. Every target gets its panel's own rotation (the framing's angle, plus the panel's turn, plus north's lean at its center) whatever turns the rig's camera; reaching it is the rig's business. Writes nothing. apply_activation takes the digest."
     )]
     async fn preview_activation(
         &self,

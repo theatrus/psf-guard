@@ -1,19 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Crosshair, Globe, Grid3x3, Images, Layers, LocateFixed, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
+import { Check, Crosshair, Globe, Grid3x3, Images, Layers, LocateFixed, Move, Orbit, RefreshCw, RotateCw, Sparkles, SquareDashedMousePointer, Sun, Telescope, Undo2 } from 'lucide-react';
 import NumberInput from '../NumberInput';
 import { useDraftSection } from './pageDraftsState';
 import { describeFramingChanges } from './draftChanges';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { SkyPreview } from '../../api/types';
-import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorMosaicPanel, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
+import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorLayout, DirectorMeasuredGeometry, DirectorMosaicPanel, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
 import {
   DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, TILE_MAX_FOV, angleAt, clampFov, deprojectFrom, deprojectOn, draftFromState, fitViewFov, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, framingProblems, fromStage,
   compassDirections, insidePolygon, markLabelBudget, normaliseAngle, offsetFrom, panelForRig, pixelScale, polygonPoints, preferredSurveyId, previewRequest, projectOn, rigGeometries, rotationHandleSky, roundRa, stackMatrix, stageAngleAt, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
+  cameraDegreesToPlane, framingBoxes, framingShapes, panelHandleSky, readFraming, rigLayout, turnToward,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
+import MosaicPanels, { type ExtendScope } from './MosaicPanels';
+import { asGrid, cameraStep, cameraToPlane, describeIssue, extendFrom, extendMosaic, fillHoles, findPanel, flaggedPanels, freshIssues, movePanel, planeToCamera, ringAround, setLocked, snapPlacement, snapTurn, turnOf, turnPanel, wrapTurn, type Direction } from './mosaicLayout';
+import { shapeCenter, shapeOverlap, sharedStrips, splitApart, type PanelShape, type Point, type ShapeReading } from './panelShape';
 import TargetSearch, { type TargetPick } from './TargetSearch';
 import SkyCanvas, { type SkyTileImage } from './SkyCanvas';
 import { useDebounced, useSurveyCutout } from './useSurveyCutout';
@@ -33,8 +37,40 @@ const WHEEL_ZOOM_PER_PIXEL = Math.log(1.2) / 100;
 const NARROW_STAGE_PX = 560;
 /** How a drag on the stage behaves, as N.I.N.A. offers it: move the
  *  rectangle over a still sky, or keep the rectangle where it is and move
- *  the sky (and the target with it) under it. Remembered in this browser. */
-type DragMode = 'rectangle' | 'sky';
+ *  the sky (and the target with it) under it. `panel` moves one mosaic
+ *  panel and leaves the rest. Remembered in this browser. */
+type DragMode = 'rectangle' | 'panel' | 'sky';
+/** A dragged panel settles on a lined-up or minimum-overlap place this
+ *  many screen pixels away. */
+const SNAP_PX = 14;
+/** The handles on the stage take a press this close, in stage units, and at
+ *  least this close in CSS pixels, so a phone's finger finds them. */
+const HANDLE_PX = 15;
+const HANDLE_CSS_PX = 22;
+/** Handles are drawn at least this wide in CSS pixels: wider for a finger. */
+const HANDLE_DRAWN_CSS_PX = { fine: 18, coarse: 30 };
+/** Whether the main pointer is a finger, as the browser says. */
+const coarsePointer = () => { try { return window.matchMedia?.('(pointer: coarse)').matches ?? false; } catch { return false; } };
+/** Arrow keys nudge the chosen panel by this share of a panel; Shift ten times as far. */
+const NUDGE = 0.01;
+/** [ and ] turn the chosen panel by this many degrees; Shift ten times as far. */
+const TURN_STEP = 1;
+/** A turned panel settles on the framing's angle, a neighbour's or a shot
+ *  panel's this many degrees away. */
+const SNAP_TURN_DEG = 2;
+/** A turn as said beside the panels: signed, to a tenth of a degree. */
+const signedTurn = (degrees: number) => `${degrees < 0 ? '−' : '+'}${Math.abs(degrees).toFixed(1)}°`;
+/** Where a shot panel's outline comes from, in a few words. */
+function shotSource(measured: DirectorMeasuredGeometry): string {
+  const frames = `${measured.frames} frame${measured.frames === 1 ? '' : 's'}`;
+  return measured.source === 'solved' ? `from ${measured.frames} solved frame${measured.frames === 1 ? '' : 's'}`
+    : measured.source === 'header' ? `from the headers of ${frames}` : 'from the plan';
+}
+/** The way a panel's up edge leans in the camera frame, as a turn. */
+const shapeTurn = (shape: PanelShape) => {
+  const [top, bottom] = shape.corners;
+  return wrapTurn((Math.atan2(-(top[0] - bottom[0]), top[1] - bottom[1]) * 180) / Math.PI);
+};
 const DRAG_MODE_KEY = 'psf-guard.framing.dragMode';
 const ROTATE_SKY_KEY = 'psf-guard.framing.rotateSky';
 /** The survey layer last picked in this browser: how the sky is shown, not
@@ -94,9 +130,11 @@ const stackName = (stack: SkyPreview) => stack.kind === 'color' ? `Colour ${stac
 /** The stack a panel shows: the one picked, or its best. */
 const shownStack = (panel: DirectorMosaicPanel, choice: string): SkyPreview | null =>
   choice ? panel.stacks.find(stack => stack.key === choice) ?? null : panel.stacks[0] ?? panel.preview;
-/** One line per panel: whose it is, how far along, and whether the stack it shows can be placed. */
-function describeStack(panel: DirectorMosaicPanel, choice: string, choiceName: string): string {
-  const who = `${panel.panel_id}, ${panel.catalog_name || panel.rig.name}`;
+/** One line per panel: whose it is, how far along, and whether the stack it
+ *  shows can be placed. Before an activation a panel is a linked project's
+ *  target, so it goes by the target's name. */
+function describeStack(panel: DirectorMosaicPanel, choice: string, choiceName: string, activated = true): string {
+  const who = `${!activated && panel.target_name ? panel.target_name : panel.panel_id}, ${panel.catalog_name || panel.rig.name}`;
   const done = panel.progress ? `${panel.progress.accepted}/${panel.progress.desired} frames accepted` : 'no exposure plans';
   if (panel.status === 'missing_target') return `${who}: its target row is gone from the database.`;
   if (panel.status === 'missing_catalog') return `${who}: its database is no longer registered here.`;
@@ -104,6 +142,24 @@ function describeStack(panel: DirectorMosaicPanel, choice: string, choiceName: s
   if (!stack) return choice && panel.stacks.length > 0 ? `${who}: ${done}; no ${choiceName} stack.` : `${who}: ${done}; no stack yet.`;
   return stack.wcs ? `${who}: ${done}; ${stackName(stack)} stack placed by its solve.` : `${who}: ${done}; the ${stackName(stack)} stack has no plate solve yet, so it cannot be placed.`;
 }
+
+/** The nearest of `places` within `reach` of `point`. */
+function nearestWithin<T extends { at: [number, number] }>(places: T[], point: [number, number], reach: number): T | undefined {
+  let best: T | undefined; let distance = reach;
+  for (const place of places) {
+    const d = Math.hypot(place.at[0] - point[0], place.at[1] - point[1]);
+    if (d <= distance) { best = place; distance = d; }
+  }
+  return best;
+}
+/** How far a handle takes a press, in stage units, on a stage drawn at
+ *  `unitsPerPx` stage units per CSS pixel. */
+const handleReach = (unitsPerPx: number) => Math.max(HANDLE_PX, HANDLE_CSS_PX * unitsPerPx);
+
+/** A layout of the shared framing (`null`) or of a rig framed on its own. */
+const layoutIn = (current: FramingState, rig: string | null) => rig ? current.rigFramings.find(own => own.rig_id === rig)?.layout ?? null : current.layout;
+const withLayout = (current: FramingState, rig: string | null, layout: DirectorLayout): Partial<FramingState> => rig
+  ? { rigFramings: current.rigFramings.map(own => own.rig_id === rig ? { ...own, layout } : own) } : { layout };
 
 function StartFraming({ canWrite, onStart }: { canWrite: boolean; onStart: (seed: FramingSeed) => void }) {
   const [name, setName] = useState('');
@@ -165,6 +221,19 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     setBaseline(change);
   }, []);
   const [notice, setNotice] = useState('');
+  // What the last panel edit did, or why it did not, said beside the panels;
+  // counted, so the same words said again are announced again, and with
+  // what it offers, such as placing a sprung-back panel anyway.
+  type NoticeAction = { label: string; run: () => void };
+  const [panelNotice, setPanelNoticeState] = useState<{ text: string; count: number; action: NoticeAction | null }>({ text: '', count: 0, action: null });
+  const setPanelNotice = useCallback((text: string, action: NoticeAction | null = null) => setPanelNoticeState(current => ({ text, count: current.count + 1, action })), []);
+  // Panel edits undo one step at a time; the save bar's Discard goes back to
+  // the save, and a framing replaced as a whole starts a new history. Each
+  // step remembers which framing it belongs to.
+  type Step = { rig: string | null; layout: DirectorLayout };
+  const [past, setPast] = useState<Step[]>([]);
+  const [future, setFuture] = useState<Step[]>([]);
+  const forgetHistory = useCallback(() => { setPast([]); setFuture([]); }, []);
   // What the save bar was told when a drag began, held until it ends.
   const [heldReport, setHeldReport] = useState<{ unsaved: boolean; changes: string[] } | null>(null);
   const [problem, setProblem] = useState('');
@@ -187,12 +256,13 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     if (loaded) {
       setState(loaded);
       setBaseline(loaded);
+      forgetHistory();
     } else if (started) {
       // Typed into the start form: that is an edit, against nothing saved.
       setState(stateFromSeed(started, DEFAULT_SURVEY));
       setBaseline(null);
     }
-  }, [draft.data, seed, started]);
+  }, [draft.data, seed, started, forgetHistory]);
   // The layer last picked in this browser comes first. Else a fresh framing
   // starts on the offline DSS map when the server has one, and a saved
   // survey gives way to the offline map that stands in for it. The list may
@@ -217,6 +287,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     adjust(current => current && { ...current, surveyId: id });
   };
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
+  const rigName = (id: string) => rigList.find(entry => entry.rig.id === id)?.catalog_name ?? 'Rig';
   // A rig framed on a center of its own is timed where the view has it,
   // saved or not, so the visibility chart follows the drag.
   const liveRigCenters = useMemo(() => Object.fromEntries((state?.rigFramings ?? [])
@@ -225,6 +296,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // The shared framing is drawn only while some rig shoots it: when every
   // rig that is on has a separate framing, no shared target is planned.
   const sharedInUse = !onToggleRig || !state || rigList.some(entry => (shootingRigIds ?? []).includes(entry.rig.id) && !state.rigFramings.some(own => own.rig_id === entry.rig.id));
+
   // A rig that is off, or gone from the list, keeps its separate framing,
   // drawn dim and left where it is.
   const rigLive = (id: string) => rigList.some(entry => entry.rig.id === id) && (!onToggleRig || (shootingRigIds ?? []).includes(id));
@@ -259,6 +331,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const first = checkedShooting.current === null;
     checkedShooting.current = key;
     if (!state.panelRigId || shootingRigIds.includes(state.panelRigId)) return;
+    // A locked panel off the center holds the size it was placed at.
+    if (state.layout.panels.some(panel => panel.locked && (Math.abs(panel.x) > 1e-9 || Math.abs(panel.y) > 1e-9))) return;
     const next = rigList.find(r => sizesShared(state, r));
     if (!next) return;
     const take = (current: FramingState | null) => current ? { ...current, panelRigId: next.rig.id, panel: panelForRig(rigList, next.rig.id) } : current;
@@ -269,6 +343,47 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // uses when it activates, so it follows the pointer without a round trip.
   const request = useMemo(() => state ? previewRequest(state, rigList) : null, [state, rigList]);
   const geometry = useMemo(() => request ? framingGeometry(request) : undefined, [request]);
+  // Rigs framed on their own: their grids over the same target, each in its own colour.
+  const ownRigs = useMemo(() => state ? rigGeometries(state, rigList) : [], [state, rigList]);
+  const [editingRig, setEditingRig] = useState<string | null>(null);
+  // The framing the panel tools work on: a rig framed on its own while its
+  // editor is open, else the shared one. Each has its own panels and locks.
+  // A rig that is off keeps its framing where it is, drawn dim.
+  const activeRig = editingRig && rigLive(editingRig) && state?.rigFramings.some(own => own.rig_id === editingRig) ? editingRig : null;
+  // The panels the tools work on are on the sky: a rig being framed on its
+  // own, or the shared framing while some rig shoots it.
+  const activeShown = !!activeRig || sharedInUse;
+  const active = useMemo(() => {
+    if (!state) return null;
+    if (activeRig) {
+      const own = state.rigFramings.find(entry => entry.rig_id === activeRig)!;
+      return {
+        rig: activeRig as string | null, center: own.center ?? state.center, positionAngle: own.position_angle_degrees ?? state.positionAngle,
+        panel: rigLayout(state, activeRig, rigList)?.panel ?? null, layout: own.layout, geometry: ownRigs.find(entry => entry.rigId === activeRig)?.geometry,
+      };
+    }
+    return { rig: null as string | null, center: state.center, positionAngle: state.positionAngle, panel: state.panel, layout: state.layout, geometry };
+  }, [state, activeRig, rigList, ownRigs, geometry]);
+  // Each panel's outline in the active framing's camera frame, and its reach
+  // in panel sizes: a shot panel at its real edges. Read once per layout, so
+  // a pan or a zoom does not clip every pair of panels again.
+  const activeShapes = useMemo(() => active?.panel ? readFraming(active.center, active.positionAngle, active.panel, active.layout).shapes : [], [active]);
+  const activeBoxes = useMemo(() => active?.panel ? framingBoxes(active.center, active.positionAngle, active.panel, active.layout) : undefined, [active]);
+  // The rule's reading of a layout of the active framing: what falls short,
+  // and which panels are joined.
+  const readingOf = (layout: DirectorLayout): ShapeReading => active?.panel ? readFraming(active.center, active.positionAngle, active.panel, layout).reading : { issues: [], groups: new Map() };
+  /** What placing or turning panel `id` leaves short that `before` did not. */
+  const freshFrom = (before: DirectorLayout, after: DirectorLayout, id: string) => {
+    const was = readingOf(before); const now = readingOf(after);
+    return freshIssues(was.issues, now.issues, id, splitApart(was.groups, now.groups));
+  };
+  // How two of the active framing's panels overlap, read from their outlines.
+  const overlapOf = (layout: DirectorLayout, a: string, b: string) => {
+    if (!active?.panel) return null;
+    const shapes = framingShapes(active.center, active.positionAngle, active.panel, layout);
+    const first = shapes.find(shape => shape.id === a); const second = shapes.find(shape => shape.id === b);
+    return first && second ? shapeOverlap(first, second)?.thickness ?? null : null;
+  };
 
   // A found target moves the target and the view, and a separate framing
   // with a center of its own keeps its offset from the target. Undo puts
@@ -292,10 +407,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     setUndo(null);
     setNotice('Put the target back where it was.');
   };
-  const savedState = draft.data?.draft ? stateFromDraft(draft.data.draft) : null;
+  const savedState = useMemo(() => draft.data?.draft ? stateFromDraft(draft.data.draft) : null, [draft.data]);
   // The name is saved trimmed, so a trailing space is no difference.
   // The survey layer is how the sky is shown, so it is no difference.
-  const planFields = (s: FramingState) => JSON.stringify([s.targetName.trim(), s.center, s.positionAngle, s.mosaic, s.panelRigId, s.panel, s.shownRigIds, s.rigFramings]);
+  const planFields = (s: FramingState) => JSON.stringify([s.targetName.trim(), s.center, s.positionAngle, s.layout, s.panelRigId, s.panel, s.shownRigIds, s.rigFramings]);
   const differsFromSaved = !!state && !!savedState && planFields(state) !== planFields(savedState);
   // The stage takes the shape of its element, so the sky fills whatever
   // width and height the window gives it. The element is held in state as
@@ -309,8 +424,21 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // of a drag is read against the view as it was when the drag began: with
   // the sky turned by the camera, the handle's own turn would otherwise
   // turn the view it is read in.
-  const drag = useRef<{ rig?: string | null; kind: 'look' | 'sky' | 'target' | 'rotate'; x: number; y: number; view: StageView; center: FramingState['viewCenter']; target: FramingState['center']; grab: [number, number] } | null>(null);
-  const [dragMode, setDragMode] = useState<DragMode>(() => remembered(DRAG_MODE_KEY, ['rectangle', 'sky'] as const, 'rectangle'));
+  const drag = useRef<{
+    rig?: string | null; kind: 'look' | 'sky' | 'target' | 'rotate' | 'panel' | 'turn'; x: number; y: number; view: StageView; center: FramingState['viewCenter']; target: FramingState['center']; grab: [number, number];
+    /** The pointer that holds the drag; any other is ignored until it lets go. */
+    pointer: number;
+    /** What the drag may change, as it was when it began, for a cancel:
+     *  the camera angle, and a rig's own center (`null` when it follows the shared one). */
+    angle: number; ownCenter?: DirectorSkyPosition | null;
+    /** The panel being dragged or turned, its framing (`null` for the
+     *  shared one), the layout before the drag, whether the pointer has
+     *  moved, and where the last move put it: the drop is checked there. */
+    panel?: { id: string; rig: string | null; before: DirectorLayout; moved: boolean; last?: DirectorLayout };
+    /** The panel a press landed on, chosen on release if the pointer did not move. */
+    pressed?: string | null;
+  } | null>(null);
+  const [dragMode, setDragMode] = useState<DragMode>(() => remembered(DRAG_MODE_KEY, ['rectangle', 'panel', 'sky'] as const, 'rectangle'));
   const [rotateSky, setRotateSky] = useState(() => remembered(ROTATE_SKY_KEY, ['true', 'false'] as const, 'false') === 'true');
   const chooseDragMode = (mode: DragMode) => { setDragMode(mode); remember(DRAG_MODE_KEY, mode); };
   const chooseRotateSky = (on: boolean) => { setRotateSky(on); remember(ROTATE_SKY_KEY, String(on)); };
@@ -330,13 +458,20 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     remember(MARK_KEYS[key], String(on));
   };
   const skyRotation = rotateSky && state ? state.positionAngle : 0;
-  const stageView: StageView | null = useMemo(() => state ? viewAt(state.viewCenter, state.viewCenter, skyRotation) : null, [state, skyRotation]);
+  // Kept while only the panels change, so the sky, grid and chart under them
+  // are not drawn again for every step of a panel drag.
+  const viewCenter = state?.viewCenter;
+  const stageView: StageView | null = useMemo(() => viewCenter ? viewAt(viewCenter, viewCenter, skyRotation) : null, [viewCenter, skyRotation]);
   const [stageSize, setStageSize] = useState<Stage>(DEFAULT_STAGE);
   // The stage's width in device pixels, so survey tiles are asked for at the
   // density the screen shows; two pixels per logical unit until measured.
   const [stagePixels, setStagePixels] = useState(DEFAULT_STAGE.width * 2);
   // A stage narrower than a tablet has no room for a row of survey chips.
   const [narrow, setNarrow] = useState(false);
+  // The stage's width in CSS pixels, so handles are drawn and taken at a
+  // size a hand can use however small the stage is shown.
+  const [stageCssWidth, setStageCssWidth] = useState(0);
+  const [coarse] = useState(coarsePointer);
   const [layersOpen, setLayersOpen] = useState(false);
   useEffect(() => {
     const element = stageElement;
@@ -347,6 +482,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         setStageSize(stageFor(width / height));
         setStagePixels(Math.round(width * Math.min(2, window.devicePixelRatio || 1)));
         setNarrow(width < NARROW_STAGE_PX);
+        setStageCssWidth(width);
       }
     };
     measure();
@@ -439,6 +575,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   const [stackPick, setStackPick] = useState(() => { try { return window.localStorage.getItem(STACK_CHOICE_KEY + projectId) ?? ''; } catch { return ''; } });
   const chooseStack = (key: string) => { setStackPick(key); remember(STACK_CHOICE_KEY + projectId, key); };
   const mosaic = useQuery({ queryKey: ['directorMosaic', projectId], queryFn: () => apiClient.getDirectorMosaic(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false, staleTime: 60_000 });
+  const refreshMosaic = () => client.invalidateQueries({ queryKey: ['directorMosaic', projectId] });
   // Every stack some panel has, colour first, each once.
   const stackChoices = useMemo(() => {
     const found = new Map<string, SkyPreview>();
@@ -448,11 +585,149 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // A stack picked before that no panel has now falls back to each panel's best.
   const stackChoice = stackChoices.some(stack => stack.key === stackPick) ? stackPick : '';
   const stackChoiceName = stackChoices.find(stack => stack.key === stackChoice);
-  const placedStacks = useMemo(() => !showStacks || !state || !stageView || !mosaic.data ? [] : mosaic.data.panels.flatMap(panel => {
+  const viewFov = state?.viewFov;
+  const placedStacks = useMemo(() => !showStacks || viewFov === undefined || !stageView || !mosaic.data ? [] : mosaic.data.panels.flatMap(panel => {
     const preview = shownStack(panel, stackChoice);
-    const matrix = preview ? stackMatrix(preview, stageView, state.viewFov, stageSize) : null;
+    const matrix = preview ? stackMatrix(preview, stageView, viewFov, stageSize) : null;
     return preview && matrix ? [{ panel, preview, matrix }] : [];
-  }), [showStacks, state, stageView, mosaic.data, stageSize, stackChoice]);
+  }), [showStacks, viewFov, stageView, mosaic.data, stageSize, stackChoice]);
+  // The active framing's panels: which one is chosen, what each has shot,
+  // and which are locked, by hand or by their frames. A panel with frames
+  // is where those frames were taken, so it never moves.
+  const [selectedPanel, setSelectedPanel] = useState<string | null>(null);
+  // Frames belong to the framing they were shot under: the saved one, as the
+  // server reads them. A rig framed separately since keeps its frames on the
+  // shared panels until the save.
+  const savedRigFramings = draft.data?.draft?.rig_framings;
+  const framesByKey = useMemo(() => {
+    const shot = new Map<string, number>();
+    for (const panel of mosaic.data?.panels ?? []) {
+      // A rig framed on its own shoots its own panels under the same ids.
+      const key = `${savedRigFramings?.some(own => own.rig_id === panel.rig.id) ? panel.rig.id : ''}|${panel.panel_id}`;
+      shot.set(key, (shot.get(key) ?? 0) + (panel.progress?.acquired ?? 0));
+    }
+    return shot;
+  }, [mosaic.data, savedRigFramings]);
+  const framesOf = useCallback((rig: string | null, id: string) => framesByKey.get(`${rig ?? ''}|${id}`) ?? 0, [framesByKey]);
+  // Where each shot panel's frames say it was, as the server reads them.
+  const measuredByKey = useMemo(() => new Map((mosaic.data?.measured ?? []).map(entry => [`${entry.framing_rig_id ?? ''}|${entry.panel_id}`, entry.geometry])), [mosaic.data]);
+  const activeKey = active?.rig ?? null;
+  const panelFrames = useCallback((id: string) => framesOf(activeKey, id), [framesOf, activeKey]);
+  const panelLocked = useCallback((id: string) => !!active && (!!findPanel(active.layout, id)?.locked || panelFrames(id) > 0), [active, panelFrames]);
+  const heldIn = useCallback((rig: string | null, layout: DirectorLayout) => layout.panels.some(panel => panel.locked || framesOf(rig, panel.id) > 0), [framesOf]);
+  // Locked panels hold the shared center and angle: the shared framing's,
+  // and those of a rig framed on its own that follows either.
+  const followersHeld = (follows: (own: DirectorRigFraming) => boolean): string[] => !state ? [] : state.rigFramings.filter(own => follows(own) && heldIn(own.rig_id, own.layout)).map(own => own.rig_id);
+  const sharedHeld = !!state && heldIn(null, state.layout);
+  const centerHolders = followersHeld(own => own.center === null);
+  const angleHolders = followersHeld(own => own.position_angle_degrees === null);
+  const centerHeld = sharedHeld || centerHolders.length > 0;
+  const angleHeld = sharedHeld || angleHolders.length > 0;
+  const layoutLocked = centerHeld || angleHeld;
+  // Who holds the shared center or angle, in a few words.
+  const heldBy = (rigs: string[]) => sharedHeld || rigs.length === 0 ? 'Locked panels' : `Locked panels of ${rigs.map(rigName).join(' and ')}`;
+  const holders = [...new Set([...centerHolders, ...angleHolders])];
+  const followed = centerHeld && angleHeld ? 'center and camera angle' : centerHeld ? 'center' : 'camera angle';
+  const heldNote = sharedHeld ? 'Locked panels hold the center and camera angle. Unlock them to move the whole mosaic.'
+    : `${heldBy(holders)} follow the shared ${followed} and hold ${centerHeld && angleHeld ? 'them' : 'it'} where ${centerHeld && angleHeld ? 'they are' : 'it is'}. Unlock them, or give ${holders.length === 1 ? rigName(holders[0]) : 'those rigs'} a ${followed} of ${holders.length === 1 ? 'its' : 'their'} own.`;
+  // A new panel size moves every planned panel off the center; one locked
+  // there holds the size. A shot panel stays as shot whatever the size.
+  const holdsSize = useCallback((rig: string | null, layout: DirectorLayout) => layout.panels.some(panel => !panel.measured && (panel.locked || framesOf(rig, panel.id) > 0) && (Math.abs(panel.x) > 1e-9 || Math.abs(panel.y) > 1e-9)), [framesOf]);
+  const sizeLocked = !!state && holdsSize(null, state.layout);
+  // A panel with frames is locked in the draft too, so the server holds it
+  // there for every client, and a locked panel is drawn where its frames
+  // say it was shot. Both are the view's own choices, saved quietly. A
+  // panel moved before its frames were known goes back to its saved place.
+  useEffect(() => {
+    if (!state || (framesByKey.size === 0 && measuredByKey.size === 0)) return;
+    const settle = (rig: string | null, layout: DirectorLayout, restored?: string[]): DirectorLayout | null => {
+      let changed = false;
+      const savedLayout = savedState ? layoutIn(savedState, rig) : null;
+      const panels = layout.panels.map(panel => {
+        let next = panel;
+        if (!next.locked && framesOf(rig, next.id) > 0) {
+          next = { ...next, locked: true };
+          const saved = savedLayout ? findPanel(savedLayout, next.id) : undefined;
+          if (saved && (Math.abs(saved.x - next.x) > 1e-9 || Math.abs(saved.y - next.y) > 1e-9 || turnOf(saved) !== turnOf(next))) {
+            next = { ...next, x: saved.x, y: saved.y };
+            if (turnOf(saved) === 0) delete next.angle_offset_degrees; else next.angle_offset_degrees = turnOf(saved);
+            restored?.push(next.id);
+          }
+        }
+        const shot = next.locked ? measuredByKey.get(`${rig ?? ''}|${next.id}`) : undefined;
+        if (shot && JSON.stringify(shot) !== JSON.stringify(next.measured ?? null)) next = { ...next, measured: shot };
+        if (next !== panel) changed = true;
+        return next;
+      });
+      return changed ? { ...layout, panels } : null;
+    };
+    const restored: string[] = [];
+    const shared = settle(null, state.layout, restored);
+    const own = state.rigFramings.map(entry => settle(entry.rig_id, entry.layout, restored));
+    if (!shared && own.every(entry => !entry)) return;
+    adjust(current => current && {
+      ...current, layout: settle(null, current.layout) ?? current.layout,
+      rigFramings: current.rigFramings.map(entry => ({ ...entry, layout: settle(entry.rig_id, entry.layout) ?? entry.layout })),
+    });
+    if (restored.length > 0) setPanelNotice(`${restored.join(', ')} ${restored.length === 1 ? 'has' : 'have'} frames, so ${restored.length === 1 ? 'it went' : 'they went'} back to the saved place and ${restored.length === 1 ? 'is' : 'are'} locked.`);
+  }, [state, savedState, framesByKey, measuredByKey, framesOf, adjust, setPanelNotice]);
+  // Another framing's panels start with nothing chosen and nothing to undo.
+  useEffect(() => { setPast([]); setFuture([]); setSelectedPanel(null); }, [activeRig]);
+  const [extendScope, setExtendScope] = useState<ExtendScope>('mosaic');
+  const [extendOverlap, setExtendOverlap] = useState<number | null>(null);
+  const editLayout = useCallback((next: DirectorLayout, what: string) => {
+    if (!active || next === active.layout) return;
+    setPast(list => [...list.slice(-49), { rig: active.rig, layout: active.layout }]);
+    setFuture([]);
+    const rig = active.rig;
+    update(current => withLayout(current, rig, next));
+    setPanelNotice(what);
+  }, [active, update, setPanelNotice]);
+  const stepHistory = (back: boolean) => {
+    if (!state) return;
+    const from = back ? past : future;
+    const entry = from[from.length - 1];
+    if (!entry) return;
+    (back ? setPast : setFuture)(from.slice(0, -1));
+    const now = layoutIn(state, entry.rig);
+    if (!now) return;
+    (back ? setFuture : setPast)(list => [...list, { rig: entry.rig, layout: now }]);
+    if (selectedPanel && !findPanel(entry.layout, selectedPanel)) setSelectedPanel(null);
+    update(current => withLayout(current, entry.rig, entry.layout));
+    setPanelNotice(back ? 'Undid the last panel change.' : 'Redid the panel change.');
+  };
+  const addOverlap = Math.max(active?.layout.min_overlap_percent ?? 0, extendOverlap ?? active?.layout.min_overlap_percent ?? 0);
+  const extend = (direction: Direction) => {
+    if (!active) return;
+    const step = cameraStep(direction, active.positionAngle);
+    const chosen = extendScope === 'panel' && selectedPanel && findPanel(active.layout, selectedPanel);
+    const result = chosen ? extendFrom(active.layout, chosen.id, step, addOverlap, activeBoxes, overlapOf) : extendMosaic(active.layout, step, addOverlap, activeBoxes, overlapOf);
+    if (result.added.length === 0) { setPanelNotice(result.skipped.length ? `A panel is already there: ${result.skipped.join(', ')}.` : 'Nothing to add.'); return; }
+    editLayout(result.layout, `Added ${result.added.join(', ')} ${chosen ? `${direction} of ${chosen.id}` : `on the ${direction} side`}.`);
+    if (result.added.length === 1) setSelectedPanel(result.added[0]);
+  };
+  const addAt = (fromId: string, step: [number, number]) => {
+    if (!active) return;
+    const result = extendFrom(active.layout, fromId, step, addOverlap, activeBoxes, overlapOf);
+    if (result.added.length === 0) { setPanelNotice(`A panel is already there: ${result.skipped.join(', ')}.`); return; }
+    editLayout(result.layout, `Added ${result.added[0]} beside ${fromId}.`);
+    setSelectedPanel(result.added[0]);
+  };
+  // The turns a turned panel settles on: the framing's own, and each other
+  // panel's, a shot one's as its outline leans.
+  const turnCandidates = (id: string) => [0, ...activeShapes.filter(shape => shape.id !== id).map(shapeTurn)];
+  /** Turn the chosen panel to `degrees` from the framing's angle, saying
+   *  what the turn leaves short of the rule. */
+  const turnChosen = (id: string, degrees: number) => {
+    if (!active) return;
+    const next = turnPanel(active.layout, id, degrees);
+    const fresh = freshFrom(active.layout, next, id);
+    const turn = turnOf(findPanel(next, id) ?? { id, x: 0, y: 0, locked: false });
+    editLayout(next, `${turn === 0 ? `Turned ${id} back to the framing angle` : `Turned ${id} ${signedTurn(turn)} from the framing`}${fresh.length ? `; it leaves ${fresh.map(describeIssue).join('; ')}` : ''}.`);
+  };
+  // What each panel is short of, for the sky and the list.
+  const layoutIssueList = useMemo(() => active?.geometry?.issues ?? [], [active]);
+  const flagged = useMemo(() => flaggedPanels(layoutIssueList), [layoutIssueList]);
   // A view narrower than the footprint hides its edges and handle. The fit
   // takes every panel corner as it is drawn, turned by the camera angle,
   // and the handle past the top edge. It widens the view once when the
@@ -463,8 +738,15 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const shared = request && (sharedInUse || own.length === 0) ? framingGeometry(request) : null;
     const corners = [...(shared?.panels ?? []), ...own].flatMap(panel => panel.corners);
     const handle = shared && shared.panels.length > 0 ? (fov: number) => rotationHandleSky(current, shared.extent, fov) : null;
-    const fov = fitViewFov(corners, handle, current.center, rotateSky ? current.positionAngle : 0, stageSize);
-    return fov === null ? {} : { viewFov: widenOnly ? Math.max(current.viewFov, fov) : fov, viewCenter: current.center };
+    // Panels added on one side leave the target off the mosaic's middle;
+    // the view centers on the middle of the shared panels.
+    const xs = current.layout.panels.map(panel => panel.x);
+    const ys = current.layout.panels.map(panel => panel.y);
+    const middle = shared && current.panel && xs.length > 0
+      ? deprojectFrom(current.center, cameraToPlane((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, current.panel, current.positionAngle))
+      : current.center;
+    const fov = fitViewFov(corners, handle, middle, rotateSky ? current.positionAngle : 0, stageSize);
+    return fov === null ? {} : { viewFov: widenOnly ? Math.max(current.viewFov, fov) : fov, viewCenter: middle };
   }), [update, rigList, sharedInUse, rotateSky, stageSize]);
   const fitted = useRef(false);
   const hasGeometry = !!geometry;
@@ -493,6 +775,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       }
       client.setQueryData<DirectorFramingDraftView>(draftKey, saved);
     },
+    // The server writes each locked panel's shot geometry from its frames on
+    // every save, so the panels are read again after one, and after a
+    // refusal, in case frames landed since they were read.
+    onSettled: () => { void refreshMosaic(); },
   });
   const httpError = isAxiosError(save.error) ? save.error : save.error instanceof Error && isAxiosError(save.error.cause) ? save.error.cause : null;
   const stale = httpError?.response?.status === 409;
@@ -529,6 +815,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       setState(baseline ?? savedState);
       setUndo(null);
       setNotice('');
+      setPanelNotice('');
+      forgetHistory();
       save.reset();
     },
   });
@@ -543,42 +831,180 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     return [(event.clientX - rect.left) * k, (event.clientY - rect.top) * k];
   };
   const geometryRef = useRef<DirectorFramingPreview | undefined>(undefined);
+  // A camera-frame place of the active framing, in panel sizes (or degrees),
+  // on the stage; and a stage point back as a camera-frame place.
+  const cameraOnStage = (x: number, y: number, view: StageView): [number, number] | null => {
+    if (!state || !active?.panel) return null;
+    const at = projectOn(view, deprojectFrom(active.center, cameraToPlane(x, y, active.panel, active.positionAngle)));
+    return at ? toStage(at, state.viewFov, stageSize) : null;
+  };
+  const degreesOnStage = (place: Point, view: StageView): [number, number] | null => {
+    if (!state || !active) return null;
+    const at = projectOn(view, deprojectFrom(active.center, cameraDegreesToPlane(place, active.positionAngle)));
+    return at ? toStage(at, state.viewFov, stageSize) : null;
+  };
+  const stageToCamera = (point: [number, number], view: StageView): [number, number] | null => {
+    if (!state || !active?.panel) return null;
+    const sky = deprojectOn(view, fromStage(point[0], point[1], state.viewFov, stageSize));
+    const offset = offsetFrom(active.center, sky);
+    return offset ? planeToCamera(offset, active.panel, active.positionAngle) : null;
+  };
+  /** The active framing's panel under a stage point, the last drawn first. */
+  const panelAt = (point: [number, number], view: StageView): string | null => {
+    const shown = geometryRef.current?.panels ?? [];
+    for (let index = shown.length - 1; index >= 0; index -= 1) {
+      const corners = stageCorners(shown[index].corners, view);
+      if (corners && insidePolygon(point, corners, state!.viewFov, stageSize)) return shown[index].id;
+    }
+    return null;
+  };
+  /** The add handles round the chosen panel: one on each side and corner. */
+  const ADD_STEPS: Array<[number, number]> = [[-1, 1], [0, 1], [1, 1], [-1, 0], [1, 0], [-1, -1], [0, -1], [1, -1]];
+  const addHandles = (view: StageView): Array<{ step: [number, number]; at: [number, number] }> => {
+    const chosen = active && selectedPanel ? findPanel(active.layout, selectedPanel) : undefined;
+    if (!chosen || !canWrite || !activeShown || !activeBoxes) return [];
+    // At the middle of each side and each corner of its real outline.
+    const box = activeBoxes(chosen);
+    const [cx, cy] = [(box[0] + box[1]) / 2, (box[2] + box[3]) / 2];
+    return ADD_STEPS.flatMap(step => {
+      const at = cameraOnStage(cx + (step[0] * (box[1] - box[0])) / 2, cy + (step[1] * (box[3] - box[2])) / 2, view);
+      return at ? [{ step, at }] : [];
+    });
+  };
+  /** The chosen panel's turn handle: past its top edge along its own up. */
+  const turnHandle = (view: StageView): { at: [number, number]; middle: [number, number] } | null => {
+    const chosen = active && selectedPanel ? findPanel(active.layout, selectedPanel) : undefined;
+    if (!state || !chosen || !canWrite || !activeShown || !active?.panel || panelLocked(chosen.id)) return null;
+    const shape = activeShapes.find(entry => entry.id === chosen.id);
+    if (!shape) return null;
+    const tip = projectOn(view, panelHandleSky(active.center, active.positionAngle, shapeCenter(shape), turnOf(chosen), active.panel.height_degrees / 2, state.viewFov));
+    const middle = degreesOnStage(shapeCenter(shape), view);
+    return tip && middle ? { at: toStage(tip, state.viewFov, stageSize), middle } : null;
+  };
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  /** End the drag in hand and put back what it moved: a cancelled touch, a
+   *  lost capture, Escape, or a pointer that let go without a pointerup. */
+  const cancelDrag = (say = true) => {
+    const ended = drag.current;
+    if (!ended) return false;
+    drag.current = null;
+    setHeldReport(null);
+    if (ended.panel) {
+      const { id, rig, before, moved } = ended.panel;
+      if (moved) {
+        update(current => withLayout(current, rig, before));
+        if (say) setPanelNotice(`Put ${id} back.`);
+      }
+    } else if (ended.kind === 'look') update({ viewCenter: ended.center });
+    else if (ended.kind === 'sky') update({ viewCenter: ended.center, center: ended.target });
+    else if (ended.kind === 'rotate') update({ positionAngle: ended.angle });
+    else if (ended.kind === 'target') {
+      const { rig, ownCenter, target } = ended;
+      if (rig) update(current => ({ rigFramings: current.rigFramings.map(own => own.rig_id === rig ? { ...own, center: ownCenter ?? null } : own) }));
+      else update({ center: target });
+    }
+    return true;
+  };
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!state || !stageView || event.button !== 0) return;
+    // One pointer drags at a time: a second finger or a pen while a drag is
+    // in hand is ignored. The same pointer pressing again lost its last
+    // release, so that drag is put back first.
+    if (drag.current) {
+      if (drag.current.pointer !== event.pointerId) return;
+      cancelDrag(false);
+    }
     const point = stagePoint(event);
     const geometry = geometryRef.current;
+    // Handles take a press within a finger's reach on a small stage, the nearest first.
+    const reach = handleReach(stageSize.width / Math.max(1, event.currentTarget.getBoundingClientRect().width));
+    const begin = { x: event.clientX, y: event.clientY, view: stageView, center: state.viewCenter, target: state.center, pointer: event.pointerId, angle: state.positionAngle };
+    // A press on an add handle round the chosen panel adds a panel there;
+    // the chosen panel's own handle turns it alone.
+    if (selectedPanel && !event.shiftKey) {
+      const turning = turnHandle(stageView);
+      const hit = nearestWithin([...addHandles(stageView).map(entry => ({ at: entry.at, step: entry.step as [number, number] | null })), ...(turning ? [{ at: turning.at, step: null }] : [])], point, reach);
+      if (hit?.step) { addAt(selectedPanel, hit.step); return; }
+      if (hit && active) {
+        drag.current = { ...begin, kind: 'turn', rig: active.rig, grab: [0, 0], panel: { id: selectedPanel, rig: active.rig, before: active.layout, moved: false } };
+        setHeldReport({ unsaved: reported.unsaved, changes: reported.changes });
+        event.currentTarget.setPointerCapture(event.pointerId);
+        return;
+      }
+    }
     // The handle turns the camera in either mode. Otherwise a drag moves the
     // rectangle when it starts on it, or the sky under a pinned rectangle;
     // Shift looks around without moving the target in both modes.
-    let kind: 'look' | 'sky' | 'target' | 'rotate' = event.shiftKey ? 'look' : dragMode === 'sky' ? 'sky' : 'look';
+    let kind: 'look' | 'sky' | 'target' | 'rotate' | 'panel' = event.shiftKey ? 'look' : dragMode === 'sky' ? 'sky' : 'look';
     // The rig being framed on its own comes first: a drag on its grid moves
     // its own center, and detaches it from the shared one if it followed it.
     // A rig that is off, or no longer listed, is drawn dim and stays put.
     const own = ownRigsRef.current.find(entry => entry.rigId === editingRef.current && rigLive(entry.rigId));
     let rig: string | null = null;
+    const pressed = activeShown && active?.geometry ? panelAt(point, stageView) : null;
     if (own && kind === 'look' && !event.shiftKey && dragMode === 'rectangle' && own.geometry.panels.some(panel => { const corners = stageCorners(panel.corners, stageView); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) {
       kind = 'target';
       rig = own.rigId;
+      // Its locked panels hold its center where it is.
+      if (heldIn(own.rigId, own.layout.layout)) {
+        kind = 'look';
+        setPanelNotice(`Locked panels hold ${rigName(own.rigId)}'s framing where it is. Drag one panel with Panel, or unlock them.`);
+      }
     } else if (geometry && geometry.panels.length > 0 && sharedInUse) {
-      // A hidden shared framing has no handle to take hold of.
-      const handleAt = projectOn(stageView, rotationHandleSky(state, geometry.extent));
+      // A hidden shared framing has no handle to take hold of, and a
+      // locked one shows none.
+      const handleAt = angleHeld ? null : projectOn(stageView, rotationHandleSky(state, geometry.extent));
       const handle = handleAt ? toStage(handleAt, state.viewFov, stageSize) : null;
-      if (handle && Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= 18) kind = 'rotate';
-      else if (kind === 'look' && !event.shiftKey && dragMode === 'rectangle' && geometry.panels.some(panel => { const corners = stageCorners(panel.corners, stageView); return corners && insidePolygon(point, corners, state.viewFov, stageSize); })) kind = 'target';
+      if (handle && Math.hypot(handle[0] - point[0], handle[1] - point[1]) <= Math.max(18, reach)) kind = 'rotate';
+      else if (kind === 'look' && !event.shiftKey && dragMode === 'rectangle' && pressed) kind = 'target';
     }
-    // Where the pointer took hold, relative to the target, so the target
-    // follows the hand instead of jumping to it.
+    let panel: { id: string; rig: string | null; before: DirectorLayout; moved: boolean } | undefined;
+    // Panel mode moves the one panel under the pointer; a locked one stays
+    // and the drag looks around instead.
+    if (dragMode === 'panel' && !event.shiftKey && pressed && kind !== 'rotate' && active) {
+      if (canWrite && !panelLocked(pressed)) {
+        kind = 'panel';
+        panel = { id: pressed, rig: active.rig, before: active.layout, moved: false };
+      } else {
+        kind = 'look';
+        if (canWrite) setPanelNotice(`${pressed} is locked${panelFrames(pressed) > 0 ? ` by its ${panelFrames(pressed)} frames` : ''}: it stays where it is.`);
+      }
+    }
+    // Locked panels hold the shared center and angle: dragging the
+    // rectangle, or the sky with the target on it, looks around instead.
+    const holders = (kind === 'target' && rig === null) || kind === 'sky' ? (centerHeld ? centerHolders : null) : kind === 'rotate' && angleHeld ? angleHolders : null;
+    if (holders) {
+      kind = 'look';
+      setPanelNotice(`${heldBy(holders)} hold the mosaic where it is. Drag one panel with Panel, or unlock them.`);
+    }
+    // Where the pointer took hold, relative to the target (or the panel),
+    // so it follows the hand instead of jumping to it.
     const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
     const target = own && rig ? own.layout.center : state.center;
     const targetOffset = projectOn(stageView, target) ?? [0, 0];
-    drag.current = { kind, rig, x: event.clientX, y: event.clientY, view: stageView, center: state.viewCenter, target, grab: [pointerOffset[0] - targetOffset[0], pointerOffset[1] - targetOffset[1]] };
+    let grab: [number, number] = [pointerOffset[0] - targetOffset[0], pointerOffset[1] - targetOffset[1]];
+    if (panel && active) {
+      const at = stageToCamera(point, stageView);
+      const placed = findPanel(active.layout, panel.id)!;
+      grab = at ? [at[0] - placed.x, at[1] - placed.y] : [0, 0];
+    }
+    const ownCenter = rig ? state.rigFramings.find(entry => entry.rig_id === rig)?.center ?? null : undefined;
+    drag.current = { ...begin, kind, rig, target, grab, panel, pressed, ownCenter };
     // The save bar keeps what it said until the drag ends: a bar appearing
     // mid-drag would push the stage down under the pointer.
     setHeldReport({ unsaved: reported.unsaved, changes: reported.changes });
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!drag.current || !state) return;
+    if (!drag.current || !state || event.pointerId !== drag.current.pointer) return;
+    // No button held: the release never arrived. A panel goes back to where
+    // it was, since its drop was never checked; a look around simply ends.
+    if (event.buttons === 0) {
+      if (drag.current.panel) cancelDrag();
+      else { drag.current = null; setHeldReport(null); }
+      return;
+    }
     const { view } = drag.current;
     if (drag.current.kind === 'look' || drag.current.kind === 'sky') {
       const scale = pixelScale(state.viewFov, stageSize) * stageScale();
@@ -599,19 +1025,160 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     }
     const point = stagePoint(event);
     const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
+    if (drag.current.kind === 'panel' && drag.current.panel && active?.panel) {
+      // The panel follows the hand, and settles on a place lined up with
+      // another panel or at the minimum overlap beside one when near it,
+      // against a shot or turned panel's real edges, so a straight drag
+      // does not drift off its row by a hair. Alt only keeps a drop short
+      // of the rule; arrow keys place it finer.
+      const held = drag.current.panel;
+      const at = stageToCamera(point, view);
+      if (!at) return;
+      const tolerance = (SNAP_PX * pixelScale(state.viewFov, stageSize) * stageScale()) / Math.min(active.panel.width_degrees, active.panel.height_degrees);
+      const { x, y } = snapPlacement(held.before, held.id, at[0] - drag.current.grab[0], at[1] - drag.current.grab[1], tolerance, activeBoxes, overlapOf);
+      if (Math.hypot(event.clientX - drag.current.x, event.clientY - drag.current.y) > 2) held.moved = true;
+      if (held.moved) {
+        const placed = movePanel(held.before, held.id, x, y);
+        held.last = placed;
+        update(current => withLayout(current, held.rig, placed));
+      }
+      return;
+    }
+    if (drag.current.kind === 'turn' && drag.current.panel && active?.panel) {
+      // The panel turns about its middle toward the hand, read on the
+      // framing's plane, and settles on the framing's angle, a neighbour's
+      // or a shot panel's when near it.
+      const held = drag.current.panel;
+      const shape = readFraming(active.center, active.positionAngle, active.panel, held.before).shapes.find(entry => entry.id === held.id);
+      const raw = shape ? turnToward(active.center, active.positionAngle, shapeCenter(shape), deprojectOn(view, pointerOffset)) : null;
+      if (raw === null) return;
+      const { degrees } = snapTurn(Math.round(raw * 10) / 10, turnCandidates(held.id), SNAP_TURN_DEG);
+      if (Math.hypot(event.clientX - drag.current.x, event.clientY - drag.current.y) > 2) held.moved = true;
+      if (held.moved) {
+        const turned = turnPanel(held.before, held.id, degrees);
+        held.last = turned;
+        update(current => withLayout(current, held.rig, turned));
+      }
+      return;
+    }
     if (drag.current.kind === 'target') {
       const { grab, rig } = drag.current;
+      // A press that has not moved is a click: it chooses the panel.
+      if (Math.hypot(event.clientX - drag.current.x, event.clientY - drag.current.y) <= 2) return;
       const center = deprojectOn(view, [pointerOffset[0] - grab[0], pointerOffset[1] - grab[1]]);
       if (rig) update(current => ({ rigFramings: current.rigFramings.map(own => own.rig_id === rig ? { ...own, center } : own) }));
       else update({ center });
-    } else {
+    } else if (drag.current.kind === 'rotate') {
       // The angle is read on the target's plane, where the camera angle
       // lives, so the handle and the rectangle agree wherever the view is.
       const at = deprojectOn(view, pointerOffset);
       update({ positionAngle: normaliseAngle(Math.round(angleAt(state.center, at) * 10) / 10) });
     }
   };
-  const onPointerUp = () => { drag.current = null; setHeldReport(null); };
+  /** Keep a placement or a turn the rule found short, as one undoable step. */
+  const keepAnyway = (rig: string | null, id: string, before: DirectorLayout, after: DirectorLayout, said: string) => () => {
+    const now = stateRef.current ? layoutIn(stateRef.current, rig) : null;
+    if (!now || JSON.stringify(now) !== JSON.stringify(before)) { setPanelNotice(`The panels changed since; drag ${id} again.`); return; }
+    setPast(list => [...list.slice(-49), { rig, layout: before }]);
+    setFuture([]);
+    update(current => withLayout(current, rig, after));
+    setPanelNotice(said);
+  };
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const ended = drag.current;
+    if (!ended || event.pointerId !== ended.pointer) return;
+    drag.current = null;
+    setHeldReport(null);
+    if (!stateRef.current) return;
+    const still = Math.hypot(event.clientX - ended.x, event.clientY - ended.y) <= 3;
+    if ((ended.kind === 'panel' || ended.kind === 'turn') && ended.panel) {
+      const { id, before, moved, rig, last } = ended.panel;
+      setSelectedPanel(id);
+      // The drop is where the last move put the panel, whether or not the
+      // screen has drawn it yet.
+      if (!moved || !last) return;
+      const after = last;
+      update(current => withLayout(current, rig, after));
+      const turned = ended.kind === 'turn';
+      // A placement or a turn that leaves a thin overlap, a gap or a lone
+      // panel the layout did not have springs back unless Alt asks for it.
+      const fresh = freshFrom(before, after, id);
+      const short = fresh.map(describeIssue).join('; ');
+      const offRule = `${turned ? 'Turned' : 'Placed'} ${id} off the rule: ${short}.`;
+      if (fresh.length > 0 && !event.altKey) {
+        update(current => withLayout(current, rig, before));
+        setPanelNotice(`Not ${turned ? 'turned' : 'placed'}: ${short}. Hold Alt (Option) while dropping to ${turned ? 'turn' : 'place'} it anyway, or:`,
+          { label: turned ? 'Turn anyway' : 'Place anyway', run: keepAnyway(rig, id, before, after, offRule) });
+        return;
+      }
+      setPast(list => [...list.slice(-49), { rig, layout: before }]);
+      setFuture([]);
+      const turn = turnOf(findPanel(after, id) ?? { id, x: 0, y: 0, locked: false });
+      const done = turned ? (turn === 0 ? `Turned ${id} back to the framing angle` : `Turned ${id} ${signedTurn(turn)} from the framing`) : `Moved ${id}`;
+      setPanelNotice(fresh.length > 0 ? offRule : `${done}.`);
+      return;
+    }
+    // A click chooses the panel under it, or none.
+    if (still && (ended.kind === 'look' || ended.kind === 'target' || ended.kind === 'sky')) setSelectedPanel(ended.pressed ?? null);
+  };
+  // A cancelled touch or a capture taken away puts back what the drag moved.
+  const onPointerCancel = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (drag.current && event.pointerId === drag.current.pointer) cancelDrag();
+  };
+  /** Arrow keys nudge the chosen panel along the camera axis nearest the
+   *  arrow's way on screen; [ and ] turn it a degree (Shift: ten); Delete
+   *  removes it, L locks it, Escape cancels a drag or lets go, and Ctrl+Z /
+   *  Ctrl+Shift+Z undo and redo panel edits. A key pressed on a button over
+   *  the sky is that button's, apart from undo, redo and cancelling a drag. */
+  const onStageKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape' && drag.current) { event.preventDefault(); cancelDrag(); return; }
+    if (!state || !active) return;
+    const mod = event.metaKey || event.ctrlKey;
+    const key = event.key.toLowerCase();
+    if (mod && (key === 'z' || key === 'y')) { event.preventDefault(); stepHistory(key === 'z' && !event.shiftKey); return; }
+    if (event.target !== event.currentTarget) return;
+    if (!selectedPanel) return;
+    const layout = active.layout;
+    const chosen = findPanel(layout, selectedPanel);
+    if (!chosen) return;
+    if (event.key === 'Escape') { event.preventDefault(); setSelectedPanel(null); return; }
+    if (!canWrite) return;
+    // By the key's place, as [ and ] are, so a keyboard layout without an L still has one.
+    if (event.code === 'KeyL' && !mod) {
+      event.preventDefault();
+      if (panelFrames(chosen.id) > 0) { setPanelNotice(`${chosen.id} has frames, so it stays locked.`); return; }
+      editLayout(setLocked(layout, chosen.id, !chosen.locked), chosen.locked ? `Unlocked ${chosen.id}.` : `Locked ${chosen.id}.`);
+      return;
+    }
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      if (panelLocked(chosen.id)) { setPanelNotice(`${chosen.id} is locked: unlock it to remove it.`); return; }
+      if (layout.panels.length < 2) { setPanelNotice(`${chosen.id} is the only panel: a framing keeps one.`); return; }
+      editLayout({ ...layout, panels: layout.panels.filter(panel => panel.id !== chosen.id) }, `Removed ${chosen.id}.`);
+      setSelectedPanel(null);
+      return;
+    }
+    // By the key's place, so Shift and keyboard layouts do not change it.
+    if (!mod && (event.code === 'BracketLeft' || event.code === 'BracketRight')) {
+      event.preventDefault();
+      if (panelLocked(chosen.id)) { setPanelNotice(`${chosen.id} is locked: it keeps the angle it was shot at.`); return; }
+      turnChosen(chosen.id, turnOf(chosen) + (event.code === 'BracketRight' ? 1 : -1) * TURN_STEP * (event.shiftKey ? 10 : 1));
+      return;
+    }
+    const arrows: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    const arrow = arrows[event.key];
+    if (!arrow || !active.panel) return;
+    event.preventDefault();
+    if (panelLocked(chosen.id)) { setPanelNotice(`${chosen.id} is locked: it stays where it is.`); return; }
+    // The arrow's way on screen, taken onto the sky and into the camera frame.
+    const rad = (skyRotation * Math.PI) / 180;
+    const screen: [number, number] = [-arrow[0], -arrow[1]];
+    const plane: [number, number] = [screen[0] * Math.cos(-rad) - screen[1] * Math.sin(-rad), screen[0] * Math.sin(-rad) + screen[1] * Math.cos(-rad)];
+    const camera = planeToCamera(plane, { width_degrees: 1, height_degrees: 1 }, active.positionAngle);
+    const size = NUDGE * (event.shiftKey ? 10 : 1);
+    const step: [number, number] = Math.abs(camera[0]) >= Math.abs(camera[1]) ? [Math.sign(camera[0]) * size, 0] : [0, Math.sign(camera[1]) * size];
+    editLayout(movePanel(layout, chosen.id, chosen.x + step[0], chosen.y + step[1]), `Nudged ${chosen.id}.`);
+  };
   const turn = (delta: number) => update(current => ({ positionAngle: normaliseAngle(current.positionAngle + delta) }));
   const zoomBy = (factor: number) => update(current => ({ viewFov: clampFov(current.viewFov * factor) }));
   useEffect(() => {
@@ -632,22 +1199,22 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
 
   const survey = surveys.data?.find(entry => entry.id === state?.surveyId);
   const panelRig = rigList.find(entry => entry.rig.id === state?.panelRigId);
-  // Rigs framed on their own: their grids over the same target, each in its own colour.
-  const ownRigs = useMemo(() => state ? rigGeometries(state, rigList) : [], [state, rigList]);
-  const [editingRig, setEditingRig] = useState<string | null>(null);
   const ownRigsRef = useRef(ownRigs);
   ownRigsRef.current = ownRigs;
   const editingRef = useRef<string | null>(null);
   editingRef.current = editingRig;
   const editing = state?.rigFramings.find(own => own.rig_id === editingRig) ?? null;
-  const rigName = (id: string) => rigList.find(entry => entry.rig.id === id)?.catalog_name ?? 'Rig';
   const editOwn = (patch: Partial<DirectorRigFraming>) => update(current => ({ rigFramings: current.rigFramings.map(own => own.rig_id === editingRig ? { ...own, ...patch } : own) }));
   const frameRig = (id: string) => {
     if (!id) return;
-    update(current => current.rigFramings.some(own => own.rig_id === id) ? {} : ({ rigFramings: [...current.rigFramings, { rig_id: id, center: null, position_angle_degrees: null, mosaic: { ...current.mosaic }, panel: panelForRig(rigList, id) ? null : current.panel }] }));
+    update(current => current.rigFramings.some(own => own.rig_id === id) ? {} : ({ rigFramings: [...current.rigFramings, { rig_id: id, center: null, position_angle_degrees: null, layout: { ...current.layout, panels: current.layout.panels.map(panel => setLocked({ ...current.layout, panels: [panel] }, panel.id, false).panels[0]) }, panel: panelForRig(rigList, id) ? null : current.panel }] }));
     setEditingRig(id);
   };
-  const chooseRig = (rigId: string) => update({ panelRigId: rigId || null, panel: rigId ? panelForRig(rigList, rigId) : null });
+  const chooseRig = (rigId: string) => {
+    // A new size moves every panel off the center, a locked one too.
+    if (sizeLocked) { setPanelNotice('A locked panel off the center holds the panel size: unlock it to frame with another rig.'); return; }
+    update({ panelRigId: rigId || null, panel: rigId ? panelForRig(rigList, rigId) : null });
+  };
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
 
   // The rigs that shoot this plan come first; the rest fold away.
@@ -662,7 +1229,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // a line that offers to try again; only a first load has nothing to show.
   if (draft.isError && !draft.data) return <p className="director-error" role="alert">{message(draft.error)} <button type="button" onClick={() => void draft.refetch()}>Retry</button></p>;
   if (!state) return <StartFraming canWrite={canWrite} onStart={setStarted} />;
-  geometryRef.current = geometry;
+  geometryRef.current = active?.geometry;
   const ownEditor = editing && (() => {
           const own = ownRigs.find(entry => entry.rigId === editing.rig_id);
           const field = panelForRig(rigList, editing.rig_id);
@@ -670,28 +1237,30 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
           const center = editing.center ?? state.center;
           const at = (field: string) => problemAt(`rig:${editing.rig_id}:${field}`);
           const said = problems.filter(problem => problem.field.startsWith(`rig:${editing.rig_id}:`));
+          // Its locked panels hold its center and angle, as the shared ones do.
+          const held = heldIn(editing.rig_id, editing.layout);
+          // A locked planned panel off the center holds the panel size too.
+          const sized = holdsSize(editing.rig_id, editing.layout);
+          const follows = editing.center === null && editing.position_angle_degrees === null ? 'center and camera angle'
+            : editing.center === null ? 'center' : editing.position_angle_degrees === null ? 'camera angle' : null;
           return <div className="framing-own" data-testid="framing-own-rig">
             <div className="framing-grid">
-              <label>RA<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} right ascension degrees`} step="any" min={0} max={359.99999} value={Number(center.ra_degrees.toFixed(5))} onChange={event => editOwn({ center: { ra_degrees: normaliseAngle(number(event.target.value, center.ra_degrees)), dec_degrees: center.dec_degrees } })} /><small>°</small></span></label>
-              <label>Dec<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} declination degrees`} step="any" min={-90} max={90} value={Number(center.dec_degrees.toFixed(5))} onChange={event => editOwn({ center: { ra_degrees: center.ra_degrees, dec_degrees: Math.max(-90, Math.min(90, number(event.target.value, center.dec_degrees))) } })} /><small>°</small></span></label>
+              <label>RA<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} right ascension degrees`} disabled={held} step="any" min={0} max={359.99999} value={Number(center.ra_degrees.toFixed(5))} onChange={event => editOwn({ center: { ra_degrees: normaliseAngle(number(event.target.value, center.ra_degrees)), dec_degrees: center.dec_degrees } })} /><small>°</small></span></label>
+              <label>Dec<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} declination degrees`} disabled={held} step="any" min={-90} max={90} value={Number(center.dec_degrees.toFixed(5))} onChange={event => editOwn({ center: { ra_degrees: center.ra_degrees, dec_degrees: Math.max(-90, Math.min(90, number(event.target.value, center.dec_degrees))) } })} /><small>°</small></span></label>
             </div>
-            <p className="director-muted"><label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared center`} checked={editing.center === null} onChange={event => editOwn({ center: event.target.checked ? null : state.center })} />Shared center</label>
-              {editing.center && <> <button type="button" className="link-button" onClick={() => editOwn({ center: state.viewCenter })}>Move to view center</button></>}
+            <p className="director-muted"><label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared center`} checked={editing.center === null} disabled={held && editing.center !== null} onChange={event => editOwn({ center: event.target.checked ? null : state.center })} />Shared center</label>
+              {editing.center && <> <button type="button" className="link-button" disabled={held} onClick={() => editOwn({ center: state.viewCenter })}>Move to view center</button></>}
               </p>
             <label>Camera angle<span className="framing-input">
-              <NumberInput aria-label={`${rigName(editing.rig_id)} camera angle degrees`} step="any" min={0} max={359.99} value={Number((editing.position_angle_degrees ?? state.positionAngle).toFixed(2))} onChange={event => editOwn({ position_angle_degrees: normaliseAngle(number(event.target.value, 0)) })} /><small>° E of N</small>
-              <label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared angle`} checked={editing.position_angle_degrees === null} onChange={event => editOwn({ position_angle_degrees: event.target.checked ? null : state.positionAngle })} />Shared angle</label>
+              <NumberInput aria-label={`${rigName(editing.rig_id)} camera angle degrees`} disabled={held} step="any" min={0} max={359.99} value={Number((editing.position_angle_degrees ?? state.positionAngle).toFixed(2))} onChange={event => editOwn({ position_angle_degrees: normaliseAngle(number(event.target.value, 0)) })} /><small>° E of N</small>
+              <label className="framing-check"><input type="checkbox" aria-label={`${rigName(editing.rig_id)} follows the shared angle`} checked={editing.position_angle_degrees === null} disabled={held && editing.position_angle_degrees !== null} onChange={event => editOwn({ position_angle_degrees: event.target.checked ? null : state.positionAngle })} />Shared angle</label>
             </span></label>
             <div className="framing-grid">
-              <label>Panel width<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} panel width degrees`} aria-invalid={at('panel') || undefined} step="any" min={0.01} max={30} value={size?.width_degrees ?? ''} onChange={event => editOwn({ panel: { width_degrees: number(event.target.value, size?.width_degrees ?? 1), height_degrees: size?.height_degrees ?? 1 } })} /><small>°</small></span></label>
-              <label>Panel height<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} panel height degrees`} aria-invalid={at('panel') || undefined} step="any" min={0.01} max={30} value={size?.height_degrees ?? ''} onChange={event => editOwn({ panel: { width_degrees: size?.width_degrees ?? 1, height_degrees: number(event.target.value, size?.height_degrees ?? 1) } })} /><small>°</small></span></label>
+              <label>Panel width<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} panel width degrees`} disabled={sized} aria-invalid={at('panel') || undefined} step="any" min={0.01} max={30} value={size ? round(size.width_degrees, 3) : ''} onChange={event => editOwn({ panel: { width_degrees: number(event.target.value, size?.width_degrees ?? 1), height_degrees: size?.height_degrees ?? 1 } })} /><small>°</small></span></label>
+              <label>Panel height<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} panel height degrees`} disabled={sized} aria-invalid={at('panel') || undefined} step="any" min={0.01} max={30} value={size ? round(size.height_degrees, 3) : ''} onChange={event => editOwn({ panel: { width_degrees: size?.width_degrees ?? 1, height_degrees: number(event.target.value, size?.height_degrees ?? 1) } })} /><small>°</small></span></label>
             </div>
-            <p className="director-muted">{editing.panel ? <>Typed size {field && <button type="button" className="link-button" onClick={() => editOwn({ panel: null })}>Use rig field</button>}</> : field ? `Rig field ${formatDegrees(field.width_degrees)} × ${formatDegrees(field.height_degrees)}` : 'No optics: type a size'}</p>
-            <div className="framing-grid">
-              <label>Rows<NumberInput aria-label={`${rigName(editing.rig_id)} rows`} aria-invalid={at('mosaic') || undefined} min={1} max={16} step={1} value={editing.mosaic.rows} onChange={event => editOwn({ mosaic: { ...editing.mosaic, rows: Math.max(1, Math.min(16, Math.round(number(event.target.value, 1)))) } })} /></label>
-              <label>Columns<NumberInput aria-label={`${rigName(editing.rig_id)} columns`} aria-invalid={at('mosaic') || undefined} min={1} max={16} step={1} value={editing.mosaic.columns} onChange={event => editOwn({ mosaic: { ...editing.mosaic, columns: Math.max(1, Math.min(16, Math.round(number(event.target.value, 1)))) } })} /></label>
-              <label>Overlap<span className="framing-input"><NumberInput aria-label={`${rigName(editing.rig_id)} overlap percent`} aria-invalid={at('mosaic') || undefined} min={0} max={90} step={1} value={editing.mosaic.overlap_percent} onChange={event => editOwn({ mosaic: { ...editing.mosaic, overlap_percent: Math.max(0, Math.min(90, Math.round(number(event.target.value, 0)))) } })} /><small>%</small></span></label>
-            </div>
+            <p className="director-muted">{editing.panel ? <>Typed size {field && <button type="button" className="link-button" disabled={sized} onClick={() => editOwn({ panel: null })}>Use rig field</button>}</> : field ? `Rig field ${formatDegrees(field.width_degrees)} × ${formatDegrees(field.height_degrees)}` : 'No optics: type a size'}</p>
+            <p className="director-muted framing-mosaic-note">{held ? `Locked panels hold its center and camera angle${follows ? `, and so the shared ${follows} it follows` : ''}. ${sized ? 'A locked panel off its center holds its panel size too. ' : ''}` : ''}Its panels are placed under Mosaic panels and on the sky, like the shared framing's.</p>
             <p className="director-muted" data-testid="framing-own-extent">{own ? `${own.geometry.panels.length} panel${own.geometry.panels.length === 1 ? '' : 's'} · ${formatDegrees(own.geometry.extent.width_degrees)} × ${formatDegrees(own.geometry.extent.height_degrees)}` : 'Type a size'}</p>
             {said.map(problem => <p key={problem.field} className="framing-problem">{problem.message}</p>)}
           </div>;
@@ -704,20 +1273,20 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const sizes = state.panelRigId === id;
     const shown = state.shownRigIds.includes(id);
     const field = entry.field_of_view;
-    const grid = (m: DirectorRigFraming['mosaic']) => m.rows * m.columns > 1 ? `${m.rows} × ${m.columns}, ${m.overlap_percent}%` : '1 panel';
+    const grid = (layout: DirectorRigFraming['layout']) => { const g = asGrid(layout); return g ? (g.rows * g.columns > 1 ? `${g.rows} × ${g.columns}, ${g.overlap_percent}%` : '1 panel') : `${layout.panels.length} panels`; };
     const shooting = shootingRigIds?.includes(id) ?? false;
     const off = !!onToggleRig && !shooting;
     const role = own
-      ? `Separate framing · ${grid(own.mosaic)} · ${round(own.position_angle_degrees ?? state.positionAngle, 1)}°${own.center ? ' · moved center' : ''}`
-      : sizes ? `Frames the plan · ${grid(state.mosaic)}`
-      : field ? `Shared framing · ${grid(state.mosaic)}` : 'No optics';
+      ? `Separate framing · ${grid(own.layout)} · ${round(own.position_angle_degrees ?? state.positionAngle, 1)}°${own.center ? ' · moved center' : ''}`
+      : sizes ? `Frames the plan · ${grid(state.layout)}`
+      : field ? `Shared framing · ${grid(state.layout)}` : 'No optics';
     const swatch = own ? `is-own-${ownIndex % 4}` : sizes ? 'is-shared' : shown ? 'is-compared' : 'is-none';
     const blocked = !shooting && !!joinBlocked;
     // A rig that is off shoots nothing; it may still hold the panel size
     // until a rig that is on can take it.
     const shownRole = off && !own ? (sizes ? 'Not in this plan · sets the panel size' : 'Not in this plan') : off ? `Not in this plan · ${role}` : role;
     // Only a rig that is on frames the plan, on a page that keeps one.
-    const canFrame = !own && !!field && !off;
+    const canFrame = !own && !!field && !off && !sizeLocked;
     return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}${sizes && !own && !off ? ' is-framing' : ''}`} role="group" aria-label={entry.catalog_name}>
       <div className="framing-rig-head">
         {onToggleRig && <button type="button" role="switch" className="framing-rig-switch" aria-checked={shooting}
@@ -755,9 +1324,28 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   };
   const view = stageView ?? viewAt(state.center, state.viewCenter);
   const onStage = (position: { ra_degrees: number; dec_degrees: number }) => { const offset = projectOn(view, position); return offset ? toStage(offset, state.viewFov, stageSize) : null; };
-  const handle = sharedInUse && geometry && geometry.panels.length > 0 ? onStage(rotationHandleSky(state, geometry.extent)) : null;
+  const handle = sharedInUse && !angleHeld && geometry && geometry.panels.length > 0 ? onStage(rotationHandleSky(state, geometry.extent)) : null;
+  // The chosen panel's overlaps with its neighbours, read from their real
+  // outlines, and where to add beside it or turn it.
+  const chosenPanel = selectedPanel && activeShown && active ? findPanel(active.layout, selectedPanel) : undefined;
+  const strips = chosenPanel && active ? sharedStrips(activeShapes, chosenPanel.id, active.layout.min_overlap_percent).flatMap(strip => {
+    const corners = strip.polygon.map(point => degreesOnStage(point, view));
+    const middle = degreesOnStage([strip.polygon.reduce((sum, p) => sum + p[0], 0) / strip.polygon.length, strip.polygon.reduce((sum, p) => sum + p[1], 0) / strip.polygon.length], view);
+    return corners.every(Boolean) && middle ? [{ strip, points: (corners as Array<[number, number]>).map(point => point.map(v => v.toFixed(1)).join(',')).join(' '), middle }] : [];
+  }) : [];
+  const handles = canWrite ? addHandles(view) : [];
+  // Handles drawn r = 11 stage units, scaled up so they are at least a
+  // fingertip wide on a small stage or a touch screen.
+  const unitsPerPx = stageCssWidth > 0 ? stageSize.width / stageCssWidth : 1;
+  const handleScale = Math.max(1, ((coarse ? HANDLE_DRAWN_CSS_PX.coarse : HANDLE_DRAWN_CSS_PX.fine) / 2) * unitsPerPx / 11);
+  const turning = canWrite ? turnHandle(view) : null;
   const centerOnStage = geometry ? onStage(state.center) : null;
-  const panelPolygons = sharedInUse ? (geometry?.panels ?? []).map(panel => ({ panel, corners: stageCorners(panel.corners, view) })) : [];
+  const panelPolygons = activeShown ? (active?.geometry?.panels ?? []).map(panel => ({ panel, corners: stageCorners(panel.corners, view) })) : [];
+  // A rig framed on its own keeps its colour while its panels are edited.
+  const activeIndex = activeRig ? ownRigs.findIndex(entry => entry.rigId === activeRig) % 4 : null;
+  // Locked panels draw over the rest, so their outline and lock stay in sight, and the chosen one over all.
+  const drawRank = (id: string) => (id === selectedPanel ? 2 : panelLocked(id) ? 1 : 0);
+  const drawOrder = [...panelPolygons].sort((a, b) => drawRank(a.panel.id) - drawRank(b.panel.id));
   const chips = chipSurveys(surveys.data ?? []);
   // The layer's short chip name, so a note on the sky stays a few words.
   const layerLabel = chips.find(chip => chip.survey.id === state.surveyId)?.label ?? survey?.name;
@@ -766,8 +1354,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     <div className="framing-stage-wrap">
       {/* The sky and the line under it share the room the page gives them. */}
       <div className="framing-sky-box">
-      <div ref={stageRef} className={`framing-stage${cutout.stale ? ' is-stale' : ''}`} role="img" aria-label="Sky view" data-testid="framing-stage"
-        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
+      <div ref={stageRef} className={`framing-stage${cutout.stale ? ' is-stale' : ''}`} role="application" aria-label="Sky view" aria-roledescription="sky view"
+        aria-description={selectedPanel ? `Panel ${selectedPanel} chosen: arrow keys nudge it, [ and ] turn it, Delete removes it, L locks it, Escape lets go.` : 'Click a panel to choose it.'}
+        tabIndex={0} data-testid="framing-stage" data-drag={dragMode}
+        onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onLostPointerCapture={onPointerCancel} onKeyDown={onStageKey}>
         {!pictureUp && <div className="framing-stage-empty" />}
         {webgl && view && <SkyCanvas className={`framing-sky${cutout.image ? '' : ' is-empty'}`} tiles={skyTiles} view={view} viewFov={state.viewFov} stage={stageSize} onUnsupported={() => setWebgl(false)} onLost={setSkyLost} />}
         <svg viewBox={`0 0 ${stageSize.width} ${stageSize.height}`} aria-hidden="true">
@@ -786,18 +1376,49 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
             <polygon className="framing-overlay" points={polygonPoints(corners, state.viewFov, stageSize)} />
             <text className="framing-overlay-label" x={toStage(corners[0], state.viewFov, stageSize)[0] + 6} y={toStage(corners[0], state.viewFov, stageSize)[1] + 14}>{rigName(overlay.id)}</text>
           </g>; })}
-          {ownRigs.map(({ rigId, geometry: own }, index) => <g key={rigId} className={`framing-rig-panels framing-rig-${index % 4}${rigId === editingRig ? ' is-editing' : ''}${rigLive(rigId) ? '' : ' is-off'}`} data-testid="framing-rig-panels" data-rig={rigId}>
+          {/* While a rig's own panels are edited, the shared framing stays in sight, drawn plain. */}
+          {activeRig && sharedInUse && geometry && <g className="framing-shared-panels" data-testid="framing-shared-panels">
+            {geometry.panels.map(panel => { const corners = stageCorners(panel.corners, view); return corners && <polygon key={panel.id} className="framing-panel-outline" points={polygonPoints(corners, state.viewFov, stageSize)} />; })}
+          </g>}
+          {ownRigs.map(({ rigId, geometry: own }, index) => rigId === activeRig ? null : <g key={rigId} className={`framing-rig-panels framing-rig-${index % 4}${rigId === editingRig ? ' is-editing' : ''}${rigLive(rigId) ? '' : ' is-off'}`} data-testid="framing-rig-panels" data-rig={rigId}>
             {own.panels.map(panel => { const corners = stageCorners(panel.corners, view); return corners && <g key={panel.id}>
               <polygon points={polygonPoints(corners, state.viewFov, stageSize)} />
               <text x={toStage(corners[0], state.viewFov, stageSize)[0] + 8} y={toStage(corners[0], state.viewFov, stageSize)[1] + 20}>{rigName(rigId)}{own.panels.length > 1 ? ` ${panel.id}` : ''}</text>
             </g>; })}
           </g>)}
-          {panelPolygons.map(({ panel, corners }) => corners && <g key={panel.id} className="framing-panel">
-            <polygon points={polygonPoints(corners, state.viewFov, stageSize)} />
-            {panelPolygons.length > 1 && <text x={toStage(corners[0], state.viewFov, stageSize)[0] + 8} y={toStage(corners[0], state.viewFov, stageSize)[1] + 20}>{panel.id}</text>}
+          <g className="framing-panels" data-testid="framing-panels" data-framing={activeRig ? 'rig' : 'shared'} data-rig-index={activeIndex ?? undefined}>
+          {drawOrder.map(({ panel, corners }) => {
+            if (!corners) return null;
+            const held = panelLocked(panel.id);
+            // The name sits inside the panel, a third of the way up from its
+            // middle, clear of the edges where neighbours overlap; a locked
+            // panel's lock goes before it, and a shot one says where its
+            // outline comes from under it.
+            const shape = activeShapes.find(entry => entry.id === panel.id);
+            const lift = 0.15 * (active?.panel?.height_degrees ?? 0);
+            const [lx, ly] = (shape && degreesOnStage([shapeCenter(shape)[0], shapeCenter(shape)[1] + lift], view)) ?? toStage(corners[0], state.viewFov, stageSize);
+            const label = panelPolygons.length > 1 || held;
+            const half = (panel.id.length * 12.5) / 2;
+            return <g key={panel.id} className="framing-panel" data-testid="framing-panel" data-panel-id={panel.id}
+              data-panel-state={held ? 'locked' : flagged.has(panel.id) ? 'invalid' : undefined} data-selected={panel.id === selectedPanel ? 'true' : undefined}
+              data-shot={panel.measured ? panel.measured.source : undefined}>
+              <polygon points={polygonPoints(corners, state.viewFov, stageSize)} />
+              {held && <g className="framing-panel-lock" transform={`translate(${(lx - half - 14).toFixed(1)} ${(ly - 12).toFixed(1)})`}><rect x={-6} y={-1} width={12} height={10} rx={2} /><path d="M-3.5 -1 v-3 a3.5 3.5 0 0 1 7 0 v3" /></g>}
+              {label && <text x={lx} y={ly} textAnchor="middle">{panel.id}</text>}
+              {panel.measured && <text className="framing-panel-shot" data-testid="framing-panel-shot" x={lx} y={ly + 22} textAnchor="middle">{shotSource(panel.measured)}</text>}
+            </g>;
+          })}
+          </g>
+          {strips.map(({ strip, points, middle }) => <g key={strip.other} className="framing-overlap" data-testid="framing-overlap" data-short={strip.belowMinimum ? 'true' : undefined}>
+            <polygon points={points} />
+            <text x={middle[0]} y={middle[1] + 5} textAnchor="middle">{strip.percent}%</text>
           </g>)}
+          {handles.map(({ step, at }) => <g key={step.join(',')} className="framing-add-handle" data-testid="framing-add-handle" transform={`translate(${at[0].toFixed(1)} ${at[1].toFixed(1)}) scale(${handleScale.toFixed(2)})`}>
+            <circle r={11} /><path d="M-5 0 H5 M0 -5 V5" />
+          </g>)}
+          {turning && <g className="framing-turn-handle" data-testid="framing-turn-handle"><line x1={turning.middle[0]} y1={turning.middle[1]} x2={turning.at[0]} y2={turning.at[1]} /><circle cx={turning.at[0]} cy={turning.at[1]} r={9 * handleScale} /></g>}
           {centerOnStage && <g className="framing-target"><line x1={centerOnStage[0] - 14} y1={centerOnStage[1]} x2={centerOnStage[0] + 14} y2={centerOnStage[1]} /><line x1={centerOnStage[0]} y1={centerOnStage[1] - 14} x2={centerOnStage[0]} y2={centerOnStage[1] + 14} /></g>}
-          {handle && centerOnStage && <g className="framing-rotate" data-testid="framing-rotate-handle"><line x1={centerOnStage[0]} y1={centerOnStage[1]} x2={handle[0]} y2={handle[1]} /><circle cx={handle[0]} cy={handle[1]} r={9} /></g>}
+          {handle && centerOnStage && <g className="framing-rotate" data-testid="framing-rotate-handle"><line x1={centerOnStage[0]} y1={centerOnStage[1]} x2={handle[0]} y2={handle[1]} /><circle cx={handle[0]} cy={handle[1]} r={9 * handleScale} /></g>}
           {(() => { const { north, east } = compassDirections(skyRotation); return <g className="framing-compass" data-testid="framing-compass" data-rotation={skyRotation.toFixed(1)} transform={`translate(${stageSize.width - 44} 44)`}>
             <line x1={0} y1={0} x2={north[0] * 28} y2={north[1] * 28} /><text x={north[0] * 36} y={north[1] * 36 + 5} textAnchor="middle">N</text>
             <line x1={0} y1={0} x2={east[0] * 28} y2={east[1] * 28} /><text x={east[0] * 36} y={east[1] * 36 + 5} textAnchor="middle">E</text>
@@ -809,6 +1430,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <div className="framing-stage-tools" onPointerDown={event => event.stopPropagation()}>
           <div className="framing-seg" role="group" aria-label="A drag moves">
             <button type="button" aria-pressed={dragMode === 'rectangle'} aria-label="Drag moves the rectangle" title="A drag moves the rectangle over a still sky. Drag its handle to turn the camera; drag the sky to look around." onClick={() => chooseDragMode('rectangle')}><SquareDashedMousePointer size={15} /><span>Rectangle</span></button>
+            <button type="button" aria-pressed={dragMode === 'panel'} aria-label="Drag moves one panel" title="A drag moves one mosaic panel; the others and locked panels stay. It settles lined up with a panel or at the minimum overlap beside one; hold Alt to keep a drop short of the rule." onClick={() => chooseDragMode('panel')}><Move size={15} /><span>Panel</span></button>
             <button type="button" aria-pressed={dragMode === 'sky'} aria-label="Drag moves the sky" title="A drag moves the sky under a pinned rectangle, and the target with it. Drag the handle to turn the camera; Shift-drag to look around without moving the target." onClick={() => chooseDragMode('sky')}><Globe size={15} /><span>Sky</span></button>
           </div>
           <div className="framing-seg framing-seg-icons" role="group" aria-label="Sky layers">
@@ -860,7 +1482,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         </div>}
         {mosaic.data.framing_stale && <p className="director-muted">The framing changed since the last activation. Stacks sit where their solves put them; the rectangles are the new plan.</p>}
         {mosaic.data.warnings.map(warning => <p key={warning} className="director-muted">{warning}</p>)}
-        <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel, stackChoice, stackChoiceName ? stackName(stackChoiceName) : '')}</li>)}</ul>
+        <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel, stackChoice, stackChoiceName ? stackName(stackChoiceName) : '', mosaic.data!.activation_revision !== null)}</li>)}</ul>
       </div>}
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} For composition only.</p>
       <VisibilityPanel projectId={projectId} center={state.center} rigCenters={liveRigCenters} compact />
@@ -868,21 +1490,22 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     <form className="framing-controls" onSubmit={event => { event.preventDefault(); if (canWrite && !save.isPending && !stale && !refusal) { setNotice(''); setProblem(''); save.mutate(state); } }}>
       <fieldset>
         <legend>Target</legend>
-        <TargetSearch label="Find a target" ariaLabel="Find a target" placeholder="M 31, NGC 7000, Heart Nebula" buttonLabel="Go" disabled={!canWrite}
+        {layoutLocked && <p className="director-muted framing-mosaic-note" data-testid="framing-held">{heldNote}</p>}
+        <TargetSearch label="Find a target" ariaLabel="Find a target" placeholder="M 31, NGC 7000, Heart Nebula" buttonLabel="Go" disabled={!canWrite || centerHeld}
           hint="The local catalog answers as you type; the last row asks CDS Sesame (Simbad, NED, VizieR)." onPick={pickTarget} />
         <label>Name<input aria-label="Target name" value={state.targetName} maxLength={256} onChange={event => update({ targetName: event.target.value })} /></label>
         <div className="framing-grid">
-          <label>RA<span className="framing-input"><NumberInput aria-label="Right ascension degrees" aria-invalid={problemAt('center') || undefined} step="any" min={0} max={359.99999} value={round(state.center.ra_degrees, 5)} onChange={event => update(current => ({ center: { ...current.center, ra_degrees: normaliseAngle(number(event.target.value, current.center.ra_degrees)) } }))} /><small>°</small></span><small>{formatRaHours(state.center.ra_degrees)}</small></label>
-          <label>Dec<span className="framing-input"><NumberInput aria-label="Declination degrees" aria-invalid={problemAt('center') || undefined} step="any" min={-90} max={90} value={round(state.center.dec_degrees, 5)} onChange={event => update(current => ({ center: { ...current.center, dec_degrees: Math.max(-90, Math.min(90, number(event.target.value, current.center.dec_degrees))) } }))} /><small>°</small></span><small>{formatDec(state.center.dec_degrees)}</small></label>
-          <label className="framing-span">Camera angle<span className="framing-input"><NumberInput aria-label="Position angle degrees" step="any" min={0} max={359.99} value={round(state.positionAngle, 2)} onChange={event => update({ positionAngle: normaliseAngle(number(event.target.value, state.positionAngle)) })} /><small>° E of N</small></span>
-            <span className="framing-turns"><button type="button" aria-label="Turn 90 degrees counter-clockwise" onClick={() => turn(-90)}>−90°</button><button type="button" aria-label="Turn 90 degrees clockwise" onClick={() => turn(90)}>+90°</button>
-              {panelRig?.profile?.optics && panelRig.profile.optics.value.rotation.mode !== 'rotator' && <button type="button" onClick={() => update({ positionAngle: normaliseAngle((panelRig.profile!.optics!.value.rotation as { angle_degrees: number }).angle_degrees) })}>Rig's camera angle</button>}</span></label>
+          <label>RA<span className="framing-input"><NumberInput aria-label="Right ascension degrees" disabled={centerHeld} aria-invalid={problemAt('center') || undefined} step="any" min={0} max={359.99999} value={round(state.center.ra_degrees, 5)} onChange={event => update(current => ({ center: { ...current.center, ra_degrees: normaliseAngle(number(event.target.value, current.center.ra_degrees)) } }))} /><small>°</small></span><small>{formatRaHours(state.center.ra_degrees)}</small></label>
+          <label>Dec<span className="framing-input"><NumberInput aria-label="Declination degrees" disabled={centerHeld} aria-invalid={problemAt('center') || undefined} step="any" min={-90} max={90} value={round(state.center.dec_degrees, 5)} onChange={event => update(current => ({ center: { ...current.center, dec_degrees: Math.max(-90, Math.min(90, number(event.target.value, current.center.dec_degrees))) } }))} /><small>°</small></span><small>{formatDec(state.center.dec_degrees)}</small></label>
+          <label className="framing-span">Camera angle<span className="framing-input"><NumberInput aria-label="Position angle degrees" disabled={angleHeld} step="any" min={0} max={359.99} value={round(state.positionAngle, 2)} onChange={event => update({ positionAngle: normaliseAngle(number(event.target.value, state.positionAngle)) })} /><small>° E of N</small></span>
+            <span className="framing-turns"><button type="button" aria-label="Turn 90 degrees counter-clockwise" disabled={angleHeld} onClick={() => turn(-90)}>−90°</button><button type="button" aria-label="Turn 90 degrees clockwise" disabled={angleHeld} onClick={() => turn(90)}>+90°</button>
+              {panelRig?.profile?.optics && panelRig.profile.optics.value.rotation.mode !== 'rotator' && <button type="button" disabled={angleHeld} onClick={() => update({ positionAngle: normaliseAngle((panelRig.profile!.optics!.value.rotation as { angle_degrees: number }).angle_degrees) })}>Rig's camera angle</button>}</span></label>
         </div>
         <div className="director-actions">
           <button type="button" onClick={() => update(current => ({ viewCenter: current.center }))}><Crosshair size={16} />Center view on target</button>
-          <button type="button" disabled={!canWrite} onClick={() => update(current => ({ center: current.viewCenter }))}><LocateFixed size={16} />Move target to view center</button>
-          {seed && <button type="button" disabled={!canWrite} onClick={() => update({ targetName: seed.name, center: seed.center, positionAngle: seed.position_angle_degrees, viewCenter: seed.center })}><Undo2 size={16} />Back to catalog target</button>}
-          {savedState && <button type="button" disabled={!differsFromSaved} title="Drop every change since the last save" onClick={() => { setState(savedState); setUndo(null); setNotice(`Back to saved framing revision ${draft.data?.draft?.revision ?? 0}.`); }}><Undo2 size={16} />Back to saved framing</button>}
+          <button type="button" disabled={!canWrite || centerHeld} onClick={() => update(current => ({ center: current.viewCenter }))}><LocateFixed size={16} />Move target to view center</button>
+          {seed && <button type="button" disabled={!canWrite || layoutLocked} onClick={() => update({ targetName: seed.name, center: seed.center, positionAngle: seed.position_angle_degrees, viewCenter: seed.center })}><Undo2 size={16} />Back to catalog target</button>}
+          {savedState && <button type="button" disabled={!differsFromSaved} title="Drop every change since the last save" onClick={() => { setState(savedState); setUndo(null); forgetHistory(); setNotice(`Back to saved framing revision ${draft.data?.draft?.revision ?? 0}.`); }}><Undo2 size={16} />Back to saved framing</button>}
         </div>
       </fieldset>
       <fieldset className="framing-rigs">
@@ -904,7 +1527,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         {/* A rig gone from the list has no card; its framing is listed so it can go. */}
         {rigs.isSuccess && orphans.length > 0 && <ul className="framing-orphans" aria-label="Framings of rigs not listed">
           {orphans.map(own => <li key={own.rig_id}>
-            <span>Rig not listed · separate framing, {own.mosaic.rows} × {own.mosaic.columns}</span>
+            <span>Rig not listed · separate framing, {own.layout.panels.length} panel{own.layout.panels.length === 1 ? '' : 's'}</span>
             {canWrite && <button type="button" className="link-button" onClick={() => update(current => ({ rigFramings: current.rigFramings.filter(framing => framing.rig_id !== own.rig_id) }))}>Remove</button>}
           </li>)}
         </ul>}
@@ -923,22 +1546,33 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
             const moved = !!field && !!state.panel && (Math.abs(field.width_degrees - state.panel.width_degrees) > 1e-9 || Math.abs(field.height_degrees - state.panel.height_degrees) > 1e-9);
             return <>Size from <strong>{panelRig.catalog_name}</strong>{off ? ' (off)' : ''}
               {state.panel && ` · ${formatDegrees(state.panel.width_degrees)} × ${formatDegrees(state.panel.height_degrees)}`}{field ? '' : ' · no optics now'}
-              {canWrite && moved && <> <button type="button" className="link-button" title={`The rig's field is now ${formatDegrees(field!.width_degrees)} × ${formatDegrees(field!.height_degrees)}`} onClick={() => update({ panel: field })}>Use current field</button></>}
+              {canWrite && moved && !sizeLocked && <> <button type="button" className="link-button" title={`The rig's field is now ${formatDegrees(field!.width_degrees)} × ${formatDegrees(field!.height_degrees)}`} onClick={() => update({ panel: field })}>Use current field</button></>}
               {canWrite && <> <button type="button" className="link-button" onClick={() => update(current => ({ panelRigId: null, panel: current.panel }))}>Type a size</button></>}</>;
           })()}
         </p>
         {!panelRig && <div className="framing-grid">
-          <label>Panel width<span className="framing-input"><NumberInput aria-label="Panel width degrees" aria-invalid={problemAt('panel') || undefined} step="any" min={0.01} max={30} value={state.panel ? round(state.panel.width_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: number(event.target.value, current.panel?.width_degrees ?? 1), height_degrees: current.panel?.height_degrees ?? 1 } }))} /><small>°</small></span></label>
-          <label>Panel height<span className="framing-input"><NumberInput aria-label="Panel height degrees" aria-invalid={problemAt('panel') || undefined} step="any" min={0.01} max={30} value={state.panel ? round(state.panel.height_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: current.panel?.width_degrees ?? 1, height_degrees: number(event.target.value, current.panel?.height_degrees ?? 1) } }))} /><small>°</small></span></label>
+          <label>Panel width<span className="framing-input"><NumberInput aria-label="Panel width degrees" disabled={sizeLocked} aria-invalid={problemAt('panel') || undefined} step="any" min={0.01} max={30} value={state.panel ? round(state.panel.width_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: number(event.target.value, current.panel?.width_degrees ?? 1), height_degrees: current.panel?.height_degrees ?? 1 } }))} /><small>°</small></span></label>
+          <label>Panel height<span className="framing-input"><NumberInput aria-label="Panel height degrees" disabled={sizeLocked} aria-invalid={problemAt('panel') || undefined} step="any" min={0.01} max={30} value={state.panel ? round(state.panel.height_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: current.panel?.width_degrees ?? 1, height_degrees: number(event.target.value, current.panel?.height_degrees ?? 1) } }))} /><small>°</small></span></label>
         </div>}
-        <div className="framing-grid">
-          <label>Rows<NumberInput aria-label="Mosaic rows" aria-invalid={problemAt('mosaic') || undefined} min={1} max={16} step={1} value={state.mosaic.rows} onChange={event => update(current => ({ mosaic: { ...current.mosaic, rows: Math.max(1, Math.min(16, Math.round(number(event.target.value, 1)))) } }))} /></label>
-          <label>Columns<NumberInput aria-label="Mosaic columns" aria-invalid={problemAt('mosaic') || undefined} min={1} max={16} step={1} value={state.mosaic.columns} onChange={event => update(current => ({ mosaic: { ...current.mosaic, columns: Math.max(1, Math.min(16, Math.round(number(event.target.value, 1)))) } }))} /></label>
-          <label>Overlap<span className="framing-input"><NumberInput aria-label="Panel overlap percent" aria-invalid={problemAt('mosaic') || undefined} min={0} max={90} step={1} value={state.mosaic.overlap_percent} onChange={event => update(current => ({ mosaic: { ...current.mosaic, overlap_percent: Math.max(0, Math.min(90, Math.round(number(event.target.value, 0)))) } }))} /><small>%</small></span></label>
-        </div>
         <p className="director-muted" data-testid="framing-extent">{geometry ? `${geometry.panels.length} panel${geometry.panels.length === 1 ? '' : 's'} · ${formatDegrees(geometry.extent.width_degrees)} × ${formatDegrees(geometry.extent.height_degrees)}` : 'Pick a rig or type a size'}</p>
         {problems.filter(problem => !problem.field.startsWith('rig:')).map(problem => <p key={problem.field} className="framing-problem" data-testid="framing-problem">{problem.message}</p>)}
       </fieldset>
+      {active && <fieldset className="framing-mosaic-fieldset">
+        <legend>Mosaic panels{activeRig ? ` · ${rigName(activeRig)}` : ''}</legend>
+        {activeRig && <p className="director-muted framing-mosaic-note" data-testid="framing-panels-of">The panels of {rigName(activeRig)}, framed on its own. Done under Rigs goes back to the shared framing.</p>}
+        <MosaicPanels layout={active.layout} issues={layoutIssueList} selected={selectedPanel && findPanel(active.layout, selectedPanel) ? selectedPanel : null} onSelect={setSelectedPanel}
+          frames={panelFrames} isLocked={panelLocked} canWrite={canWrite} invalid={problemAt(activeRig ? `rig:${activeRig}:mosaic` : 'mosaic')}
+          namePrefix={activeRig ? rigName(activeRig) : undefined}
+          onEdit={editLayout} onExtend={extend}
+          onRing={() => { const result = ringAround(active.layout, addOverlap, activeBoxes, overlapOf); if (result.added.length) editLayout(result.layout, `Added ${result.added.length} panels around the mosaic.`); else setPanelNotice('Every place around the mosaic has a panel.'); }}
+          onFill={() => { const result = fillHoles(active.layout); if (!result) setPanelNotice('The panels sit on no one lattice, so there is no hole to name. Add panels beside them instead.'); else if (result.added.length) editLayout(result.layout, `Filled ${result.added.length} hole${result.added.length === 1 ? '' : 's'}: ${result.added.join(', ')}.`); else setPanelNotice('The mosaic has no holes.'); }}
+          scope={extendScope} onScope={setExtendScope} overlap={addOverlap} onOverlap={setExtendOverlap}
+          undo={{ can: past.length > 0, run: () => stepHistory(true) }} redo={{ can: future.length > 0, run: () => stepHistory(false) }}
+          notice={panelNotice.text} noticeKey={panelNotice.count} noticeAction={panelNotice.action}
+          shot={id => active.geometry?.panels.find(panel => panel.id === id) ?? null}
+          onTurn={(id, degrees) => turnChosen(id, degrees)}
+          gridBlocked={heldIn(active.rig, active.layout) ? 'Locked panels stay where they are, so the panels are not laid out as a grid again.' : null} />
+      </fieldset>}
       <fieldset>
         <legend>View</legend>
         <div className="framing-grid">
@@ -960,7 +1594,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
       <div className="director-actions">
         {canWrite && !managed && <button type="submit" disabled={save.isPending || stale || !!refusal} title={refusal ?? undefined}><Check size={16} />{save.isPending ? 'Saving...' : 'Save framing'}</button>}
-        <button type="button" aria-label="Reload framing" title="Reload framing" onClick={() => { setNotice(''); setProblem(''); save.reset(); void draft.refetch(); }}><RefreshCw size={16} /></button>
+        <button type="button" aria-label="Reload framing" title="Reload framing" onClick={() => { setNotice(''); setProblem(''); save.reset(); void draft.refetch(); void refreshMosaic(); }}><RefreshCw size={16} /></button>
         {!canWrite && <span className="director-muted">Read only</span>}
       </div>
     </form>

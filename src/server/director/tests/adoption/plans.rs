@@ -325,7 +325,10 @@ async fn listing_counts_frames_per_target_across_linked_databases() {
     assert_eq!(row["framing"]["center"]["ra_degrees"], 38.2);
     assert_eq!(row["framing"]["position_angle_degrees"], 15.0);
     assert_eq!(row["framing"]["survey_id"], "dss2_color");
-    assert_eq!(row["framing"]["mosaic"]["rows"], 2);
+    assert_eq!(
+        row["framing"]["layout"]["panels"].as_array().unwrap().len(),
+        2
+    );
     assert_eq!(row["framing"]["panel"]["width_degrees"], 2.0);
     assert!(
         row["framing"]["extent"]["height_degrees"].as_f64().unwrap() > 2.0,
@@ -687,8 +690,8 @@ async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once(
     let framing = &row["framing"];
     assert_eq!(framing["source"], "draft", "{framing}");
     assert_eq!(framing["target_name"], "Heart");
-    assert_eq!(framing["mosaic"]["rows"], 1);
-    assert_eq!(framing["mosaic"]["columns"], 2);
+    assert_eq!(framing["layout"]["panels"][0]["id"], "r1c1");
+    assert_eq!(framing["layout"]["panels"][1]["id"], "r1c2");
     assert_eq!(framing["panels"], 2);
     // The center is the midpoint of the two targets, in degrees.
     assert!(
@@ -1590,17 +1593,176 @@ async fn an_imported_plan_follows_target_scheduler_until_it_is_saved_here() {
     assert!((moved.center.dec_degrees - 1.0).abs() < 1e-3, "{moved:?}");
     assert_eq!(moved.survey_id, "nina:FramingAssistantCache");
 
+    // A lock and a new minimum overlap change nothing activation writes, so
+    // the plan still follows; a refresh keeps them.
+    {
+        let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut locked = moved.clone();
+        locked.layout.panels[1].locked = true;
+        locked.layout.min_overlap_percent = 30;
+        let locked = store.save_framing_draft(&locked, moved.revision).unwrap();
+        assert_eq!(locked.layout_revision, moved.layout_revision);
+    }
+    db.execute("UPDATE exposureplan SET desired=50", [])
+        .unwrap();
+    list().await;
+    let (kept, plan_kept, import_kept) = saved();
+    assert_eq!(plan_kept.objectives[0].goal, Goal::Frames { value: 50 });
+    assert!(kept.layout.panels[1].locked, "{kept:?}");
+    assert!(!kept.layout.panels[0].locked);
+    assert_eq!(kept.layout.min_overlap_percent, 30);
+    assert!(import_kept.is_some(), "still following");
+    // Target Scheduler moving the locked panel's target: the plan keeps its
+    // own framing and stops following.
+    db.execute("UPDATE target SET dec=2.0 WHERE Id=2", [])
+        .unwrap();
+    list().await;
+    let (held, _, import_held) = saved();
+    assert!(import_held.is_none(), "stopped following");
+    assert_eq!(
+        held.revision, kept.revision,
+        "the framing is the plan's own"
+    );
+    let plan2 = plan_kept;
+
     // Saved here: the plan is the operator's from now on.
     {
         let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut edited = plan2.clone();
         edited.objectives[0].goal = Goal::Frames { value: 60 };
-        store.save_plan_draft(&edited, 2).unwrap();
+        store.save_plan_draft(&edited, edited.revision).unwrap();
     }
     db.execute("UPDATE exposureplan SET desired=80", [])
         .unwrap();
     list().await;
     let (_, plan3, _) = saved();
-    assert_eq!(plan3.revision, 3);
+    assert_eq!(plan3.revision, plan2.revision + 1);
     assert_eq!(plan3.objectives[0].goal, Goal::Frames { value: 60 });
+}
+
+/// The editor locks a followed import's shot target through `PUT /framing`.
+/// The server writes its reading of the frames' solves onto the panel; read
+/// where the panel already sits, that is no move, so the plan keeps
+/// following Target Scheduler, and the next night's solves, nudging the
+/// median by a few hundredths of a degree, keep it following too.
+#[tokio::test]
+async fn locking_a_solved_panel_in_the_editor_keeps_an_import_following() {
+    use super::mosaic::{persist_solve, write_solved_header};
+    let f = Fixture::new();
+    let path = register(
+        &f,
+        "heart",
+        "Heart rig",
+        &[(1, "Heart Nebula", Some(Uuid::new_v4()))],
+    );
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        r#"INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (1, 'profile-x', 'Ha 300', 'Ha', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, 'tmpl-ha');
+         INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'Heart Nebula', 1, 2.5466667, 61.45, 2, 0.0, 100, 1, 'tgt-1');
+         INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES ('profile-x', -1, 30, 2, 2, 1, 1, 1, 'ep-1');
+         INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata) VALUES
+           (101, 1, 1, 1, 'Ha', 1, '{"FileName":"frame-1.fits"}'),
+           (102, 1, 1, 2, 'Ha', 1, '{"FileName":"frame-2.fits"}');"#,
+    )
+    .unwrap();
+    // Shot a few arcseconds off the target, as solves of real frames are.
+    let dir = f._dir.path().to_path_buf();
+    let cache = f
+        .state
+        .get_database("heart")
+        .unwrap()
+        .cache_dir_path
+        .clone();
+    let shot = (38.2 + 0.002, 61.45 + 0.001);
+    let solve = |id: i32, n: u32, angle: f64| {
+        let file = dir.join(format!("frame-{n}.fits"));
+        write_solved_header(&file, (200, 150), 36.0, shot, angle);
+        persist_solve(&cache, id, &file, (200, 150), 36.0, shot, angle);
+    };
+    solve(101, 1, 0.2);
+    solve(102, 2, 0.3);
+    let list = || {
+        let app = f.app.clone();
+        async move {
+            let (status, listed) = call(&app, "GET", "/plans", Value::Null, None).await;
+            assert_eq!(status, StatusCode::OK, "{listed}");
+            listed
+        }
+    };
+    let listed = list().await;
+    let project = Uuid::parse_str(
+        listed["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["project"]["name"] == "Heart Nebula")
+            .unwrap()["project"]["id"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let saved = || {
+        let store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        (
+            store.framing_draft(project).unwrap().unwrap(),
+            store.plan_draft(project).unwrap().unwrap(),
+            store.draft_import(project).unwrap(),
+        )
+    };
+    let (imported, _, import) = saved();
+    assert!(import.is_some(), "the import is recorded");
+
+    // The editor locks r1c1 and saves; the server writes its reading.
+    let framing = format!("/projects/{project}/framing");
+    let (_, got) = call(&f.app, "GET", &framing, Value::Null, None).await;
+    let mut draft = got["data"]["draft"].clone();
+    draft["layout"]["panels"][0]["locked"] = json!(true);
+    let (status, put) = call(&f.app, "PUT", &framing, draft, None).await;
+    assert_eq!(status, StatusCode::OK, "{put}");
+    let locked = put["data"]["draft"].clone();
+    assert_eq!(
+        locked["layout"]["panels"][0]["measured"]["source"], "solved",
+        "{locked}"
+    );
+    assert_eq!(
+        locked["layout_revision"].as_u64().unwrap(),
+        imported.layout_revision,
+        "a reading where the panel sits is no move"
+    );
+
+    // Another night: a new solve nudges the median, and the editor saves
+    // again. The reading is the new one; the layout is the same.
+    solve(102, 2, 0.32);
+    let (status, put) = call(&f.app, "PUT", &framing, locked.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{put}");
+    let resaved = put["data"]["draft"].clone();
+    assert!(
+        (resaved["layout"]["panels"][0]["measured"]["position_angle_degrees"]
+            .as_f64()
+            .unwrap()
+            - 0.26)
+            .abs()
+            < 1e-9,
+        "{resaved}"
+    );
+    assert_eq!(
+        resaved["layout_revision"].as_u64().unwrap(),
+        imported.layout_revision
+    );
+
+    // Target Scheduler raises the goal: the plan still follows and takes it
+    // in, and the lock and its reading stay.
+    db.execute("UPDATE exposureplan SET desired=45", [])
+        .unwrap();
+    list().await;
+    let (kept, plan, import) = saved();
+    assert!(import.is_some(), "still following");
+    assert_eq!(plan.objectives[0].goal, Goal::Frames { value: 45 });
+    assert!(kept.layout.panels[0].locked, "{kept:?}");
+    assert!(kept.layout.panels[0].measured.is_some(), "{kept:?}");
 }

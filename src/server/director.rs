@@ -35,6 +35,7 @@ mod import_drafts;
 #[cfg(test)]
 pub(crate) use activation::create_director_tables as create_rig_tables_for_tests;
 pub(crate) use import_drafts::inferred_mosaic;
+mod measured;
 mod mosaic;
 pub(super) mod pairing;
 mod plan;
@@ -299,6 +300,8 @@ enum Error {
     WrongRig,
     Busy,
     Internal,
+    /// A well-formed request the stored record will not take, and why.
+    Refused(String),
 }
 
 impl From<StoreError> for Error {
@@ -341,31 +344,37 @@ impl From<crate::catalog_identity::Error> for Error {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            Self::Disabled => (StatusCode::NOT_FOUND, "Director metadata is disabled"),
-            Self::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "Director metadata requires database management",
-            ),
-            Self::Invalid => (StatusCode::BAD_REQUEST, "Invalid Director metadata request"),
-            Self::Missing => (StatusCode::NOT_FOUND, "Director record not found"),
-            Self::Conflict => (
-                StatusCode::CONFLICT,
-                "Director record conflicts with stored content; reload before retrying",
-            ),
-            Self::WrongRig => (
-                StatusCode::FORBIDDEN,
-                "Coordinator, catalog and rig identities do not match this server's binding",
-            ),
-            Self::Busy => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Director metadata is busy; retry shortly",
-            ),
-            Self::Internal => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Director metadata operation failed; see server logs",
-            ),
+            Self::Refused(reason) => (StatusCode::UNPROCESSABLE_ENTITY, reason),
+            other => {
+                let (status, message) = match other {
+                    Self::Disabled => (StatusCode::NOT_FOUND, "Director metadata is disabled"),
+                    Self::Forbidden => (
+                        StatusCode::FORBIDDEN,
+                        "Director metadata requires database management",
+                    ),
+                    Self::Invalid => (StatusCode::BAD_REQUEST, "Invalid Director metadata request"),
+                    Self::Missing => (StatusCode::NOT_FOUND, "Director record not found"),
+                    Self::Conflict => (
+                        StatusCode::CONFLICT,
+                        "Director record conflicts with stored content; reload before retrying",
+                    ),
+                    Self::WrongRig => (
+                        StatusCode::FORBIDDEN,
+                        "Coordinator, catalog and rig identities do not match this server's binding",
+                    ),
+                    Self::Busy => (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Director metadata is busy; retry shortly",
+                    ),
+                    Self::Internal | Self::Refused(_) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Director metadata operation failed; see server logs",
+                    ),
+                };
+                (status, message.to_owned())
+            }
         };
-        let mut response = (status, Json(ApiResponse::<()>::error(message.into()))).into_response();
+        let mut response = (status, Json(ApiResponse::<()>::error(message))).into_response();
         if status == StatusCode::SERVICE_UNAVAILABLE {
             response
                 .headers_mut()

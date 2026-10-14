@@ -1,4 +1,6 @@
-import type { DirectorContribution, DirectorObjectiveProgress, DirectorRigProgress, DirectorGoal, DirectorLibraryTemplate, DirectorMoonPolicy, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice, DirectorFramingDraft} from '../../api/directorTypes';
+import type { DirectorContribution, DirectorObjectiveProgress, DirectorRigProgress, DirectorGoal, DirectorLibraryTemplate, DirectorMoonPolicy, DirectorLayout, DirectorMosaic, DirectorObjective, DirectorPlanDraft, DirectorRigProfileSummary, DirectorTemplate, DirectorTemplateChoice, DirectorFramingDraft} from '../../api/directorTypes';
+import { gridLayout, layoutCells } from './mosaicLayout';
+import { layoutOf } from './framingModel';
 
 export const PURPOSES: Array<{ id: string; name: string }> = [
   { id: 'faint_detail', name: 'Faint detail' },
@@ -237,22 +239,26 @@ export function planProblem(plan: DirectorPlanDraft): string | null {
   return null;
 }
 
-/** Panel ids the way the core names them: row one at the top, column one east. */
-export function panelIds(mosaic: DirectorMosaic | null | undefined): string[] {
-  if (!mosaic) return [];
-  const ids: string[] = [];
-  for (let r = 1; r <= mosaic.rows; r++) for (let c = 1; c <= mosaic.columns; c++) ids.push(`r${r}c${c}`);
-  return ids;
+/** Panel ids in the order the mosaic lists them: row one at the top, then
+ *  across from the camera's left, as the core counts rows and columns. A
+ *  grid (from an older client) names its cells the same way. */
+export function panelIds(layout: DirectorLayout | DirectorMosaic | null | undefined): string[] {
+  if (!layout) return [];
+  const panels = 'panels' in layout ? layout : gridLayout(layout);
+  const cells = layoutCells(panels);
+  return panels.panels.map((panel, index) => ({ id: panel.id, cell: cells[index] }))
+    .sort((a, b) => a.cell[0] - b.cell[0] || a.cell[1] - b.cell[1])
+    .map(entry => entry.id);
 }
 
-/** The panels each rig can own: its own grid when it is framed on its own,
- *  else the shared grid. */
+/** The panels each rig can own: its own panels when it is framed on its
+ *  own, else the shared framing's. */
 export function panelsByRig(draft: DirectorFramingDraft | null | undefined, rigIds: string[]): Record<string, string[]> {
-  const shared = panelIds(draft?.mosaic);
+  const shared = draft ? panelIds(layoutOf(draft)) : [];
   const map: Record<string, string[]> = {};
   for (const rigId of rigIds) {
     const own = draft?.rig_framings?.find(entry => entry.rig_id === rigId);
-    map[rigId] = own ? panelIds(own.mosaic) : shared;
+    map[rigId] = own ? panelIds(layoutOf(own)) : shared;
   }
   return map;
 }

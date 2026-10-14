@@ -1,0 +1,372 @@
+{
+  "preview": {
+    "extent": {
+      "height_degrees": 3.1754198847938584,
+      "width_degrees": 4.56186036603503
+    },
+    "issues": [
+      {
+        "kind": "thin_overlap",
+        "panels": [
+          "r1c1",
+          "p2"
+        ],
+        "percent": 10.9
+      },
+      {
+        "kind": "thin_overlap",
+        "panels": [
+          "r1c1",
+          "p3"
+        ],
+        "percent": 13.9
+      },
+      {
+        "kind": "gap",
+        "panels": [
+          "p2",
+          "p4"
+        ],
+        "percent": 1.1
+      },
+      {
+        "kind": "gap",
+        "panels": [
+          "p3",
+          "p4"
+        ],
+        "percent": 20.0
+      }
+    ],
+    "overlays": [
+      {
+        "center": {
+          "dec_degrees": 61.45000000000001,
+          "ra_degrees": 38.2
+        },
+        "corners": [
+          {
+            "dec_degrees": 61.224967318643216,
+            "ra_degrees": 44.42405997157682
+          },
+          {
+            "dec_degrees": 58.64930885719654,
+            "ra_degrees": 40.31470251151246
+          },
+          {
+            "dec_degrees": 61.388671842319184,
+            "ra_degrees": 31.943234211089603
+          },
+          {
+            "dec_degrees": 64.21148265906602,
+            "ra_degrees": 35.67079081833953
+          }
+        ],
+        "id": "wide",
+        "view_corners": [
+          [
+            2.657886702048737,
+            0.23736069706643403
+          ],
+          [
+            0.736689626426429,
+            -2.444412224821817
+          ],
+          [
+            -3.328889376346858,
+            0.46631106971151887
+          ],
+          [
+            -1.406669239496307,
+            3.1502993711895866
+          ]
+        ]
+      }
+    ],
+    "panels": [
+      {
+        "angle_offset_degrees": 0.0,
+        "center": {
+          "dec_degrees": 61.47,
+          "ra_degrees": 38.25
+        },
+        "column": 3,
+        "corners": [
+          {
+            "dec_degrees": 61.39764675338818,
+            "ra_degrees": 41.17542719615691
+          },
+          {
+            "dec_degrees": 60.14004841464044,
+            "ra_degrees": 39.150739333745165
+          },
+          {
+            "dec_degrees": 61.479461131926875,
+            "ra_degrees": 35.31688201007661
+          },
+          {
+            "dec_degrees": 62.79348028507447,
+            "ra_degrees": 37.26910346304665
+          }
+        ],
+        "id": "r1c1",
+        "locked": true,
+        "measured": {
+          "center": {
+            "dec_degrees": 61.47,
+            "ra_degrees": 38.25
+          },
+          "frames": 12,
+          "position_angle_degrees": 36.5,
+          "size": {
+            "height_degrees": 1.6,
+            "width_degrees": 2.3
+          },
+          "size_source": "solved",
+          "source": "solved"
+        },
+        "position_angle_degrees": 36.5,
+        "row": 3,
+        "view_corners": [
+          [
+            1.089237608655898,
+            0.31664149906864103
+          ],
+          [
+            0.12485593284616038,
+            -0.9598044531381977
+          ],
+          [
+            -1.7105389869941627,
+            0.42647843848618555
+          ],
+          [
+            -0.745936362722956,
+            1.7034201756874512
+          ]
+        ]
+      },
+      {
+        "angle_offset_degrees": 6.0,
+        "center": {
+          "dec_degrees": 60.32323984400864,
+          "ra_degrees": 41.34339453968997
+        },
+        "column": 2,
+        "corners": [
+          {
+            "dec_degrees": 60.15075635617677,
+            "ra_degrees": 43.83312504342697
+          },
+          {
+            "dec_degrees": 59.091192054527376,
+            "ra_degrees": 41.738859065668166
+          },
+          {
+            "dec_degrees": 60.44885777965744,
+            "ra_degrees": 38.82771578625044
+          },
+          {
+            "dec_degrees": 61.555324707854005,
+            "ra_degrees": 40.91645621497998
+          }
+        ],
+        "id": "p2",
+        "locked": false,
+        "position_angle_degrees": 43.743277272,
+        "row": 3,
+        "view_corners": [
+          [
+            2.4548046897046536,
+            -0.85760231247405
+          ],
+          [
+            1.4589902250280666,
+            -1.9785944527244212
+          ],
+          [
+            -0.0356528914486941,
+            -0.6511506887418107
+          ],
+          [
+            0.9604271372319393,
+            0.4701965605140366
+          ]
+        ]
+      },
+      {
+        "angle_offset_degrees": 0.0,
+        "center": {
+          "dec_degrees": 62.5456496291224,
+          "ra_degrees": 39.879292982651236
+        },
+        "column": 3,
+        "corners": [
+          {
+            "dec_degrees": 62.52772716812403,
+            "ra_degrees": 42.58736137285266
+          },
+          {
+            "dec_degrees": 61.346297832483955,
+            "ra_degrees": 40.626213433279254
+          },
+          {
+            "dec_degrees": 62.51116192779237,
+            "ra_degrees": 37.17106099592465
+          },
+          {
+            "dec_degrees": 63.73994886363145,
+            "ra_degrees": 39.07028953459177
+          }
+        ],
+        "id": "p3",
+        "locked": false,
+        "position_angle_degrees": 36.482788932,
+        "row": 2,
+        "view_corners": [
+          [
+            1.7011903137388298,
+            1.4766230574154289
+          ],
+          [
+            0.8277139582875167,
+            0.257242010006058
+          ],
+          [
+            -0.7982384652552875,
+            1.4221353600973368
+          ],
+          [
+            0.07542393430508448,
+            2.6419192605193254
+          ]
+        ]
+      },
+      {
+        "angle_offset_degrees": 0.0,
+        "center": {
+          "dec_degrees": 61.2325235488532,
+          "ra_degrees": 44.165507854986025
+        },
+        "column": 1,
+        "corners": [
+          {
+            "dec_degrees": 61.1350128626969,
+            "ra_degrees": 46.741396290903204
+          },
+          {
+            "dec_degrees": 60.0151004107695,
+            "ra_degrees": 44.721563072115636
+          },
+          {
+            "dec_degrees": 61.2809748544552,
+            "ra_degrees": 41.572003714462525
+          },
+          {
+            "dec_degrees": 62.44838581132452,
+            "ra_degrees": 43.5642566550491
+          }
+        ],
+        "id": "p4",
+        "locked": false,
+        "position_angle_degrees": 40.202843802,
+        "row": 1,
+        "view_corners": [
+          [
+            3.781857907550871,
+            0.2620043827127937
+          ],
+          [
+            2.9085938042525896,
+            -0.9569088155037164
+          ],
+          [
+            1.2838023348067145,
+            0.20723314305784687
+          ],
+          [
+            2.157252405240654,
+            1.426548889191063
+          ]
+        ]
+      }
+    ],
+    "schema_version": 1,
+    "view_center_offset": [
+      -0.3345515300862892,
+      0.351799560219711
+    ]
+  },
+  "request": {
+    "center": {
+      "dec_degrees": 61.45,
+      "ra_degrees": 38.2
+    },
+    "layout": {
+      "min_overlap_percent": 15,
+      "panels": [
+        {
+          "id": "r1c1",
+          "locked": true,
+          "measured": {
+            "center": {
+              "dec_degrees": 61.47,
+              "ra_degrees": 38.25
+            },
+            "frames": 12,
+            "position_angle_degrees": 36.5,
+            "size": {
+              "height_degrees": 1.6,
+              "width_degrees": 2.3
+            },
+            "size_source": "solved",
+            "source": "solved"
+          },
+          "x": 0.0,
+          "y": 0.0
+        },
+        {
+          "angle_offset_degrees": 6.0,
+          "id": "p2",
+          "locked": false,
+          "x": -0.95,
+          "y": 0.0
+        },
+        {
+          "id": "p3",
+          "locked": false,
+          "x": 0.0,
+          "y": 0.9
+        },
+        {
+          "id": "p4",
+          "locked": false,
+          "x": -1.2,
+          "y": 1.05
+        }
+      ]
+    },
+    "overlays": [
+      {
+        "id": "wide",
+        "position_angle_degrees": 35.0,
+        "size": {
+          "height_degrees": 3.3,
+          "width_degrees": 5.0
+        }
+      }
+    ],
+    "panel": {
+      "height_degrees": 1.5,
+      "width_degrees": 2.0
+    },
+    "position_angle_degrees": 35.0,
+    "view": {
+      "center": {
+        "dec_degrees": 61.1,
+        "ra_degrees": 38.9
+      },
+      "rotation_degrees": 0.0
+    }
+  }
+}

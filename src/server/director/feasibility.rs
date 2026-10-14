@@ -175,13 +175,13 @@ pub(super) async fn evaluate(
         // shoots each panel's frames, so the hours owed scale with panels,
         // its own grid when it is framed on its own.
         let panels_for = |rig_id: Uuid| -> Vec<String> {
-            let mosaic = framing
-                .as_ref()
-                .map(|f| f.rig_framing(rig_id).map_or(f.mosaic, |own| own.mosaic));
-            let (rows, columns) = mosaic.map_or((1, 1), |m| (m.rows.max(1), m.columns.max(1)));
-            (1..=rows)
-                .flat_map(|row| (1..=columns).map(move |column| format!("r{row}c{column}")))
-                .collect()
+            let Some(framing) = framing.as_ref() else {
+                return vec!["r1c1".into()];
+            };
+            let layout = framing
+                .rig_framing(rig_id)
+                .map_or(&framing.layout, |own| &own.layout);
+            layout.panels.iter().map(|panel| panel.id.clone()).collect()
         };
         // Every rig with a site; the plan's rigs first.
         let mut warnings = Vec::new();

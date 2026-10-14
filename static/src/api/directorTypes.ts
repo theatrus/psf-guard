@@ -128,12 +128,40 @@ export interface DirectorSurvey {
 }
 export interface DirectorSkyPosition { ra_degrees: number; dec_degrees: number }
 export interface DirectorPanelSize { width_degrees: number; height_degrees: number }
+/** A rows-by-columns grid: one way to make panels, no longer what is stored. */
 export interface DirectorMosaic { rows: number; columns: number; overlap_percent: number }
+/** Where a shot panel's frames say it was: from fresh plate solves, the
+ *  frames' headers, or the target as planned when nothing better is read. */
+export type DirectorMeasuredSource = 'solved' | 'header' | 'plan';
+export interface DirectorMeasuredGeometry {
+  center: DirectorSkyPosition;
+  /** Camera up as shot, east of north at `center`. */
+  position_angle_degrees: number;
+  size: DirectorPanelSize;
+  source: DirectorMeasuredSource;
+  size_source: DirectorMeasuredSource;
+  /** Frames the center and angle were read from. */
+  frames: number;
+}
+/** One panel: a stable id (`r{row}c{column}` from a grid, `p{n}` added since), its
+ *  offset from the framing's center along the camera's axes in panel sizes (`x`
+ *  toward the camera's right, west at angle zero; `y` toward its up), and a lock.
+ *  A locked panel may carry the geometry its frames were shot with, and is then
+ *  drawn as shot; a panel may be turned from the framing's angle on its own. */
+export interface DirectorPanelPlacement {
+  id: string; x: number; y: number; locked: boolean;
+  measured?: DirectorMeasuredGeometry | null;
+  /** Degrees counter-clockwise from the framing's angle on the plane; absent for 0. */
+  angle_offset_degrees?: number;
+}
+export interface DirectorLayout { min_overlap_percent: number; panels: DirectorPanelPlacement[] }
+export type DirectorLayoutIssueKind = 'thin_overlap' | 'gap' | 'isolated' | 'disconnected';
+export interface DirectorLayoutIssue { kind: DirectorLayoutIssueKind; panels: string[]; percent: number | null }
 export interface DirectorFramingRequest {
   center: DirectorSkyPosition;
   position_angle_degrees: number;
   panel: DirectorPanelSize;
-  mosaic: DirectorMosaic;
+  layout: DirectorLayout;
   overlays: Array<{ id: string; size: DirectorPanelSize; position_angle_degrees: number }>;
   view: { center: DirectorSkyPosition; rotation_degrees: number } | null;
 }
@@ -147,20 +175,28 @@ export interface DirectorFootprint {
 }
 export interface DirectorFramingPreview {
   schema_version: number;
-  panels: Array<DirectorFootprint & { row: number; column: number }>;
+  panels: Array<DirectorFootprint & {
+    row: number; column: number; locked: boolean;
+    /** The camera angle to shoot it at, east of north at its own center. */
+    position_angle_degrees: number;
+    angle_offset_degrees: number;
+    measured?: DirectorMeasuredGeometry | null;
+  }>;
   overlays: DirectorFootprint[];
   extent: DirectorPanelSize;
   view_center_offset: DirectorOffset | null;
+  issues: DirectorLayoutIssue[];
 }
-/** One rig framed on its own over the shared target: its grid, an angle of its own or the shared one, and a size set by hand or its own field. */
-export interface DirectorRigFraming { rig_id: string; center: DirectorSkyPosition | null; position_angle_degrees: number | null; mosaic: DirectorMosaic; panel: DirectorPanelSize | null }
+/** One rig framed on its own over the shared target: its panels, an angle of its own or the shared one, and a size set by hand or its own field. */
+export interface DirectorRigFraming { rig_id: string; center: DirectorSkyPosition | null; position_angle_degrees: number | null; layout: DirectorLayout; panel: DirectorPanelSize | null }
 export interface DirectorFramingDraft {
   project_id: string;
   revision: number;
   target_name: string;
   center: DirectorSkyPosition;
   position_angle_degrees: number;
-  mosaic: DirectorMosaic;
+  /** The shared framing's panels, placed around `center`. */
+  layout: DirectorLayout;
   panel_rig_id: string | null;
   panel: DirectorPanelSize | null;
   shown_rig_ids: string[];
@@ -448,12 +484,17 @@ export interface DirectorMosaicPanel {
   /** Every finished stack of the panel's target, best first. */
   stacks: SkyPreview[];
 }
+/** Where a framing panel's frames were shot: `framing_rig_id` names the rig
+ *  framed on its own the panel belongs to, null for the shared framing. */
+export interface DirectorMeasuredPanel { framing_rig_id: string | null; panel_id: string; geometry: DirectorMeasuredGeometry }
 export interface DirectorMosaicPreview {
   project: DirectorIdentity;
   activation_revision: number | null;
   framing_revision: number | null;
   framing_stale: boolean;
   panels: DirectorMosaicPanel[];
+  /** Absent from servers before panels followed their shots. */
+  measured?: DirectorMeasuredPanel[];
   warnings: string[];
 }
 
@@ -488,7 +529,7 @@ export interface DirectorFramingSummary {
   center: DirectorSkyPosition;
   position_angle_degrees: number;
   panel: DirectorPanelSize | null;
-  mosaic: DirectorMosaic;
+  layout: DirectorLayout;
   survey_id: string;
   extent: DirectorPanelSize | null;
 }

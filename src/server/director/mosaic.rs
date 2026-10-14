@@ -10,6 +10,8 @@ use crate::server::{
     database_context::DatabaseContext,
     sky_coverage::{stacks_for, SkyPreview},
 };
+use psf_guard_director_core::framing::{MeasuredGeometry, MeasuredSource, PanelSize};
+use psf_guard_director_meta::framing::FramingDraft;
 use rusqlite::{OpenFlags, OptionalExtension};
 use std::{collections::BTreeMap, time::Duration};
 
@@ -43,6 +45,17 @@ struct MosaicPanel {
     stacks: Vec<SkyPreview>,
 }
 
+/// Where a framing panel's frames were shot, for the framing to draw it
+/// as shot ([`super::measured`]).
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct MeasuredPanel {
+    /// The rig framed on its own the panel belongs to; `None` for the
+    /// shared framing.
+    pub(super) framing_rig_id: Option<Uuid>,
+    pub(super) panel_id: String,
+    pub(super) geometry: MeasuredGeometry,
+}
+
 #[derive(Serialize)]
 pub(super) struct Mosaic {
     project: NamedIdentity,
@@ -54,6 +67,9 @@ pub(super) struct Mosaic {
     /// sit where their solves put them; the plan's panels may have moved.
     framing_stale: bool,
     panels: Vec<MosaicPanel>,
+    /// Each framing panel with frames, where they were shot. A panel more
+    /// than one rig shot is measured from the rig with the best evidence.
+    measured: Vec<MeasuredPanel>,
     warnings: Vec<String>,
 }
 
@@ -100,8 +116,47 @@ fn progress(
     Ok(total)
 }
 
+/// The panel each target of a linked project stands for, named the way the
+/// framing taken in from it names its panels: a lone target is the single
+/// panel `r1c1`, and targets on a grid are its cells. Targets that form no
+/// grid keep their names. So the framing view knows which of its panels
+/// already have frames before any activation.
+pub(super) fn linked_panel_ids(
+    connection: &rusqlite::Connection,
+    project: Uuid,
+    targets: &[(i64, String, Option<Uuid>)],
+) -> Result<Vec<String>, Error> {
+    if targets.len() == 1 {
+        return Ok(vec!["r1c1".into()]);
+    }
+    let row: Option<i64> = connection
+        .query_row(
+            "SELECT Id FROM project WHERE lower(guid) = lower(?1)",
+            [project.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StoreError::from)?;
+    let cells = match row {
+        Some(row) => super::inferred_mosaic(connection, row)?.unwrap_or_default(),
+        None => vec![],
+    };
+    Ok(targets
+        .iter()
+        .map(|(target_id, name, _)| {
+            cells
+                .iter()
+                .find(|cell| cell.target_id == *target_id)
+                .map_or_else(
+                    || name.clone(),
+                    |cell| format!("r{}c{}", cell.row, cell.column),
+                )
+        })
+        .collect())
+}
+
 /// A linked project's targets: row, name and GUID.
-fn project_targets(
+pub(super) fn project_targets(
     connection: &rusqlite::Connection,
     project: Uuid,
 ) -> rusqlite::Result<Vec<(i64, String, Option<Uuid>)>> {
@@ -149,6 +204,284 @@ fn status_of(target_id: Option<i64>, preview: Option<&SkyPreview>) -> &'static s
     }
 }
 
+/// How much a measurement proves, for choosing among rigs.
+fn rank(geometry: &MeasuredGeometry) -> (u8, u32) {
+    let source = match geometry.source {
+        MeasuredSource::Solved => 2,
+        MeasuredSource::Header => 1,
+        MeasuredSource::Plan => 0,
+    };
+    (source, geometry.frames)
+}
+
+/// The field a panel's measurement falls back on when no solve or header
+/// gives one: the size it was measured with before, so a new camera does
+/// not resize it; else the size the framing plans with.
+fn fallback_size(
+    draft: &FramingDraft,
+    framing_rig_id: Option<Uuid>,
+    panel_id: &str,
+) -> Option<PanelSize> {
+    let (layout, panel) = match framing_rig_id.and_then(|rig| draft.rig_framing(rig)) {
+        Some(own) => (&own.layout, own.panel.or(draft.panel)),
+        None => (&draft.layout, draft.panel),
+    };
+    layout
+        .panel(panel_id)
+        .and_then(|placement| placement.measured.as_ref())
+        .map(|measured| measured.size)
+        .or(panel)
+}
+
+fn open_catalog(context: &DatabaseContext) -> Result<rusqlite::Connection, Error> {
+    let connection = super::super::database_context::open_scheduler_connection_with_flags(
+        FilePath::new(&context.database_path),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(StoreError::from)?;
+    connection
+        .busy_timeout(Duration::from_secs(2))
+        .map_err(StoreError::from)?;
+    Ok(connection)
+}
+
+/// The mosaic of project `id` as the rig databases hold it: its panels'
+/// targets, progress and stacks, and where each panel's frames were shot.
+pub(super) fn collect(
+    store: &MetaStore,
+    id: Uuid,
+    catalogs: &[Arc<DatabaseContext>],
+    instance_id: Uuid,
+) -> Result<Mosaic, Error> {
+    collect_for(store, id, catalogs, instance_id, None)
+}
+
+/// [`collect`], with shot geometry keyed by `keying` (the framings a save
+/// is about to store) instead of the stored draft: which rigs are framed on
+/// their own, and the sizes a panel falls back on.
+pub(super) fn collect_for(
+    store: &MetaStore,
+    id: Uuid,
+    catalogs: &[Arc<DatabaseContext>],
+    instance_id: Uuid,
+    keying: Option<&FramingDraft>,
+) -> Result<Mosaic, Error> {
+    let project = store.project(id)?.ok_or(Error::Missing)?;
+    let stored = store.framing_draft(id)?;
+    let framing_revision = stored.as_ref().map(|draft| draft.revision);
+    // Only a change activation writes moves the rectangles off the stacks.
+    let layout_revision = stored.as_ref().map(|draft| draft.layout_revision);
+    let framing = keying.or(stored.as_ref());
+    let activation = store.activation(id)?;
+    let framing_stale = activation.as_ref().is_some_and(|activation| {
+        layout_revision.is_some_and(|revision| revision > activation.framing_revision)
+    });
+    // One stack index read per rig database, however many panels it owns.
+    let mut stacks: BTreeMap<String, std::collections::HashMap<i32, Vec<SkyPreview>>> =
+        BTreeMap::new();
+    let mut panels = Vec::new();
+    let mut warnings = Vec::new();
+    // The best measurement so far of each framing panel.
+    let mut measured: BTreeMap<(Option<Uuid>, String), MeasuredGeometry> = BTreeMap::new();
+    let found = identified_catalogs(catalogs, instance_id);
+    warnings.extend(found.duplicates.iter().cloned());
+    let mut measure = |rig: Uuid,
+                       context: &DatabaseContext,
+                       connection: &rusqlite::Connection,
+                       panel_id: &str,
+                       target_id: i64| {
+        let Some(draft) = framing else {
+            return Ok::<_, Error>(());
+        };
+        let key = (draft.rig_framing(rig).map(|_| rig), panel_id.to_owned());
+        let size = fallback_size(draft, key.0, panel_id);
+        let geometry = super::measured::measure_target(context, connection, target_id, size)
+            .map_err(StoreError::from)?;
+        if let Some(geometry) = geometry
+            && measured
+                .get(&key)
+                .is_none_or(|best| rank(&geometry) > rank(best))
+        {
+            measured.insert(key, geometry);
+        }
+        Ok(())
+    };
+    let mut panel = |rig: &NamedIdentity,
+                     context: &DatabaseContext,
+                     panel_id: String,
+                     target_guid: Option<Uuid>,
+                     row: Option<(i64, String)>,
+                     progress: Option<PanelProgress>| {
+        let found = stacks
+            .entry(context.id.clone())
+            .or_insert_with(|| stacks_for(context));
+        let (target_id, target_name) = match row {
+            Some((target_id, name)) => (Some(target_id), Some(name)),
+            None => (None, None),
+        };
+        let list = target_id
+            .and_then(|target_id| i32::try_from(target_id).ok())
+            .and_then(|target_id| found.get(&target_id).cloned())
+            .unwrap_or_default();
+        let preview = list.first().cloned();
+        MosaicPanel {
+            panel_id,
+            rig: rig.clone(),
+            catalog_slug: Some(context.id.clone()),
+            catalog_name: context.name.clone(),
+            target_guid,
+            target_id,
+            target_name,
+            progress,
+            status: status_of(target_id, preview.as_ref()),
+            preview,
+            stacks: list,
+        }
+    };
+    let mut reached = std::collections::BTreeSet::new();
+    for activated in activation.iter().flat_map(|a| a.rigs.iter()) {
+        reached.insert(activated.rig_id);
+        let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;
+        let Some(context) = found.get(activated.catalog_id) else {
+            warnings.push(format!(
+                "{}: its database is no longer registered on this server.",
+                rig.name
+            ));
+            for target in &activated.targets {
+                panels.push(MosaicPanel {
+                    panel_id: target.panel_id.clone(),
+                    rig: rig.clone(),
+                    catalog_slug: None,
+                    catalog_name: String::new(),
+                    target_guid: Some(target.target_guid),
+                    target_id: None,
+                    target_name: None,
+                    progress: None,
+                    status: "missing_catalog",
+                    preview: None,
+                    stacks: vec![],
+                });
+            }
+            continue;
+        };
+        let connection = open_catalog(context)?;
+        for target in &activated.targets {
+            let row = target_row(&connection, target.target_guid).map_err(StoreError::from)?;
+            // A plan summing several objectives is listed once.
+            let plans: Vec<String> = activated
+                .plans
+                .iter()
+                .filter(|plan| plan.target_guid == target.target_guid)
+                .map(|plan| plan.exposureplan_guid.to_string())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let progress = row
+                .as_ref()
+                .map(|(target_id, _)| progress(&connection, *target_id, &plans))
+                .transpose()
+                .map_err(StoreError::from)?;
+            if let Some((target_id, _)) = &row {
+                measure(rig.id, context, &connection, &target.panel_id, *target_id)?;
+            }
+            panels.push(panel(
+                &rig,
+                context,
+                target.panel_id.clone(),
+                Some(target.target_guid),
+                row,
+                progress,
+            ));
+        }
+    }
+    // A rig no activation reached shows its linked project's targets.
+    for (identity, context) in found.iter() {
+        let Some(binding) = store.catalog_rig(identity.id)? else {
+            continue;
+        };
+        if reached.contains(&binding.rig.id) {
+            continue;
+        }
+        let mut after = None;
+        let mut linked = Vec::new();
+        loop {
+            let page = store.catalog_project_mappings(identity.id, after, 256)?;
+            linked.extend(
+                page.items
+                    .iter()
+                    .filter(|m| m.project_id == id)
+                    .map(|m| m.source_project_guid),
+            );
+            match page.next_after {
+                Some(next) => after = Some(next),
+                None => break,
+            }
+        }
+        if linked.is_empty() {
+            continue;
+        }
+        let connection = match open_catalog(context) {
+            Ok(connection) => connection,
+            Err(_) => {
+                warnings.push(format!(
+                    "{}: its database could not be read.",
+                    binding.rig.name
+                ));
+                continue;
+            }
+        };
+        for source in linked {
+            let targets = project_targets(&connection, source).map_err(StoreError::from)?;
+            let ids = linked_panel_ids(&connection, source, &targets)?;
+            for ((target_id, name, guid), panel_id) in targets.into_iter().zip(ids) {
+                let progress = target_progress(&connection, target_id).map_err(StoreError::from)?;
+                measure(binding.rig.id, context, &connection, &panel_id, target_id)?;
+                panels.push(panel(
+                    &binding.rig,
+                    context,
+                    panel_id,
+                    guid,
+                    Some((target_id, name)),
+                    Some(progress),
+                ));
+            }
+        }
+    }
+    if panels.is_empty() && activation.is_none() {
+        warnings.push(
+            "Link a Target Scheduler project or activate the plan; stacks appear once the rigs have shot their panels."
+                .into(),
+        );
+    }
+    panels.sort_by(|a, b| {
+        a.panel_id
+            .cmp(&b.panel_id)
+            .then_with(|| a.rig.name.cmp(&b.rig.name))
+    });
+    Ok(Mosaic {
+        project,
+        activation_revision: activation.as_ref().map(|a| a.revision),
+        framing_revision,
+        framing_stale,
+        panels,
+        measured: measured
+            .into_iter()
+            .map(|((framing_rig_id, panel_id), geometry)| MeasuredPanel {
+                framing_rig_id,
+                panel_id,
+                geometry,
+            })
+            .collect(),
+        warnings,
+    })
+}
+
+impl Mosaic {
+    pub(super) fn measured(&self) -> &[MeasuredPanel] {
+        &self.measured
+    }
+}
+
 pub(super) async fn get(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
@@ -161,171 +494,10 @@ pub(super) async fn get(
         .values()
         .cloned()
         .collect();
+    let instance_id = service.instance_id;
     let mosaic = service
         .clone()
-        .with_reader(move |store| {
-            let project = store.project(id)?.ok_or(Error::Missing)?;
-            let framing = store.framing_draft(id)?;
-            let framing_revision = framing.as_ref().map(|draft| draft.revision);
-            // Only a change activation writes moves the rectangles off the stacks.
-            let layout_revision = framing.as_ref().map(|draft| draft.layout_revision);
-            let activation = store.activation(id)?;
-            let framing_stale = activation.as_ref().is_some_and(|activation| {
-                layout_revision.is_some_and(|revision| revision > activation.framing_revision)
-            });
-            // One stack index read per rig database, however many panels it owns.
-            let mut stacks: BTreeMap<String, std::collections::HashMap<i32, Vec<SkyPreview>>> =
-                BTreeMap::new();
-            let mut panels = Vec::new();
-            let mut warnings = Vec::new();
-            let found = identified_catalogs(&catalogs, service.instance_id);
-            warnings.extend(found.duplicates.iter().cloned());
-            let open = |context: &DatabaseContext| -> Result<rusqlite::Connection, Error> {
-                let connection =
-                    super::super::database_context::open_scheduler_connection_with_flags(
-                        FilePath::new(&context.database_path),
-                        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-                    )
-                    .map_err(StoreError::from)?;
-                connection
-                    .busy_timeout(Duration::from_secs(2))
-                    .map_err(StoreError::from)?;
-                Ok(connection)
-            };
-            let mut panel = |rig: &NamedIdentity,
-                             context: &DatabaseContext,
-                             panel_id: String,
-                             target_guid: Option<Uuid>,
-                             row: Option<(i64, String)>,
-                             progress: Option<PanelProgress>| {
-                let found = stacks
-                    .entry(context.id.clone())
-                    .or_insert_with(|| stacks_for(context));
-                let (target_id, target_name) = match row {
-                    Some((target_id, name)) => (Some(target_id), Some(name)),
-                    None => (None, None),
-                };
-                let list = target_id
-                    .and_then(|target_id| i32::try_from(target_id).ok())
-                    .and_then(|target_id| found.get(&target_id).cloned())
-                    .unwrap_or_default();
-                let preview = list.first().cloned();
-                MosaicPanel {
-                    panel_id,
-                    rig: rig.clone(),
-                    catalog_slug: Some(context.id.clone()),
-                    catalog_name: context.name.clone(),
-                    target_guid,
-                    target_id,
-                    target_name,
-                    progress,
-                    status: status_of(target_id, preview.as_ref()),
-                    preview,
-                    stacks: list,
-                }
-            };
-            let mut reached = std::collections::BTreeSet::new();
-            for activated in activation.iter().flat_map(|a| a.rigs.iter()) {
-                reached.insert(activated.rig_id);
-                let rig = store.rig(activated.rig_id)?.ok_or(Error::Missing)?;
-                let Some(context) = found.get(activated.catalog_id) else {
-                    warnings.push(format!(
-                        "{}: its database is no longer registered on this server.",
-                        rig.name
-                    ));
-                    for target in &activated.targets {
-                        panels.push(MosaicPanel {
-                            panel_id: target.panel_id.clone(),
-                            rig: rig.clone(),
-                            catalog_slug: None,
-                            catalog_name: String::new(),
-                            target_guid: Some(target.target_guid),
-                            target_id: None,
-                            target_name: None,
-                            progress: None,
-                            status: "missing_catalog",
-                            preview: None,
-                            stacks: vec![],
-                        });
-                    }
-                    continue;
-                };
-                let connection = open(context)?;
-                for target in &activated.targets {
-                    let row =
-                        target_row(&connection, target.target_guid).map_err(StoreError::from)?;
-                    // A plan summing several objectives is listed once.
-                    let plans: Vec<String> = activated
-                        .plans
-                        .iter()
-                        .filter(|plan| plan.target_guid == target.target_guid)
-                        .map(|plan| plan.exposureplan_guid.to_string())
-                        .collect::<std::collections::BTreeSet<_>>()
-                        .into_iter()
-                        .collect();
-                    let progress = row
-                        .as_ref()
-                        .map(|(target_id, _)| progress(&connection, *target_id, &plans))
-                        .transpose()
-                        .map_err(StoreError::from)?;
-                    panels.push(panel(&rig, context, target.panel_id.clone(), Some(target.target_guid), row, progress));
-                }
-            }
-            // A rig no activation reached shows its linked project's targets.
-            for (identity, context) in found.iter() {
-                let Some(binding) = store.catalog_rig(identity.id)? else {
-                    continue;
-                };
-                if reached.contains(&binding.rig.id) {
-                    continue;
-                }
-                let mut after = None;
-                let mut linked = Vec::new();
-                loop {
-                    let page = store.catalog_project_mappings(identity.id, after, 256)?;
-                    linked.extend(page.items.iter().filter(|m| m.project_id == id).map(|m| m.source_project_guid));
-                    match page.next_after {
-                        Some(next) => after = Some(next),
-                        None => break,
-                    }
-                }
-                if linked.is_empty() {
-                    continue;
-                }
-                let connection = match open(context) {
-                    Ok(connection) => connection,
-                    Err(_) => {
-                        warnings.push(format!("{}: its database could not be read.", binding.rig.name));
-                        continue;
-                    }
-                };
-                for source in linked {
-                    for (target_id, name, guid) in project_targets(&connection, source).map_err(StoreError::from)? {
-                        let progress = target_progress(&connection, target_id).map_err(StoreError::from)?;
-                        panels.push(panel(&binding.rig, context, name.clone(), guid, Some((target_id, name)), Some(progress)));
-                    }
-                }
-            }
-            if panels.is_empty() && activation.is_none() {
-                warnings.push(
-                    "Link a Target Scheduler project or activate the plan; stacks appear once the rigs have shot their panels."
-                        .into(),
-                );
-            }
-            panels.sort_by(|a, b| {
-                a.panel_id
-                    .cmp(&b.panel_id)
-                    .then_with(|| a.rig.name.cmp(&b.rig.name))
-            });
-            Ok::<_, Error>(Mosaic {
-                project,
-                activation_revision: activation.as_ref().map(|a| a.revision),
-                framing_revision,
-                framing_stale,
-                panels,
-                warnings,
-            })
-        })
+        .with_reader(move |store| collect(store, id, &catalogs, instance_id))
         .await?;
     Ok(Json(ApiResponse::success(mosaic)))
 }
