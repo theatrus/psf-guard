@@ -41,6 +41,8 @@ mod plan;
 mod plan_progress;
 mod plans;
 mod program;
+mod remote_push;
+pub(crate) use remote_push::peer_reached;
 mod rig_profile;
 mod rig_scheduling;
 mod site_profile;
@@ -152,6 +154,8 @@ pub struct Service {
     /// What earlier plan listings read, for the next one.
     plans_memo: Mutex<plans::Memo>,
     collaboration: collaboration_auth::SessionState,
+    /// Peers a background resend is sending to now.
+    resending: Mutex<std::collections::BTreeSet<String>>,
 }
 
 pub(crate) fn spawn_collaboration(state: Arc<AppState>) {
@@ -195,6 +199,7 @@ impl Service {
             discovery_admission: Arc::new(Semaphore::new(1)),
             plans_memo: Mutex::new(plans::Memo::default()),
             collaboration: collaboration_auth::SessionState::default(),
+            resending: Mutex::new(std::collections::BTreeSet::new()),
         })))
     }
 

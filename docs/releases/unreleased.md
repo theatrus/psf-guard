@@ -224,3 +224,10 @@
   server to finish its work, so the job queue it saves is not lost. If that
   work is still running after two minutes, the log lists it and the whole
   app restarts instead.
+- A plan whose remote rig's site missed the last activation now reads **Not
+  synced**: "observatory-pi hasn't received this activation" in the summary
+  and the bar, and "not sent to observatory-pi" on the rig's line. The bar
+  and the activation dialog offer **Send to observatory-pi again**, with the
+  error and when it was tried, and show no button when every site has it.
+  Once the site answers a connection test, a sync or another push, the
+  server sends the activation there on its own.

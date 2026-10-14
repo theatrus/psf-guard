@@ -454,10 +454,12 @@ activation had it (N.I.N.A. changed them, or an old plan another length
 replaced is still on). Its **Activate…** button, **Activate again…** once
 the plan has been activated, opens the preview and apply over the page. Its
 message says **Not synced** and why, such as "Not synced: ultracat131
-differs from the plan". The summary ends with a short label, **Synced** or
-**Not synced** with the reason in its tooltip, and an **Activate…** button
-beside it opens the same dialog at any time, to push the last activation
-again. When the last activation had the saved plan, framing and rigs, the
+differs from the plan". While a remote rig's site lacks the last
+activation, the bar says so and offers to send it there, with **Activate…**
+beside it; see [Rigs at another site](#rigs-at-another-site). The summary
+ends with a short label, **Synced** or **Not synced** with the reason in its
+tooltip, and an **Activate…** button beside it opens the same dialog at any
+time. When the last activation had the saved plan, framing and rigs, the
 label says **Synced** at once while the [check](#activation) runs, and
 changes only if the check finds rows to write. Otherwise it says
 **Checking the rigs…** until the check answers. When the check fails, or
@@ -1260,7 +1262,7 @@ already Inactive or Closed in Target Scheduler is left as the operator set
 it, and stays that way when the rig comes back on. A rig that is off is
 listed only when its project changes, and leaves the activation record's
 rigs; the record keeps the projects it set Inactive (`inactive_rigs`), and
-**Push again** sends those to their peers too. A rig an activation cannot
+a remote rig's site gets those too. A rig an activation cannot
 reach (its database not registered, no panel size, a refused row) keeps its
 last record, so its rows stay accounted for and a later activation can still
 turn it off.
@@ -1369,10 +1371,35 @@ database that N.I.N.A. and Target Scheduler write. To plan for it from here:
 
 The **Remote site** column of the report says what happened per rig: *Pushed
 to* the peer, or the peer's refusal or the network error, in which case the
-local activation still stands. **Push to remote sites again** resends the
-last activation to every remote rig's peer, for a site that was offline at
-Apply. The rig's warnings list a peer removed from the registry, and the
-plan stays on this server until Setup picks another.
+local activation still stands. The activation record keeps each remote rig's
+push (`pushes`): the peer, whether it applied the rows, when it was last
+tried and why it failed. Apply writes each one as waiting before it pushes,
+so a push cut short still counts as not sent.
+
+A remote rig whose site has not had the last activation (the site was
+offline at Apply, the push failed, or it has not run yet) is **Not synced**,
+even when the rows here match the plan: "Not synced: observatory-pi hasn't
+received this activation" in the summary's tooltip and the bar, and "not
+synced · not sent to observatory-pi" on the rig's line under Rigs. The bar
+and the activation dialog then offer **Send to observatory-pi again** (no
+"again" before a first try); the dialog lists each such rig with the error
+and when it was tried. Neither shows the button when no rig is remote or
+every site has the activation. A push to a peer since removed from the
+registry, or to one the rig no longer sends to, no longer counts: the rig's
+warnings list a removed peer, and the plan stays on this server until Setup
+picks another.
+
+The server also sends it on its own once the site answers: a successful
+**Test connection**, a sync with that peer other than a pull that writes, or
+another push that reaches it. In the background it sends each rig database
+that an activation still owes the peer, once per contact, and records how it
+went. It sends only the latest activation of each plan, never one the site
+already applied, and only from a server that may write rig databases. Every
+planning push takes the server's Sync apply lock, so no two run at once, and
+records its result under it; one running for a peer covers any contact that
+arrives meanwhile. A pull that writes does not send: the site's rows may
+have replaced the activated ones here, so the check may ask to activate
+again first. The server log says what it sent and what failed.
 
 The remote PSF Guard sees the pushed rows as ordinary Target Scheduler
 projects with the same GUIDs, so its own Library and Sync work on them; it
@@ -1381,12 +1408,12 @@ pulls its program from this server, the coordinator, and reports here.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| GET | `/projects/{id}/activation` | `{ activation }`: the last applied activation (revision, framing and plan revisions, and per rig the project, target and plan GUIDs) or `null`. |
+| GET | `/projects/{id}/activation` | `{ activation }`: the last applied activation (revision, framing and plan revisions, per rig the project, target and plan GUIDs, and `pushes`, each remote rig's `rig_id`, `peer_id`, `peer_name`, `applied`, `attempted_at_ms` and `error`, left out when empty) or `null`. A push to a peer no longer registered, or one the rig no longer sends to, is left out. |
 | POST | `/projects/{id}/activation/preview` | Empty body. Computes and rolls back; returns the per-rig report and `preview_digest`. `422` until the project has a framing with a panel size and a plan with a ticked rig. |
 | GET | `/projects/{id}/activation/check` | The preview's report, worked out on an in-memory copy of each rig database's planning tables; never writes and never takes a rig database's lock. |
 | POST | `/projects/{id}/plan/take-target-scheduler` | `{ rig_id, plan_revision, framing_revision }`. Writes that rig's linked Target Scheduler project into the saved plan and framing drafts and answers the new revisions with `taken` and `left` lines; `409` when either draft was saved since, `422` when the rig has no database here or no project linked to the plan. |
 | POST | `/projects/{id}/activation/apply` | `{ preview_digest }`. Commits each rig database in turn, records the activation, links new projects, then pushes each remote rig's planning rows to its peer; `409` when the digest no longer matches. Each rig row carries `push` (`peer_id`, `peer_name`, `applied`, `summary`, `error`) or `null`. |
-| POST | `/projects/{id}/activation/push` | Empty body. Sends the last activation's rows again to every remote rig's peer and returns one row per pushed rig; `422` before any activation. An unreachable peer is an `error` in its row, not a failed call. |
+| POST | `/projects/{id}/activation/push` | Empty body. Sends the last activation's rows again to each remote rig's peer that has not applied them (to every remote rig's peer when all have, or the record keeps no pushes), records the result, and returns one row per pushed rig; `422` before any activation. An unreachable peer is an `error` in its row, not a failed call. |
 
 ## Program pull
 

@@ -1,7 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../../api/client';
-import type { DirectorActivationChange, DirectorActivationRig } from '../../api/directorTypes';
+import type { DirectorActivationChange, DirectorActivationRemotePush, DirectorActivationRig } from '../../api/directorTypes';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { shootingRigs } from './planModel';
 import { retryWhenBusy } from './retry';
@@ -15,6 +15,17 @@ export const writesRows = (rig: DirectorActivationRig) => rig.changes.some(chang
 const holdsPlan = (rig: DirectorActivationRig) => rig.profile_id !== null && rig.changes.length > 0 && !writesRows(rig);
 
 const listed = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+
+/** A remote rig whose site has not had the last activation, with the
+ *  rig's database name. */
+export type UnsentPush = DirectorActivationRemotePush & { rig_name: string };
+
+/** The sites these pushes go to, each once. */
+export const sitesOf = (unsent: UnsentPush[]) => [...new Set(unsent.map(push => push.peer_name))];
+
+/** The send button's label: "Send to observatory-pi again", or without
+ *  "again" when no push was tried yet. */
+export const sendLabel = (unsent: UnsentPush[]) => `Send to ${listed(sitesOf(unsent))}${unsent.some(push => push.attempted_at_ms) ? ' again' : ''}`;
 
 /** What a rig's turn-offs come to, in a few words: "1 plan", "2 plans",
  *  "the project", "the project and 1 plan"; empty for none. */
@@ -88,15 +99,26 @@ export function useActivationState(projectId: string) {
   // Everything the rigs lack: the saved parts, the rigs left out, then the
   // rigs whose rows differ.
   const behind = matches ? [] : [...parts, ...missing, ...differingRigs.map(rig => rig.catalog_name)];
+  // Remote rigs whose site has not had the last activation: the site was
+  // offline at Apply, the push failed, or it has not run yet. The rows
+  // here can match while the site lacks them.
+  const unsent: UnsentPush[] = (last.data?.pushes ?? []).filter(push => !push.applied)
+    .map(push => ({ ...push, rig_name: profiles.data?.find(rig => rig.rig.id === push.rig_id)?.catalog_name ?? 'a rig' }));
+  const sites = sitesOf(unsent);
+  const sentReason = `${listed(sites)} ${sites.length === 1 ? "hasn't" : "haven't"} received this activation`;
   // Why the rigs are not synced, said once for the bar, the summary's
   // tooltip and the activation panel.
   const reasons = last.data ? [
-    parts.length > 0 && `saved ${listed(parts)} not activated yet`,
+    !matches && parts.length > 0 && `saved ${listed(parts)} not activated yet`,
     missing.length > 0 && `${listed(missing)} not activated yet`,
     differing.length > 0 && `${listed(differing)} ${differing.length === 1 ? 'differs' : 'differ'} from the plan`,
     ...turningOff,
+    sites.length > 0 && sentReason,
   ].filter(Boolean).join('; ') : 'not activated yet';
   const notSynced = `Not synced: ${reasons}`;
+  // Only the sites that lack the last activation, for a bar that asks for
+  // nothing else.
+  const notSent = `Not synced: ${sentReason}`;
   // A check that failed, or a rig it could not read (its database locked,
   // unreadable or not on this server, or a row it refuses): said, never
   // asked about, with the reason in `title`.
@@ -109,27 +131,51 @@ export function useActivationState(projectId: string) {
   const rigSync = (rigId: string): { text: string; title?: string } => {
     const unread = skipped.find(rig => rig.rig.id === rigId);
     const report = check.data?.rigs.find(rig => rig.rig.id === rigId);
-    if (holding.has(rigId)) return { text: 'synced' };
+    // Rows that match here still wait for a site that lacks them.
+    const waiting = unsent.find(push => push.rig_id === rigId);
+    const synced = waiting ? { text: `not synced · not sent to ${waiting.peer_name}`, title: waiting.error } : { text: 'synced' };
+    if (holding.has(rigId)) return synced;
     if (unread) return { text: "couldn't check", title: unread.warnings.join(' ') };
     if (!activated.has(rigId)) return { text: 'not synced · not activated yet' };
     if (report && changed.has(rigId)) return { text: onlyTurnsOff(report) ? `not synced · turns off ${turnedOff(report.changes)}` : 'not synced · differs from the plan' };
     if (parts.length > 0) return { text: `not synced · saved ${listed(parts)} not activated yet` };
-    return { text: 'synced' };
+    return synced;
   };
-  return { last, savedPlan, savedFraming, planRevision, framingRevision, behind, notSynced, matches, checking, unchecked, rigSync };
+  return { last, savedPlan, savedFraming, planRevision, framingRevision, behind, notSynced, notSent, unsent, matches, checking, unchecked, rigSync };
 }
 
-/** Whether the page should ask for an activation: someone may write, the
- *  server writes rig databases, the saved plan shoots something, and the
- *  rigs lack the saved plan, its layout or a rig that shoots it, or their
- *  rows differ from it. The save bar comes first, so the page also waits for
- *  unsaved edits. Where the record cannot answer it waits for the check
- *  rather than ask and then take it back; where it can, it asks once the
- *  check finds rows to write. */
-export function useActivationDue(projectId: string, canWrite: boolean, unsaved: number): boolean {
-  const { last, savedPlan, behind, matches, checking } = useActivationState(projectId);
+/** Send the last activation again to the remote sites that lack it. The
+ *  server records how it went, so the state reads the record again. */
+export function useSendAgain(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: () => apiClient.pushDirectorActivation(projectId),
+    onSettled: () => client.invalidateQueries({ queryKey: ['directorActivation', projectId] }),
+  });
+}
+
+/** What the bar at the top of the page asks for. `activate`: someone may
+ *  write, the server writes rig databases, the saved plan shoots something,
+ *  and the rigs lack the saved plan, its layout or a rig that shoots it, or
+ *  their rows differ from it. `send`: a remote site lacks the last
+ *  activation. The save bar comes first, so the page also waits for unsaved
+ *  edits. Where the record cannot answer it waits for the check rather than
+ *  ask and then take it back; where it can, it asks once the check finds
+ *  rows to write. */
+export function useActivationBar(projectId: string, canWrite: boolean, unsaved: number): { activate: boolean; send: boolean } {
+  const { last, savedPlan, behind, matches, checking, unsent } = useActivationState(projectId);
   const status = useDirectorStatus();
   const shoots = shootingRigs(savedPlan.data?.plan).length > 0;
-  return canWrite && !!status.data?.database_management && unsaved === 0 && last.isSuccess && shoots
-    && (!last.data || behind.length > 0) && !matches && !checking;
+  const ready = canWrite && !!status.data?.database_management && unsaved === 0 && last.isSuccess;
+  return {
+    activate: ready && shoots && (!last.data || behind.length > 0) && !matches && !checking,
+    send: ready && unsent.length > 0,
+  };
+}
+
+/** Whether the bar at the top of the page is up, for either reason. */
+export function useActivationDue(projectId: string, canWrite: boolean, unsaved: number): boolean {
+  const { activate, send } = useActivationBar(projectId, canWrite, unsaved);
+  return activate || send;
 }

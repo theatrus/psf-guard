@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Download, Eye, Power, Send, Telescope, TriangleAlert } from 'lucide-react';
+import { Check, Download, Eye, Power, RefreshCw, Telescope, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
-import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport, DirectorActivationShot, DirectorTakenValues } from '../../api/directorTypes';
+import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationReport, DirectorActivationShot, DirectorTakenValues } from '../../api/directorTypes';
 import { describeFailure, useDrafts } from './pageDraftsState';
-import { turnedOff, useActivationState, writesRows } from './activationState';
+import { sendLabel, turnedOff, useActivationState, useSendAgain, writesRows } from './activationState';
 import { objectiveName } from './planModel';
 import './ActivationPanel.css';
 import CollaborationActivation from './CollaborationActivation';
@@ -195,7 +195,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
   const client = useQueryClient();
-  const { last, savedPlan, planRevision, framingRevision, behind, notSynced, matches, checking, unchecked } = useActivationState(projectId);
+  const { last, savedPlan, planRevision, framingRevision, behind, notSynced, unsent, matches, checking, unchecked } = useActivationState(projectId);
   const objectiveLabel = (id: string) => {
     const objective = savedPlan.data?.plan?.objectives.find(entry => entry.id === id);
     return objective ? objectiveName(objective) : '';
@@ -233,8 +233,9 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
       preview.mutate();
     },
   });
-  const [pushed, setPushed] = useState<DirectorActivationPushReport | null>(null);
-  const push = useMutation({ retry: false, mutationFn: () => apiClient.pushDirectorActivation(projectId), onSuccess: setPushed });
+  // Sending the last activation again to the remote sites that lack it.
+  const push = useSendAgain(projectId);
+  const pushed = push.data;
   const run = (action: () => void) => { if (busy.current) return; busy.current = true; try { action(); } finally { busy.current = false; } };
   useEffect(() => { onReport?.(report); }, [report, onReport]);
   // Apply takes its own button away; the result takes focus in its place.
@@ -248,8 +249,17 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   return <section className="activation" aria-label="Activation">
     <CollaborationActivation projectId={projectId} value={visits} disabled={pending || !canWrite} onChange={next => { setVisits(next); setReport(null); }} />
     {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
-    {last.data && behind.length > 0 && <p className="activation-behind" role="note">{notSynced}</p>}
-    {last.data && behind.length === 0 && !checking && !unsavedPlan && planRevision !== undefined && (unchecked
+    {last.data && (behind.length > 0 || unsent.length > 0) && <p className="activation-behind" role="note">{notSynced}</p>}
+    {unsent.length > 0 && <div className="activation-unsent" role="note" aria-label="Not sent to remote sites">
+      <ul>{unsent.map(site => <li key={site.rig_id}>
+        {site.rig_name}: not sent to {site.peer_name}{site.error && <span className="director-error">: {site.error}</span>}
+        {site.attempted_at_ms !== undefined && <span className="director-muted"> · tried {new Date(site.attempted_at_ms).toLocaleString()}</span>}
+      </li>)}</ul>
+      {canWrite && <button type="button" disabled={pending || !manageable} title={manageable ? 'Send the last activation\'s rows to these sites again' : 'This server cannot change rig databases'} onClick={() => run(() => push.mutate())}>
+        <RefreshCw size={16} />{push.isPending ? 'Sending…' : sendLabel(unsent)}
+      </button>}
+    </div>}
+    {last.data && behind.length === 0 && unsent.length === 0 && !checking && !unsavedPlan && planRevision !== undefined && (unchecked
       ? <p className="director-muted" title={unchecked.title}>{unchecked.text}</p>
       : <p className="director-muted">Synced</p>)}
     {!last.data && last.isSuccess && <p className="director-muted">{matches ? 'Synced' : notSynced}</p>}
@@ -268,14 +278,13 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
       </div>)}
     </div>}
     {pushed && <div className="activation-report" aria-label="Push result">
-      <p><strong>Pushed again</strong>: activation revision {pushed.activation_revision}.</p>
+      <p><strong>Sent again</strong>: activation revision {pushed.activation_revision}.</p>
       {pushed.warnings.map(warning => <p key={warning} className="director-muted">{warning}</p>)}
       <ul>{pushed.rigs.map(rig => <li key={rig.rig.id} className={rig.push.error ? 'director-error' : undefined}>{rig.catalog_name}: {describePush(rig.push, true)}</li>)}</ul>
     </div>}
     {canWrite && <div className="director-actions">
       <button type="button" disabled={pending} onClick={() => run(() => preview.mutate())}><Eye size={16} />{preview.isPending ? 'Previewing...' : unsavedPlan ? 'Save and preview' : report && !report.applied ? 'Preview again' : 'Preview'}</button>
       {report && !report.applied && !unsavedPlan && <button type="button" disabled={pending || !manageable || report.rigs.every(r => r.warnings.length > 0 && r.changes.length === 0)} title={manageable ? undefined : 'This server cannot change rig databases'} onClick={() => run(() => apply.mutate())}><Check size={16} />{apply.isPending ? 'Applying...' : 'Apply'}</button>}
-      {last.data && <button type="button" disabled={pending || !manageable} title={manageable ? 'Send the last activation\'s rows to each remote rig\'s peer again' : 'This server cannot change rig databases'} onClick={() => run(() => push.mutate())}><Send size={16} />{push.isPending ? 'Pushing...' : 'Push again'}</button>}
     </div>}
     {canWrite && unsavedPlan && <p className="director-muted" role="note">Unsaved changes in {unsavedLabels.join(', ')}; preview saves them{report && !report.applied ? ' (this preview predates them)' : ''}</p>}
     {!canWrite && <p className="director-muted">Read only</p>}

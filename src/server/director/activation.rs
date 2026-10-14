@@ -16,7 +16,9 @@ use psf_guard_director_core::{
     framing::{FramingRequest, Panel},
 };
 use psf_guard_director_meta::{
-    activation::{ActivatedPlan, ActivatedRig, ActivatedTarget, Activation, InactiveRig},
+    activation::{
+        ActivatedPlan, ActivatedRig, ActivatedTarget, Activation, InactiveRig, RemotePush,
+    },
     catalog::ProjectMapping,
     framing::FramingDraft,
     plan::{Contribution, Goal, Objective, PlanDraft},
@@ -42,12 +44,12 @@ struct Change {
 /// written like any other, then its planning rows travel by Sync.
 #[derive(Clone, Serialize)]
 pub(super) struct Push {
-    peer_id: String,
-    peer_name: String,
+    pub(super) peer_id: String,
+    pub(super) peer_name: String,
     /// True once the peer applied the planning rows.
     pub(super) applied: bool,
-    summary: BTreeMap<String, i64>,
-    error: Option<String>,
+    pub(super) summary: BTreeMap<String, i64>,
+    pub(super) error: Option<String>,
 }
 
 impl Push {
@@ -181,10 +183,28 @@ pub(super) async fn last(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Last>>, Error> {
+    let peers = registered_peers(&state);
     let activation = enabled(&state)?
         .query(move |store| {
             store.project(id)?.ok_or(StoreError::NotFound)?;
-            store.activation(id)
+            let Some(mut activation) = store.activation(id)? else {
+                return Ok(None);
+            };
+            // A push to a peer since removed from the registry, or one the
+            // rig no longer sends to, is moot: the rig's next activation goes
+            // where Setup points. The others carry the peer's name now.
+            let mut pushes = Vec::new();
+            for mut push in std::mem::take(&mut activation.pushes) {
+                let Some(peer) = peers.iter().find(|peer| peer.id == push.peer_id) else {
+                    continue;
+                };
+                if remote_push::sends_to(store, push.rig_id, &peer.id)? {
+                    push.peer_name = peer.name.clone();
+                    pushes.push(push);
+                }
+            }
+            activation.pushes = pushes;
+            Ok(Some(activation))
         })
         .await?;
     Ok(Json(ApiResponse::success(Last { activation })))
@@ -978,15 +998,29 @@ async fn execute_guarded(
                     applied_at_ms: now,
                     rigs: all,
                     inactive_rigs: inactive,
+                    pushes: vec![],
                 }
+            };
+            // The remote rigs this apply writes, and their peers. A
+            // background apply sends nothing, so its rigs keep how their
+            // last push went.
+            let remote: BTreeMap<Uuid, (String, String)> = reports
+                .iter()
+                .filter_map(|r| r.push.as_ref().map(|p| (r.rig.id, (p.peer_id.clone(), p.peer_name.clone()))))
+                .collect();
+            let mut written: std::collections::BTreeSet<Uuid> = if guard.is_none() {
+                pending.iter().map(|(rig, ..)| *rig).collect()
+            } else {
+                Default::default()
             };
             // The record is built and checked before any rig commits, so one
             // the store would refuse never leaves rows written but unrecorded.
-            let whole = record_of(
+            let mut whole = record_of(
                 pending.iter().filter_map(|(_, _, record, _)| record.clone()).collect(),
                 inactive.clone(),
                 &carried,
             );
+            whole.pushes = pushes_of(&whole, &written, &remote, previous.as_ref());
             if whole.validate().is_err() {
                 return Err(ActivationError::NotReady(
                     "This activation is too large to record; nothing was written. Split the plan or turn some rigs off.",
@@ -1037,7 +1071,10 @@ async fn execute_guarded(
                 .into_iter()
                 .filter(|r| !failed.contains(&r.rig_id) || previously_inactive(r.rig_id))
                 .collect();
-            to_record = Some((record_of(rigs, inactive, &carried), links));
+            written.retain(|rig| !failed.contains(rig));
+            let mut record = record_of(rigs, inactive, &carried);
+            record.pushes = pushes_of(&record, &written, &remote, previous.as_ref());
+            to_record = Some((record, links));
         }
         Ok::<_, ActivationError>((Report {
             project,
@@ -1059,6 +1096,7 @@ async fn execute_guarded(
             .map(|r| (r.rig.id, r.catalog_name.clone()))
             .collect();
         let (revision, link_warnings) = recorder
+            .clone()
             .with_writer(move |store| {
                 let recorded = store.record_activation(&record).map_err(|error| {
                     tracing::error!(error = ?error, "Applied activation could not be recorded");
@@ -1089,9 +1127,12 @@ async fn execute_guarded(
         report.activation_revision = Some(revision);
         report.warnings.extend(link_warnings);
     }
-    if report.applied {
-        // The local rows are committed; now each remote rig's peer. A push
-        // that fails leaves the activation standing and says so in its row.
+    if let (true, Some(revision)) = (report.applied, report.activation_revision) {
+        // The local rows are committed and the record says each remote rig
+        // waits; now each rig's peer, and the record says how it went. A
+        // push that fails leaves the activation standing and says so in its
+        // row.
+        let mut answered = std::collections::BTreeSet::new();
         for rig in report.rigs.iter_mut().filter(|rig| rig.applied) {
             let (Some(push), Some(slug)) = (rig.push.as_mut(), rig.catalog_slug.as_deref()) else {
                 continue;
@@ -1102,7 +1143,20 @@ async fn execute_guarded(
             ) else {
                 continue;
             };
-            *push = push_planning(&state, &context, peer).await;
+            let waiting = remote_push::Waiting {
+                project: id,
+                revision,
+                rig: rig.rig.id,
+            };
+            *push =
+                remote_push::push_catalog(&state, &recorder, &context, peer, vec![waiting]).await;
+            if push.applied {
+                answered.insert(peer.id.clone());
+            }
+        }
+        // The peers answered: anything else waiting for them goes too.
+        for peer in answered {
+            remote_push::peer_reached(&state, &peer);
         }
     }
     Ok(Json(ApiResponse::success(report)))
@@ -1131,6 +1185,44 @@ fn open_rig_for(path: &str, on_copy: bool) -> Result<Connection, String> {
     } else {
         open_rig(path)
     }
+}
+
+/// Each remote rig this apply writes waits for its push, which runs once
+/// the record is kept; a rig it does not write keeps how its last push
+/// went. A rig written here with no peer has nothing to wait for.
+fn pushes_of(
+    record: &Activation,
+    written: &std::collections::BTreeSet<Uuid>,
+    remote: &BTreeMap<Uuid, (String, String)>,
+    previous: Option<&Activation>,
+) -> Vec<RemotePush> {
+    let mut seen = std::collections::BTreeSet::new();
+    record
+        .rigs
+        .iter()
+        .map(|r| r.rig_id)
+        .chain(record.inactive_rigs.iter().map(|r| r.rig_id))
+        .filter(|rig| seen.insert(*rig))
+        .filter_map(|rig| {
+            if written.contains(&rig) {
+                remote.get(&rig).map(|(peer_id, peer_name)| RemotePush {
+                    rig_id: rig,
+                    peer_id: peer_id.clone(),
+                    peer_name: peer_name
+                        .chars()
+                        .take(psf_guard_director_meta::activation::MAX_PEER_NAME_CHARS)
+                        .collect(),
+                    applied: false,
+                    attempted_at_ms: None,
+                    error: None,
+                })
+            } else {
+                previous
+                    .and_then(|p| p.pushes.iter().find(|push| push.rig_id == rig))
+                    .cloned()
+            }
+        })
+        .collect()
 }
 
 /// Every table an activation reads or writes in a rig database.
@@ -1236,16 +1328,10 @@ pub(super) fn planned_push(
 
 /// Send a rig database's planning rows to the peer that holds the rig's real
 /// database: a Sync planning push, reviewed and applied on the peer. Captures
-/// and grades never travel this way.
-pub(super) async fn push_planning(
-    state: &AppState,
-    context: &DatabaseContext,
-    peer: &PeerEntry,
-) -> Push {
+/// and grades never travel this way. The caller holds the server's Sync
+/// apply lock; [`remote_push::push_catalog`] takes it and records the result.
+pub(super) async fn send_planning(context: &DatabaseContext, peer: &PeerEntry) -> Push {
     let mut push = Push::planned(peer);
-    // The same lock a local Sync apply takes, so a pull cannot rewrite the
-    // rows while the bundle is being read.
-    let _guard = state.sync_apply_lock.lock().await;
     match sync_remote(RemoteSyncOptions {
         direction: RemoteDirection::PushPlanning,
         local_path: PathBuf::from(&context.database_path),
@@ -1271,8 +1357,10 @@ pub(super) async fn push_planning(
     push
 }
 
-/// Push the last activation's rows again to every remote rig's peer, for a
-/// peer that was unreachable at Apply or has since been repaired.
+/// Push the last activation's rows again to each remote rig's peer that has
+/// not had them, for a peer that was unreachable at Apply or has since been
+/// repaired; to every remote rig's peer when each has them already, or the
+/// record predates keeping pushes.
 pub(super) async fn push(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
@@ -1286,6 +1374,9 @@ pub(super) async fn push(
         .cloned()
         .collect();
     let peers = registered_peers(&state);
+    let registered: std::collections::BTreeSet<String> =
+        peers.iter().map(|peer| peer.id.clone()).collect();
+    let instance = service.instance_id;
     let (project, revision, targets, mut warnings) = service
         .clone()
         .with_reader(move |store| {
@@ -1294,8 +1385,18 @@ pub(super) async fn push(
                 .activation(id)?
                 .ok_or(ActivationError::NotReady("Apply an activation first."))?;
             let mut targets: Vec<(NamedIdentity, Arc<DatabaseContext>, String)> = Vec::new();
-            let found = identified_catalogs(&catalogs, service.instance_id);
+            let found = identified_catalogs(&catalogs, instance);
             let mut warnings = found.duplicates.clone();
+            // The rigs whose site still lacks this activation, as the page
+            // shows them.
+            let mut unsent = std::collections::BTreeSet::new();
+            for push in activation.pushes.iter().filter(|p| !p.applied) {
+                if registered.contains(&push.peer_id)
+                    && remote_push::sends_to(store, push.rig_id, &push.peer_id)?
+                {
+                    unsent.insert(push.rig_id);
+                }
+            }
             // Every rig the activation reached, including those it set
             // Inactive, which a peer that was offline still needs to hear.
             let reached = activation
@@ -1307,7 +1408,8 @@ pub(super) async fn push(
                         .inactive_rigs
                         .iter()
                         .map(|r| (r.rig_id, r.catalog_id)),
-                );
+                )
+                .filter(|(rig, _)| unsent.is_empty() || unsent.contains(rig));
             for (rig_id, catalog_id) in reached {
                 let rig = store.rig(rig_id)?.ok_or(Error::Missing)?;
                 let Some(peer_id) = store
@@ -1328,9 +1430,17 @@ pub(super) async fn push(
         })
         .await?;
     let mut rigs = Vec::with_capacity(targets.len());
+    let mut answered = std::collections::BTreeSet::new();
     for (rig, context, peer_id) in targets {
         let push = match peers.iter().find(|peer| peer.id == peer_id) {
-            Some(peer) => push_planning(&state, &context, peer).await,
+            Some(peer) => {
+                let waiting = remote_push::Waiting {
+                    project: id,
+                    revision,
+                    rig: rig.id,
+                };
+                remote_push::push_catalog(&state, &service, &context, peer, vec![waiting]).await
+            }
             None => Push {
                 peer_id: peer_id.clone(),
                 peer_name: peer_id.clone(),
@@ -1341,11 +1451,18 @@ pub(super) async fn push(
                 ),
             },
         };
+        if push.applied {
+            answered.insert(push.peer_id.clone());
+        }
         rigs.push(PushedRig {
             rig,
             catalog_name: context.name.clone(),
             push,
         });
+    }
+    // The peers answered: anything else waiting for them goes too.
+    for peer in answered {
+        remote_push::peer_reached(&state, &peer);
     }
     if rigs.is_empty() && warnings.is_empty() {
         warnings.push(

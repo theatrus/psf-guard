@@ -410,6 +410,16 @@ export interface DirectorActivationReport {
   applied: boolean;
   activation_revision: number | null;
 }
+/** How a remote rig's rows reached the PSF Guard at its site: waiting
+ *  (never tried), failed with `error`, or `applied`. */
+export interface DirectorActivationRemotePush {
+  rig_id: string;
+  peer_id: string;
+  peer_name: string;
+  applied: boolean;
+  attempted_at_ms?: number;
+  error?: string;
+}
 export interface DirectorActivation {
   project_id: string;
   revision: number;
@@ -418,6 +428,8 @@ export interface DirectorActivation {
   coordinator_instance_id: string;
   applied_at_ms: number;
   rigs: Array<{ rig_id: string; catalog_id: string; project_guid: string; profile_id: string; targets: Array<{ panel_id: string; target_guid: string }>; plans: Array<{ contribution_id: string; objective_id: string; target_guid: string; exposureplan_guid: string; required_frames: number }> }>;
+  /** One per remote rig whose site still counts; absent when none. */
+  pushes?: DirectorActivationRemotePush[];
 }
 
 /** One activated panel's latest stack, placed by its plate solve when it has one. */

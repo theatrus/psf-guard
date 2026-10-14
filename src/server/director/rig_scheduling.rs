@@ -276,7 +276,11 @@ async fn run(
         && !planned.writes.is_empty()
         && let Some(peer) = peer
     {
-        push = Some(activation::push_planning(&state, &context, &peer).await);
+        let sent = remote_push::push_catalog(&state, &service, &context, &peer, vec![]).await;
+        if sent.applied {
+            remote_push::peer_reached(&state, &peer.id);
+        }
+        push = Some(sent);
     }
     Ok(Json(ApiResponse::success(Report {
         rig: identity,
