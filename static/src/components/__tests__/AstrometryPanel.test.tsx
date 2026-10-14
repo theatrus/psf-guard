@@ -64,6 +64,40 @@ const solved: AstrometryAnalysis = {
 };
 
 describe('AstrometryPanel', () => {
+  it('folds to one line that does not call a header WCS a solve', () => {
+    const onToggleOpen = vi.fn();
+    const props = {
+      isLoading: false,
+      isSolving: false,
+      canSolve: true,
+      overlayVisible: false,
+      onToggleOverlay: vi.fn(),
+      onSolve: vi.fn(),
+      open: false,
+      onToggleOpen,
+    };
+    const view = render(<AstrometryPanel analysis={solved} {...props} />);
+    const heading = screen.getByRole('button', { name: /^Sky context/ });
+    expect(heading).toHaveAccessibleName('Sky context 1 object');
+    expect(heading).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByText('Embedded FITS WCS')).toBeInTheDocument();
+    expect(screen.queryByText('M 31')).toBeNull();
+    fireEvent.click(heading);
+    expect(onToggleOpen).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <AstrometryPanel
+        analysis={{
+          ...solved,
+          mode: 'hinted',
+          pointing: { target_in_frame: true, separation_arcsec: 12 } as AstrometryAnalysis['pointing'],
+        }}
+        {...props}
+      />,
+    );
+    expect(heading).toHaveAccessibleName('Sky context solved · target in frame · 1 object');
+  });
+
   it('shows embedded WCS context, catalog objects, and an overlay toggle', () => {
     const onToggle = vi.fn();
     render(

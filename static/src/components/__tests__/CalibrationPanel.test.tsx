@@ -1,12 +1,17 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import CalibrationPanel from '../CalibrationPanel';
-import type { CalibrationKindExplanation, ImageCalibrationExplanation } from '../../api/types';
+import { setDetailSection, setDisplayPreferences } from '../../hooks/useDisplayPreferences';
+import type {
+  CalibrationKindExplanation,
+  CalibrationLightMark,
+  ImageCalibrationExplanation,
+} from '../../api/types';
 
 function kind(
   name: CalibrationKindExplanation['kind'],
@@ -51,13 +56,37 @@ const explanation: ImageCalibrationExplanation = {
 
 function Where() {
   const location = useLocation();
-  return <output data-testid="where">{location.search}</output>;
+  const navigate = useNavigate();
+  return (
+    <>
+      <output data-testid="where">{location.search}</output>
+      {/* Stands in for a chip or a filter changing the address. */}
+      <input aria-label="go" onChange={(event) => navigate(event.target.value)} />
+    </>
+  );
 }
 
-function show(route: string, data: ImageCalibrationExplanation = explanation) {
+const thinDark: CalibrationLightMark = { image_id: 8, level: 'poor', codes: ['thin_dark', 'mixed_flats'] };
+
+/** Lights asked about, in order. */
+let asked: number[] = [];
+
+function show(
+  route: string,
+  data: ImageCalibrationExplanation = explanation,
+  marks: CalibrationLightMark[] = [],
+) {
+  asked = [];
   server.use(
-    http.get('/api/db/:dbId/images/:imageId/calibration', () =>
-      HttpResponse.json({ success: true, error: null, status: 'ready', data })),
+    http.get('/api/db/:dbId/images/:imageId/calibration', ({ params }) => {
+      asked.push(Number(params.imageId));
+      return HttpResponse.json({ success: true, error: null, status: 'ready', data });
+    }),
+    http.get('/api/db/:dbId/calibration-health/lights', () =>
+      HttpResponse.json({
+        success: true, error: null, status: 'ready',
+        data: { lights: marks, stale_projects: [], running: false },
+      })),
   );
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -68,12 +97,31 @@ function show(route: string, data: ImageCalibrationExplanation = explanation) {
       </MemoryRouter>
     </QueryClientProvider>
   );
-  render(<CalibrationPanel dbId="c925" imageId={8} projectId={1} />, { wrapper: Wrapper });
+  const view = render(<CalibrationPanel dbId="c925" imageId={8} projectId={1} />, { wrapper: Wrapper });
+  return {
+    /** Arrow-key navigation: the same panel, another light. */
+    showImage: (imageId: number) =>
+      view.rerender(<CalibrationPanel dbId="c925" imageId={imageId} projectId={1} />),
+  };
 }
 
 const focus = () => new URLSearchParams(screen.getByTestId('where').textContent!).get('calibFocus');
+const heading = () => screen.getByRole('button', { name: /^Calibration/ });
+const go = (route: string) => fireEvent.change(screen.getByLabelText('go'), { target: { value: route } });
 
 describe('CalibrationPanel', () => {
+  beforeEach(() => {
+    setDisplayPreferences({
+      showNightChip: true,
+      showAllChip: true,
+      showCalibrationChip: true,
+      advanceOnGrade: true,
+      projectPickerGrouping: 'activity',
+      libraryDensity: 'compact',
+      detailSections: {},
+    });
+  });
+
   it('opens on the finding Images was filtered by and picks out its nights', async () => {
     show('/detail/8?db=c925&project=1&calib=mixed_flats');
     const mixed = await screen.findByRole('button', { name: /mixes flats from 2 nights/ });
@@ -105,7 +153,8 @@ describe('CalibrationPanel', () => {
   });
 
   it('keeps the chosen finding in the URL and can show every kind', async () => {
-    show('/detail/8?db=c925&project=1');
+    // Marked, so the panel opens without a purpose.
+    show('/detail/8?db=c925&project=1', explanation, [thinDark]);
     // With nothing chosen, the worst finding shows.
     const thin = await screen.findByRole('button', { name: /only 3 frames/ });
     expect(thin).toHaveAttribute('aria-pressed', 'true');
@@ -130,8 +179,88 @@ describe('CalibrationPanel', () => {
 
   it('says so when the library has no finding for the light', async () => {
     show('/detail/8?db=c925&project=1', { ...explanation, findings: [] });
+    // No mark: folded, and it says why without asking for the account.
+    await waitFor(() => expect(heading()).toHaveAccessibleName('Calibration no findings'));
+    expect(heading()).toHaveAttribute('aria-expanded', 'false');
+    expect(asked).toEqual([]);
+
+    fireEvent.click(heading());
     expect(await screen.findByText(/calibrates this light with no findings/)).toBeInTheDocument();
     expect(screen.getByText('No findings')).toBeInTheDocument();
     expect(document.querySelectorAll('.light-calibration-kind.is-folded')).toHaveLength(0);
+    expect(asked).toEqual([8]);
+  });
+
+  it('opens on a marked light and folds on a light with no finding, asking only when open', async () => {
+    const view = show('/detail/8?db=c925&project=1', explanation, [thinDark]);
+    expect(await screen.findByRole('button', { name: /only 3 frames/ })).toBeInTheDocument();
+    expect(heading()).toHaveAttribute('aria-expanded', 'true');
+    expect(asked).toEqual([8]);
+
+    view.showImage(9);
+    await waitFor(() => expect(heading()).toHaveAttribute('aria-expanded', 'false'));
+    expect(heading()).toHaveAccessibleName('Calibration no findings');
+    expect(screen.queryByRole('list', { name: 'Calibration findings' })).toBeNull();
+    expect(asked).toEqual([8]);
+  });
+
+  it('shows a folded light its mark: the level and the findings by name', async () => {
+    setDetailSection('calibration', 'closed');
+    show('/detail/8?db=c925&project=1', explanation, [thinDark]);
+    await waitFor(() =>
+      expect(heading()).toHaveAccessibleName('Calibration Thin dark master · Flats from several nights'));
+    expect(screen.getByTestId('calibration-panel')).toHaveTextContent('Poor');
+    expect(asked).toEqual([]);
+  });
+
+  it.each([
+    ['a chip', '/detail/8?db=c925&project=1&calibFocus=thin_dark'],
+    ['Images filtered by calibration', '/detail/8?db=c925&project=1&calib=poor'],
+  ])('opens when the viewer came to look at calibration, from %s', async (_from, route) => {
+    // Not marked, and folded by hand before: the purpose still opens it.
+    setDetailSection('calibration', 'closed');
+    show(route);
+    expect(await screen.findByRole('button', { name: /only 3 frames/ })).toBeInTheDocument();
+    expect(heading()).toHaveAttribute('aria-expanded', 'true');
+    expect(asked).toEqual([8]);
+  });
+
+  it('keeps a hand-made choice from light to light over what the marks say', async () => {
+    const view = show('/detail/8?db=c925&project=1', explanation, [thinDark, { ...thinDark, image_id: 10 }]);
+    await screen.findByRole('button', { name: /only 3 frames/ });
+
+    // Folded on a marked light, it stays folded on the next marked one.
+    fireEvent.click(heading());
+    expect(heading()).toHaveAttribute('aria-expanded', 'false');
+    view.showImage(10);
+    await waitFor(() => expect(heading()).toHaveAccessibleName(/^Calibration Thin dark master/));
+    expect(heading()).toHaveAttribute('aria-expanded', 'false');
+
+    // Opened on a light with no finding, it stays open on the next one.
+    view.showImage(9);
+    fireEvent.click(heading());
+    expect(heading()).toHaveAttribute('aria-expanded', 'true');
+    view.showImage(11);
+    await waitFor(() => expect(asked).toContain(11));
+    expect(heading()).toHaveAttribute('aria-expanded', 'true');
+    expect(asked).toEqual([8, 9, 11]);
+  });
+
+  it('folds a panel opened on purpose until the purpose changes', async () => {
+    const view = show('/detail/8?db=c925&project=1&calibFocus=thin_dark');
+    await screen.findByRole('button', { name: /only 3 frames/ });
+
+    fireEvent.click(heading());
+    expect(heading()).toHaveAttribute('aria-expanded', 'false');
+    // The finding travels with the address from image to image; the panel
+    // stays as the viewer left it.
+    view.showImage(9);
+    expect(heading()).toHaveAttribute('aria-expanded', 'false');
+    expect(asked).toEqual([8]);
+
+    // Another chip is another reason to look.
+    act(() => go('/detail/9?db=c925&project=1&calibFocus=mixed_flats'));
+    await waitFor(() => expect(heading()).toHaveAttribute('aria-expanded', 'true'));
+    await waitFor(() => expect(asked).toEqual([8, 9]));
   });
 });

@@ -62,6 +62,47 @@ describe('SatellitePanel', () => {
     expect(onToggleOverlay).toHaveBeenCalledOnce();
   });
 
+  it('folds to its crossings and keeps its badge', () => {
+    const status = {
+      orbital_elements_cached: true,
+      analysis: {
+        association: 'predicted_only',
+        catalog: { source: 'cache.json', state: 'cached' },
+        exposure: { duration_seconds: 120 },
+        tracks: [],
+        risk: {
+          track_count: 2,
+          potentially_bright_count: 1,
+          high_risk_count: 1,
+          maximum_bright_trail_risk: 0.7,
+          pixel_alignment_attempted: false,
+          pixel_aligned_count: 0,
+          pixel_aligned_high_risk_count: 0,
+          reject_recommended: false,
+        },
+      },
+    } as unknown as SatelliteAnalysisStatus;
+    const onToggleOpen = vi.fn();
+    render(
+      <SatellitePanel
+        status={status}
+        isLoading={false}
+        isPredicting={false}
+        canPredict={true}
+        overlayVisible={false}
+        onToggleOverlay={vi.fn()}
+        onPredict={vi.fn()}
+        open={false}
+        onToggleOpen={onToggleOpen}
+      />
+    );
+    const heading = screen.getByRole('button', { name: 'Satellite tracks 2 crossings · 1 bright' });
+    expect(screen.getByText('Predicted')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Show track identifiers/ })).toBeNull();
+    fireEvent.click(heading);
+    expect(onToggleOpen).toHaveBeenCalledOnce();
+  });
+
   it('offers on-demand prediction when no cached analysis exists', () => {
     const onPredict = vi.fn();
     render(

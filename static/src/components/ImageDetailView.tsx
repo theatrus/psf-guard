@@ -19,12 +19,15 @@ import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import QualityAnalysisSummary from './QualityAnalysisSummary';
 import QualityRegionOverlay from './QualityRegionOverlay';
 import CalibrationPanel from './CalibrationPanel';
+import DetailSection from './DetailSection';
 import {
   colorPreviewEnabled,
   setColorPreview,
   useColorPreview,
 } from '../hooks/useColorPreview';
 import { setSkyOverlay, useSkyOverlay } from '../hooks/useSkyOverlay';
+import { useDetailSection } from '../hooks/useDetailSections';
+import { useSidebarScrollAnchor } from '../hooks/useSidebarScrollAnchor';
 import { useAccess } from '../auth/access';
 
 interface ImageDetailViewProps {
@@ -99,6 +102,16 @@ export default function ImageDetailView({
     width: number;
     height: number;
   } | null>(null);
+
+  // The sidebar's panels fold away, and stay as the viewer left them from
+  // image to image. Calibration keeps its own rule (see CalibrationPanel).
+  // A folded panel's data still loads where the image overlays need it.
+  const infoSection = useDetailSection('info');
+  const qualitySection = useDetailSection('quality');
+  const skySection = useDetailSection('sky');
+  const satelliteSection = useDetailSection('satellites');
+  const [sidebar, setSidebar] = useState<HTMLDivElement | null>(null);
+  useSidebarScrollAnchor(sidebar);
 
   // Fetch image details
   const { data: image, isLoading } = useQuery({
@@ -221,6 +234,11 @@ export default function ImageDetailView({
         : quality
           ? undefined
           : 'No sequence score is available for this image.';
+  const qualityStatusSummary = qualityScope.isLoading
+      ? 'loading…'
+      : qualityScope.error
+        ? 'unavailable'
+        : 'no score';
 
   const {
     data: astrometry,
@@ -504,6 +522,24 @@ export default function ImageDetailView({
     return new Date(timestamp * 1000).toLocaleString();
   };
 
+  // A folded Image Information panel: why the light was rejected, when it
+  // was taken, for how long, and its stars and background.
+  const metadata = image.metadata ?? {};
+  const exposure = metadata.Exposure ?? metadata.ExposureDuration;
+  const infoSummary = [
+    image.reject_reason ? `rejected: ${image.reject_reason}` : null,
+    image.acquired_date
+      ? new Date(image.acquired_date * 1000).toLocaleString(undefined, {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        })
+      : null,
+    exposure !== undefined && exposure !== null ? `${exposure}s` : null,
+    typeof metadata.HFR === 'number' ? `HFR ${metadata.HFR.toFixed(2)}` : null,
+    typeof metadata.DetectedStars === 'number' ? `${metadata.DetectedStars} stars` : null,
+    typeof metadata.Mean === 'number' ? `mean ${metadata.Mean.toFixed(0)}` : null,
+  ].filter(Boolean).join(' · ');
+
   // Hide until the visible src has actually loaded AND still belongs to this
   // image/size — never show a stale or errored <img> (e.g. one whose original
   // request 202'd while its regenerated copy loads under a `v=` buster).
@@ -726,10 +762,14 @@ export default function ImageDetailView({
             </div>
           </div>
 
-          <div className="detail-info">
-            <div className="info-section">
-              <h3>Image Information</h3>
-              
+          <div className="detail-info" ref={setSidebar}>
+            <DetailSection
+              title="Image Information"
+              summary={infoSummary}
+              open={infoSection.open}
+              onToggle={infoSection.toggle}
+              data-testid="image-info-panel"
+            >
               {/* Date on its own row */}
               <div className="date-row">
                 <span className="date-label">Date:</span>
@@ -830,7 +870,7 @@ export default function ImageDetailView({
                   <p>{image.reject_reason}</p>
                 </div>
               )}
-            </div>
+            </DetailSection>
 
             {viewCopies.length > 0 && (
               <div className="detail-copy-switch" role="group" aria-label="File shown">
@@ -867,6 +907,9 @@ export default function ImageDetailView({
             <QualityAnalysisSummary
               quality={quality}
               statusMessage={qualityStatus}
+              statusSummary={qualityStatusSummary}
+              open={qualitySection.open}
+              onToggleOpen={qualitySection.toggle}
               overlayVisible={showQualityRegions && !!quality?.spatial_overlay}
               onToggleOverlay={quality?.spatial_overlay ? () => {
                 setShowQualityRegions((visible) => !visible);
@@ -886,6 +929,8 @@ export default function ImageDetailView({
                 : undefined}
               isSolving={solveMatchesCurrent && solveAstrometry.isPending}
               canSolve={canCompute}
+              open={skySection.open}
+              onToggleOpen={skySection.toggle}
               overlayVisible={showAstrometry && !!astrometry?.solution}
               onToggleOverlay={toggleSkyOverlay}
               onSolve={() => solveAstrometry.mutate({ dbId, imageId })}
@@ -900,6 +945,8 @@ export default function ImageDetailView({
                 : undefined}
               isPredicting={satellitePredictionMatchesCurrent && predictSatellites.isPending}
               canPredict={canCompute}
+              open={satelliteSection.open}
+              onToggleOpen={satelliteSection.toggle}
               overlayVisible={showSatellites && !!satelliteStatus?.analysis}
               onToggleOverlay={() => {
                 setShowSatellites((visible) => !visible);

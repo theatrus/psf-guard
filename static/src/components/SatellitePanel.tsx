@@ -1,4 +1,5 @@
 import type { SatelliteAnalysisStatus } from '../api/types';
+import DetailSection from './DetailSection';
 
 interface SatellitePanelProps {
   status?: SatelliteAnalysisStatus;
@@ -10,6 +11,13 @@ interface SatellitePanelProps {
   overlayVisible: boolean;
   onToggleOverlay: () => void;
   onPredict: () => void;
+  /** Folded, the heading says only how many tracks cross the frame. */
+  open?: boolean;
+  onToggleOpen?: () => void;
+}
+
+function plural(count: number, one: string): string {
+  return `${count} ${one}${count === 1 ? '' : 's'}`;
 }
 
 export default function SatellitePanel({
@@ -22,6 +30,8 @@ export default function SatellitePanel({
   overlayVisible,
   onToggleOverlay,
   onPredict,
+  open = true,
+  onToggleOpen,
 }: SatellitePanelProps) {
   const analysis = status?.analysis;
   const risk = analysis?.risk;
@@ -33,10 +43,22 @@ export default function SatellitePanel({
         ? 'IAU SatChecker'
         : undefined;
 
+  const summary = isPredicting
+    ? 'predicting…'
+    : risk
+      ? [
+          plural(risk.track_count, 'crossing'),
+          risk.high_risk_count ? `${risk.high_risk_count} bright` : null,
+        ].filter(Boolean).join(' · ')
+      : undefined;
+
   return (
-    <section className="info-section astrometry-section" data-testid="satellite-panel">
-      <div className="astrometry-heading-row">
-        <h3>Satellite tracks</h3>
+    <DetailSection
+      title="Satellite tracks"
+      className="astrometry-section"
+      headingClassName="astrometry-heading-row"
+      data-testid="satellite-panel"
+      badge={
         <span className={`astrometry-badge ${risk?.pixel_aligned_high_risk_count ? 'satellite-badge-high' : ''}`}>
           {isLoading
             ? 'Checking cache…'
@@ -46,8 +68,11 @@ export default function SatellitePanel({
                 ? 'Predicted'
                 : 'On demand'}
         </span>
-      </div>
-
+      }
+      summary={summary}
+      open={open}
+      onToggle={onToggleOpen}
+    >
       {analysis ? (
         <button
           type="button"
@@ -146,6 +171,6 @@ export default function SatellitePanel({
           {predictError || error || analysis?.pixel_alignment_error || analysis?.catalog.warning}
         </p>
       )}
-    </section>
+    </DetailSection>
   );
 }

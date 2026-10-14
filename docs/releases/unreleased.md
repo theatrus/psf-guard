@@ -242,3 +242,10 @@
   it stacks one pill kind per place. The Projects toolbar uses the pills
   Images and Sequence use and wraps into rows instead of running off the
   edge, so **Compact** / **Detailed** stays in reach on a narrow window.
+- The panels beside an image in its detail view fold away: click a panel's
+  title to fold or open it. A folded panel keeps one line, such as the
+  quality score, whether the field solved, or the calibration findings by
+  name, and each stays as you left it from image to image and after a
+  reload. **Calibration** opens on its own only for a light with a Poor or
+  Check finding, or when you came from the 🧪 chip or Images filtered by
+  calibration; folded, it reads "no findings".

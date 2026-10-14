@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import type {
+  CalibrationHealthCode,
+  CalibrationHealthLevel,
   CalibrationKind,
   CalibrationKindExplanation,
   CalibrationNightFrames,
@@ -10,7 +12,11 @@ import type {
   LightCalibrationFinding,
 } from '../api/types';
 import { CALIBRATION_FOCUS_PARAM, useFilters, useUrlParams } from '../hooks/useUrlState';
+import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
+import { useCalibrationSection } from '../hooks/useDetailSections';
+import { calibrationFilterLabel } from '../utils/calibrationFilter';
 import { calibrationPageHref } from './calibration/calibrationLinks';
+import DetailSection from './DetailSection';
 import { CalibrationIcon } from './ScoreChipIcons';
 import {
   FINDING_HINTS,
@@ -64,6 +70,11 @@ function hasAnything(kind: CalibrationKindExplanation): boolean {
  * health check finds wrong with it. Choosing a finding (kept in the URL, so
  * it stays chosen from image to image) picks out the frames behind it and
  * folds the kinds it is not about.
+ *
+ * The panel folds away; `useCalibrationSection` says when it starts open.
+ * Folded, its heading says what the project's calibration marks say about
+ * the light, and it asks the server for nothing more: the light's own
+ * account is fetched when the panel opens.
  */
 export default function CalibrationPanel({ dbId, imageId, projectId }: CalibrationPanelProps) {
   const { getParam, updateParams } = useUrlParams();
@@ -73,65 +84,60 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
   const sectionRef = useRef<HTMLElement>(null);
   const scrolledFor = useRef<string | null>(null);
 
+  // The project's marks: cached, and shared with the chips in Images.
+  const calibrationMarks = useCalibrationMarks(dbId, projectId, true);
+  const mark = calibrationMarks.marks.get(imageId);
+  // Opened on purpose, from a chip, a chosen finding or Images filtered by
+  // calibration.
+  const purpose = focus ?? filters.calibration.join(',');
+  const section = useCalibrationSection(!!mark, purpose);
+
   const query = useQuery({
     queryKey: ['db', dbId, 'image-calibration', imageId],
     queryFn: () => apiClient.getImageCalibration(dbId, imageId),
     staleTime: 60_000,
     retry: false,
+    enabled: section.open,
   });
 
-  // Opened on purpose, from a chip, a chosen finding or Images filtered by
-  // calibration: bring the panel into view once per image and choice, so
-  // later refreshes leave the scroll alone.
-  const purpose = focus ?? filters.calibration.join(',');
+  // Opened on purpose: bring the panel into view once per image and
+  // choice, so later refreshes leave the scroll alone.
   useEffect(() => {
     const key = `${imageId}:${purpose}`;
-    if (!purpose || !query.data || scrolledFor.current === key) return;
+    if (!section.open || !purpose || !query.data || scrolledFor.current === key) return;
     scrolledFor.current = key;
     sectionRef.current?.scrollIntoView?.({ block: 'nearest' });
-  }, [purpose, imageId, query.data]);
+  }, [purpose, imageId, query.data, section.open]);
 
-  const heading = (badge?: ReactNode) => (
-    <div className="light-calibration-panel-heading">
-      <h3>
-        <CalibrationIcon /> Calibration
-      </h3>
-      {badge}
-    </div>
-  );
-
-  if (query.isLoading) {
-    return (
-      <section className="info-section light-calibration-panel" ref={sectionRef} data-testid="calibration-panel">
-        {heading()}
-        <p className="light-calibration-panel-message">Matching the light against the library…</p>
-      </section>
-    );
-  }
-  if (query.error || !query.data) {
-    return (
-      <section className="info-section light-calibration-panel" ref={sectionRef} data-testid="calibration-panel">
-        {heading()}
-        <p className="light-calibration-panel-message">
-          {query.error instanceof Error ? query.error.message : 'Calibration information is unavailable.'}
-        </p>
-      </section>
-    );
-  }
-
-  const explanation = query.data;
-  const { findings } = explanation;
+  // The light's own account, unless asking for it failed.
+  const explanation = query.error ? undefined : query.data;
+  const findings = explanation?.findings ?? [];
   const chosen = chosenFinding(findings, focus, filters.calibration);
-  const worst = findings[0]?.level ?? null;
+  // The heading reads the light's own account once it is here, else its mark.
+  const worst: CalibrationHealthLevel | null = explanation
+    ? findings[0]?.level ?? null
+    : mark?.level ?? null;
+  const codes: CalibrationHealthCode[] = explanation
+    ? findings.map((finding) => finding.code)
+    : mark?.codes ?? [];
+  const summary = codes.length > 0
+    ? codes.map(calibrationFilterLabel).join(' · ')
+    : explanation
+      ? 'no findings'
+      : calibrationMarks.isLoading
+        ? undefined
+        : calibrationMarks.updating
+          ? 'being checked'
+          : 'no findings';
   const choose = (finding: LightCalibrationFinding) =>
     updateParams({ [CALIBRATION_FOCUS_PARAM]: chosen?.code === finding.code ? NO_FINDING : finding.code });
-  const kinds = explanation.kinds.filter(hasAnything);
+  const kinds = explanation?.kinds.filter(hasAnything) ?? [];
 
   const calibrationHref = (kind: CalibrationKind, night?: string) => {
     const [path, search] = calibrationPageHref(location.search, dbId, projectId ?? undefined).split('?');
     const params = new URLSearchParams(search);
     params.set('calKind', kind);
-    if (kind === 'flat' && explanation.light.filter) params.set('calFilter', explanation.light.filter);
+    if (kind === 'flat' && explanation?.light.filter) params.set('calFilter', explanation.light.filter);
     if (night) {
       params.set('calFrom', night);
       params.set('calTo', night);
@@ -140,23 +146,37 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
   };
 
   return (
-    <section
-      className={`info-section light-calibration-panel${worst ? ` is-${worst}` : ''}`}
+    <DetailSection
       ref={sectionRef}
+      className={`light-calibration-panel${worst ? ` is-${worst}` : ''}`}
+      headingClassName="light-calibration-panel-heading"
       data-testid="calibration-panel"
-    >
-      {heading(
+      icon={<CalibrationIcon />}
+      title="Calibration"
+      badge={(worst || explanation) && (
         <span className={`light-calibration-panel-badge${worst ? ` is-${worst}` : ' is-ok'}`}>
           {worst === 'poor' ? 'Poor' : worst === 'check' ? 'Check' : 'No findings'}
         </span>
       )}
-      {lightReadings(explanation.light) && (
+      summary={summary}
+      open={section.open}
+      onToggle={section.toggle}
+    >
+      {query.isPending && (
+        <p className="light-calibration-panel-message">Matching the light against the library…</p>
+      )}
+      {!query.isPending && !explanation && (
+        <p className="light-calibration-panel-message">
+          {query.error instanceof Error ? query.error.message : 'Calibration information is unavailable.'}
+        </p>
+      )}
+      {explanation && lightReadings(explanation.light) && (
         <p className="light-calibration-panel-readings" title="The readings the library is matched on">
           Matched on {lightReadings(explanation.light)}
         </p>
       )}
 
-      {findings.length > 0 ? (
+      {explanation && (findings.length > 0 ? (
         <>
           <ul className="light-calibration-findings" aria-label="Calibration findings">
             {findings.map((finding) => {
@@ -195,12 +215,12 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
         </>
       ) : (
         <p className="light-calibration-panel-message">The library calibrates this light with no findings.</p>
-      )}
+      ))}
 
-      {kinds.length === 0 && (
+      {explanation && kinds.length === 0 && (
         <p className="light-calibration-panel-message">The library holds no calibration frames.</p>
       )}
-      {kinds.map((kind) => {
+      {explanation && kinds.map((kind) => {
         const parts = focusParts(chosen, kind);
         return (
           <KindAccount
@@ -214,7 +234,7 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
           />
         );
       })}
-    </section>
+    </DetailSection>
   );
 }
 

@@ -31,6 +31,18 @@ describe('QualityAnalysisSummary', () => {
     expect(screen.getByText(quality.details!)).toBeInTheDocument();
   });
 
+  it('folds to its score and review reason', () => {
+    const onToggleOpen = vi.fn();
+    render(<QualityAnalysisSummary quality={quality} open={false} onToggleOpen={onToggleOpen} />);
+    const heading = screen.getByRole('button', {
+      name: 'Quality analysis 36% · Tracking error: elongated stars',
+    });
+    expect(heading).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Review reason')).toBeNull();
+    fireEvent.click(heading);
+    expect(onToggleOpen).toHaveBeenCalledOnce();
+  });
+
   it('says when a scored image has no specific issue', () => {
     render(
       <QualityAnalysisSummary quality={{ ...quality, regrade_reason: undefined, details: null }} />,
