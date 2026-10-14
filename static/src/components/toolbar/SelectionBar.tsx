@@ -8,8 +8,8 @@ interface SelectionBarProps {
   /** The count at which the actions appear. The Images grid needs two: a
    *  plain click there selects one image only to move the cursor. */
   minimum?: number;
-  /** Said while resting: how to select. */
-  hint: ReactNode;
+  /** How to select, as the count's tooltip. */
+  hint: string;
   /** Said beside the count once active, such as the rule that chose it. */
   note?: ReactNode;
   /** The actions, most important first. */
@@ -20,9 +20,9 @@ interface SelectionBarProps {
 
 /**
  * The selection end of a toolbar. At rest it says how many images are
- * selected and how to select more; once enough are, it turns into a
- * highlighted bar with the count, the actions and Clear. Both states are
- * one row high, so the toolbar keeps its height either way.
+ * selected, with how to select more as its tooltip; once enough are, it
+ * turns into a highlighted bar with the count, the actions and Clear. Both
+ * states are the same height, so the toolbar keeps its height either way.
  */
 export default function SelectionBar({
   count,
@@ -40,8 +40,8 @@ export default function SelectionBar({
       role="group"
       aria-label="Selected image actions"
     >
-      <span className="selection-count">{count} selected</span>
-      {active ? (
+      <span className="selection-count" title={hint}>{count} selected</span>
+      {active && (
         <>
           {note && <span className="selection-note">{note}</span>}
           <div className="selection-actions">{children}</div>
@@ -55,8 +55,6 @@ export default function SelectionBar({
             <span className="tool-button-label">Clear</span>
           </button>
         </>
-      ) : (
-        <span className="selection-hint">· {hint}</span>
       )}
     </div>
   );

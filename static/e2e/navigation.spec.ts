@@ -400,6 +400,8 @@ test('image-ID cursor and selection survive regrouping and reload', async ({ pag
   await page.keyboard.press('Space');
   await expect(page.locator('.image-card-wrapper.multi-selected')).toHaveCount(2);
 
+  // Grouping is under View, with the other display settings.
+  await page.getByRole('button', { name: 'View', exact: true }).click();
   await page.getByLabel('Group', { exact: true }).selectOption('session');
   const current = page.locator(`[data-image-id="${secondId}"]`);
   await expect(current).toHaveClass(/current-selection/);

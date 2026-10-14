@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { ChartColumn, Check, Columns2, FolderInput, Layers, RotateCcw, X } from 'lucide-react';
+import { ChartColumn, Check, Columns2, FolderInput, Layers, RotateCcw, ScanSearch, X } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type { Image, ProjectMosaic } from '../api/types';
 import { GradingStatus } from '../api/types';
@@ -905,13 +905,16 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           )}
           activeFilters={imageFilterCount(filters)}
           onClearFilters={clearFilters}
+          controls={(
+            <ThumbnailSizeControl
+              id="grid-thumbnail-size"
+              value={imageSize}
+              onChange={setImageSize}
+              icons
+            />
+          )}
           view={(
             <>
-              <ThumbnailSizeControl
-                id="grid-thumbnail-size"
-                value={imageSize}
-                onChange={setImageSize}
-              />
               <div className="toolbar-field">
                 <label className="toolbar-caption" htmlFor="grid-grouping">Group</label>
                 <select
@@ -954,73 +957,73 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               />
               <button
                 type="button"
-                className="tool-button compare-button"
+                className="tool-button icon-at-1600 compare-button"
                 onClick={() => {
                   if (comparePair) navigateToComparison(comparePair[0], comparePair[1]);
                 }}
                 disabled={!comparePair}
                 title={selectedImages.size === 2 ? "Compare selected images (C)" : "Compare images side-by-side (C)"}
               >
-                <Columns2 size={14} aria-hidden="true" /> Compare
+                <Columns2 size={14} aria-hidden="true" />
+                <span className="tool-button-label">Compare</span>
               </button>
-              <QualityScanButton
-                scan={spatialScan}
-                targetId={targetId}
-                canWrite={grading.canWrite}
-                className="tool-button quality-scan-button"
-              />
-              {grading.canWrite && serverInfo?.allow_database_management && (
-                <button
-                  type="button"
-                  className="tool-button organization-action"
-                  disabled={!canMoveImages}
-                  title={canMoveImages ? 'Move selected exposures to another target or project' : 'Select exposures from one target to move'}
-                  onClick={() => {
-                    if (!dbId || !canMoveImages) return;
-                    const source = imagesToMove[0];
-                    setOrganizationScope({
-                      kind: 'move_images',
-                      dbId,
-                      sourceTargetId: source.target_id,
-                      sourceTargetName: source.target_name,
-                      sourceProjectId: source.project_id,
-                      imageIds: imagesToMove.map(image => image.id),
-                    });
-                  }}
-                >
-                  <FolderInput size={14} aria-hidden="true" /> Move exposures
-                </button>
-              )}
-            </>
-          )}
-          summary={(
-            <>
-              <span className="grid-stats">
-                {mosaic && <>{mosaicLabel(mosaic)} • </>}
-                {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
-                {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
-                {filters.filterNames.length > 0 && ` • ${filters.filterNames.join(', ')}`}
-                {filters.searchTerm && ` • "${filters.searchTerm}"`}
-                {calibrationFilterActive && ` • ${filters.calibration.map(calibrationFilterLabel).join(', ')}`}
-                {calibrationFilterActive && calibration.updating && ' (updating)'}
-                {' • '}
-                <span className="grid-quality-state" title={qualityStatus.title}>
-                  {qualityStatus.label}
-                </span>
-              </span>
-              {/* The statistics open below the toolbar, under the counts
-                  they expand on. */}
+              {/* The statistics open below the toolbar. */}
               <button
                 type="button"
-                className="tool-button tool-button-quiet stats-toggle"
+                className="tool-button icon-at-1600 stats-toggle"
                 aria-pressed={showStats}
                 aria-controls={showStats ? 'grid-stats-dashboard' : undefined}
                 title={showStats ? 'Hide image statistics' : 'Show image statistics'}
                 onClick={() => setShowStats(!showStats)}
               >
-                <ChartColumn size={14} aria-hidden="true" /> Stats
+                <ChartColumn size={14} aria-hidden="true" />
+                <span className="tool-button-label">Stats</span>
               </button>
+              <QualityScanButton
+                scan={spatialScan}
+                targetId={targetId}
+                canWrite={grading.canWrite}
+                className="tool-button icon-at-1360 quality-scan-button"
+                icon={<ScanSearch size={14} aria-hidden="true" />}
+              />
             </>
+          )}
+          menu={grading.canWrite && serverInfo?.allow_database_management ? (
+            <button
+              type="button"
+              className="toolbar-menu-item organization-action"
+              disabled={!canMoveImages}
+              title={canMoveImages ? 'Move selected exposures to another target or project' : 'Select exposures from one target to move'}
+              onClick={() => {
+                if (!dbId || !canMoveImages) return;
+                const source = imagesToMove[0];
+                setOrganizationScope({
+                  kind: 'move_images',
+                  dbId,
+                  sourceTargetId: source.target_id,
+                  sourceTargetName: source.target_name,
+                  sourceProjectId: source.project_id,
+                  imageIds: imagesToMove.map(image => image.id),
+                });
+              }}
+            >
+              <FolderInput size={14} aria-hidden="true" /> Move exposures
+            </button>
+          ) : undefined}
+          summary={(
+            <span className="grid-stats">
+              {mosaic && <>{mosaicLabel(mosaic)} • </>}
+              {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
+              {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
+              {filters.filterNames.length > 0 && ` • ${filters.filterNames.join(', ')}`}
+              {filters.searchTerm && ` • "${filters.searchTerm}"`}
+              {calibrationFilterActive && ` • ${filters.calibration.map(calibrationFilterLabel).join(', ')}`}
+              {calibrationFilterActive && calibration.updating && ' (updating)'}
+              {' • '}
+              <span className="grid-quality-state" title={qualityStatus.title}>
+                {qualityStatus.label}
+              </span>
+            </span>
           )}
           selection={(
             <SelectionBar

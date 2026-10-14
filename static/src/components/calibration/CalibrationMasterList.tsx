@@ -4,6 +4,7 @@ import { apiClient } from '../../api/client';
 import type { CalibrationKind, LibraryCalibrationMaster } from '../../api/types';
 import { CalibrationMasterInspector } from '../CalibrationMasterInspector';
 import { KIND_LABELS, formatTime, plural } from './calibrationLabels';
+import PillSelect from '../toolbar/PillSelect';
 import ViewToolbar from '../toolbar/ViewToolbar';
 import type { useCalibrationActions } from './useCalibrationActions';
 
@@ -71,16 +72,18 @@ export default function CalibrationMasterList({ dbId, dbName, canManage, opened,
         label="Master filters"
         filters={(
           <>
-            <label className="toolbar-field">
-              <span className="toolbar-caption">Type</span>
-              <select value={kind} onChange={(event) => setKind(event.target.value as CalibrationKind | '')}>
-                <option value="">All</option>
-                {(['flat', 'dark_flat', 'dark', 'bias'] as const).map((value) => (
-                  <option key={value} value={value}>{KIND_LABELS[value]}</option>
-                ))}
-              </select>
-            </label>
-            <label className="toolbar-check">
+            <PillSelect
+              label="Type"
+              active={kind !== ''}
+              value={kind}
+              onChange={(event) => setKind(event.target.value as CalibrationKind | '')}
+            >
+              <option value="">All</option>
+              {(['flat', 'dark_flat', 'dark', 'bias'] as const).map((value) => (
+                <option key={value} value={value}>{KIND_LABELS[value]}</option>
+              ))}
+            </PillSelect>
+            <label className="toolbar-pill toolbar-pill-check">
               <input type="checkbox" checked={onDisk} onChange={(event) => setOnDisk(event.target.checked)} />
               Files on disk only
             </label>
@@ -91,8 +94,8 @@ export default function CalibrationMasterList({ dbId, dbName, canManage, opened,
           setKind('');
           setOnDisk(false);
         }}
-        tools={canManage && (catalog.data?.masters.length ?? 0) > 0 ? (
-          <button type="button" className="tool-button tool-button-danger" disabled={actions.pending} onClick={clear}>
+        menu={canManage && (catalog.data?.masters.length ?? 0) > 0 ? (
+          <button type="button" className="toolbar-menu-item toolbar-menu-item-danger" disabled={actions.pending} onClick={clear}>
             Clear generated masters
           </button>
         ) : undefined}

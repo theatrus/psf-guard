@@ -66,6 +66,8 @@ async function openMove(page: Page, imageIds: number[]): Promise<Locator> {
   for (const id of imageIds.slice(1)) {
     await page.locator(`[data-card-image-id="${id}"]`).click({ modifiers: ['ControlOrMeta'] });
   }
+  // Move exposures waits under ⋯ with the other rarely used tools.
+  await page.getByRole('button', { name: 'More tools' }).click();
   await page.getByRole('button', { name: 'Move exposures', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Move exposures', exact: true });
   await expect(dialog).toBeVisible();

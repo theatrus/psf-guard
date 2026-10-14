@@ -1,3 +1,4 @@
+import { Image as ImageIcon } from 'lucide-react';
 import {
   THUMBNAIL_SIZE_MAX,
   THUMBNAIL_SIZE_MIN,
@@ -16,6 +17,9 @@ interface ThumbnailSizeControlProps {
   step?: number;
   /** Said in place of the pixel width, such as "Fit". */
   valueText?: string;
+  /** A small picture at each end of the slider, for a toolbar that shows
+   *  no caption; the name becomes its tooltip. */
+  icons?: boolean;
 }
 
 export default function ThumbnailSizeControl({
@@ -27,10 +31,13 @@ export default function ThumbnailSizeControl({
   max = THUMBNAIL_SIZE_MAX,
   step = THUMBNAIL_SIZE_STEP,
   valueText,
+  icons = false,
 }: ThumbnailSizeControlProps) {
+  const shown = valueText ?? `${value}px`;
   return (
-    <div className="size-control compact">
+    <div className="size-control compact" title={icons ? `${label}: ${shown}` : undefined}>
       <label htmlFor={id}>{label}</label>
+      {icons && <ImageIcon size={12} aria-hidden="true" />}
       <input
         id={id}
         type="range"
@@ -40,7 +47,8 @@ export default function ThumbnailSizeControl({
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
       />
-      <output htmlFor={id} className="size-value">{valueText ?? `${value}px`}</output>
+      {icons && <ImageIcon size={16} aria-hidden="true" />}
+      <output htmlFor={id} className="size-value">{shown}</output>
     </div>
   );
 }

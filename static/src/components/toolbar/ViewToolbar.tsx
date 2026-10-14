@@ -1,5 +1,6 @@
 import { useId, useState, type ReactNode } from 'react';
-import { SlidersHorizontal } from 'lucide-react';
+import { ListFilter, MoreHorizontal, SlidersHorizontal, X } from 'lucide-react';
+import ToolbarMenuButton from './ToolbarMenuButton';
 import './toolbar.css';
 
 interface ViewToolbarProps {
@@ -8,22 +9,28 @@ interface ViewToolbarProps {
   className?: string;
   /** Stays at the top of the scrolling view. */
   sticky?: boolean;
-  /** Fields that narrow what the view shows, on a row of their own. */
+  /** Filter pills that narrow what the view shows. */
   filters?: ReactNode;
   /** How many filters narrow the view: the Filters button counts them,
-   *  and Clear filters waits for one. */
+   *  and Clear appears once there is one. */
   activeFilters?: number;
   onClearFilters?: () => void;
-  /** Settings on the tools' row: how the view draws its images, and a
-   *  view's lone filter, which needs no row of its own. Folds with the
-   *  filters. */
+  /** Sliders and their buttons, such as the thumbnail size and the score
+   *  cutoff: in the control row on a wide screen, folded with the filters
+   *  on a phone. */
+  controls?: ReactNode;
+  /** Controls in the control row at every width, such as Sequence's
+   *  selection rule. */
+  primary?: ReactNode;
+  /** What the View panel holds: how the view draws its images. */
   view?: ReactNode;
-  /** Buttons that act on the view. They stay in sight at every width. */
+  /** Buttons that act on the view, at the end of the control row. */
   tools?: ReactNode;
-  /** The last row's left side: counts, or the controls that choose a
-   *  selection. */
+  /** Tools used too rarely to keep in sight, under ⋯. */
+  menu?: ReactNode;
+  /** The status row's left side: counts, or the current settings. */
   summary?: ReactNode;
-  /** The last row's right side: what is selected and what to do with it. */
+  /** The status row's right side: what is selected and what to do with it. */
   selection?: ReactNode;
 }
 
@@ -31,11 +38,11 @@ interface ViewToolbarProps {
  * The toolbar of a view that lists images: Images, Sequence and the
  * calibration library.
  *
- * On a wide screen the filters take the first row, the view settings and
- * the tools the second, and the summary and the selection the last. On a
- * narrow one the filters and view settings fold behind one Filters button
- * that counts the filters in use; the tools, the summary and the selection
- * stay in sight. toolbar.css draws both layouts from the same markup.
+ * One control row holds the filter pills, the sliders and the tools, with
+ * View and ⋯ opening panels; a slim status row under it holds the summary
+ * and the selection. On a phone the filters and sliders fold behind one
+ * Filters button that counts the filters in use. toolbar.css draws both
+ * layouts from the same markup.
  */
 export default function ViewToolbar({
   label,
@@ -44,64 +51,94 @@ export default function ViewToolbar({
   filters,
   activeFilters = 0,
   onClearFilters,
+  controls,
+  primary,
   view,
   tools,
+  menu,
   summary,
   selection,
 }: ViewToolbarProps) {
   const panelId = useId();
   const [open, setOpen] = useState(false);
-  const foldable = Boolean(filters || view);
+  const foldable = Boolean(filters || controls);
   const classes = [
     'view-toolbar',
     sticky ? 'sticky' : '',
-    view ? 'has-view' : '',
     open ? 'is-open' : '',
     className ?? '',
   ].filter(Boolean).join(' ');
 
   return (
     <section className={classes} aria-label={label}>
-      {foldable && (
-        <button
-          type="button"
-          className="tool-button view-toolbar-toggle"
-          aria-expanded={open}
-          aria-controls={panelId}
-          aria-label={activeFilters > 0 ? `Filters (${activeFilters} in use)` : 'Filters'}
-          onClick={() => setOpen((value) => !value)}
-        >
-          <SlidersHorizontal size={14} aria-hidden="true" />
-          Filters
-          {activeFilters > 0 && (
-            <span className="view-toolbar-count" aria-hidden="true">{activeFilters}</span>
-          )}
-        </button>
-      )}
-      {foldable && (
-        <div id={panelId} className="view-toolbar-panel">
-          {filters && (
-            <div className="view-toolbar-filters">
-              {filters}
-              {onClearFilters && (
-                <button
-                  type="button"
-                  className="tool-button tool-button-quiet view-toolbar-clear"
-                  disabled={activeFilters === 0}
-                  onClick={onClearFilters}
-                >
-                  Clear filters
-                </button>
-              )}
-            </div>
-          )}
-          {view && <div className="view-toolbar-view">{view}</div>}
-        </div>
-      )}
-      {tools && <div className="view-toolbar-tools">{tools}</div>}
+      <div className="view-toolbar-bar">
+        {foldable && (
+          <button
+            type="button"
+            className="tool-button view-toolbar-toggle"
+            aria-expanded={open}
+            aria-controls={panelId}
+            aria-label={activeFilters > 0 ? `Filters (${activeFilters} in use)` : 'Filters'}
+            title="Filters and sliders"
+            onClick={() => setOpen((value) => !value)}
+          >
+            <ListFilter size={14} aria-hidden="true" />
+            <span className="view-toolbar-toggle-label">Filters</span>
+            {activeFilters > 0 && (
+              <span className="view-toolbar-count" aria-hidden="true">{activeFilters}</span>
+            )}
+          </button>
+        )}
+        {filters && (
+          <div id={panelId} className="view-toolbar-filters">
+            {filters}
+            {onClearFilters && activeFilters > 0 && (
+              <button
+                type="button"
+                className="toolbar-pill toolbar-pill-clear"
+                aria-label="Clear filters"
+                title="Clear filters"
+                onClick={onClearFilters}
+              >
+                <X size={13} aria-hidden="true" />
+                Clear
+              </button>
+            )}
+          </div>
+        )}
+        {controls && (
+          <div id={filters ? undefined : panelId} className="view-toolbar-controls">{controls}</div>
+        )}
+        {primary && <div className="view-toolbar-primary">{primary}</div>}
+        {(view || tools || menu) && (
+          <div className="view-toolbar-tools">
+            {view && (
+              <ToolbarMenuButton
+                label="View"
+                icon={<SlidersHorizontal size={14} aria-hidden="true" />}
+                panelClassName="view-toolbar-view"
+              >
+                {view}
+              </ToolbarMenuButton>
+            )}
+            {tools}
+            {menu && (
+              <ToolbarMenuButton
+                label="More tools"
+                icon={<MoreHorizontal size={16} aria-hidden="true" />}
+                iconOnly
+                closeOnAction
+                panelClassName="toolbar-overflow"
+              >
+                {menu}
+              </ToolbarMenuButton>
+            )}
+          </div>
+        )}
+      </div>
       {(summary || selection) && (
         <div className="view-toolbar-status">
-          {summary && <div className="view-toolbar-summary">{summary}</div>}
+          <div className="view-toolbar-summary">{summary}</div>
           {selection}
         </div>
       )}

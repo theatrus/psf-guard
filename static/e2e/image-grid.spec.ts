@@ -107,7 +107,7 @@ test('the toolbar keeps its shape: one height for every control, and a long choi
   const shape = () => bar.evaluate((element) => ({
     height: Math.round(element.getBoundingClientRect().height),
     controls: [...element.querySelectorAll('button, select, input[type="text"]')]
-      .filter((control) => (control as HTMLElement).offsetParent && !control.closest('.selection-action-bar, .multi-select-menu'))
+      .filter((control) => (control as HTMLElement).offsetParent && !control.closest('.selection-action-bar, .toolbar-menu'))
       .map((control) => Math.round(control.getBoundingClientRect().height)),
   }));
   const plain = await shape();

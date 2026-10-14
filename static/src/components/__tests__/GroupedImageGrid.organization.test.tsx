@@ -154,6 +154,8 @@ describe('GroupedImageGrid organization navigation', () => {
     const { refreshSourceAfterMove } = mountGrid();
     await screen.findByTestId('image-1');
     await screen.findByTestId('image-2');
+    // Move exposures waits under ⋯ with the other rarely used tools.
+    await userEvent.click(await screen.findByRole('button', { name: 'More tools' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Move exposures' }));
     await screen.findByRole('dialog', { name: 'Move exposures' });
 
@@ -176,6 +178,8 @@ describe('GroupedImageGrid organization navigation', () => {
 
   it('resumes source cursor normalization when the move is canceled', async () => {
     const { refreshSourceAfterMove } = mountGrid();
+    // Move exposures waits under ⋯ with the other rarely used tools.
+    await userEvent.click(await screen.findByRole('button', { name: 'More tools' }));
     await userEvent.click(await screen.findByRole('button', { name: 'Move exposures' }));
     await refreshSourceAfterMove();
     expect(screen.getByTestId('route')).toHaveTextContent(sourceRoute);

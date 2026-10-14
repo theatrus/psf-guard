@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { useSpatialScan } from '../hooks/useSpatialScan';
 
 type QualityScan = ReturnType<typeof useSpatialScan>;
@@ -7,6 +8,8 @@ interface QualityScanButtonProps {
   targetId: number | null | undefined;
   canWrite: boolean;
   className?: string;
+  /** Shown before the label; a narrow toolbar keeps only the icon. */
+  icon?: ReactNode;
 }
 
 export function QualityScanButton({
@@ -14,6 +17,7 @@ export function QualityScanButton({
   targetId,
   canWrite,
   className,
+  icon,
 }: QualityScanButtonProps) {
   const scope = scan.scope;
   if (targetId == null || !scope?.needs_analysis) {
@@ -51,7 +55,8 @@ export function QualityScanButton({
       disabled={!canWrite || scan.isStarting || scan.isRunning}
       title={title}
     >
-      {label}
+      {icon}
+      {icon ? <span className="tool-button-label">{label}</span> : label}
     </button>
   );
 }

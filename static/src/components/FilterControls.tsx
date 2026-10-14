@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Search } from 'lucide-react';
 import {
   parseStatusFilter,
   STATUS_FILTER_OPTIONS,
@@ -51,7 +52,7 @@ function dateRangeLabel(start: Date | null, end: Date | null): string {
 }
 
 /**
- * The Images filters, as fields for the shared toolbar: Status, Filter,
+ * The Images filters, as pills for the shared toolbar: Status, Filter,
  * Flag and Calibration keep any of several values; Dates and Search
  * narrow further.
  */
@@ -142,7 +143,7 @@ export default function FilterControls({
         active={Boolean(start || end)}
         title="Keep only images taken between these dates"
       >
-        <div className="toolbar-date-range">
+        <div className="toolbar-range-panel">
           <label className="toolbar-field">
             <span className="toolbar-caption">From</span>
             <input
@@ -172,16 +173,17 @@ export default function FilterControls({
         </div>
       </ToolbarPopover>
 
-      <div className="toolbar-field">
-        <label className="toolbar-caption" htmlFor="image-search-filter">Search</label>
+      <label className={`toolbar-search${filters.searchTerm ? ' is-set' : ''}`} title="Keep only targets whose name contains this">
+        <Search size={13} aria-hidden="true" />
         <input
           id="image-search-filter"
           type="text"
-          placeholder="Target name…"
+          aria-label="Search"
+          placeholder="Search targets"
           value={filters.searchTerm}
           onChange={(e) => change({ searchTerm: e.target.value })}
         />
-      </div>
+      </label>
     </>
   );
 }

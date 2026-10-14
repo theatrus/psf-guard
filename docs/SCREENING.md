@@ -250,16 +250,16 @@ frames across two sessions. It reports profiles without enough matches instead
 of assigning them a perfect score. Stack previews use the same cross-session
 score when choosing a reference frame; profiles without enough matches keep
 their session score.
-Use **Select frames** to pick frames by a rule: below the score cutoff,
+Use the **Select** pill to pick frames by a rule: below the score cutoff,
 clouds or obstruction, off target, failed plate solve, recommended rejects,
 or poor calibration. Each choice shows how many frames it selects in the view
 on screen. A rule stays on, and the address keeps it as `selectRule` beside
 the `cutoff`: moving the cutoff, rescoring, or opening another session tab
 selects again without choosing the rule a second time. Frames clicked by hand
-stay as you left them when the rule selects again. **Stop rule** turns the
-rule off and keeps the frames; **Clear** empties the selection and turns the
-rule off. Rejecting a selection always opens a per-image review before
-anything is written.
+stay as you left them when the rule selects again. **×** beside the pill
+turns the rule off and keeps the frames; **Clear** empties the selection and
+turns the rule off. Rejecting a selection always opens a per-image review
+before anything is written.
 
 The user-triggered scan resolves and durably caches suitable orbital elements
 for each exposure, then caches exposure-specific crossings. Potentially bright

@@ -2952,8 +2952,12 @@
 
 @media (max-width: 768px) {
   .grid-stats {
-    flex: 1 1 12rem;
     white-space: normal;
+  }
+
+  /* With images selected, the status row gives the actions its width. */
+  .view-toolbar-status:has(.selection-action-bar.active) .grid-stats {
+    display: none;
   }
 
   .size-control.compact input[type="range"] {
@@ -5289,7 +5293,8 @@
   /* On a phone the Images toolbar scrolls away with the page: a tap
      selects one image only, so its selection actions are rarely in use. */
   .grouped-image-container > .image-controls.sticky {
-    position: static;
+    position: relative;
+    z-index: 100;
     border-top: 1px solid var(--color-border-secondary);
     border-radius: 10px;
   }
@@ -5943,34 +5948,36 @@
   color: var(--color-text-muted);
 }
 
-/* Sequence: a selection rule that is on says so in its field. */
-.sequence-select-rule-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  min-width: 0;
+/* Sequence: the selection rule's pill takes the room its rule needs, and
+   stands out while a rule is on. */
+.view-toolbar .sequence-select-rule {
+  max-width: 20rem;
 }
 
-.sequence-select-rule select {
-  max-width: 18rem;
+.view-toolbar .toolbar-pill.sequence-select-rule select {
+  max-width: 15rem;
 }
 
-.sequence-select-rule.is-active .toolbar-caption {
+.view-toolbar .sequence-stop-rule {
+  width: var(--toolbar-control-height);
+  padding: 0;
+  border-color: var(--color-primary-alpha-50);
+  border-radius: 999px;
   color: var(--color-primary);
 }
 
-.sequence-select-rule.is-active select {
-  border-color: var(--color-primary);
-  background: var(--color-primary-alpha-10);
-}
-
-.sequence-select-rule.is-active .toolbar-caption::after {
-  content: ' · rule on';
-}
-
 @media (max-width: 760px) {
-  .sequence-select-rule select {
+  .view-toolbar .sequence-select-rule {
     flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .view-toolbar .sequence-select-rule .toolbar-pill-label {
+    display: none;
+  }
+
+  .view-toolbar .toolbar-pill.sequence-select-rule select {
+    flex: 1;
     min-width: 0;
     max-width: none;
   }

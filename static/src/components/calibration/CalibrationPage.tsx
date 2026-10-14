@@ -7,6 +7,7 @@ import { useDbProjectTarget } from '../../hooks/useUrlState';
 import { useAllDatabases, useMergedProjects } from '../../hooks/useDatabases';
 import { isTauriApp } from '../../utils/tauri';
 import SchedulerFlatHistory from '../SchedulerFlatHistory';
+import PillSelect from '../toolbar/PillSelect';
 import CalibrationFilters from './CalibrationFilters';
 import CalibrationFramePanel from './CalibrationFramePanel';
 import CalibrationFrameStrip from './CalibrationFrameStrip';
@@ -291,16 +292,13 @@ function CalibrationFrames({
                   </p>
                 )}
               </div>
-              <label className="toolbar-field">
-                <span className="toolbar-caption">Order</span>
-                <select value={filters.sort ?? 'oldest'}
-                  onChange={(event) => state.setFilters({ sort: event.target.value === 'oldest' ? undefined : event.target.value as typeof filters.sort })}>
-                  <option value="oldest">As shot</option>
-                  <option value="newest">Newest first</option>
-                  <option value="file">By file</option>
-                  <option value="grade">Worst first</option>
-                </select>
-              </label>
+              <PillSelect label="Order" value={filters.sort ?? 'oldest'}
+                onChange={(event) => state.setFilters({ sort: event.target.value === 'oldest' ? undefined : event.target.value as typeof filters.sort })}>
+                <option value="oldest">As shot</option>
+                <option value="newest">Newest first</option>
+                <option value="file">By file</option>
+                <option value="grade">Worst first</option>
+              </PillSelect>
               {canManage && frames.length > 0 && (
                 <div className="calibration-session-actions">
                   <div className="tool-segmented" role="group" aria-label="Session serves lights">

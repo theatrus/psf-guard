@@ -24,9 +24,10 @@ import ImageCard from './ImageCard';
 import Dialog from './Dialog';
 import ViewToolbar from './toolbar/ViewToolbar';
 import SelectionBar from './toolbar/SelectionBar';
+import PillSelect from './toolbar/PillSelect';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
-import { X } from 'lucide-react';
+import { ScanSearch, X } from 'lucide-react';
 import type { CalibrationLightMark, Image, ScoredSequence, ImageQualityResult } from '../api/types';
 import {
   imageDetailNavigationState,
@@ -755,37 +756,89 @@ export default function SequenceView() {
         label="Sequence tools"
         className="sequence-controls"
         sticky
-        // One filter field: it shares the view settings' row rather than
-        // take a row of its own, and choosing All filters clears it.
+        filters={availableFilters.length > 1 ? (
+          <PillSelect
+            label="Filter"
+            id="sequence-filter"
+            active={!!filterName}
+            value={filterName || 'all'}
+            onChange={(e) => chooseFilter(e.target.value === 'all' ? undefined : e.target.value)}
+          >
+            <option value="all">All</option>
+            {availableFilters.map(f => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </PillSelect>
+        ) : undefined}
+        // One filter pill: choosing All clears it.
         activeFilters={filterName ? 1 : 0}
-        view={(
+        controls={(
           <>
-            {availableFilters.length > 1 && (
-              <div className="toolbar-field">
-                <label className="toolbar-caption" htmlFor="sequence-filter">Filter</label>
-                <select
-                  id="sequence-filter"
-                  value={filterName || 'all'}
-                  onChange={(e) => chooseFilter(e.target.value === 'all' ? undefined : e.target.value)}
-                >
-                  <option value="all">All filters</option>
-                  {availableFilters.map(f => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
-              </div>
-            )}
             <ThumbnailSizeControl
               id="sequence-thumbnail-size"
               value={imageSize}
               onChange={setImageSize}
+              icons
             />
-            <div className="toolbar-field">
-              <span className="toolbar-caption">Chips</span>
-              <SecondaryScoreToggle />
-            </div>
+            <span
+              className="toolbar-range"
+              title="Frames scoring under the cutoff are marked; the Below the cutoff rule selects them"
+            >
+              <label htmlFor="sequence-threshold">Cutoff</label>
+              <input
+                id="sequence-threshold"
+                aria-label="Score cutoff"
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={threshold}
+                onChange={(e) => setThreshold(parseFloat(e.target.value))}
+              />
+              <output htmlFor="sequence-threshold">{threshold.toFixed(2)}</output>
+            </span>
             <ScoringPenaltyControl />
           </>
+        )}
+        primary={(
+          <>
+            <PillSelect
+              label="Select"
+              aria-label="Select frames"
+              id="sequence-select-rule"
+              pillClassName="sequence-select-rule"
+              active={!!selectionRule}
+              pillTitle={selectionRule
+                ? `${selectionRuleOf(selectionRule).description}. The rule stays on: it selects again when the cutoff or the scores change.`
+                : 'Choose a rule to select frames. It stays on, and selects again when the cutoff or the scores change.'}
+              value={selectionRule ?? ''}
+              onChange={(e) => chooseRule(parseSelectionRule(e.target.value))}
+            >
+              <option value="">By hand</option>
+              {SELECTION_RULES.map(rule => (
+                <option key={rule.id} value={rule.id} title={rule.description}>
+                  {rule.label} ({ruleCounts.get(rule.id) ?? 0})
+                </option>
+              ))}
+            </PillSelect>
+            {selectionRule && (
+              <button
+                type="button"
+                className="tool-button tool-button-quiet sequence-stop-rule"
+                aria-label="Stop rule"
+                title="Turn the rule off; the frames it chose stay selected"
+                onClick={() => chooseRule(null)}
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            )}
+          </>
+        )}
+        view={(
+          <div className="toolbar-field">
+            <span className="toolbar-caption">Chips</span>
+            <SecondaryScoreToggle />
+          </div>
         )}
         tools={(
           <>
@@ -805,63 +858,13 @@ export default function SequenceView() {
               scan={spatialScan}
               targetId={targetId}
               canWrite={grading.canWrite}
-              className="tool-button quality-scan-button"
+              className="tool-button icon-at-1360 quality-scan-button"
+              icon={<ScanSearch size={14} aria-hidden="true" />}
             />
           </>
         )}
-        summary={(
-          <>
-            <div className="toolbar-field">
-              <label className="toolbar-caption" htmlFor="sequence-threshold">Score cutoff</label>
-              <span className="toolbar-range">
-                <input
-                  id="sequence-threshold"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={threshold}
-                  title="Frames scoring under the cutoff are marked; the Below the cutoff rule selects them"
-                  onChange={(e) => setThreshold(parseFloat(e.target.value))}
-                />
-                <output htmlFor="sequence-threshold">{threshold.toFixed(2)}</output>
-              </span>
-            </div>
-            <div className={`toolbar-field sequence-select-rule${selectionRule ? ' is-active' : ''}`}>
-              <label className="toolbar-caption" htmlFor="sequence-select-rule">
-                Select frames
-              </label>
-              <span className="sequence-select-rule-control">
-                <select
-                  id="sequence-select-rule"
-                  value={selectionRule ?? ''}
-                  title={selectionRule
-                    ? `${selectionRuleOf(selectionRule).description}. The rule stays on: it selects again when the cutoff or the scores change.`
-                    : 'Choose a rule to select frames. It stays on, and selects again when the cutoff or the scores change.'}
-                  onChange={(e) => chooseRule(parseSelectionRule(e.target.value))}
-                >
-                  <option value="">By hand (no rule)</option>
-                  {SELECTION_RULES.map(rule => (
-                    <option key={rule.id} value={rule.id} title={rule.description}>
-                      {rule.label} ({ruleCounts.get(rule.id) ?? 0})
-                    </option>
-                  ))}
-                </select>
-                {selectionRule && (
-                  <button
-                    type="button"
-                    className="tool-button tool-button-quiet"
-                    title="Turn the rule off; the frames it chose stay selected"
-                    onClick={() => chooseRule(null)}
-                  >
-                    <X size={14} aria-hidden="true" />
-                    <span className="tool-button-label">Stop rule</span>
-                  </button>
-                )}
-              </span>
-            </div>
-          </>
-        )}
+        // On a phone the cutoff slider folds away; its value stays in sight.
+        summary={<span className="toolbar-phone-only">Cutoff {threshold.toFixed(2)}</span>}
         selection={(
           <SelectionBar
             className="sequence-selection-bar"

@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { usePopover } from './usePopover';
 import './toolbar.css';
 
 interface ToolbarPopoverProps {
   id: string;
-  /** The caption over the button, such as "Filter". */
+  /** The field's name, said in the pill before its value: "Filter". */
   label: string;
   /** What the field keeps, in a few words, such as "All" or "Ha, OIII". */
   value: string;
-  /** The field narrows the view; its button stands out. */
+  /** The field narrows the view; its pill stands out. */
   active?: boolean;
   /** Said on hover. */
   title?: string;
@@ -17,9 +18,10 @@ interface ToolbarPopoverProps {
 }
 
 /**
- * A toolbar field that opens a small panel under its button: the
- * multi-selects and the date range. The panel closes on a click outside
- * it or on Escape, which hands focus back to the button.
+ * A filter pill, "Filter: Ha ▾", that opens a small panel under it: the
+ * multi-selects and the date and temperature ranges. The panel stays
+ * mounted while closed, so a number typed in it is still committed when a
+ * click elsewhere closes it.
  */
 export default function ToolbarPopover({
   id,
@@ -30,50 +32,28 @@ export default function ToolbarPopover({
   className,
   children,
 }: ToolbarPopoverProps) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  const button = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.stopPropagation();
-      setOpen(false);
-      button.current?.focus();
-    };
-    document.addEventListener('pointerdown', outside);
-    document.addEventListener('keydown', escape, true);
-    return () => {
-      document.removeEventListener('pointerdown', outside);
-      document.removeEventListener('keydown', escape, true);
-    };
-  }, [open]);
-
+  const { open, setOpen, rootRef, buttonRef } = usePopover();
   return (
-    <div className={`toolbar-field multi-select${className ? ` ${className}` : ''}`} ref={root}>
-      <span className="toolbar-caption" aria-hidden="true">{label}</span>
+    <div className={`toolbar-popover${className ? ` ${className}` : ''}`} ref={rootRef}>
       <button
-        ref={button}
+        ref={buttonRef}
         type="button"
         id={id}
-        className={`multi-select-button${active ? ' is-set' : ''}`}
+        className={`toolbar-pill${active ? ' is-set' : ''}`}
         aria-haspopup="true"
         aria-expanded={open}
+        aria-controls={`${id}-panel`}
         aria-label={`${label}: ${value}`}
         title={title}
         onClick={() => setOpen((shown) => !shown)}
       >
-        <span className="multi-select-value">{value}</span>
-        <ChevronDown size={14} aria-hidden="true" />
+        <span className="toolbar-pill-label">{label}:</span>
+        <span className="toolbar-pill-value">{value}</span>
+        <ChevronDown size={13} aria-hidden="true" />
       </button>
-      {open && (
-        <div className="multi-select-menu" role="group" aria-label={label}>
-          {children}
-        </div>
-      )}
+      <div id={`${id}-panel`} className="toolbar-menu" role="group" aria-label={label} hidden={!open}>
+        {children}
+      </div>
     </div>
   );
 }

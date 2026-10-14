@@ -18,8 +18,9 @@ interface MultiSelectMenuProps {
 }
 
 /**
- * The one multi-select of the toolbars: a button that says what is kept
- * and opens a list of boxes, with All at the top to clear them.
+ * The one multi-select of the toolbars: a pill that says what is kept,
+ * "Filter: Ha, OIII", and opens a list of boxes with All at the top to
+ * clear them.
  */
 export default function MultiSelectMenu({
   id,
