@@ -30,6 +30,8 @@ export interface MosaicPanelsProps {
   redo: { can: boolean; run: () => void };
   /** The server would refuse the panels as they are. */
   invalid: boolean;
+  /** What the last panel edit did, or why it did not. */
+  notice: string;
   /** Why the grid cannot be laid out again, such as a locked panel. */
   gridBlocked: string | null;
 }
@@ -96,6 +98,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
       <p className="director-muted framing-mosaic-note">N, E, S and W are on the sky: each adds on the panel side facing nearest that way at this camera angle. Panels go in at {overlap}% overlap.</p>
     </div>
 
+    {props.notice && <p className="framing-mosaic-notice" role="status" data-testid="framing-mosaic-notice">{props.notice}</p>}
     <div className="framing-panel-head">
       <span className="framing-catalogs-title">{layout.panels.length} panel{layout.panels.length === 1 ? '' : 's'}{locked.length > 0 ? ` · ${locked.length} locked` : ''}</span>
       <span className="framing-history">

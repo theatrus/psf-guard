@@ -252,6 +252,7 @@
 /* The panel editor beside the sky. */
 .framing-mosaic { display: flex; flex-direction: column; gap: 10px; }
 .framing-mosaic-note { margin: 4px 0 0; font-size: 12px; }
+.framing-mosaic-notice { margin: 0; padding: 6px 9px; font-size: 13px; color: var(--color-text-primary); background: var(--color-bg-secondary); border-left: 3px solid var(--color-border-tertiary); border-radius: 4px; }
 .framing-regrid summary { cursor: pointer; font-size: 13px; color: var(--color-text-secondary); }
 .framing-extend { display: flex; flex-direction: column; gap: 6px; }
 .framing-extend-head, .framing-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }

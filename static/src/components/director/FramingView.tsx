@@ -177,6 +177,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     setBaseline(change);
   }, []);
   const [notice, setNotice] = useState('');
+  // What the last panel edit did, or why it did not, said beside the panels.
+  const [panelNotice, setPanelNotice] = useState('');
   // What the save bar was told when a drag began, held until it ends.
   const [heldReport, setHeldReport] = useState<{ unsaved: boolean; changes: string[] } | null>(null);
   const [problem, setProblem] = useState('');
@@ -511,7 +513,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     setPast(list => [...list.slice(-49), state.layout]);
     setFuture([]);
     update({ layout: next });
-    setNotice(what);
+    setPanelNotice(what);
   }, [state, update]);
   const stepHistory = (back: boolean) => {
     if (!state) return;
@@ -522,7 +524,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     (back ? setFuture : setPast)(list => [...list, state.layout]);
     if (selectedPanel && !findPanel(target, selectedPanel)) setSelectedPanel(null);
     update({ layout: target });
-    setNotice(back ? 'Undid the last panel change.' : 'Redid the panel change.');
+    setPanelNotice(back ? 'Undid the last panel change.' : 'Redid the panel change.');
   };
   const addOverlap = Math.max(state?.layout.min_overlap_percent ?? 0, extendOverlap ?? state?.layout.min_overlap_percent ?? 0);
   const extend = (direction: Direction) => {
@@ -530,14 +532,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const step = cameraStep(direction, state.positionAngle);
     const chosen = extendScope === 'panel' && selectedPanel && findPanel(state.layout, selectedPanel);
     const result = chosen ? extendFrom(state.layout, chosen.id, step, addOverlap) : extendMosaic(state.layout, step, addOverlap);
-    if (result.added.length === 0) { setNotice(result.skipped.length ? `A panel is already there: ${result.skipped.join(', ')}.` : 'Nothing to add.'); return; }
+    if (result.added.length === 0) { setPanelNotice(result.skipped.length ? `A panel is already there: ${result.skipped.join(', ')}.` : 'Nothing to add.'); return; }
     editLayout(result.layout, `Added ${result.added.join(', ')} ${chosen ? `${direction} of ${chosen.id}` : `on the ${direction} side`}.`);
     if (result.added.length === 1) setSelectedPanel(result.added[0]);
   };
   const addAt = (fromId: string, step: [number, number]) => {
     if (!state) return;
     const result = extendFrom(state.layout, fromId, step, addOverlap);
-    if (result.added.length === 0) { setNotice(`A panel is already there: ${result.skipped.join(', ')}.`); return; }
+    if (result.added.length === 0) { setPanelNotice(`A panel is already there: ${result.skipped.join(', ')}.`); return; }
     editLayout(result.layout, `Added ${result.added[0]} beside ${fromId}.`);
     setSelectedPanel(result.added[0]);
   };
@@ -554,8 +556,15 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const shared = request && (sharedInUse || own.length === 0) ? framingGeometry(request) : null;
     const corners = [...(shared?.panels ?? []), ...own].flatMap(panel => panel.corners);
     const handle = shared && shared.panels.length > 0 ? (fov: number) => rotationHandleSky(current, shared.extent, fov) : null;
-    const fov = fitViewFov(corners, handle, current.center, rotateSky ? current.positionAngle : 0, stageSize);
-    return fov === null ? {} : { viewFov: widenOnly ? Math.max(current.viewFov, fov) : fov, viewCenter: current.center };
+    // Panels added on one side leave the target off the mosaic's middle;
+    // the view centers on the middle of the shared panels.
+    const xs = current.layout.panels.map(panel => panel.x);
+    const ys = current.layout.panels.map(panel => panel.y);
+    const middle = shared && current.panel && xs.length > 0
+      ? deprojectFrom(current.center, cameraToPlane((Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2, current.panel, current.positionAngle))
+      : current.center;
+    const fov = fitViewFov(corners, handle, middle, rotateSky ? current.positionAngle : 0, stageSize);
+    return fov === null ? {} : { viewFov: widenOnly ? Math.max(current.viewFov, fov) : fov, viewCenter: middle };
   }), [update, rigList, sharedInUse, rotateSky, stageSize]);
   const fitted = useRef(false);
   const hasGeometry = !!geometry;
@@ -620,6 +629,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       setState(baseline ?? savedState);
       setUndo(null);
       setNotice('');
+      setPanelNotice('');
       save.reset();
     },
   });
@@ -707,13 +717,13 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         panel = { id: pressed, before: state.layout, moved: false };
       } else {
         kind = 'look';
-        if (canWrite) setNotice(`${pressed} is locked${panelFrames(pressed) > 0 ? ` by its ${panelFrames(pressed)} frames` : ''}: it stays where it is.`);
+        if (canWrite) setPanelNotice(`${pressed} is locked${panelFrames(pressed) > 0 ? ` by its ${panelFrames(pressed)} frames` : ''}: it stays where it is.`);
       }
     }
     // Locked panels hold the shared center and angle.
     if ((kind === 'target' || kind === 'rotate') && rig === null && layoutLocked) {
       kind = 'look';
-      setNotice('Locked panels hold the mosaic where it is. Drag one panel with Panel, or unlock them.');
+      setPanelNotice('Locked panels hold the mosaic where it is. Drag one panel with Panel, or unlock them.');
     }
     // Where the pointer took hold, relative to the target (or the panel),
     // so it follows the hand instead of jumping to it.
@@ -800,12 +810,12 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       const fresh = issuesFor(now.layout, id).filter(issue => !had.has(key(issue)));
       if (fresh.length > 0 && !event.altKey) {
         update({ layout: before });
-        setNotice(`Not placed: ${fresh.map(describeIssue).join('; ')}. Hold Alt (Option) while dropping to place it anyway.`);
+        setPanelNotice(`Not placed: ${fresh.map(describeIssue).join('; ')}. Hold Alt (Option) while dropping to place it anyway.`);
         return;
       }
       setPast(list => [...list.slice(-49), before]);
       setFuture([]);
-      setNotice(fresh.length > 0 ? `Placed ${id} off the rule: ${fresh.map(describeIssue).join('; ')}.` : `Moved ${id}.`);
+      setPanelNotice(fresh.length > 0 ? `Placed ${id} off the rule: ${fresh.map(describeIssue).join('; ')}.` : `Moved ${id}.`);
       return;
     }
     // A click chooses the panel under it, or none.
@@ -826,13 +836,13 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     if (!canWrite) return;
     if (key === 'l' && !mod) {
       event.preventDefault();
-      if (panelFrames(chosen.id) > 0) { setNotice(`${chosen.id} has frames, so it stays locked.`); return; }
+      if (panelFrames(chosen.id) > 0) { setPanelNotice(`${chosen.id} has frames, so it stays locked.`); return; }
       editLayout({ ...state.layout, panels: state.layout.panels.map(panel => panel.id === chosen.id ? { ...panel, locked: !panel.locked } : panel) }, chosen.locked ? `Unlocked ${chosen.id}.` : `Locked ${chosen.id}.`);
       return;
     }
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault();
-      if (panelLocked(chosen.id) || state.layout.panels.length < 2) { setNotice(`${chosen.id} is locked: unlock it to remove it.`); return; }
+      if (panelLocked(chosen.id) || state.layout.panels.length < 2) { setPanelNotice(`${chosen.id} is locked: unlock it to remove it.`); return; }
       editLayout({ ...state.layout, panels: state.layout.panels.filter(panel => panel.id !== chosen.id) }, `Removed ${chosen.id}.`);
       setSelectedPanel(null);
       return;
@@ -841,7 +851,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const arrow = arrows[event.key];
     if (!arrow || !state.panel) return;
     event.preventDefault();
-    if (panelLocked(chosen.id)) { setNotice(`${chosen.id} is locked: it stays where it is.`); return; }
+    if (panelLocked(chosen.id)) { setPanelNotice(`${chosen.id} is locked: it stays where it is.`); return; }
     // The arrow's way on screen, taken onto the sky and into the camera frame.
     const rad = (skyRotation * Math.PI) / 180;
     const screen: [number, number] = [-arrow[0], -arrow[1]];
@@ -888,7 +898,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   };
   const chooseRig = (rigId: string) => {
     // A new size moves every panel off the center, a locked one too.
-    if (sizeLocked) { setNotice('A locked panel off the center holds the panel size: unlock it to frame with another rig.'); return; }
+    if (sizeLocked) { setPanelNotice('A locked panel off the center holds the panel size: unlock it to frame with another rig.'); return; }
     update({ panelRigId: rigId || null, panel: rigId ? panelForRig(rigList, rigId) : null });
   };
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
@@ -1012,6 +1022,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   const handles = canWrite ? addHandles(view) : [];
   const centerOnStage = geometry ? onStage(state.center) : null;
   const panelPolygons = sharedInUse ? (geometry?.panels ?? []).map(panel => ({ panel, corners: stageCorners(panel.corners, view) })) : [];
+  // Locked panels draw over the rest, so their outline and lock stay in sight, and the chosen one over all.
+  const drawRank = (id: string) => (id === selectedPanel ? 2 : panelLocked(id) ? 1 : 0);
+  const drawOrder = [...panelPolygons].sort((a, b) => drawRank(a.panel.id) - drawRank(b.panel.id));
   const chips = chipSurveys(surveys.data ?? []);
   // The layer's short chip name, so a note on the sky stays a few words.
   const layerLabel = chips.find(chip => chip.survey.id === state.surveyId)?.label ?? survey?.name;
@@ -1048,16 +1061,21 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
               <text x={toStage(corners[0], state.viewFov, stageSize)[0] + 8} y={toStage(corners[0], state.viewFov, stageSize)[1] + 20}>{rigName(rigId)}{own.panels.length > 1 ? ` ${panel.id}` : ''}</text>
             </g>; })}
           </g>)}
-          {panelPolygons.map(({ panel, corners }) => {
+          {drawOrder.map(({ panel, corners }) => {
             if (!corners) return null;
             const held = panelLocked(panel.id);
-            const [lx, ly] = toStage(corners[0], state.viewFov, stageSize);
+            // The name sits inside the panel, a third of the way down, clear
+            // of the edges where neighbours overlap; a locked panel's lock
+            // goes before it.
+            const placed = findPanel(state.layout, panel.id);
+            const [lx, ly] = (placed && cameraOnStage(placed.x, placed.y + 0.15, view)) ?? toStage(corners[0], state.viewFov, stageSize);
             const label = panelPolygons.length > 1 || held;
+            const half = (panel.id.length * 12.5) / 2;
             return <g key={panel.id} className="framing-panel" data-testid="framing-panel" data-panel-id={panel.id}
               data-panel-state={held ? 'locked' : flagged.has(panel.id) ? 'invalid' : undefined} data-selected={panel.id === selectedPanel ? 'true' : undefined}>
               <polygon points={polygonPoints(corners, state.viewFov, stageSize)} />
-              {held && <g className="framing-panel-lock" transform={`translate(${(lx + 16).toFixed(1)} ${(ly + 16).toFixed(1)})`}><rect x={-6} y={-1} width={12} height={10} rx={2} /><path d="M-3.5 -1 v-3 a3.5 3.5 0 0 1 7 0 v3" /></g>}
-              {label && <text x={lx + (held ? 28 : 8)} y={ly + 22}>{panel.id}</text>}
+              {held && <g className="framing-panel-lock" transform={`translate(${(lx - half - 14).toFixed(1)} ${(ly - 12).toFixed(1)})`}><rect x={-6} y={-1} width={12} height={10} rx={2} /><path d="M-3.5 -1 v-3 a3.5 3.5 0 0 1 7 0 v3" /></g>}
+              {label && <text x={lx} y={ly} textAnchor="middle">{panel.id}</text>}
             </g>;
           })}
           {strips.map(({ strip, points, middle }) => <g key={strip.other} className="framing-overlap" data-testid="framing-overlap" data-short={strip.belowMinimum ? 'true' : undefined}>
@@ -1212,10 +1230,11 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <MosaicPanels layout={state.layout} issues={layoutIssueList} selected={selectedPanel && findPanel(state.layout, selectedPanel) ? selectedPanel : null} onSelect={setSelectedPanel}
           frames={panelFrames} isLocked={panelLocked} canWrite={canWrite} invalid={problemAt('mosaic')}
           onEdit={editLayout} onExtend={extend}
-          onRing={() => { const result = ringAround(state.layout, addOverlap); if (result.added.length) editLayout(result.layout, `Added ${result.added.length} panels around the mosaic.`); else setNotice('Every place around the mosaic has a panel.'); }}
-          onFill={() => { const result = fillHoles(state.layout); if (!result) setNotice('The panels sit on no one lattice, so there is no hole to name. Add panels beside them instead.'); else if (result.added.length) editLayout(result.layout, `Filled ${result.added.length} hole${result.added.length === 1 ? '' : 's'}: ${result.added.join(', ')}.`); else setNotice('The mosaic has no holes.'); }}
+          onRing={() => { const result = ringAround(state.layout, addOverlap); if (result.added.length) editLayout(result.layout, `Added ${result.added.length} panels around the mosaic.`); else setPanelNotice('Every place around the mosaic has a panel.'); }}
+          onFill={() => { const result = fillHoles(state.layout); if (!result) setPanelNotice('The panels sit on no one lattice, so there is no hole to name. Add panels beside them instead.'); else if (result.added.length) editLayout(result.layout, `Filled ${result.added.length} hole${result.added.length === 1 ? '' : 's'}: ${result.added.join(', ')}.`); else setPanelNotice('The mosaic has no holes.'); }}
           scope={extendScope} onScope={setExtendScope} overlap={addOverlap} onOverlap={setExtendOverlap}
           undo={{ can: past.length > 0, run: () => stepHistory(true) }} redo={{ can: future.length > 0, run: () => stepHistory(false) }}
+          notice={panelNotice}
           gridBlocked={layoutLocked ? 'Locked panels stay where they are, so the panels are not laid out as a grid again.' : null} />
       </fieldset>
       <fieldset>
