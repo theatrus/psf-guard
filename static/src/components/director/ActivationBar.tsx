@@ -16,11 +16,11 @@ export default function ActivationBar({ projectId, drafts, canWrite, open, onOpe
   onOpen: () => void;
   onClose: () => void;
 }) {
-  const { last, behindText } = useActivationState(projectId);
+  const { last, notSynced } = useActivationState(projectId);
   const show = useActivationDue(projectId, canWrite, drafts.unsaved.length);
   return <>
     {show && <div className="draft-bar is-due" role="region" aria-label="Activation due">
-      <p className="draft-bar-message">{last.data ? behindText : 'Not activated yet'}</p>
+      <p className="draft-bar-message">{notSynced}</p>
       <div className="draft-bar-actions">
         <button type="button" className="is-primary" onClick={onOpen}><Send size={16} />{last.data ? 'Activate again…' : 'Activate…'}</button>
       </div>

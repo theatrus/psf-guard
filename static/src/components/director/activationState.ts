@@ -71,11 +71,14 @@ export function useActivationState(projectId: string) {
   // Everything the rigs lack: the saved parts, the rigs left out, then the
   // rigs whose rows differ.
   const behind = matches ? [] : [...parts, ...missing, ...differing];
-  const behindText = [
-    parts.length > 0 && `Saved ${listed(parts)} not on the rigs yet`,
+  // Why the rigs are not synced, said once for the bar, the summary's
+  // tooltip and the activation panel.
+  const reasons = last.data ? [
+    parts.length > 0 && `saved ${listed(parts)} not activated yet`,
     missing.length > 0 && `${listed(missing)} not activated yet`,
     differing.length > 0 && `${listed(differing)} ${differing.length === 1 ? 'differs' : 'differ'} from the plan`,
-  ].filter(Boolean).join('; ');
+  ].filter(Boolean).join('; ') : 'not activated yet';
+  const notSynced = `Not synced: ${reasons}`;
   // A check that failed, or a rig it could not read (its database locked,
   // unreadable or not on this server, or a row it refuses): said, never
   // asked about, with the reason in `title`.
@@ -84,7 +87,17 @@ export function useActivationState(projectId: string) {
     : check.isError ? { text: "Couldn't check the rigs", title: failure(check.error) }
     : skipped.length > 0 ? { text: `Couldn't check ${listed(skipped.map(rig => rig.catalog_name || rig.rig.name))}`, title: skipped.flatMap(rig => rig.warnings).join(' ') }
     : null;
-  return { last, savedPlan, savedFraming, planRevision, framingRevision, behind, behindText, matches, holding, changed, checking, unchecked };
+  /** One rig's line on the Rigs tab: synced or not, and why. */
+  const rigSync = (rigId: string): { text: string; title?: string } => {
+    const unread = skipped.find(rig => rig.rig.id === rigId);
+    if (holding.has(rigId)) return { text: 'synced' };
+    if (unread) return { text: "couldn't check", title: unread.warnings.join(' ') };
+    if (!activated.has(rigId)) return { text: 'not synced · not activated yet' };
+    if (changed.has(rigId)) return { text: 'not synced · differs from the plan' };
+    if (parts.length > 0) return { text: `not synced · saved ${listed(parts)} not activated yet` };
+    return { text: 'synced' };
+  };
+  return { last, savedPlan, savedFraming, planRevision, framingRevision, behind, notSynced, matches, checking, unchecked, rigSync };
 }
 
 /** Whether the page should ask for an activation: someone may write, the

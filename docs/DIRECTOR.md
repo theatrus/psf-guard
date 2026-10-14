@@ -420,8 +420,9 @@ hours, its progress over every objective, and its status. An exposure plan
 counts toward the objective its activation wrote it for; one taken in from
 Target Scheduler goes to the objective with its template, else the one with
 its filter's band. `GET /projects/{id}/plan/progress` returns the counts.
-**Rigs** lists each rig with its database's project and whether activation
-has reached it, or its rows differ from the plan. **Add a rig** offers every
+**Rigs** lists each rig with its database's project and whether it is
+**synced** (its rows hold the saved plan) or **not synced**, and why: not
+activated yet, or its rows differ from the plan. **Add a rig** offers every
 rig with a new project, which activation creates in its database, and every
 project another plan holds in a database this plan has none in. A rig joins with a template for each
 objective, from its database or the library; one with no template for any
@@ -447,16 +448,18 @@ that shoots the plan has none of it (the last activation skipped it, or it
 joined since), or a rig's rows differ from the plan though the last
 activation had it (N.I.N.A. changed them, or an old plan another length
 replaced is still on). Its **Activate…** button, **Activate again…** once
-the plan has been activated, opens the preview and apply over the page. The
-summary ends with where the plan stands as a label, and an **Activate…**
-button beside it opens the same dialog at any time, to push the last
-activation again. When the last activation had the saved plan, framing and
-rigs, the label says **On the rigs** at once while the
-[check](#activation) runs, and changes only if the check finds rows to
-write. Otherwise it says **Checking the rigs…** until the check answers.
-When the check fails, or cannot read a rig's database, the label says
-**Couldn't check the rigs** (or the rig), with the reason in its tooltip,
-and no bar asks. On a server that does not write rig databases the summary
+the plan has been activated, opens the preview and apply over the page. Its
+message says **Not synced** and why, such as "Not synced: ultracat131
+differs from the plan". The summary ends with a short label, **Synced** or
+**Not synced** with the reason in its tooltip, and an **Activate…** button
+beside it opens the same dialog at any time, to push the last activation
+again. When the last activation had the saved plan, framing and rigs, the
+label says **Synced** at once while the [check](#activation) runs, and
+changes only if the check finds rows to write. Otherwise it says
+**Checking…** until the check answers. When the check fails, or cannot
+read a rig's database, the label says **Couldn't check**, with the reason
+in its tooltip, and no bar asks. The activation dialog's status line says
+the same. On a server that does not write rig databases the summary
 says **Drafts only** and no bar asks. Older links to the Plan, Rig
 databases or Activate tabs open Exposures or Rigs. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation

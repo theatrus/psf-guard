@@ -45,23 +45,24 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
   /** The activation bar is up and says it already. */
   hideActivation?: boolean;
 }) {
-  const { last, savedPlan, savedFraming, behind, behindText, matches, checking, unchecked } = useActivationState(projectId);
+  const { last, savedPlan, savedFraming, behind, notSynced, matches, checking, unchecked } = useActivationState(projectId);
   const status = useDirectorStatus();
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const framing = savedFraming.data?.draft;
   const objectives = savedPlan.data?.plan?.objectives ?? [];
-  // Rows that already match count as on the rigs, recorded or not. Not
-  // "Active": that is a Target Scheduler project state, which the project in
-  // each database keeps whatever this says. A current record answers at
-  // once; where it cannot, the rows are read first, rather than say one
-  // thing and then another.
-  const activation: { tone?: 'ok' | 'behind'; text: string; title?: string } | null = checking ? { text: 'Checking the rigs…' }
-    : matches ? { tone: 'ok', text: 'On the rigs' }
+  // Rows that already match count as synced, recorded or not. Not "Active":
+  // that is a Target Scheduler project state, which the project in each
+  // database keeps whatever this says. The pill stays short; why is in its
+  // tooltip. A current record answers at once; where it cannot, the rows
+  // are read first, rather than say one thing and then another.
+  const synced = { tone: 'ok', text: 'Synced', title: 'The rigs hold the saved plan' } as const;
+  const activation: { tone?: 'ok' | 'behind'; text: string; title?: string } | null = checking ? { text: 'Checking…', title: 'Reading the rig databases' }
+    : matches ? synced
     : last.data
-      ? behind.length > 0 ? { tone: 'behind', text: behindText }
-        : unchecked ? { tone: 'behind', ...unchecked }
-        : { tone: 'ok', text: 'On the rigs' }
-      : last.isSuccess ? { tone: 'behind', text: 'Not activated yet' } : null;
+      ? behind.length > 0 ? { tone: 'behind', text: 'Not synced', title: notSynced }
+        : unchecked ? { tone: 'behind', text: "Couldn't check", title: `${unchecked.text}: ${unchecked.title}` }
+        : synced
+      : last.isSuccess ? { tone: 'behind', text: 'Not synced', title: notSynced } : null;
   return <div className="workspace-summary" aria-label="Plan summary" role="region">
     <div className="workspace-summary-head">
       <Link className="workspace-pill workspace-back" to={`/?${back}`}><ArrowLeft size={14} />Library</Link>
@@ -69,7 +70,7 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
       {status.data && !status.data.database_management && <span className="workspace-pill" title="This server does not write to rig databases" data-testid="summary-drafts-only">Drafts only</span>}
       {/* Where the plan stands is a pill; the action beside it is a button. */}
       {activation && !hideActivation && <span className="workspace-activation">
-        <span className={`workspace-pill${activation.tone ? ` is-${activation.tone}` : ''}`} data-testid="summary-activation" title={activation.title || activation.text}>
+        <span className={`workspace-pill${activation.tone ? ` is-${activation.tone}` : ''}`} data-testid="summary-activation" title={activation.title}>
           {activation.tone === 'ok' && <Check size={14} aria-hidden="true" />}
           {activation.tone === 'behind' && <TriangleAlert size={14} aria-hidden="true" />}
           {activation.text}

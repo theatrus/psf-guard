@@ -40,7 +40,7 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
   const manageable = status.data?.database_management ?? true;
   const info = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 300_000 });
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
-  const { last, holding, changed } = useActivationState(projectId);
+  const { rigSync } = useActivationState(projectId);
   const client = useQueryClient();
   const [pick, setPick] = useState('');
   const [detachPick, setDetachPick] = useState<string | null>(null);
@@ -116,7 +116,6 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
     ...row.links.map(link => ({ rigId: link.rig.id, name: link.catalog_name, link })),
     ...joined.filter(id => !linkedRigs.has(id)).map(id => ({ rigId: id, name: profiles.data?.find(rig => rig.rig.id === id)?.catalog_name ?? 'A rig', link: null })),
   ].sort((left, right) => Number(right.link?.catalog_slug === cameFrom) - Number(left.link?.catalog_slug === cameFrom));
-  const activated = new Set(last.data?.rigs.map(rig => rig.rig_id) ?? []);
   const canEditRows = canWrite && !!info.data?.allow_database_management;
 
   return <section aria-label="Rigs" className="plan-rig-list">
@@ -133,7 +132,7 @@ export default function PlanRigs({ row, rows, joined, objectives, ready, control
         : 'new project on activation';
       return <div className="director-rig-database plan-rig" role="group" aria-label={name} key={key}>
         <p className="plan-rig-head"><strong>{name}</strong><span className="plan-rig-place">{place}</span>
-          <span className="director-muted">{activated.has(rigId) ? changed.has(rigId) ? 'differs from the plan' : 'activated' : holding.has(rigId) ? 'matches' : 'not activated'}{shooting ? '' : ' · not shooting'}</span>
+          <span className="director-muted" title={rigSync(rigId).title}>{rigSync(rigId).text}{shooting ? '' : ' · not shooting'}</span>
           {link && cameFrom === link.catalog_slug && <span className="director-muted"> · opened from here</span>}</p>
         <div className="director-actions">
           {canWrite && !shooting && <button type="button" disabled={!!waitTitle} title={waitTitle} onClick={() => setRig(rigId, true)}><Plus size={16} />Shoot this plan</button>}

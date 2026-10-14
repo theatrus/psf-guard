@@ -137,7 +137,7 @@ describe('project workspace', () => {
   it('asks for an activation at the top once the saved plan is not on the rigs, and opens the preview', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 1, shoots: true });
     const due = await screen.findByRole('region', { name: 'Activation due' });
-    expect(due).toHaveTextContent('Not activated yet');
+    expect(due).toHaveTextContent('Not synced: not activated yet');
     // Said once: the summary leaves it to the bar.
     expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
     expect(screen.queryByText('Activation project')).not.toBeInTheDocument();
@@ -152,12 +152,12 @@ describe('project workspace', () => {
   it('does not ask for an activation when only the view of the framing changed', async () => {
     // Revision 5 changed the survey; the layout the rigs have is still revision 2's.
     mount(links, '/plan?plan=project', { framing: true, framingRevision: 5, layoutRevision: 2, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, matches: true });
-    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent('On the rigs'));
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Synced$/));
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
   });
   it('asks for one when the layout moved after the activation', async () => {
     mount(links, '/plan?plan=project', { framing: true, framingRevision: 5, layoutRevision: 5, planRevision: 4, shoots: true, activated: { plan_revision: 4 } });
-    expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent('Saved framing not on the rigs yet');
+    expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent('Not synced: saved framing not activated yet');
   });
   it('does not ask for an activation the rigs already have', async () => {
     // A plan the rig holds beside one the plan leaves alone (`keep`) is in step.
@@ -165,7 +165,7 @@ describe('project workspace', () => {
       plans: [{ action: 'unchanged', name: 'M31 · Ha · 300 s', detail: '' }, { action: 'keep', name: 'M31 · OIII · 600 s', detail: 'not part of this plan; left as it is' }] });
     // Not "Active", which is a Target Scheduler project state of its own.
     const summary = await screen.findByRole('region', { name: 'Plan summary' });
-    await waitFor(() => expect(within(summary).getByTestId('summary-activation')).toHaveTextContent('On the rigs'));
+    await waitFor(() => expect(within(summary).getByTestId('summary-activation')).toHaveTextContent(/^Synced$/));
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     // Where it stands is no button; the button beside it opens the
     // activation, to push it again.
@@ -181,60 +181,65 @@ describe('project workspace', () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, matches: true, checkAfter,
       plans: [{ action: 'unchanged', name: 'SNR G132 · G_300 · 300 s', detail: '' }, { action: 'disable', name: 'SNR G132 · G_120 · 120 s', detail: 'plan #34 (2 of 120 frames taken) is replaced by SNR G132 · G_300 · 300 s' }] });
     // The record answers at once while the check runs, and nothing asks yet.
-    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent('On the rigs'));
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Synced$/));
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     answer();
     const due = await screen.findByRole('region', { name: 'Activation due' });
-    expect(due).toHaveTextContent('C925 data differs from the plan');
+    expect(due).toHaveTextContent('Not synced: C925 data differs from the plan');
     expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: /Rigs/ }));
-    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/differs from the plan/)).toBeInTheDocument();
+    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/^not synced · differs from the plan/)).toBeInTheDocument();
     fireEvent.click(within(due).getByRole('button', { name: 'Activate again…' }));
     expect(screen.getByRole('dialog', { name: 'Activate on the rigs' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /close/i }));
-    // With edits unsaved the save bar comes first; the summary says it.
+    // With edits unsaved the save bar comes first; the summary says it,
+    // short, with why in its tooltip.
     fireEvent.click(screen.getByRole('tab', { name: /Exposures/ }));
     fireEvent.change(screen.getByLabelText('Stub goal'), { target: { value: '120' } });
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
-    expect(screen.getByTestId('summary-activation')).toHaveTextContent('C925 data differs from the plan');
+    expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Not synced$/);
+    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', 'Not synced: C925 data differs from the plan');
   });
   it('asks again for a rig the last activation left out, though the revisions match', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4, rigs: [] } });
-    expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent('C925 data not activated yet');
+    expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent('Not synced: C925 data not activated yet');
     expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
   });
   it('says the rigs could not be checked, without asking, when the check fails', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, check: 'fails' });
     const summary = await screen.findByRole('region', { name: 'Plan summary' });
-    await waitFor(() => expect(within(summary).getByTestId('summary-activation')).toHaveTextContent("Couldn't check the rigs"));
-    expect(within(summary).getByTestId('summary-activation')).toHaveAttribute('title', 'The check failed: disk I/O error');
+    await waitFor(() => expect(within(summary).getByTestId('summary-activation')).toHaveTextContent(/^Couldn't check$/));
+    expect(within(summary).getByTestId('summary-activation')).toHaveAttribute('title', "Couldn't check the rigs: The check failed: disk I/O error");
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     expect(within(summary).getByRole('button', { name: 'Activate…' })).toBeInTheDocument();
   });
   it('says which rig could not be checked when its database could not be read', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, check: 'unreadable' });
-    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent("Couldn't check C925 data"));
-    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', 'Its database could not be read: file is not a database.');
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Couldn't check$/));
+    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', "Couldn't check C925 data: Its database could not be read: file is not a database.");
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /Rigs/ }));
+    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/^couldn't check/)).toHaveAttribute('title', 'Its database could not be read: file is not a database.');
   });
   it('does not ask for an activation when the rigs already hold a plan none was recorded for', async () => {
     // A plan taken in from Target Scheduler: the rows it came from match it.
     mount(links, '/plan?plan=project', { framing: true, planRevision: 1, shoots: true, matches: true });
-    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent('On the rigs'));
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Synced$/));
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: /Rigs/ }));
-    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/matches/)).toBeInTheDocument();
+    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/^synced/)).toBeInTheDocument();
   });
   it('does not ask when the saved plan is newer than the record but the rows already match it', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 5, shoots: true, activated: { plan_revision: 4 }, matches: true });
-    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent('On the rigs'));
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Synced$/));
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
   });
   it('leaves the activation bar out on a server that does not write rig databases', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 1, shoots: true, databaseManagement: false });
     expect(await screen.findByTestId('summary-drafts-only')).toHaveTextContent('Drafts only');
     // The summary still says where it stands and opens the preview.
-    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent('Not activated yet'));
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Not synced$/));
+    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', 'Not synced: not activated yet');
     expect(within(screen.getByRole('region', { name: 'Plan summary' })).getByRole('button', { name: 'Activate…' })).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
   });
@@ -247,7 +252,8 @@ describe('project workspace', () => {
     expect(within(summary).getAllByText(/no rig profile/).length).toBe(2);
     // Both databases hold a project, but neither rig shoots the plan now.
     expect(within(summary).getAllByText(/· off/).length).toBe(2);
-    expect(await screen.findByTestId('summary-activation')).toHaveTextContent('Saved plan not on the rigs yet');
+    expect(await screen.findByTestId('summary-activation')).toHaveTextContent(/^Not synced$/);
+    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', 'Not synced: saved plan not activated yet');
   });
   it('opens on framing, saved or not, unless the address names a tab', async () => {
     mount(links, '/plan?plan=project', { framing: false });
