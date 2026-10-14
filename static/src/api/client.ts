@@ -47,6 +47,7 @@ import type { GuidFillReport, GuidReport,
   StarDetectionResponse,
   PreviewOptions,
   ServerInfo,
+  AccountPreferences,
   AuthStatus,
   AuthTokenSummary,
   AuthUserSummary,
@@ -761,6 +762,35 @@ export const apiClient = {
   logout: async (): Promise<void> => {
     const apiInstance = await getApi();
     await apiInstance.post('/auth/logout');
+  },
+
+  /** The signed-in user's saved view preferences. */
+  getMyPreferences: async (): Promise<AccountPreferences> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AccountPreferences>>('/me/preferences');
+    if (!data.data) throw new Error(data.error || 'Failed to load your preferences');
+    return data.data;
+  },
+
+  /** Replace the signed-in user's view preferences. With `keepalive` the
+   *  request outlives the page, for a save made as it closes. */
+  saveMyPreferences: async (
+    preferences: Record<string, unknown>,
+    options: { keepalive?: boolean } = {},
+  ): Promise<void> => {
+    const body = { schema_version: 1, preferences };
+    if (options.keepalive) {
+      await fetch(`${getCachedServerUrl()}/api/me/preferences`, {
+        method: 'PUT',
+        keepalive: true,
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return;
+    }
+    const apiInstance = await getApi();
+    await apiInstance.put<ApiResponse<AccountPreferences>>('/me/preferences', body);
   },
 
   getAuthUsers: async (): Promise<AuthUserSummary[]> => {

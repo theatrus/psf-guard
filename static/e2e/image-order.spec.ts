@@ -72,6 +72,23 @@ test('Images turns around in place, and the keys and the detail follow', async (
   await expect(page).toHaveURL(/order=newest/);
 });
 
+test('Images at rest flips with the page in place and the cursor on the newest frame', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&size=300`);
+  const wrappers = page.locator('.image-card-wrapper');
+  await expect(wrappers).toHaveCount(3, { timeout: 15_000 });
+  const oldest = await gridIds(page);
+  await expect(wrappers.nth(0)).toHaveClass(/current-selection/);
+  const scrollTop = () => page.locator('.app-main').evaluate((main) => main.scrollTop);
+  const before = await scrollTop();
+
+  await chooseOrder(page, 'Newest first');
+  await expect.poll(() => gridIds(page)).toEqual([...oldest].reverse());
+  await expect(wrappers.nth(0)).toHaveClass(/current-selection/);
+  await expect(page).toHaveURL(new RegExp(`current=${oldest[2]}`));
+  expect(await scrollTop()).toBe(before);
+  await expect(page.getByRole('button', { name: 'View (newest first)' })).toBeInViewport();
+});
+
 test('Sequence follows the order, and the score chart keeps capture order', async ({ page }) => {
   await page.goto(`/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`);
   const cards = page.locator('.sequence-image-card');
@@ -85,12 +102,19 @@ test('Sequence follows the order, and the score chart keeps capture order', asyn
   await chooseOrder(page, 'Newest first');
   await expect.poll(() => stripIds(page)).toEqual([...oldest].reverse());
   expect(await chart()).toEqual(oldest);
-  // The cursor stays on the frame it was on, now the last card.
-  await expect(cards.nth(2)).toHaveClass(/current-selection/);
+  // Nobody moved the cursor yet: it goes to the new first card, the newest.
+  await expect(cards.nth(0)).toHaveClass(/current-selection/);
+  await expect(page).toHaveURL(new RegExp(`current=${oldest[2]}`));
 
-  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowRight');
   await expect(cards.nth(1)).toHaveClass(/current-selection/);
   await expect(cards.nth(1)).toHaveAttribute('data-card-image-id', oldest[1]!);
+
+  // Moved now: turning back keeps the cursor on its frame.
+  await chooseOrder(page, 'Oldest first');
+  await expect.poll(() => stripIds(page)).toEqual(oldest);
+  await expect(cards.nth(1)).toHaveClass(/current-selection/);
+  await chooseOrder(page, 'Newest first');
 
   // Images opens in the same order from the header.
   await page.getByRole('button', { name: 'Images', exact: true }).click();

@@ -282,11 +282,23 @@ first** turns them around, and the View button is marked while it is on:
 The arrow keys, `Space`, Shift-click ranges, Compare and the detail view's
 next and previous follow the order on screen, and a view with no current
 image opens on its first card. Selection rules pick the same frames in
-either order. Turning the order around keeps the current image, the
-selection and the current card's place on screen. The address keeps the
-choice as `order=newest`, shared by both views. The last choice is
-remembered in this browser and used for links that name no order, such as
-a project opened from the Library.
+either order.
+
+What a flip does with your place depends on whether you have moved:
+
+- **Not yet**: the cursor is still on the first card the view chose, and
+  that card is in sight. The page stays where it is, and the cursor moves
+  to the new first card. On a phone, where the Images toolbar scrolls with
+  the page, the View panel stays in view.
+- **Moved**: you used the arrow keys, clicked a card, or scrolled the first
+  card out of sight. The current image, the selection and the current
+  card's place on screen stay.
+
+The address keeps the choice as `order=newest`, shared by both views. The
+last choice, like the grouping and the thumbnail size, is remembered and
+fills in a link that names none, such as a project opened from the Library.
+Signed in to a server with accounts, these choices follow you to another
+browser (see [view preferences](AUTHENTICATION.md#view-preferences)).
 
 A small dot before a card's date marks a frame captured since your last
 visit to its project or target from the Library: the frames the Library's

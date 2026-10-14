@@ -107,6 +107,15 @@ fn add_list_replace_and_remove_users() {
         .unwrap()
         .contains("\"email\": \"viewer@example.com\""));
 
+    // The viewer saved view preferences, and so did an account of another
+    // name; removing the viewer drops only theirs.
+    let preferences_path = directory.path().join("test-config.user-preferences.json");
+    fs::write(
+        &preferences_path,
+        r#"{"schema_version":1,"users":{"viewer":{"preferences":{"imageOrder":"newest"},"updated_unix_seconds":1},"someone":{"preferences":{},"updated_unix_seconds":1}}}"#,
+    )
+    .unwrap();
+
     let guarded_remove = run(&["users", "remove", "viewer", "--registry", &registry_arg]);
     assert!(!guarded_remove.status.success());
     assert!(
@@ -130,6 +139,9 @@ fn add_list_replace_and_remove_users() {
     );
     let contents = fs::read_to_string(auth_path).unwrap();
     assert!(contents.contains("\"users\": []"));
+    let preferences = fs::read_to_string(&preferences_path).unwrap();
+    assert!(!preferences.contains("\"viewer\""), "{preferences}");
+    assert!(preferences.contains("\"someone\""), "{preferences}");
 }
 
 #[test]

@@ -102,6 +102,37 @@ describe('GroupedImageGrid order', () => {
     expect(screen.getByRole('button', { name: 'View' })).not.toHaveClass('is-set');
   });
 
+  it('at rest, flips with the page in place and the cursor on the new first card', async () => {
+    render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1') });
+    await waitFor(() => expect(cardIds()).toEqual([1, 3, 5, 2, 4]));
+    await waitFor(() => expect(params().get('current')).toBe('1'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Newest first' }));
+    await waitFor(() => expect(cardIds()).toEqual([5, 3, 1, 4, 2]));
+    expect(params().get('order')).toBe('newest');
+    expect(params().get('current')).toBe('5');
+    expect(document.querySelector('[data-image-id="5"]')).toHaveClass('current-selection');
+    expect(document.querySelector('[data-image-id="1"]')).not.toHaveClass('current-selection');
+
+    // Back again, still at rest: the cursor follows the first card.
+    fireEvent.click(screen.getByRole('radio', { name: 'Oldest first' }));
+    await waitFor(() => expect(cardIds()).toEqual([1, 3, 5, 2, 4]));
+    expect(params().get('current')).toBe('1');
+  });
+
+  it('once the person has clicked a card, even the first, the flip keeps it', async () => {
+    render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1') });
+    await waitFor(() => expect(cardIds()).toEqual([1, 3, 5, 2, 4]));
+    fireEvent.click(document.querySelector('[data-image-id="1"] .image-card')!);
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Newest first' }));
+    await waitFor(() => expect(cardIds()).toEqual([5, 3, 1, 4, 2]));
+    expect(params().get('current')).toBe('1');
+    expect(document.querySelector('[data-image-id="1"]')).toHaveClass('current-selection');
+  });
+
   it('moves between the two orders with the arrow keys', async () => {
     render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1') });
     await waitFor(() => expect(cardIds()).toEqual([1, 3, 5, 2, 4]));

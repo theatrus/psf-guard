@@ -86,6 +86,9 @@ pub fn manage_users(action: UserCommand) -> Result<()> {
             }
             registry.remove(&username)?;
             registry.save(&auth_path)?;
+            // Their saved view preferences go too, so a later account of
+            // the same name starts clean.
+            crate::user_preferences::forget_user(&database_registry_path, &username)?;
             println!("Removed user '{}' from {}", username, auth_path.display());
             println!("Restart the server to apply this change.");
         }

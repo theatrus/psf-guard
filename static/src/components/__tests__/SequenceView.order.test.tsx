@@ -116,6 +116,26 @@ describe('SequenceView order', () => {
     expect(screen.getByRole('button', { name: 'View (newest first)' })).toHaveClass('is-set');
   });
 
+  it('at rest, flips onto the new first frame; once moved, keeps the cursor', async () => {
+    handlers();
+    render(<SequenceView />, { wrapper: wrapper('/sequence?db=test&project=1&target=1') });
+    await waitFor(() => expect(card(1)).toHaveClass('current-selection'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Newest first' }));
+    await waitFor(() => expect(stripIds()[0]).toBe(10));
+    await waitFor(() => expect(card(10)).toHaveClass('current-selection'));
+    expect(params().get('current')).toBe('10');
+
+    // An arrow moves the cursor; the next flip keeps it.
+    fireEvent.keyDown(document, { key: 'ArrowRight', code: 'ArrowRight' });
+    await waitFor(() => expect(card(9)).toHaveClass('current-selection'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Oldest first' }));
+    await waitFor(() => expect(stripIds()[0]).toBe(1));
+    expect(params().get('current')).toBe('9');
+    expect(card(9)).toHaveClass('current-selection');
+  });
+
   it('lists the session tabs newest first, each filter\'s all-sessions tab still first', async () => {
     const [first, second] = multiSessionFixture.data.sequences;
     handlers({

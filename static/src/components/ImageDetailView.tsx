@@ -328,10 +328,10 @@ export default function ImageDetailView({
   // Keyboard shortcuts
   useHotkeys('escape', onClose, [onClose]);
   useHotkeys('k,right', () => {
-    onNext(); // K/Right goes to newer image (higher index in oldest-first sort)
+    onNext(); // K/Right: the next image in the order the grid shows
   }, { enableOnFormTags: true }, [onNext]);
   useHotkeys('j,left', () => {
-    onPrevious(); // J/Left goes to older image (lower index in oldest-first sort)
+    onPrevious(); // J/Left: the previous one
   }, { enableOnFormTags: true }, [onPrevious]);
   useHotkeys('a,shift+a', (event) => onGrade('accepted', event.shiftKey), [onGrade]);
   useHotkeys('x,shift+x', (event) => onGrade('rejected', event.shiftKey), [onGrade]);

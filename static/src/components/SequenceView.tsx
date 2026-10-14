@@ -22,9 +22,9 @@ import {
   useImageOrder,
   useSequenceSelectionRule,
 } from '../hooks/useUrlState';
-import { useReorderAnchor } from '../hooks/useReorderAnchor';
+import { cardIsOnScreen, useReorderAnchor, viewIsAtRest } from '../hooks/useReorderAnchor';
 import { useNewFrameIds } from '../hooks/useNewFrames';
-import { inImageOrder } from '../utils/imageOrder';
+import { inImageOrder, type ImageOrder } from '../utils/imageOrder';
 import { useProjectMosaic } from '../hooks/useProjectMosaic';
 import MosaicSequence from './MosaicSequence';
 import UndoRedoToolbar from './UndoRedoToolbar';
@@ -138,7 +138,7 @@ export default function SequenceView() {
     setImageSize,
     setCurrentImageId,
     setSelectedImages,
-  } = useGridState(150);
+  } = useGridState('sequence');
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -159,6 +159,9 @@ export default function SequenceView() {
   const [showRejectReview, setShowRejectReview] = useState(false);
   const selectionAnchorIdRef = useRef<number | null>(null);
   const selectionBaseIdsRef = useRef<Set<number>>(new Set());
+  // Whether the person has moved the cursor in the strip on screen, by keys
+  // or a click. A new tab or scope opens at rest again.
+  const touchedRef = useRef(false);
   // What the selection rule picked when it last ran: the frames that differ
   // from it were clicked by hand since. Null until the rule first runs.
   const ruleBaseRef = useRef<{ key: string; picks: Set<number> } | null>(null);
@@ -232,6 +235,7 @@ export default function SequenceView() {
   useEffect(() => {
     if (selectionScopeRef.current !== selectionScope) {
       selectionScopeRef.current = selectionScope;
+      touchedRef.current = false;
       const inferredSelection = inferredSelectionRef.current;
       inferredSelectionRef.current = null;
       if (inferredSelection === null) entrySelectionRef.current = null;
@@ -398,17 +402,34 @@ export default function SequenceView() {
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
   const sequenceStripRef = useRef<HTMLDivElement>(null);
-  // Turning the order around keeps the current card where it was on screen.
-  const captureReorder = useReorderAnchor(order, () =>
+  // Turning the order around. At rest, the page stays put and the cursor
+  // moves to the new first card. Once the person has moved, the current
+  // card keeps its place on screen.
+  const cardOf = useCallback((imageId: number | null) =>
     sequenceStripRef.current?.querySelector<HTMLElement>(
-      `.sequence-image-card[data-card-image-id="${activeImageIdRef.current}"]`,
-    ) ?? null,
-  );
-  const chooseOrder = useCallback((next: typeof order) => {
+      `.sequence-image-card[data-card-image-id="${imageId}"]`,
+    ) ?? null, []);
+  const captureReorder = useReorderAnchor(order, () => cardOf(activeImageIdRef.current));
+  const chooseOrder = useCallback((next: ImageOrder) => {
     if (next === order) return;
-    captureReorder();
-    setOrder(next);
-  }, [captureReorder, order, setOrder]);
+    const firstId = orderedImages[0]?.image_id ?? null;
+    const atRest = viewIsAtRest({
+      currentId: activeImageIdRef.current,
+      firstId,
+      touched: touchedRef.current,
+      firstOnScreen: cardIsOnScreen(cardOf(firstId)),
+    });
+    const nextFirst = activeSequence ? inImageOrder(activeSequence.images, next)[0]?.image_id : undefined;
+    if (!atRest || nextFirst === undefined) {
+      captureReorder('anchor');
+      setOrder(next);
+      return;
+    }
+    captureReorder('rest');
+    activeImageIdRef.current = nextFirst;
+    selectionAnchorIdRef.current = nextFirst;
+    setOrder(next, { current: nextFirst, groupIndex: null, imageIndex: null });
+  }, [activeSequence, captureReorder, cardOf, order, orderedImages, setOrder]);
   // Frames captured since the last visit from the Library.
   const newImageIds = useNewFrameIds(dbId, images);
   const restoredScrollRef = useRef(false);
@@ -627,6 +648,7 @@ export default function SequenceView() {
 
   // Toggle individual image selection
   const toggleImage = useCallback((imageId: number) => {
+    touchedRef.current = true;
     activeImageIdRef.current = imageId;
     selectionAnchorIdRef.current = imageId;
     setCurrentImageId(imageId);
@@ -647,6 +669,7 @@ export default function SequenceView() {
   // Shift-click selects the frames between the anchor and the click as the
   // strip shows them.
   const selectImage = useCallback((imageId: number, event: React.MouseEvent) => {
+    touchedRef.current = true;
     const storedAnchorId = selectionAnchorIdRef.current;
     const anchorId = storedAnchorId !== null && orderedImages.some(
       image => image.image_id === storedAnchorId,
@@ -688,6 +711,7 @@ export default function SequenceView() {
         ?.getBoundingClientRect() ?? null,
     );
     if (nextIndex === currentIndex) return;
+    touchedRef.current = true;
     const nextImageId = orderedImages[nextIndex].image_id;
     activeImageIdRef.current = nextImageId;
     setCurrentImageId(nextImageId);
@@ -726,6 +750,8 @@ export default function SequenceView() {
     // A tab opens on its first frame as the strip shows it.
     const firstImageId = inImageOrder(sequence.images, order)[0]?.image_id;
     if (firstImageId !== undefined) {
+      // The tab opens on its first frame, at rest.
+      touchedRef.current = false;
       selectionAnchorIdRef.current = firstImageId;
       const sequenceImageIds = new Set(sequence.images.map(image => image.image_id));
       selectionBaseIdsRef.current = new Set(

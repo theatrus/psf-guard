@@ -181,6 +181,10 @@ test('the grid View panel and its Sort fit a phone', async ({ page }, testInfo) 
   await expect(sort).toBeVisible();
   await sort.getByRole('radio', { name: 'Newest first' }).click();
   await expect(page).toHaveURL(/order=newest/);
+  // Nobody had moved: the page stays put, so the panel stays in view and
+  // the cursor sits on the new first card.
+  await expect(sort).toBeInViewport();
+  await expect(page.locator('.image-card-wrapper').first()).toHaveClass(/current-selection/);
   // The View button, an icon on a phone, still says the order is on.
   await expect(page.getByRole('button', { name: 'View (newest first)' })).toHaveClass(/is-set/);
   await expectPhoneFit(page, testInfo, 'grid-view-sort');

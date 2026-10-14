@@ -27,6 +27,7 @@ import {
 import { apiClient } from './api/client';
 import AuthGate from './auth/AccessContext';
 import { useAccess } from './auth/access';
+import { useAccountPreferences } from './hooks/useAccountPreferences';
 import './App.css';
 
 function AppContent() {
@@ -66,6 +67,8 @@ function AppContent() {
   // the modal itself is shown regardless of mode.
   const [, setIsTauri] = useState(false);
   const access = useAccess();
+  // A signed-in user's View choices follow them from browser to browser.
+  useAccountPreferences(access.status.username);
   // Settings opens by itself at most once: the check repeats for late Tauri
   // globals, and a user who closed it should not see it come back.
   const autoOpened = useRef(false);

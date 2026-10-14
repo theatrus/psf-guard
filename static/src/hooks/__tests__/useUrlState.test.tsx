@@ -11,7 +11,7 @@ function Router({ children }: PropsWithChildren) {
 
 describe('useGridState', () => {
   it('supports a view-specific default thumbnail size', async () => {
-    const { result } = renderHook(() => useGridState(150), { wrapper: Router });
+    const { result } = renderHook(() => useGridState('sequence'), { wrapper: Router });
     expect(result.current.imageSize).toBe(150);
 
     act(() => result.current.setImageSize(500));
@@ -39,6 +39,57 @@ describe('useGridState', () => {
     await waitFor(() => expect(result.current.currentImageId).toBe(12));
     expect([...result.current.selectedImages]).toEqual([11, 12]);
     expect(result.current.setSelectedImages).toBe(initialSetter);
+  });
+});
+
+describe('saved View choices as defaults', () => {
+  const preferences = {
+    showNightChip: true,
+    showAllChip: true, showCalibrationChip: true,
+    advanceOnGrade: true,
+    projectPickerGrouping: 'activity',
+    libraryDensity: 'compact',
+  } as const;
+  afterEach(() => setDisplayPreferences({ ...preferences }));
+
+  function at(route: string) {
+    return function At({ children }: PropsWithChildren) {
+      return <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>;
+    };
+  }
+
+  it('fill the grouping and size a link leaves out, and lose to one it names', () => {
+    setDisplayPreferences({
+      ...preferences,
+      imageGrouping: 'session',
+      imageGroupingAllProjects: 'project+date',
+      gridThumbnailSize: 450,
+      sequenceThumbnailSize: 200,
+    });
+    const grid = renderHook(() => useGridState(), { wrapper: at('/grid?db=a&project=1') }).result.current;
+    expect(grid.groupingMode).toBe('session');
+    expect(grid.imageSize).toBe(450);
+    const sequence = renderHook(() => useGridState('sequence'), { wrapper: at('/sequence?db=a&project=1') }).result.current;
+    expect(sequence.imageSize).toBe(200);
+    // No project in the link is All projects, with its own grouping.
+    expect(renderHook(() => useGridState(), { wrapper: at('/grid?db=a') }).result.current.groupingMode)
+      .toBe('project+date');
+    const linked = renderHook(() => useGridState(), { wrapper: at('/grid?db=a&project=1&grouping=date&size=600') }).result.current;
+    expect(linked.groupingMode).toBe('date');
+    expect(linked.imageSize).toBe(600);
+  });
+
+  it('are saved when chosen, each for its own scope and view', async () => {
+    const { result } = renderHook(() => useGridState(), { wrapper: at('/grid?db=a&project=1') });
+    act(() => result.current.setGroupingMode('both'));
+    await waitFor(() => expect(result.current.groupingMode).toBe('both'));
+    act(() => result.current.setGroupingMode('project+filter'));
+    act(() => result.current.setImageSize(700));
+    const saved = renderHook(() => useDisplayPreferences()).result.current;
+    expect(saved.imageGrouping).toBe('both');
+    expect(saved.imageGroupingAllProjects).toBe('project+filter');
+    expect(saved.gridThumbnailSize).toBe(700);
+    expect(saved.sequenceThumbnailSize).toBe(150);
   });
 });
 

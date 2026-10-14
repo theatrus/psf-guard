@@ -37,6 +37,7 @@ pub mod star_contours;
 pub mod sync_client;
 pub mod ts_guids;
 pub mod ts_schema;
+pub mod user_preferences;
 pub mod utils;
 pub mod zero_point;
 
