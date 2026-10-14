@@ -94,14 +94,14 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
     // Safari's engine, which the macOS app's WebView and every iPhone
-    // browser share. It has no CSS scroll anchoring and lays out phones its
-    // own way, so the detail's scroll and phone specs, and the View
-    // choices' long-page flip, run here too; the rest stay Chromium-only to
-    // keep the run short.
+    // browser share. It has no CSS scroll anchoring, lays out phones its
+    // own way and draws native form fields itself, so the detail's scroll
+    // and phone specs, the View choices' long-page flip and the form-field
+    // spec run here too; the rest stay Chromium-only to keep the run short.
     {
       name: 'webkit',
       use: { ...devices['Desktop Safari'] },
-      testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts'],
+      testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts'],
     },
   ],
 

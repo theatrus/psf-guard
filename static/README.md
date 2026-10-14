@@ -78,6 +78,16 @@ Interaction states take the `--state-*` tokens:
 - **Focus**: `--state-focus-border` with `--state-focus-ring` on fields and
   boxed controls, or `outline: 2px solid var(--state-focus-border)`.
 
+Form fields need no colours of their own. A base rule in `src/index.css`
+draws text, number, search and date inputs, selects and textareas from the
+`--color-input-*` tokens, including focus, `aria-invalid='true'` and
+disabled, at no specificity, so a component sets only the size and spacing
+it needs. The theme's `:root` block sets `color-scheme: dark`, which the
+browser uses for its own parts of a control: spinners, date pickers, a
+select's menu and scrollbars. A theme added later sets its own
+`color-scheme` and input tokens beside its other tokens;
+`src/__tests__/formFields.test.ts` checks that every theme does.
+
 Write attribute selectors with single quotes, as in `[aria-pressed='true']`.
 `src/components/toolbar/toolbar.css` shows the pattern: its states come from
 one section and it writes no colour of its own.

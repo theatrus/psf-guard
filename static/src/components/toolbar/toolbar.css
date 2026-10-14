@@ -186,7 +186,7 @@
 }
 
 /* A pill around a native select: the select keeps its own list and
-   keyboard. */
+   keyboard, and the pill shows its focus. */
 .toolbar-pill.toolbar-pill-select select {
   -webkit-appearance: none;
   appearance: none;
@@ -202,6 +202,7 @@
   text-overflow: ellipsis;
   cursor: pointer;
   outline: none;
+  box-shadow: none;
 }
 
 .toolbar-pill.toolbar-pill-select select option {
@@ -348,10 +349,7 @@
   height: var(--toolbar-control-height, 30px);
   max-width: 12rem;
   padding: 0 0.55rem;
-  border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
-  background: var(--color-bg-input);
-  color: var(--color-text-primary);
   font: inherit;
   font-size: 0.82rem;
   font-weight: normal;
@@ -384,7 +382,6 @@
 .toolbar-range input[type='range'] {
   width: 7rem;
   margin: 0;
-  accent-color: var(--color-primary);
 }
 
 .toolbar-range output {

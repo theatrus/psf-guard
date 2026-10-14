@@ -474,7 +474,6 @@
   width: 100%;
   margin: 0;
   background: transparent;
-  accent-color: var(--color-primary);
   pointer-events: none;
   -webkit-appearance: none;
   appearance: none;

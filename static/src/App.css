@@ -1,4 +1,10 @@
 :root {
+  /* The app is always dark. color-scheme says so to the browser, which
+     then draws its own parts of a control dark too: spinners, date
+     pickers, a select's menu, scrollbars and autofill. A light theme would
+     set color-scheme: light beside its own tokens. */
+  color-scheme: dark;
+
   /* Background Colors */
   --color-bg-primary: #1a1a1a;
   --color-bg-secondary: #252525;
@@ -74,6 +80,19 @@
   /* Links and plain buttons, from the base styles in index.css. */
   --color-link: #646cff;
   --color-link-hover: #535bf2;
+
+  /* Form fields, from the base styles in index.css: text, number, search
+     and date inputs, selects and textareas. A field that is invalid says so
+     with aria-invalid. Checkboxes, radios and sliders take the accent. */
+  --color-input-bg: var(--color-bg-input);
+  --color-input-border: var(--color-border-secondary);
+  --color-input-text: var(--color-text-primary);
+  --color-input-placeholder: var(--color-text-secondary);
+  --color-input-invalid-border: var(--color-error);
+  --color-input-disabled-bg: var(--color-bg-tertiary);
+  --color-input-disabled-border: var(--color-border-primary);
+  --color-input-disabled-text: var(--color-text-disabled);
+  --color-input-accent: var(--color-primary);
 
   /* Shadows: a popover or menu, a card lifted on hover, a panel resting
      on the page, and a dialog. */
@@ -513,10 +532,7 @@
   box-sizing: border-box;
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
-  background: var(--color-bg-input);
-  color: var(--color-text-primary);
   font: inherit;
   font-size: 0.84rem;
 }
@@ -4673,10 +4689,6 @@
   font-size: 0.68rem;
 }
 
-.stack-background-controls > header input {
-  accent-color: var(--color-primary);
-}
-
 .stack-background-controls > header span,
 .stack-background-controls > p {
   color: var(--color-text-muted);
@@ -4745,10 +4757,6 @@
   justify-content: space-between;
   color: var(--color-primary);
   font-size: 0.68rem;
-}
-
-.stack-deconvolution-controls > header input {
-  accent-color: var(--color-primary);
 }
 
 .stack-deconvolution-controls > header span,
@@ -4827,10 +4835,6 @@
   align-items: center;
   gap: 0.42rem;
   font-size: 0.64rem;
-}
-
-.stack-rc-astro-tool > label input {
-  accent-color: var(--color-primary);
 }
 
 .stack-rc-astro-tool > label small {
@@ -5183,10 +5187,6 @@
   width: 100%;
   min-width: 0;
   padding: 0.35rem;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 4px;
-  color: var(--color-text-primary);
-  background: var(--color-bg-input);
 }
 
 .calibration-master-stretch {
