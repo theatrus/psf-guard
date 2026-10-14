@@ -53,6 +53,10 @@
   autofocus frames, tests and other folders out of every import, with exclude
   and include patterns and filters for frames with no image type, no target
   name or a short exposure. A `.psfguardignore` file skips its folder.
+- The Sequence score chart puts a dot under each bar for the frame's grade:
+  green for accepted, red for rejected, faint grey for pending. The bar's
+  tooltip starts with the grade and the reject reason, and the dots change
+  as you grade, undo and redo.
 - Planning no longer says **PSF Guard was updated** after every reload. A
   survey image the browser had kept from before an update carried the old
   build, and the page took it for news of a newer one.

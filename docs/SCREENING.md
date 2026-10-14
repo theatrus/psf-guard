@@ -232,6 +232,9 @@ running the chip reads **Finished with errors** until then. Results persist
 across restarts. The
 sequence analysis shows coverage badges, classifications, solved-center
 scatter, a session view, and an all-session stack comparison for each filter.
+In its score chart, a dot under each bar shows the frame's grade: green for
+accepted, red for rejected, faint grey for pending. The dots follow grading,
+undo and redo.
 When analysis finds a cause, the same reason and supporting evidence appear on
 the Sequence card, the matching Grid card, and the image detail panel.
 For a localized finding, image detail also offers **Show affected regions**.

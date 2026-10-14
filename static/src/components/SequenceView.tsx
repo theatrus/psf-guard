@@ -28,6 +28,7 @@ import PillSelect from './toolbar/PillSelect';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
 import { ScanSearch, X } from 'lucide-react';
+import { GradingStatus } from '../api/types';
 import type { CalibrationLightMark, Image, ScoredSequence, ImageQualityResult } from '../api/types';
 import {
   imageDetailNavigationState,
@@ -96,6 +97,26 @@ function qualityColor(score: number): string {
   if (score >= 0.7) return 'var(--color-success)';
   if (score >= 0.5) return 'var(--color-warning)';
   return 'var(--color-error)';
+}
+
+/** The grade mark under a chart bar: the grid's accepted and rejected
+ * colours, and a faint mark for a frame not graded yet. */
+function gradeMark(image: Image): { grade: string; label: string; fill: string; opacity: number } {
+  switch (image.grading_status) {
+    case GradingStatus.Accepted:
+      return { grade: 'accepted', label: 'Accepted', fill: 'var(--color-success)', opacity: 1 };
+    case GradingStatus.Rejected: {
+      const reason = image.reject_reason?.trim().replace(/\.$/, '');
+      return {
+        grade: 'rejected',
+        label: reason ? `Rejected: ${reason}` : 'Rejected',
+        fill: 'var(--color-error)',
+        opacity: 1,
+      };
+    }
+    default:
+      return { grade: 'pending', label: 'Pending', fill: 'var(--color-text-muted)', opacity: 0.35 };
+  }
 }
 
 export default function SequenceView() {
@@ -975,6 +996,7 @@ export default function SequenceView() {
               <SequenceTimeline
                 key={`${activeChoice?.key}-timeline`}
                 images={activeSequence.images}
+                imageMap={imageMap}
                 scoreScope={activeScoreScope}
                 threshold={threshold}
                 currentImageId={activeImageId}
@@ -1108,6 +1130,7 @@ const PointingScatter = memo(function PointingScatter({ images }: { images: Imag
 // Timeline visualization component
 const SequenceTimeline = memo(function SequenceTimeline({
   images,
+  imageMap,
   scoreScope,
   threshold,
   currentImageId,
@@ -1115,6 +1138,8 @@ const SequenceTimeline = memo(function SequenceTimeline({
   onSelect,
 }: {
   images: ImageQualityResult[];
+  /** The catalog rows, for each frame's grade; they reload after grading. */
+  imageMap: ReadonlyMap<number, Image>;
   scoreScope: QualityScoreScope;
   threshold: number;
   currentImageId: number | null;
@@ -1150,6 +1175,12 @@ const SequenceTimeline = memo(function SequenceTimeline({
 
   const barStep = innerWidth / images.length;
   const barWidth = Math.max(0.75, Math.min(10, barStep * 0.8));
+  // The grade marks sit in the empty strip under the bars. A mark is a dot
+  // until the bars get thinner than it, then a pill as wide as its bar, so
+  // it never reaches a neighbour's.
+  const markHeight = 6;
+  const markWidth = Math.min(markHeight, barWidth, barStep);
+  const markY = padding.top + innerHeight + 4;
 
   return (
     <div className="sequence-timeline">
@@ -1187,26 +1218,50 @@ const SequenceTimeline = memo(function SequenceTimeline({
           const y = padding.top + innerHeight - barHeight;
           const isSelected = selectedImages.has(img.image_id);
           const isCurrent = currentImageId === img.image_id;
+          const image = imageMap.get(img.image_id);
+          const mark = image ? gradeMark(image) : null;
+          const title = `${mark ? `${mark.label}. ` : ''}${qualityScoreDescription(img, scoreScope)}${
+            img.category ? ` ${formatCategory(img.category)}.` : ''
+          }`;
 
           return (
-            <rect
-              key={img.image_id}
-              data-image-id={img.image_id}
-              x={x}
-              y={y}
-              width={barWidth}
-              height={Math.max(1, barHeight)}
-              fill={qualityColor(img.quality_score)}
-              opacity={isSelected || isCurrent ? 1 : 0.7}
-              stroke={isCurrent
-                ? 'var(--color-primary)'
-                : isSelected ? 'var(--color-warning)' : 'none'}
-              strokeWidth={isCurrent ? 2 : isSelected ? 1 : 0}
-              style={{ cursor: 'pointer' }}
-              onClick={(event) => onSelect(img.image_id, event)}
-            >
-              <title>{qualityScoreDescription(img, scoreScope)}{img.category ? ` ${formatCategory(img.category)}.` : ''}</title>
-            </rect>
+            <g key={img.image_id}>
+              <rect
+                data-image-id={img.image_id}
+                x={x}
+                y={y}
+                width={barWidth}
+                height={Math.max(1, barHeight)}
+                fill={qualityColor(img.quality_score)}
+                opacity={isSelected || isCurrent ? 1 : 0.7}
+                stroke={isCurrent
+                  ? 'var(--color-primary)'
+                  : isSelected ? 'var(--color-warning)' : 'none'}
+                strokeWidth={isCurrent ? 2 : isSelected ? 1 : 0}
+                style={{ cursor: 'pointer' }}
+                onClick={(event) => onSelect(img.image_id, event)}
+              >
+                <title>{title}</title>
+              </rect>
+              {mark && (
+                <rect
+                  className="sequence-grade-mark"
+                  data-grade-image-id={img.image_id}
+                  data-grade={mark.grade}
+                  x={padding.left + i * barStep + (barStep - markWidth) / 2}
+                  y={markY}
+                  width={markWidth}
+                  height={markHeight}
+                  rx={markWidth / 2}
+                  fill={mark.fill}
+                  opacity={mark.opacity}
+                  style={{ cursor: 'pointer' }}
+                  onClick={(event) => onSelect(img.image_id, event)}
+                >
+                  <title>{title}</title>
+                </rect>
+              )}
+            </g>
           );
         })}
         </svg>
