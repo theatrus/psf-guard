@@ -124,3 +124,17 @@ describe('SelectionBar', () => {
     expect(onClear).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ViewToolbar View button', () => {
+  it('is marked set and names a View setting off its default', () => {
+    const { rerender } = render(
+      <ViewToolbar label="Image tools" view={<span>Sort</span>} viewNote="newest first" />,
+    );
+    const view = screen.getByRole('button', { name: 'View (newest first)' });
+    expect(view).toHaveClass('is-set');
+    expect(view).toHaveAttribute('title', 'View: newest first');
+
+    rerender(<ViewToolbar label="Image tools" view={<span>Sort</span>} />);
+    expect(screen.getByRole('button', { name: 'View' })).not.toHaveClass('is-set');
+  });
+});

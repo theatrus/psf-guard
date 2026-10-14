@@ -24,6 +24,9 @@ interface ViewToolbarProps {
   primary?: ReactNode;
   /** What the View panel holds: how the view draws its images. */
   view?: ReactNode;
+  /** A View setting off its default, such as "newest first": the View
+   *  button is marked set and names it. */
+  viewNote?: string;
   /** Buttons that act on the view, at the end of the control row. */
   tools?: ReactNode;
   /** Tools used too rarely to keep in sight, under ⋯. */
@@ -54,6 +57,7 @@ export default function ViewToolbar({
   controls,
   primary,
   view,
+  viewNote,
   tools,
   menu,
   summary,
@@ -116,6 +120,7 @@ export default function ViewToolbar({
               <ToolbarMenuButton
                 label="View"
                 icon={<SlidersHorizontal size={14} aria-hidden="true" />}
+                note={viewNote}
                 panelClassName="view-toolbar-view"
               >
                 {view}

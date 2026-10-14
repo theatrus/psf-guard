@@ -28,6 +28,7 @@ describe('display preferences', () => {
       projectPickerGrouping: 'activity',
       libraryDensity: 'compact',
       detailSections: {},
+      imageOrder: 'oldest',
     });
   });
 
@@ -109,7 +110,29 @@ describe('display preferences', () => {
       projectPickerGrouping: 'database',
       libraryDensity: 'compact',
       detailSections: {},
+      imageOrder: 'oldest',
     });
+  });
+
+  it('remembers the image order, and reads oldest first when none or a bad one is stored', () => {
+    const base = {
+      showNightChip: true,
+      showAllChip: true, showCalibrationChip: true,
+      advanceOnGrade: true,
+      projectPickerGrouping: 'activity',
+      libraryDensity: 'compact',
+    } as const;
+    act(() => setDisplayPreferences({ ...base, imageOrder: 'newest' }));
+    expect(renderHook(() => useDisplayPreferences()).result.current.imageOrder).toBe('newest');
+    expect(JSON.parse(window.localStorage.getItem('psf-guard.display-preferences')!).imageOrder)
+      .toBe('newest');
+
+    act(() => setDisplayPreferences({ ...base, imageOrder: 'sideways' as unknown as 'newest' }));
+    expect(renderHook(() => useDisplayPreferences()).result.current.imageOrder).toBe('oldest');
+
+    // A preference saved before the order existed.
+    act(() => setDisplayPreferences(base));
+    expect(renderHook(() => useDisplayPreferences()).result.current.imageOrder).toBe('oldest');
   });
 
   it('falls back to the default on malformed stored values', () => {

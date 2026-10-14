@@ -256,3 +256,14 @@
   a landscape frame spans the width with no black band above and below,
   which leaves about 130 px more of the screen for the panels. A portrait
   frame stops at 60% of the height.
+- Images and Sequence can show the newest frames first: **View › Sort ›
+  Newest first** turns each group, the Sequence strip and its session tabs
+  around, while the score chart keeps time left to right. The arrow keys,
+  Shift-click, the detail view's next and previous, and Compare follow the
+  order on screen; the current image, the selection and its place on screen
+  stay put. The address keeps it as `order=newest`, the View button shows it,
+  and the choice is remembered as the default for links that name no order.
+- Frames captured since your last visit to a project from the Library carry
+  a small dot before their date in Images and Sequence: the frames the
+  Library's "new" badge counted, plus any captured since. They keep it until
+  you next open the project from the Library.

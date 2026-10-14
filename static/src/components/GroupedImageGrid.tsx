@@ -9,13 +9,16 @@ import { GradingStatus } from '../api/types';
 import { useGrading } from '../hooks/useGrading';
 import { useSpatialScan } from '../hooks/useSpatialScan';
 import { useStableScrollAnchor } from '../hooks/useStableScrollAnchor';
-import { useDbProjectTarget, useGridState, useFilters } from '../hooks/useUrlState';
+import { useDbProjectTarget, useGridState, useFilters, useImageOrder } from '../hooks/useUrlState';
+import { useReorderAnchor } from '../hooks/useReorderAnchor';
+import { useNewFrameIds } from '../hooks/useNewFrames';
 import ImageCard from './ImageCard';
 import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
 import { imageFilterCount } from '../utils/imageFilterCount';
 import ViewToolbar from './toolbar/ViewToolbar';
 import SelectionBar from './toolbar/SelectionBar';
+import ImageOrderToggle from './toolbar/ImageOrderToggle';
 import { availableFlags, matchesFlagFilter } from '../utils/flagFilter';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
@@ -33,13 +36,11 @@ import {
   getNextMultiProjectMode 
 } from '../types/grouping';
 import {
-  groupImagesBySession,
+  groupGridImages,
   groupImagesByPanel,
   imageGroupKey,
-  type ImageGroup,
   NO_EXPANDED_GROUPS,
   resolveExpandedGroups,
-  splitImageGroupsByExposure,
 } from '../utils/imageGrouping';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
 import {
@@ -56,85 +57,6 @@ import { chipFocus } from '../utils/calibrationFocus';
 import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
-
-/** The grid's groups for one set of images in a grouping mode. */
-function groupImages(filteredImages: Image[], groupingMode: GroupingMode): ImageGroup[] {
-  if (groupingMode === 'session') {
-    return splitImageGroupsByExposure(groupImagesBySession(filteredImages));
-  }
-
-  const groups = new Map<string, Image[]>();
-
-  filteredImages.forEach(image => {
-    let groupKey: string;
-
-    // Helper functions for building group keys
-    const getProjectPart = () => image.project_display_name || 'Unknown Project';
-    const getFilterPart = () => image.filter_name || 'No Filter';
-    const getDatePart = () => {
-      if (image.acquired_date) {
-        const date = new Date(image.acquired_date * 1000);
-        return date.toISOString().split('T')[0];
-      }
-      return 'Unknown Date';
-    };
-
-    // Build group key based on mode
-    switch (groupingMode) {
-      case 'filter':
-        groupKey = getFilterPart();
-        break;
-      case 'date':
-        groupKey = getDatePart();
-        break;
-      case 'both':
-        groupKey = `${getFilterPart()} - ${getDatePart()}`;
-        break;
-      case 'project':
-        groupKey = getProjectPart();
-        break;
-      case 'project+filter':
-        groupKey = `${getProjectPart()} - ${getFilterPart()}`;
-        break;
-      case 'project+date':
-        groupKey = `${getProjectPart()} - ${getDatePart()}`;
-        break;
-      case 'project+date+filter':
-        groupKey = `${getProjectPart()} - ${getDatePart()} - ${getFilterPart()}`;
-        break;
-      default:
-        groupKey = getFilterPart();
-    }
-
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, []);
-    }
-    groups.get(groupKey)!.push(image);
-  });
-
-  // Convert to array and sort
-  const sorted = Array.from(groups.entries())
-    .map(([groupName, images]) => ({
-      filterName: groupName, // Keep property name for compatibility
-      images: images.sort((a, b) => {
-        // Within each group, sort by acquired date (oldest first - chronological order)
-        const dateA = a.acquired_date || 0;
-        const dateB = b.acquired_date || 0;
-        return dateA - dateB; // Oldest first
-      })
-    }));
-
-  // Sort groups based on mode
-  if (groupingMode === 'date' || groupingMode.includes('date')) {
-    // Sort by group name descending for date-based grouping (newest first)
-    sorted.sort((a, b) => b.filterName.localeCompare(a.filterName));
-  } else {
-    // Sort alphabetically for other modes
-    sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
-  }
-
-  return splitImageGroupsByExposure(sorted);
-}
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -175,6 +97,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     setCurrentImageSelection,
   } = useGridState();
   const { filters, updateFilters, clearFilters } = useFilters();
+  const { order, setOrder } = useImageOrder();
   
   // Adapter function to convert between FilterOptions and URL state
   const handleFilterChange = useCallback((filterOptions: FilterOptions) => {
@@ -375,9 +298,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Group images based on selected mode, under their panels in a mosaic.
   const imageGroups = useMemo(
     () => mosaic
-      ? groupImagesByPanel(filteredImages, mosaic, images => groupImages(images, groupingMode))
-      : groupImages(filteredImages, groupingMode),
-    [filteredImages, groupingMode, mosaic],
+      ? groupImagesByPanel(filteredImages, mosaic, images => groupGridImages(images, groupingMode, order))
+      : groupGridImages(filteredImages, groupingMode, order),
+    [filteredImages, groupingMode, mosaic, order],
   );
 
   const visibleExpandedGroups = useMemo(
@@ -415,6 +338,20 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   }, [flatImages, lastSelectedImageId, selectedImages, urlCurrentImageId]);
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
+
+  // Turning the order around keeps the cursor's image, the selection and
+  // the cursor's card where it was on screen.
+  const captureReorder = useReorderAnchor(order, () =>
+    containerRef.current?.querySelector<HTMLElement>(`[data-image-id="${activeImageIdRef.current}"]`) ?? null,
+  );
+  const chooseOrder = useCallback((next: typeof order) => {
+    if (next === order) return;
+    captureReorder();
+    setOrder(next);
+  }, [captureReorder, order, setOrder]);
+
+  // Frames captured since the last visit from the Library.
+  const newImageIds = useNewFrameIds(dbId, allImages);
 
   // Keep the cursor on an image ID. Group positions can move when new images
   // arrive or the grouping mode changes.
@@ -925,6 +862,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               icons
             />
           )}
+          viewNote={order === 'newest' ? 'newest first' : undefined}
           view={(
             <>
               <div className="toolbar-field">
@@ -941,6 +879,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   ))}
                 </select>
               </div>
+              <ImageOrderToggle
+                order={order}
+                onChange={chooseOrder}
+                title="The frames in each group by capture time. Date and Session groups always start with the newest night."
+              />
               <div className="toolbar-field">
                 <span className="toolbar-caption">Chips</span>
                 <SecondaryScoreToggle />
@@ -1163,6 +1106,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                               navigateToDetail(image.id, chipFocus(mark.codes, filters.calibration))}
                             qualityPresentation="compact"
                             showTarget={severalTargets}
+                            isNew={newImageIds.has(image.id)}
                             isSelected={
                               selectedImages.has(image.id) ||
                               image.id === activeImageId

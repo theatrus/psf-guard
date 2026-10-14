@@ -58,6 +58,9 @@ export interface ImageCardProps {
   /** Name the target on the card. A grid of one target's frames says it
    *  once in its header, not on every card. */
   showTarget?: boolean;
+  /** Captured since the last visit from the Library (see isNewFrame): a
+   *  small dot before the date. */
+  isNew?: boolean;
 }
 
 export default function ImageCard({
@@ -76,6 +79,7 @@ export default function ImageCard({
   selectionEffects = true,
   className = '',
   showTarget = true,
+  isNew = false,
 }: ImageCardProps) {
   const color = useColorPreview();
   const { showNightChip, showAllChip, showCalibrationChip } = useDisplayPreferences();
@@ -271,6 +275,11 @@ export default function ImageCard({
         <div className="image-facts">
           <span className="image-filter" title={`Filter: ${image.filter_name || 'none'}`}>{image.filter_name || 'No filter'}</span>
           <span className={`image-date${when?.otherYear ? ' is-other-year' : ''}`} title={formatDate(image.acquired_date)}>
+            {isNew && (
+              <span className="image-new-mark" title="New since your last visit from the Library">
+                <span className="visually-hidden">New, </span>
+              </span>
+            )}
             {when ? <>
               <span className="date-day">{when.day} </span>
               <span className="date-day-short">{when.dayShort} </span>

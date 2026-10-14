@@ -34,10 +34,11 @@ import { openSettings } from '../utils/settingsIntent';
 import {
   loadProjectSeenState,
   markerForProject,
-  markerForTarget,
   newImageCount,
   newTargetImageCount,
   projectSeenKey,
+  revisitProject,
+  revisitTarget,
   saveProjectSeenState,
 } from '../utils/projectRecency';
 import { formatRelativeTime } from '../utils/relativeTime';
@@ -522,15 +523,15 @@ export default function Overview() {
   };
 
   // Navigation handlers. Each click carries the project's db_id so the scoped
-  // view knows which database to query.
+  // view knows which database to query. Opening a project or target clears
+  // its "new" badge here; the frames it counted stay marked new in Images
+  // and Sequence until the next visit (see revisitProject).
   const markProjectSeen = (project: WithDb<ProjectOverview>) => {
     setSeenProjects((current) => {
+      const key = projectSeenKey(project.db_id, project.id);
       const next = {
         ...current,
-        [projectSeenKey(project.db_id, project.id)]: markerForProject(
-          project,
-          targetsByProject[projectSeenKey(project.db_id, project.id)] || []
-        ),
+        [key]: revisitProject(current[key], project, targetsByProject[key] || []),
       };
       saveProjectSeenState(next);
       return next;
@@ -559,7 +560,7 @@ export default function Overview() {
           ...existing,
           targets: {
             ...existing.targets,
-            [String(target.id)]: markerForTarget(target),
+            [String(target.id)]: revisitTarget(current[key], target),
           },
         },
       };

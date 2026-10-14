@@ -9,6 +9,13 @@ import {
   parseSelectionRule,
   type SelectionRuleId,
 } from '../utils/sequenceSelectionRules';
+import {
+  DEFAULT_IMAGE_ORDER,
+  IMAGE_ORDER_PARAM,
+  parseImageOrder,
+  type ImageOrder,
+} from '../utils/imageOrder';
+import { setDisplayPreferences, useDisplayPreferences } from './useDisplayPreferences';
 
 /**
  * Hook for managing URL search parameters as state
@@ -400,4 +407,25 @@ export function useSequenceSelectionRule() {
   }, [updateParams]);
 
   return { cutoff, rule, setCutoff, setRule };
+}
+
+/**
+ * The order Images and Sequence show their frames in (`order`), one key for
+ * both views, so it travels between them and into the detail view's next
+ * and previous. A link that names no order opens in the one last chosen in
+ * this browser. Choosing writes both; oldest first leaves the URL clean.
+ */
+export function useImageOrder() {
+  const { getParam, updateParams } = useUrlParams();
+  const preferences = useDisplayPreferences();
+  const order: ImageOrder = parseImageOrder(getParam(IMAGE_ORDER_PARAM))
+    ?? preferences.imageOrder
+    ?? DEFAULT_IMAGE_ORDER;
+
+  const setOrder = useCallback((next: ImageOrder) => {
+    setDisplayPreferences({ ...preferences, imageOrder: next });
+    updateParams({ [IMAGE_ORDER_PARAM]: next === DEFAULT_IMAGE_ORDER ? null : next });
+  }, [preferences, updateParams]);
+
+  return { order, setOrder };
 }

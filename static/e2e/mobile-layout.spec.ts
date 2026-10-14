@@ -173,6 +173,19 @@ test('comparison fits a phone', async ({ page }, testInfo) => {
   await expectPhoneFit(page, testInfo, 'compare');
 });
 
+test('the grid View panel and its Sort fit a phone', async ({ page }, testInfo) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.image-card').first()).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'View', exact: true }).click();
+  const sort = page.getByRole('radiogroup', { name: 'Sort' });
+  await expect(sort).toBeVisible();
+  await sort.getByRole('radio', { name: 'Newest first' }).click();
+  await expect(page).toHaveURL(/order=newest/);
+  // The View button, an icon on a phone, still says the order is on.
+  await expect(page.getByRole('button', { name: 'View (newest first)' })).toHaveClass(/is-set/);
+  await expectPhoneFit(page, testInfo, 'grid-view-sort');
+});
+
 test('sequence view fits a phone', async ({ page }, testInfo) => {
   await page.goto(`/#/sequence?db=${encodeURIComponent(dbId)}&project=1`);
   await expect(page.locator('.sequence-view')).toBeVisible({ timeout: 15_000 });

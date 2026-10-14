@@ -16,7 +16,15 @@ import { useSequenceAnalysis } from '../hooks/useSequenceAnalysis';
 import { useSpatialScan } from '../hooks/useSpatialScan';
 import ScoringPenaltyControl from './ScoringPenaltyControl';
 import { useGrading } from '../hooks/useGrading';
-import { useDbProjectTarget, useGridState, useSequenceSelectionRule } from '../hooks/useUrlState';
+import {
+  useDbProjectTarget,
+  useGridState,
+  useImageOrder,
+  useSequenceSelectionRule,
+} from '../hooks/useUrlState';
+import { useReorderAnchor } from '../hooks/useReorderAnchor';
+import { useNewFrameIds } from '../hooks/useNewFrames';
+import { inImageOrder } from '../utils/imageOrder';
 import { useProjectMosaic } from '../hooks/useProjectMosaic';
 import MosaicSequence from './MosaicSequence';
 import UndoRedoToolbar from './UndoRedoToolbar';
@@ -25,6 +33,7 @@ import Dialog from './Dialog';
 import ViewToolbar from './toolbar/ViewToolbar';
 import SelectionBar from './toolbar/SelectionBar';
 import PillSelect from './toolbar/PillSelect';
+import ImageOrderToggle from './toolbar/ImageOrderToggle';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
 import { ScanSearch, X } from 'lucide-react';
@@ -140,6 +149,7 @@ export default function SequenceView() {
 
   const filterName = searchParams.get('filterName') || undefined;
   const requestedScoreScope = searchParams.get('scoreScope');
+  const { order, setOrder } = useImageOrder();
   const {
     cutoff: threshold,
     rule: selectionRule,
@@ -251,7 +261,7 @@ export default function SequenceView() {
     const rollupsByFilter = new Map(
       rollups.map(rollup => [rollup.filter_name, rollup]),
     );
-    sequences.forEach(sequence => {
+    inImageOrder(sequences, order).forEach(sequence => {
       const sessions = sessionsByFilter.get(sequence.filter_name);
       if (sessions) sessions.push(sequence);
       else sessionsByFilter.set(sequence.filter_name, [sequence]);
@@ -260,8 +270,9 @@ export default function SequenceView() {
       sequences.flatMap(sequence => sequence.images).map(image => [image.image_id, image]),
     );
 
-    // Keep the server's chronological session order so the tabs read left to
-    // right in capture order. Each filter's all-session view stays first.
+    // The server's sessions come in capture order, so the tabs read left
+    // to right in it; newest first turns them around, the filter shot last
+    // leading. Each filter's all-session view stays first.
     sessionsByFilter.forEach((sessions, filter) => {
       const rollup = rollupsByFilter.get(filter);
       if (rollup && sessions.length > 1) {
@@ -302,7 +313,7 @@ export default function SequenceView() {
       }));
     });
     return choices;
-  }, [rollups, sequences]);
+  }, [order, rollups, sequences]);
 
   // Grid selection shares URL state with Sequence. Normalize that initial
   // selection once the active target's analysis has loaded. Later Sequence
@@ -343,6 +354,12 @@ export default function SequenceView() {
       ?? sequenceChoices[0];
   }, [requestedScoreScope, sequenceChoices, urlCurrentImageId]);
   const activeSequence = activeChoice?.sequence;
+  // The strip's frames in the order chosen; the score chart keeps capture
+  // order, its time axis left to right.
+  const orderedImages = useMemo(
+    () => activeSequence ? inImageOrder(activeSequence.images, order) : [],
+    [activeSequence, order],
+  );
   const activeScoreScope: QualityScoreScope = activeChoice?.scoreScope ?? 'capture_sequence';
   // Every basis score per frame, for the always-on chips: the session
   // score, and the all-sessions score for filters with several sessions.
@@ -371,16 +388,29 @@ export default function SequenceView() {
   }, [rollups, sequences]);
   const unavailableImageCount = activeChoice?.unavailableImageCount ?? 0;
   const activeImageId = useMemo(() => {
-    if (!activeSequence || activeSequence.images.length === 0) return null;
+    if (orderedImages.length === 0) return null;
     if (urlCurrentImageId
-      && activeSequence.images.some(image => image.image_id === urlCurrentImageId)) {
+      && orderedImages.some(image => image.image_id === urlCurrentImageId)) {
       return urlCurrentImageId;
     }
-    return activeSequence.images[0].image_id;
-  }, [activeSequence, urlCurrentImageId]);
+    return orderedImages[0].image_id;
+  }, [orderedImages, urlCurrentImageId]);
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
   const sequenceStripRef = useRef<HTMLDivElement>(null);
+  // Turning the order around keeps the current card where it was on screen.
+  const captureReorder = useReorderAnchor(order, () =>
+    sequenceStripRef.current?.querySelector<HTMLElement>(
+      `.sequence-image-card[data-card-image-id="${activeImageIdRef.current}"]`,
+    ) ?? null,
+  );
+  const chooseOrder = useCallback((next: typeof order) => {
+    if (next === order) return;
+    captureReorder();
+    setOrder(next);
+  }, [captureReorder, order, setOrder]);
+  // Frames captured since the last visit from the Library.
+  const newImageIds = useNewFrameIds(dbId, images);
   const restoredScrollRef = useRef(false);
 
   useEffect(() => {
@@ -561,7 +591,7 @@ export default function SequenceView() {
     const selected = new Map<number, ImageQualityResult>();
     // Put the active view first so the dialog follows its order and score
     // scope. Other session selections follow without overwriting it.
-    activeSequence?.images.forEach(image => {
+    orderedImages.forEach(image => {
       if (selectedImages.has(image.image_id)) selected.set(image.image_id, image);
     });
     sequences.forEach(sequence => {
@@ -572,7 +602,7 @@ export default function SequenceView() {
       });
     });
     return Array.from(selected.values());
-  }, [activeSequence, selectedImages, sequences]);
+  }, [orderedImages, selectedImages, sequences]);
 
   // Batch rejection is deliberately two-step: show the exact per-image
   // evidence/reason before changing scheduler grades. Each image's own reason
@@ -614,20 +644,22 @@ export default function SequenceView() {
     });
   }, [setCurrentImageId, setSelectedImages]);
 
+  // Shift-click selects the frames between the anchor and the click as the
+  // strip shows them.
   const selectImage = useCallback((imageId: number, event: React.MouseEvent) => {
     const storedAnchorId = selectionAnchorIdRef.current;
-    const anchorId = storedAnchorId !== null && activeSequence?.images.some(
+    const anchorId = storedAnchorId !== null && orderedImages.some(
       image => image.image_id === storedAnchorId,
     ) ? storedAnchorId : activeImageIdRef.current;
-    if (event.shiftKey && activeSequence && anchorId !== null) {
-      const anchorIndex = activeSequence.images.findIndex(image => image.image_id === anchorId);
-      const imageIndex = activeSequence.images.findIndex(image => image.image_id === imageId);
+    if (event.shiftKey && anchorId !== null) {
+      const anchorIndex = orderedImages.findIndex(image => image.image_id === anchorId);
+      const imageIndex = orderedImages.findIndex(image => image.image_id === imageId);
       if (anchorIndex >= 0 && imageIndex >= 0) {
         const start = Math.min(anchorIndex, imageIndex);
         const end = Math.max(anchorIndex, imageIndex);
         setSelectedImages(() => {
           const next = new Set(selectionBaseIdsRef.current);
-          activeSequence.images.slice(start, end + 1).forEach(image => {
+          orderedImages.slice(start, end + 1).forEach(image => {
             next.add(image.image_id);
           });
           return next;
@@ -638,17 +670,17 @@ export default function SequenceView() {
       }
     }
     toggleImage(imageId);
-  }, [activeSequence, setCurrentImageId, setSelectedImages, toggleImage]);
+  }, [orderedImages, setCurrentImageId, setSelectedImages, toggleImage]);
 
   const moveImageCursor = useCallback((direction: GridNavigationDirection) => {
     const currentImageId = activeImageIdRef.current;
-    if (!activeSequence || currentImageId === null) return;
-    const currentIndex = activeSequence.images.findIndex(
+    if (currentImageId === null) return;
+    const currentIndex = orderedImages.findIndex(
       image => image.image_id === currentImageId,
     );
     if (currentIndex < 0) return;
     const nextIndex = findGridNavigationIndex(
-      activeSequence.images,
+      orderedImages,
       currentIndex,
       direction,
       image => sequenceStripRef.current
@@ -656,10 +688,10 @@ export default function SequenceView() {
         ?.getBoundingClientRect() ?? null,
     );
     if (nextIndex === currentIndex) return;
-    const nextImageId = activeSequence.images[nextIndex].image_id;
+    const nextImageId = orderedImages[nextIndex].image_id;
     activeImageIdRef.current = nextImageId;
     setCurrentImageId(nextImageId);
-  }, [activeSequence, setCurrentImageId]);
+  }, [orderedImages, setCurrentImageId]);
 
   const sequenceHotkeyOptions = useMemo(() => ({
     enabled: !!activeSequence && !isAnalyzing && !showRejectReview,
@@ -691,7 +723,8 @@ export default function SequenceView() {
 
   const selectSequence = useCallback((choice: SequenceChoice) => {
     const sequence = choice.sequence;
-    const firstImageId = sequence.images[0]?.image_id;
+    // A tab opens on its first frame as the strip shows it.
+    const firstImageId = inImageOrder(sequence.images, order)[0]?.image_id;
     if (firstImageId !== undefined) {
       selectionAnchorIdRef.current = firstImageId;
       const sequenceImageIds = new Set(sequence.images.map(image => image.image_id));
@@ -709,7 +742,7 @@ export default function SequenceView() {
       }
       navigate(`/sequence?${params.toString()}`, { replace: true });
     }
-  }, [navigate, searchParams, selectedImages]);
+  }, [navigate, order, searchParams, selectedImages]);
 
   const chooseFilter = useCallback((filter: string | undefined) => {
     const params = new URLSearchParams(searchParams);
@@ -867,11 +900,19 @@ export default function SequenceView() {
             )}
           </>
         )}
+        viewNote={order === 'newest' ? 'newest first' : undefined}
         view={(
-          <div className="toolbar-field">
-            <span className="toolbar-caption">Chips</span>
-            <SecondaryScoreToggle />
-          </div>
+          <>
+            <ImageOrderToggle
+              order={order}
+              onChange={chooseOrder}
+              title="The frames and the session tabs by capture time. The score chart keeps time left to right."
+            />
+            <div className="toolbar-field">
+              <span className="toolbar-caption">Chips</span>
+              <SecondaryScoreToggle />
+            </div>
+          </>
         )}
         tools={(
           <>
@@ -1023,7 +1064,8 @@ export default function SequenceView() {
               <SequenceStrip
                 key={`${activeChoice?.key}-strip`}
                 dbId={dbId!}
-                images={activeSequence.images}
+                images={orderedImages}
+                newImageIds={newImageIds}
                 scoreScope={activeScoreScope}
                 basisScoresByImage={basisScoresByImage}
                 calibrationByImage={calibration.marks}
@@ -1286,6 +1328,7 @@ const SequenceTimeline = memo(function SequenceTimeline({
 const SequenceStrip = memo(function SequenceStrip({
   dbId,
   images,
+  newImageIds,
   scoreScope,
   basisScoresByImage,
   calibrationByImage,
@@ -1303,7 +1346,10 @@ const SequenceStrip = memo(function SequenceStrip({
   onOpen,
 }: {
   dbId: string;
+  /** The frames in the order chosen. */
   images: ImageQualityResult[];
+  /** Frames captured since the last visit from the Library. */
+  newImageIds: ReadonlySet<number>;
   scoreScope: QualityScoreScope;
   basisScoresByImage: ReadonlyMap<number, BasisScores>;
   calibrationByImage: ReadonlyMap<number, CalibrationLightMark>;
@@ -1377,6 +1423,7 @@ const SequenceStrip = memo(function SequenceStrip({
             calibration={calibrationByImage.get(quality.image_id)}
             onCalibrationClick={(mark) => onOpen(quality.image_id, mark.codes[0])}
             isSelected={selectedImages.has(quality.image_id)}
+            isNew={newImageIds.has(quality.image_id)}
             onClick={(event) => onSelect(quality.image_id, event)}
             onDoubleClick={() => onOpen(quality.image_id)}
             lazyPreview

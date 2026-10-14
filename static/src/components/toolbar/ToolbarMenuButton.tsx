@@ -11,6 +11,9 @@ interface ToolbarMenuButtonProps {
   iconOnly?: boolean;
   /** Close once a button in the panel is used, as a menu does. */
   closeOnAction?: boolean;
+  /** A setting in the panel is off its default, such as "newest first":
+   *  the button is marked set and says it in its name. */
+  note?: string;
   panelClassName?: string;
   children: ReactNode;
 }
@@ -25,22 +28,24 @@ export default function ToolbarMenuButton({
   icon,
   iconOnly = false,
   closeOnAction = false,
+  note,
   panelClassName,
   children,
 }: ToolbarMenuButtonProps) {
   const panelId = useId();
   const { open, setOpen, rootRef, buttonRef } = usePopover();
+  const name = note ? `${label} (${note})` : label;
   return (
     <div className="toolbar-popover" ref={rootRef}>
       <button
         ref={buttonRef}
         type="button"
-        className="tool-button toolbar-menu-button"
+        className={`tool-button toolbar-menu-button${note ? ' is-set' : ''}`}
         aria-haspopup="true"
         aria-expanded={open}
         aria-controls={panelId}
-        aria-label={iconOnly ? label : undefined}
-        title={label}
+        aria-label={iconOnly || note ? name : undefined}
+        title={note ? `${label}: ${note}` : label}
         onClick={() => setOpen((shown) => !shown)}
       >
         {icon}

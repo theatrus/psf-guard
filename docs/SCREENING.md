@@ -264,6 +264,38 @@ turns the rule off and keeps the frames; **Clear** empties the selection and
 turns the rule off. Rejecting a selection always opens a per-image review
 before anything is written.
 
+### Order and new frames
+
+Images and Sequence show frames in capture order. **View › Sort › Newest
+first** turns them around, and the View button is marked while it is on:
+
+- **Images**: the frames in each group run newest first. The groups keep
+  their place: Date and Session groups already start with the newest night,
+  and Filter and Project groups stay A to Z, so they do not move about as a
+  night's frames arrive. Under Filter + Date, each filter's newest night
+  comes first.
+- **Sequence**: the strip runs newest first, and the session tabs too, with
+  each filter's **All sessions** tab still first and the filter shot last
+  leading. The score chart keeps time left to right. A mosaic's sequence
+  follows the same order.
+
+The arrow keys, `Space`, Shift-click ranges, Compare and the detail view's
+next and previous follow the order on screen, and a view with no current
+image opens on its first card. Selection rules pick the same frames in
+either order. Turning the order around keeps the current image, the
+selection and the current card's place on screen. The address keeps the
+choice as `order=newest`, shared by both views. The last choice is
+remembered in this browser and used for links that name no order, such as
+a project opened from the Library.
+
+A small dot before a card's date marks a frame captured since your last
+visit to its project or target from the Library: the frames the Library's
+"new" badge counted when you opened it, plus any captured since. Opening the
+project from the Library again starts from there, as its badge does. A
+project this browser has never listed marks nothing. The mark goes by
+capture time, so frames imported late with an older capture time do not get
+it.
+
 The user-triggered scan resolves and durably caches suitable orbital elements
 for each exposure, then caches exposure-specific crossings. Potentially bright
 predictions warn; only a high-risk prediction with a matching pixel trail

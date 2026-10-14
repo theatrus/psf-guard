@@ -1,5 +1,6 @@
 import type { Image, ProjectMosaic } from '../api/types';
 import type { GroupingMode } from '../types/grouping';
+import type { ImageOrder } from './imageOrder';
 
 export interface ImageGroup {
   /** Stable identity for React and URL state. The label may change as a live session grows. */
@@ -42,6 +43,77 @@ export function splitImageGroupsByExposure(groups: ImageGroup[]): ImageGroup[] {
     }
     return [...partitions.values()];
   });
+}
+
+/**
+ * The Images grid's groups for one set of images in a grouping mode, each
+ * group's frames in the order chosen: capture order, or newest first.
+ *
+ * The groups themselves keep their order either way. Date and Session
+ * groups already start with the newest night; Filter and Project groups
+ * stay A to Z, so they do not move about as a night's frames arrive. Only
+ * Filter + Date, whose nights run oldest first under each filter, turns
+ * them around for newest first, so the newest frame of each filter leads.
+ * The detail view's next and previous walk the same list.
+ */
+export function groupGridImages(
+  images: Image[],
+  groupingMode: GroupingMode,
+  order: ImageOrder = 'oldest',
+): ImageGroup[] {
+  if (groupingMode === 'session') {
+    const sessions = groupImagesBySession(images);
+    return splitImageGroupsByExposure(order === 'newest'
+      ? sessions.map((group) => ({ ...group, images: [...group.images].reverse() }))
+      : sessions);
+  }
+
+  const groups = new Map<string, { filter: string; date: string; images: Image[] }>();
+  for (const image of images) {
+    const project = image.project_display_name || 'Unknown Project';
+    const filter = image.filter_name || 'No Filter';
+    const date = image.acquired_date
+      ? new Date(image.acquired_date * 1000).toISOString().split('T')[0]
+      : 'Unknown Date';
+    let key: string;
+    switch (groupingMode) {
+      case 'date': key = date; break;
+      case 'both': key = `${filter} - ${date}`; break;
+      case 'project': key = project; break;
+      case 'project+filter': key = `${project} - ${filter}`; break;
+      case 'project+date': key = `${project} - ${date}`; break;
+      case 'project+date+filter': key = `${project} - ${date} - ${filter}`; break;
+      default: key = filter;
+    }
+    const group = groups.get(key);
+    if (group) group.images.push(image);
+    else groups.set(key, { filter, date, images: [image] });
+  }
+
+  const sorted = Array.from(groups.entries()).map(([name, group]) => {
+    // Capture order, stable for frames with the same time; newest first is
+    // its mirror image.
+    const chronological = group.images.sort((a, b) => (a.acquired_date || 0) - (b.acquired_date || 0));
+    return {
+      filterName: name,
+      filter: group.filter,
+      date: group.date,
+      images: order === 'newest' ? chronological.reverse() : chronological,
+    };
+  });
+
+  if (order === 'newest' && groupingMode === 'both') {
+    sorted.sort((a, b) => a.filter.localeCompare(b.filter) || b.date.localeCompare(a.date));
+  } else if (groupingMode.includes('date')) {
+    // Date modes: the newest night first.
+    sorted.sort((a, b) => b.filterName.localeCompare(a.filterName));
+  } else {
+    sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
+  }
+
+  return splitImageGroupsByExposure(
+    sorted.map(({ filterName, images: groupImages }) => ({ filterName, images: groupImages })),
+  );
 }
 
 export const NO_EXPANDED_GROUPS = '__none__';

@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { DEFAULT_IMAGE_ORDER, parseImageOrder, type ImageOrder } from '../utils/imageOrder';
 
 /**
  * Card display choices shared by every surface that renders an ImageCard.
@@ -37,6 +38,10 @@ export interface DisplayPreferences {
   libraryDensity: LibraryDensity;
   /** The image detail's sidebar sections the viewer opened or folded. */
   detailSections: DetailSectionChoices;
+  /** The order Images and Sequence open in when the link names none: the
+   *  last one chosen in their View panel. Always set once read; a caller
+   *  that leaves it out keeps oldest first. */
+  imageOrder?: ImageOrder;
 }
 
 /** A whole set of preferences, where leaving out the detail sections
@@ -55,6 +60,7 @@ const DEFAULTS: DisplayPreferences = {
   projectPickerGrouping: 'activity',
   libraryDensity: 'compact',
   detailSections: {},
+  imageOrder: DEFAULT_IMAGE_ORDER,
 };
 
 type Listener = () => void;
@@ -103,6 +109,7 @@ function sanitize(parsed: StoredPreferences): DisplayPreferences {
       parsed.projectPickerGrouping === 'database' ? 'database' : DEFAULTS.projectPickerGrouping,
     libraryDensity: parsed.libraryDensity === 'detailed' ? 'detailed' : DEFAULTS.libraryDensity,
     detailSections: sanitizeSections(parsed.detailSections),
+    imageOrder: parseImageOrder(parsed.imageOrder) ?? DEFAULT_IMAGE_ORDER,
   };
 }
 
