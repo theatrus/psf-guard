@@ -78,6 +78,14 @@ pub struct WbppRunProgress {
     /// this `stray_light_darks`.
     #[serde(default, alias = "stray_light_darks")]
     pub kept_out_frames: usize,
+    /// Lights left out because they can't be calibrated properly, as stacks
+    /// leave them out when the calibration setting asks.
+    #[serde(default)]
+    pub uncalibrated_lights: usize,
+    /// The calibration settings that chose the frames and differ from the
+    /// defaults, in words with who set them; empty when the defaults did.
+    #[serde(default)]
+    pub calibration_settings: Vec<String>,
     /// The command line, as a person would type it.
     pub command: Option<String>,
     pub pid: Option<u32>,
@@ -947,6 +955,7 @@ async fn launch(
         target_id: req.target_id,
         filter_name: req.filter_name.clone(),
         layout: ExportLayout::Wbpp,
+        exclude_uncalibrated: crate::commands::export::exclude_uncalibrated_for(ExportLayout::Wbpp),
         ..Default::default()
     };
     let job_ctx = ctx.clone();
@@ -1162,6 +1171,16 @@ pub(crate) fn drain_queue(state: Arc<AppState>) -> Pin<Box<dyn Future<Output = (
     })
 }
 
+/// What a run's plan holds, for its progress.
+struct PlanSummary {
+    frames: usize,
+    lights: usize,
+    missing: usize,
+    kept_out: usize,
+    uncalibrated: usize,
+    calibration_settings: Vec<String>,
+}
+
 /// The run itself: plan, write, launch, watch. Returns the closing stage.
 #[allow(clippy::too_many_arguments)]
 async fn run(
@@ -1197,8 +1216,10 @@ async fn run(
             .count();
         if lights == 0 {
             anyhow::bail!(
-                "no light frames to stack ({} catalog rows had missing files)",
-                plan.missing.len()
+                "no light frames to stack ({} catalog rows had missing files, {} lights \
+                 can't be calibrated)",
+                plan.missing.len(),
+                plan.uncalibrated.len()
             );
         }
         std::fs::create_dir_all(&plan_output_dir)
@@ -1211,27 +1232,31 @@ async fn run(
             },
             options: wbpp_options,
             bpp_main: Some(bpp_main),
+            stale_frames: Vec::new(),
         };
         crate::commands::export::write_wbpp_scripts(&plan, &plan_work_dir, &spec)?;
         let runner = plan_work_dir.join(crate::commands::export::wbpp::JS_RUNNER);
-        let summary = (
-            plan.items.len(),
+        let summary = PlanSummary {
+            frames: plan.items.len(),
             lights,
-            plan.missing.len(),
-            plan.kept_out.len(),
-        );
+            missing: plan.missing.len(),
+            kept_out: plan.kept_out.len(),
+            uncalibrated: plan.uncalibrated.len(),
+            calibration_settings: plan.calibration_settings.clone(),
+        };
         let _ = &plan_store;
         Ok((summary, runner))
     })
     .await
     .map_err(|e| anyhow::anyhow!("planning task: {e}"))??;
 
-    let (frames, lights, missing, kept_out) = plan_summary;
     update(&store, |progress| {
-        progress.frames = frames;
-        progress.lights = lights;
-        progress.missing_files = missing;
-        progress.kept_out_frames = kept_out;
+        progress.frames = plan_summary.frames;
+        progress.lights = plan_summary.lights;
+        progress.missing_files = plan_summary.missing;
+        progress.kept_out_frames = plan_summary.kept_out;
+        progress.uncalibrated_lights = plan_summary.uncalibrated;
+        progress.calibration_settings = plan_summary.calibration_settings;
         progress.stage = "launching".to_string();
     });
     if cancel.load(Ordering::SeqCst) {

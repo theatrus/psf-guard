@@ -7404,6 +7404,14 @@ pub struct ExportCalibration {
     /// The darks this light's master is built from, so an export can keep
     /// two lights' different sets from being integrated as one.
     pub dark_set: Option<DarkSet>,
+    /// Why the light cannot be calibrated properly, as a stack would judge
+    /// it ([`calibration_gap`]): only a gap whose check flags it. An export
+    /// that leaves out what stacks leave out skips the light. Judged only
+    /// when asked.
+    pub gap: Option<String>,
+    /// The rules the light was matched with: its rig's, the server's or the
+    /// defaults.
+    pub rules: Arc<Rules>,
 }
 
 /// One light's dark master, as an export names it.
@@ -7419,6 +7427,8 @@ pub struct DarkSet {
 
 /// Lights are matched one at a time, so the caller reads `night_boundary` once
 /// for the catalog ([`crate::server::sky_coverage::catalog_night_boundary`]).
+/// `judge_gap` asks for [`ExportCalibration::gap`], which may read the flat
+/// library again; an export that keeps such lights passes `false`.
 pub fn export_destinations(
     conn: &Connection,
     light: &FrameMeta,
@@ -7426,9 +7436,16 @@ pub fn export_destinations(
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     layout: crate::commands::export::ExportLayout,
     night_boundary: i64,
+    judge_gap: bool,
 ) -> Result<ExportCalibration> {
     use crate::commands::export::{session_component, ExportLayout};
     let mut selected = select_for_light(conn, light)?;
+    // Judged as a stack judges it, before missing files are followed.
+    let gap = if judge_gap {
+        calibration_gap(conn, light, &selected, night_boundary)?
+    } else {
+        None
+    };
     remap_missing_sources(&mut selected, directory_tree);
     // Only the frames a master would build from: the coherent set nearest
     // the light per kind, the same reduction a stack makes. Everything the
@@ -7562,6 +7579,8 @@ pub fn export_destinations(
         flat_session,
         kept_out,
         dark_set,
+        gap,
+        rules: Arc::clone(&selected.rules),
     })
 }
 
@@ -7746,7 +7765,7 @@ fn format_number(value: Option<f64>) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::io::Write;
 
@@ -9063,6 +9082,7 @@ mod tests {
             None,
             crate::commands::export::ExportLayout::Wbpp,
             0,
+            false,
         )
         .unwrap();
         let placed = export
@@ -9542,7 +9562,7 @@ mod tests {
 
     /// Serializes the tests that change the process-wide external-master
     /// policy, which every selection in the process reads.
-    pub(super) static POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(crate) static POLICY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn replace_test_fits_filter(path: &Path, filter_card: &str) {
         let mut bytes = std::fs::read(path).unwrap();
@@ -10511,6 +10531,7 @@ mod tests {
             None,
             crate::commands::export::ExportLayout::Wbpp,
             12 * 3600,
+            false,
         )
         .unwrap();
         assert_eq!(export.kept_out.len(), 1);
@@ -12830,17 +12851,17 @@ mod tests {
     // ---------- Tunable checks ----------
 
     /// Put settings in force for one test and the defaults back after it.
-    pub(super) struct RulesInForce;
+    pub(crate) struct RulesInForce;
 
     /// Settings by key.
-    type Pairs<'a> = [(&'a str, serde_json::Value)];
+    pub(crate) type Pairs<'a> = [(&'a str, serde_json::Value)];
 
     impl RulesInForce {
-        pub(super) fn global(values: &[(&str, serde_json::Value)]) -> Self {
+        pub(crate) fn global(values: &[(&str, serde_json::Value)]) -> Self {
             Self::with(values, &[])
         }
 
-        pub(super) fn with(
+        pub(crate) fn with(
             global: &[(&str, serde_json::Value)],
             rigs: &[(&str, &str, &Pairs<'_>)],
         ) -> Self {

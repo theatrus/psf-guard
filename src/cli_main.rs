@@ -172,6 +172,8 @@ pub fn main() -> Result<()> {
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
             )
             .with_context(|| format!("opening database at {}", db_path.display()))?;
+            // Count calibration frames by the settings the app matches with.
+            crate::calibration::configure(reg.as_ref().and_then(|r| r.calibration.as_ref()));
             let export = crate::astrobin::export(
                 &conn,
                 tree.as_ref(),
@@ -292,12 +294,18 @@ pub fn main() -> Result<()> {
             )
             .with_context(|| format!("opening database at {}", db_path.display()))?;
 
+            // Match calibration frames by the settings the app uses, global
+            // and per rig, as a stack in the app would.
+            crate::calibration::configure(reg.as_ref().and_then(|r| r.calibration.as_ref()));
             let options = ExportOptions {
                 include_pending,
                 project_filter: project,
                 target_filter: target,
                 filter_name: filter,
                 layout: layout.into(),
+                exclude_uncalibrated: crate::commands::export::exclude_uncalibrated_for(
+                    layout.into(),
+                ),
                 ..Default::default()
             };
             let placement = if link && placement == crate::cli::ExportPlacementArg::Copy {
@@ -329,6 +337,7 @@ pub fn main() -> Result<()> {
                     files,
                     options: (&wbpp_args).into(),
                     bpp_main: None,
+                    stale_frames: Vec::new(),
                 };
                 match write_wbpp_scripts(&plan, &dest_root, &spec) {
                     Ok(scripts) => {
@@ -373,6 +382,33 @@ pub fn main() -> Result<()> {
                     plan.kept_out.len(),
                     example.display()
                 );
+            }
+            if let Some((id, basename, reason)) = plan.uncalibrated.first() {
+                eprintln!(
+                    "  ⚠️ left out {} light(s) that can't be calibrated, as stacks leave them \
+                     out, e.g. image {id} ({basename}): {reason}",
+                    plan.uncalibrated.len()
+                );
+            }
+            if !plan.calibration_settings.is_empty() {
+                println!("Calibration frames matched with:");
+                for line in &plan.calibration_settings {
+                    println!("  {line}");
+                }
+            }
+            if !plan.without_darks.is_empty() {
+                println!("No darks exported for {}.", plan.without_darks.join(", "));
+            }
+            if options.layout == ExportLayout::Wbpp && placement.places_files() {
+                let stale = wbpp::stale_frames(&plan, &dest_root);
+                if let Some(first) = stale.first() {
+                    eprintln!(
+                        "  ⚠️ {} file(s) under the frame folders are not part of this export, \
+                         e.g. {first}; WBPP would take them. Remove them or export to an \
+                         empty folder.",
+                        stale.len()
+                    );
+                }
             }
             if summary.errors > 0 {
                 return Err(anyhow::anyhow!(

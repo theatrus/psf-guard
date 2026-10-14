@@ -1785,6 +1785,10 @@ export interface WbppRunProgress {
   missing_files: number;
   /** Calibration frames the library keeps out: graded poor or kept out by hand. */
   kept_out_frames?: number;
+  /** Lights left out because they can't be calibrated, as stacks leave them out. */
+  uncalibrated_lights?: number;
+  /** Calibration settings that differ from the defaults, with who set them. */
+  calibration_settings?: string[];
   command: string | null;
   pid: number | null;
   started_at: number | null;

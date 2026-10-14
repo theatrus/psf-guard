@@ -45,7 +45,7 @@ describe('CalibrationMatchingSettings', () => {
     expect(screen.getByLabelText('Dark reach')).toHaveAttribute('placeholder', '183');
     expect(screen.getByLabelText('Dark choice')).toHaveValue('complete');
     expect(screen.getByLabelText('No matching flat')).toHaveValue('flag');
-    for (const legend of ['Matching', 'Dark masters', 'Flat masters', 'Light checks', 'Stacks']) {
+    for (const legend of ['Matching', 'Dark masters', 'Flat masters', 'Light checks', 'Stacks and WBPP exports']) {
       expect(screen.getByRole('group', { name: legend })).toBeInTheDocument();
     }
     expect(screen.getByText(/Nothing is rebuilt/)).toBeInTheDocument();

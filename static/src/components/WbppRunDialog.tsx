@@ -401,7 +401,14 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
                 `; ${progress.missing_files} catalog row(s) had no file and were left out`}
               {(progress.kept_out_frames ?? 0) > 0 &&
                 `; ${progress.kept_out_frames} kept-out calibration frame(s) were left out`}
+              {(progress.uncalibrated_lights ?? 0) > 0 &&
+                `; ${progress.uncalibrated_lights} light(s) that can't be calibrated were left out, as stacks leave them out`}
               .
+            </p>
+          )}
+          {(progress.calibration_settings?.length ?? 0) > 0 && (
+            <p className="wbpp-run-muted">
+              Calibration frames matched with: {progress.calibration_settings?.join('; ')}.
             </p>
           )}
           {progress.wbpp_stage && (

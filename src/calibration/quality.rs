@@ -1412,6 +1412,7 @@ pub(super) mod tests {
             None,
             crate::commands::export::ExportLayout::Wbpp,
             12 * 3600,
+            false,
         )
         .unwrap();
         assert_eq!(export.kept_out.len(), 1);

@@ -36,6 +36,23 @@ Anything else WBPP takes can ride along: the run dialog has a box for more
 appended to `PARAMS`. WBPP prints its full list with Alt+A in its dialog,
 or with `automationMode=true,paramList` on the command line.
 
+## Calibration frames
+
+An export and a run hand WBPP the calibration frames a PSF Guard stack would
+take for each light, matched by the settings in force for that light's rig
+under **Settings › Calibration** (see
+[Tune the checks](CALIBRATION_LIBRARY.md#tune-the-checks)). The flat rotation,
+focal length and session limits decide which flats share a light's
+`SESSION_<night>` folder; dark temperature, reach and choice decide its darks;
+a rig set to do without darks gets none; and masters from other software
+follow their setting. With **Leave out lights that can't be calibrated** on,
+the lights a stack would leave out stay out of the export or run too. The
+runner scripts list the settings that differ from the defaults, the rigs that
+export no darks, and the lights left out; the run dialog shows the same. A run
+always plans afresh into a new folder. An export into a folder that already
+holds an earlier one keeps the earlier frames, which WBPP would scan along with
+the new ones, so the runner warns about them.
+
 ## Export a WBPP tree and run it yourself
 
 The Export action on a project card or target row, with the **WBPP**

@@ -2302,6 +2302,7 @@ pub async fn export_archive_route(
         target_id: query.target_id,
         filter_name: query.filter_name.clone(),
         layout: query.layout,
+        exclude_uncalibrated: crate::commands::export::exclude_uncalibrated_for(query.layout),
         ..Default::default()
     };
     // A referenced download is the runner scripts alone: nothing is copied,
@@ -2400,6 +2401,7 @@ pub async fn export_archive_route(
                 files,
                 options: wbpp_options,
                 bpp_main: None,
+                stale_frames: Vec::new(),
             };
             let scripts = [
                 ("run-wbpp.sh", wbpp::shell_script(&plan, &spec)),
@@ -2496,6 +2498,7 @@ pub async fn export_local_route(
         target_id: req.target_id,
         filter_name: req.filter_name.clone(),
         layout: req.layout,
+        exclude_uncalibrated: crate::commands::export::exclude_uncalibrated_for(req.layout),
         ..Default::default()
     };
     // `placement` supersedes the older `link` flag, whose default was to
@@ -2541,6 +2544,7 @@ pub async fn export_local_route(
                 files: files.clone(),
                 options: req.wbpp.clone().unwrap_or_default(),
                 bpp_main: None,
+                stale_frames: Vec::new(),
             };
             if let Err(error) = write_wbpp_scripts(&plan, std::path::Path::new(&dest), &spec) {
                 if !placement.places_files() {
@@ -2610,6 +2614,7 @@ pub async fn start_server_export_route(
         target_id: req.target_id,
         filter_name: req.filter_name.clone(),
         layout: req.layout,
+        exclude_uncalibrated: crate::commands::export::exclude_uncalibrated_for(req.layout),
         ..Default::default()
     };
     let placement = req.placement.unwrap_or(Placement::Reflink);
@@ -2660,6 +2665,7 @@ pub async fn start_server_export_route(
                     files: files.clone(),
                     options: wbpp_options.clone(),
                     bpp_main: None,
+                    stale_frames: Vec::new(),
                 };
                 if let Err(error) = write_wbpp_scripts(&plan, &dest, &spec) {
                     if !placement.places_files() {

@@ -171,7 +171,7 @@ export default function CalibrationMatchingSettings() {
         </details>
       )}
       <fieldset className="calibration-settings-group" disabled={save.isPending}>
-        <legend>Stacks</legend>
+        <legend>Stacks and WBPP exports</legend>
         <label className="review-preference">
           <input
             type="checkbox"
@@ -182,7 +182,7 @@ export default function CalibrationMatchingSettings() {
             Leave out lights that can't be calibrated
             <small>
               No matching flat, bias or dark, or flats past the age limit, where the library holds them
-              for that camera and the check flags it.
+              for that camera and the check flags it. WBPP exports and runs leave them out too.
             </small>
           </span>
         </label>

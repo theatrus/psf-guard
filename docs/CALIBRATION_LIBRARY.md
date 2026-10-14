@@ -639,11 +639,12 @@ reason. **Reject N lights** then sets them Rejected with the reason, so
 Target Scheduler shoots them again. It refuses, and asks for a new check,
 when the list changed after it was shown.
 
-Stacks keep such lights unless **Settings › Calibration › Stacks › Leave out
-lights that can't be calibrated** is on. With it on, and calibration on or
-automatic, stack previews leave them out, so they never mix with properly
-calibrated frames: the stack card counts them under **can't calibrate** and
-each frame's decision gives the reason.
+Stacks keep such lights unless **Settings › Calibration › Stacks and WBPP
+exports › Leave out lights that can't be calibrated** is on. With it on, and
+calibration on or automatic, stack previews leave them out, so they never mix
+with properly calibrated frames: the stack card counts them under **can't
+calibrate** and each frame's decision gives the reason. WBPP exports and runs
+leave the same lights out (see [Export](#export)).
 
 ### Calibration health
 
@@ -788,6 +789,8 @@ it inherits and from where; **Own value** sets or clears one, and
   defaults, so a setting that changes only which matching darks or flats a
   master keeps, such as the complete night or the flat session, still
   builds the stack again; a stack nobody tuned keeps its key.
+- WBPP exports and runs match the same way when they are planned, so one
+  planned after a change takes the new frames (see [Export](#export)).
 - **Light checks** change only what is flagged. The health pass judges the
   lights again from the headers it kept; nothing is rebuilt and no pixel is
   read.
@@ -1000,6 +1003,20 @@ matched. Flats stay under their target because PSF Guard matched them to that
 target's lights, and under the night they were shot because two nights of one
 target can need different flats for one filter. Merging either would have WBPP
 integrate both into a single master flat.
+
+Matching follows the settings in force for each light's rig (see [Tune the
+checks](#tune-the-checks)); the CLI reads them from the registry. The flat
+rotation, focal length and session limits decide which flats land in a light's
+session folder, the dark settings decide which darks go and whether any do, and
+a master from other software goes only when its setting uses it. With **Leave
+out lights that can't be calibrated** on, a WBPP export, like a stack, leaves
+out the lights whose gap is flagged; a check set to **Check only** or **Off**
+lets them go. The grouped-by-target layout keeps every light. The runner
+scripts list the settings that differ from the defaults, the rigs that export
+no darks, and the lights left out. An export into a folder that already holds
+an earlier one keeps the earlier files, and WBPP scans each frame folder whole,
+so the runner warns when it finds frames this export did not place; remove
+them or export to an empty folder.
 
 In the WBPP layout the light's path carries the same night as its flats. The
 runner passes `keywords=SESSION` with keyword grouping on, and WBPP reads the
