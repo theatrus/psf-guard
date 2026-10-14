@@ -99,7 +99,11 @@ test('closing the detail returns Images to the same scroll position', async ({ p
   await expect(page).toHaveURL(/#\/detail\/2/);
   await page.keyboard.press('ArrowRight');
   await expect(page).toHaveURL(/#\/detail\/3/);
-  await page.locator('.image-detail-overlay .close-button').click();
+  // Let the next light's panels load before closing: the Linux CI's
+  // software-rendered WebKit can take seconds to report × as holding still
+  // while the overlay re-renders around it.
+  await settledSidebar(page);
+  await page.locator('.image-detail-overlay .close-button').click({ timeout: 20_000 });
 
   await expect(page).toHaveURL(/#\/grid\?/);
   await expect.poll(async () => Math.abs(await scroller.evaluate((element) => element.scrollTop) - before))
@@ -123,7 +127,11 @@ test('closing the detail returns Sequence with the card it opened where it was',
   await expect(page).toHaveURL(/#\/detail\/2/);
   await page.keyboard.press('ArrowRight');
   await expect(page).toHaveURL(/#\/detail\/3/);
-  await page.locator('.image-detail-overlay .close-button').click();
+  // Let the next light's panels load before closing: the Linux CI's
+  // software-rendered WebKit can take seconds to report × as holding still
+  // while the overlay re-renders around it.
+  await settledSidebar(page);
+  await page.locator('.image-detail-overlay .close-button').click({ timeout: 20_000 });
 
   await expect(page).toHaveURL(/#\/sequence\?/);
   await expect(page).toHaveURL(/current=3/);
