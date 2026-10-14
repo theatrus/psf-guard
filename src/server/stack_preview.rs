@@ -1251,17 +1251,23 @@ impl StackPreviewManager {
             self.request_cancel(&job_id);
         }
         // A re-apply steps aside too, and waits for its turn again.
-        for run_id in self.automatic_processing_ids() {
-            self.yielded.lock().unwrap().insert(run_id.clone());
-            self.request_cancel(&run_id);
-        }
+        self.yield_automatic_processing();
         projects.sort();
         projects.dedup();
         projects
     }
 
-    /// Whether a run was stopped to make way for a person's work, rather
-    /// than for good. Asking forgets it.
+    /// Stop every re-apply queued or running so other work gets the worker.
+    /// Each waits for its turn again rather than ending.
+    pub(super) fn yield_automatic_processing(&self) {
+        for run_id in self.automatic_processing_ids() {
+            self.yielded.lock().unwrap().insert(run_id.clone());
+            self.request_cancel(&run_id);
+        }
+    }
+
+    /// Whether a run was stopped to make way for other work, rather than
+    /// for good. Asking forgets it.
     pub(super) fn take_yielded(&self, run_id: &str) -> bool {
         self.yielded.lock().unwrap().remove(run_id)
     }
@@ -7594,6 +7600,207 @@ mod tests {
         })
         .await;
         drop(person);
+    }
+
+    /// A server whose R card was refreshed to `2…`, with the re-apply still
+    /// waiting because a person's work holds it off.
+    async fn waiting_reapply(
+        cache: &FsPath,
+    ) -> (
+        Arc<AppState>,
+        String,
+        crate::server::state::InteractiveJobGuard,
+    ) {
+        let (state, applied) = processed_card(cache).await;
+        let person = state.begin_interactive_job();
+        refresh(&state, cache, &"2".repeat(64), "rev-2");
+        assert_eq!(state.stack_previews.reapply_count(), 1);
+        (state, applied, person)
+    }
+
+    /// The re-apply's start, coming back from probing the tools late.
+    async fn start_reapply_again(
+        state: &Arc<AppState>,
+        request: stretch::StackViewProcessingRequest,
+        still_wanted: bool,
+    ) -> Result<stretch::ReapplyStart, String> {
+        let ctx = state.get_database("test").unwrap();
+        stretch::start_reapply(
+            state,
+            &ctx,
+            &"2".repeat(64),
+            0,
+            "rev-2",
+            request,
+            &move || still_wanted,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reapply_that_crash_loops_the_server_is_given_up_for_good() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let registry_dir = tempfile::tempdir().unwrap();
+        let registry = registry_dir.path().join("reg.json");
+        let (before, _, person) = waiting_reapply(cache.path()).await;
+        // The journal from the last crash: the re-apply was running, for the
+        // third restart in a row.
+        let source = r_source(&before, &"2".repeat(64));
+        let entry = journal::JournaledStackJob::Processing {
+            database_id: "test".into(),
+            project_id: 7,
+            job_id: source.job_id.clone(),
+            group_index: 0,
+            revision: "rev-2".into(),
+            run_id: "c".repeat(64),
+            request: Box::new(mtf_request(0.3)),
+            automatic: true,
+            attempts: 2,
+            running: true,
+        };
+        stretch::write_json_atomic(
+            &journal::journal_path(&registry),
+            &serde_json::json!({"schema_version": 2, "stack": [entry]}),
+        )
+        .unwrap();
+        drop(person);
+
+        let after = state_on_disk(cache.path(), Some(&registry));
+        journal::restore(&after).await;
+        assert_eq!(
+            after.stack_previews.reapply_count(),
+            0,
+            "neither the journal nor the remembered carry brings it back"
+        );
+        let failed = shown(&after, &"2".repeat(64))
+            .unwrap()
+            .reprocessing
+            .unwrap();
+        assert_eq!(failed.state, stretch::ReprocessingState::Failed);
+        assert!(failed.error.unwrap().contains("restarts in a row"));
+        // Another restart finds nothing to revive either.
+        reapply::recover(&after);
+        assert_eq!(after.stack_previews.reapply_count(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reapply_starting_late_keeps_a_persons_apply() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (state, _, person) = waiting_reapply(cache.path()).await;
+        // While the re-apply probes the tools, the person applies their own.
+        drop(person);
+        let theirs = apply_and_wait(&state, &"2".repeat(64), mtf_request(0.6)).await;
+        assert_eq!(
+            start_reapply_again(&state, mtf_request(0.3), true).await,
+            Ok(stretch::ReapplyStart::Withdrawn)
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        assert!(the_automatic_run(&state).is_none());
+        let shown_now = shown(&state, &"2".repeat(64)).unwrap();
+        assert_eq!(
+            shown_now.stretch_id, theirs,
+            "their processing stays selected"
+        );
+        assert!(shown_now.reprocessing.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reapply_starting_late_keeps_a_persons_revert() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (state, _, _person) = waiting_reapply(cache.path()).await;
+        // The person reverts, as the DELETE route does.
+        let ctx = state.get_database("test").unwrap();
+        let source = r_source(&state, &"2".repeat(64));
+        reapply::replaced_by_person(&state, &source, None);
+        stretch::clear_selected_processing(&ctx.stack_root, &source.key, &source.revision).unwrap();
+        assert_eq!(
+            start_reapply_again(&state, mtf_request(0.3), true).await,
+            Ok(stretch::ReapplyStart::Withdrawn)
+        );
+        assert!(the_automatic_run(&state).is_none());
+        assert!(
+            shown(&state, &"2".repeat(64)).is_none(),
+            "the revert stands"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reapply_no_longer_wanted_queues_nothing() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (state, _, _person) = waiting_reapply(cache.path()).await;
+        // A newer stack dropped it while it probed the tools.
+        assert_eq!(
+            start_reapply_again(&state, mtf_request(0.3), false).await,
+            Ok(stretch::ReapplyStart::Withdrawn)
+        );
+        assert!(the_automatic_run(&state).is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reapply_does_not_hold_off_automatic_refreshes() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (state, _) = processed_card(cache.path()).await;
+        let busy = Arc::clone(&state.stack_previews.permit)
+            .try_acquire_owned()
+            .unwrap();
+        refresh(&state, cache.path(), &"2".repeat(64), "rev-2");
+        eventually("the re-apply is queued", || {
+            the_automatic_run(&state).is_some()
+        })
+        .await;
+        assert!(
+            !automatic::holds_off_refreshes(&state.stack_previews),
+            "a due refresh may start while only a re-apply holds the worker"
+        );
+        // The refresh's build goes ahead; the re-apply waits for its turn.
+        state.stack_previews.yield_automatic_processing();
+        eventually("the re-apply steps aside", || {
+            the_automatic_run(&state).is_none()
+        })
+        .await;
+        assert_eq!(state.stack_previews.reapply_count(), 1);
+        assert_eq!(
+            shown(&state, &"2".repeat(64))
+                .unwrap()
+                .reprocessing
+                .unwrap()
+                .state,
+            stretch::ReprocessingState::Waiting
+        );
+        // Anything else still holds refreshes off.
+        assert!(state.stack_previews.insert(running_build("held")));
+        assert!(automatic::holds_off_refreshes(&state.stack_previews));
+        drop(busy);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reapply_yielding_after_the_setting_went_off_stops_waiting() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (state, _) = processed_card(cache.path()).await;
+        let busy = Arc::clone(&state.stack_previews.permit)
+            .try_acquire_owned()
+            .unwrap();
+        refresh(&state, cache.path(), &"2".repeat(64), "rev-2");
+        eventually("the re-apply is queued", || {
+            the_automatic_run(&state).is_some()
+        })
+        .await;
+        // Switched off while it runs, which leaves it be; then it steps
+        // aside for a person.
+        reapply::configure(false);
+        interrupt_automatic(&state);
+        eventually("it settles", || state.stack_previews.reapply_count() == 0).await;
+        assert!(
+            shown(&state, &"2".repeat(64)).is_none(),
+            "the card no longer says it is reprocessing"
+        );
+        drop(busy);
     }
 
     /// Processing runs driven through the stand-in `rc-astro`, a shell

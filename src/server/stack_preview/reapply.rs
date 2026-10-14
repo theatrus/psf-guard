@@ -342,6 +342,23 @@ pub(super) async fn start_due(state: Arc<AppState>) {
             );
             continue;
         }
+        // Probing the tools takes seconds. Whatever happened to this
+        // re-apply meanwhile (a person's Apply or Revert, a newer stack) is
+        // checked again before it is queued.
+        let still_wanted = {
+            let state = Arc::clone(&state);
+            let channel = channel.clone();
+            let revision = reapply.revision.clone();
+            move || {
+                state
+                    .stack_previews
+                    .reapplies
+                    .lock()
+                    .unwrap()
+                    .get(&channel)
+                    .is_some_and(|entry| entry.revision == revision && entry.run_id.is_none())
+            }
+        };
         match stretch::start_reapply(
             &state,
             &ctx,
@@ -349,10 +366,20 @@ pub(super) async fn start_due(state: Arc<AppState>) {
             reapply.group_index,
             &reapply.revision,
             reapply.request.clone(),
+            &still_wanted,
         )
         .await
         {
-            Ok(Some(run_id)) => {
+            Ok(stretch::ReapplyStart::Withdrawn) => {
+                // Its own record already went with whatever replaced it.
+                let mut reapplies = manager.reapplies.lock().unwrap();
+                if reapplies.get(&channel).is_some_and(|entry| {
+                    entry.revision == reapply.revision && entry.run_id.is_none()
+                }) {
+                    reapplies.remove(&channel);
+                }
+            }
+            Ok(stretch::ReapplyStart::Queued(run_id)) => {
                 if let Some(entry) = manager.reapplies.lock().unwrap().get_mut(&channel)
                     && entry.revision == reapply.revision
                 {
@@ -360,7 +387,7 @@ pub(super) async fn start_due(state: Arc<AppState>) {
                 }
                 return;
             }
-            Ok(None) => {
+            Ok(stretch::ReapplyStart::Done) => {
                 manager.forget_reapply(&channel);
                 let _ = stretch::carry_published(
                     &ctx.stack_root,
@@ -403,12 +430,19 @@ pub(super) fn run_finished(state: &Arc<AppState>, run_id: &str, outcome: RunOutc
     if outcome == RunOutcome::Interrupted {
         return;
     }
-    if yielded && outcome != RunOutcome::Published {
+    if yielded && outcome != RunOutcome::Published && enabled() {
         if let Some(entry) = manager.reapplies.lock().unwrap().get_mut(&channel) {
             entry.run_id = None;
         }
+        if let Some(ctx) = state.get_database(&reapply.database_id) {
+            let _ =
+                stretch::clear_carry_run(&ctx.stack_root, &reapply.source_key, &reapply.revision);
+        }
         return;
     }
+    // A re-apply that stepped aside after re-applying was turned off has no
+    // turn coming: it settles as stopped below, like one turned off while
+    // waiting, so its card stops saying it is reprocessing.
     manager.forget_reapply(&channel);
     let Some(ctx) = state.get_database(&reapply.database_id) else {
         return;
@@ -471,6 +505,45 @@ pub(super) fn replaced_by_person(
         project_id = reapply.project_id,
         "A person's processing replaced the re-apply queued for a refreshed stack"
     );
+}
+
+/// A journaled re-apply that will not run again after a restart: cut off by
+/// too many restarts in a row, or no longer restorable. Its carry is
+/// settled as failed with the reason, so its card stops waiting and
+/// [`recover`] never brings it back with its attempts reset. Anything other
+/// than a processing run is left alone.
+pub(super) fn give_up(
+    state: &Arc<AppState>,
+    job: &super::journal::JournaledStackJob,
+    reason: &str,
+) {
+    let super::journal::JournaledStackJob::Processing {
+        database_id,
+        job_id,
+        group_index,
+        revision,
+        ..
+    } = job
+    else {
+        return;
+    };
+    let Some(ctx) = state.get_database(database_id) else {
+        return;
+    };
+    let key = source_key(job_id, *group_index);
+    tracing::warn!(
+        db = %database_id,
+        "A re-apply of processing to a refreshed stack is given up: {reason}"
+    );
+    if let Err(error) = stretch::end_carry(
+        &ctx.stack_root,
+        &key,
+        revision,
+        CarryState::Failed,
+        Some(format!("Re-applying was given up: {reason}")),
+    ) {
+        tracing::warn!("could not mark a re-apply as given up: {error}");
+    }
 }
 
 /// The setting was turned off: re-applies not yet running are dropped and

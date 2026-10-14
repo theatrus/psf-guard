@@ -1218,6 +1218,21 @@ pub(super) async fn restore_run(
     state: &Arc<AppState>,
     origin: super::journal::JournaledStackJob,
 ) -> Result<(), super::journal::NotRestored> {
+    let result = restore_processing(state, origin.clone()).await;
+    // A re-apply that does not come back is settled as failed, so its
+    // card stops waiting and no recovery revives it.
+    if origin.automatic()
+        && let Err(super::journal::NotRestored::Skip(reason)) = &result
+    {
+        super::reapply::give_up(state, &origin, reason);
+    }
+    result
+}
+
+async fn restore_processing(
+    state: &Arc<AppState>,
+    origin: super::journal::JournaledStackJob,
+) -> Result<(), super::journal::NotRestored> {
     use super::journal::{JournaledStackJob, NotRestored};
     let JournaledStackJob::Processing {
         database_id,
@@ -1332,9 +1347,23 @@ pub(super) async fn restore_run(
     Ok(())
 }
 
+/// How starting a re-apply went.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ReapplyStart {
+    /// Queued as this run.
+    Queued(String),
+    /// The result already existed and is now the revision's selection.
+    Done,
+    /// No longer wanted: a person applied or reverted processing, or a newer
+    /// stack replaced this one, while the tools were probed.
+    Withdrawn,
+}
+
 /// Queue a re-apply: the request the previous revision showed, run on the
-/// new revision as automatic work in the build line. Returns the run's id,
-/// or `None` when that result already exists and is now selected.
+/// new revision as automatic work in the build line. `still_wanted` is asked
+/// again once the tools are probed, under the selection lock, together with
+/// whether the revision's carry still waits: whatever a person did
+/// meanwhile wins.
 pub(super) async fn start_reapply(
     state: &Arc<AppState>,
     ctx: &super::DatabaseContext,
@@ -1342,7 +1371,8 @@ pub(super) async fn start_reapply(
     group_index: usize,
     revision: &str,
     request: StackViewProcessingRequest,
-) -> Result<Option<String>, String> {
+    still_wanted: &(dyn Fn() -> bool + Send + Sync),
+) -> Result<ReapplyStart, String> {
     let source = super::stack_processing_source(state, ctx, job_id, group_index)
         .map_err(|error| format!("its stack is not readable: {error:?}"))?;
     if source.revision != revision {
@@ -1360,29 +1390,27 @@ pub(super) async fn start_reapply(
     // Asked for on this revision, as a person's Apply would be, so the run
     // becomes the selection when it lands; the carried result stays until
     // then.
-    let generation = super::new_artifact_revision();
-    request_selection_with_source(
+    if !claim_carry(
         &selection_path,
-        &generation,
-        Some(ProcessingSource {
+        &super::new_artifact_revision(),
+        ProcessingSource {
             key: source.key.clone(),
             revision: source.revision.clone(),
-        }),
-        true,
-    )?;
-    bind_selection(&selection_path, &generation, &stretch_id)?;
-    update_carry(&selection_path, |carried| {
-        carried.run_id = Some(stretch_id.clone())
-    })?;
+        },
+        &stretch_id,
+        still_wanted,
+    )? {
+        return Ok(ReapplyStart::Withdrawn);
+    }
     if read_cached_manifest(&ctx.stack_root, &stretch_id).is_some() {
         complete_selection(&selection_path, &stretch_id)?;
         update_carry(&selection_path, |_| ())?;
-        return Ok(None);
+        return Ok(ReapplyStart::Done);
     }
     let Some(token) = try_begin_in_flight(&stretch_id) else {
         // A person's run of this very request is under way: it is the
         // re-apply.
-        return Ok(Some(stretch_id));
+        return Ok(ReapplyStart::Queued(stretch_id));
     };
     let origin = super::journal::JournaledStackJob::Processing {
         database_id: ctx.id.clone(),
@@ -1413,7 +1441,40 @@ pub(super) async fn start_reapply(
         token,
         origin,
     );
-    Ok(Some(stretch_id))
+    Ok(ReapplyStart::Queued(stretch_id))
+}
+
+/// Claim a revision's carried re-apply for one run, in one go under the
+/// selection lock: only while nothing is selected, the carry still waits, and
+/// the caller still wants it. A person's Apply clears the carry and a Revert
+/// stops it, so either one made meanwhile is kept.
+fn claim_carry(
+    selection_path: &FsPath,
+    generation: &str,
+    source: ProcessingSource,
+    stretch_id: &str,
+    still_wanted: &(dyn Fn() -> bool + Send + Sync),
+) -> Result<bool, String> {
+    let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
+    let Some(mut selection) = read_selection(selection_path) else {
+        return Ok(false);
+    };
+    let waiting = selection.selected.is_none()
+        && selection
+            .carried
+            .as_ref()
+            .is_some_and(|carried| carried.state == CarryState::Waiting);
+    if !waiting || !still_wanted() {
+        return Ok(false);
+    }
+    selection.requested = generation.into();
+    selection.desired = Some(stretch_id.into());
+    selection.source = Some(source);
+    if let Some(carried) = selection.carried.as_mut() {
+        carried.run_id = Some(stretch_id.into());
+    }
+    write_json_atomic(selection_path, &selection)?;
+    Ok(true)
 }
 
 /// Carry the processing a stack's previous revision shows to its new
@@ -1508,6 +1569,18 @@ pub(super) fn carry_published(
     update_carry(
         &selection_path(stack_root, source_key, source_revision),
         |_| (),
+    )
+}
+
+/// The re-apply's run stepped aside: it waits again, with no run.
+pub(super) fn clear_carry_run(
+    stack_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+) -> Result<(), String> {
+    update_carry(
+        &selection_path(stack_root, source_key, source_revision),
+        |carried| carried.run_id = None,
     )
 }
 

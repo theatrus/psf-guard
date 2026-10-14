@@ -469,8 +469,10 @@ async fn tick(state: &Arc<AppState>) {
         return;
     }
     // One stacking worker, and the user comes first on it: while a build
-    // runs, or interactive work is in flight, everything due waits.
-    if state.interactive_job_active() || !state.stack_previews.active().is_empty() {
+    // runs, or interactive work is in flight, everything due waits. A
+    // re-apply of processing does not hold a refresh off: the refresh may
+    // bring a newer stack, which the re-apply would only be redone for.
+    if state.interactive_job_active() || holds_off_refreshes(&state.stack_previews) {
         for (key, pending) in due {
             state.auto_stacks.postpone(key, pending, BUSY_RETRY, now);
         }
@@ -494,6 +496,12 @@ async fn tick(state: &Arc<AppState>) {
         for project_id in projects {
             match refresh_project(state, &ctx, project_id, pending.reason).await {
                 Ok(RefreshOutcome::Started) => {
+                    // The build goes ahead of a re-apply holding the worker,
+                    // which waits for its turn again. If the build makes a
+                    // newer stack, the re-apply moves on to it; nothing in
+                    // a re-apply touches a refresh, so the two cannot chase
+                    // each other.
+                    state.stack_previews.yield_automatic_processing();
                     // The worker is taken; the rest of this database and
                     // every other due key wait for the next free moment,
                     // keeping their history so the cap still holds.
@@ -538,6 +546,15 @@ async fn tick(state: &Arc<AppState>) {
             }
         }
     }
+}
+
+/// Whether queued or running work keeps due refreshes waiting: anything but
+/// a re-apply of processing.
+pub(super) fn holds_off_refreshes(manager: &super::StackPreviewManager) -> bool {
+    manager
+        .active()
+        .into_iter()
+        .any(|entry| !(entry.kind == super::StackActivityKind::Processing && entry.automatic))
 }
 
 enum RefreshOutcome {

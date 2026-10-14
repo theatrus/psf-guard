@@ -1203,7 +1203,9 @@ stack, on its own and with no page open:
   of frames does not start RC-Astro after every build. It then waits for
   the worker to be free of everything else: anything you start and every
   stack build go first. Like an automatic build, it steps aside when you
-  start work, and comes back once the worker is free.
+  start work, and comes back once the worker is free. A running re-apply
+  also steps aside for an automatic refresh that is due, since the refresh
+  may bring a newer stack anyway.
 - Only the channel's newest stack is processed. A newer stack arriving while
   a re-apply waits or runs drops it, and a running RC-Astro tool is killed;
   RC-Astro steps cached for the old stack were made from other pixels, so
@@ -1219,11 +1221,13 @@ stack, on its own and with no page open:
   replaces the re-apply. The same settings take the queued run over as
   yours.
 - Turning the setting off drops re-applies that have not started; a running
-  one finishes.
+  one finishes, and one that steps aside after that is dropped too.
 
 Re-applies survive a restart: queued and running ones are in the job
 journal like other processing runs, and one still waiting for its project to
-settle is remembered by the new stack's processing selection.
+settle is remembered by the new stack's processing selection. One cut off by
+two restarts in a row, or that cannot be put back, is given up for good: its
+card says why, as for a failure.
 
 ## Named processing setups
 

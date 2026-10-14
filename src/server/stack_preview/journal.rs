@@ -456,10 +456,19 @@ pub async fn restore(state: &Arc<AppState>) {
         let mut restored_a_persons_build = false;
         for job in journal.stack {
             let noun = job.noun();
-            let Some(job) = job.after_restart() else {
+            let Some(job) = job.clone().after_restart() else {
                 tracing::warn!(
                     "A {noun} cut off by {MAX_ATTEMPTS} restarts in a row is not started again"
                 );
+                // A re-apply given up on here must not come back through
+                // the carry its stack's selection remembers.
+                if job.automatic() {
+                    super::reapply::give_up(
+                        state,
+                        &job,
+                        &format!("it was cut off by {MAX_ATTEMPTS} restarts in a row"),
+                    );
+                }
                 continue;
             };
             let automatic = job.automatic();
