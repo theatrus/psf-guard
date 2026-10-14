@@ -271,6 +271,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const first = checkedShooting.current === null;
     checkedShooting.current = key;
     if (!state.panelRigId || shootingRigIds.includes(state.panelRigId)) return;
+    // A locked panel off the center holds the size it was placed at.
+    if (state.layout.panels.some(panel => panel.locked && (Math.abs(panel.x) > 1e-9 || Math.abs(panel.y) > 1e-9))) return;
     const next = rigList.find(r => sizesShared(state, r));
     if (!next) return;
     const take = (current: FramingState | null) => current ? { ...current, panelRigId: next.rig.id, panel: panelForRig(rigList, next.rig.id) } : current;
@@ -1197,13 +1199,13 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
             const moved = !!field && !!state.panel && (Math.abs(field.width_degrees - state.panel.width_degrees) > 1e-9 || Math.abs(field.height_degrees - state.panel.height_degrees) > 1e-9);
             return <>Size from <strong>{panelRig.catalog_name}</strong>{off ? ' (off)' : ''}
               {state.panel && ` · ${formatDegrees(state.panel.width_degrees)} × ${formatDegrees(state.panel.height_degrees)}`}{field ? '' : ' · no optics now'}
-              {canWrite && moved && <> <button type="button" className="link-button" title={`The rig's field is now ${formatDegrees(field!.width_degrees)} × ${formatDegrees(field!.height_degrees)}`} onClick={() => update({ panel: field })}>Use current field</button></>}
+              {canWrite && moved && !sizeLocked && <> <button type="button" className="link-button" title={`The rig's field is now ${formatDegrees(field!.width_degrees)} × ${formatDegrees(field!.height_degrees)}`} onClick={() => update({ panel: field })}>Use current field</button></>}
               {canWrite && <> <button type="button" className="link-button" onClick={() => update(current => ({ panelRigId: null, panel: current.panel }))}>Type a size</button></>}</>;
           })()}
         </p>
         {!panelRig && <div className="framing-grid">
-          <label>Panel width<span className="framing-input"><NumberInput aria-label="Panel width degrees" aria-invalid={problemAt('panel') || undefined} step="any" min={0.01} max={30} value={state.panel ? round(state.panel.width_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: number(event.target.value, current.panel?.width_degrees ?? 1), height_degrees: current.panel?.height_degrees ?? 1 } }))} /><small>°</small></span></label>
-          <label>Panel height<span className="framing-input"><NumberInput aria-label="Panel height degrees" aria-invalid={problemAt('panel') || undefined} step="any" min={0.01} max={30} value={state.panel ? round(state.panel.height_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: current.panel?.width_degrees ?? 1, height_degrees: number(event.target.value, current.panel?.height_degrees ?? 1) } }))} /><small>°</small></span></label>
+          <label>Panel width<span className="framing-input"><NumberInput aria-label="Panel width degrees" disabled={sizeLocked} aria-invalid={problemAt('panel') || undefined} step="any" min={0.01} max={30} value={state.panel ? round(state.panel.width_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: number(event.target.value, current.panel?.width_degrees ?? 1), height_degrees: current.panel?.height_degrees ?? 1 } }))} /><small>°</small></span></label>
+          <label>Panel height<span className="framing-input"><NumberInput aria-label="Panel height degrees" disabled={sizeLocked} aria-invalid={problemAt('panel') || undefined} step="any" min={0.01} max={30} value={state.panel ? round(state.panel.height_degrees, 3) : ''} onChange={event => update(current => ({ panel: { width_degrees: current.panel?.width_degrees ?? 1, height_degrees: number(event.target.value, current.panel?.height_degrees ?? 1) } }))} /><small>°</small></span></label>
         </div>}
         <p className="director-muted" data-testid="framing-extent">{geometry ? `${geometry.panels.length} panel${geometry.panels.length === 1 ? '' : 's'} · ${formatDegrees(geometry.extent.width_degrees)} × ${formatDegrees(geometry.extent.height_degrees)}` : 'Pick a rig or type a size'}</p>
         {problems.filter(problem => !problem.field.startsWith('rig:')).map(problem => <p key={problem.field} className="framing-problem" data-testid="framing-problem">{problem.message}</p>)}
