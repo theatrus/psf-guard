@@ -132,9 +132,9 @@
 }
 
 /* Filter pills: the name, the value and a chevron in one rounded button.
-   A pill that narrows the view stands out. A dark fill keeps the name
-   (about 5.8:1) and the value (about 9.6:1) readable; the lighter input
-   grey left the name near 2.6:1. */
+   A pill that narrows the view stands out. A dark fill with a light name
+   (about 7.9:1) and a semibold near-white value (about 11:1) reads at a
+   glance; the input grey with a muted name was near 2.6:1. */
 .toolbar-pill {
   display: inline-flex;
   align-items: center;
@@ -175,18 +175,20 @@
 
 .toolbar-pill-label {
   flex: none;
-  color: var(--color-text-secondary);
+  color: var(--color-text-lighter);
 }
 
 .toolbar-pill-value {
   min-width: 0;
+  color: #f2f2f2;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .toolbar-pill svg {
   flex: none;
-  color: var(--color-text-secondary);
+  color: var(--color-text-lighter);
 }
 
 /* A pill around a native select: the select keeps its own list and
@@ -200,8 +202,9 @@
   padding: 0 0.1rem;
   border: 0;
   background: transparent;
-  color: inherit;
+  color: #f2f2f2;
   font: inherit;
+  font-weight: 600;
   text-overflow: ellipsis;
   cursor: pointer;
   outline: none;
@@ -218,7 +221,7 @@
   flex: none;
   width: 13px;
   height: 13px;
-  background: var(--color-text-secondary);
+  background: var(--color-text-lighter);
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
   pointer-events: none;
@@ -269,7 +272,7 @@
 }
 
 .view-toolbar .toolbar-search input::placeholder {
-  color: var(--color-text-light);
+  color: var(--color-text-secondary);
   opacity: 1;
 }
 
