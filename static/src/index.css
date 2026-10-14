@@ -3,7 +3,6 @@
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: light dark;
   color: var(--color-text-primary);
   background-color: var(--color-bg-secondary);
 
@@ -56,4 +55,63 @@ button:focus-visible {
   outline: 2px solid var(--state-focus-border);
 }
 
-/* Always use dark mode for this app */
+/* Form fields: text, number, search and date inputs, selects and textareas.
+   They take the --color-input-* tokens from App.css, and the browser draws
+   its own parts of them (spinners, pickers, a select's menu) from
+   color-scheme there. Each rule, its state included, sits inside :where()
+   for no specificity: this file loads after App.css, and a component that
+   draws a field its own way must still win. Focus lays an outline over
+   the border, so it shows on a field whose component draws its own
+   border too. Later rules here win ties, so an invalid field keeps its
+   colour while focused. Checkboxes, radios and sliders keep the
+   browser's drawing in the theme's accent. */
+:root {
+  accent-color: var(--color-input-accent);
+}
+
+:where(
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image']),
+    select,
+    textarea
+  ) {
+  border: 1px solid var(--color-input-border);
+  border-radius: 4px;
+  background-color: var(--color-input-bg);
+  color: var(--color-input-text);
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--color-input-placeholder);
+  opacity: 1;
+}
+
+:where(
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image']):focus-visible,
+    select:focus-visible,
+    textarea:focus-visible
+  ) {
+  outline: 1px solid var(--state-focus-border);
+  outline-offset: -1px;
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
+}
+
+:where(
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image'])[aria-invalid='true'],
+    select[aria-invalid='true'],
+    textarea[aria-invalid='true']
+  ) {
+  border-color: var(--color-input-invalid-border);
+  outline-color: var(--color-input-invalid-border);
+}
+
+:where(
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image']):disabled,
+    select:disabled,
+    textarea:disabled
+  ) {
+  border-color: var(--color-input-disabled-border);
+  background-color: var(--color-input-disabled-bg);
+  color: var(--color-input-disabled-text);
+  cursor: not-allowed;
+}

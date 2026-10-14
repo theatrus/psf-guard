@@ -56,10 +56,6 @@
   width: 4.5rem;
   margin: 0 4px;
   padding: 4px 8px;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 4px;
-  background: var(--color-bg-input);
-  color: var(--color-text-primary);
 }
 
 .purge-rejects .reject-removal-plan ul {

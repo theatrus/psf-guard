@@ -223,11 +223,7 @@
 .tauri-settings .file-path-input {
   flex: 1;
   padding: 8px 12px;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 4px;
   font-size: 14px;
-  background: var(--color-bg-input);
-  color: var(--color-text-primary);
 }
 
 .tauri-settings .file-path-input:focus {
@@ -698,10 +694,6 @@
   width: 100%;
   min-width: 0;
   padding: 8px 9px;
-  color: var(--color-text-primary);
-  background: var(--color-bg-input);
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 4px;
 }
 
 .tauri-settings .scheduler-sync-endpoints small {
@@ -1054,10 +1046,6 @@
 .tauri-settings .catalog-install-controls select {
   min-width: 0;
   padding: 8px 10px;
-  color: var(--color-text-primary);
-  background: var(--color-bg-input);
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 4px;
 }
 
 .tauri-settings .catalog-install-controls > small,

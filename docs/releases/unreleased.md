@@ -287,3 +287,7 @@
   a small dot before their date in Images and Sequence: the frames the
   Library's "new" badge counted, plus any captured since. They keep it until
   you next open the project from the Library.
+- Form fields match the dark theme: text, number and date fields, menus and
+  text boxes are dark with light text everywhere, such as Settings and the
+  Sequence **Scoring** limits, even when the computer is set to light mode.
+  Their arrows, date pickers, checkboxes and sliders follow the theme too.

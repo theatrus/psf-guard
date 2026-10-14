@@ -59,10 +59,7 @@
   box-sizing: border-box;
   height: 30px;
   padding: 0 0.55rem;
-  border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
-  background: var(--color-bg-input);
-  color: var(--color-text-primary);
   font: inherit;
   font-size: 0.82rem;
   letter-spacing: normal;

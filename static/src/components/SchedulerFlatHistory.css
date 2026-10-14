@@ -33,10 +33,6 @@
   box-sizing: border-box;
   min-height: 34px;
   padding: 6px 8px;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 4px;
-  background: var(--color-bg-input);
-  color: var(--color-text-primary);
 }
 
 .flat-history-table-scroll { overflow: auto; min-height: 120px; }
