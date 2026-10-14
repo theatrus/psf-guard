@@ -1219,6 +1219,7 @@ impl DatabaseContext {
             Arc::clone(&self.pair_calibrated_copies),
             Arc::clone(&self.image_import_mutex),
         );
+        crate::server::calibration_health::tree_published(&self.database_path);
         Ok(tree)
     }
 
@@ -2086,6 +2087,8 @@ impl DatabaseContext {
         if built_tree {
             let mut cache = self.file_check_cache.write().unwrap();
             cache.refresh_progress.complete_directory();
+            drop(cache);
+            crate::server::calibration_health::tree_published(&self.database_path);
         } else {
             tracing::debug!(
                 "🌳 Directory tree cache became fresh while refresh waited for db={}",

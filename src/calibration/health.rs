@@ -19,7 +19,10 @@
 //! A light takes the worst level among its findings, and a project the worst
 //! among its lights. Each finding counts its lights by night and filter.
 //! The work is one header read and one match per light, so the server runs
-//! it in the background and keeps the result; see [`project_key`].
+//! it in the background and keeps the result; see [`project_key`] and
+//! [`project_file_digests`]. It keeps each light's header too
+//! ([`KeptHeader`]), so a project judged again reads only the lights whose
+//! file changed.
 
 use super::quality::{self, StoredMeasurement};
 use super::{
@@ -35,8 +38,9 @@ use seiza_calibration::{FlatMeasurement, FlatScreening, Grade, FRAME_QUALITY_ALG
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::UNIX_EPOCH;
 
 /// Bump when the rules or what a result keeps change, so every kept result
 /// is computed again. 2: each finding keeps its lights' ids.
@@ -158,6 +162,34 @@ pub struct LightResult {
     pub filter: String,
     /// `None` when the file could not be read.
     pub findings: Option<Vec<LightFinding>>,
+}
+
+/// A light's header as a pass read it, kept so the next pass reads it again
+/// only when the file changed: another place, size or modification time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KeptHeader {
+    pub path: PathBuf,
+    pub size: u64,
+    /// Nanoseconds since 1970.
+    pub modified_ns: u64,
+    pub meta: FrameMeta,
+}
+
+/// A file's size and modification time, or `None` when it cannot be read.
+fn file_stamp(path: &Path) -> Option<(u64, u64)> {
+    let metadata = std::fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some((metadata.len(), u64::try_from(modified.as_nanos()).ok()?))
+}
+
+/// What judging one light came to, with its header for the next pass.
+#[derive(Debug, Clone)]
+pub struct JudgedLight {
+    pub result: LightResult,
+    /// The header read or kept; absent when the file could not be read.
+    pub header: Option<KeptHeader>,
+    /// Whether the header was read from the file this time.
+    pub read: bool,
 }
 
 /// The library as judging needs it, read once for many lights.
@@ -309,25 +341,56 @@ impl HealthLibrary {
 
     /// Read one light's header and judge it.
     pub fn judge_light(&self, light: &ProjectLight) -> Result<LightResult> {
-        if self.is_empty() {
-            return Ok(LightResult {
-                image_id: light.image_id,
-                night: light.night.clone(),
-                filter: light.filter.clone(),
-                findings: Some(Vec::new()),
-            });
-        }
-        let meta = crate::commands::import::headers::read_frame_meta(&light.path);
-        let findings = if meta.readable {
-            Some(self.findings(&meta)?)
-        } else {
-            None
-        };
-        Ok(LightResult {
+        Ok(self.judge_light_kept(light, None)?.result)
+    }
+
+    /// Judge one light, reading its header only when `kept` does not hold
+    /// it as the file is now.
+    pub fn judge_light_kept(
+        &self,
+        light: &ProjectLight,
+        kept: Option<&KeptHeader>,
+    ) -> Result<JudgedLight> {
+        let result = |findings| LightResult {
             image_id: light.image_id,
             night: light.night.clone(),
             filter: light.filter.clone(),
             findings,
+        };
+        if self.is_empty() {
+            return Ok(JudgedLight {
+                result: result(Some(Vec::new())),
+                header: kept.cloned(),
+                read: false,
+            });
+        }
+        let stamp = file_stamp(&light.path);
+        let unchanged = kept
+            .filter(|kept| kept.path == light.path && stamp == Some((kept.size, kept.modified_ns)));
+        let (meta, read) = match unchanged {
+            Some(kept) => (kept.meta.clone(), false),
+            None => (
+                crate::commands::import::headers::read_frame_meta(&light.path),
+                true,
+            ),
+        };
+        if !meta.readable {
+            return Ok(JudgedLight {
+                result: result(None),
+                header: None,
+                read,
+            });
+        }
+        let findings = self.findings(&meta)?;
+        Ok(JudgedLight {
+            result: result(Some(findings)),
+            header: stamp.map(|(size, modified_ns)| KeptHeader {
+                path: light.path.clone(),
+                size,
+                modified_ns,
+                meta,
+            }),
+            read,
         })
     }
 
@@ -760,6 +823,56 @@ pub fn project_light_digests(conn: &Connection) -> Result<BTreeMap<i32, String>>
         let hasher = hashers.entry(project).or_default();
         for index in 1..6 {
             feed(hasher, row.get_ref(index)?);
+        }
+        hasher.update(b"\x1e");
+    }
+    Ok(hashers
+        .into_iter()
+        .map(|(project, hasher)| (project, hex(hasher)))
+        .collect())
+}
+
+/// Where each project's lights were found, with the image folders searched:
+/// one changes when a light's file turns up, goes or moves, or the folders
+/// change. Only the background pass compares it, since it needs the folder
+/// tree; the views compare [`current_keys`], which needs only the catalog.
+/// A project whose lights are all rejected has none.
+pub fn project_file_digests(
+    conn: &Connection,
+    folders: &[String],
+    tree: &crate::directory_tree::DirectoryTree,
+) -> Result<BTreeMap<i32, String>> {
+    let mut statement = conn.prepare(
+        "SELECT ai.projectId, ai.Id,
+                CASE WHEN json_valid(ai.metadata) THEN json_extract(ai.metadata, '$.FileName') END
+         FROM acquiredimage ai
+         JOIN project p ON ai.projectId = p.Id
+         JOIN target t ON ai.targetId = t.Id
+         WHERE ai.gradingStatus IS NOT 2
+         ORDER BY ai.projectId, ai.Id",
+    )?;
+    let mut rows = statement.query([])?;
+    let mut hashers: BTreeMap<i32, Sha256> = BTreeMap::new();
+    while let Some(row) = rows.next()? {
+        let project: i32 = row.get(0)?;
+        let hasher = hashers.entry(project).or_insert_with(|| {
+            let mut hasher = Sha256::new();
+            for folder in folders {
+                hasher.update(folder.as_bytes());
+                hasher.update(b"\x1f");
+            }
+            hasher.update(b"\x1d");
+            hasher
+        });
+        hasher.update(row.get::<_, i64>(1)?.to_le_bytes());
+        hasher.update(b"\x1f");
+        let found = row.get::<_, Option<String>>(2)?.and_then(|name| {
+            tree.find_file_first(crate::utils::file_name_of(&name))
+                .cloned()
+        });
+        match found {
+            Some(path) => hasher.update(path.to_string_lossy().as_bytes()),
+            None => hasher.update(b"\x00"),
         }
         hasher.update(b"\x1e");
     }
@@ -1293,6 +1406,100 @@ mod tests {
         configure_flat_max_age(None);
         assert_ne!(settings[&2], graded[&2]);
         assert_eq!(current_keys(&fixture.conn).unwrap(), graded);
+    }
+
+    #[test]
+    fn file_digests_follow_where_the_lights_are_found() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.light(2, 1, LIGHT_AT, "Camera");
+        fixture.light(3, 2, LIGHT_AT, "Camera");
+        let folders = vec![fixture.temp.path().display().to_string()];
+        let digests = |folders: &[String]| {
+            let tree = crate::directory_tree::DirectoryTree::build(fixture.temp.path()).unwrap();
+            project_file_digests(&fixture.conn, folders, &tree).unwrap()
+        };
+        let found = digests(&folders);
+        assert_eq!(found.len(), 2);
+        assert_eq!(digests(&folders), found, "stable");
+
+        // A light's file goes: its project's digest changes, the other's
+        // does not; it comes back, and the digest with it.
+        let aside = fixture.temp.path().join("light-1.aside");
+        std::fs::rename(fixture.path("light-1.fits"), &aside).unwrap();
+        let missing = digests(&folders);
+        assert_ne!(missing[&1], found[&1]);
+        assert_eq!(missing[&2], found[&2]);
+        std::fs::rename(&aside, fixture.path("light-1.fits")).unwrap();
+        assert_eq!(digests(&folders), found);
+
+        // Other image folders change every project's digest.
+        let other = digests(&[folders[0].clone(), "/elsewhere".into()]);
+        assert_ne!(other[&1], found[&1]);
+        assert_ne!(other[&2], found[&2]);
+
+        // A rejected light is not judged, so where it is does not count.
+        fixture
+            .conn
+            .execute(
+                "UPDATE acquiredimage SET gradingStatus = 2 WHERE Id = 3",
+                [],
+            )
+            .unwrap();
+        assert!(!digests(&folders).contains_key(&2));
+    }
+
+    #[test]
+    fn a_kept_header_is_read_again_only_when_its_file_changes() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        let library = HealthLibrary::load(&fixture.conn).unwrap();
+        let light = ProjectLight {
+            image_id: 1,
+            path: fixture.path("light-1.fits"),
+            night: "2026-09-09".into(),
+            filter: "Ha".into(),
+        };
+        let first = library.judge_light_kept(&light, None).unwrap();
+        assert!(first.read);
+        let header = first
+            .header
+            .clone()
+            .expect("a readable light keeps its header");
+        assert!(header.meta.readable);
+
+        // The header survives a trip through the cache file.
+        let header: KeptHeader =
+            serde_json::from_slice(&serde_json::to_vec(&header).unwrap()).unwrap();
+        let again = library.judge_light_kept(&light, Some(&header)).unwrap();
+        assert!(!again.read, "an unchanged file is not read again");
+        assert_eq!(again.result.findings, first.result.findings);
+
+        // A file written again is read again.
+        let bytes = std::fs::read(&light.path).unwrap();
+        std::fs::write(&light.path, [bytes.as_slice(), &[0; 2880]].concat()).unwrap();
+        assert!(
+            library
+                .judge_light_kept(&light, Some(&header))
+                .unwrap()
+                .read
+        );
+
+        // So is one found somewhere else.
+        let moved = ProjectLight {
+            path: fixture.path("light-1-moved.fits"),
+            ..light.clone()
+        };
+        std::fs::copy(&light.path, &moved.path).unwrap();
+        assert!(
+            library
+                .judge_light_kept(&moved, Some(&header))
+                .unwrap()
+                .read
+        );
     }
 
     #[test]

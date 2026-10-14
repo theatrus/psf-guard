@@ -1717,6 +1717,10 @@ pub async fn update_database_route(
     }
 
     let _ = new_ctx.ensure_cache_available();
+    // Lights may be found elsewhere, or found at last.
+    if previous_entry.image_dirs != entry.image_dirs {
+        crate::server::calibration_health::request(&state, &new_ctx.database_path);
+    }
 
     Ok(Json(ApiResponse::success(summary_of(&new_ctx))))
 }

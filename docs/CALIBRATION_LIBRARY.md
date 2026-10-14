@@ -696,14 +696,24 @@ Reading every light takes time, so this runs in the background, never on a
 request: after each grading pass (which follows the server start, imports,
 syncs, forgets and remote uploads), when a light's grade changes, and when a
 frame is kept out or used anyway, a validity mark changes, or the
-calibration settings change. It uses the background worker share and waits
-while interactive work runs. The results are kept below the database's cache
-folder, each filed under a key of the library and its grades, the project's
-lights, the calibration settings and the rules, so a project is read again
-only when one of those changed. Accepting a light, or setting it back to
-pending, changes no key; rejecting one does. Until a project is read again,
-a result that no longer holds shows no pill. The image views keep showing its
-marks, so rejecting lights does not clear the rest until the pass ends.
+calibration settings change. A directory refresh and a change of image
+folders start one too, since a light's file may have turned up or moved.
+When the Library or an image view finds a result that no longer holds, as
+after N.I.N.A. writes new lights or the CLI regrades some, it asks for one.
+It uses the background worker share and waits while interactive work runs;
+a server that stops ends it between lights.
+
+The results are kept below the database's cache folder, each filed under a
+key of the library and its grades, the project's lights, the calibration
+settings and the rules, and beside it where the project's lights were found
+in the image folders. A project is read again only when one of those
+changed, and then only the lights whose file changed are read: each light's
+header is kept, with its file's size and modification time, from the last
+read. Accepting a light, or setting it back to pending, changes no key;
+rejecting one does. Until a project is read again, a result that no longer
+holds shows no pill. The image views keep showing its marks, so rejecting
+lights does not clear the rest until the pass ends; Sequence holds back
+**Poor calibration** in **Select** until then.
 
 ## Stack previews
 

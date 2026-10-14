@@ -4,22 +4,29 @@
 //! Judging a project reads every light's header and matches it against the
 //! library (see [`crate::calibration::project_health`]), so no request ever
 //! does it. A pass runs after the grading pass, which itself follows the
-//! server start, imports, syncs, forgets and uploads; and when a frame is
-//! chosen for or against, a validity mark changes, or the calibration
-//! settings change. It works out only the projects whose key changed: the
+//! server start, imports, syncs, forgets and uploads; when a frame is chosen
+//! for or against, a validity mark changes, or the calibration settings
+//! change; when a directory refresh finishes or the image folders change;
+//! and when a view finds a result behind the catalog, as after N.I.N.A.
+//! writes new lights. It works out only the projects whose key changed: the
 //! key covers the library and its grades, the project's lights, the
-//! settings and the rules, so an unchanged project is never read again.
+//! settings and the rules, and the pass also compares where the lights'
+//! files were found. An unchanged project is never read again, and a
+//! project judged again reads only the headers of lights whose file
+//! changed.
 //!
 //! The Library reads the kept results only. One whose key no longer matches
 //! is stale and is not shown until the next pass replaces it.
 
-use crate::calibration::{HealthCode, HealthLevel, HealthLibrary, ProjectHealth};
+use crate::calibration::{
+    HealthCode, HealthLevel, HealthLibrary, JudgedLight, KeptHeader, ProjectHealth, ProjectLight,
+};
 use crate::concurrency::{ComputePool, Priority};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
-use axum::extract::{Path, Query};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
@@ -27,11 +34,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock, Weak};
 use std::time::Duration;
 
 /// The kept results, below the database's cache folder.
 const CACHE_FILE: &str = "calibration-health.json";
+
+/// The kept light headers, one file per project, below the database's cache
+/// folder. Apart from the results, which every view reads.
+const HEADERS_DIR: &str = "calibration-health-headers";
 
 /// How often a pass looks again while interactive work runs.
 const YIELD_POLL: Duration = Duration::from_millis(250);
@@ -45,12 +56,53 @@ struct HealthCache {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedHealth {
     key: String,
+    /// Where the project's lights were found when it was judged
+    /// ([`crate::calibration::health_file_digests`]).
+    #[serde(default)]
+    files: String,
     computed_at: i64,
     health: ProjectHealth,
 }
 
+/// One project's light headers, by light id.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct KeptHeaders {
+    /// The build that read them; another may read a header differently.
+    version: String,
+    lights: BTreeMap<i32, KeptHeader>,
+}
+
 fn cache_path(cache_dir: &FsPath) -> PathBuf {
     cache_dir.join(CACHE_FILE)
+}
+
+fn headers_path(cache_dir: &FsPath, project: i32) -> PathBuf {
+    cache_dir.join(HEADERS_DIR).join(format!("{project}.json"))
+}
+
+/// One project's kept headers, or none when the file is missing, unreadable
+/// or from another build.
+fn read_headers(cache_dir: &FsPath, project: i32) -> BTreeMap<i32, KeptHeader> {
+    std::fs::read(headers_path(cache_dir, project))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<KeptHeaders>(&bytes).ok())
+        .filter(|kept| kept.version == env!("CARGO_PKG_VERSION"))
+        .map(|kept| kept.lights)
+        .unwrap_or_default()
+}
+
+fn write_headers(
+    cache_dir: &FsPath,
+    project: i32,
+    lights: BTreeMap<i32, KeptHeader>,
+) -> anyhow::Result<()> {
+    write_json(
+        &headers_path(cache_dir, project),
+        &KeptHeaders {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            lights,
+        },
+    )
 }
 
 /// The kept results, or none when the file is missing, unreadable, or from
@@ -66,18 +118,23 @@ fn read_cache(cache_dir: &FsPath) -> HealthCache {
 /// Distinguishes the temporary files of one process's writes.
 static WRITES: AtomicUsize = AtomicUsize::new(0);
 
-/// Write the results whole under a temporary name, then rename it into
-/// place, so a reader never sees half a file.
 fn write_cache(cache_dir: &FsPath, cache: &HealthCache) -> anyhow::Result<()> {
-    std::fs::create_dir_all(cache_dir)?;
-    let path = cache_path(cache_dir);
+    write_json(&cache_path(cache_dir), cache)
+}
+
+/// Write a file whole under a temporary name, then rename it into place, so
+/// a reader never sees half of it.
+fn write_json(path: &FsPath, value: &impl Serialize) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let temporary = path.with_extension(format!(
         "json.tmp-{}-{}",
         std::process::id(),
         WRITES.fetch_add(1, Ordering::Relaxed)
     ));
-    std::fs::write(&temporary, serde_json::to_vec(cache)?)?;
-    if let Err(error) = std::fs::rename(&temporary, &path) {
+    std::fs::write(&temporary, serde_json::to_vec(value)?)?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
         let _ = std::fs::remove_file(&temporary);
         return Err(error.into());
     }
@@ -116,6 +173,25 @@ struct Job {
     flags: Mutex<Flags>,
     /// Projects judged so far this pass, and how many it set out to judge.
     progress: RwLock<(usize, usize)>,
+    /// The server that last asked, so a directory refresh can ask again.
+    state: Mutex<Weak<AppState>>,
+    work: Mutex<WorkDone>,
+}
+
+/// What the passes over one catalog have done since the server started.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct WorkDone {
+    pub projects: usize,
+    pub lights: usize,
+    /// Light headers read from their files; the rest were kept from an
+    /// earlier pass.
+    pub headers_read: usize,
+}
+
+/// What the passes over the catalog at `path` have done since the server
+/// started: the work a pass skipped shows here.
+pub fn work_done(path: &str) -> WorkDone {
+    *job(path).work.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// One job per catalog file, whichever database context asks.
@@ -146,12 +222,14 @@ pub fn request(state: &Arc<AppState>, path: &str) {
         return;
     }
     let job = job(path);
+    *job.state.lock().unwrap_or_else(|p| p.into_inner()) = Arc::downgrade(state);
     if !claim(&mut job.flags.lock().unwrap_or_else(|p| p.into_inner())) {
         return;
     }
     let state = Arc::clone(state);
     let path = path.to_string();
-    // A stop waits for the project being judged to be written.
+    // A stop waits for the light being judged; the project it cut short is
+    // judged whole by the next pass.
     let work = state.shutdown.hold(format!("calibration health ({path})"));
     std::thread::spawn(move || {
         let _work = work;
@@ -183,6 +261,25 @@ pub fn request_all(state: &Arc<AppState>) {
     }
 }
 
+/// A directory refresh of the catalog at `path` finished: a light's file
+/// may have turned up, gone or moved. Only a catalog a server has asked
+/// about is looked at again; the server start asks about each anyway.
+pub fn tree_published(path: &str) {
+    let state = JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(path)
+        .and_then(|job| {
+            job.state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .upgrade()
+        });
+    if let Some(state) = state {
+        request(&state, path);
+    }
+}
+
 fn read_only(path: &str) -> anyhow::Result<Connection> {
     Ok(
         crate::server::database_context::open_scheduler_connection_with_flags(
@@ -192,8 +289,8 @@ fn read_only(path: &str) -> anyhow::Result<Connection> {
     )
 }
 
-/// One pass: judge each project whose key changed, writing the results
-/// after each so the Library sees them as they come.
+/// One pass: judge each project whose key or lights' files changed,
+/// writing the results after each so the Library sees them as they come.
 fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
     let Some(ctx) = state
         .all_databases()
@@ -204,18 +301,29 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
     };
     let conn = read_only(path)?;
     let keys = crate::calibration::health_keys(&conn)?;
+    let tree = ctx.get_directory_tree()?;
+    let mut files = crate::calibration::health_file_digests(&conn, &ctx.image_dirs, &tree)?;
     let mut cache = read_cache(&ctx.cache_dir_path);
     let known = cache.projects.len();
-    cache
+    let gone: Vec<i32> = cache
         .projects
-        .retain(|project, _| keys.contains_key(project));
-    let stale: Vec<(i32, String)> = keys
+        .keys()
+        .filter(|project| !keys.contains_key(project))
+        .copied()
+        .collect();
+    for project in gone {
+        cache.projects.remove(&project);
+        let _ = std::fs::remove_file(headers_path(&ctx.cache_dir_path, project));
+    }
+    let stale: Vec<(i32, String, String)> = keys
         .into_iter()
-        .filter(|(project, key)| {
-            cache
+        .filter_map(|(project, key)| {
+            let files = files.remove(&project).unwrap_or_default();
+            let current = cache
                 .projects
-                .get(project)
-                .is_none_or(|kept| &kept.key != key)
+                .get(&project)
+                .is_some_and(|kept| kept.key == key && kept.files == files);
+            (!current).then_some((project, key, files))
         })
         .collect();
     cache.version = crate::calibration::HEALTH_ALGORITHM_VERSION;
@@ -227,7 +335,6 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
     }
     *job.progress.write().unwrap_or_else(|p| p.into_inner()) = (0, stale.len());
     let library = HealthLibrary::load(&conn)?;
-    let tree = ctx.get_directory_tree()?;
     // Header reads, mostly: little memory, so the core budget decides.
     let budget =
         crate::concurrency::plan_workers(None, &state.worker_policy(), Priority::Background, None);
@@ -239,24 +346,29 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
         lease.summary()
     );
     let mut poor = 0;
-    for (index, (project, key)) in stale.into_iter().enumerate() {
+    for (index, (project, key, files)) in stale.into_iter().enumerate() {
         if state.shutdown.is_stopping() {
             break;
         }
         let (lights, missing) =
             crate::calibration::project_lights(&conn, project, &tree, library.night_boundary())?;
-        let results = pool.install(|| {
-            lights
-                .par_iter()
-                .map(|light| {
-                    // Interactive work comes first; this light waits for it.
-                    while state.interactive_job_active() && !state.shutdown.is_stopping() {
-                        std::thread::sleep(YIELD_POLL);
-                    }
-                    library.judge_light(light)
-                })
-                .collect::<anyhow::Result<Vec<_>>>()
-        })?;
+        let judged = judge_project(
+            &pool,
+            &library,
+            &lights,
+            &read_headers(&ctx.cache_dir_path, project),
+            &|| state.shutdown.is_stopping(),
+            &|| state.interactive_job_active(),
+        )?;
+        let headers_read = judged.iter().filter(|light| light.read).count();
+        let mut headers = BTreeMap::new();
+        let mut results = Vec::with_capacity(judged.len());
+        for light in judged {
+            if let Some(header) = light.header {
+                headers.insert(light.result.image_id, header);
+            }
+            results.push(light.result);
+        }
         let health = crate::calibration::summarize_health(project, results, missing);
         if health.level == Some(HealthLevel::Poor) {
             poor += 1;
@@ -265,11 +377,22 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
             project,
             CachedHealth {
                 key,
+                files,
                 computed_at: chrono::Utc::now().timestamp(),
                 health,
             },
         );
         write_cache(&ctx.cache_dir_path, &cache)?;
+        // Losing the headers costs only reading them again.
+        if let Err(error) = write_headers(&ctx.cache_dir_path, project, headers) {
+            tracing::warn!("Could not keep the light headers of project {project}: {error:#}");
+        }
+        {
+            let mut work = job.work.lock().unwrap_or_else(|p| p.into_inner());
+            work.projects += 1;
+            work.lights += lights.len();
+            work.headers_read += headers_read;
+        }
         job.progress.write().unwrap_or_else(|p| p.into_inner()).0 = index + 1;
     }
     if poor > 0 {
@@ -278,25 +401,74 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The kept results whose keys still match the catalog: the only ones
-/// shown.
-fn fresh(path: &str, cache_dir: &FsPath) -> anyhow::Result<BTreeMap<i32, CachedHealth>> {
-    let conn = read_only(path)?;
-    let keys = crate::calibration::health_keys(&conn)?;
-    Ok(read_cache(cache_dir)
-        .projects
-        .into_iter()
-        .filter(|(project, kept)| keys.get(project) == Some(&kept.key))
-        .collect())
+/// Judge one project's lights on the pool, reusing each kept header whose
+/// file has not changed. A light waits while `busy` says interactive work
+/// runs, and once `stopping` says so the project ends between lights with
+/// an error: nothing of it is kept.
+fn judge_project(
+    pool: &ComputePool,
+    library: &HealthLibrary,
+    lights: &[ProjectLight],
+    kept: &BTreeMap<i32, KeptHeader>,
+    stopping: &(dyn Fn() -> bool + Sync),
+    busy: &(dyn Fn() -> bool + Sync),
+) -> anyhow::Result<Vec<JudgedLight>> {
+    pool.install(|| {
+        lights
+            .par_iter()
+            .map(|light| {
+                // Interactive work comes first; this light waits for it.
+                while busy() && !stopping() {
+                    std::thread::sleep(YIELD_POLL);
+                }
+                if stopping() {
+                    anyhow::bail!("the server is stopping");
+                }
+                library.judge_light_kept(light, kept.get(&light.image_id))
+            })
+            .collect()
+    })
 }
 
-async fn fresh_for(ctx: &DbContext) -> Result<BTreeMap<i32, CachedHealth>, AppError> {
+/// The kept results whose keys still match the catalog, the only ones
+/// shown, and whether some project has none that does.
+fn fresh(path: &str, cache_dir: &FsPath) -> anyhow::Result<(BTreeMap<i32, CachedHealth>, bool)> {
+    let conn = read_only(path)?;
+    let keys = crate::calibration::health_keys(&conn)?;
+    let projects = read_cache(cache_dir).projects;
+    let behind = keys
+        .iter()
+        .any(|(project, key)| projects.get(project).is_none_or(|kept| &kept.key != key));
+    let fresh = projects
+        .into_iter()
+        .filter(|(project, kept)| keys.get(project) == Some(&kept.key))
+        .collect();
+    Ok((fresh, behind))
+}
+
+/// Ask for a pass when a view finds a result behind the catalog. Nothing
+/// else asks when N.I.N.A. writes new lights or the CLI regrades some; a
+/// pass that runs already just runs once more.
+fn catch_up(state: &Arc<AppState>, ctx: &DbContext, behind: bool) {
+    if behind {
+        request(state, &ctx.database_path);
+    }
+}
+
+async fn fresh_for(
+    state: &Arc<AppState>,
+    ctx: &DbContext,
+) -> Result<BTreeMap<i32, CachedHealth>, AppError> {
     let path = ctx.database_path.clone();
     let cache_dir = ctx.cache_dir_path.clone();
-    tokio::task::spawn_blocking(move || fresh(&path, &cache_dir))
+    let (fresh, behind) = tokio::task::spawn_blocking(move || fresh(&path, &cache_dir))
         .await
         .map_err(|error| AppError::InternalError(format!("reading calibration health: {error}")))?
-        .map_err(|error| AppError::InternalError(format!("reading calibration health: {error:#}")))
+        .map_err(|error| {
+            AppError::InternalError(format!("reading calibration health: {error:#}"))
+        })?;
+    catch_up(state, ctx, behind);
+    Ok(fresh)
 }
 
 /// One project in the Library's list.
@@ -321,9 +493,10 @@ pub struct CalibrationHealthResponse {
 /// `GET /api/db/{db}/calibration-health` — each project's level and counts,
 /// from the kept results.
 pub async fn get_health(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<CalibrationHealthResponse>>, AppError> {
-    let projects = fresh_for(&ctx)
+    let projects = fresh_for(&state, &ctx)
         .await?
         .into_values()
         .map(|kept| ProjectHealthSummary {
@@ -352,10 +525,11 @@ pub struct ProjectHealthResponse {
 /// `GET /api/db/{db}/projects/{project_id}/calibration-health` — one
 /// project's findings, by night and filter.
 pub async fn get_project_health(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<ProjectHealthResponse>>, AppError> {
-    let kept = fresh_for(&ctx).await?.remove(&project_id);
+    let kept = fresh_for(&state, &ctx).await?.remove(&project_id);
     Ok(Json(ApiResponse::success(ProjectHealthResponse {
         computed_at: kept.as_ref().map(|kept| kept.computed_at),
         health: kept.map(|kept| kept.health),
@@ -419,17 +593,22 @@ pub struct LightMarksResponse {
 /// so: rejecting lights would otherwise blank every mark in their project
 /// until the next pass.
 pub async fn get_light_marks(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Query(query): Query<LightMarksQuery>,
 ) -> Result<Json<ApiResponse<LightMarksResponse>>, AppError> {
     let path = ctx.database_path.clone();
     let cache_dir = ctx.cache_dir_path.clone();
-    let (lights, stale_projects) = tokio::task::spawn_blocking(move || {
+    let (lights, stale_projects, behind) = tokio::task::spawn_blocking(move || {
         let conn = read_only(&path)?;
         let keys = crate::calibration::health_keys(&conn)?;
+        let projects = read_cache(&cache_dir).projects;
+        let behind = keys
+            .iter()
+            .any(|(project, key)| projects.get(project).is_none_or(|kept| &kept.key != key));
         let mut lights = Vec::new();
         let mut stale = Vec::new();
-        for (project, kept) in read_cache(&cache_dir).projects {
+        for (project, kept) in projects {
             if query.project_id.is_some_and(|wanted| wanted != project) {
                 continue;
             }
@@ -440,11 +619,12 @@ pub async fn get_light_marks(
             }
             lights.extend(marks_of(&kept.health));
         }
-        anyhow::Ok((lights, stale))
+        anyhow::Ok((lights, stale, behind))
     })
     .await
     .map_err(|error| AppError::InternalError(format!("reading calibration marks: {error}")))?
     .map_err(|error| AppError::InternalError(format!("reading calibration marks: {error:#}")))?;
+    catch_up(&state, &ctx, behind);
     Ok(Json(ApiResponse::success(LightMarksResponse {
         lights,
         stale_projects,
@@ -497,6 +677,32 @@ mod tests {
     }
 
     #[test]
+    fn a_stop_ends_a_project_between_lights() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        let library = HealthLibrary::load(&conn).unwrap();
+        let lights: Vec<ProjectLight> = (0..200)
+            .map(|image_id| ProjectLight {
+                image_id,
+                path: PathBuf::from(format!("light-{image_id}.fits")),
+                night: "2026-09-09".into(),
+                filter: "Ha".into(),
+            })
+            .collect();
+        let pool = ComputePool::take("calibration-health-test", 1).unwrap();
+        let none = BTreeMap::new();
+        let judged = judge_project(&pool, &library, &lights, &none, &|| false, &|| false).unwrap();
+        assert_eq!(judged.len(), lights.len());
+
+        // A stop that comes after five lights ends the project there.
+        let asked = AtomicUsize::new(0);
+        let stopping = || asked.fetch_add(1, Ordering::SeqCst) >= 5;
+        let stopped = judge_project(&pool, &library, &lights, &none, &stopping, &|| false);
+        assert!(stopped.is_err());
+        assert!(asked.load(Ordering::SeqCst) < 20, "{asked:?}");
+    }
+
+    #[test]
     fn a_request_during_a_pass_runs_one_more() {
         let mut flags = Flags::default();
         assert!(claim(&mut flags));
@@ -519,6 +725,7 @@ mod tests {
             3,
             CachedHealth {
                 key: "k".into(),
+                files: String::new(),
                 computed_at: 1,
                 health: health.clone(),
             },

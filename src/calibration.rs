@@ -19,9 +19,10 @@ pub mod browse;
 mod health;
 mod quality;
 pub use health::{
-    current_keys as health_keys, project_health, project_lights, summarize as summarize_health,
-    HealthCode, HealthFinding, HealthLevel, HealthLibrary, LightFinding, LightResult,
-    NightFilterLights, ProjectHealth, ProjectLight, FLAT_CHECK_AGE_DAYS, HEALTH_ALGORITHM_VERSION,
+    current_keys as health_keys, project_file_digests as health_file_digests, project_health,
+    project_lights, summarize as summarize_health, HealthCode, HealthFinding, HealthLevel,
+    HealthLibrary, JudgedLight, KeptHeader, LightFinding, LightResult, NightFilterLights,
+    ProjectHealth, ProjectLight, FLAT_CHECK_AGE_DAYS, HEALTH_ALGORITHM_VERSION,
 };
 /// Synthetic frames for tests elsewhere in the crate.
 #[cfg(test)]
