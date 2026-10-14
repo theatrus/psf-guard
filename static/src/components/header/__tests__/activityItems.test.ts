@@ -196,4 +196,62 @@ describe('header activity items', () => {
     expect(items[1]).toMatchObject({ title: 'Composing color', stoppable: false });
     expect(items).toHaveLength(2);
   });
+
+  it('lists processing runs in the stack line with what they do and where they stand', () => {
+    const build = stack('Ha', 'running', 3, 10);
+    const blur: StackActivityEntry = {
+      kind: 'processing', job_id: 'b'.repeat(64), database_id: 'db-a', project_id: 1, target_id: 42,
+      state: 'running', label: 'M44 · G', detail: 'BlurXTerminator', processed_units: 420,
+      total_units: 1000, created_unix_seconds: 2, progress_label: 'BlurXTerminator · 42%',
+      processing: {
+        operation: 'BlurXTerminator', channel: 'G', stage: 'BlurXTerminator', fraction: 0.42,
+        started_unix_seconds: 1_760_000_000, stoppable: true,
+      },
+    };
+    const startedAt = new Date(1_760_000_000_000).toLocaleTimeString([], {
+      hour: '2-digit', minute: '2-digit',
+    });
+    const stretch: StackActivityEntry = {
+      kind: 'processing', job_id: 's'.repeat(64), database_id: 'db-a', project_id: 1, target_id: 42,
+      state: 'queued', label: 'M44 · R', detail: 'Waiting for BlurXTerminator on M44 · G to finish',
+      processed_units: 0, total_units: 0, created_unix_seconds: 3, queue_position: 0,
+      processing: {
+        operation: 'Deconvolution', channel: 'R', waiting_for: 'BlurXTerminator on M44 · G',
+        stoppable: false,
+      },
+    };
+    const items = activityItems([], [stretch, blur, { ...build, state: 'queued', queue_position: 1 }]);
+    expect(items.map((item) => item.title)).toEqual(['BlurXTerminator', 'Deconvolution', 'Stacking']);
+    expect(items[0]).toMatchObject({
+      kind: 'processing',
+      scope: 'M44 · G',
+      // The title names the tool; the line under it says when it started.
+      detail: `started ${startedAt}`,
+      queued: false,
+      percent: 42,
+      stoppable: true,
+      queue: 'stack',
+      control: { kind: 'stack', jobId: 'b'.repeat(64) },
+      href: '/stacks?db=db-a&project=1&target=42',
+    });
+    // Waiting: it says what for, has a place in the line, and leaves it like a build.
+    expect(items[1]).toMatchObject({
+      scope: 'M44 · R',
+      detail: 'Waiting for BlurXTerminator on M44 · G',
+      queued: true,
+      percent: null,
+      position: 0,
+      stoppable: true,
+    });
+    expect(lineLengths(items)).toEqual({ stack: 2, wbpp: 0 });
+    // A running stretch or deconvolution cannot be stopped.
+    const deconvolving = activityItems([], [{
+      ...stretch, state: 'running', queue_position: null, detail: 'Deconvolution',
+      processing: { ...stretch.processing!, waiting_for: null, stage: 'Reading the stack' },
+    }]);
+    expect(deconvolving[0]).toMatchObject({
+      queued: false, percent: null, stoppable: false, detail: 'Reading the stack',
+    });
+    expect(summarize(items)).toEqual({ count: 3, queued: 2, percent: 42 });
+  });
 });

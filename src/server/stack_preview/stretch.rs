@@ -421,8 +421,10 @@ static IN_FLIGHT: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet
 /// The failure of a detached run, held for the next poll of that id.
 static FAILURES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
     std::sync::LazyLock::new(Default::default);
-/// Live progress of an in-flight computation, served to the pending poll:
-/// which tool is running and the chain's overall fraction.
+/// Live progress of a running computation, served to the pending poll and
+/// the activity list: the step under way and, while an RC-Astro tool runs,
+/// the chain's overall fraction. A run still waiting for the worker has no
+/// entry here; the manager's line says what it waits for.
 static PROGRESS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, PendingProgress>>,
 > = std::sync::LazyLock::new(Default::default);
@@ -430,11 +432,29 @@ static PROGRESS: std::sync::LazyLock<
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct PendingProgress {
     pub stage: String,
-    pub fraction: f32,
+    /// Known while an RC-Astro tool reports it; a step that cannot say,
+    /// such as deconvolution, leaves the last fraction or none.
+    pub fraction: Option<f32>,
 }
 
-fn report_progress(stretch_id: &str, stage: &str, fraction: f32) {
+/// An RC-Astro tool's progress: its name and the chain's overall fraction.
+pub(super) fn report_progress(stretch_id: &str, stage: &str, fraction: f32) {
     if let Ok(mut progress) = PROGRESS.lock() {
+        progress.insert(
+            stretch_id.to_string(),
+            PendingProgress {
+                stage: stage.to_string(),
+                fraction: Some(fraction),
+            },
+        );
+    }
+}
+
+/// A step that cannot say how far it has got. The fraction so far stays, so
+/// rendering after a finished chain still reads 100%.
+fn report_stage(stretch_id: &str, stage: &str) {
+    if let Ok(mut progress) = PROGRESS.lock() {
+        let fraction = progress.get(stretch_id).and_then(|entry| entry.fraction);
         progress.insert(
             stretch_id.to_string(),
             PendingProgress {
@@ -442,6 +462,18 @@ fn report_progress(stretch_id: &str, stage: &str, fraction: f32) {
                 fraction,
             },
         );
+    }
+}
+
+/// The live progress of a running computation, if it has reported any.
+pub(super) fn run_progress(stretch_id: &str) -> Option<PendingProgress> {
+    PROGRESS.lock().ok()?.get(stretch_id).cloned()
+}
+
+#[cfg(test)]
+pub(super) fn clear_progress(stretch_id: &str) {
+    if let Ok(mut progress) = PROGRESS.lock() {
+        progress.remove(stretch_id);
     }
 }
 
@@ -742,44 +774,88 @@ fn processing_source_exists(
         })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn apply_to_fits(
-    state: Arc<AppState>,
-    database_id: String,
-    stack_root: PathBuf,
-    source_key: String,
-    source_revision: String,
-    source_path: PathBuf,
-    request: StackViewProcessingRequest,
-    select_processing: bool,
-) -> Result<StretchApplyOutcome, AppError> {
+/// The stack a processing request reads: its cache identity, its FITS, and
+/// what it shows, for the activity list and the log.
+pub(crate) struct StretchSource {
+    pub key: String,
+    pub revision: String,
+    pub path: PathBuf,
+    pub scope: super::processing_queue::ProcessingScope,
+    /// The stack build and channel group, for the job journal.
+    pub job_id: String,
+    pub group_index: usize,
+}
+
+/// How long the request that starts a run waits for its result before it
+/// answers `202`. A plain stretch usually finishes within it and answers at
+/// once; a run that has to wait for the worker answers `202` straight away.
+const INLINE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What the next poll hears when a person stops a run.
+pub(super) const STOPPED_MESSAGE: &str = "Processing was stopped";
+
+/// Refuse a request the run would fail on anyway, before anything is hashed.
+fn validate_request(request: &StackViewProcessingRequest) -> Result<(), String> {
     if let Some(deconvolution) = request.deconvolution {
         deconvolution
             .validate()
-            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+            .map_err(|error| error.to_string())?;
     }
     if let Some(rc_astro) = &request.rc_astro {
-        rc_astro.validate().map_err(AppError::BadRequest)?;
+        rc_astro.validate()?;
     }
-    let selection_path = selection_path(&stack_root, &source_key, &source_revision);
-    let selection_generation = select_processing.then(super::new_artifact_revision);
-    if let Some(generation) = &selection_generation {
-        request_selection_with_source(
-            &selection_path,
-            generation,
-            Some(ProcessingSource {
-                key: source_key.clone(),
-                revision: source_revision.clone(),
-            }),
+    Ok(())
+}
+
+/// A request resolved to its cache identity: what the run does, and the id
+/// the browser polls it by.
+struct PreparedRun {
+    stretch_id: String,
+    stretch: StackStretchRequest,
+    config: StretchConfig,
+    deconvolution: Option<DeconvolutionConfig>,
+    deconvolution_id: Option<String>,
+    /// Canonical against the installed tools' schemas.
+    rc_astro: Option<super::rc_astro::RcAstroProcessing>,
+    rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+    /// Per-prefix cache ids for the RC-Astro chain, canonical order.
+    rc_astro_chain: Option<Vec<String>>,
+}
+
+impl PreparedRun {
+    /// The request as the run uses it, canonical.
+    fn request(&self) -> StackViewProcessingRequest {
+        StackViewProcessingRequest {
+            stretch: self.stretch.clone(),
+            deconvolution: self.deconvolution,
+            rc_astro: self.rc_astro.clone(),
+        }
+    }
+
+    fn operation(&self) -> String {
+        super::processing_queue::operation_name(
+            self.deconvolution.is_some(),
+            self.rc_astro_schemas
+                .iter()
+                .flatten()
+                .map(|(_, schema)| schema.name.as_str()),
         )
-        .map_err(AppError::InternalError)?;
     }
+}
+
+/// Resolve a request against one stack revision and the installed tools.
+/// The same request, sent again or read back from the job journal, comes
+/// out under the same id.
+async fn prepare_run(
+    database_id: &str,
+    source_key: &str,
+    source_revision: &str,
+    request: StackViewProcessingRequest,
+) -> Result<PreparedRun, AppError> {
     let config = request.stretch.config();
     let deconvolution = request.deconvolution;
     let deconvolution_id = deconvolution
-        .map(|request| {
-            deconvolution_cache_id(&database_id, &source_key, &source_revision, &request)
-        })
+        .map(|request| deconvolution_cache_id(database_id, source_key, source_revision, &request))
         .transpose()?;
     // Reading the tool schemas spawns short-lived rc-astro processes; they
     // also pin the CLI and model versions into the cache identity.
@@ -805,19 +881,16 @@ pub(super) async fn apply_to_fits(
     };
     let rc_astro_chain = match (&rc_astro, &rc_astro_schemas) {
         (Some(config), Some(schemas)) => Some(super::rc_astro::rc_astro_chain_ids(
-            &database_id,
-            &source_key,
-            &source_revision,
+            database_id,
+            source_key,
+            source_revision,
             config,
             schemas,
             deconvolution_id.as_deref(),
         )?),
         _ => None,
     };
-    let rc_astro_id = rc_astro_chain
-        .as_ref()
-        .and_then(|chain| chain.last())
-        .cloned();
+    let rc_astro_id = rc_astro_chain.as_ref().and_then(|chain| chain.last());
     let encoded = serde_json::to_vec(&config).map_err(|error| {
         AppError::InternalError(format!("Failed to encode stretch request: {error}"))
     })?;
@@ -832,7 +905,7 @@ pub(super) async fn apply_to_fits(
         hasher.update(b"deconvolution");
         hasher.update(deconvolution_id.as_bytes());
     }
-    if let Some(rc_astro_id) = &rc_astro_id {
+    if let Some(rc_astro_id) = rc_astro_id {
         hasher.update(b"rc-astro");
         hasher.update(rc_astro_id.as_bytes());
     }
@@ -840,17 +913,49 @@ pub(super) async fn apply_to_fits(
     for byte in hasher.finalize() {
         write!(&mut stretch_id, "{byte:02x}").expect("writing to a String cannot fail");
     }
+    Ok(PreparedRun {
+        stretch_id,
+        stretch: request.stretch,
+        config,
+        deconvolution,
+        deconvolution_id,
+        rc_astro,
+        rc_astro_schemas,
+        rc_astro_chain,
+    })
+}
+
+pub(super) async fn apply_to_fits(
+    state: Arc<AppState>,
+    database_id: String,
+    stack_root: PathBuf,
+    source: StretchSource,
+    request: StackViewProcessingRequest,
+    select_processing: bool,
+) -> Result<StretchApplyOutcome, AppError> {
+    validate_request(&request).map_err(AppError::BadRequest)?;
+    let selection_path = selection_path(&stack_root, &source.key, &source.revision);
+    let selection_generation = select_processing.then(super::new_artifact_revision);
+    if let Some(generation) = &selection_generation {
+        request_selection_with_source(
+            &selection_path,
+            generation,
+            Some(ProcessingSource {
+                key: source.key.clone(),
+                revision: source.revision.clone(),
+            }),
+        )
+        .map_err(AppError::InternalError)?;
+    }
+    let prepared = prepare_run(&database_id, &source.key, &source.revision, request).await?;
+    let stretch_id = prepared.stretch_id.clone();
     if let Some(generation) = &selection_generation {
         bind_selection(&selection_path, generation, &stretch_id)
             .map_err(AppError::InternalError)?;
     }
     if let Some(mut cached) = read_cached_manifest(&stack_root, &stretch_id) {
         if cached.request.is_none() {
-            cached.request = Some(StackViewProcessingRequest {
-                stretch: request.stretch.clone(),
-                deconvolution,
-                rc_astro: rc_astro.clone(),
-            });
+            cached.request = Some(prepared.request());
             let _guard = SELECTION_LOCK
                 .lock()
                 .map_err(|error| AppError::InternalError(error.to_string()))?;
@@ -874,80 +979,323 @@ pub(super) async fn apply_to_fits(
         return Ok(StretchApplyOutcome::Pending { stretch_id });
     };
     if !select_processing {
+        // A server stop, and a restart until the job journal has put the
+        // line back, leave a run between two servers. The page keeps
+        // polling and finds it again once it is back.
+        if state.shutdown.is_stopping() || !super::journal::restored() {
+            return Ok(StretchApplyOutcome::Pending { stretch_id });
+        }
         return Err(AppError::BadRequest(
             "Processing is no longer running; apply the settings again".into(),
         ));
     }
-
-    let identity = StretchIdentity {
-        stretch_id: stretch_id.clone(),
-        deconvolution_id,
-        rc_astro_chain,
-        selection_path,
-        request: StackViewProcessingRequest {
-            stretch: request.stretch,
-            deconvolution,
-            rc_astro: rc_astro.clone(),
-        },
-    };
-
-    if rc_astro.is_some() {
-        // Minutes of external-tool work: run detached so no reverse proxy
-        // can kill it mid-flight, and let the client poll. The permit and
-        // the interactive-job guard are taken inside the task and held
-        // until the blocking work finishes.
-        tokio::spawn(compute_stretch_variant(
-            state,
-            database_id,
-            stack_root,
-            token,
-            identity,
-            source_path,
-            config,
-            deconvolution,
-            rc_astro,
-            rc_astro_schemas,
+    if state.shutdown.is_stopping() {
+        return Err(AppError::Conflict(
+            "The server is stopping; apply the processing again once it is back".into(),
         ));
-        return Ok(StretchApplyOutcome::Pending { stretch_id });
     }
 
-    // A plain stretch (or deconvolution) is fast enough to answer inline.
-    match compute_stretch_variant(
-        state,
+    let origin = super::journal::JournaledStackJob::Processing {
+        database_id: database_id.clone(),
+        project_id: source.scope.project_id,
+        job_id: source.job_id.clone(),
+        group_index: source.group_index,
+        revision: source.revision.clone(),
+        run_id: stretch_id.clone(),
+        request: Box::new(prepared.request()),
+        attempts: 0,
+        running: false,
+    };
+    // A person is waiting on this: an automatic build in the way yields.
+    super::interrupt_automatic(&state);
+    let (run, waits) = start_run(
+        &state,
         database_id,
-        stack_root.clone(),
+        stack_root,
+        source,
+        selection_path,
+        prepared,
         token,
-        identity,
-        source_path,
-        config,
-        deconvolution,
-        None,
-        None,
-    )
-    .await
-    {
-        Some(response) => Ok(StretchApplyOutcome::Ready(Box::new(response))),
-        None => {
+        origin,
+    );
+    if waits {
+        return Ok(StretchApplyOutcome::Pending { stretch_id });
+    }
+    match tokio::time::timeout(INLINE_WAIT, run).await {
+        // Still running: the poll carries its progress.
+        Err(_) => Ok(StretchApplyOutcome::Pending { stretch_id }),
+        Ok(Ok(Some(response))) => Ok(StretchApplyOutcome::Ready(Box::new(response))),
+        Ok(outcome) => {
             if let Ok(mut failures) = FAILURES.lock()
                 && let Some(message) = failures.remove(&stretch_id)
             {
                 return Err(AppError::BadRequest(message));
             }
-            Err(AppError::InternalError("Stretch rendering failed".into()))
+            Err(AppError::InternalError(match outcome {
+                Err(error) => format!("Stretch worker failed: {error}"),
+                Ok(_) => "Stretch rendering failed".into(),
+            }))
         }
     }
 }
 
-/// Acquire the stack permit, render, and publish the manifest. Runs to
-/// completion regardless of the HTTP request that started it. A failure is
-/// parked in [`FAILURES`] for the next poll. Returns the response on
-/// success so the inline path can answer directly.
+/// Put a prepared run at the back of the line and start its task. The run
+/// belongs to the server, not to a request: it keeps going when the request
+/// ends, and the client polls with the same request. Returns the task and
+/// whether the run has to wait for the worker.
+#[allow(clippy::too_many_arguments)]
+fn start_run(
+    state: &Arc<AppState>,
+    database_id: String,
+    stack_root: PathBuf,
+    source: StretchSource,
+    selection_path: PathBuf,
+    prepared: PreparedRun,
+    token: InFlightToken,
+    origin: super::journal::JournaledStackJob,
+) -> (tokio::task::JoinHandle<Option<StackStretchPreview>>, bool) {
+    let stretch_id = prepared.stretch_id.clone();
+    let operation = prepared.operation();
+    let label = source.scope.label();
+    let identity = StretchIdentity {
+        stretch_id: stretch_id.clone(),
+        deconvolution_id: prepared.deconvolution_id.clone(),
+        rc_astro_chain: prepared.rc_astro_chain.clone(),
+        selection_path,
+        request: prepared.request(),
+    };
+    // The run joins the line builds wait in, so the line, not the
+    // semaphore, decides when it runs, and a person can move it there.
+    let (cancel, waits) = state.stack_previews.queue_processing(
+        &stretch_id,
+        source.scope,
+        operation.clone(),
+        prepared.rc_astro.is_some(),
+        origin,
+    );
+    // A server stop waits for the run to stop: a stretch or deconvolution in
+    // hand finishes, and an RC-Astro tool is killed and reaped.
+    let work = state
+        .shutdown
+        .hold(format!("{operation} on {label} (db={database_id})"));
+    if waits {
+        let wait = state
+            .stack_previews
+            .processing_wait(&stretch_id)
+            .map(|wait| wait.describe())
+            .unwrap_or_default();
+        tracing::info!(
+            "Processing {} ({operation} on {label}, db={database_id}) is queued: {wait}",
+            short_id(&stretch_id)
+        );
+    }
+    let run = tokio::spawn(compute_stretch_variant(
+        Arc::clone(state),
+        database_id,
+        stack_root,
+        ProcessingTicket {
+            token,
+            cancel,
+            work,
+        },
+        identity,
+        source.path,
+        prepared.config,
+        prepared.deconvolution,
+        prepared.rc_astro,
+        prepared.rc_astro_schemas,
+    ));
+    (run, waits)
+}
+
+/// Put back a processing run the job journal kept, in the line and under the
+/// id the browser polls with, so a page left open across the restart finds
+/// it. Steps of its RC-Astro chain that finished before the restart come from
+/// the cache.
+pub(super) async fn restore_run(
+    state: &Arc<AppState>,
+    origin: super::journal::JournaledStackJob,
+) -> Result<(), super::journal::NotRestored> {
+    use super::journal::{JournaledStackJob, NotRestored};
+    let JournaledStackJob::Processing {
+        database_id,
+        project_id,
+        job_id,
+        group_index,
+        revision,
+        run_id,
+        request,
+        attempts,
+        running,
+    } = origin
+    else {
+        return Err(NotRestored::Skip("it is not a processing run".into()));
+    };
+    let ctx = state
+        .get_database(&database_id)
+        .ok_or_else(|| NotRestored::Skip(format!("database {database_id} is gone")))?;
+    let source = match super::stack_processing_source(state, &ctx, &job_id, group_index) {
+        Ok(source) => source,
+        // No stack folder at all: its disk may not be mounted yet.
+        Err(_) if !ctx.stack_root.exists() => {
+            return Err(NotRestored::Retry(format!(
+                "the stack folder {} is not there",
+                ctx.stack_root.display()
+            )));
+        }
+        Err(_) => {
+            return Err(NotRestored::Skip(format!(
+                "its stack {} is gone",
+                short_id(&job_id)
+            )));
+        }
+    };
+    if source.revision != revision {
+        return Err(NotRestored::Skip(format!(
+            "its stack {} was rebuilt",
+            short_id(&job_id)
+        )));
+    }
+    validate_request(&request).map_err(NotRestored::Skip)?;
+    let prepared = prepare_run(&ctx.id, &source.key, &source.revision, *request)
+        .await
+        .map_err(|error| NotRestored::Skip(format!("{error:?}")))?;
+    let stretch_id = prepared.stretch_id.clone();
+    if stretch_id != run_id {
+        tracing::info!(
+            "Processing {} comes back as {}: the installed tools changed",
+            short_id(&run_id),
+            short_id(&stretch_id)
+        );
+    }
+    let selection_path = selection_path(&ctx.stack_root, &source.key, &source.revision);
+    if read_cached_manifest(&ctx.stack_root, &stretch_id).is_some() {
+        complete_selection(&selection_path, &stretch_id).map_err(NotRestored::Skip)?;
+        return Err(NotRestored::Skip(format!(
+            "{} finished before the restart",
+            short_id(&stretch_id)
+        )));
+    }
+    let token = try_begin_in_flight(&stretch_id).ok_or_else(|| {
+        NotRestored::Skip(format!("{} is already running", short_id(&stretch_id)))
+    })?;
+    let origin = JournaledStackJob::Processing {
+        database_id: ctx.id.clone(),
+        project_id,
+        job_id,
+        group_index,
+        revision,
+        run_id: stretch_id.clone(),
+        request: Box::new(prepared.request()),
+        attempts,
+        running,
+    };
+    tracing::info!(
+        "Processing {} ({} on {}) is back in the line after the restart",
+        short_id(&stretch_id),
+        prepared.operation(),
+        source.scope.label()
+    );
+    // The selection on disk already says which run a person asked for last;
+    // a restored run leaves it alone and takes it only if it is that one.
+    start_run(
+        state,
+        ctx.id.clone(),
+        ctx.stack_root.clone(),
+        source,
+        selection_path,
+        prepared,
+        token,
+        origin,
+    );
+    Ok(())
+}
+
+/// The first twelve characters of a run id, enough to tell runs apart in
+/// the log.
+fn short_id(stretch_id: &str) -> &str {
+    &stretch_id[..stretch_id.len().min(12)]
+}
+
+/// What a detached run holds until it ends: its in-flight entry, its stop
+/// flag, and the server stop's wait.
+struct ProcessingTicket {
+    token: InFlightToken,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    work: crate::server::shutdown::WorkGuard,
+}
+
+/// Takes a run out of the activity list and the line when it ends, however
+/// it ends.
+struct ProcessingRegistration {
+    state: Arc<AppState>,
+    run_id: String,
+}
+
+impl Drop for ProcessingRegistration {
+    fn drop(&mut self) {
+        self.state.stack_previews.finish_processing(&self.run_id);
+    }
+}
+
+/// When a running run stops. A person's stop and a server stop both kill an
+/// RC-Astro tool at once, and its exchange folder goes with it; steps that
+/// finished stay cached. A stretch or deconvolution in hand finishes; the
+/// run stops at its next check, before deconvolution or before each tool.
+pub(super) struct RunStop {
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    shutdown: Arc<crate::server::shutdown::Shutdown>,
+}
+
+impl RunStop {
+    fn stopped(&self) -> bool {
+        self.cancel.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// A person's stop, not a server's.
+    fn stopped_by_a_person(&self) -> bool {
+        self.stopped() && !self.shutdown.is_stopping()
+    }
+
+    /// Read before each costly step.
+    fn check(&self) -> Result<(), String> {
+        if self.shutdown.is_stopping() {
+            return Err("The server is stopping; the run resumes after the restart".into());
+        }
+        if self.stopped() {
+            return Err(STOPPED_MESSAGE.into());
+        }
+        Ok(())
+    }
+
+    /// What a person reads when a step failed: the stop they asked for, not
+    /// the tool's own complaint about being killed.
+    fn explain(&self, message: String) -> String {
+        if self.stopped_by_a_person() {
+            STOPPED_MESSAGE.into()
+        } else {
+            message
+        }
+    }
+
+    /// Kills a running RC-Astro tool when the run is stopped.
+    fn signal(&self) -> seiza_stacking::CancelSignal {
+        seiza_stacking::CancelSignal::from(Arc::clone(&self.cancel))
+    }
+}
+
+/// Wait for the worker in the line, render, and publish the manifest. Runs
+/// to completion regardless of the HTTP request that started it. A failure
+/// is parked in [`FAILURES`] for the next poll, except one a server stop
+/// caused: the job journal brings that run back after the restart. Returns
+/// the response on success so the request that started it can answer
+/// directly.
 #[allow(clippy::too_many_arguments)]
 async fn compute_stretch_variant(
     state: Arc<AppState>,
     database_id: String,
     stack_root: PathBuf,
-    token: InFlightToken,
+    ticket: ProcessingTicket,
     identity: StretchIdentity,
     source_path: PathBuf,
     config: StretchConfig,
@@ -955,40 +1303,79 @@ async fn compute_stretch_variant(
     rc_astro: Option<super::rc_astro::RcAstroProcessing>,
     rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
 ) -> Option<StackStretchPreview> {
+    let ProcessingTicket {
+        token,
+        cancel,
+        work,
+    } = ticket;
+    // Dropped in reverse: the run leaves the activity list, then the
+    // in-flight set, and the server stop's wait ends last, once every file
+    // is written or the tool is reaped.
+    let _work = work;
     let _token = token;
     let stretch_id = identity.stretch_id.clone();
-    let park_failure = |message: String| {
+    let _registration = ProcessingRegistration {
+        state: Arc::clone(&state),
+        run_id: stretch_id.clone(),
+    };
+    let short = short_id(&stretch_id).to_string();
+    let summary = state
+        .stack_previews
+        .processing_summary(&stretch_id)
+        .unwrap_or_else(|| "processing".into());
+    // `by_stop`: the failure came from a stop. One a server stop caused is
+    // no failure: the run comes back from the journal, and a page still
+    // polling must not hear that it failed.
+    let park_failure = |message: String, by_stop: bool| {
+        if by_stop && state.shutdown.is_stopping() {
+            tracing::info!(
+                "Processing {short} ({summary}) stopped for the server stop; it resumes after \
+                 the restart"
+            );
+            return;
+        }
         tracing::warn!("Stack stretch {stretch_id} failed: {message}");
         if let Ok(mut failures) = FAILURES.lock() {
             failures.insert(stretch_id.clone(), message);
         }
     };
-    // A person is waiting on this: an automatic build in the way yields.
-    super::interrupt_automatic(&state);
-    let permit = match Arc::clone(&state.stack_previews.permit)
-        .acquire_owned()
-        .await
-    {
-        Ok(permit) => permit,
-        Err(_) => {
-            park_failure("Stack preview processor is unavailable".into());
-            return None;
-        }
+    let queued_at = std::time::Instant::now();
+    let permit = state.stack_previews.wait_turn(&stretch_id, &cancel).await;
+    // A stop that lands as the worker frees up still keeps the run from
+    // starting.
+    let Some(permit) =
+        permit.filter(|_| state.stack_previews.start_processing(&stretch_id, &cancel))
+    else {
+        tracing::info!("Processing {short} ({summary}) left the line");
+        park_failure(STOPPED_MESSAGE.into(), true);
+        return None;
     };
+    tracing::info!(
+        "Processing {short} ({summary}) starts after waiting {:.1} s",
+        queued_at.elapsed().as_secs_f64()
+    );
     if let Some(cached) = read_cached_manifest(&stack_root, &identity.stretch_id) {
         if let Err(message) = complete_selection(&identity.selection_path, &identity.stretch_id) {
-            park_failure(message);
+            park_failure(message, false);
             return None;
         }
+        state.stack_previews.processing_completed(&stretch_id);
         return Some(cached);
     }
     let guard = state.begin_interactive_job();
+    let stop = Arc::new(RunStop {
+        cancel,
+        shutdown: Arc::clone(&state.shutdown),
+    });
+    let stop_for_render = Arc::clone(&stop);
     let state_for_render = Arc::clone(&state);
     let stack_for_render = stack_root.clone();
     let database_for_render = database_id.clone();
+    let started = std::time::Instant::now();
     let result = tokio::task::spawn_blocking(move || {
         let _guard = guard;
         let _permit = permit;
+        let stop = stop_for_render;
         let rendered = render_fits_variant(
             &state_for_render,
             &stack_for_render,
@@ -1000,7 +1387,14 @@ async fn compute_stretch_variant(
             rc_astro,
             identity.rc_astro_chain.as_deref(),
             rc_astro_schemas,
-        )?;
+            &stop,
+        )
+        .map_err(|message| stop.explain(message))?;
+        // Stopped by a person while it rendered: publish nothing they asked
+        // to stop. A server stop lets a finished render through.
+        if stop.stopped_by_a_person() {
+            return Err(STOPPED_MESSAGE.to_string());
+        }
         let response = build_stretch_preview(
             &database_for_render,
             &identity,
@@ -1016,13 +1410,20 @@ async fn compute_stretch_variant(
     })
     .await;
     match result {
-        Ok(Ok(response)) => Some(response),
+        Ok(Ok(response)) => {
+            tracing::info!(
+                "Processing {short} ({summary}) finished in {:.1} s",
+                started.elapsed().as_secs_f64()
+            );
+            state.stack_previews.processing_completed(&stretch_id);
+            Some(response)
+        }
         Ok(Err(message)) => {
-            park_failure(message);
+            park_failure(message, stop.stopped());
             None
         }
         Err(join_error) => {
-            park_failure(format!("Stretch worker failed: {join_error}"));
+            park_failure(format!("Stretch worker failed: {join_error}"), false);
             None
         }
     }
@@ -1100,7 +1501,9 @@ fn render_fits_variant(
     rc_astro_request: Option<super::rc_astro::RcAstroProcessing>,
     rc_astro_chain: Option<&[String]>,
     rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+    stop: &RunStop,
 ) -> Result<RenderedVariant, String> {
+    report_stage(stretch_id, "Reading the stack");
     let frame =
         crate::image_io::open_linear_frame(source_path).map_err(|error| error.to_string())?;
     let samples = frame.image.data.len();
@@ -1184,6 +1587,8 @@ fn render_fits_variant(
                 channels: cached.channels,
             })
         } else {
+            stop.check()?;
+            report_stage(stretch_id, "Deconvolution");
             let (restored, result) = pool.install(|| apply_deconvolution(&frame.image, request))?;
             let parent = fits
                 .parent()
@@ -1225,7 +1630,10 @@ fn render_fits_variant(
         (rc_astro_request, rc_astro_chain, rc_astro_schemas.as_ref())
     {
         // The tools are programs of their own and choose their own
-        // threads; the analysis after them runs in this job's pool.
+        // threads; the analysis after them runs in this job's pool. A
+        // person's stop kills the tool in hand; a server stop is read only
+        // between tools, so the one in hand finishes and its result stays.
+        let cancel = stop.signal();
         rc_astro_outcome = Some(pool.install(|| {
             super::rc_astro::apply_rc_astro(
                 stack_root,
@@ -1235,9 +1643,12 @@ fn render_fits_variant(
                 linear,
                 &frame.headers,
                 &mut |stage, fraction| report_progress(stretch_id, stage, fraction),
+                Some(&cancel),
+                &mut || stop.check(),
             )
         })?);
     }
+    report_stage(stretch_id, "Rendering preview");
     let linear = rc_astro_outcome
         .as_ref()
         .map(|outcome| &outcome.image)
@@ -1594,38 +2005,70 @@ pub(super) fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result
         .map_err(|error| error.to_string())
 }
 
-/// What a 202 poll answer carries: the run's live progress when known.
+/// What a 202 poll answer carries: where the run stands. While it waits for
+/// the stack worker, `queued` is true, `stage` says what it waits for and
+/// there is no `fraction`; once it runs, `stage` and `fraction` are its live
+/// progress. Clients that read only `stage` and `fraction` keep working.
 #[derive(Debug, Serialize)]
-struct StretchPendingStatus {
+pub(super) struct StretchPendingStatus {
     pending: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stage: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fraction: Option<f32>,
+    /// Waiting in the line for the stack worker.
+    queued: bool,
+    /// What holds the worker while the run waits, such as
+    /// `the stack build of M44 · Ha`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waiting_for: Option<String>,
+    /// Place in the line, 0 next.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue_position: Option<usize>,
+}
+
+/// Where a pending run stands now: waiting in the line, or running with its
+/// live progress.
+pub(super) fn pending_status(
+    stretch_id: &str,
+    manager: &super::StackPreviewManager,
+) -> StretchPendingStatus {
+    if let Some(wait) = manager.processing_wait(stretch_id) {
+        return StretchPendingStatus {
+            pending: true,
+            stage: Some(wait.describe()),
+            fraction: None,
+            queued: true,
+            waiting_for: wait.holder,
+            queue_position: wait.position,
+        };
+    }
+    let progress = run_progress(stretch_id);
+    StretchPendingStatus {
+        pending: true,
+        stage: progress.as_ref().map(|progress| progress.stage.clone()),
+        fraction: progress.and_then(|progress| progress.fraction),
+        queued: false,
+        waiting_for: None,
+        queue_position: None,
+    }
 }
 
 /// A ready result answers 200 with the preview; a pending one answers 202
-/// with the run's live progress, telling the client to re-send the same
+/// with where the run stands, telling the client to re-send the same
 /// request.
-pub(super) fn apply_response(outcome: StretchApplyOutcome) -> axum::response::Response {
+pub(super) fn apply_response(
+    outcome: StretchApplyOutcome,
+    manager: &super::StackPreviewManager,
+) -> axum::response::Response {
     use axum::response::IntoResponse;
     match outcome {
         StretchApplyOutcome::Ready(result) => Json(ApiResponse::success(*result)).into_response(),
-        StretchApplyOutcome::Pending { stretch_id } => {
-            let progress = PROGRESS
-                .lock()
-                .ok()
-                .and_then(|progress| progress.get(&stretch_id).cloned());
-            (
-                StatusCode::ACCEPTED,
-                Json(ApiResponse::success(StretchPendingStatus {
-                    pending: true,
-                    stage: progress.as_ref().map(|progress| progress.stage.clone()),
-                    fraction: progress.map(|progress| progress.fraction),
-                })),
-            )
-                .into_response()
-        }
+        StretchApplyOutcome::Pending { stretch_id } => (
+            StatusCode::ACCEPTED,
+            Json(ApiResponse::success(pending_status(&stretch_id, manager))),
+        )
+            .into_response(),
     }
 }
 

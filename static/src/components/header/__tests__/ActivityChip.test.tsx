@@ -345,6 +345,52 @@ describe('ActivityChip', () => {
     expect(list).not.toHaveTextContent('Automatic refresh');
   }, 10_000);
 
+  it('lists a processing run beside the build it waits for, then its progress, and links to its stacks', async () => {
+    let running = false;
+    const blur = (): StackActivityEntry => ({
+      kind: 'processing', job_id: 'b'.repeat(64), database_id: 'askar', project_id: 1, target_id: 42,
+      state: running ? 'running' : 'queued', label: 'Alpha M44 · R',
+      detail: running ? 'BlurXTerminator' : 'Waiting for the stack build of Alpha M44 · Ha to finish',
+      processed_units: running ? 420 : 0, total_units: running ? 1000 : 0, created_unix_seconds: 2,
+      queue_position: running ? null : 0,
+      progress_label: running ? 'BlurXTerminator · 42%' : null,
+      processing: {
+        operation: 'BlurXTerminator', channel: 'R', stoppable: true,
+        stage: running ? 'BlurXTerminator' : null, fraction: running ? 0.42 : null,
+        waiting_for: running ? null : 'the stack build of Alpha M44 · Ha',
+      },
+    });
+    mockServer({
+      stacks: () => (running ? [blur()] : [{ ...stack('Ha', 'running', 3, 10), target_id: 42 }, blur()]),
+    });
+    renderChip({ showLocation: true });
+    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    await waitFor(() => expect(chip).toHaveAccessibleName('Background jobs: 30% done, 1 running, 1 queued'));
+    await userEvent.click(chip);
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('Stacking');
+    expect(rows[1]).toHaveTextContent('BlurXTerminator');
+    expect(rows[1]).toHaveTextContent('queued · 1');
+    expect(rows[1]).toHaveTextContent('Alpha M44 · R');
+    expect(rows[1]).toHaveTextContent('Waiting for the stack build of Alpha M44 · Ha');
+    // It waits in the builds' line, so it leaves it the same way.
+    expect(within(rows[1]).getByRole('button', { name: 'Remove BlurXTerminator: Alpha M44 · R from the line' }))
+      .toBeInTheDocument();
+
+    running = true;
+    await waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(1), { timeout: 3000 });
+    const row = within(list).getByRole('listitem');
+    expect(row).toHaveTextContent('42%');
+    expect(row).toHaveTextContent('BlurXTerminator');
+    expect(within(row).getByRole('button', { name: 'Stop BlurXTerminator: Alpha M44 · R' })).toBeInTheDocument();
+    await userEvent.click(within(row).getByRole('link', { name: 'Go to BlurXTerminator: Alpha M44 · R' }));
+    expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent(
+      '/stacks?db=askar&project=1&target=42'
+    );
+  }, 10_000);
+
   it('offers no Stop on a running color composition', async () => {
     mockServer({ stacks: () => [{ ...stack('C', 'running', 1, 4), kind: 'color' }] });
     renderChip();

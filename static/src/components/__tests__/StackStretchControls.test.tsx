@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
-import type { StackStretchPreview, StackViewProcessingRequest } from '../../api/types';
+import type {
+  StackStretchPendingProgress,
+  StackStretchPreview,
+  StackViewProcessingRequest,
+} from '../../api/types';
 import StackStretchControls from '../StackStretchControls';
 
 const request: StackViewProcessingRequest = {
@@ -118,5 +122,42 @@ describe('StackStretchControls saved processing', () => {
     finish(applied);
     await Promise.resolve();
     expect(onApplied).not.toHaveBeenCalled();
+  });
+});
+
+describe('StackStretchControls while a run is in flight', () => {
+  it('says what the run waits for, then how far it has got, then is ready again', async () => {
+    let report!: (progress: StackStretchPendingProgress) => void;
+    let finish!: (preview: StackStretchPreview) => void;
+    const apply = vi.fn((_request: StackViewProcessingRequest,
+      onProgress?: (progress: StackStretchPendingProgress) => void) => {
+      report = onProgress!;
+      return new Promise<StackStretchPreview>((resolve) => { finish = resolve; });
+    });
+    const onApplied = vi.fn();
+    render(<StackStretchControls label="R" channels={1} apply={apply} onApplied={onApplied}
+      onRevert={vi.fn().mockResolvedValue(undefined)} />, { wrapper: wrapper() });
+    fireEvent.click(screen.getByText('View processing'));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply processing' }));
+    // Nothing heard yet.
+    expect(await screen.findByRole('button', { name: 'Applying…' })).toBeDisabled();
+
+    act(() => report({
+      pending: true, queued: true, queue_position: 0,
+      stage: 'Waiting for the stack build of M44 · Ha to finish',
+      waiting_for: 'the stack build of M44 · Ha',
+    }));
+    const waiting = screen.getByRole('button', { name: 'Waiting for the stack build of M44 · Ha to finish' });
+    expect(waiting).toBeDisabled();
+    expect(waiting).toHaveAttribute('aria-busy', 'true');
+
+    act(() => report({ pending: true, queued: false, stage: 'RC-Astro BlurXTerminator', fraction: 0.42 }));
+    expect(screen.getByRole('button', { name: 'Applying… 42% · BlurXTerminator' })).toBeDisabled();
+
+    act(() => finish(applied));
+    await waitFor(() => expect(onApplied).toHaveBeenCalledWith(applied));
+    const ready = await screen.findByRole('button', { name: 'Apply processing' });
+    expect(ready).toBeEnabled();
+    expect(ready).toHaveAttribute('aria-busy', 'false');
   });
 });

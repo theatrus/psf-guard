@@ -964,9 +964,26 @@ export interface LatestStackPreviews {
   groups: LatestStackPreviewGroup[];
 }
 
-export type StackActivityKind = 'mono' | 'color';
+export type StackActivityKind = 'mono' | 'color' | 'processing';
 
-/** One queued or running stack build, reported across databases. */
+/** What a stretch, deconvolution or RC-Astro run does and where it stands. */
+export interface StackProcessingActivity {
+  /** "BlurXTerminator", "Deconvolution", "Stretch", or a chain's steps joined. */
+  operation: string;
+  /** The channel it works on, such as "R". */
+  channel: string;
+  /** The step under way while it runs. */
+  stage?: string | null;
+  /** How far it has got, 0..1, when its step can say. */
+  fraction?: number | null;
+  /** What holds the stack worker while it waits. */
+  waiting_for?: string | null;
+  started_unix_seconds?: number | null;
+  /** Whether Stop can end it while it runs; an RC-Astro tool can be killed. */
+  stoppable: boolean;
+}
+
+/** One queued or running stack build or processing run, reported across databases. */
 export interface StackActivityEntry {
   kind: StackActivityKind;
   job_id: string;
@@ -986,6 +1003,8 @@ export interface StackActivityEntry {
   queue_position?: number | null;
   /** The progress in words, such as the final rejection pass's place. */
   progress_label?: string | null;
+  /** Only on `processing` entries. */
+  processing?: StackProcessingActivity | null;
 }
 
 /** An automatic refresh still waiting for its frames or grades to settle. */
@@ -1106,13 +1125,23 @@ export interface StackRcAstroResult {
   has_stars: boolean;
 }
 
-/** A 202 poll answer while a detached processing run computes. */
+/** A 202 poll answer while a detached processing run waits or computes. */
 export interface StackStretchPendingProgress {
   pending: true;
-  /** The tool currently running, e.g. "RC-Astro StarXTerminator". */
+  /**
+   * The step under way, e.g. "RC-Astro StarXTerminator". While the run waits
+   * for the stack worker, what it waits for: "Waiting for the stack build of
+   * M44 · Ha to finish".
+   */
   stage?: string;
-  /** The chain's overall fraction complete in 0..1. */
+  /** The chain's overall fraction complete in 0..1; absent while waiting. */
   fraction?: number;
+  /** Waiting in the line for the stack worker. */
+  queued?: boolean;
+  /** What holds the worker while the run waits: "the stack build of M44 · Ha". */
+  waiting_for?: string;
+  /** Place in the line, 0 next. */
+  queue_position?: number;
 }
 
 export interface StackDeconvolutionConfig {
