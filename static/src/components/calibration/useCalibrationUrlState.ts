@@ -153,9 +153,19 @@ export function useCalibrationUrlState() {
   );
   const setFull = useCallback((next: boolean) => updateParams({ calFull: next ? '1' : null }), [updateParams]);
   const openMaster = useCallback((id: string | null) => updateParams({ calMaster: id }), [updateParams]);
-  /** Forget the session, frame, page and master chosen. */
-  const resetSelection = useCallback(
-    () => updateParams({ calSession: null, calFrame: null, calPage: null, calMaster: null, calView: null }),
+  /** Another database chosen elsewhere, as in the header: the session,
+   *  frame, page, master and filters chosen in the last one go. Its rig
+   *  above all would match nothing here. */
+  const resetForDatabase = useCallback(
+    () =>
+      updateParams({
+        calSession: null,
+        calFrame: null,
+        calPage: null,
+        calMaster: null,
+        calView: null,
+        ...Object.fromEntries(Object.values(FILTER_KEYS).map((key) => [key, null])),
+      }),
     [updateParams]
   );
   /** Another database: nothing chosen in this one carries over. */
@@ -191,7 +201,7 @@ export function useCalibrationUrlState() {
     setStretch,
     setFull,
     openMaster,
-    resetSelection,
+    resetForDatabase,
     setDatabase,
   };
 }

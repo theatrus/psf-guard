@@ -38,22 +38,53 @@ const TABS: { value: CalibrationTab; label: string }[] = [
  * and the masters built from them. Everything chosen lives in the URL.
  */
 export default function CalibrationPage() {
-  const { dbId } = useDbProjectTarget();
+  const { dbId, projectId } = useDbProjectTarget();
   const { data: databases } = useAllDatabases();
   const state = useCalibrationUrlState();
-  const { setDatabase, resetSelection } = state;
+  const { setDatabase, resetForDatabase, filters, setFilters } = state;
 
   // A page opened without a database takes the first one.
   useEffect(() => {
     if (!dbId && databases && databases.length > 0) setDatabase(databases[0].id);
   }, [databases, dbId, setDatabase]);
-  // Another database chosen in the header: what was chosen in this one
-  // means nothing there.
+
+  // A project in scope opens on its rig: the one whose frames came from the
+  // project's N.I.N.A. profile, when exactly one did, and only when the
+  // library holds more than one rig: with one, the page shows no Rig choice.
+  // A rig chosen this way gives way to the next project's; one a person
+  // chose stays, so choosing All sticks.
+  const summary = useQuery({
+    queryKey: ['db', dbId, 'calibrations'],
+    queryFn: () => apiClient.getCalibrationLibrary(dbId!),
+    enabled: !!dbId,
+  });
+  const { data: projects } = useMergedProjects();
+  const profile = projects.find((project) => project.db_id === dbId && project.id === projectId)?.profile_id;
   const shownDb = useRef(dbId);
+  const openedFor = useRef<string | null>(null);
+  const defaultRig = useRef<string | null>(null);
   useEffect(() => {
-    if (shownDb.current !== null && shownDb.current !== dbId) resetSelection();
-    shownDb.current = dbId;
-  }, [dbId, resetSelection]);
+    let rig = filters.rig;
+    if (shownDb.current !== dbId) {
+      // Another database chosen in the header: what was chosen in this one
+      // means nothing there. Its rig may stay in the URL a moment longer,
+      // so it counts as no one's choice.
+      if (shownDb.current !== null) {
+        resetForDatabase();
+        defaultRig.current = rig ?? null;
+        rig = undefined;
+      }
+      shownDb.current = dbId;
+    }
+    const rigs = summary.data?.rigs;
+    const scope = `${dbId}:${projectId}`;
+    if (!dbId || !profile || !rigs || rigs.length < 2 || openedFor.current === scope) return;
+    openedFor.current = scope;
+    if (rig && rig !== defaultRig.current) return;
+    const own = rigs.filter((entry) => entry.profile_ids?.includes(profile));
+    defaultRig.current = own.length === 1 ? own[0].rig_uuid : ALL_RIGS;
+    setFilters({ rig: defaultRig.current });
+  }, [dbId, filters.rig, profile, projectId, resetForDatabase, setFilters, summary.data]);
 
   const database = databases?.find((entry) => entry.id === dbId);
   // The header's project picker chooses the database, as for every view.
@@ -105,25 +136,6 @@ function CalibrationLibrary({
     queryKey: ['db', dbId, 'calibrations'],
     queryFn: () => apiClient.getCalibrationLibrary(dbId),
   });
-
-  // A project in scope opens on its rig: the one whose frames came from the
-  // project's N.I.N.A. profile, when exactly one did. Only while no rig is
-  // in the URL, once per project, so choosing All sticks, and only when the
-  // library holds more than one rig: with one, the page shows no Rig choice.
-  const { projectId } = useDbProjectTarget();
-  const { data: projects } = useMergedProjects();
-  const profile = projects.find((project) => project.db_id === dbId && project.id === projectId)?.profile_id;
-  const { filters, setFilters } = state;
-  const openedFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!profile || !summary.data || summary.data.rigs.length < 2) return;
-    const scope = `${dbId}:${projectId}`;
-    if (openedFor.current === scope) return;
-    openedFor.current = scope;
-    if (filters.rig) return;
-    const own = summary.data.rigs.filter((rig) => rig.profile_ids?.includes(profile));
-    setFilters({ rig: own.length === 1 ? own[0].rig_uuid : ALL_RIGS });
-  }, [dbId, filters.rig, profile, projectId, setFilters, summary.data]);
 
   if (state.tab === 'scheduler') {
     return <SchedulerFlatHistory dbId={dbId} canManage={canManage} />;

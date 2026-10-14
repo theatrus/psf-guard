@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { delay, http, HttpResponse } from 'msw';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '../../../api/client';
 import { AccessContext, useAccess } from '../../../auth/access';
@@ -151,6 +151,69 @@ function Location() {
   return <output aria-label="location">{location.search}</output>;
 }
 
+/** What the header's project picker does: another project, maybe in
+ *  another database. */
+function Scope() {
+  const [, setSearchParams] = useSearchParams();
+  const open = (db: string, project: string) =>
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.set('db', db);
+      next.set('project', project);
+      return next;
+    }, { replace: true });
+  return (
+    <>
+      <button type="button" onClick={() => open('demo', '7')}>Open Bubble</button>
+      <button type="button" onClick={() => open('demo', '8')}>Open Heart</button>
+      <button type="button" onClick={() => open('other', '9')}>Open Iris</button>
+    </>
+  );
+}
+
+const TWO_RIGS = {
+  schema_version: 9, frame_count: 9, master_count: 1,
+  rigs: [
+    { rig_uuid: 'rig', name: 'Askar · ASI2600', profile_ids: ['p1'], frame_count: 5, bias: 0, dark: 2, dark_flat: 0, flat: 3 },
+    { rig_uuid: 'rig2', name: 'C925 · ASI6200', profile_ids: ['p2', 'p3'], frame_count: 4, bias: 0, dark: 2, dark_flat: 0, flat: 2 },
+  ],
+};
+
+function project(id: number, profile: string, name: string) {
+  return { id, profile_id: profile, profile_name: profile, name, display_name: name, description: null, has_files: true, state: 1, latest_image_date: null };
+}
+
+/** Demo with two rigs and two projects, and a second database whose
+ *  library holds `otherRigs`. */
+function serveTwoDatabases(otherRigs: string[]) {
+  const seen = serve();
+  const other: URLSearchParams[] = [];
+  server.use(
+    http.get('/api/databases', () => ok([
+      { id: 'demo', name: 'Demo', database_path: '/demo.sqlite', image_directories: [], remote_image_upload: { enabled: false } },
+      { id: 'other', name: 'Other', database_path: '/other.sqlite', image_directories: [], remote_image_upload: { enabled: false } },
+    ])),
+    http.get('/api/db/demo/calibrations', () => ok(TWO_RIGS)),
+    http.get('/api/db/demo/projects', () => ok([project(7, 'p3', 'Bubble'), project(8, 'p1', 'Heart')])),
+    http.get('/api/db/other/calibrations', () => ok({
+      schema_version: 9, frame_count: 4, master_count: 0,
+      rigs: otherRigs.map((rig) => ({
+        rig_uuid: rig, name: rig, profile_ids: [`${rig}-profile`], frame_count: 2, bias: 0, dark: 2, dark_flat: 0, flat: 0,
+      })),
+    })),
+    http.get('/api/db/other/projects', () => ok([project(9, `${otherRigs.at(-1)}-profile`, 'Iris')])),
+    http.get('/api/db/other/calibrations/sessions', ({ request }) => {
+      other.push(new URL(request.url).searchParams);
+      return ok({
+        sessions: [], total: 0, page: 0, per_page: 50, frames: 0,
+        facets: { filters: [], exposures: [], first_night: null, last_night: null },
+        night_boundary_seconds: 43200,
+      });
+    }),
+  );
+  return { ...seen, other };
+}
+
 function WithAccess({ canWrite, children }: { canWrite: boolean; children: ReactNode }) {
   const access = useAccess();
   return <AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider>;
@@ -163,7 +226,7 @@ function renderPage(entry: string, { canWrite = true }: { canWrite?: boolean } =
       <WithAccess canWrite={canWrite}>
         <MemoryRouter initialEntries={[entry]}>
           <Routes>
-            <Route path="/calibration" element={<>{children}<Location /></>} />
+            <Route path="/calibration" element={<>{children}<Location /><Scope /></>} />
           </Routes>
         </MemoryRouter>
       </WithAccess>
@@ -237,6 +300,48 @@ describe('CalibrationPage', () => {
     fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'any' } });
     await waitFor(() => expect(params().get('calRig')).toBe('any'));
     await waitFor(() => expect(seen.sessions.at(-1)?.has('rig')).toBe(false));
+  });
+
+  it('opens each project on its own rig, and keeps a rig chosen by hand', async () => {
+    serveTwoDatabases(['o1', 'o2']);
+    renderPage('/calibration?db=demo&project=7');
+    await waitFor(() => expect(params().get('calRig')).toBe('rig2'));
+    // Another project: the rig the last one opened on gives way to its own.
+    fireEvent.click(screen.getByRole('button', { name: 'Open Heart' }));
+    await waitFor(() => expect(params().get('project')).toBe('8'));
+    await waitFor(() => expect(params().get('calRig')).toBe('rig'));
+    // A rig chosen by hand stays when the project changes.
+    fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'any' } });
+    await waitFor(() => expect(params().get('calRig')).toBe('any'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Bubble' }));
+    await waitFor(() => expect(params().get('project')).toBe('7'));
+    await screen.findByLabelText('Rig');
+    expect(params().get('calRig')).toBe('any');
+  });
+
+  it("drops the last database's rig and filters, and opens the new project's rig", async () => {
+    const seen = serveTwoDatabases(['o1', 'o2']);
+    renderPage('/calibration?db=demo&project=8&calKind=dark&calGrade=poor');
+    await waitFor(() => expect(params().get('calRig')).toBe('rig'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Iris' }));
+    await waitFor(() => expect(params().get('db')).toBe('other'));
+    await waitFor(() => expect(params().get('calRig')).toBe('o2'));
+    expect(params().get('calKind')).toBeNull();
+    expect(params().get('calGrade')).toBeNull();
+    await waitFor(() => expect(seen.other.at(-1)?.get('rig')).toBe('o2'));
+    expect(seen.other.at(-1)?.has('kind')).toBe(false);
+  });
+
+  it("drops the last database's rig where the new one has a single rig", async () => {
+    const seen = serveTwoDatabases(['o1']);
+    renderPage('/calibration?db=demo&project=7');
+    await waitFor(() => expect(params().get('calRig')).toBe('rig2'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Iris' }));
+    await waitFor(() => expect(params().get('db')).toBe('other'));
+    await waitFor(() => expect(params().get('calRig')).toBeNull());
+    await waitFor(() => expect(seen.other.at(-1)?.has('rig')).toBe(false));
+    // One rig: no Rig choice, and nothing hidden left choosing.
+    expect(screen.queryByLabelText('Rig')).toBeNull();
   });
 
   it('writes filters to the URL and asks the server for them', async () => {
