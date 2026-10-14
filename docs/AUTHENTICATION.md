@@ -241,29 +241,62 @@ A signed-in user's view choices follow them to any browser or device:
 - Library: compact or detailed rows.
 - The project picker's grouping, and moving on after a grade.
 
-**Saving.** The browser loads the user's document at sign-in, applies it,
-and saves each change a moment after changes stop, or as the page
-closes. A link that names an order or a grouping still wins; the saved
-choice fills in what a link leaves out. A viewer saves their own
-preferences too: they change no catalog, so the role does not gate them.
+**Saving.** The browser loads the user's document at sign-in and shows
+it: its keys, and the default for any it leaves out. Each change is saved
+a moment after changes stop, or as the page closes, as just the keys it
+changed, so a tab left open all day never undoes a choice made since on
+another device. Nothing is saved until the document has loaded: a failed
+load is tried again after 1 s, then 2 s, 4 s and so on up to a minute, and
+a change made in the meantime is applied over the document when it comes
+and saved then. A change made in one tab is saved by that tab; the user's
+other tabs in the same browser follow it without saving it again. A link
+that names an order or a grouping still wins; the saved choice fills in
+what a link leaves out. A viewer saves their own preferences too: they
+change no catalog, so the role does not gate them.
 
-**First sign-in.** If the user has no document yet, the browser's own
-choices become theirs. Each user's copy in a browser is kept apart from the
-browser's own and from other users', so signing in as someone else on the
-same browser does not hand one person's choices to the next.
+**First sign-in.** If the user has no document yet, they start from the
+defaults, with one exception: the first account to sign in on a browser
+takes the choices that browser made before anyone signed in. No later
+account gets them, and if the first account already has a document, its
+document wins and the browser's choices are set aside. Each user's copy in
+a browser is kept apart from the browser's own and from other users', so
+signing in as someone else on the same browser does not hand one person's
+choices to the next. An empty document also sets aside any copy the
+browser kept under that name, so an account removed and made again under
+the same name starts clean.
 
-**The API.** `GET` and `PUT /api/me/preferences` read and replace the
-document of whoever is signed in; no request can name another user. A
-document holds only the keys PSF Guard knows, each checked for its type and
-range, and is limited to 4 KiB. A `PUT` drops keys it does not know and
-names them in `ignored`.
+**The API.** All three name only whoever is signed in; no request can name
+another user.
+
+- `GET /api/me/preferences` returns the document.
+- `PATCH /api/me/preferences` merges changes into it:
+  `{"schema_version": 1, "preferences": {"imageOrder": "newest", "imageGrouping": null}}`
+  sets the order and resets the grouping to its default, and keeps every
+  key it does not name. For one key, the last change wins.
+- `PUT /api/me/preferences` replaces the whole document. It stays for tabs
+  still running an older build; current builds send `PATCH`.
+
+A document holds only the keys PSF Guard knows, each checked for its type
+and range, and is limited to 4 KiB; only a `PATCH` may set a key to `null`.
+Both writes drop keys they do not know and name them in `ignored`. A
+request body is limited to 16 KiB, and the server stops reading a longer
+one there and answers `413`.
 
 **Storage.** The server keeps the documents in `user-preferences.json`
 beside `auth.json` (`<stem>.user-preferences.json` beside a custom
 registry). It replaces the file atomically on each save, sets mode `0600` on
 Unix, and keeps a `schema_version`. Fields a newer build wrote survive a
-save by an older one. Removing a user, in Settings or with the CLI, removes
-their preferences.
+save by an older one. Every change to the file holds a lock on
+`user-preferences.json.lock` beside it, so the server and the CLI never lose
+each other's write.
+
+**Removing a user.** Removing a user in Settings ends their sessions and
+removes their preferences. `psf-guard users remove` removes them too; if
+the preferences file cannot be read or written it warns rather than fails,
+since the account is already gone. A running server keeps a user removed
+with the CLI until it restarts, so their open sessions can save again until
+then. Each save, and each server start, drops the preferences of any user
+the server no longer has.
 
 **No accounts.** A server without accounts, and the desktop app, keep these
 choices in the browser's own storage, as before.

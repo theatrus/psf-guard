@@ -36,7 +36,8 @@
   --color-primary-alpha-90: rgba(97, 218, 251, 0.9);
 
   /* Interaction states, so every control says them the same way.
-     Set: a filter or rule narrows what is shown (.is-set).
+     Set: a control's value is off its default, such as a filter or rule
+     that narrows what is shown, or a changed sort (.is-set).
      On: a toggle is pressed, a menu is open, a tab or row is chosen, or
      this is the current view (aria-pressed, aria-expanded, aria-selected,
      aria-checked, aria-current). A tab marks it with its underline and

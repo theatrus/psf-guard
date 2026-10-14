@@ -731,8 +731,9 @@
 }
 
 /* States. Every control takes them from here, with the tokens in App.css:
-   set when a filter or rule narrows what is shown, on when a toggle is
-   pressed or a menu is open. */
+   set when a control's value is off its default (a filter or rule that
+   narrows what is shown, or a changed sort), on when a toggle is pressed
+   or a menu is open. */
 .toolbar-pill.is-set,
 .toolbar-pill-check:has(input:checked),
 .toolbar-search.is-set input,

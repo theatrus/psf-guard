@@ -476,7 +476,10 @@ export default function Overview() {
   // without labeling the whole back catalog as new.
   useEffect(() => {
     setSeenProjects((current) => {
-      const next = { ...current };
+      // From what is stored now: another tab, or a visit since this page
+      // read the markers, may have written ones it has not seen, and a seed
+      // must not write over them.
+      const next = { ...current, ...loadProjectSeenState() };
       let changed = false;
 
       for (const project of projects) {

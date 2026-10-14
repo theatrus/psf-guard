@@ -931,15 +931,16 @@ test('sequence thumbnail size can be changed and survives reload', async ({ page
     /grid-template-columns: repeat\(auto-fill, minmax\(min\(500px, 100%\), 1fr\)\)/
   );
 
+  // Each view keeps its own size: Sequence's 500 stays behind.
   await page.getByRole('button', { name: 'Images', exact: true }).click();
   await expect(page.locator('.image-card')).toHaveCount(3);
   const gridSize = page.getByLabel('Size', { exact: true });
-  await expect(gridSize).toHaveValue('500');
-  await gridSize.fill('300');
-  await expect(page).toHaveURL(/size=300/);
+  await expect(gridSize).toHaveValue('300');
+  await gridSize.fill('450');
+  await expect(page).toHaveURL(/size=450/);
 
   await page.getByRole('button', { name: 'Sequence', exact: true }).click();
-  await expect(page.getByLabel('Size', { exact: true })).toHaveValue('300');
+  await expect(page.getByLabel('Size', { exact: true })).toHaveValue('500');
 
   await page.setViewportSize({ width: 760, height: 720 });
   // At this width the view settings fold behind the Filters button.

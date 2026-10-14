@@ -409,7 +409,23 @@ export default function SequenceView() {
     sequenceStripRef.current?.querySelector<HTMLElement>(
       `.sequence-image-card[data-card-image-id="${imageId}"]`,
     ) ?? null, []);
-  const captureReorder = useReorderAnchor(order, () => cardOf(activeImageIdRef.current));
+  // An order that changes by itself, such as a signed-in user's saved
+  // order arriving after the strip drew, is a flip at rest while the view
+  // is still as it opened.
+  const captureReorder = useReorderAnchor(order, () => cardOf(activeImageIdRef.current), {
+    firstId: orderedImages[0]?.image_id ?? null,
+    decide: (previousFirstId) => {
+      const nextFirst = orderedImages[0]?.image_id ?? null;
+      if (touchedRef.current || previousFirstId === null || nextFirst === null
+        || activeImageIdRef.current !== previousFirstId || nextFirst === previousFirstId) {
+        return 'anchor';
+      }
+      activeImageIdRef.current = nextFirst;
+      selectionAnchorIdRef.current = nextFirst;
+      setCurrentImageId(nextFirst);
+      return 'rest';
+    },
+  });
   const chooseOrder = useCallback((next: ImageOrder) => {
     if (next === order) return;
     const firstId = orderedImages[0]?.image_id ?? null;

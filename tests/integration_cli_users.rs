@@ -145,6 +145,52 @@ fn add_list_replace_and_remove_users() {
 }
 
 #[test]
+fn removing_a_user_warns_when_their_preferences_cannot_be_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_registry = directory.path().join("test-config.json");
+    let password_file = directory.path().join("password");
+    fs::write(&password_file, "long-user-password\n").unwrap();
+    let registry_arg = path_arg(&database_registry);
+    let password_arg = path_arg(&password_file);
+    for name in ["viewer", "editor"] {
+        let added = run(&[
+            "users",
+            "add",
+            name,
+            "--role",
+            "read-write",
+            "--password-file",
+            &password_arg,
+            "--registry",
+            &registry_arg,
+        ]);
+        assert!(
+            added.status.success(),
+            "{}",
+            String::from_utf8_lossy(&added.stderr)
+        );
+    }
+    // A preferences file this build cannot read.
+    let preferences_path = directory.path().join("test-config.user-preferences.json");
+    fs::write(&preferences_path, "not a preferences file").unwrap();
+
+    let removed = run(&["users", "remove", "viewer", "--registry", &registry_arg]);
+    let stderr = String::from_utf8_lossy(&removed.stderr);
+    // The account is gone either way; the leftover preferences are only
+    // reported, and the server drops them when it next starts.
+    assert!(removed.status.success(), "{stderr}");
+    assert!(stderr.contains("Warning"), "{stderr}");
+    assert!(stderr.contains("view preferences"), "{stderr}");
+    let auth = fs::read_to_string(directory.path().join("test-config.auth.json")).unwrap();
+    assert!(!auth.contains("\"viewer\""), "{auth}");
+    assert!(auth.contains("\"editor\""), "{auth}");
+    assert_eq!(
+        fs::read_to_string(&preferences_path).unwrap(),
+        "not a preferences file"
+    );
+}
+
+#[test]
 fn tokens_are_minted_listed_and_revoked_without_storing_the_secret() {
     let directory = tempfile::tempdir().unwrap();
     let database_registry = directory.path().join("test-config.json");

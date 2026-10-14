@@ -210,7 +210,8 @@ Current behavior: [importing](docs/IMPORTING.md) and
   `static/src/App.css`; follow the Styling section of `static/README.md`.
   Write no colour literals in CSS or inline styles; add a token named by its
   meaning instead. Style on and open from the control's ARIA attribute with
-  the `--state-on-*` tokens, a narrowing filter with `.is-set`, and focus
+  the `--state-on-*` tokens, a control whose value is off its default (a
+  narrowing filter or a changed sort) with `.is-set`, and focus
   with `--state-focus-*`. `src/__tests__/themeTokens.test.ts` fails on a new
   literal or a new state class.
 

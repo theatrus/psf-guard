@@ -772,16 +772,18 @@ export const apiClient = {
     return data.data;
   },
 
-  /** Replace the signed-in user's view preferences. With `keepalive` the
-   *  request outlives the page, for a save made as it closes. */
-  saveMyPreferences: async (
-    preferences: Record<string, unknown>,
+  /** Merge changes into the signed-in user's view preferences: each key
+   *  given replaces that preference, and `null` resets it to the default.
+   *  Keys left out keep what the server has. With `keepalive` the request
+   *  outlives the page, for a save made as it closes. */
+  patchMyPreferences: async (
+    changes: Record<string, unknown>,
     options: { keepalive?: boolean } = {},
   ): Promise<void> => {
-    const body = { schema_version: 1, preferences };
+    const body = { schema_version: 1, preferences: changes };
     if (options.keepalive) {
       await fetch(`${getCachedServerUrl()}/api/me/preferences`, {
-        method: 'PUT',
+        method: 'PATCH',
         keepalive: true,
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -790,7 +792,7 @@ export const apiClient = {
       return;
     }
     const apiInstance = await getApi();
-    await apiInstance.put<ApiResponse<AccountPreferences>>('/me/preferences', body);
+    await apiInstance.patch<ApiResponse<AccountPreferences>>('/me/preferences', body);
   },
 
   getAuthUsers: async (): Promise<AuthUserSummary[]> => {

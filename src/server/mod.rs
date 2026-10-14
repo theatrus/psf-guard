@@ -570,7 +570,12 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/auth/tokens/{id}", delete(user_admin::revoke_token))
         .route(
             "/me/preferences",
-            get(user_preferences::get_preferences).put(user_preferences::put_preferences),
+            get(user_preferences::get_preferences)
+                .patch(user_preferences::patch_preferences)
+                .put(user_preferences::put_preferences)
+                .layer(DefaultBodyLimit::max(
+                    crate::user_preferences::MAX_REQUEST_BYTES,
+                )),
         )
         .route("/info", get(handlers::get_server_info))
         .route("/stack-activity", get(stack_preview::get_stack_activity))
@@ -879,6 +884,9 @@ async fn run_server_internal(
             state.set_allow_database_management(config.allow_database_management);
             state.set_site_banner(config.site_banner.clone());
             state.set_server_auth(config.auth.clone());
+            if let (Some(auth), Some(registry_path)) = (&config.auth, &config.registry_path) {
+                user_preferences::forget_removed_users(auth, registry_path);
+            }
             state.set_anonymous_access_trusted(anonymous_access_trusted);
             state.set_worker_policy(config.worker_policy);
             state.set_preview_encoding(config.preview_encoding);

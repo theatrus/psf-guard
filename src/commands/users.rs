@@ -86,10 +86,20 @@ pub fn manage_users(action: UserCommand) -> Result<()> {
             }
             registry.remove(&username)?;
             registry.save(&auth_path)?;
-            // Their saved view preferences go too, so a later account of
-            // the same name starts clean.
-            crate::user_preferences::forget_user(&database_registry_path, &username)?;
             println!("Removed user '{}' from {}", username, auth_path.display());
+            // Their saved view preferences go too, so a later account of
+            // the same name starts clean. The account is already gone, so a
+            // preferences file that cannot be read or written is only
+            // reported: the server drops the entry when it next starts.
+            // The file is locked against a running server's own writes.
+            if let Err(error) =
+                crate::user_preferences::forget_user(&database_registry_path, &username)
+            {
+                eprintln!(
+                    "Warning: could not drop '{username}''s saved view preferences: {error:#}. \
+                     The server drops them when it next starts."
+                );
+            }
             println!("Restart the server to apply this change.");
         }
         UserCommand::Token { action } => manage_tokens(action, &mut registry, &auth_path)?,

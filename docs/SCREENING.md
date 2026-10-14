@@ -273,7 +273,9 @@ first** turns them around, and the View button is marked while it is on:
   their place: Date and Session groups already start with the newest night,
   and Filter and Project groups stay A to Z, so they do not move about as a
   night's frames arrive. Under Filter + Date, each filter's newest night
-  comes first.
+  comes first. A group split by exposure keeps its exposures in the order
+  they were first shot, as under oldest first; only the frames in each
+  turn around, so the exposures do not trade places as frames arrive.
 - **Sequence**: the strip runs newest first, and the session tabs too, with
   each filter's **All sessions** tab still first and the filter shot last
   leading. The score chart keeps time left to right. A mosaic's sequence
@@ -294,11 +296,22 @@ What a flip does with your place depends on whether you have moved:
   card out of sight. The current image, the selection and the current
   card's place on screen stay.
 
+The order can also change by itself: a signed-in user's saved order can
+arrive after the frames have drawn, and another tab can change the saved
+order. A view you have not moved in treats that as a flip at rest: the page
+stays and the cursor goes to the new first card. Otherwise the current card
+stays current and is brought into view if the change left it off screen.
+
 The address keeps the choice as `order=newest`, shared by both views. The
 last choice, like the grouping and the thumbnail size, is remembered and
 fills in a link that names none, such as a project opened from the Library.
-Signed in to a server with accounts, these choices follow you to another
-browser (see [view preferences](AUTHENTICATION.md#view-preferences)).
+Each view has its own thumbnail size: `size` in the address is the size of
+the view it names, and the header leaves it behind when it moves to another
+view. A link that names open groups (`expanded`) none of which the view has
+any more, such as an All projects link from before All projects grouped by
+project, opens the default groups. Signed in to a server with accounts,
+these choices follow you to another browser (see
+[view preferences](AUTHENTICATION.md#view-preferences)).
 
 A small dot before a card's date marks a frame captured since your last
 visit to its project or target from the Library: the frames the Library's

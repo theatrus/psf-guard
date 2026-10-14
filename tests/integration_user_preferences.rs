@@ -14,7 +14,10 @@ use psf_guard::{
 };
 use rusqlite::Connection;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use tower::ServiceExt;
 
 fn registry() -> AuthRegistry {
@@ -109,8 +112,37 @@ async fn put(app: &Router, cookie: Option<&str>, body: impl Into<Body>) -> (Stat
     send(app, request.body(body.into()).unwrap()).await
 }
 
+async fn patch(app: &Router, cookie: Option<&str>, body: impl Into<Body>) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/me/preferences")
+        .header("content-type", "application/json");
+    if let Some(cookie) = cookie {
+        request = request.header(COOKIE, cookie);
+    }
+    send(app, request.body(body.into()).unwrap()).await
+}
+
 fn document(preferences: Value) -> String {
     json!({ "schema_version": 1, "preferences": preferences }).to_string()
+}
+
+/// An endless request body that counts what the server reads of it.
+struct CountedBody {
+    read: Arc<AtomicUsize>,
+}
+
+impl tokio::io::AsyncRead for CountedBody {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let room = buffer.remaining().min(1024);
+        buffer.put_slice(&vec![b' '; room]);
+        self.read.fetch_add(room, Ordering::SeqCst);
+        std::task::Poll::Ready(Ok(()))
+    }
 }
 
 #[tokio::test]
@@ -305,4 +337,331 @@ async fn removing_a_user_drops_their_preferences() {
         UserPreferencesRegistry::load(&directory.path().join("user-preferences.json")).unwrap();
     assert!(stored.get("viewer").is_none());
     assert!(stored.get("editor").is_some());
+}
+
+#[tokio::test]
+async fn a_patch_merges_the_keys_it_names_into_the_callers_document() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = app(&directory, true);
+    let viewer = login(&app, "viewer").await;
+    let editor = login(&app, "editor").await;
+
+    // A viewer may patch their own, as they may PUT it.
+    let (status, body) = patch(
+        &app,
+        Some(&viewer),
+        document(json!({ "imageOrder": "newest", "imageGrouping": "session" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["data"]["preferences"],
+        json!({ "imageOrder": "newest", "imageGrouping": "session" })
+    );
+    assert!(body["data"]["updated_unix_seconds"].is_i64());
+
+    // Another browser of the same person changes one other key: the first
+    // two stay.
+    let elsewhere = login(&app, "viewer").await;
+    let (_, body) = patch(
+        &app,
+        Some(&elsewhere),
+        document(json!({ "gridThumbnailSize": 450 })),
+    )
+    .await;
+    assert_eq!(
+        body["data"]["preferences"],
+        json!({ "imageOrder": "newest", "imageGrouping": "session", "gridThumbnailSize": 450 })
+    );
+
+    // A key set to null goes back to the default; unknown keys are named.
+    let (status, body) = patch(
+        &app,
+        Some(&viewer),
+        document(json!({ "imageGrouping": null, "fromTheFuture": 1 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["data"]["preferences"],
+        json!({ "imageOrder": "newest", "gridThumbnailSize": 450 })
+    );
+    assert_eq!(body["data"]["ignored"], json!(["fromTheFuture"]));
+
+    // The editor's document is their own.
+    let (_, body) = get(&app, Some(&editor)).await;
+    assert_eq!(body["data"]["preferences"], json!({}));
+    patch(
+        &app,
+        Some(&editor),
+        document(json!({ "libraryDensity": "detailed" })),
+    )
+    .await;
+    let (_, body) = get(&app, Some(&viewer)).await;
+    assert_eq!(
+        body["data"]["preferences"],
+        json!({ "imageOrder": "newest", "gridThumbnailSize": 450 })
+    );
+
+    // An old tab's PUT still replaces the whole document.
+    put(
+        &app,
+        Some(&viewer),
+        document(json!({ "showAllChip": false })),
+    )
+    .await;
+    let (_, body) = get(&app, Some(&viewer)).await;
+    assert_eq!(body["data"]["preferences"], json!({ "showAllChip": false }));
+    let (_, body) = get(&app, Some(&editor)).await;
+    assert_eq!(
+        body["data"]["preferences"],
+        json!({ "libraryDensity": "detailed" })
+    );
+}
+
+#[tokio::test]
+async fn a_patch_is_checked_like_a_put() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = app(&directory, true);
+    let viewer = login(&app, "viewer").await;
+    patch(
+        &app,
+        Some(&viewer),
+        document(json!({ "imageOrder": "newest" })),
+    )
+    .await;
+
+    for bad in [
+        document(json!({ "imageOrder": "sideways" })),
+        document(json!({ "gridThumbnailSize": 5000 })),
+        document(json!({ "showAllChip": "no" })),
+        json!({ "schema_version": 2, "preferences": {} }).to_string(),
+        json!({ "preferences": {} }).to_string(),
+        json!({ "schema_version": 1, "preferences": {}, "username": "editor" }).to_string(),
+        "not json".to_string(),
+    ] {
+        let (status, body) = patch(&app, Some(&viewer), bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+    }
+    // A PUT may not reset a key with null; only a PATCH names a reset.
+    let (status, _) = put(&app, Some(&viewer), document(json!({ "imageOrder": null }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, body) = get(&app, Some(&viewer)).await;
+    assert_eq!(
+        body["data"]["preferences"],
+        json!({ "imageOrder": "newest" })
+    );
+
+    // Signed out, or with no accounts, there is nothing to patch.
+    let (status, _) = patch(&app, None, document(json!({}))).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let without = tempfile::tempdir().unwrap();
+    let (status, _) = patch(
+        &app_without_accounts(&without),
+        None,
+        document(json!({ "imageOrder": "newest" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!without.path().join("user-preferences.json").exists());
+}
+
+fn app_without_accounts(directory: &tempfile::TempDir) -> Router {
+    app(directory, false)
+}
+
+#[tokio::test]
+async fn an_oversized_body_is_refused_at_the_limit_not_after_two_megabytes() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = app(&directory, true);
+    let viewer = login(&app, "viewer").await;
+
+    for method in [Method::PATCH, Method::PUT] {
+        // An endless body with no length: the server stops reading at the
+        // route's limit, far short of axum's 2 MiB default.
+        let read = Arc::new(AtomicUsize::new(0));
+        let stream = tokio_util::io::ReaderStream::new(CountedBody {
+            read: Arc::clone(&read),
+        });
+        let (status, body) = send(
+            &app,
+            Request::builder()
+                .method(method.clone())
+                .uri("/api/me/preferences")
+                .header("content-type", "application/json")
+                .header(COOKIE, &viewer)
+                .body(Body::from_stream(stream))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{method}: {body}");
+        assert!(
+            body["error"].as_str().unwrap().contains("limited to"),
+            "{body}"
+        );
+        let consumed = read.load(Ordering::SeqCst);
+        assert!(
+            consumed <= MAX_REQUEST_BYTES + 64 * 1024,
+            "{method} read {consumed} bytes"
+        );
+    }
+
+    // One that says its length up front is refused the same way.
+    let padding = "x".repeat(MAX_REQUEST_BYTES);
+    let (status, _) = patch(
+        &app,
+        Some(&viewer),
+        document(json!({ "imageOrder": "newest", "pad": padding })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    let (_, body) = get(&app, Some(&viewer)).await;
+    assert_eq!(body["data"]["preferences"], json!({}));
+}
+
+#[tokio::test]
+async fn concurrent_patches_lose_no_key() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = app(&directory, true);
+    // Two users, and two sessions of one of them, as two browsers.
+    let sessions = [
+        login(&app, "viewer").await,
+        login(&app, "viewer").await,
+        login(&app, "editor").await,
+    ];
+    let changes = [
+        ("showNightChip", json!(false)),
+        ("showAllChip", json!(false)),
+        ("showCalibrationChip", json!(false)),
+        ("advanceOnGrade", json!(false)),
+        ("libraryDensity", json!("detailed")),
+        ("projectPickerGrouping", json!("database")),
+        ("imageOrder", json!("newest")),
+        ("imageGrouping", json!("date")),
+        ("gridThumbnailSize", json!(450)),
+        ("sequenceThumbnailSize", json!(200)),
+    ];
+    let mut tasks = Vec::new();
+    for (index, (key, value)) in changes.iter().enumerate() {
+        // The viewer's keys alternate between their two browsers; the
+        // editor sends each key alongside.
+        let viewer_session = sessions[index % 2].clone();
+        let editor_session = sessions[2].clone();
+        let app = app.clone();
+        let body = document(json!({ *key: value.clone() }));
+        tasks.push(tokio::spawn(async move {
+            let (viewer, editor) = tokio::join!(
+                patch(&app, Some(&viewer_session), body.clone()),
+                patch(&app, Some(&editor_session), body),
+            );
+            assert_eq!(viewer.0, StatusCode::OK, "{}", viewer.1);
+            assert_eq!(editor.0, StatusCode::OK, "{}", editor.1);
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    let expected = Value::Object(
+        changes
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect(),
+    );
+    for session in &sessions {
+        let (_, body) = get(&app, Some(session)).await;
+        assert_eq!(body["data"]["preferences"], expected);
+    }
+}
+
+#[tokio::test]
+async fn a_removed_users_entry_is_pruned_and_not_written_back() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = app(&directory, true);
+    let viewer = login(&app, "viewer").await;
+    let editor = login(&app, "editor").await;
+    let preferences_path = directory.path().join("user-preferences.json");
+    // An entry for an account that is gone, as a CLI removal that could not
+    // write this file leaves behind.
+    let mut stored = UserPreferencesRegistry::default();
+    stored
+        .set(
+            "ghost",
+            json!({ "imageOrder": "newest" })
+                .as_object()
+                .unwrap()
+                .clone(),
+            1,
+        )
+        .unwrap();
+    stored.save(&preferences_path).unwrap();
+
+    // The next save by anyone drops it.
+    patch(
+        &app,
+        Some(&viewer),
+        document(json!({ "imageOrder": "newest" })),
+    )
+    .await;
+    let loaded = UserPreferencesRegistry::load(&preferences_path).unwrap();
+    assert!(loaded.get("ghost").is_none());
+    assert!(loaded.get("viewer").is_some());
+
+    // Removing the viewer ends their sessions: a tab still open cannot
+    // write their entry back.
+    let (status, body) = send(
+        &app,
+        Request::builder()
+            .method(Method::DELETE)
+            .uri("/api/auth/users/viewer")
+            .header(COOKIE, &editor)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _) = patch(
+        &app,
+        Some(&viewer),
+        document(json!({ "imageOrder": "oldest" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let loaded = UserPreferencesRegistry::load(&preferences_path).unwrap();
+    assert!(loaded.get("viewer").is_none());
+}
+
+#[tokio::test]
+async fn the_server_drops_removed_users_preferences_when_it_starts() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_registry_path = directory.path().join("config.json");
+    let preferences_path = directory.path().join("user-preferences.json");
+    let mut stored = UserPreferencesRegistry::default();
+    for name in ["viewer", "ghost"] {
+        stored
+            .set(
+                name,
+                json!({ "imageOrder": "newest" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                1,
+            )
+            .unwrap();
+    }
+    stored.save(&preferences_path).unwrap();
+    let auth = ServerAuth::from_sources(
+        Some(&ServerAuthConfig {
+            session_hours: Some(1),
+            secure_cookie: Some(false),
+            allow_read_only_compute: false,
+        }),
+        &registry(),
+        3000,
+    )
+    .unwrap()
+    .unwrap();
+    psf_guard::server::user_preferences::forget_removed_users(&auth, &database_registry_path);
+    let loaded = UserPreferencesRegistry::load(&preferences_path).unwrap();
+    assert!(loaded.get("ghost").is_none());
+    assert!(loaded.get("viewer").is_some());
 }

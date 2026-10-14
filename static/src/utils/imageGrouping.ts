@@ -54,18 +54,21 @@ export function splitImageGroupsByExposure(groups: ImageGroup[]): ImageGroup[] {
  * stay A to Z, so they do not move about as a night's frames arrive. Only
  * Filter + Date, whose nights run oldest first under each filter, turns
  * them around for newest first, so the newest frame of each filter leads.
- * The detail view's next and previous walk the same list.
+ * Exposure sub-groups are split in capture order and then turned around
+ * inside, so they keep their places as frames arrive, and the flip only
+ * mirrors each one's frames. The detail view's next and previous walk the
+ * same list.
  */
 export function groupGridImages(
   images: Image[],
   groupingMode: GroupingMode,
   order: ImageOrder = 'oldest',
 ): ImageGroup[] {
+  const inOrder = (groups: ImageGroup[]) => order === 'newest'
+    ? groups.map((group) => ({ ...group, images: [...group.images].reverse() }))
+    : groups;
   if (groupingMode === 'session') {
-    const sessions = groupImagesBySession(images);
-    return splitImageGroupsByExposure(order === 'newest'
-      ? sessions.map((group) => ({ ...group, images: [...group.images].reverse() }))
-      : sessions);
+    return inOrder(splitImageGroupsByExposure(groupImagesBySession(images)));
   }
 
   const groups = new Map<string, { filter: string; date: string; images: Image[] }>();
@@ -90,17 +93,14 @@ export function groupGridImages(
     else groups.set(key, { filter, date, images: [image] });
   }
 
-  const sorted = Array.from(groups.entries()).map(([name, group]) => {
+  const sorted = Array.from(groups.entries()).map(([name, group]) => ({
+    filterName: name,
+    filter: group.filter,
+    date: group.date,
     // Capture order, stable for frames with the same time; newest first is
     // its mirror image.
-    const chronological = group.images.sort((a, b) => (a.acquired_date || 0) - (b.acquired_date || 0));
-    return {
-      filterName: name,
-      filter: group.filter,
-      date: group.date,
-      images: order === 'newest' ? chronological.reverse() : chronological,
-    };
-  });
+    images: group.images.sort((a, b) => (a.acquired_date || 0) - (b.acquired_date || 0)),
+  }));
 
   if (order === 'newest' && groupingMode === 'both') {
     sorted.sort((a, b) => a.filter.localeCompare(b.filter) || b.date.localeCompare(a.date));
@@ -111,9 +111,9 @@ export function groupGridImages(
     sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
   }
 
-  return splitImageGroupsByExposure(
+  return inOrder(splitImageGroupsByExposure(
     sorted.map(({ filterName, images: groupImages }) => ({ filterName, images: groupImages })),
-  );
+  ));
 }
 
 export const NO_EXPANDED_GROUPS = '__none__';
@@ -175,6 +175,12 @@ export function imageGroupKey(group: ImageGroup): string {
   return group.key ?? group.filterName;
 }
 
+/**
+ * The groups shown open: the ones the link names, or, when it names none
+ * of these groups, the default ones. Keys that match no group are ignored,
+ * so a link from another grouping, such as an All projects link from
+ * before All projects grouped by project, still opens something.
+ */
 export function resolveExpandedGroups(
   imageGroups: ImageGroup[],
   groupingMode: GroupingMode,
@@ -191,12 +197,13 @@ export function resolveExpandedGroups(
         }
       } catch { /* Existing filter/session keys are plain strings. */ }
     }
-    return new Set(imageGroups.filter((group) => {
+    const named = imageGroups.filter((group) => {
       const key = imageGroupKey(group);
       return expandedGroups.has(key)
         || (group.baseKey !== undefined && expandedGroups.has(group.baseKey))
         || (group.baseKey === undefined && previousBaseKeys.has(key));
-    }).map(imageGroupKey));
+    }).map(imageGroupKey);
+    if (named.length > 0 || imageGroups.length === 0) return new Set(named);
   }
 
   const newestBase = imageGroups[0]?.baseKey;

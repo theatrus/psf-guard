@@ -352,7 +352,24 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // image, the selection and the cursor's card's place on screen stay.
   const cardOf = useCallback((imageId: number | null) =>
     containerRef.current?.querySelector<HTMLElement>(`[data-image-id="${imageId}"]`) ?? null, []);
-  const captureReorder = useReorderAnchor(order, () => cardOf(activeImageIdRef.current));
+  // The order can also change by itself: a signed-in user's saved order
+  // arriving after the frames drew, or another tab's choice. A view still
+  // at rest then treats it as a flip at rest.
+  const captureReorder = useReorderAnchor(order, () => cardOf(activeImageIdRef.current), {
+    firstId: flatImages[0]?.id ?? null,
+    decide: (previousFirstId) => {
+      const nextFirst = flatImages[0]?.id ?? null;
+      if (touchedScopeRef.current === gridScopeKey || previousFirstId === null || nextFirst === null
+        || activeImageIdRef.current !== previousFirstId || nextFirst === previousFirstId) {
+        return 'anchor';
+      }
+      activeImageIdRef.current = nextFirst;
+      selectionAnchorIdRef.current = nextFirst;
+      setLastSelectedImageId(nextFirst);
+      setCurrentImageId(nextFirst);
+      return 'rest';
+    },
+  });
   const chooseOrder = useCallback((next: ImageOrder) => {
     if (next === order) return;
     const firstId = flatImages[0]?.id ?? null;
