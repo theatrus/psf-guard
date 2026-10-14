@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { apiClient } from '../../../api/client';
 import { AccessContext, useAccess } from '../../../auth/access';
 import { server } from '../../../test/msw-server';
 import CalibrationPage from '../CalibrationPage';
@@ -283,6 +284,33 @@ describe('CalibrationPage', () => {
     await waitFor(() => expect(params().get('calSession')).toBe('s2'));
     await waitFor(() => expect(params().get('calFrame')).toBe('d1'));
     expect(params().get('calView')).toBeNull();
+  });
+
+  it('stays in compare mode while stepping, though the next frame is still loading', async () => {
+    serve();
+    renderPage('/calibration?db=demo&calSession=s1&calFrame=f1&calView=session');
+    await screen.findByRole('heading', { name: 'f1.fits' });
+    const compare = await screen.findByRole('button', { name: 'Compare with session' });
+    await waitFor(() => expect(compare).toHaveAttribute('aria-pressed', 'true'));
+    // The next frames' details arrive late, as from a busy server.
+    server.use(http.get('/api/db/demo/calibrations/frames/:uuid', async ({ params }) => {
+      await delay(150);
+      const uuid = String(params.uuid);
+      return ok(detail(uuid, 's1', FRAMES.s1.find((entry) => entry.frame_uuid === uuid)));
+    }));
+    const asked = vi.spyOn(apiClient, 'getCalibrationFramePreviewUrl');
+    fireEvent.keyDown(document, { key: 'ArrowRight', code: 'ArrowRight' });
+    await waitFor(() => expect(params().get('calFrame')).toBe('f2'));
+    await screen.findByRole('heading', { name: 'f2.fits' });
+    fireEvent.keyDown(document, { key: 'ArrowRight', code: 'ArrowRight' });
+    await waitFor(() => expect(params().get('calFrame')).toBe('f3'));
+    await screen.findByRole('heading', { name: 'f3.fits' });
+    // The viewer's pictures, not the strip's thumbnails.
+    const viewer = asked.mock.calls.filter(([, , options]) => options.size !== 'thumb');
+    expect(viewer.map(([, uuid]) => uuid)).toContain('f2');
+    expect(viewer.map(([, , options]) => options.view)).not.toContain('frame');
+    expect(compare).toHaveAttribute('aria-pressed', 'true');
+    expect(params().get('calView')).toBe('session');
   });
 
   it('keeps a frame out, marks its validity and forgets it, behind the management gate', async () => {

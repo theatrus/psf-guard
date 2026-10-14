@@ -221,6 +221,10 @@ function CalibrationFrames({
   const frameIndex = frames.findIndex((frame) => frame.frame_uuid === frameUuid);
   const current = detail.data && detail.data.frame_uuid === frameUuid ? detail.data : undefined;
   const shownDetail = frameUuid ? detail.data : undefined;
+  // Whether the frame can be set against its session. While the next
+  // frame's detail loads, the last one of the same session answers, so
+  // stepping through a session in compare mode stays in it.
+  const compare = (current ?? (shownDetail?.session === sessionId ? shownDetail : undefined))?.compare ?? false;
   const sessionIndex = sessionList.findIndex((entry) => entry.id === sessionId);
 
   const hotkeys = { enabled: !state.master, preventDefault: true };
@@ -237,8 +241,8 @@ function CalibrationFrames({
     if (sessionIndex >= 0 && sessionIndex < sessionList.length - 1) selectSession(sessionList[sessionIndex + 1].id);
   }, hotkeys, [selectSession, sessionIndex, sessionList]);
   useHotkeys('c', () => {
-    if (current?.compare) state.setView(state.view === 'session' ? 'frame' : 'session');
-  }, { enabled: !state.master }, [current?.compare, state.setView, state.view]);
+    if (compare) state.setView(state.view === 'session' ? 'frame' : 'session');
+  }, { enabled: !state.master }, [compare, state.setView, state.view]);
 
   // Keep the chosen session in sight in its list as the keys move it.
   const listRef = useRef<HTMLDivElement>(null);
@@ -343,7 +347,7 @@ function CalibrationFrames({
                 view={state.view}
                 stretch={state.stretch}
                 full={state.full}
-                canCompare={current?.compare ?? false}
+                canCompare={compare}
                 spots={spots}
                 onView={state.setView}
                 onStretch={state.setStretch}
@@ -362,7 +366,7 @@ function CalibrationFrames({
           )}
           {frameIndex >= 0 && frames.length > 1 && (
             <p className="calibration-muted calibration-hint">
-              Frame {frameIndex + 1} of {frames.length} · ← → frames · ↑ ↓ sessions{current?.compare ? ' · C compare' : ''}
+              Frame {frameIndex + 1} of {frames.length} · ← → frames · ↑ ↓ sessions{compare ? ' · C compare' : ''}
             </p>
           )}
         </div>
