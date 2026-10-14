@@ -1,12 +1,17 @@
 //! Footprint and mosaic geometry for the framing view. Pure arithmetic on a
 //! tangent plane around the project's center; the browser only draws what
-//! this returns. A footprint says where a rig would point, not where it did.
+//! this returns. A planned footprint says where a rig would point; a
+//! measured one, where its frames were shot.
 
 use crate::visibility::IcrsPosition;
 use serde::{Deserialize, Serialize};
 
 pub mod layout;
+pub mod measured;
+pub mod shape;
 pub use layout::{Layout, LayoutIssue, LayoutIssueKind, PanelPlacement};
+pub use measured::{MeasuredGeometry, MeasuredSource};
+pub use shape::PanelShape;
 
 pub const FRAMING_VERSION: u32 = 1;
 pub const MAX_PANELS: usize = 256;
@@ -147,8 +152,117 @@ pub struct Panel {
     pub column: u32,
     #[serde(default)]
     pub locked: bool,
+    /// The camera angle to shoot it at, east of north at its own center:
+    /// the framing's angle plus the panel's own turn, turned by north's
+    /// lean there ([`camera_angle_at`]), or as shot for a measured panel.
+    #[serde(default)]
+    pub position_angle_degrees: f64,
+    /// The panel's own turn from the framing's angle on the plane.
+    #[serde(default)]
+    pub angle_offset_degrees: f64,
+    /// Where its frames were shot, for a locked panel measured from them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured: Option<MeasuredGeometry>,
     #[serde(flatten)]
     pub footprint: Footprint,
+}
+
+/// Unit vectors at a sky position: toward it, east and north.
+fn basis(position: IcrsPosition) -> [[f64; 3]; 3] {
+    let (sa, ca) = position.ra_degrees.to_radians().sin_cos();
+    let (sd, cd) = position.dec_degrees.to_radians().sin_cos();
+    [
+        [cd * ca, cd * sa, sd],
+        [-sa, ca, 0.0],
+        [-sd * ca, -sd * sa, cd],
+    ]
+}
+
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// North's lean at `at` on the tangent plane about `center`: the position
+/// angle, east of north at `at`, of the direction the gnomonic projection
+/// draws parallel to the plane's own north. A camera at `at` turned to
+/// `θ + north_turn` has its up along `θ` on the plane, as the framing drew
+/// it. Zero on the plane's central meridian; about `Δα · sin δ` elsewhere,
+/// so panels 3° apart in right ascension at +60° lean 2.6° apart.
+///
+/// On the plane the tangent `T` at `P` draws as
+/// `(Tx·Pz − Px·Tz, Ty·Pz − Py·Tz)` in the plane's (east, north, out) frame.
+/// The tangent drawn straight up is `T ∝ (−Px·Py, Px² + Pz², −Py·Pz)`, and
+/// its position angle at `P` is the turn.
+pub fn north_turn(center: IcrsPosition, at: IcrsPosition) -> f64 {
+    let angle = camera_angle_at(center, at, 0.0);
+    (angle + 180.0).rem_euclid(360.0) - 180.0
+}
+
+/// The position angle a camera at `at` takes so its up draws at `theta`
+/// (east of north) on the tangent plane about `center`: `theta` plus north's
+/// lean there ([`north_turn`]) to first order, exactly here. The gnomonic
+/// plane does not keep angles, so for `theta` away from 0° and 180° the two
+/// differ, by a few hundredths of a degree three degrees from the center.
+///
+/// A tangent `T` at `P` draws as `A·T = (Tx·Pz − Px·Tz, Ty·Pz − Py·Tz)` in
+/// the plane's (east, north, out) frame. It draws along `d` when
+/// `T ⊥ w = (Pz·dy, −Pz·dx, Py·dx − Px·dy)`; with `T ⊥ P` too,
+/// `T ∝ P × w`, and its position angle at `P` is the answer.
+pub fn camera_angle_at(center: IcrsPosition, at: IcrsPosition, theta: f64) -> f64 {
+    let [z, x, y] = basis(center);
+    let [p, east, north] = basis(at);
+    let (px, py, pz) = (dot(p, x), dot(p, y), dot(p, z));
+    if pz <= 1e-9 {
+        return normalise_angle(theta);
+    }
+    let (dx, dy) = {
+        let (sin, cos) = theta.to_radians().sin_cos();
+        (sin, cos)
+    };
+    let w = [pz * dy, -pz * dx, py * dx - px * dy];
+    let p_local = [px, py, pz];
+    let mut t = [
+        p_local[1] * w[2] - p_local[2] * w[1],
+        p_local[2] * w[0] - p_local[0] * w[2],
+        p_local[0] * w[1] - p_local[1] * w[0],
+    ];
+    // Point it along `d`, not against it.
+    let drawn = [t[0] * pz - px * t[2], t[1] * pz - py * t[2]];
+    if drawn[0] * dx + drawn[1] * dy < 0.0 {
+        t = [-t[0], -t[1], -t[2]];
+    }
+    let tangent = [
+        t[0] * x[0] + t[1] * y[0] + t[2] * z[0],
+        t[0] * x[1] + t[1] * y[1] + t[2] * z[1],
+        t[0] * x[2] + t[1] * y[2] + t[2] * z[2],
+    ];
+    normalise_angle(dot(tangent, east).atan2(dot(tangent, north)).to_degrees())
+}
+
+/// The angle on the tangent plane about `center` that a camera at `at`
+/// shooting at `position_angle` draws its up along: the inverse of
+/// [`camera_angle_at`], so a target's stored angle reads back as the
+/// framing's.
+pub fn plane_angle_at(center: IcrsPosition, at: IcrsPosition, position_angle: f64) -> f64 {
+    let mut theta = position_angle - north_turn(center, at);
+    // The map is the identity plus a small, slowly varying term: a few
+    // steps settle it to rounding.
+    for _ in 0..4 {
+        let miss =
+            (position_angle - camera_angle_at(center, at, theta) + 180.0).rem_euclid(360.0) - 180.0;
+        theta += miss;
+    }
+    normalise_angle(theta)
+}
+
+/// An angle in [0, 360), rounded to a billionth of a degree.
+fn normalise_angle(degrees: f64) -> f64 {
+    let rounded = (degrees.rem_euclid(360.0) * 1e9).round() / 1e9;
+    if rounded >= 360.0 {
+        0.0
+    } else {
+        rounded
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -310,15 +424,28 @@ impl FramingRequest {
         }
         self.panel.validate()?;
         self.layout.validate()?;
+        // Every panel within the reach where the flat layout stays honest,
+        // a measured one by where it was shot.
+        let plane = TangentPlane::at(self.center)?;
+        for panel in &self.layout.panels {
+            let (dx, dy) = match &panel.measured {
+                Some(measured) => {
+                    let offset = plane
+                        .project(measured.center)
+                        .ok_or(FramingError::TooLarge)?;
+                    (offset[0], offset[1])
+                }
+                None => (
+                    panel.x * self.panel.width_degrees,
+                    panel.y * self.panel.height_degrees,
+                ),
+            };
+            if dx.abs() > MAX_EXTENT_DEGREES || dy.abs() > MAX_EXTENT_DEGREES {
+                return Err(FramingError::TooLarge);
+            }
+        }
         let extent = self.extent();
         if extent.width_degrees > MAX_EXTENT_DEGREES || extent.height_degrees > MAX_EXTENT_DEGREES {
-            return Err(FramingError::TooLarge);
-        }
-        // Every panel within the reach where the flat layout stays honest.
-        if self.layout.panels.iter().any(|p| {
-            (p.x * self.panel.width_degrees).abs() > MAX_EXTENT_DEGREES
-                || (p.y * self.panel.height_degrees).abs() > MAX_EXTENT_DEGREES
-        }) {
             return Err(FramingError::TooLarge);
         }
         if self.overlays.len() > 64 {
@@ -347,13 +474,110 @@ impl FramingRequest {
         Ok(())
     }
 
-    /// The whole mosaic along the camera axes, edge to edge.
+    /// The whole mosaic along the camera axes, edge to edge: planned
+    /// panels at their places, measured ones as shot.
     pub fn extent(&self) -> PanelSize {
-        let (across, up) = self.layout.span();
-        PanelSize {
-            width_degrees: self.panel.width_degrees * across,
-            height_degrees: self.panel.height_degrees * up,
+        let Ok(shapes) = self.shapes() else {
+            let (across, up) = self.layout.span();
+            return PanelSize {
+                width_degrees: self.panel.width_degrees * across,
+                height_degrees: self.panel.height_degrees * up,
+            };
+        };
+        let mut b = [
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for shape in &shapes {
+            let s = shape.bounds();
+            b = [
+                b[0].min(s[0]),
+                b[1].max(s[1]),
+                b[2].min(s[2]),
+                b[3].max(s[3]),
+            ];
         }
+        if shapes.is_empty() {
+            return PanelSize {
+                width_degrees: 0.0,
+                height_degrees: 0.0,
+            };
+        }
+        PanelSize {
+            width_degrees: b[1] - b[0],
+            height_degrees: b[3] - b[2],
+        }
+    }
+
+    /// A plane offset (east, north) as the camera frame (right, up).
+    fn camera_place(&self, offset: Offset) -> Offset {
+        let (sin, cos) = self.position_angle_degrees.to_radians().sin_cos();
+        [
+            -offset[0] * cos + offset[1] * sin,
+            offset[0] * sin + offset[1] * cos,
+        ]
+    }
+
+    /// A camera-frame place (right, up) as a plane offset (east, north).
+    fn plane_offset(&self, place: Offset) -> Offset {
+        // The same reflection both ways.
+        self.camera_place(place)
+    }
+
+    /// A measured panel's corners on the sky: the rectangle its camera
+    /// covered on the plane about its own center, at the angle it was shot.
+    fn measured_corners(measured: &MeasuredGeometry) -> Result<[IcrsPosition; 4], FramingError> {
+        let own = TangentPlane::at(measured.center)?;
+        Ok(
+            rectangle([0.0, 0.0], measured.size, measured.position_angle_degrees)
+                .map(|corner| own.deproject(corner)),
+        )
+    }
+
+    /// Every panel's outline in the camera frame, in degrees: planned panels
+    /// as rectangles at their places, measured ones as shot, projected onto
+    /// the framing's plane.
+    pub fn shapes(&self) -> Result<Vec<PanelShape>, FramingError> {
+        let plane = TangentPlane::at(self.center)?;
+        self.layout
+            .panels
+            .iter()
+            .map(|panel| match &panel.measured {
+                Some(measured) => {
+                    let corners = Self::measured_corners(measured)?;
+                    let mut out = [[0.0; 2]; 4];
+                    for (slot, corner) in out.iter_mut().zip(corners) {
+                        *slot =
+                            self.camera_place(plane.project(corner).ok_or(FramingError::TooLarge)?);
+                    }
+                    Ok(PanelShape {
+                        id: panel.id.clone(),
+                        corners: out,
+                    })
+                }
+                None => Ok(PanelShape::turned(
+                    panel.id.clone(),
+                    [
+                        panel.x * self.panel.width_degrees,
+                        panel.y * self.panel.height_degrees,
+                    ],
+                    self.panel.width_degrees,
+                    self.panel.height_degrees,
+                    panel.angle_offset_degrees,
+                )),
+            })
+            .collect()
+    }
+
+    /// Where the panels fall short of the minimum overlap rule, read from
+    /// their outlines ([`shape::shape_issues`]).
+    pub fn issues(&self) -> Result<Vec<LayoutIssue>, FramingError> {
+        Ok(shape::shape_issues(
+            &self.shapes()?,
+            self.layout.min_overlap_percent,
+        ))
     }
 
     pub fn preview(&self) -> Result<FramingPreview, FramingError> {
@@ -370,44 +594,77 @@ impl FramingRequest {
                 .map(|offset| turn(offset, *rotation))
                 .ok_or(FramingError::OutsideView)
         };
-        let footprint = |id: String, center: Offset, size: PanelSize, angle: f64| {
-            let corners = rectangle(center, size, angle).map(|c| plane.deproject(c));
-            let view_corners = if view.is_some() {
+        let view_corners =
+            |corners: [IcrsPosition; 4]| -> Result<Option<[Offset; 4]>, FramingError> {
+                if view.is_none() {
+                    return Ok(None);
+                }
                 let mut mapped = [[0.0; 2]; 4];
                 for (slot, corner) in mapped.iter_mut().zip(corners) {
                     *slot = to_view(corner)?;
                 }
-                Some(mapped)
-            } else {
-                None
+                Ok(Some(mapped))
             };
+        let footprint = |id: String, center: Offset, size: PanelSize, angle: f64| {
+            let corners = rectangle(center, size, angle).map(|c| plane.deproject(c));
             Ok::<_, FramingError>(Footprint {
                 id,
                 center: plane.deproject(center),
                 corners,
-                view_corners,
+                view_corners: view_corners(corners)?,
             })
         };
-        let (sin, cos) = self.position_angle_degrees.to_radians().sin_cos();
-        let up = [sin, cos];
-        let right = [-cos, sin];
-        let cells = self.layout.cells();
+        let shapes = self.shapes()?;
+        // Rows and columns from where each panel sits, in panel sizes.
+        let places: Vec<[f64; 2]> = shapes
+            .iter()
+            .map(|shape| {
+                let c = shape.center();
+                [
+                    c[0] / self.panel.width_degrees,
+                    c[1] / self.panel.height_degrees,
+                ]
+            })
+            .collect();
+        let cells = layout::cells_at(&places);
         let mut panels = Vec::with_capacity(self.layout.panels.len());
-        for (placement, (row, column)) in self.layout.panels.iter().zip(cells) {
-            // Offsets along the camera's axes, in degrees on the plane.
-            let dx = placement.x * self.panel.width_degrees;
-            let dy = placement.y * self.panel.height_degrees;
-            let center = [dx * right[0] + dy * up[0], dx * right[1] + dy * up[1]];
+        for ((placement, (row, column)), shape) in self.layout.panels.iter().zip(cells).zip(&shapes)
+        {
+            let footprint = match &placement.measured {
+                Some(measured) => {
+                    let corners = Self::measured_corners(measured)?;
+                    Footprint {
+                        id: placement.id.clone(),
+                        center: measured.center,
+                        corners,
+                        view_corners: view_corners(corners)?,
+                    }
+                }
+                None => footprint(
+                    placement.id.clone(),
+                    self.plane_offset(shape.center()),
+                    self.panel,
+                    self.position_angle_degrees + placement.angle_offset_degrees,
+                )?,
+            };
+            // The angle a camera at the panel's center takes so its up runs
+            // along the panel's angle on the plane; as shot when measured.
+            let position_angle_degrees = match &placement.measured {
+                Some(measured) => measured.position_angle_degrees,
+                None => camera_angle_at(
+                    self.center,
+                    footprint.center,
+                    self.position_angle_degrees + placement.angle_offset_degrees,
+                ),
+            };
             panels.push(Panel {
                 row,
                 column,
                 locked: placement.locked,
-                footprint: footprint(
-                    placement.id.clone(),
-                    center,
-                    self.panel,
-                    self.position_angle_degrees,
-                )?,
+                position_angle_degrees,
+                angle_offset_degrees: placement.angle_offset_degrees,
+                measured: placement.measured.clone(),
+                footprint,
             });
         }
         let overlays = self
@@ -433,7 +690,7 @@ impl FramingRequest {
             overlays,
             extent: self.extent(),
             view_center_offset,
-            issues: self.layout.issues(),
+            issues: shape::shape_issues(&shapes, self.layout.min_overlap_percent),
         })
     }
 }
@@ -702,12 +959,10 @@ mod tests {
     #[test]
     fn an_added_panel_sits_where_its_offset_says_at_any_angle() {
         let mut request = request();
-        request.layout.panels.push(PanelPlacement {
-            id: "p2".into(),
-            x: -0.8,
-            y: 0.0,
-            locked: false,
-        });
+        request
+            .layout
+            .panels
+            .push(PanelPlacement::at("p2", -0.8, 0.0));
         request.layout.panels[0].locked = true;
         let preview = request.preview().unwrap();
         let plane = TangentPlane::at(request.center).unwrap();
@@ -735,24 +990,9 @@ mod tests {
             request.layout = Layout {
                 min_overlap_percent: 20,
                 panels: vec![
-                    PanelPlacement {
-                        id: "r1c1".into(),
-                        x: 0.0,
-                        y: 0.0,
-                        locked: false,
-                    },
-                    PanelPlacement {
-                        id: "p2".into(),
-                        x: 0.8,
-                        y: 0.0,
-                        locked: false,
-                    },
-                    PanelPlacement {
-                        id: "p3".into(),
-                        x: 0.0,
-                        y: 0.8,
-                        locked: false,
-                    },
+                    PanelPlacement::at("r1c1", 0.0, 0.0),
+                    PanelPlacement::at("p2", 0.8, 0.0),
+                    PanelPlacement::at("p3", 0.0, 0.8),
                 ],
             };
             let preview = request.preview().unwrap();
@@ -815,5 +1055,259 @@ mod tests {
         // What is written back is the layout.
         let written = serde_json::to_value(&request).unwrap();
         assert!(written.get("layout").is_some() && written.get("mosaic").is_none());
+    }
+
+    fn at(ra: f64, dec: f64) -> IcrsPosition {
+        IcrsPosition {
+            ra_degrees: ra,
+            dec_degrees: dec,
+        }
+    }
+
+    /// The position angle at `from` of the great circle toward `to`.
+    fn bearing(from: IcrsPosition, to: IcrsPosition) -> f64 {
+        let (d1, d2) = (from.dec_degrees.to_radians(), to.dec_degrees.to_radians());
+        let da = (to.ra_degrees - from.ra_degrees).to_radians();
+        (da.sin() * d2.cos())
+            .atan2(d1.cos() * d2.sin() - d1.sin() * d2.cos() * da.cos())
+            .to_degrees()
+    }
+
+    /// The worked case: panels 3° apart in right ascension at +60°. North
+    /// leans by about Δα·sin δ = 2.598° at the outer panel, and the exact
+    /// turn matches the bearing of a short step up the plane from it.
+    #[test]
+    fn north_leans_by_about_the_right_ascension_apart_times_sin_dec() {
+        let center = at(100.0, 60.0);
+        assert_eq!(north_turn(center, center), 0.0);
+        let east = at(103.0, 60.0);
+        let turn = north_turn(center, east);
+        assert!(
+            (turn - 3.0 * 60f64.to_radians().sin()).abs() < 0.01,
+            "{turn}"
+        );
+        assert!(
+            turn > 0.0,
+            "east of center, the plane's north is east of local north"
+        );
+        assert!((north_turn(center, at(97.0, 60.0)) + turn).abs() < 1e-9);
+        // On the central meridian north does not lean, whatever the dec.
+        assert!(north_turn(center, at(100.0, 63.0)).abs() < 1e-12);
+        // South of the equator it leans the other way.
+        assert!(north_turn(at(100.0, -60.0), at(103.0, -60.0)) < 0.0);
+        // The exact turn is the bearing of a short step up the plane.
+        let plane = TangentPlane::at(center).unwrap();
+        for target in [east, at(104.5, 58.0), at(96.0, 63.5), at(100.5, 75.0)] {
+            let offset = plane.project(target).unwrap();
+            let step = plane.deproject([offset[0], offset[1] + 1e-6]);
+            let expected = bearing(target, step);
+            let turn = north_turn(center, target);
+            assert!(
+                (turn - expected).abs() < 1e-5,
+                "{target:?}: {turn} against {expected}"
+            );
+        }
+    }
+
+    /// A panel shot at its camera angle has its up along θ on the mosaic's
+    /// plane: the line through the middles of its top and bottom edges, a
+    /// great circle, draws at θ exactly. The angle is θ plus north's lean to
+    /// within the plane's angle distortion.
+    #[test]
+    fn a_stored_angle_reads_back_as_the_framings() {
+        let center = at(100.0, 60.0);
+        for (place, theta) in [
+            (at(103.0, 60.0), 20.0),
+            (at(97.5, 61.5), 300.0),
+            (center, 45.0),
+        ] {
+            let shot = camera_angle_at(center, place, theta);
+            let back = plane_angle_at(center, place, shot);
+            let apart = (back - theta + 180.0).rem_euclid(360.0) - 180.0;
+            assert!(apart.abs() < 1e-7, "{theta}: {back}");
+        }
+    }
+
+    #[test]
+    fn a_panel_turned_by_north_lean_lines_up_with_the_plane() {
+        let center = at(100.0, 60.0);
+        let plane = TangentPlane::at(center).unwrap();
+        for theta in [0.0, 30.0, 90.0, 147.0] {
+            for target in [at(103.0, 60.0), at(98.0, 61.5), at(101.0, 58.5)] {
+                let pa = camera_angle_at(center, target, theta);
+                // θ plus north's lean, to the plane's angle distortion.
+                let first_order = (theta + north_turn(center, target)).rem_euclid(360.0);
+                let apart = (pa - first_order + 180.0).rem_euclid(360.0) - 180.0;
+                assert!(
+                    apart.abs() < 0.1,
+                    "{theta} at {target:?}: {pa} against {first_order}"
+                );
+                let own = TangentPlane::at(target).unwrap();
+                let (sin, cos) = pa.to_radians().sin_cos();
+                let top = plane
+                    .project(own.deproject([0.6 * sin, 0.6 * cos]))
+                    .unwrap();
+                let bottom = plane
+                    .project(own.deproject([-0.6 * sin, -0.6 * cos]))
+                    .unwrap();
+                let drawn = (top[0] - bottom[0]).atan2(top[1] - bottom[1]).to_degrees();
+                let apart = (drawn - theta + 180.0).rem_euclid(360.0) - 180.0;
+                assert!(apart.abs() < 1e-7, "{theta} at {target:?}: drawn {drawn}");
+                // Without the turn it draws off by the lean.
+                let (sin0, cos0) = theta.to_radians().sin_cos();
+                let top0 = plane
+                    .project(own.deproject([0.6 * sin0, 0.6 * cos0]))
+                    .unwrap();
+                let bottom0 = plane
+                    .project(own.deproject([-0.6 * sin0, -0.6 * cos0]))
+                    .unwrap();
+                let drawn0 = (top0[0] - bottom0[0])
+                    .atan2(top0[1] - bottom0[1])
+                    .to_degrees();
+                let off = (drawn0 - theta + 180.0).rem_euclid(360.0) - 180.0;
+                let lean = north_turn(center, target);
+                if lean.abs() > 0.1 {
+                    assert!((off + lean).abs() < 0.05, "{off} against {lean}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn each_planned_panel_is_shot_at_the_framing_angle_turned_by_north_lean() {
+        let mut request = request();
+        request.center = at(100.0, 60.0);
+        request.position_angle_degrees = 20.0;
+        request.panel = PanelSize {
+            width_degrees: 3.0,
+            height_degrees: 2.0,
+        };
+        request.layout = Layout {
+            min_overlap_percent: 0,
+            panels: vec![
+                PanelPlacement::at("r1c1", 0.0, 0.0),
+                PanelPlacement::at("p2", -1.0, 0.0),
+                PanelPlacement::at("p3", 1.0, 0.0),
+            ],
+        };
+        let preview = request.preview().unwrap();
+        assert!((preview.panels[0].position_angle_degrees - 20.0).abs() < 1e-9);
+        for panel in &preview.panels[1..] {
+            let lean = north_turn(request.center, panel.footprint.center);
+            assert!(lean.abs() > 1.0, "{lean}");
+            let exact = camera_angle_at(request.center, panel.footprint.center, 20.0);
+            assert!((panel.position_angle_degrees - exact).abs() < 1e-8);
+            assert!((panel.position_angle_degrees - (20.0 + lean).rem_euclid(360.0)).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn a_turned_panel_is_drawn_checked_and_shot_at_its_own_angle() {
+        let mut request = request();
+        request.center = at(100.0, 60.0);
+        request.position_angle_degrees = 20.0;
+        request.panel = PanelSize {
+            width_degrees: 3.0,
+            height_degrees: 2.0,
+        };
+        let mut turned = PanelPlacement::at("p2", -0.9, 0.0);
+        turned.angle_offset_degrees = 10.0;
+        let mut centered = PanelPlacement::at("r1c1", 0.0, 0.0);
+        centered.angle_offset_degrees = -15.0;
+        request.layout = Layout {
+            min_overlap_percent: 10,
+            panels: vec![centered, turned],
+        };
+        let preview = request.preview().unwrap();
+        // At the center no lean: the framing's angle plus the panel's turn.
+        assert!((preview.panels[0].position_angle_degrees - 5.0).abs() < 1e-9);
+        assert_eq!(preview.panels[0].angle_offset_degrees, -15.0);
+        // Off the center, the same turn plus north's lean there.
+        let p2 = &preview.panels[1];
+        let exact = camera_angle_at(request.center, p2.footprint.center, 30.0);
+        assert!((p2.position_angle_degrees - exact).abs() < 1e-8);
+        let lean = north_turn(request.center, p2.footprint.center);
+        assert!((p2.position_angle_degrees - (30.0 + lean)).abs() < 0.1);
+        // Its outline in the camera frame is the rectangle turned the same
+        // way: its up edge leans toward the camera's left.
+        let shapes = request.shapes().unwrap();
+        let [top_left, bottom_left, _, _] = shapes[1].corners;
+        let up = [top_left[0] - bottom_left[0], top_left[1] - bottom_left[1]];
+        let drawn = (-up[0]).atan2(up[1]).to_degrees();
+        assert!((drawn - 10.0).abs() < 1e-9, "{drawn}");
+        // And on the sky, the footprint's up edge runs at the panel's angle
+        // on the plane.
+        let plane = TangentPlane::at(request.center).unwrap();
+        let [tl, bl, _, _] = p2.footprint.corners.map(|c| plane.project(c).unwrap());
+        let sky_up = (tl[0] - bl[0]).atan2(tl[1] - bl[1]).to_degrees();
+        assert!((sky_up - 30.0).abs() < 1e-6, "{sky_up}");
+        // Overlap is read from the turned outlines: two 3° panels 0.9 apart
+        // overlap by about a tenth, less where the turn opens the seam.
+        assert!(preview
+            .issues
+            .iter()
+            .all(|issue| issue.kind != LayoutIssueKind::Gap));
+        // A turn past a half turn either way is refused.
+        let mut wild = request.clone();
+        wild.layout.panels[1].angle_offset_degrees = 181.0;
+        assert_eq!(wild.preview().unwrap_err(), FramingError::InvalidMosaic);
+    }
+
+    fn measured(center: IcrsPosition, angle: f64, width: f64, height: f64) -> MeasuredGeometry {
+        MeasuredGeometry {
+            center,
+            position_angle_degrees: angle,
+            size: PanelSize {
+                width_degrees: width,
+                height_degrees: height,
+            },
+            source: MeasuredSource::Solved,
+            size_source: MeasuredSource::Solved,
+            frames: 12,
+        }
+    }
+
+    /// A locked panel follows its original shots: drawn as shot, kept at
+    /// its angle, and the new panels beside it are read against that outline.
+    #[test]
+    fn a_shot_panel_is_drawn_and_checked_as_shot() {
+        let mut request = request();
+        request.center = at(38.2, 61.45);
+        request.position_angle_degrees = 0.0;
+        request.panel = PanelSize {
+            width_degrees: 1.8,
+            height_degrees: 1.2,
+        };
+        // Shot with a wider camera, a degree turned and a hair off the plan.
+        let mut shot = PanelPlacement::at("r1c1", 0.0, 0.0);
+        shot.locked = true;
+        shot.measured = Some(measured(at(38.21, 61.452), 1.0, 2.1, 1.4));
+        // A new panel to its left (east), sharing a fifth of the wider width.
+        let new_x = -(1.05 + 0.9 - 0.2 * 2.1) / 1.8;
+        request.layout = Layout {
+            min_overlap_percent: 20,
+            panels: vec![shot.clone(), PanelPlacement::at("p2", new_x, 0.0)],
+        };
+        let preview = request.preview().unwrap();
+        let drawn = &preview.panels[0];
+        assert_eq!(drawn.footprint.center, at(38.21, 61.452));
+        assert_eq!(drawn.position_angle_degrees, 1.0);
+        assert_eq!(drawn.measured, shot.measured);
+        let shapes = request.shapes().unwrap();
+        let b = shapes[0].bounds();
+        assert!((b[1] - b[0] - 2.1).abs() < 0.06, "{b:?}");
+        // The plane's projection and the degree of turn leave the seam a
+        // little off a clean 20%: still joined, or at most a thin share.
+        let pair = shape::shape_overlap(&shapes[0], &shapes[1]).unwrap();
+        assert!((pair.thickness - 0.2).abs() < 0.03, "{pair:?}");
+        // Moved half a panel further, it leaves a gap the rule names.
+        request.layout.panels[1].x -= 0.5;
+        let issues = request.issues().unwrap();
+        assert_eq!(issues[0].kind, LayoutIssueKind::Gap, "{issues:?}");
+        // Only a locked panel may follow its shots.
+        let mut loose = shot;
+        loose.locked = false;
+        request.layout.panels[0] = loose;
+        assert_eq!(request.preview(), Err(FramingError::InvalidMosaic));
     }
 }

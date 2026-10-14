@@ -133,8 +133,10 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     let targets = data["program"]["targets"].as_array().unwrap();
     assert_eq!(targets.len(), 2);
     assert!(targets.iter().any(|t| t["name"] == "IC 1805 r1c1"));
-    // A rotator was reported, so the camera angle travels with the target.
-    assert_eq!(targets[0]["position_angle_mas"], 15 * 3_600_000);
+    // A rotator was reported, so the camera angle travels with the target:
+    // the framing's 15°, turned by north's lean at the panel.
+    let angle = targets[0]["position_angle_mas"].as_i64().unwrap() as f64 / 3_600_000.0;
+    assert!((angle - 15.0).abs() < 1.0 && angle != 15.0, "{angle}");
     assert!(
         (targets[0]["icrs_dec_mas"].as_i64().unwrap() as f64 / 3_600_000.0 - 61.45).abs() < 1.0
     );

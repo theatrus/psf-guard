@@ -1997,7 +1997,7 @@ pub fn persist_solved_analysis(
     persist_pixel_analysis(cache_dir, analysis)
 }
 
-fn source_fingerprint(path: &Path) -> Result<AstrometrySourceFingerprint, String> {
+pub(crate) fn source_fingerprint(path: &Path) -> Result<AstrometrySourceFingerprint, String> {
     let canonical = path
         .canonicalize()
         .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))?;

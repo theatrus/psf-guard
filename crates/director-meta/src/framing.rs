@@ -132,6 +132,13 @@ pub fn same_places(a: &Layout, b: &Layout) -> bool {
             b.panel(&panel.id).is_some_and(|other| {
                 (panel.x - other.x).abs() <= PLACE_TOLERANCE_PANELS
                     && (panel.y - other.y).abs() <= PLACE_TOLERANCE_PANELS
+                    && same_angle(panel.angle_offset_degrees, other.angle_offset_degrees)
+                    // A panel redrawn from new solves of its frames moves.
+                    && match (&panel.measured, &other.measured) {
+                        (None, None) => true,
+                        (Some(a), Some(b)) => a.same(b),
+                        _ => false,
+                    }
             })
         })
 }
@@ -332,6 +339,41 @@ impl FramingDraft {
     }
 }
 
+impl FramingDraft {
+    /// The locked panels whose measured geometry `next` changes, by rig
+    /// framing (`None` for the shared one) and id. Only the server measures
+    /// a panel's frames, so each change must be what it measures now; the
+    /// route checks that before saving.
+    pub fn measured_changes(&self, next: &Self) -> Vec<(Option<Uuid>, String)> {
+        let mut out = Vec::new();
+        let changed = |was: Option<&Layout>, now: &Layout, rig: Option<Uuid>, out: &mut Vec<_>| {
+            for panel in now.panels.iter().filter(|panel| panel.locked) {
+                let old = was
+                    .and_then(|layout| layout.panel(&panel.id))
+                    .and_then(|p| p.measured.as_ref());
+                let same = match (old, panel.measured.as_ref()) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => a.same(b),
+                    _ => false,
+                };
+                if !same {
+                    out.push((rig, panel.id.clone()));
+                }
+            }
+        };
+        changed(Some(&self.layout), &next.layout, None, &mut out);
+        for own in &next.rig_framings {
+            changed(
+                self.rig_framing(own.rig_id).map(|before| &before.layout),
+                &own.layout,
+                Some(own.rig_id),
+                &mut out,
+            );
+        }
+        out
+    }
+}
+
 /// Where a framing puts its panels: around a center, turned by an angle,
 /// sized by a panel.
 struct Placing {
@@ -364,15 +406,23 @@ fn moved_locks(
         let Some(old) = was.panel(&panel.id) else {
             continue;
         };
-        let place_held = match (before.sky(old.x, old.y), after.sky(panel.x, panel.y)) {
-            (Some(a), Some(b)) => same_position(&a, &b),
-            _ => {
-                same_position(&before.center, &after.center)
-                    && (old.x - panel.x).abs() <= PLACE_TOLERANCE_PANELS
-                    && (old.y - panel.y).abs() <= PLACE_TOLERANCE_PANELS
+        let same_offsets = (old.x - panel.x).abs() <= PLACE_TOLERANCE_PANELS
+            && (old.y - panel.y).abs() <= PLACE_TOLERANCE_PANELS;
+        // A panel measured from its frames is held where they were shot,
+        // whatever the camera the plan uses now: its planned place stays,
+        // and a new panel size does not move it.
+        let place_held = if panel.measured.is_some() || old.measured.is_some() {
+            same_position(&before.center, &after.center) && same_offsets
+        } else {
+            match (before.sky(old.x, old.y), after.sky(panel.x, panel.y)) {
+                (Some(a), Some(b)) => same_position(&a, &b),
+                _ => same_position(&before.center, &after.center) && same_offsets,
             }
         };
-        if !place_held || !same_angle(before.angle, after.angle) {
+        // Its own turn holds as well: a locked panel's camera angle is
+        // the one it was shot at.
+        let turn_held = same_angle(old.angle_offset_degrees, panel.angle_offset_degrees);
+        if !place_held || !turn_held || !same_angle(before.angle, after.angle) {
             out.push(format!("{prefix}{}", panel.id));
         }
     }

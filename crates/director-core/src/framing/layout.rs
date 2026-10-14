@@ -4,10 +4,14 @@
 //! Places are measured on the tangent plane at the framing's center, along
 //! the camera's axes, in panel sizes: `x` in panel widths toward the
 //! camera's right (west at camera angle zero), `y` in panel heights toward
-//! its up (north at angle zero). Every panel of one framing shares the
-//! panel size and the camera angle, so overlaps are read in the camera's
-//! own frame and turning the mosaic never changes one.
+//! its up (north at angle zero). Planned panels share the framing's panel
+//! size and camera angle. A locked panel measured from its frames keeps
+//! the field and angle it was shot with ([`MeasuredGeometry`]); overlaps are
+//! read from the panels' outlines in the camera's frame, so turning the
+//! mosaic never changes one.
 
+use super::measured::MeasuredGeometry;
+use super::shape::{shape_issues, PanelShape};
 use super::{FramingError, Mosaic, MAX_PANELS};
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +43,33 @@ pub struct PanelPlacement {
     /// angle or panel size under it, while it stays locked.
     #[serde(default)]
     pub locked: bool,
+    /// Where a locked panel's frames were really shot. When present the
+    /// panel is drawn, checked and activated as shot, not as planned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured: Option<MeasuredGeometry>,
+    /// The panel's own turn from the framing's angle on the plane, degrees,
+    /// counter-clockwise as the camera sees the sky (the way a larger
+    /// position angle turns), -180 to 180. Most panels keep 0.
+    #[serde(default, skip_serializing_if = "is_unturned")]
+    pub angle_offset_degrees: f64,
+}
+
+fn is_unturned(degrees: &f64) -> bool {
+    *degrees == 0.0
+}
+
+impl PanelPlacement {
+    /// A planned panel, unlocked, at `x` and `y` in panel sizes.
+    pub fn at(id: impl Into<String>, x: f64, y: f64) -> Self {
+        Self {
+            id: id.into(),
+            x,
+            y,
+            locked: false,
+            measured: None,
+            angle_offset_degrees: 0.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -76,44 +107,6 @@ pub struct LayoutIssue {
     /// the panel side across the seam.
     #[serde(default, deserialize_with = "Option::deserialize")]
     pub percent: Option<f64>,
-}
-
-/// How two panels sit against each other, in panel sizes.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PairOverlap {
-    /// Share of the side across the seam the two panels overlap; negative
-    /// for a gap between them.
-    pub thickness: f64,
-    /// Share of the side along the seam the two panels have in common.
-    pub run: f64,
-    /// Whether the seam runs up and down the camera frame (panels side by
-    /// side left and right) rather than across it.
-    pub vertical_seam: bool,
-}
-
-/// The overlap of two panels at offsets `a` and `b`: along each camera axis
-/// one minus how far apart they are, in panel sizes. The thinner axis is
-/// across the seam; the other runs along it. `None` for two panels apart on
-/// both axes, which have no seam.
-pub fn pair_overlap(a: (f64, f64), b: (f64, f64)) -> Option<PairOverlap> {
-    let across_x = 1.0 - (a.0 - b.0).abs();
-    let across_y = 1.0 - (a.1 - b.1).abs();
-    if across_x <= 0.0 && across_y <= 0.0 {
-        return None;
-    }
-    // The seam is where the panels are thinner together: the axis with the
-    // smaller overlap, or the one with a gap.
-    let vertical_seam = across_x <= across_y;
-    let (thickness, run) = if vertical_seam {
-        (across_x, across_y)
-    } else {
-        (across_y, across_x)
-    };
-    Some(PairOverlap {
-        thickness,
-        run,
-        vertical_seam,
-    })
 }
 
 fn valid_id(id: &str) -> bool {
@@ -157,12 +150,11 @@ impl Layout {
             for column in 0..mosaic.columns {
                 let x =
                     (f64::from(column) - f64::from(mosaic.columns.saturating_sub(1)) / 2.0) * keep;
-                panels.push(PanelPlacement {
-                    id: format!("r{}c{}", row + 1, column + 1),
+                panels.push(PanelPlacement::at(
+                    format!("r{}c{}", row + 1, column + 1),
                     x,
                     y,
-                    locked: false,
-                });
+                ));
             }
         }
         Self {
@@ -193,9 +185,12 @@ impl Layout {
         let grid = Self::grid(mosaic);
         let fits = grid.panels.iter().all(|cell| {
             self.panels.iter().any(|panel| {
+                // A turned panel, or one drawn as shot, is off the grid.
                 panel.id == cell.id
                     && (panel.x - cell.x).abs() <= PLACE_TOLERANCE
                     && (panel.y - cell.y).abs() <= PLACE_TOLERANCE
+                    && panel.angle_offset_degrees == 0.0
+                    && panel.measured.is_none()
             })
         });
         fits.then_some(mosaic)
@@ -238,7 +233,16 @@ impl Layout {
             if !valid_id(&panel.id) || !ids.insert(panel.id.as_str()) {
                 return Err(FramingError::InvalidMosaic);
             }
-            if !panel.x.is_finite() || !panel.y.is_finite() {
+            if !panel.x.is_finite()
+                || !panel.y.is_finite()
+                || !(-180.0..=180.0).contains(&panel.angle_offset_degrees)
+            {
+                return Err(FramingError::InvalidMosaic);
+            }
+            // Only a locked panel follows its shots.
+            if let Some(measured) = &panel.measured
+                && (!panel.locked || !measured.is_valid())
+            {
                 return Err(FramingError::InvalidMosaic);
             }
         }
@@ -273,138 +277,31 @@ impl Layout {
     /// within a tenth of a panel counted as one. A grid's panels get their
     /// own cells; a free layout gets the sparse grid its panels fall on.
     pub fn cells(&self) -> Vec<(u32, u32)> {
-        let ys: Vec<f64> = self.panels.iter().map(|p| -p.y).collect();
-        let xs: Vec<f64> = self.panels.iter().map(|p| p.x).collect();
-        let rows = bands(&ys, 0.1);
-        let columns = bands(&xs, 0.1);
-        rows.into_iter().zip(columns).collect()
+        cells_at(&self.panels.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())
     }
 
-    /// Where the layout falls short of the minimum overlap rule, read pair by
-    /// pair in the camera frame. Two panels are joined when they overlap by
-    /// at least the minimum on both axes, whether side by side or at a
-    /// corner. Two panels sit side by side when they share at least half a
-    /// side along their seam (`run`); such a pair that overlaps by less than
-    /// the minimum across the seam is a thin overlap, and one with uncovered
-    /// sky between them is a gap. A corner that overlaps by less is no seam
-    /// and is left alone. Panels joined to nobody are isolated, and groups
-    /// that never meet are disconnected.
+    /// Where the layout falls short of the minimum overlap rule, read from
+    /// each planned panel as an unturned unit square at its place; see
+    /// [`shape_issues`]. Turned panels need their size: A framing with a panel size reads measured panels
+    /// as shot ([`super::FramingRequest::issues`]).
     pub fn issues(&self) -> Vec<LayoutIssue> {
-        let minimum = f64::from(self.min_overlap_percent) / 100.0;
-        let n = self.panels.len();
-        let mut issues = Vec::new();
-        if n < 2 {
-            return issues;
-        }
-        let mut linked = vec![Vec::new(); n];
-        let mut flagged = vec![false; n];
-        for i in 0..n {
-            for j in i + 1..n {
-                let (a, b) = (&self.panels[i], &self.panels[j]);
-                let Some(pair) = pair_overlap((a.x, a.y), (b.x, b.y)) else {
-                    continue;
-                };
-                if pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= minimum
-                {
-                    linked[i].push(j);
-                    linked[j].push(i);
-                    continue;
-                }
-                if pair.run + PLACE_TOLERANCE < SIDE_BY_SIDE {
-                    continue;
-                }
-                let ids = vec![a.id.clone(), b.id.clone()];
-                if pair.thickness >= -PLACE_TOLERANCE {
-                    issues.push(LayoutIssue {
-                        kind: LayoutIssueKind::ThinOverlap,
-                        panels: ids,
-                        percent: Some(round_percent(pair.thickness.max(0.0))),
-                    });
-                    flagged[i] = true;
-                    flagged[j] = true;
-                } else if -pair.thickness < 1.0 && !self.gap_covered(i, j, pair) {
-                    issues.push(LayoutIssue {
-                        kind: LayoutIssueKind::Gap,
-                        panels: ids,
-                        percent: Some(round_percent(-pair.thickness)),
-                    });
-                    flagged[i] = true;
-                    flagged[j] = true;
-                }
-            }
-        }
-        for i in 0..n {
-            if linked[i].is_empty() && !flagged[i] {
-                issues.push(LayoutIssue {
-                    kind: LayoutIssueKind::Isolated,
-                    panels: vec![self.panels[i].id.clone()],
-                    percent: None,
-                });
-            }
-        }
-        if issues.is_empty() {
-            let groups = components(&linked);
-            if groups.len() > 1 {
-                issues.push(LayoutIssue {
-                    kind: LayoutIssueKind::Disconnected,
-                    panels: groups
-                        .iter()
-                        .map(|group| self.panels[group[0]].id.clone())
-                        .collect(),
-                    percent: None,
-                });
-            }
-        }
-        issues
-    }
-
-    /// Whether other panels cover the sky between panels `i` and `j`, which
-    /// face each other across a gap. Sampled at points strictly inside the
-    /// gap, which is enough at the sizes a person drags to.
-    fn gap_covered(&self, i: usize, j: usize, pair: PairOverlap) -> bool {
-        let (a, b) = (&self.panels[i], &self.panels[j]);
-        // Across the seam: from the nearer edge of one to the other. Along
-        // it: the stretch both panels span.
-        let (across_a, across_b, along_a, along_b) = if pair.vertical_seam {
-            (a.x, b.x, a.y, b.y)
-        } else {
-            (a.y, b.y, a.x, b.x)
-        };
-        let (low, high) = if across_a < across_b {
-            (across_a + 0.5, across_b - 0.5)
-        } else {
-            (across_b + 0.5, across_a - 0.5)
-        };
-        let start = along_a.max(along_b) - 0.5;
-        let end = along_a.min(along_b) + 0.5;
-        const ACROSS: usize = 3;
-        const ALONG: usize = 5;
-        for s in 0..ACROSS {
-            let across = low + (high - low) * (s as f64 + 0.5) / ACROSS as f64;
-            for t in 0..ALONG {
-                let along = start + (end - start) * (t as f64 + 0.5) / ALONG as f64;
-                let (px, py) = if pair.vertical_seam {
-                    (across, along)
-                } else {
-                    (along, across)
-                };
-                let covered = self.panels.iter().enumerate().any(|(k, panel)| {
-                    k != i
-                        && k != j
-                        && (px - panel.x).abs() <= 0.5 + PLACE_TOLERANCE
-                        && (py - panel.y).abs() <= 0.5 + PLACE_TOLERANCE
-                });
-                if !covered {
-                    return false;
-                }
-            }
-        }
-        true
+        let shapes: Vec<PanelShape> = self
+            .panels
+            .iter()
+            .map(|panel| PanelShape::rectangle(panel.id.clone(), [panel.x, panel.y], 1.0, 1.0))
+            .collect();
+        shape_issues(&shapes, self.min_overlap_percent)
     }
 }
 
-fn round_percent(share: f64) -> f64 {
-    (share * 1000.0).round() / 10.0
+/// Rows and columns of places given in panel sizes (right, up): row one
+/// furthest up, column one furthest left, within a tenth of a panel as one.
+pub fn cells_at(places: &[[f64; 2]]) -> Vec<(u32, u32)> {
+    let ys: Vec<f64> = places.iter().map(|p| -p[1]).collect();
+    let xs: Vec<f64> = places.iter().map(|p| p[0]).collect();
+    let rows = bands(&ys, 0.1);
+    let columns = bands(&xs, 0.1);
+    rows.into_iter().zip(columns).collect()
 }
 
 /// One-based band per value: values sorted, a new band where the next value
@@ -426,43 +323,12 @@ fn bands(values: &[f64], tolerance: f64) -> Vec<u32> {
     out
 }
 
-/// Connected groups of a link list, each by its members in input order.
-fn components(linked: &[Vec<usize>]) -> Vec<Vec<usize>> {
-    let mut seen = vec![false; linked.len()];
-    let mut groups = Vec::new();
-    for start in 0..linked.len() {
-        if seen[start] {
-            continue;
-        }
-        let mut group = vec![start];
-        seen[start] = true;
-        let mut next = 0;
-        while next < group.len() {
-            for &other in &linked[group[next]] {
-                if !seen[other] {
-                    seen[other] = true;
-                    group.push(other);
-                }
-            }
-            next += 1;
-        }
-        group.sort_unstable();
-        groups.push(group);
-    }
-    groups
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn place(id: &str, x: f64, y: f64) -> PanelPlacement {
-        PanelPlacement {
-            id: id.into(),
-            x,
-            y,
-            locked: false,
-        }
+        PanelPlacement::at(id, x, y)
     }
 
     fn layout(panels: Vec<PanelPlacement>) -> Layout {

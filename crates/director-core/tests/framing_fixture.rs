@@ -5,7 +5,10 @@
 //! `PSF_GUARD_WRITE_FIXTURES=1 cargo test -p psf-guard-director-core --test framing_fixture`.
 
 use psf_guard_director_core::{
-    framing::{FramingRequest, Layout, Mosaic, Overlay, PanelPlacement, PanelSize, View},
+    framing::{
+        FramingRequest, Layout, MeasuredGeometry, MeasuredSource, Mosaic, Overlay, PanelPlacement,
+        PanelSize, View,
+    },
     visibility::IcrsPosition,
 };
 
@@ -53,6 +56,8 @@ fn free_request() -> FramingRequest {
         x,
         y,
         locked,
+        measured: None,
+        angle_offset_degrees: 0.0,
     };
     FramingRequest {
         layout: Layout {
@@ -66,6 +71,33 @@ fn free_request() -> FramingRequest {
         },
         ..request()
     }
+}
+
+/// The framed target measured from its frames, shot with a wider camera a
+/// degree and a half off the plan's angle, with planned panels around it
+/// at the current camera's size: one east turned by 6°, one north, and one
+/// left a gap.
+fn measured_request() -> FramingRequest {
+    let mut request = free_request();
+    request.layout.panels[0].measured = Some(MeasuredGeometry {
+        center: IcrsPosition {
+            ra_degrees: 38.25,
+            dec_degrees: 61.47,
+        },
+        position_angle_degrees: 36.5,
+        size: PanelSize {
+            width_degrees: 2.3,
+            height_degrees: 1.6,
+        },
+        source: MeasuredSource::Solved,
+        size_source: MeasuredSource::Solved,
+        frames: 12,
+    });
+    request.layout.panels[1].x = -0.95;
+    request.layout.panels[1].angle_offset_degrees = 6.0;
+    request.layout.panels[2].y = 0.9;
+    request.layout.panels[3] = PanelPlacement::at("p4", -1.2, 1.05);
+    request
 }
 
 /// Write the fixture when asked, then hold the core to it.
@@ -103,6 +135,15 @@ fn the_browser_geometry_fixture_matches_the_core() {
         .iter()
         .all(|p| p.footprint.view_corners.is_some()));
     assert!(preview.issues.is_empty());
+}
+
+#[test]
+fn the_measured_layout_fixture_matches_the_core() {
+    let preview = check("framing-measured-layout.json", measured_request());
+    assert_eq!(preview.panels.len(), 4);
+    assert!(preview.panels[0].measured.is_some());
+    assert_eq!(preview.panels[0].position_angle_degrees, 36.5);
+    assert!(!preview.issues.is_empty(), "{:?}", preview.issues);
 }
 
 #[test]

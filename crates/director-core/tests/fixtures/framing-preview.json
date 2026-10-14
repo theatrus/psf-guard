@@ -52,6 +52,7 @@
     ],
     "panels": [
       {
+        "angle_offset_degrees": 0.0,
         "center": {
           "dec_degrees": 61.466594100242176,
           "ra_degrees": 40.29252256946672
@@ -77,6 +78,7 @@
         ],
         "id": "r1c1",
         "locked": false,
+        "position_angle_degrees": 36.834076018,
         "row": 1,
         "view_corners": [
           [
@@ -98,6 +100,7 @@
         ]
       },
       {
+        "angle_offset_degrees": 0.0,
         "center": {
           "dec_degrees": 62.39864939749626,
           "ra_degrees": 37.528460722293836
@@ -123,6 +126,7 @@
         ],
         "id": "r1c2",
         "locked": false,
+        "position_angle_degrees": 34.411649186,
         "row": 1,
         "view_corners": [
           [
@@ -144,6 +148,7 @@
         ]
       },
       {
+        "angle_offset_degrees": 0.0,
         "center": {
           "dec_degrees": 60.49824171824084,
           "ra_degrees": 38.831809371759924
@@ -169,6 +174,7 @@
         ],
         "id": "r2c1",
         "locked": false,
+        "position_angle_degrees": 35.556662956,
         "row": 2,
         "view_corners": [
           [
@@ -190,6 +196,7 @@
         ]
       },
       {
+        "angle_offset_degrees": 0.0,
         "center": {
           "dec_degrees": 61.401377378976754,
           "ra_degrees": 36.11184951513551
@@ -215,6 +222,7 @@
         ],
         "id": "r2c2",
         "locked": false,
+        "position_angle_degrees": 33.161956782,
         "row": 2,
         "view_corners": [
           [

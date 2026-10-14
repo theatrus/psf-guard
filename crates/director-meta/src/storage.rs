@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 29;
+const SCHEMA_VERSION: i32 = 30;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -153,6 +153,10 @@ impl MetaStore {
                 // Mosaic grids become the panels they make, each in place.
                 super::framing::migrate_grids_to_panels(&tx)?;
             }
+            // Schema 30 lets a locked panel carry the geometry its frames
+            // were shot with, an optional field older drafts read without:
+            // nothing to rewrite. The bump keeps a build that cannot read
+            // the field from opening a store that may hold it.
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;

@@ -1,7 +1,7 @@
 {
   "preview": {
     "extent": {
-      "height_degrees": 2.7750000000000004,
+      "height_degrees": 2.775,
       "width_degrees": 3.8600000000000003
     },
     "issues": [
@@ -61,6 +61,7 @@
     ],
     "panels": [
       {
+        "angle_offset_degrees": 0.0,
         "center": {
           "dec_degrees": 61.45000000000001,
           "ra_degrees": 38.2
@@ -86,6 +87,7 @@
         ],
         "id": "r1c1",
         "locked": true,
+        "position_angle_degrees": 35.0,
         "row": 2,
         "view_corners": [
           [
@@ -107,8 +109,9 @@
         ]
       },
       {
+        "angle_offset_degrees": 0.0,
         "center": {
-          "dec_degrees": 60.44516910037018,
+          "dec_degrees": 60.445169100370165,
           "ra_degrees": 41.02309509505145
         },
         "column": 1,
@@ -132,6 +135,7 @@
         ],
         "id": "p2",
         "locked": false,
+        "position_angle_degrees": 37.468094082,
         "row": 2,
         "view_corners": [
           [
@@ -153,6 +157,7 @@
         ]
       },
       {
+        "angle_offset_degrees": 0.0,
         "center": {
           "dec_degrees": 62.48534530968195,
           "ra_degrees": 39.78281554342317
@@ -178,6 +183,7 @@
         ],
         "id": "p3",
         "locked": false,
+        "position_angle_degrees": 36.397200336,
         "row": 1,
         "view_corners": [
           [
@@ -199,6 +205,7 @@
         ]
       },
       {
+        "angle_offset_degrees": 0.0,
         "center": {
           "dec_degrees": 61.34628876061092,
           "ra_degrees": 42.9041763496792
@@ -224,6 +231,7 @@
         ],
         "id": "p4",
         "locked": false,
+        "position_angle_degrees": 39.109970808,
         "row": 1,
         "view_corners": [
           [

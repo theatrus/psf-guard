@@ -7848,7 +7848,7 @@ pub(crate) fn merge_astrometry_metrics(
 /// The sky angle the rotator reported, from N.I.N.A.'s `RotatorPosition`.
 /// None when no rotator was connected: N.I.N.A. then writes the lowest
 /// double as the mechanical position, and its sky angle means nothing.
-fn rotator_position_from_metadata(metadata_json: &str) -> Option<f64> {
+pub(crate) fn rotator_position_from_metadata(metadata_json: &str) -> Option<f64> {
     let metadata = serde_json::from_str::<serde_json::Value>(metadata_json).ok()?;
     if let Some(mechanical) = metadata.get("RotatorMechanicalPosition")
         && !mechanical

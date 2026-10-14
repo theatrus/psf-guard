@@ -1,8 +1,11 @@
 //! Mosaic panels placed one by one: the schema 29 migration from every
-//! older stored shape, locks, and what counts as a layout change.
+//! older stored shape, the schema 30 measured panels, locks, and what
+//! counts as a layout change.
 
 use psf_guard_director_core::{
-    framing::{FramingRequest, Layout, Mosaic, PanelPlacement, PanelSize},
+    framing::{
+        FramingRequest, Layout, MeasuredGeometry, MeasuredSource, Mosaic, PanelPlacement, PanelSize,
+    },
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{
@@ -154,7 +157,7 @@ fn stored_grids_from_every_older_shape_become_their_panels_in_place() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        29
+        30
     );
     for (index, project) in projects[..4].iter().enumerate() {
         let stored = raw(&conn, *project);
@@ -246,6 +249,8 @@ fn place(id: &str, x: f64, y: f64, locked: bool) -> PanelPlacement {
         x,
         y,
         locked,
+        measured: None,
+        angle_offset_degrees: 0.0,
     }
 }
 
@@ -310,35 +315,50 @@ fn a_locked_panel_stays_put_until_it_is_unlocked() {
     refused(&mut store, &|d| d.layout.panels[0].x = 0.1);
     refused(&mut store, &|d| d.center.ra_degrees += 0.5);
     refused(&mut store, &|d| d.position_angle_degrees = 36.0);
-    // The other panels still move freely.
+    // Turning it on its own is a move too.
+    refused(&mut store, &|d| {
+        d.layout.panels[0].angle_offset_degrees = 5.0
+    });
+    // The other panels still move and turn freely, and a turn is a layout
+    // change of its own.
     let mut dragged = stricter.clone();
     dragged.layout.panels[2].x = 0.05;
     let dragged = store.save_framing_draft(&dragged, 4).unwrap();
     assert_eq!(dragged.layout_revision, 5);
+    let mut turned = dragged.clone();
+    turned.layout.panels[2].angle_offset_degrees = -12.5;
+    assert!(!dragged.same_layout(&turned));
+    let turned = store.save_framing_draft(&turned, 5).unwrap();
+    assert_eq!(turned.layout_revision, 6);
+    assert_eq!(turned.layout.panels[2].angle_offset_degrees, -12.5);
+    let mut dragged = turned.clone();
+    dragged.layout.panels[2].angle_offset_degrees = 0.0;
+    let dragged = store.save_framing_draft(&dragged, 6).unwrap();
+    assert_eq!(dragged.layout_revision, 7);
     // A new size keeps a locked panel at the center where it is.
     let mut resized = dragged.clone();
     resized.panel = Some(PanelSize {
         width_degrees: 1.2,
         height_degrees: 0.9,
     });
-    let resized = store.save_framing_draft(&resized, 5).unwrap();
+    let resized = store.save_framing_draft(&resized, 7).unwrap();
     // With a locked panel off the center, a new size would move it.
     let mut anchored = resized.clone();
     anchored.layout.panels[1].locked = true;
-    let anchored = store.save_framing_draft(&anchored, 6).unwrap();
+    let anchored = store.save_framing_draft(&anchored, 8).unwrap();
     let mut shrunk = anchored.clone();
     shrunk.panel = Some(PanelSize {
         width_degrees: 1.0,
         height_degrees: 0.9,
     });
     assert_eq!(anchored.locked_moves(&shrunk), vec!["p2".to_string()]);
-    assert!(store.save_framing_draft(&shrunk, 7).is_err());
+    assert!(store.save_framing_draft(&shrunk, 9).is_err());
 
     // Unlocking is an edit of its own, and may move the panel in the same save.
     let mut unlocked = anchored.clone();
     unlocked.layout.panels[1].locked = false;
     unlocked.layout.panels[1].x = -0.75;
-    let unlocked = store.save_framing_draft(&unlocked, 7).unwrap();
+    let unlocked = store.save_framing_draft(&unlocked, 9).unwrap();
     assert_eq!(unlocked.layout.panels[1].x, -0.75);
 }
 
@@ -396,4 +416,151 @@ fn an_older_client_saves_a_grid_and_reads_back_panels() {
     let mut nudged = saved.clone();
     nudged.layout.panels[3].y -= 0.01;
     assert!(!saved.same_layout(&nudged));
+}
+
+/// What twelve solved frames of the framed target say: shot a little off
+/// the plan, with a wider camera.
+fn measured() -> MeasuredGeometry {
+    MeasuredGeometry {
+        center: IcrsPosition {
+            ra_degrees: 38.25,
+            dec_degrees: 61.47,
+        },
+        position_angle_degrees: 36.5,
+        size: PanelSize {
+            width_degrees: 1.6,
+            height_degrees: 1.1,
+        },
+        source: MeasuredSource::Solved,
+        size_source: MeasuredSource::Solved,
+        frames: 12,
+    }
+}
+
+#[test]
+fn a_schema_29_store_opens_unchanged_and_keeps_measured_panels() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let project = store.create_project(Uuid::new_v4(), "Heart").unwrap().id;
+    let plain = store.create_project(Uuid::new_v4(), "Plain").unwrap().id;
+    let mut draft = single(project);
+    draft.layout.panels[0].locked = true;
+    draft.layout.panels.push(place("p2", -0.8, 0.0, false));
+    let saved = store.save_framing_draft(&draft, 0).unwrap();
+    store.save_framing_draft(&single(plain), 0).unwrap();
+    drop(store);
+    let conn = Connection::open(&path).unwrap();
+    // A draft without measured geometry never writes the field, so a
+    // schema 29 build reads what this one saved.
+    let stored = raw(&conn, project);
+    assert!(
+        !stored.contains("measured") && !stored.contains("angle_offset"),
+        "{stored}"
+    );
+    conn.pragma_update(None, "user_version", 29).unwrap();
+
+    // Schema 30 rewrites nothing.
+    let before = [raw(&conn, project), raw(&conn, plain)];
+    let mut store = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+            .unwrap(),
+        30
+    );
+    assert_eq!([raw(&conn, project), raw(&conn, plain)], before);
+    assert_eq!(store.framing_draft(project).unwrap().unwrap(), saved);
+
+    // A locked panel keeps the geometry its frames were shot with.
+    let mut shot = saved.clone();
+    shot.layout.panels[0].measured = Some(measured());
+    assert_eq!(
+        saved.measured_changes(&shot),
+        vec![(None, "r1c1".to_string())]
+    );
+    let shot = store.save_framing_draft(&shot, saved.revision).unwrap();
+    // New geometry is a layout change: activation writes new neighbours.
+    assert_eq!(shot.layout_revision, shot.revision);
+    assert_eq!(
+        store.framing_draft(project).unwrap().unwrap().layout.panels[0].measured,
+        Some(measured())
+    );
+    assert!(raw(&conn, project).contains("\"measured\""));
+    // Saving it unchanged is no change.
+    assert!(shot.measured_changes(&shot.clone()).is_empty());
+
+    // Only a locked panel holds measured geometry.
+    let mut loose = shot.clone();
+    loose.layout.panels[0].locked = false;
+    assert!(matches!(
+        store.save_framing_draft(&loose, shot.revision),
+        Err(Error::InvalidInput)
+    ));
+    // Unlocking drops it, and the panel is planned again.
+    loose.layout.panels[0].measured = None;
+    assert!(shot.measured_changes(&loose).is_empty());
+    store.save_framing_draft(&loose, shot.revision).unwrap();
+}
+
+#[test]
+fn a_measured_panel_holds_where_it_was_shot_under_a_new_camera() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let project = store.create_project(Uuid::new_v4(), "Heart").unwrap().id;
+    let mut draft = single(project);
+    draft.layout.panels = vec![
+        place("r1c1", 0.0, 0.0, true),
+        place("r1c2", -0.8, 0.0, true),
+        place("p3", 0.0, 0.8, false),
+    ];
+    draft.layout.panels[1].measured = Some(measured());
+    let saved = store.save_framing_draft(&draft, 0).unwrap();
+
+    // The plan's camera changes: the measured panel off the center stays
+    // as shot, so the new size is no move.
+    let mut resized = saved.clone();
+    resized.panel = Some(PanelSize {
+        width_degrees: 1.0,
+        height_degrees: 0.8,
+    });
+    assert!(saved.locked_moves(&resized).is_empty());
+    let resized = store.save_framing_draft(&resized, saved.revision).unwrap();
+    // Its planned place, center and angle still hold.
+    let mut dragged = resized.clone();
+    dragged.layout.panels[1].x = -0.6;
+    assert_eq!(resized.locked_moves(&dragged), vec!["r1c2".to_string()]);
+    let mut turned = resized.clone();
+    turned.position_angle_degrees = 40.0;
+    assert_eq!(
+        resized.locked_moves(&turned),
+        vec!["r1c1".to_string(), "r1c2".to_string()]
+    );
+
+    // A rig framed on its own reports its measured changes by rig.
+    let rig = store.create_rig(Uuid::new_v4(), "C925").unwrap().id;
+    let mut own = Layout::single(20);
+    own.panels[0].locked = true;
+    let mut with_rig = resized.clone();
+    with_rig.rig_framings.push(RigFraming {
+        rig_id: rig,
+        center: None,
+        position_angle_degrees: None,
+        layout: own,
+        panel: None,
+    });
+    let with_rig = store
+        .save_framing_draft(&with_rig, resized.revision)
+        .unwrap();
+    let mut shot = with_rig.clone();
+    shot.rig_framings[0].layout.panels[0].measured = Some(measured());
+    assert_eq!(
+        with_rig.measured_changes(&shot),
+        vec![(Some(rig), "r1c1".to_string())]
+    );
+    let mut refreshed = shot.clone();
+    refreshed.layout.panels[1].measured.as_mut().unwrap().frames = 14;
+    assert_eq!(
+        shot.measured_changes(&refreshed),
+        vec![(None, "r1c2".to_string())]
+    );
 }

@@ -27,6 +27,7 @@ pub(super) fn describe_issue(issue: &LayoutIssue) -> String {
         ),
     }
 }
+use crate::server::database_context::DatabaseContext;
 use psf_guard_director_meta::{framing::FramingDraft, profile::RigProfile, site_profile::RigSite};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -72,7 +73,75 @@ pub(super) async fn put_draft(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let view = enabled(&state)?
+    let service = enabled(&state)?;
+    // Only the server reads the frames, so a locked panel's shot geometry
+    // must be what they say now: measured from the stored draft, the same
+    // way the mosaic reported it to the editor.
+    let catalogs: Vec<Arc<DatabaseContext>> = state
+        .databases
+        .read()
+        .map_err(|_| Error::Internal)?
+        .values()
+        .cloned()
+        .collect();
+    let instance_id = service.instance_id;
+    let body = draft.clone();
+    service
+        .clone()
+        .with_reader(move |store| {
+            let Some(stored) = store.framing_draft(id)? else {
+                return Ok(());
+            };
+            if stored.revision != body.revision {
+                return Ok(());
+            }
+            let changes = stored.measured_changes(&body);
+            if changes.is_empty() {
+                return Ok(());
+            }
+            let mosaic = super::mosaic::collect(store, id, &catalogs, instance_id)?;
+            let wrong: Vec<String> = changes
+                .into_iter()
+                .filter(|(rig, panel_id)| {
+                    let sent = match rig {
+                        Some(rig) => body
+                            .rig_framing(*rig)
+                            .and_then(|own| own.layout.panel(panel_id)),
+                        None => body.layout.panel(panel_id),
+                    }
+                    .and_then(|panel| panel.measured.as_ref());
+                    let read = mosaic
+                        .measured()
+                        .iter()
+                        .find(|m| m.framing_rig_id == *rig && &m.panel_id == panel_id)
+                        .map(|m| &m.geometry);
+                    !match (sent, read) {
+                        (Some(sent), Some(read)) => sent.same(read),
+                        // Drawn from the plan again once no frame is left.
+                        (None, None) => true,
+                        _ => false,
+                    }
+                })
+                .map(|(_, panel_id)| panel_id)
+                .collect();
+            if wrong.is_empty() {
+                Ok(())
+            } else {
+                Err(Error::Refused(format!(
+                    "Locked panel{} {} must stay where {} frames say {} shot; reload the framing",
+                    if wrong.len() == 1 { "" } else { "s" },
+                    wrong.join(", "),
+                    if wrong.len() == 1 { "its" } else { "their" },
+                    if wrong.len() == 1 {
+                        "it was"
+                    } else {
+                        "they were"
+                    },
+                )))
+            }
+        })
+        .await?;
+    let view = service
         .with_writer(move |store| -> Result<DraftView, Error> {
             let project = store.project(id)?.ok_or(StoreError::NotFound)?;
             let expected = draft.revision;
