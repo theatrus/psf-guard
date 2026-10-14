@@ -104,9 +104,11 @@ const stackName = (stack: SkyPreview) => stack.kind === 'color' ? `Colour ${stac
 /** The stack a panel shows: the one picked, or its best. */
 const shownStack = (panel: DirectorMosaicPanel, choice: string): SkyPreview | null =>
   choice ? panel.stacks.find(stack => stack.key === choice) ?? null : panel.stacks[0] ?? panel.preview;
-/** One line per panel: whose it is, how far along, and whether the stack it shows can be placed. */
-function describeStack(panel: DirectorMosaicPanel, choice: string, choiceName: string): string {
-  const who = `${panel.panel_id}, ${panel.catalog_name || panel.rig.name}`;
+/** One line per panel: whose it is, how far along, and whether the stack it
+ *  shows can be placed. Before an activation a panel is a linked project's
+ *  target, so it goes by the target's name. */
+function describeStack(panel: DirectorMosaicPanel, choice: string, choiceName: string, activated = true): string {
+  const who = `${!activated && panel.target_name ? panel.target_name : panel.panel_id}, ${panel.catalog_name || panel.rig.name}`;
   const done = panel.progress ? `${panel.progress.accepted}/${panel.progress.desired} frames accepted` : 'no exposure plans';
   if (panel.status === 'missing_target') return `${who}: its target row is gone from the database.`;
   if (panel.status === 'missing_catalog') return `${who}: its database is no longer registered here.`;
@@ -1131,7 +1133,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         </div>}
         {mosaic.data.framing_stale && <p className="director-muted">The framing changed since the last activation. Stacks sit where their solves put them; the rectangles are the new plan.</p>}
         {mosaic.data.warnings.map(warning => <p key={warning} className="director-muted">{warning}</p>)}
-        <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel, stackChoice, stackChoiceName ? stackName(stackChoiceName) : '')}</li>)}</ul>
+        <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel, stackChoice, stackChoiceName ? stackName(stackChoiceName) : '', mosaic.data!.activation_revision !== null)}</li>)}</ul>
       </div>}
       <p className="director-muted framing-attribution">{survey ? `${survey.name}: ${survey.bandpass}. ${survey.attribution}.` : 'Choose a survey.'} For composition only.</p>
       <VisibilityPanel projectId={projectId} center={state.center} rigCenters={liveRigCenters} compact />
