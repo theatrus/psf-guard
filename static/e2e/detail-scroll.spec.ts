@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
+import { registerFixtureDb, resetDatabases, stubPixelWork, waitForCacheReady } from './helpers';
 
 // Scroll positions in and around the image detail. Runs in Chromium and in
 // WebKit (see playwright.config.ts): WebKit has no CSS scroll anchoring, so
@@ -9,7 +9,10 @@ let dbId: string;
 
 test.use({ viewport: { width: 1280, height: 640 } });
 
-test.beforeEach(async ({ request }) => {
+test.beforeEach(async ({ page, request }) => {
+  // Scroll positions need the views laid out, not real pixels; stubbing them
+  // keeps the shared preview queue free for the image-detail specs after.
+  await stubPixelWork(page);
   await resetDatabases(request);
   const entry = await registerFixtureDb(request, {
     name: 'Imaging Rig e2e',

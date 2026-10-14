@@ -3,6 +3,7 @@ import {
   fixtureImageDir,
   registerFixtureDb,
   resetDatabases,
+  stubPixelWork,
   waitForCacheReady,
 } from './helpers';
 
@@ -205,6 +206,9 @@ test('detail view loads the large preview and renders pixels', async ({
 });
 
 test('detail panels fold and stay folded from image to image and across a reload', async ({ page }) => {
+  // About the sidebar, not the pixels: keep the preview queue free for the
+  // timed preview tests below.
+  await stubPixelWork(page);
   const calibrationAsked: string[] = [];
   page.on('request', (request) => {
     if (/\/images\/\d+\/calibration/.test(request.url())) calibrationAsked.push(request.url());
