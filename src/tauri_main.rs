@@ -21,6 +21,31 @@ struct ServerState {
     /// save through the local server, so no in-memory copy stays current.
     registry_path: Arc<Mutex<PathBuf>>,
     server_shutdown: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    /// The running server, which ends once its work has drained and it has
+    /// written the job journal for the last time.
+    server_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+}
+
+impl ServerState {
+    /// Stop the running server and wait until it has ended. A stop lets
+    /// work in hand reach a safe point, then writes the job journal; the
+    /// next server reads that file when it starts and writes it from then
+    /// on, so it must not start before the last write.
+    async fn stop_server(&self) {
+        let shutdown = self.server_shutdown.lock().unwrap().take();
+        if let Some(shutdown_tx) = shutdown
+            && shutdown_tx.send(()).is_err()
+        {
+            tracing::warn!("Failed to send shutdown signal");
+        }
+        let task = self.server_task.lock().unwrap().take();
+        if let Some(task) = task {
+            tracing::info!("🛑 Waiting for the server to finish its work before restarting");
+            if let Err(error) = task.await {
+                tracing::warn!("The server ended badly: {error}");
+            }
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -54,7 +79,7 @@ pub fn main() {
     let server_astrometry = initial_registry.astrometry.clone();
     let server_config_for_task = server_config.clone();
     let registry_path_for_task = registry_path.clone();
-    rt.spawn(async move {
+    let server_task = rt.spawn(async move {
         if let Err(e) = start_server_for_tauri(
             server_port,
             server_databases,
@@ -77,6 +102,7 @@ pub fn main() {
             url: Arc::new(Mutex::new(server_url)),
             registry_path: Arc::new(Mutex::new(registry_path)),
             server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
+            server_task: Arc::new(Mutex::new(Some(server_task))),
         })
         .manage(server_config)
         .invoke_handler(tauri::generate_handler![
@@ -494,16 +520,9 @@ async fn restart_server(
     let registry = load_registry(&state)?;
     let (databases, astrometry_config) = (registry.databases, registry.astrometry);
 
-    {
-        let mut shutdown_guard = state.server_shutdown.lock().unwrap();
-        if let Some(shutdown_tx) = shutdown_guard.take()
-            && shutdown_tx.send(()).is_err()
-        {
-            tracing::warn!("Failed to send shutdown signal");
-        }
-    }
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    // The old server's last journal write would otherwise replace the new
+    // server's queue.
+    state.stop_server().await;
 
     let server_port = find_free_port().map_err(|e| format!("Could not find free port: {}", e))?;
     let server_url = format!("http://localhost:{}", server_port);
@@ -521,7 +540,7 @@ async fn restart_server(
     tracing::info!("🚀 Starting new server on {}", server_url);
 
     let base_clone = base.inner().clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         if let Err(e) = start_server_for_tauri(
             server_port,
             databases,
@@ -535,6 +554,7 @@ async fn restart_server(
             eprintln!("Server restart error: {}", e);
         }
     });
+    *state.server_task.lock().unwrap() = Some(task);
 
     Ok(format!("Server restarted successfully on {}", server_url))
 }
@@ -583,6 +603,35 @@ mod tests {
             pixinsight: None,
             peers: Vec::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn a_restart_waits_for_the_old_server_to_finish() {
+        // A server that takes a while to drain after the signal, then
+        // writes its journal.
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let journal_written = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let written = Arc::clone(&journal_written);
+        let task = tokio::spawn(async move {
+            shutdown_rx.await.ok();
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            written.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let state = ServerState {
+            url: Arc::new(Mutex::new(String::new())),
+            registry_path: Arc::new(Mutex::new(PathBuf::new())),
+            server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
+            server_task: Arc::new(Mutex::new(Some(task))),
+        };
+        state.stop_server().await;
+        assert!(
+            journal_written.load(std::sync::atomic::Ordering::SeqCst),
+            "the next server starts only after the old one's last write"
+        );
+        assert!(state.server_shutdown.lock().unwrap().is_none());
+        assert!(state.server_task.lock().unwrap().is_none());
+        // Nothing left to stop: returns at once.
+        state.stop_server().await;
     }
 
     #[test]
