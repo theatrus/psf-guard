@@ -11,10 +11,9 @@ interface ViewTabProps {
 }
 
 /**
- * One view in the header, shown by its icon. The current view also shows
- * its name. Any other slides its name out of the button while hovered or
- * focused, and the current view folds its name away meanwhile, still
- * highlighted, so the row keeps about the same width.
+ * One view in the header, shown by its icon. The current view always shows
+ * its name. Any other slides its name out of the button once the pointer
+ * rests on it, or on keyboard focus.
  */
 export default function ViewTab({ label, icon: Icon, current, disabled, title, onClick }: ViewTabProps) {
   return (

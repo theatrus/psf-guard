@@ -559,10 +559,11 @@ div.activity-error {
   font-size: 0.78rem;
 }
 
-/* A view shown by its icon (ViewTab). The current view also shows its
-   name. Any other slides its name out of the button on hover or focus, and
-   the current view folds its name away meanwhile, still highlighted, so the
-   row keeps about the same width. */
+/* A view shown by its icon (ViewTab). The current view always shows its
+   name. Any other slides its name out of the button once the pointer rests
+   on it, or on keyboard focus. The pause keeps a pointer passing over the
+   icons from opening each name in turn, and the current name never moves,
+   so nothing jumps under the pointer. */
 .view-tab {
   display: inline-flex;
   align-items: center;
@@ -590,11 +591,9 @@ div.activity-error {
   opacity: 1;
 }
 
-.header-nav:has(.view-tab:not([aria-current="page"]):is(:hover, :focus-visible))
-  .view-tab[aria-current="page"] .view-tab-name {
-  max-width: 0;
-  margin-left: 0;
-  opacity: 0;
+/* Opening waits; closing does not. */
+.view-tab:not([aria-current="page"]):hover .view-tab-name {
+  transition-delay: 0.15s;
 }
 
 @media (prefers-reduced-motion: reduce) {
