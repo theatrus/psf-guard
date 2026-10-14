@@ -122,6 +122,12 @@ test('exposure sub-groups keep their order under Newest first as frames arrive',
   }));
   const catalog = syntheticCatalog(frames);
   const dbId = await register(request, catalog.databasePath);
+  // The copied catalog carries whatever earlier specs chose for the
+  // project; this one splits by exposure.
+  const split = await request.put(`/api/db/${encodeURIComponent(dbId)}/projects/1/processing-settings`, {
+    data: { split_exposure_groups: true },
+  });
+  expect(split.ok(), await split.text()).toBeTruthy();
   await page.clock.install();
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&order=newest&size=300`);
