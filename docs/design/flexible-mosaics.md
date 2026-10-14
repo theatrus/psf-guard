@@ -219,10 +219,9 @@ frame was read. Where several rigs shot one shared panel, the rig with the
 better source and then more frames speaks for it.
 
 **Prediction or evidence.** Only `solved` is evidence of where the pixels
-point; `header` and `plan` are what the mount and the plan said. The label
-travels with the numbers to the sky ("from 12 solved frames", "from the
-headers of 3 frames", "from the plan") and to the activation preview, so a
-prediction is never shown as a solve.
+point; `header` and `plan` are what the mount and the plan said. The source
+travels with the numbers to the activation preview, so a prediction is never
+shown there as a solve. The sky does not say it.
 
 **Saving it.** Only the server reads frames, so it writes the shot geometry
 itself: on every save that keeps a panel locked, the panel's `measured` is
@@ -355,8 +354,12 @@ A panel is **locked** two ways:
 - **by its frames**: a panel whose target has captured frames, read from the
   rigs that shoot that framing (the shared one, or a rig's own). The framing
   view locks it in the draft as its own quiet choice, saved with the next
-  save, and it cannot be unlocked or removed there;
-- **by hand**: the person locks or unlocks any other panel.
+  save, unless the panel is `unlocked_by_hand`;
+- **by hand**: the person locks or unlocks any panel. Unlocking a panel with
+  frames sets `unlocked_by_hand`, so the view does not lock it again; locking
+  it clears the flag, and the server clears it on any locked panel. A shot
+  panel moved more than a quarter of its size gets a new target at
+  activation, so unlocking it never moves its frames.
 
 A locked panel's center and camera angle on the sky cannot move. The server
 refuses a save (`422`, naming the panels) that moves or turns a panel locked
@@ -519,9 +522,9 @@ What PSF Guard keeps on its side:
 
 1. **A framed target.** The Framing tab shows the plan's panel. If it has
    frames, it is drawn solid in the locked ink with a padlock where its
-   frames say it was shot, with where that comes from under its name ("from
-   12 solved frames"); the list says "40 frames", and the center, angle and
-   target search say the locked panels hold them.
+   frames say it was shot; a lone panel carries no name, and a mosaic's
+   names are small. The list says "40 frames", **Unlock** frees it, and the
+   center, angle and target search say the locked panels hold them.
 2. **Make it a mosaic.** In *Mosaic panels*, choose *Whole mosaic* or a panel
    (click it on the sky or in the list), then a direction on the pad: E adds
    a column east, N a row north. *Ring around* surrounds it.
@@ -610,9 +613,10 @@ Proposed, not built:
 3. ~~**Names.** Panels added since a grid are `p{n}` and their targets
    `{target} {panel id}`; should they read otherwise?~~ Answered: naming is
    fine.
-4. **Unlocking a shot panel.** Panels with frames cannot be unlocked or
+4. ~~**Unlocking a shot panel.** Panels with frames cannot be unlocked or
    removed in the editor. Should there be a deliberate "retire this panel"
-   that keeps its target and frames and frees the place?
+   that keeps its target and frames and frees the place?~~ Answered: a shot
+   panel can be unlocked by hand and stays unlocked (`unlocked_by_hand`).
 5. **`isMosaic` for irregular layouts.** Keep it on for every layout of more
    than one panel (as now), or offer a switch per plan?
 6. ~~**Rigs without a rotator and north's lean.** Such a rig shoots every

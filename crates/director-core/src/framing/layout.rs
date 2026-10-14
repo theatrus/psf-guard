@@ -43,6 +43,10 @@ pub struct PanelPlacement {
     /// angle or panel size under it, while it stays locked.
     #[serde(default)]
     pub locked: bool,
+    /// Unlocked by hand although its target has frames, so the framing view
+    /// does not lock it again. Locking it clears this.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlocked_by_hand: bool,
     /// Where a locked panel's frames were really shot. When present the
     /// panel is drawn, checked and activated as shot, not as planned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -66,6 +70,7 @@ impl PanelPlacement {
             x,
             y,
             locked: false,
+            unlocked_by_hand: false,
             measured: None,
             angle_offset_degrees: 0.0,
         }

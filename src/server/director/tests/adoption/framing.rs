@@ -159,3 +159,34 @@ async fn rig_profiles_list_every_bound_database_with_its_field() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed["data"], json!([]));
 }
+
+#[tokio::test]
+async fn a_panel_unlocked_by_hand_keeps_the_mark_until_it_is_locked() {
+    let f = Fixture::new();
+    let project = Uuid::parse_str(f.plan["mappings"][0]["project_id"].as_str().unwrap()).unwrap();
+    let path = format!("/projects/{project}/framing");
+    let with = |revision: u64, locked: bool| {
+        let mut body = draft(project, revision);
+        body.as_object_mut().unwrap().remove("mosaic");
+        body["layout"] = json!({"min_overlap_percent": 20, "panels": [
+            {"id": "r1c1", "x": 0.0, "y": 0.0, "locked": locked, "unlocked_by_hand": true}
+        ]});
+        body
+    };
+    let (status, saved) = call(&f.app, "PUT", &path, with(0, false), None).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let panel = &saved["data"]["draft"]["layout"]["panels"][0];
+    assert_eq!(panel["unlocked_by_hand"], true, "{saved}");
+    let (_, read) = call(&f.app, "GET", &path, Value::Null, None).await;
+    assert_eq!(
+        read["data"]["draft"]["layout"]["panels"][0]["unlocked_by_hand"],
+        true
+    );
+
+    // A locked panel is not also unlocked by hand.
+    let (status, saved) = call(&f.app, "PUT", &path, with(1, true), None).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let panel = &saved["data"]["draft"]["layout"]["panels"][0];
+    assert_eq!(panel["locked"], true);
+    assert!(panel.get("unlocked_by_hand").is_none(), "{saved}");
+}

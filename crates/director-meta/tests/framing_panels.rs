@@ -249,6 +249,7 @@ fn place(id: &str, x: f64, y: f64, locked: bool) -> PanelPlacement {
         x,
         y,
         locked,
+        unlocked_by_hand: false,
         measured: None,
         angle_offset_degrees: 0.0,
     }

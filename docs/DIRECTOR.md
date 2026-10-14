@@ -1039,10 +1039,12 @@ and **Overlap**, and changing them lays the grid out again. Panels placed
 otherwise show **Minimum overlap** instead, and **Lay out as a grid
 instead** offers to start again.
 
-- **Locked panels stay where they are.** A panel whose target has frames is
-  locked by them: it is drawn solid with a padlock, the panel list gives its
-  frames, and it cannot be moved, turned, unlocked or removed here. **Lock**
-  holds any other chosen panel the same way. While a panel is locked, the
+- **Locked panels stay where they are.** A panel whose target has frames
+  starts locked by them: it is drawn solid with a padlock and the panel list
+  gives its frames. **Unlock** frees it, and it stays unlocked: the view
+  does not lock it again. Moved more than a quarter of a panel, it gets a
+  new target at activation and its frames stay with the old one. **Lock**
+  holds any chosen panel the same way. While a panel is locked, the
   target's center, camera angle and search wait, and so does the panel size
   while a planned locked panel sits off the center, since each would move it.
   A rig framed on its own that follows the shared center or angle holds them
@@ -1055,9 +1057,9 @@ instead** offers to start again.
   where its frames say it was taken, with the field and angle they were shot
   with, not with the camera the plan uses now; new panels use the rig's
   current field. Fresh plate solves of the frames speak first, then their
-  FITS headers or rotator readings, then the target as planned, and the sky
-  says which under the panel's name ("from 12 solved frames", "from the
-  headers of 3 frames", "from the plan"). Only the server reads frames, so
+  FITS headers or rotator readings, then the target as planned. The sky
+  shows each panel's name, small, only when the mosaic has more than one
+  panel. Only the server reads frames, so
   on every save it writes each locked panel's shot geometry from them itself,
   whatever the browser sent. The view reads the panels again after each
   save, after a refused one, and on Reload, so a reading that moved on with
@@ -1083,7 +1085,9 @@ instead** offers to start again.
   lined up with another panel or at the minimum overlap beside one, turned
   panels included. A drop that leaves a thin overlap, a gap or a lone panel
   goes back and says why; hold Alt (Option) while dropping, or press **Place
-  anyway** in the note, to place it anyway. Such a panel is dashed in the
+  anyway** in the note, to place it anyway. Turn **Snap** off beside the drag
+  modes to drag and turn freely: a drop stays where it lands, and the mosaic
+  lists what is wrong with it. Such a panel is dashed in the
   warning colour and listed under the panels. A locked panel does not move;
   dragging it looks around. One finger or pen drags at a time; a cancelled
   touch, Escape or a lost release puts the panel back. On a phone or a small

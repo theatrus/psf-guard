@@ -130,6 +130,13 @@ pub(super) async fn put_draft(
         for_each_panel(&mut draft, |_, panel| panel.measured = None);
         draft
     };
+    // A locked panel is not also unlocked by hand.
+    let mut draft = draft;
+    for_each_panel(&mut draft, |_, panel| {
+        if panel.locked {
+            panel.unlocked_by_hand = false;
+        }
+    });
     let view = service
         .with_writer(move |store| -> Result<DraftView, Error> {
             let project = store.project(id)?.ok_or(StoreError::NotFound)?;

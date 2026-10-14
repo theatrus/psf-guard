@@ -401,13 +401,15 @@ export function turnPanel(layout: DirectorLayout, id: string, degrees: number): 
 }
 
 /** A locked panel holds its shot geometry; one unlocked is planned again. */
-export function setLocked(layout: DirectorLayout, id: string, locked: boolean): DirectorLayout {
+export function setLocked(layout: DirectorLayout, id: string, locked: boolean, shot = false): DirectorLayout {
   return { ...layout, panels: layout.panels.map(panel => {
     if (panel.id !== id) return panel;
-    if (locked) return { ...panel, locked };
     const rest = { ...panel, locked };
+    delete rest.unlocked_by_hand;
+    if (locked) return rest;
     delete rest.measured;
-    return rest;
+    // A panel with frames stays unlocked: the framing view would lock it again.
+    return shot ? { ...rest, unlocked_by_hand: true } : rest;
   }) };
 }
 

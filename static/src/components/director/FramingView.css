@@ -49,7 +49,7 @@
 .framing-stage.is-stale .framing-sky { opacity: 0.85; }
 .framing-stage > svg { pointer-events: none; }
 .framing-panel polygon { fill: color-mix(in srgb, var(--framing-panel) 12%, transparent); stroke: var(--framing-panel); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
-.framing-panel text { fill: var(--framing-ink); font-size: 22px; paint-order: stroke; stroke: var(--color-halo); stroke-width: 4px; }
+.framing-panel text { fill: var(--framing-ink); font-size: 13px; paint-order: stroke; stroke: var(--color-halo); stroke-width: 3px; }
 .framing-overlay { fill: none; stroke: var(--framing-rig-0); stroke-width: 2; stroke-dasharray: 10 8; vector-effect: non-scaling-stroke; }
 /* Rigs framed on their own: each grid in a colour of its own, the one being edited solid. */
 .framing-rig-panels polygon { fill: color-mix(in srgb, var(--framing-rig-0) 8%, transparent); stroke: var(--framing-rig-0); stroke-width: 2; stroke-dasharray: 6 5; vector-effect: non-scaling-stroke; }
@@ -249,8 +249,6 @@
 /* The chosen panel's own turn handle, past its top edge along its up. */
 .framing-turn-handle line { stroke: var(--framing-panel-chosen); stroke-width: 1.5; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
 .framing-turn-handle circle { fill: color-mix(in srgb, var(--framing-panel-chosen) 35%, transparent); stroke: var(--framing-panel-chosen); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
-/* Where a shot panel's outline comes from, under its name. */
-.framing-panel text.framing-panel-shot { font-size: 15px; fill: var(--framing-panel-locked); }
 /* A rig framed on its own keeps its colour while its panels are edited. */
 .framing-panels[data-rig-index='0'] { --framing-panel: var(--framing-rig-0); }
 .framing-panels[data-rig-index='1'] { --framing-panel: var(--framing-rig-1); }
