@@ -48,20 +48,24 @@ regex = "1.12"
 globset = "0.4"
 semver = "1"
 byteorder = "1.5"
-seiza = "0.29.0"
-seiza-download = "0.8.0"
-seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
-seiza-fits = "=0.3.0"
-seiza-satellites = { version = "0.18.0", features = ["serde"] }
-seiza-stacking = "0.31.0"
-seiza-stretch = "0.2.2"
+# TODO before merge: switch back to the released crates (seiza 0.31.1,
+# seiza-stacking 0.34.0 and the rest). Every Seiza crate is pinned to one
+# commit of theatrus/seiza#270, which adds CalibrationMasters'
+# with_match_tolerances, so the shared types exist once.
+seiza = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63", features = ["parallel"] }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
+seiza-satellites = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63", features = ["serde"] }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
-seiza-xisf = "0.4.0"
-seiza-background = "0.3.1"
-seiza-calibration = "0.5.0"
-seiza-deconvolution = "0.1.1"
-seiza-stars = "0.3.0"
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
+seiza-background = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
+seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
+seiza-deconvolution = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "8185d4ce424e848bbac630f916951927a3fffd63" }
 sha2 = "0.11"
 base64 = "0.23"
 rayon = "1"

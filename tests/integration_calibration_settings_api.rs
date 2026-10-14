@@ -293,8 +293,8 @@ async fn every_value_is_checked_against_its_setting() {
         ),
         (
             SETTINGS,
-            json!({ "rules": { "dark_temperature_tolerance_c": 5 } }),
-            "from 0 to 3",
+            json!({ "rules": { "dark_temperature_tolerance_c": 25 } }),
+            "from 0 to 20",
         ),
         (
             SETTINGS,
@@ -315,18 +315,6 @@ async fn every_value_is_checked_against_its_setting() {
             SETTINGS,
             json!({ "rotation_tolerance_deg": 200 }),
             "0 to 180",
-        ),
-        // Stacks hold a master flat to Seiza's 2° and 1 mm for now, so a
-        // wider tolerance would match flats the final pass refuses.
-        (
-            SETTINGS,
-            json!({ "rules": { "rotation_tolerance_deg": 5 } }),
-            "can't be wider than 2° yet",
-        ),
-        (
-            path.as_str(),
-            json!({ "rules": { "focal_length_tolerance_mm": 5 } }),
-            "can't be wider than 1 mm yet",
         ),
         (
             path.as_str(),
@@ -614,5 +602,39 @@ async fn the_number_of_rigs_with_settings_of_their_own_is_bounded() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    reset();
+}
+
+/// Stacks check each light against its masters with its rig's own
+/// tolerances, so a flat rotation, flat focal length or dark temperature
+/// wider than Seiza's defaults is accepted and put in force.
+#[tokio::test]
+async fn tolerances_wider_than_the_stackers_defaults_are_accepted() {
+    let _turn = TURN.lock().await;
+    let server = server();
+    let editor = login(&server.app, "editor", "editor-secret").await;
+    let (status, body) = send(
+        &server.app,
+        Method::PUT,
+        &rig_path(&server.rig_uuid),
+        &editor,
+        Some(json!({ "rules": {
+            "rotation_tolerance_deg": 6,
+            "focal_length_tolerance_mm": 5,
+            "dark_temperature_tolerance_c": 6,
+        } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rules = psf_guard::calibration::rule_book().for_rig(&server.rig_uuid);
+    let tolerances = rules.tolerances();
+    assert_eq!(
+        (
+            tolerances.rotation_deg,
+            tolerances.focal_length_mm,
+            tolerances.dark_temperature_c
+        ),
+        (6.0, 5.0, 6.0)
+    );
     reset();
 }

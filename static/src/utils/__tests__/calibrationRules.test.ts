@@ -48,7 +48,9 @@ describe('calibration rules', () => {
       .toEqual({ ok: false, error: 'Enter 0 to 180 degrees.' });
     expect(parseDraft(field('thin_master_frames'), '3.5'))
       .toEqual({ ok: false, error: 'Enter 2 to 64 frames.' });
-    expect(parseDraft(field('dark_temperature_tolerance_c'), '4').ok).toBe(false);
+    // Wider than Seiza's default 3 °C: stacks check with the rig's own.
+    expect(parseDraft(field('dark_temperature_tolerance_c'), '4').ok).toBe(true);
+    expect(parseDraft(field('dark_temperature_tolerance_c'), '21').ok).toBe(false);
   });
 
   it('shows grade limits in percent where the field asks and orders them', () => {

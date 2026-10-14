@@ -87,20 +87,6 @@ fn replay_weights(
         .map(Some)
 }
 
-/// Refuse a light the masters were not made for, as the integrator would.
-///
-/// TODO(seiza `validate_light_frame_with`): check with the light's own
-/// tolerances, its rig's [`crate::calibration::Rules::tolerances`], once
-/// seiza-stacking takes caller tolerances here. Until then Seiza holds a
-/// master flat to its default 2° and 1 mm, so the settings API refuses a
-/// wider flat rotation or focal length tolerance
-/// ([`crate::calibration::rules::stack_limit`]), and
-/// `a_flat_matched_by_a_wider_focal_length_tolerance_stacks_through_the_final_pass`
-/// is ignored.
-fn check_light(masters: &CalibrationMasters, frame: &FitsFrame) -> seiza_stacking::Result<()> {
-    masters.validate_light_frame(frame)
-}
-
 fn prepare_registered_frame(
     mut frame: FitsFrame,
     masters: Option<&CalibrationMasters>,
@@ -109,7 +95,8 @@ fn prepare_registered_frame(
     interpolation: seiza_stacking::Interpolation,
 ) -> seiza_stacking::Result<LinearImage> {
     if let Some(masters) = masters {
-        check_light(masters, &frame)?;
+        // Under the light's rig's tolerances, which the masters carry.
+        masters.validate_light_frame(&frame)?;
         masters.apply(&mut frame.image, frame.exposure_seconds, frame.bayer)?;
     }
     if let Some(cosmetic) = cosmetic {
@@ -548,7 +535,6 @@ mod tests {
     /// A flat 3 mm off the light, matched because its rig allows 5 mm, must
     /// calibrate the light in the final pass too, not only in matching.
     #[test]
-    #[ignore = "needs seiza-stacking's validate_light_frame_with; see check_light"]
     fn a_flat_matched_by_a_wider_focal_length_tolerance_stacks_through_the_final_pass() {
         use crate::calibration::tests::RulesInForce;
         use std::io::Write as _;

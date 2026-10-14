@@ -10,7 +10,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "rotation_tolerance_deg",
     "group": "matching",
     "label": "Flat rotation tolerance",
-    "help": "How far a flat's rotator angle may sit from the light it corrects. Wider accepts a rotator that re-homes loosely; one master still takes flats within 2° of each other. Stacks accept up to 2° for now; wider values take effect once stacking supports them.",
+    "help": "How far a flat's rotator angle may sit from the light it corrects. Wider accepts a rotator that re-homes loosely; one master still takes flats within 2° of each other.",
     "effect": "matching",
     "kind": {
       "type": "number",
@@ -25,7 +25,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "focal_length_tolerance_mm",
     "group": "matching",
     "label": "Flat focal length tolerance",
-    "help": "How far a flat's recorded focal length may sit from the light's, as when a profile's focal length was refined. One master still takes flats within 1 mm of each other. Stacks accept up to 1 mm for now; wider values take effect once stacking supports them.",
+    "help": "How far a flat's recorded focal length may sit from the light's, as when a profile's focal length was refined. One master still takes flats within 1 mm of each other.",
     "effect": "matching",
     "kind": {
       "type": "number",
@@ -40,12 +40,12 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "dark_temperature_tolerance_c",
     "group": "matching",
     "label": "Dark temperature tolerance",
-    "help": "How far a dark's sensor temperature may sit from the light's, and a dark flat's from its flat's. Stacks refuse a dark more than 3 °C away, so this can only be tightened.",
+    "help": "How far a dark's sensor temperature may sit from the light's, and a dark flat's from its flat's. Wider lets a rig that cannot hold its set point use darks shot a little warmer or cooler; one master still takes darks within 1 °C of each other.",
     "effect": "matching",
     "kind": {
       "type": "number",
       "min": 0.0,
-      "max": 3.0,
+      "max": 20.0,
       "step": 0.1,
       "unit": "°C"
     },

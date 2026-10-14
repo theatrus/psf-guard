@@ -199,7 +199,7 @@ fn checked(key: &str, value: &Value) -> Result<(), AppError> {
         return Ok(());
     }
     rules::validate(spec, value).map_err(AppError::BadRequest)?;
-    rules::stack_limit(spec, value).map_err(AppError::BadRequest)
+    rules::stacker_accepts(key, value).map_err(AppError::BadRequest)
 }
 
 /// The global edits a request makes, key to new value (`None` clears),
@@ -609,7 +609,7 @@ mod tests {
             other => panic!("expected a refusal, got {other:?}"),
         }
         for (key, value) in [
-            ("dark_temperature_tolerance_c", json!(4)),
+            ("dark_temperature_tolerance_c", json!(25)),
             ("dark_temperature_tolerance_c", json!("2")),
             ("thin_master_frames", json!(1)),
             ("thin_master_frames", json!(3.5)),

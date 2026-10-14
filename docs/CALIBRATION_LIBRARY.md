@@ -795,6 +795,9 @@ it inherits and from where; **Own value** sets or clears one, and
   temperature, flat rotation and flat focal length tolerances also decide
   which frames are graded against each other, so changing one grades the
   frames again too.
+  When a stack calibrates a light it checks the masters against the light
+  with the same tolerances, so a flat or dark matched by a wider one is
+  used, not refused.
 - WBPP exports and runs match the same way when they are planned, so one
   planned after a change takes the new frames (see [Export](#export)).
 - **Light checks** change only what is flagged. The health pass judges the
@@ -828,7 +831,7 @@ ASI2600MM)`. An editor can open the rig's settings from there.
 |---|---|---|---|---|
 | `rotation_tolerance_deg` | Flat rotation tolerance | 2° | 0–180 | matching |
 | `focal_length_tolerance_mm` | Flat focal length tolerance | 1 mm | 0–100 | matching |
-| `dark_temperature_tolerance_c` | Dark temperature tolerance (darks and dark flats) | 3 °C | 0–3 | matching |
+| `dark_temperature_tolerance_c` | Dark temperature tolerance (darks and dark flats) | 3 °C | 0–20 | matching |
 | `flat_session_hours` | Flat session: how far apart one master's flats may be | 24 h | 1–720 | matching |
 | `use_darks` | Use darks | on | on, off | matching |
 | `external_masters` | Masters from other software | use whenever one matches | prefer, fallback, ignore | matching |
@@ -872,17 +875,12 @@ A grade limit left empty is never reached. **Mask stars in flats** and
 Some limits are the stacker's, and loosening them would only hand it frames
 it refuses:
 
-- A dark more than 3 °C from its light, or of another exposure (beyond
-  0.05 s or 0.1% of the longer), is refused when the stack calibrates, so
-  the dark temperature tolerance can only be tightened.
+- A dark of another exposure than its light (beyond 0.05 s or 0.1% of the
+  longer) is refused when the stack calibrates.
 - The frames of one master are compared with its first: within 1 °C, and a
   flat within 2° and 1 mm. A wider flat tolerance lets a light take flats
   further off, but one master's flats still agree with each other that
   closely.
-- For now the stack also holds a master flat to its light at 2° and 1 mm
-  when it calibrates, whatever matching allowed, so a wider flat rotation or
-  focal length tolerance is refused when saved. Wider values take effect
-  once Seiza checks the light with the rig's own tolerances.
 - Camera, frame size, binning, gain, offset, readout mode, Bayer layout,
   filter and telescope must agree; they are identity, not tolerance.
 - The integrator's own stray-light screen, which applies only while some

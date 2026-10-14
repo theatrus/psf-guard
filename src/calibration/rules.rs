@@ -27,6 +27,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock, RwLock};
 
+/// The widest dark temperature tolerance, in °C. Stacks check each light
+/// with its rig's own tolerances, so this is a sanity bound: a dark much
+/// further off carries a different dark current.
+pub const MAX_DARK_TEMPERATURE_C: f64 = 20.0;
+
 /// One layer of settings: key to value, as the registry keeps it.
 pub type RuleValues = BTreeMap<String, Value>;
 
@@ -399,8 +404,7 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             "Flat rotation tolerance",
             "How far a flat's rotator angle may sit from the light it corrects. Wider \
              accepts a rotator that re-homes loosely; one master still takes flats within \
-             2° of each other. Stacks accept up to 2° for now; wider values take effect \
-             once stacking supports them.",
+             2° of each other.",
             (0.0, 180.0, 0.1),
             "°",
             None,
@@ -413,8 +417,7 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             "Flat focal length tolerance",
             "How far a flat's recorded focal length may sit from the light's, as when a \
              profile's focal length was refined. One master still takes flats within 1 mm \
-             of each other. Stacks accept up to 1 mm for now; wider values take effect once \
-             stacking supports them.",
+             of each other.",
             (0.0, 100.0, 0.1),
             "mm",
             None,
@@ -426,9 +429,10 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             Effect::Matching,
             "Dark temperature tolerance",
             "How far a dark's sensor temperature may sit from the light's, and a dark \
-             flat's from its flat's. Stacks refuse a dark more than 3 °C away, so this can \
-             only be tightened.",
-            (0.0, tolerances.dark_temperature_c, 0.1),
+             flat's from its flat's. Wider lets a rig that cannot hold its set point use \
+             darks shot a little warmer or cooler; one master still takes darks within 1 °C \
+             of each other.",
+            (0.0, MAX_DARK_TEMPERATURE_C, 0.1),
             "°C",
             None,
             tolerances.dark_temperature_c,
@@ -1309,31 +1313,26 @@ pub const GRADING_GROUPS: [&str; 3] = [
     "focal_length_tolerance_mm",
 ];
 
-/// Where stacking is narrower than a setting's range today: a value past
-/// it is refused when saved, so no one can save a setting that breaks a
-/// stack.
-///
-/// TODO(seiza `validate_light_frame_with`): seiza-stacking holds a master
-/// flat to its default 2° and 1 mm when it calibrates a light, whatever
-/// matching allowed. Once it takes caller tolerances, the final pass
-/// passes the light's own (`final_integration::check_light`) and this
-/// limit goes.
-pub fn stack_limit(spec: &FieldSpec, value: &Value) -> Result<(), String> {
-    let seiza = MatchTolerances::default();
-    let limit = match spec.key {
-        "rotation_tolerance_deg" => seiza.rotation_deg,
-        "focal_length_tolerance_mm" => seiza.focal_length_mm,
-        _ => return Ok(()),
+/// Whether Seiza takes a tolerance as it is, beyond this setting's own
+/// range: a stack hands each rig's tolerances to Seiza, which refuses a
+/// non-finite, negative or over-wide one rather than clamp it. A setting
+/// that is not a tolerance passes.
+pub fn stacker_accepts(key: &str, value: &Value) -> Result<(), String> {
+    let mut tolerances = MatchTolerances::default();
+    let Some(number) = value.as_f64() else {
+        return Ok(());
     };
-    match finite(value) {
-        Some(number) if number > limit => Err(format!(
-            "{} can't be wider than {} yet: stacks still refuse a flat further than that \
-             from its light. Wider values take effect once stacking supports them.",
-            spec.label,
-            describe(spec, &json!(limit))
-        )),
-        _ => Ok(()),
+    match key {
+        "rotation_tolerance_deg" => tolerances.rotation_deg = number,
+        "focal_length_tolerance_mm" => tolerances.focal_length_mm = number,
+        "dark_temperature_tolerance_c" => tolerances.dark_temperature_c = number,
+        "flat_session_hours" => tolerances.flat_session_seconds = (number * 3600.0).round() as u64,
+        _ => return Ok(()),
     }
+    tolerances.validate().map_err(|error| {
+        let label = field(key).map(|spec| spec.label).unwrap_or(key);
+        format!("{label}: {error}")
+    })
 }
 
 /// The rig a light was shot with, by the key the library files rigs
@@ -1545,10 +1544,12 @@ mod tests {
         let spec = field("dark_temperature_tolerance_c").unwrap();
         assert!(validate(spec, &json!(2.0)).is_ok());
         assert!(validate(spec, &json!(0)).is_ok());
-        assert!(validate(spec, &json!(3.0)).is_ok());
-        assert!(validate(spec, &json!(3.5))
+        // Wider than Seiza's default: stacks check each light with its rig's own.
+        assert!(validate(spec, &json!(3.5)).is_ok());
+        assert!(validate(spec, &json!(20.0)).is_ok());
+        assert!(validate(spec, &json!(20.5))
             .unwrap_err()
-            .contains("from 0 to 3"));
+            .contains("from 0 to 20"));
         assert!(validate(spec, &json!("2")).is_err());
         let count = field("thin_master_frames").unwrap();
         assert!(validate(count, &json!(4.5)).is_err());
@@ -1591,6 +1592,27 @@ mod tests {
         assert!(wider.global().matching_digest().is_some());
         assert_eq!(wider.global().coherence_tolerances().rotation_deg, 2.0);
         assert_eq!(wider.global().tolerances().rotation_deg, 5.0);
+    }
+
+    /// Seiza refuses a tolerance it cannot use rather than clamp it, so the
+    /// settings refuse it first, naming the setting; a wide one it can use
+    /// passes.
+    #[test]
+    fn a_tolerance_seiza_would_refuse_is_refused_by_name() {
+        assert!(stacker_accepts("rotation_tolerance_deg", &json!(6)).is_ok());
+        assert!(stacker_accepts("dark_temperature_tolerance_c", &json!(10)).is_ok());
+        assert!(stacker_accepts("flat_session_hours", &json!(72)).is_ok());
+        let refused = stacker_accepts("rotation_tolerance_deg", &json!(181)).unwrap_err();
+        assert!(
+            refused.starts_with("Flat rotation tolerance: "),
+            "{refused}"
+        );
+        let refused = stacker_accepts("focal_length_tolerance_mm", &json!(-1)).unwrap_err();
+        assert!(
+            refused.starts_with("Flat focal length tolerance: "),
+            "{refused}"
+        );
+        assert!(stacker_accepts("thin_master_frames", &json!(-1)).is_ok());
     }
 
     #[test]
@@ -1641,30 +1663,6 @@ mod tests {
             let other = RuleBook::new(values(&[(key, value)]), BTreeMap::new());
             assert!(!base.grades_differ(&other), "{key}");
         }
-    }
-
-    /// Stacking holds a master flat to Seiza's default angle and focal
-    /// length, so a wider tolerance is refused when saved, not stored to
-    /// break a stack later; the full range stays for when it is supported.
-    #[test]
-    fn a_flat_tolerance_past_what_stacks_accept_is_refused() {
-        let rotation = field("rotation_tolerance_deg").unwrap();
-        let focal = field("focal_length_tolerance_mm").unwrap();
-        assert!(validate(rotation, &json!(5)).is_ok());
-        assert!(stack_limit(rotation, &json!(2)).is_ok());
-        assert!(stack_limit(rotation, &json!(0.5)).is_ok());
-        let refused = stack_limit(rotation, &json!(2.5)).unwrap_err();
-        assert!(
-            refused.starts_with("Flat rotation tolerance can't be wider than 2° yet"),
-            "{refused}"
-        );
-        assert!(stack_limit(focal, &json!(1)).is_ok());
-        let refused = stack_limit(focal, &json!(5)).unwrap_err();
-        assert!(
-            refused.starts_with("Flat focal length tolerance can't be wider than 1 mm yet"),
-            "{refused}"
-        );
-        assert!(stack_limit(field("dark_reach_days").unwrap(), &json!(3000)).is_ok());
     }
 
     #[test]

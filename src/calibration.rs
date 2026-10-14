@@ -3985,6 +3985,12 @@ fn resolve_or_build_masters_pinned(
         )
         .context("loading matched calibration masters")?
     };
+    // Judge each light the masters calibrate by its rig's tolerances, as
+    // matching did: the live pass, the final pass and replay all read them
+    // from the masters.
+    let masters = masters
+        .with_match_tolerances(selected.rules.tolerances())
+        .context("refusing this rig's calibration tolerances")?;
     applied.estimated_pedestal_adu = estimated_pedestal;
     if let Some(pedestal) = estimated_pedestal {
         let hint_note = match header_pedestal_hint(&light) {
