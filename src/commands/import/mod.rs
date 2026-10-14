@@ -1454,9 +1454,9 @@ pub(crate) const DEFAULT_RULE_WEIGHTS: &[(&str, f64)] = &[
     ("Target Switch Penalty", 67.0),
 ];
 
-/// The default exposure a template made for each plan key gets: its most
-/// frequent exposure by frame count, else Target Scheduler's constructor
-/// default of 60. Exposures of a second or more come first: a few short
+/// The default exposure a template made for lights of unknown length gets:
+/// the most frequent exposure of lights with the same settings by frame
+/// count, else Target Scheduler's constructor default of 60. Exposures of a second or more come first: a few short
 /// frames (flats or test frames taken as lights) must not set a light
 /// template's default.
 fn default_exposures(plan: &ImportPlan) -> HashMap<TemplateKey, f64> {
@@ -1491,11 +1491,16 @@ fn default_exposures(plan: &ImportPlan) -> HashMap<TemplateKey, f64> {
 /// Chooses the template each new plan of one import goes on, once per
 /// profile, settings and exposure length:
 ///
-/// 1. a template of the same filter and binning whose default exposure is
-///    the lights' length, with gain, offset and readout mode each equal to
-///    the lights' or left at the camera's default (-1), exact first;
-/// 2. else the template for exactly the lights' settings, made with
-///    `default_exposure` when there is none.
+/// 1. a template of the same filter, binning and default exposure as the
+///    lights, with gain, offset and readout mode each equal to the lights'
+///    or left at the camera's default (-1), exact first;
+/// 2. else a new template pinned to the lights' gain, offset and readout
+///    mode, with their length as its default.
+///
+/// A template whose default exposure is another length never takes a new
+/// plan, even one made for the same settings. Lights of unknown length go
+/// on the template for exactly their settings, made with `default_exposure`
+/// when there is none.
 ///
 /// Templates are per profile in Target Scheduler, so a re-import reuses
 /// rows from earlier runs. A person can move a plan to another template
@@ -1503,8 +1508,8 @@ fn default_exposures(plan: &ImportPlan) -> HashMap<TemplateKey, f64> {
 #[derive(Default)]
 struct TemplateChooser {
     chosen: HashMap<(String, TemplateKey, i64), i64>,
-    /// The exact template of each profile and key this import has used.
-    exact: HashMap<(String, TemplateKey), i64>,
+    /// The templates this import made.
+    made: HashSet<i64>,
 }
 
 impl TemplateChooser {
@@ -1522,23 +1527,37 @@ impl TemplateChooser {
         if let Some(&id) = self.chosen.get(&chosen) {
             return Ok(id);
         }
-        let exact = (profile_id.to_string(), key.clone());
-        let id = match same_length_template(conn, key, exposure_s, profile_id)? {
+        let found = if exposure_s > 0.0 {
+            same_length_template(conn, key, exposure_s, profile_id)?
+        } else {
+            exact_template(conn, key, profile_id)?
+        };
+        let id = match found {
             Some(id) => {
                 // A template this import made is not one it reused.
-                if !self.exact.values().any(|&made| made == id) {
+                if !self.made.contains(&id) {
                     outcome.templates_reused += 1;
                 }
                 id
             }
-            None => match self.exact.get(&exact) {
-                Some(&id) => id,
-                None => find_or_create_template(conn, key, profile_id, default_exposure, outcome)?,
-            },
+            None => {
+                let id = if exposure_s > 0.0 {
+                    let name = format!("{} {}s", key.name(), exposure_s);
+                    create_template(conn, key, &name, profile_id, exposure_s, outcome)?
+                } else {
+                    create_template(
+                        conn,
+                        key,
+                        &key.name(),
+                        profile_id,
+                        default_exposure,
+                        outcome,
+                    )?
+                };
+                self.made.insert(id);
+                id
+            }
         };
-        if !self.exact.contains_key(&exact) && is_exact_template(conn, id, key)? {
-            self.exact.insert(exact, id);
-        }
         self.chosen.insert(chosen, id);
         Ok(id)
     }
@@ -1581,17 +1600,6 @@ fn same_length_template(
         .optional()?)
 }
 
-/// Whether the template has exactly the key's gain, offset and readout mode.
-fn is_exact_template(conn: &Connection, id: i64, key: &TemplateKey) -> Result<bool> {
-    Ok(conn.query_row(
-        "SELECT IFNULL(gain, -1) = ?2 AND IFNULL(offset, -1) = ?3
-                AND IFNULL(readoutmode, -1) = ?4
-         FROM exposuretemplate WHERE Id = ?1",
-        params![id, key.gain, key.offset, key.readout],
-        |row| row.get(0),
-    )?)
-}
-
 /// The profile's exposure templates whose plans can take frames of `key`,
 /// best first, without creating one. A template left at -1 (or NULL) for
 /// gain, offset or readout mode runs at the camera's default, as Target
@@ -1623,18 +1631,11 @@ fn find_templates(conn: &Connection, key: &TemplateKey, profile_id: &str) -> Res
     Ok(ids)
 }
 
-/// Reuse the profile's template for exactly this key, or insert one with
-/// the plugin's constructor defaults, named and pinned to the frames' own
-/// gain, offset and readout mode.
-fn find_or_create_template(
-    conn: &Connection,
-    key: &TemplateKey,
-    profile_id: &str,
-    default_exposure: f64,
-    outcome: &mut ImportOutcome,
-) -> Result<i64> {
+/// The profile's template for exactly this key, whatever its default
+/// exposure.
+fn exact_template(conn: &Connection, key: &TemplateKey, profile_id: &str) -> Result<Option<i64>> {
     use rusqlite::OptionalExtension;
-    let exact: Option<i64> = conn
+    Ok(conn
         .query_row(
             "SELECT Id FROM exposuretemplate
              WHERE profileId = ?1 AND filtername = ?2
@@ -1651,17 +1652,15 @@ fn find_or_create_template(
             ],
             |row| row.get(0),
         )
-        .optional()?;
-    if let Some(id) = exact {
-        outcome.templates_reused += 1;
-        return Ok(id);
-    }
-    create_template(conn, key, profile_id, default_exposure, outcome)
+        .optional()?)
 }
 
+/// Insert a template with the plugin's constructor defaults, pinned to the
+/// frames' own gain, offset and readout mode.
 fn create_template(
     conn: &Connection,
     key: &TemplateKey,
+    name: &str,
     profile_id: &str,
     default_exposure: f64,
     outcome: &mut ImportOutcome,
@@ -1676,7 +1675,7 @@ fn create_template(
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, 60, 7, 0, ?8, 0, 5, -15, 0, -1, 0, ?9)",
         params![
             profile_id,
-            key.name(),
+            name,
             key.filter,
             key.gain,
             key.offset,
@@ -2135,9 +2134,10 @@ mod tests {
     }
 
     #[test]
-    fn a_few_short_frames_do_not_set_a_light_templates_default_exposure() {
+    fn each_exposure_length_gets_a_template_with_that_default() {
         // Three 0.4 s frames (flats or test frames saved as lights) and two
-        // real subs of the same filter and camera settings.
+        // real subs of the same filter and camera settings: a template's
+        // default exposure is always the length of the lights on it.
         let mut conn = fresh_conn();
         let mut frames: Vec<FrameMeta> = (0..3)
             .map(|i| FrameMeta {
@@ -2150,14 +2150,23 @@ mod tests {
             ..light("M42", "B", 2_000 + i)
         }));
         import_frames(&mut conn, frames, &ImportOptions::default()).unwrap();
-        let default: f64 = conn
-            .query_row(
-                "SELECT defaultexposure FROM exposuretemplate WHERE filtername = 'B'",
-                [],
-                |row| row.get(0),
+        let templates: Vec<(String, f64)> = conn
+            .prepare(
+                "SELECT name, defaultexposure FROM exposuretemplate
+                 WHERE filtername = 'B' ORDER BY defaultexposure",
             )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(default, 180.0);
+        assert_eq!(
+            templates,
+            vec![
+                ("B G100 O30 1x1 0.4s".to_string(), 0.4),
+                ("B G100 O30 1x1 180s".to_string(), 180.0)
+            ]
+        );
     }
 
     #[test]
@@ -2704,24 +2713,33 @@ mod tests {
         }
 
         import_frames(&mut conn, frames, &ImportOptions::default()).unwrap();
-        let template: (String, i64, i64, i64, i64, f64) = conn
-            .query_row(
+        let templates: Vec<(String, i64, i64, i64, i64, f64)> = conn
+            .prepare(
                 "SELECT filtername, gain, offset, bin, readoutmode, defaultexposure
-                 FROM exposuretemplate",
-                [],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
-                },
+                 FROM exposuretemplate ORDER BY defaultexposure",
             )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(template, ("Ha".into(), 120, 25, 2, 3, 300.0));
+        // One template per length, each with that length as its default.
+        assert_eq!(
+            templates,
+            vec![
+                ("Ha".into(), 120, 25, 2, 3, 180.0),
+                ("Ha".into(), 120, 25, 2, 3, 300.0)
+            ]
+        );
     }
 
     #[test]
@@ -3500,10 +3518,12 @@ mod tests {
         assert_eq!(outcome.skipped_unplanned, 0);
         let summary = &outcome.attach_summaries[0];
         assert_eq!((summary.plans_created, summary.plans_raised), (2, 1));
-        assert_eq!(outcome.templates_created, 1, "Ha needs a template");
+        // Ha needs a template, and so do the 3 s L lights: the L template's
+        // default is 300 s.
+        assert_eq!(outcome.templates_created, 2);
         assert_eq!(
             scheduling_rows(&conn),
-            (templates + 1, plans + 2, acquired + 3, images + 3)
+            (templates + 2, plans + 2, acquired + 3, images + 3)
         );
     }
 
@@ -3528,7 +3548,7 @@ mod tests {
             (3, 2, 1)
         );
         assert_eq!((outcome.plans_created, outcome.plans_raised), (2, 1));
-        assert_eq!(outcome.templates_created, 1);
+        assert_eq!(outcome.templates_created, 2);
         assert_eq!(scheduling_rows(&conn), before, "a preview writes nothing");
     }
 
@@ -3764,7 +3784,39 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(name, "L G100 O30 1x1");
+        assert_eq!(name, "L G100 O30 1x1 180s");
+    }
+
+    #[test]
+    fn a_template_for_the_same_settings_at_another_length_is_not_reused() {
+        // M31's L template has the lights' exact gain and offset but a
+        // 300 s default; 120 s lights on a new target get their own.
+        let mut conn = catalog_with_m31_plan(false);
+        let old: i64 = conn
+            .query_row("SELECT Id FROM exposuretemplate", [], |row| row.get(0))
+            .unwrap();
+        let outcome = import_frames(
+            &mut conn,
+            vec![m42(9_000, 100, 120.0)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (outcome.templates_created, outcome.templates_reused),
+            (1, 0)
+        );
+        let (template, name, default): (i64, String, f64) = conn
+            .query_row(
+                "SELECT t.Id, t.name, t.defaultexposure FROM exposureplan e
+                 JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
+                 JOIN target ON target.Id = e.targetid
+                 WHERE target.name = 'M42'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_ne!(template, old);
+        assert_eq!((name.as_str(), default), ("L G100 O30 1x1 120s", 120.0));
     }
 
     #[test]

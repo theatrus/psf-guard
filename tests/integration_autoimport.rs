@@ -892,7 +892,8 @@ async fn a_run_that_asks_first_changes_no_plan_in_a_scheduler_project() {
         "the preview wrote nothing"
     );
 
-    // A project an import made gets its plan, as before.
+    // A project an import made gets its plan, as before, on a template of
+    // its own: the L template's default is 300 s, not 3 s.
     set_project_description(&db_path, "Imported by PSF Guard (1 frames)");
     let progress = run_now(&state, &slug).await;
     let outcome = &progress["outcome"];
@@ -905,6 +906,6 @@ async fn a_run_that_asks_first_changes_no_plan_in_a_scheduler_project() {
     let (templates, plans, acquired) = scheduling_state(&db_path);
     assert_eq!(
         (templates, plans, acquired),
-        (before.0, before.1 + 1, before.2 + 1)
+        (before.0 + 1, before.1 + 1, before.2 + 1)
     );
 }

@@ -210,7 +210,9 @@
   as having no exposure plan, or added a second template and plan. A new
   plan goes on a template of the lights' filter, binning and length, again
   allowing -1 for the rest, and only without one does import make a
-  template pinned to the lights' gain and offset. Groups that land on one
+  template pinned to the lights' gain and offset, with their length as its
+  default. A template whose default is another length never takes a new
+  plan, so lights of two lengths get two templates. Groups that land on one
   template share one plan.
 - The transfer preview counts the **Keep out** and **Use anyway** choices a
   pull brings, since they change the destination's masters, and a choice

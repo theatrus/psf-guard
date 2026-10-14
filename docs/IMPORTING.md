@@ -120,11 +120,14 @@ The grouping rules stay conservative:
   each match the lights or are left at -1 (the camera's default); one that
   matches exactly comes first. Two groups that land on the same template,
   such as two gains on a camera-default template, share one plan.
-- With no such template, the plan goes on a template pinned to the lights'
-  own gain, offset, and readout mode, named for them (for example
-  `L G100 O30 1x1`). PSF Guard makes it when the profile has none, with the
-  most common exposure length of those lights as its default. You can move
-  a plan to another template later; a sync carries the change.
+- With no such template, PSF Guard makes one pinned to the lights' own
+  gain, offset, and readout mode, with their exposure length as its default.
+  Its name gives those settings and the length, for example
+  `L G100 O30 1x1 300s`. A template
+  whose default is another length never takes a new plan, even one for the
+  same settings, so lights of two lengths get two templates. Lights with no
+  exposure length go on the template for exactly their settings. You can
+  move a plan to another template later; a sync carries the change.
 
 ![The shared exposure-template view for a real narrowband project](project-plan-narrowband.png)
 
