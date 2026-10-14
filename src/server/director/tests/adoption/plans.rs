@@ -466,6 +466,194 @@ async fn an_imported_plan_takes_each_bands_main_exposure_plan() {
     assert_eq!(plan["data"]["plan"]["objectives"][0]["goal"]["value"], 40);
 }
 
+/// Planning never grows objectives on its own: a project imported from
+/// Target Scheduler with L at 300 s and 30 s lists one L objective, and keeps
+/// one while it follows its project. Activation would then turn the 30 s
+/// plan off; taking Target Scheduler's values brings it in as an objective
+/// of its own, and the check then keeps it. Until then, progress counts each
+/// plan toward the objective with its template and length.
+#[tokio::test]
+async fn an_imported_band_at_two_lengths_stays_one_objective_until_taken() {
+    let f = Fixture::new();
+    let source = Uuid::new_v4();
+    let path = register(&f, "lum", "Lum rig", &[(1, "M81", Some(source))]);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (1, 'profile-x', 'L 300', 'L', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, 'bbbbbbbb-0000-4000-8000-000000000001');
+         INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'M81', 1, 9.926, 69.07, 2, 0.0, 100, 1, 'bbbbbbbb-0000-4000-8000-0000000000a1');
+         INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES (1, 'profile-x', -1, 80, 10, 10, 1, 1, 1, 'bbbbbbbb-0000-4000-8000-0000000000e1'),
+                (2, 'profile-x', 30, 40, 4, 4, 1, 1, 1, 'bbbbbbbb-0000-4000-8000-0000000000e2'),
+                (3, 'profile-x', 0.5, 5, 5, 0, 1, 1, 1, 'bbbbbbbb-0000-4000-8000-0000000000e3');",
+    )
+    .unwrap();
+    let list = || async {
+        let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        listed["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["project"]["name"] == "M81")
+            .unwrap()["project"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let project = Uuid::parse_str(&list().await).unwrap();
+    let plan_now = || {
+        let store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store.plan_draft(project).unwrap().unwrap()
+    };
+    let one_objective = |plan: &psf_guard_director_meta::plan::PlanDraft, desired: u32| {
+        assert_eq!(plan.objectives.len(), 1, "{plan:?}");
+        assert_eq!(plan.objectives[0].goal, Goal::Frames { value: desired });
+        assert_eq!(plan.contributions.len(), 1, "{plan:?}");
+        assert_eq!(plan.contributions[0].exposure_seconds, 300.0);
+    };
+    one_objective(&plan_now(), 80);
+    // Listed again, and again after N.I.N.A. raised a count: the plan follows
+    // its project, still with one L objective.
+    list().await;
+    db.execute("UPDATE exposureplan SET desired=90 WHERE Id=1", [])
+        .unwrap();
+    list().await;
+    let plan = plan_now();
+    one_objective(&plan, 90);
+    let rig = plan.contributions[0].rig_id;
+
+    // Progress before any activation: with one objective on the template,
+    // every plan on that template counts toward it.
+    let (status, progress) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/plan/progress"),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{progress}");
+    let progress_rig = &progress["data"]["rigs"][0];
+    assert_eq!(
+        progress_rig["objectives"][0]["frames"]["desired"], 135,
+        "{progress}"
+    );
+    assert_eq!(
+        progress_rig["objectives"][0]["exposure_plans"], 3,
+        "{progress}"
+    );
+
+    // Give the framing a panel so activation can run.
+    {
+        let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut framing = store.framing_draft(project).unwrap().unwrap();
+        let revision = framing.revision;
+        framing.panel = Some(psf_guard_director_core::framing::PanelSize {
+            width_degrees: 2.0,
+            height_degrees: 1.5,
+        });
+        framing.panel_rig_id = Some(rig);
+        store.save_framing_draft(&framing, revision).unwrap();
+    }
+    let (status, preview) = call(
+        &f.app,
+        "POST",
+        &format!("/projects/{project}/activation/preview"),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let writes = super::activation::plan_writes(&preview["data"]);
+    assert_eq!(writes.len(), 2, "{preview}");
+    assert!(
+        writes[0].starts_with("disable M81 · L 300 · 30 s | plan #2 (4 of 40 frames taken), replaced by M81 · L 300 · 300 s"),
+        "{writes:?}"
+    );
+    assert!(
+        writes[1].starts_with("disable M81 · L 300 · 0.5 s | plan #3"),
+        "{writes:?}"
+    );
+
+    let (status, taken) = super::activation::take_values(&f, project, rig).await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    assert_eq!(
+        taken["data"]["taken"],
+        json!(["L 30 s: added, 40 frames with L 300"]),
+        "{taken}"
+    );
+    assert_eq!(
+        taken["data"]["left"],
+        json!(["L 0.5 s: under a second, so left out as test frames"]),
+        "{taken}"
+    );
+    let plan = plan_now();
+    let mut parts: Vec<(String, f64)> = plan
+        .objectives
+        .iter()
+        .map(|o| {
+            let part = plan
+                .contributions
+                .iter()
+                .find(|c| c.objective_id == o.id)
+                .unwrap();
+            (o.purpose.clone(), part.exposure_seconds)
+        })
+        .collect();
+    parts.sort_by(|a, b| a.1.total_cmp(&b.1));
+    assert_eq!(
+        parts,
+        [
+            ("unsaturated_stars".to_owned(), 30.0),
+            ("faint_detail".to_owned(), 300.0),
+        ]
+    );
+    // Until an activation records them, each plan counts toward the
+    // objective with its template and length; the test frames fall back
+    // to neither, as two objectives share the template.
+    let (_, progress) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/plan/progress"),
+        Value::Null,
+        None,
+    )
+    .await;
+    let frames_of = |purpose: &str| {
+        let id = plan
+            .objectives
+            .iter()
+            .find(|o| o.purpose == purpose)
+            .unwrap()
+            .id
+            .to_string();
+        progress["data"]["rigs"][0]["objectives"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["objective_id"] == id)
+            .unwrap()["frames"]
+            .clone()
+    };
+    assert_eq!(frames_of("faint_detail")["desired"], 90, "{progress}");
+    assert_eq!(frames_of("faint_detail")["acquired"], 10, "{progress}");
+    assert_eq!(frames_of("unsaturated_stars")["desired"], 40, "{progress}");
+    assert_eq!(frames_of("unsaturated_stars")["acquired"], 4, "{progress}");
+    assert_eq!(
+        progress["data"]["rigs"][0]["other"]["desired"], 5,
+        "{progress}"
+    );
+    // The 30 s plan is now the plan's: only the test frames turn off.
+    let checked = super::activation::check_now(&f, project).await;
+    let writes = super::activation::plan_writes(&checked);
+    assert_eq!(writes.len(), 1, "{checked}");
+    assert!(writes[0].contains("0.5 s | plan #3"), "{writes:?}");
+}
+
 #[tokio::test]
 async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once() {
     let f = Fixture::new();

@@ -61,6 +61,30 @@
   Activation turns off a plan on the target that takes the same frames at
   another length, the preview lists it as replaced, and the plan asks to be
   activated until it is.
+- A plan asks to be activated again whenever activation would change a rig's
+  Target Scheduler rows, not only after a save: rows changed in N.I.N.A., or
+  an old plan another length replaced that is still on. The plan's summary
+  says **Synced** or **Not synced** (why is in the tooltip and in the bar at
+  the top), or **Couldn't check the rigs** when they cannot be read, with a
+  separate **Activate…** button. The bar's button says **Activate again…**
+  once the plan has been activated. An exposure plan the preview updates
+  says what changes, such as `desired 100 → 150`.
+- The plan now decides which Target Scheduler exposure plans run in each
+  rig's project. Activation switches on every plan the plan has, and
+  switches off every other plan in the project, frames and counts kept,
+  including filters the plan doesn't shoot at all. Two objectives that come
+  to the same target, template and exposure share one Target Scheduler plan
+  asking for the sum of their frames; progress shows it under each, marked
+  shared, and counts it once.
+- The activation preview starts with what Target Scheduler will shoot
+  afterwards, then what it turns off and why, then what it turns back on,
+  and shows the same after Apply. The count of turn-offs is in the rig's
+  line and in the bar ("Not synced: turns off 1 plan in ultracat131").
+- To keep a plan made in N.I.N.A., **Take Target Scheduler's values**: it
+  now brings each exposure length in as its own objective, so a 30 s L plan
+  beside the plan's 300 s one becomes an "Unsaturated stars" objective and
+  stays on. Planning never adds objectives on its own: a project imported
+  from Target Scheduler keeps one objective per filter.
 - Automatic import no longer changes what Target Scheduler will shoot in
   projects it did not create. There it only adds image rows to exposure
   plans that already exist, and leaves their counts alone. Frames that would

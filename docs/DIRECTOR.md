@@ -417,13 +417,18 @@ Target Scheduler exposure plans ask for, with the frames taken and rejected
 beneath, and a status: **Off**, **Not activated**, **Done**, or the project's
 state in Target Scheduler. The top row sums the rig: the plan's frames and
 hours, its progress over every objective, and its status. An exposure plan
-counts toward the objective its activation wrote it for; one taken in from
-Target Scheduler goes to the objective with its template, else the one with
-its filter's band. `GET /projects/{id}/plan/progress` returns the counts.
-**Rigs** lists each rig with its database's project and whether activation
-has reached it. **Add a rig** offers every rig with a new project, which
-activation creates in its database, and every project another plan holds in
-a database this plan has none in. A rig joins with a template for each
+counts toward the objectives its activation wrote it for; one that sums
+several objectives' frames shows under each, "shared with" the others, and
+once in the top row (`shared_with` in the API). One taken in from Target
+Scheduler goes to the objective with its template and exposure length (a
+plan left at the template's default runs at that default), else the one
+with its template, else the one with its filter's band.
+`GET /projects/{id}/plan/progress` returns the counts.
+**Rigs** lists each rig with its database's project and whether it is
+**synced** (its rows hold the saved plan) or **not synced**, and why: not
+activated yet, or its rows differ from the plan. **Add a rig** offers every
+rig with a new project, which activation creates in its database, and every
+project another plan holds in a database this plan has none in. A rig joins with a template for each
 objective, from its database or the library; one with no template for any
 objective's band says so and stays out. A library template the database
 already holds, written there by activation or with the same filter, camera
@@ -442,14 +447,25 @@ brings in, never replaces unsaved edits: the tab says the plan changed and
 offers **Reload**, and the save bar will not save over it.
 
 Activation is no tab. Once every edit is saved, a bar at the top asks for an
-activation while the rig databases lack the saved plan or framing, or a rig
+activation while the rig databases lack the saved plan or framing, a rig
 that shoots the plan has none of it (the last activation skipped it, or it
-joined since), and **Activate…** opens the preview and apply over the page.
-The summary's activation line, **On the rigs** when nothing is missing,
-opens the same dialog at any time, to push the last activation again. On a
-server that does not write rig databases the summary says **Drafts only**
-and no bar asks. Older links to the Plan, Rig databases or Activate tabs
-open Exposures or Rigs. A plan with no linked database yet starts its framing
+joined since), or a rig's rows differ from the plan though the last
+activation had it (N.I.N.A. changed them, or an old plan another length
+replaced is still on). Its **Activate…** button, **Activate again…** once
+the plan has been activated, opens the preview and apply over the page. Its
+message says **Not synced** and why, such as "Not synced: ultracat131
+differs from the plan". The summary ends with a short label, **Synced** or
+**Not synced** with the reason in its tooltip, and an **Activate…** button
+beside it opens the same dialog at any time, to push the last activation
+again. When the last activation had the saved plan, framing and rigs, the
+label says **Synced** at once while the [check](#activation) runs, and
+changes only if the check finds rows to write. Otherwise it says
+**Checking the rigs…** until the check answers. When the check fails, or
+cannot read a rig's database, the label says **Couldn't check the rigs**
+(or the rig), with the reason in its tooltip, and no bar asks. The activation dialog's status line says
+the same. On a server that does not write rig databases the summary
+says **Drafts only** and no bar asks. Older links to the Plan, Rig
+databases or Activate tabs open Exposures or Rigs. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
 Its **Library** link goes back with the scope it came from. A project
@@ -472,7 +488,12 @@ holds for it becomes Director's own drafts: its targets become the framing
 (center and rotation from the rows, a grid of panels when the targets form
 one, the rig's field as the panel size when its optics are known) and its
 exposure plans become the plan (one objective per bandpass with the frames
-a panel wants, bound to the template each plan uses at its exposure).
+a panel wants, bound to the template each plan uses at its exposure). A
+second exposure length on the same filter does not add an objective, on
+the import or when a following plan is read again: Planning never grows
+objectives on its own. Activation then lists that plan under **Turns off**,
+and **Take Target Scheduler's values** brings it in as an objective of its
+own.
 Director plans one target or one mosaic per project. A project whose targets
 are separate, not panels of one grid, is drafted as its first target with
 that target's own exposure plans, and the listing says so; Target Scheduler
@@ -1128,6 +1149,41 @@ a template leaves plans that chose it with their copy of its settings.
 
 ## Activation
 
+### What activation does
+
+The plan decides which Target Scheduler exposure plans run in each rig's
+linked project:
+
+1. **The plan turns plans on and off.** Every plan the plan has is written
+   and switched on, and one that was off is turned on. A plan already in
+   Target Scheduler on the same target, with the same template settings and
+   exposure length, is taken over in place, frames kept, never doubled.
+2. **Identical rows are summed.** Two or more of a rig's objectives that
+   come to the same target, template settings (filter, gain, offset,
+   binning, readout mode) and exposure length get one plan, asking for the
+   sum of their frames (an hours goal counts in frames at that length). Each
+   objective is recorded against it, so progress shows it under each, marked
+   shared, and counts it once in the rig's total.
+3. **Any difference makes a plan of its own**: another exposure length or
+   any other template setting.
+4. **What the plan does not account for is turned off**: any plan on any of
+   the project's targets that no row of the plan writes, whether another
+   length of a filter the plan shoots or a filter it does not have at all
+   (an SII plan made in N.I.N.A. when the plan has no SII). It stays in
+   Target Scheduler with its frames and counts, switched off. To keep one,
+   **Take Target Scheduler's values** first, which brings it into the plan,
+   or add it to the plan.
+5. **The preview says what happens and the end result.** Each rig's block
+   starts with **After activation, Target Scheduler shoots**: every plan that
+   will run, with its target, template, length, frames asked for and taken,
+   and the objectives a summed one serves. Then **Turns off**, each plan with
+   its frames and why ("not in the plan", "replaced by Ha · 300 s"), and
+   **Turns on**, plans that were off and come back. After Apply the same
+   blocks show what was done. A rig is **Synced** only when the plans running
+   there are exactly what the plan would write.
+
+### What it writes
+
 **Activation**, below Plan, pushes the framing and plan into each participating
 rig's database, the same rows Target Scheduler and the Director plugin read:
 
@@ -1144,7 +1200,8 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   project's only target not yet owned by a panel. The preview lists these as
   `adopt` with where they move, or `unchanged` when one already sits at the
   panel;
-- one exposure plan per rig objective and panel, bound to the chosen template
+- one exposure plan per panel for each of the rig's objectives, or for
+  several objectives that come to the same plan (rule 2), bound to the chosen template
   (or one matching its settings, created if needed; a library template is created under the library's own GUID, so every rig database carries the same one), with `desired` set to the
   frames that objective needs at that rig's exposure length. A plan the
   target already has for the same work is taken over rather than doubled:
@@ -1157,26 +1214,35 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   follow the plan, and the preview lists it as `adopt` with its row number
   and what changes, or as `unchanged` when it already holds the plan's
   values.
-- a plan of the target's that no activation owns and that takes the same
-  frames as a rig objective (same filter, gain, offset, binning and readout
-  mode) at another length is turned off as replaced: for example a G_120
-  plan when the plan's G objective moved to G_300 before the first
+- every other plan in the project is turned off (rule 4). One that takes
+  the same frames as a written plan (same filter, gain, offset, binning and
+  readout mode) at another length is listed as replaced: for example a
+  G_120 plan when the plan's G objective moved to G_300 before the first
   activation. Its frames and settings stay; the preview lists it as
-  `disable`, "replaced by …". To keep both lengths running, give the plan
-  an objective for each.
+  `disable`, "replaced by …", or "not in the plan" for one on a filter the
+  plan does not shoot. To keep both lengths running, take Target
+  Scheduler's values (below), which brings each length in as an objective
+  of its own, or give the plan an objective for each.
 
 Rows are owned by GUID. A target or exposure plan activation would take over
 but that has no GUID yet refuses the rig, which says which row and points at
 **Fill in GUIDs**: a GUID made at activation would exist only in that copy of
 the database, and skipping the row would make a twin of it.
 
-The preview accounts for every exposure plan on the targets: plans it adds
-(`create`), takes over (`adopt`), changes (`update`), turns off (`disable`,
-including plans another length replaced) or leaves alone (`unchanged`), and
-with `keep` the rig's own plans for work no objective asks for, which stay as
-they are in Target Scheduler. A `disable` counts as a change, so the plan
-asks to be activated until it is applied. A template
-activation creates is listed under `template`.
+The preview accounts for every exposure plan in the project: plans it adds
+(`create`), takes over (`adopt`), changes (`update`, including turning one
+on), turns off (`disable`) or leaves as they are (`unchanged`). Any action
+but `unchanged` counts as a change, so the plan asks to be activated until
+it is applied. A template activation creates is listed under `template`.
+Each rig's report also carries `shoots`, the plans Target Scheduler runs
+afterwards (row, target, template, filter, gain, offset, exposure, desired
+and acquired frames, the objectives it serves, and whether it is turned on).
+
+What a preview turns off is never folded away: the **Turns off** block is
+open and in the warning colour, with "To keep one, take Target Scheduler's
+values or add it to the plan." The rig's line counts it ("Turns off 1 plan",
+"Turns on 1 plan"), and when turning plans off is all an activation would
+do there, the bar says so: "Not synced: turns off 1 plan in ultracat131".
 
 A plan an earlier activation made that nothing plans now is turned off
 (`disable`, `enabled = 0`), so Target Scheduler stops taking it: its
@@ -1209,12 +1275,21 @@ ones to keep, a rig's block in the preview offers **Take Target Scheduler's
 values** instead of overwriting them. It reads that rig's linked project the
 way an import does and writes it into the saved plan:
 
-- each band's frames: the band's goal where only this rig shoots it, else
-  this rig's own goal. Goals compare by the frames they come to at the rig's
-  exposure length, so six hours of 300 s frames and 72 frames are the same;
-- the template and exposure length of each band, and which bands are on: a
-  band the project no longer shoots is turned off for the rig, unless some
-  exposure plan used a template Director cannot read, when none is;
+- each exposure length of each band as its own part (an import makes one
+  objective per band; a take makes one per length): it lands on the rig's
+  part at the same length, else on another of its parts in that band
+  (taking the template and length), else on an objective of that band
+  other rigs shoot, else on a new objective, for unsaturated stars if it is
+  the shorter of two. So an exposure plan made in N.I.N.A., such as L 30 s
+  beside the plan's L 300 s, joins the plan and the next activation keeps it
+  instead of turning it off;
+- each part's frames: the objective's goal where only this rig shoots it,
+  else this rig's own goal. Goals compare by the frames they come to at the
+  rig's exposure length, so six hours of 300 s frames and 72 frames are the
+  same;
+- which parts are on: a part of the rig's that no exposure plan lands on is
+  turned off for the rig, unless some exposure plan used a template
+  Director cannot read, when none is;
 - the framing, when the project's targets moved by more than 1″ and no other
   rig uses the same layout: the rig's own framing if it has one, else the
   shared one. A single panel can sit anywhere; a grid moved by hand is
@@ -1229,9 +1304,16 @@ saved.
 
 Before asking for an activation the page runs the same activation on an
 in-memory copy of each rig's planning tables (`GET /activation/check`), so
-it never locks N.I.N.A.'s database. A rig whose rows would all read
-`unchanged` or `keep` already holds the plan, whatever the activation
-record says.
+it never locks N.I.N.A.'s database. It runs the check whenever the plan
+shoots something, whatever the activation record says: the record can lag
+rows that already match, and rows can differ under a record that has the
+saved plan. A rig whose rows would all read `unchanged` is synced: the
+plans running there are exactly what the plan would write. Any other action
+asks for an activation. An `update` of an
+exposure plan says what changes, such as `desired 100 → 150` or
+`exposure 120 s → 300 s`. The check writes nothing, so it does not wait
+for the turn at the rig databases that discovery, adoption, previews and
+activations take one at a time: opening a plan never queues behind them.
 Panel ids are places in the grid, so growing the grid or turning a mosaic can
 move a panel to other sky. A panel that moves by more than a quarter of its
 size and already has frames gets a new target at its new place; the old

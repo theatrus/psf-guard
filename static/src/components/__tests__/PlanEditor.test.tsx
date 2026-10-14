@@ -208,6 +208,25 @@ describe('Plan editor', () => {
     expect(rows[3]).toHaveTextContent('Off');
   });
 
+  it('marks a plan two objectives share under each, and counts it once in the total', async () => {
+    const objectives = [
+      { id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'frames' as const, value: 72 }, priority: 1 },
+      { id: 'o2', bandpass_id: 'h_alpha', purpose: 'unsaturated_stars', goal: { kind: 'frames' as const, value: 30 }, priority: 1 },
+    ];
+    const part = (id: string, objective: string) =>
+      ({ id, objective_id: objective, rig_id: redcat.rig.id, template: { template_guid: null, template_id: 1, name: 'Ha 300', filter_name: 'Ha', gain: 100, offset: 30, bin: 1, readout_mode: null }, exposure_seconds: 300, panel_ids: [], enabled: true });
+    fixture({ project_id: 'project', revision: 1, updated_at_ms: 1, objectives, contributions: [part('c1', 'o1'), part('c2', 'o2')] }, null, []);
+    const frames = (desired: number, acquired: number, accepted: number) => ({ desired, acquired, accepted, rejected: 0 });
+    server.use(http.get('/api/director/v1/projects/project/plan/progress', () => HttpResponse.json(ok({ rigs: [{
+      rig_id: redcat.rig.id, project: { name: 'Heart Nebula', state: 1 }, note: null, other: frames(0, 0, 0), total: frames(102, 10, 8),
+      objectives: [{ objective_id: 'o1', frames: frames(102, 10, 8), exposure_plans: 1, shared_with: ['o2'] }, { objective_id: 'o2', frames: frames(102, 10, 8), exposure_plans: 1, shared_with: ['o1'] }],
+    }] }))));
+    mount();
+    expect(await screen.findByTestId('shared-redcat-o1')).toHaveTextContent('shared with H-alpha · Unsaturated stars');
+    expect(screen.getByTestId('shared-redcat-o2')).toHaveTextContent('shared with H-alpha · Faint detail');
+    expect(screen.getByTestId('summary-redcat')).toHaveTextContent('8 / 102');
+  });
+
   it("takes a picked template's exposure, after goals and a hand-set exposure", async () => {
     const objective = { id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'hours' as const, value: 6 }, priority: 1 };
     fixture({ project_id: 'project', revision: 1, updated_at_ms: 1, objectives: [objective], contributions: [

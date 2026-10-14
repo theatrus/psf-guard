@@ -104,16 +104,31 @@ fn source_targets(
     Ok(targets)
 }
 
-/// One band of a plan taken in from Target Scheduler, so far: its main
-/// plan's template and exposure, and the most frames any of its plans asks
-/// for.
-struct Band {
+/// One band at one exposure length in a plan taken in from Target
+/// Scheduler, so far: the template of its plan asking for the most frames,
+/// and the most frames any of its plans asks for.
+struct Length {
     template: usize,
     exposure: f64,
     desired: u32,
-    /// What makes a plan the main one: a second or more, then frames asked
-    /// for, then length.
-    rank: (bool, u32, u64),
+}
+
+/// Exposure lengths compare to the millisecond.
+fn length_key(exposure: f64) -> i64 {
+    (exposure * 1000.0).round() as i64
+}
+
+/// The purpose of each of a band's exposure lengths, shortest first: one
+/// length is for faint detail; of two or more, the shortest is for
+/// unsaturated stars and the rest for faint detail.
+pub(super) fn length_purposes(lengths: usize) -> impl Iterator<Item = &'static str> {
+    (0..lengths).map(move |i| {
+        if lengths > 1 && i == 0 {
+            "unsaturated_stars"
+        } else {
+            "faint_detail"
+        }
+    })
 }
 
 /// Distinct positions along one camera axis, within `tolerance`, in order.
@@ -353,6 +368,20 @@ pub(super) struct Drafts {
     pub separate_targets: usize,
     /// Exposure plans left out, and why.
     pub warnings: Vec<String>,
+    /// Lengths under a second left out beside a longer one of their band,
+    /// such as "B 0.4 s": flats or test frames taken as lights.
+    pub test_frames: Vec<String>,
+}
+
+/// How a band's exposure plans become objectives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Split {
+    /// One objective per band, as an import and the plan that follows its
+    /// project make it: Planning never grows objectives on its own.
+    Band,
+    /// One per band and exposure length, for taking Target Scheduler's
+    /// values: a second length made in N.I.N.A. joins the plan.
+    Length,
 }
 
 /// Which drafts a project has none of yet.
@@ -377,6 +406,7 @@ pub(super) fn read_drafts(
     project_name: &str,
     panel: Option<PanelSize>,
     missing: Missing,
+    split: Split,
 ) -> Result<Drafts, StoreError> {
     let mut drafts = Drafts::default();
     let missing = Missing {
@@ -459,13 +489,12 @@ pub(super) fn read_drafts(
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        // One objective per bandpass; the frames a panel wants is the most
-        // any of its plans asks for, since Director counts per panel. Its
-        // template and exposure come from the band's main plan: one of at
-        // least a second, then the one asking for most frames. A short plan
-        // made first (flats or test frames taken as lights) never sets them.
-        let main = |exposure: f64, desired: u32| (exposure >= 1.0, desired, exposure.to_bits());
-        let mut by_bandpass: BTreeMap<String, Band> = BTreeMap::new();
+        // Each band's plans by exposure length: the frames a panel wants is
+        // the most any plan at that length asks for, since Director counts
+        // per panel, and the template is that of the plan asking for the
+        // most. `split` says whether they make one objective per band or one
+        // per length.
+        let mut by_length: BTreeMap<(String, i64), Length> = BTreeMap::new();
         let mut left_out = std::collections::BTreeSet::new();
         for (template_id, exposure, desired) in rows {
             let Some(index) =
@@ -488,58 +517,90 @@ pub(super) fn read_drafts(
                 .unwrap_or(template.default_exposure)
                 .max(0.001);
             let desired = desired.unwrap_or(0).clamp(0, 100_000) as u32;
-            let rank = main(exposure, desired);
-            let band = by_bandpass
-                .entry(template.bandpass.id.clone())
-                .or_insert(Band {
+            let length = by_length
+                .entry((template.bandpass.id.clone(), length_key(exposure)))
+                .or_insert(Length {
                     template: index,
                     exposure,
                     desired: 0,
-                    rank,
                 });
-            if rank > band.rank {
-                band.template = index;
-                band.exposure = exposure;
-                band.rank = rank;
+            if desired > length.desired {
+                length.template = index;
+                length.desired = desired;
             }
-            band.desired = band.desired.max(desired);
+        }
+        // Each band's lengths, shortest first.
+        let mut bands: BTreeMap<String, Vec<Length>> = BTreeMap::new();
+        for ((bandpass_id, _), length) in by_length {
+            bands.entry(bandpass_id).or_default().push(length);
         }
         let mut objectives = Vec::new();
         let mut contributions = Vec::new();
-        for (bandpass_id, band) in by_bandpass {
-            let (index, exposure, desired) = (band.template, band.exposure, band.desired);
-            if desired == 0 {
-                continue;
-            }
-            let template = &templates.usable[index];
-            let objective = Objective {
-                id: Uuid::new_v4(),
-                bandpass_id,
-                purpose: "faint_detail".to_owned(),
-                goal: Goal::Frames { value: desired },
-                priority,
+        for (bandpass_id, mut lengths) in bands {
+            let parts: Vec<(Length, &str)> = match split {
+                // One objective per band: the template and length of its
+                // main plan (one of at least a second, then the one asking
+                // for most frames, then the longest), and the most frames
+                // any of its plans asks for. A short plan made first (flats
+                // or test frames taken as lights) never sets them.
+                Split::Band => {
+                    let desired = lengths.iter().map(|l| l.desired).max().unwrap_or(0);
+                    lengths
+                        .into_iter()
+                        .max_by_key(|l| (l.exposure >= 1.0, l.desired, l.exposure.to_bits()))
+                        .filter(|_| desired > 0)
+                        .map(|main| vec![(Length { desired, ..main }, "faint_detail")])
+                        .unwrap_or_default()
+                }
+                // One objective per length that asks for frames; a length
+                // under a second beside a longer one is test frames.
+                Split::Length => {
+                    lengths.retain(|l| l.desired > 0);
+                    if lengths.iter().any(|l| l.exposure >= 1.0) {
+                        for short in lengths.iter().filter(|l| l.exposure < 1.0) {
+                            drafts.test_frames.push(format!(
+                                "{} {} s",
+                                templates.usable[short.template].filter_name, short.exposure
+                            ));
+                        }
+                        lengths.retain(|l| l.exposure >= 1.0);
+                    }
+                    let purposes = length_purposes(lengths.len());
+                    lengths.into_iter().zip(purposes).collect()
+                }
             };
-            contributions.push(Contribution {
-                id: Uuid::new_v4(),
-                objective_id: objective.id,
-                rig_id: rig,
-                template: TemplateChoice {
-                    template_guid: template.guid,
-                    template_id: Some(template.id),
-                    name: template.name.clone(),
-                    filter_name: template.filter_name.clone(),
-                    gain: template.gain,
-                    offset: template.offset,
-                    bin: template.bin,
-                    readout_mode: template.readout_mode,
-                    moon: Some(template.moon.clone()),
-                },
-                exposure_seconds: exposure,
-                panel_ids: vec![],
-                enabled: true,
-                goal: None,
-            });
-            objectives.push(objective);
+            for (length, purpose) in parts {
+                let (index, exposure, desired) = (length.template, length.exposure, length.desired);
+                let template = &templates.usable[index];
+                let objective = Objective {
+                    id: Uuid::new_v4(),
+                    bandpass_id: bandpass_id.clone(),
+                    purpose: purpose.to_owned(),
+                    goal: Goal::Frames { value: desired },
+                    priority,
+                };
+                contributions.push(Contribution {
+                    id: Uuid::new_v4(),
+                    objective_id: objective.id,
+                    rig_id: rig,
+                    template: TemplateChoice {
+                        template_guid: template.guid,
+                        template_id: Some(template.id),
+                        name: template.name.clone(),
+                        filter_name: template.filter_name.clone(),
+                        gain: template.gain,
+                        offset: template.offset,
+                        bin: template.bin,
+                        readout_mode: template.readout_mode,
+                        moon: Some(template.moon.clone()),
+                    },
+                    exposure_seconds: exposure,
+                    panel_ids: vec![],
+                    enabled: true,
+                    goal: None,
+                });
+                objectives.push(objective);
+            }
         }
         if !objectives.is_empty() {
             drafts.plan = Some(PlanDraft {
@@ -647,20 +708,23 @@ pub(super) fn following(
         })
 }
 
-/// Give a plan read again the ids its last import had, band by band, so an
-/// unchanged plan reads the same and a changed one keeps its objectives.
+/// Give a plan read again the ids its last import had, band and purpose
+/// by band and purpose, so an unchanged plan reads the same and a changed
+/// one keeps its objectives.
 fn keep_ids(stored: Option<&PlanDraft>, plan: &mut PlanDraft) {
     let Some(stored) = stored else {
         return;
     };
+    let mut used = std::collections::BTreeSet::new();
     for objective in &mut plan.objectives {
-        let Some(old) = stored
-            .objectives
-            .iter()
-            .find(|o| o.bandpass_id == objective.bandpass_id)
-        else {
+        let Some(old) = stored.objectives.iter().find(|o| {
+            o.bandpass_id == objective.bandpass_id
+                && o.purpose == objective.purpose
+                && !used.contains(&o.id)
+        }) else {
             continue;
         };
+        used.insert(old.id);
         let read = objective.id;
         objective.id = old.id;
         for contribution in plan

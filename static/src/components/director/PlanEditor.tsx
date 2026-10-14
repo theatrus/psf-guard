@@ -8,7 +8,7 @@ import NumberInput from '../NumberInput';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorFrameCounts, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
-import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, choiceFrom, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
+import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, choiceFrom, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, objectiveName, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Plan request failed';
@@ -345,7 +345,9 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
                   {canWrite && suggested !== null && <> <button type="button" className="link-button" title={`At f/${rig.field_of_view!.focal_ratio!.toFixed(1)}, about ${suggested} h reaches f/5's depth`} onClick={() => setGoal({ kind: 'hours', value: suggested })}>f/{rig.field_of_view!.focal_ratio!.toFixed(1)}: {suggested} h</button></>}
                 </span>)}</td>
             <td>{contribution && frames !== null && <span data-testid={`frames-${rig.catalog_slug}-${objective.bandpass_id}`}>{frames}{panels.length > 1 && <small className="director-muted"> per panel</small>}<br /><small className="director-muted">{formatHours(hoursFor(frames, contribution.exposure_seconds))}{panels.length > 1 ? ' each' : ''}</small></span>}</td>
-            <td>{contribution && part && part.exposure_plans > 0 && <FramesProgress frames={part.frames} label={`${rig.catalog_name} ${label}`} />}</td>
+            <td>{contribution && part && part.exposure_plans > 0 && <FramesProgress frames={part.frames} label={`${rig.catalog_name} ${label}`} />}
+              {/* A plan summing two objectives' frames shows under each, and once in the total. */}
+              {contribution && part && (part.shared_with?.length ?? 0) > 0 && <><br /><small className="director-muted" data-testid={`shared-${rig.catalog_slug}-${objective.id}`}>shared with {part.shared_with!.map(id => { const other = plan.objectives.find(o => o.id === id); return other ? objectiveName(other) : 'another objective'; }).join(', ')}</small></>}</td>
             <td>{partStatus(contribution, done, part)}</td>
             <td>{contribution && <input type="checkbox" aria-label={`${rig.catalog_name} shoots ${label}`} checked={contribution.enabled} onChange={event => setContribution(rig, objective, current => current ? { ...current, enabled: event.target.checked } : current)} />}</td>
           </tr>;

@@ -16,6 +16,10 @@ export const KNOWN_BANDPASSES: Array<{ id: string; name: string; kind: 'broadban
   { id: 'sii', name: 'S II', kind: 'narrowband' },
 ];
 
+/** An objective in a few words, its band and purpose: "H-alpha · Faint detail". */
+export const objectiveName = (objective: Pick<DirectorObjective, 'bandpass_id' | 'purpose'>) =>
+  `${KNOWN_BANDPASSES.find(band => band.id === objective.bandpass_id)?.name ?? objective.bandpass_id} · ${PURPOSES.find(purpose => purpose.id === objective.purpose)?.name ?? objective.purpose}`;
+
 export function bandpassOptions(templatesByRig: Record<string, DirectorTemplate[]>, library: DirectorLibraryTemplate[] = []) {
   const options = new Map(KNOWN_BANDPASSES.map(b => [b.id, b]));
   for (const template of [...Object.values(templatesByRig).flat(), ...library]) {

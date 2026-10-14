@@ -254,11 +254,14 @@ pub(super) async fn get(
                 for target in &activated.targets {
                     let row =
                         target_row(&connection, target.target_guid).map_err(StoreError::from)?;
+                    // A plan summing several objectives is listed once.
                     let plans: Vec<String> = activated
                         .plans
                         .iter()
                         .filter(|plan| plan.target_guid == target.target_guid)
                         .map(|plan| plan.exposureplan_guid.to_string())
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
                         .collect();
                     let progress = row
                         .as_ref()

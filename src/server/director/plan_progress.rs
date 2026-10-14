@@ -2,9 +2,11 @@
 //! Scheduler exposure plans ask for, have taken, accepted and rejected, per
 //! objective, and the state of its project. Read only.
 //!
-//! An exposure plan belongs to the objective its activation wrote it for.
-//! One no activation recorded (a plan taken in from Target Scheduler, or
-//! rows made by hand) goes to the rig's objective with its template, else
+//! An exposure plan belongs to the objectives its activation wrote it for:
+//! one, or several whose frames it sums, when it counts toward each and once
+//! in the rig's total. One no activation recorded (a plan taken in from
+//! Target Scheduler, or rows made by hand) goes to the rig's objective with
+//! its template and exposure length, else the one with its template, else
 //! the one with its filter's band; the rest are counted apart.
 
 use super::*;
@@ -37,6 +39,9 @@ pub(super) struct ObjectiveProgress {
     frames: Frames,
     /// How many exposure plans count toward it; 0 until one is written.
     exposure_plans: usize,
+    /// Objectives that share an exposure plan with it: the plan sums their
+    /// frames, and its counts show under each.
+    shared_with: Vec<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -72,8 +77,9 @@ struct RigRead {
     contributions: Vec<Contribution>,
     /// Objective bands, by objective.
     bands: BTreeMap<Uuid, String>,
-    /// Exposure plan GUID to objective, from the last activation.
-    activated: BTreeMap<Uuid, Uuid>,
+    /// Exposure plan GUID to the objectives it serves, from the last
+    /// activation.
+    activated: BTreeMap<Uuid, Vec<Uuid>>,
 }
 
 pub(super) async fn progress(
@@ -134,14 +140,13 @@ pub(super) async fn progress(
                     .as_ref()
                     .and_then(|a| a.rigs.iter().find(|r| r.rig_id == rig));
                 project_guid = project_guid.or(activated_rig.map(|r| r.project_guid));
-                let activated = activated_rig
-                    .map(|r| {
-                        r.plans
-                            .iter()
-                            .map(|p| (p.exposureplan_guid, p.objective_id))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let mut activated: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
+                for plan in activated_rig.iter().flat_map(|r| &r.plans) {
+                    let objectives = activated.entry(plan.exposureplan_guid).or_default();
+                    if !objectives.contains(&plan.objective_id) {
+                        objectives.push(plan.objective_id);
+                    }
+                }
                 reads.push(RigRead {
                     rig,
                     path,
@@ -183,13 +188,11 @@ fn read_rig(read: RigRead) -> RigProgress {
         return progress;
     };
     match frames_of(path, guid, &read) {
-        Ok((project, by_objective, other)) => {
-            progress.project = project;
-            progress.objectives = objectives_of(&read, &by_objective);
-            progress.other = other;
-            for objective in &progress.objectives {
-                progress.total.add(objective.frames);
-            }
+        Ok(counted) => {
+            progress.project = counted.project;
+            progress.objectives = objectives_of(&read, &counted.objectives);
+            progress.other = counted.other;
+            progress.total = counted.total;
         }
         Err(error) => {
             progress.note = Some(format!("Its database could not be read: {error}."));
@@ -200,30 +203,42 @@ fn read_rig(read: RigRead) -> RigProgress {
 }
 
 /// One entry per objective the rig has a contribution for, in plan order.
-fn objectives_of(
-    read: &RigRead,
-    counted: &BTreeMap<Uuid, (Frames, usize)>,
-) -> Vec<ObjectiveProgress> {
+fn objectives_of(read: &RigRead, counted: &BTreeMap<Uuid, Counts>) -> Vec<ObjectiveProgress> {
     let mut seen = BTreeSet::new();
     read.contributions
         .iter()
         .filter(|c| seen.insert(c.objective_id))
         .map(|c| {
-            let (frames, plans) = counted.get(&c.objective_id).copied().unwrap_or_default();
+            let counts = counted.get(&c.objective_id);
             ObjectiveProgress {
                 objective_id: c.objective_id,
-                frames,
-                exposure_plans: plans,
+                frames: counts.map(|c| c.frames).unwrap_or_default(),
+                exposure_plans: counts.map_or(0, |c| c.plans),
+                shared_with: counts
+                    .map(|c| c.shared_with.iter().copied().collect())
+                    .unwrap_or_default(),
             }
         })
         .collect()
 }
 
-type Counted = (
-    Option<ProjectState>,
-    BTreeMap<Uuid, (Frames, usize)>,
-    Frames,
-);
+/// What counts toward one objective.
+#[derive(Default)]
+struct Counts {
+    frames: Frames,
+    plans: usize,
+    shared_with: BTreeSet<Uuid>,
+}
+
+/// A rig's project as read: its state, each objective's counts, the plans
+/// no objective claims, and every plan an objective claims counted once.
+#[derive(Default)]
+struct Counted {
+    project: Option<ProjectState>,
+    objectives: BTreeMap<Uuid, Counts>,
+    other: Frames,
+    total: Frames,
+}
 
 fn frames_of(path: &str, project: Uuid, read: &RigRead) -> rusqlite::Result<Counted> {
     let connection = crate::server::database_context::open_scheduler_connection_with_flags(
@@ -239,7 +254,7 @@ fn frames_of(path: &str, project: Uuid, read: &RigRead) -> rusqlite::Result<Coun
         )
         .optional()?;
     let Some((row_id, name, state)) = row else {
-        return Ok((None, BTreeMap::new(), Frames::default()));
+        return Ok(Counted::default());
     };
     let plan_guid = if import_drafts::has_column(&connection, "exposureplan", "guid") {
         "e.guid"
@@ -284,7 +299,8 @@ fn frames_of(path: &str, project: Uuid, read: &RigRead) -> rusqlite::Result<Coun
     }
     let mut statement = connection.prepare(&format!(
         "SELECT e.Id, {plan_guid}, IFNULL(e.desired, 0), IFNULL(e.acquired, 0), IFNULL(e.accepted, 0),
-                IFNULL(e.exposure, 0), e.exposureTemplateId, {template_guid}, IFNULL(x.filtername, '')
+                CASE WHEN e.exposure IS NULL OR e.exposure <= 0 THEN IFNULL(x.defaultexposure, 0) ELSE e.exposure END,
+                e.exposureTemplateId, {template_guid}, IFNULL(x.filtername, '')
          FROM exposureplan e JOIN target t ON t.Id = e.targetid
          LEFT JOIN exposuretemplate x ON x.Id = e.exposureTemplateId
          WHERE t.projectid = ?1 ORDER BY e.Id"
@@ -305,21 +321,29 @@ fn frames_of(path: &str, project: Uuid, read: &RigRead) -> rusqlite::Result<Coun
             filter: row.get(8)?,
         })
     })?;
-    let mut counted: BTreeMap<Uuid, (Frames, usize)> = BTreeMap::new();
-    let mut other = Frames::default();
+    let mut counted = Counted {
+        project: Some(ProjectState { name, state }),
+        ..Counted::default()
+    };
     for row in rows {
         let mut row = row?;
         row.frames.rejected = rejected.get(&row.id).copied().unwrap_or(0);
-        match objective_for(&row, read) {
-            Some(objective) => {
-                let entry = counted.entry(objective).or_default();
-                entry.0.add(row.frames);
-                entry.1 += 1;
-            }
-            None => other.add(row.frames),
+        let objectives = objectives_for(&row, read);
+        if objectives.is_empty() {
+            counted.other.add(row.frames);
+            continue;
+        }
+        counted.total.add(row.frames);
+        for objective in &objectives {
+            let entry = counted.objectives.entry(*objective).or_default();
+            entry.frames.add(row.frames);
+            entry.plans += 1;
+            entry
+                .shared_with
+                .extend(objectives.iter().filter(|other| *other != objective));
         }
     }
-    Ok((Some(ProjectState { name, state }), counted, other))
+    Ok(counted)
 }
 
 struct Row {
@@ -332,18 +356,28 @@ struct Row {
     filter: String,
 }
 
-/// The objective an exposure plan counts toward: the one its activation
-/// wrote it for, else the rig's with its template (the exposure settling a
-/// template two objectives share), else the only one with its band.
+/// The objectives an exposure plan counts toward: the ones its activation
+/// wrote it for, else the rig's with its template and exposure length (the
+/// row's own, or its template's default), else the rig's with its
+/// template, else the only one with its band.
+fn objectives_for(row: &Row, read: &RigRead) -> Vec<Uuid> {
+    let parse = |value: &Option<String>| {
+        value
+            .as_deref()
+            .and_then(|v| Uuid::parse_str(v.trim()).ok())
+    };
+    if let Some(objectives) = parse(&row.guid).and_then(|guid| read.activated.get(&guid)) {
+        return objectives.clone();
+    }
+    objective_for(row, read).into_iter().collect()
+}
+
 fn objective_for(row: &Row, read: &RigRead) -> Option<Uuid> {
     let parse = |value: &Option<String>| {
         value
             .as_deref()
             .and_then(|v| Uuid::parse_str(v.trim()).ok())
     };
-    if let Some(objective) = parse(&row.guid).and_then(|guid| read.activated.get(&guid)) {
-        return Some(*objective);
-    }
     let template_guid = parse(&row.template_guid);
     let by_template: Vec<&Contribution> = read
         .contributions
@@ -357,16 +391,20 @@ fn objective_for(row: &Row, read: &RigRead) -> Option<Uuid> {
         let objectives: BTreeSet<Uuid> = found.iter().map(|c| c.objective_id).collect();
         (objectives.len() == 1).then(|| *objectives.first().unwrap())
     };
+    if let Some(objective) = unique(
+        by_template
+            .iter()
+            .copied()
+            .filter(|c| (c.exposure_seconds - row.exposure).abs() < 0.5)
+            .collect(),
+    ) {
+        return Some(objective);
+    }
     if let Some(objective) = unique(by_template.clone()) {
         return Some(objective);
     }
     if by_template.len() > 1 {
-        return unique(
-            by_template
-                .into_iter()
-                .filter(|c| (c.exposure_seconds - row.exposure).abs() < 0.5)
-                .collect(),
-        );
+        return None;
     }
     let band = bandpass_for_filter(&row.filter).id;
     let by_band: BTreeSet<Uuid> = read

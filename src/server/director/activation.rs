@@ -62,6 +62,26 @@ impl Push {
     }
 }
 
+/// An exposure plan Target Scheduler shoots after the activation, as the
+/// preview and the result list it.
+#[derive(Clone, Serialize)]
+struct Shot {
+    /// Its row in Target Scheduler.
+    plan: i64,
+    target: String,
+    template: String,
+    filter: String,
+    gain: Option<i64>,
+    offset: Option<i64>,
+    exposure_seconds: f64,
+    desired: i64,
+    acquired: i64,
+    /// The objectives it serves; more than one when their frames are summed.
+    objectives: Vec<Uuid>,
+    /// It was off in Target Scheduler and comes back on.
+    turned_on: bool,
+}
+
 #[derive(Serialize)]
 struct RigReport {
     rig: NamedIdentity,
@@ -69,6 +89,8 @@ struct RigReport {
     catalog_name: String,
     profile_id: Option<String>,
     changes: Vec<Change>,
+    /// What Target Scheduler shoots in this rig's project afterwards.
+    shoots: Vec<Shot>,
     warnings: Vec<String>,
     applied: bool,
     /// Set when the rig's profile names a Sync peer; filled in after Apply.
@@ -379,7 +401,19 @@ async fn execute_guarded(
         .values()
         .cloned()
         .collect();
-    let catalog_permit = admit(&service.discovery_admission).await?;
+    // A check runs on an in-memory copy of each rig's planning tables, taken
+    // in one read transaction, and writes nothing, so it skips the turn at
+    // the rig databases that discovery, adoption and activations queue for:
+    // opening a plan never waits behind them, nor they behind it. The copy
+    // cannot hold half of an activation, which commits each rig database in
+    // one transaction; the pooled reader below bounds how many checks run.
+    // Previews write and roll back, and applies write, so both still take
+    // the turn.
+    let catalog_permit = if on_copy && expected.is_none() {
+        None
+    } else {
+        Some(admit(&service.discovery_admission).await?)
+    };
     let peers = registered_peers(&state);
     let known_peers = peers.clone();
     // Everything up to the record runs on a pooled reader: the store's one
@@ -552,7 +586,7 @@ async fn execute_guarded(
                     catalog_slug: None,
                     catalog_name: String::new(),
                     profile_id: None,
-                    changes: vec![],
+                    changes: vec![], shoots: vec![],
                     warnings: vec![
                         "Rig has no registered database on this server; pull its database from its peer, then name the peer under Rigs, Setup."
                             .into(),
@@ -583,7 +617,7 @@ async fn execute_guarded(
                     catalog_slug: Some(catalog.context.id.clone()),
                     catalog_name: catalog.context.name.clone(),
                     profile_id: None,
-                    changes: vec![],
+                    changes: vec![], shoots: vec![],
                     warnings: vec![
                         "No panel size for this rig: give its framing a size in Framing, or set its optics under Rigs, Setup.".into(),
                     ],
@@ -618,7 +652,7 @@ async fn execute_guarded(
                             catalog_slug: Some(catalog.context.id.clone()),
                             catalog_name: catalog.context.name.clone(),
                             profile_id: None,
-                            changes: vec![],
+                            changes: vec![], shoots: vec![],
                             warnings: vec![format!(
                                 "Its separate framing cannot be laid out ({error:?}); make its grid smaller or its panels narrower in Framing."
                             )],
@@ -657,7 +691,7 @@ async fn execute_guarded(
                         catalog_slug: Some(catalog.context.id.clone()),
                         catalog_name: catalog.context.name.clone(),
                         profile_id: None,
-                        changes: vec![],
+                        changes: vec![], shoots: vec![],
                         warnings,
                         applied: false,
                         push: None,
@@ -684,7 +718,7 @@ async fn execute_guarded(
                             catalog_slug: Some(catalog.context.id.clone()),
                             catalog_name: catalog.context.name.clone(),
                             profile_id: None,
-                            changes: vec![],
+                            changes: vec![], shoots: vec![],
                             warnings,
                             applied: false,
                             push: None,
@@ -763,7 +797,7 @@ async fn execute_guarded(
                     catalog_slug: Some(catalog.context.id.clone()),
                     catalog_name: catalog.context.name.clone(),
                     profile_id: None,
-                    changes: vec![],
+                    changes: vec![], shoots: vec![],
                     warnings,
                     applied: false,
                     push: None,
@@ -777,6 +811,7 @@ async fn execute_guarded(
                 catalog_name: catalog.context.name.clone(),
                 profile_id: Some(outcome.record.profile_id.clone()),
                 changes: outcome.changes,
+                shoots: outcome.shoots,
                 warnings,
                 applied: false,
                 push,
@@ -822,7 +857,7 @@ async fn execute_guarded(
                 Ok(connection) => connection,
                 Err(reason) => {
                     warnings.push(reason);
-                    reports.push(RigReport { rig, catalog_slug: Some(catalog.context.id.clone()), catalog_name: catalog.context.name.clone(), profile_id: None, changes: vec![], warnings, applied: false, push: None });
+                    reports.push(RigReport { rig, catalog_slug: Some(catalog.context.id.clone()), catalog_name: catalog.context.name.clone(), profile_id: None, changes: vec![], shoots: vec![], warnings, applied: false, push: None });
                     if already { inactive.push(was); } else { carried.extend(previous_rig(*rig_id)); }
                     continue;
                 }
@@ -831,7 +866,7 @@ async fn execute_guarded(
                 Ok(tx) => tx,
                 Err(reason) => {
                     warnings.push(reason);
-                    reports.push(RigReport { rig, catalog_slug: Some(catalog.context.id.clone()), catalog_name: catalog.context.name.clone(), profile_id: None, changes: vec![], warnings, applied: false, push: None });
+                    reports.push(RigReport { rig, catalog_slug: Some(catalog.context.id.clone()), catalog_name: catalog.context.name.clone(), profile_id: None, changes: vec![], shoots: vec![], warnings, applied: false, push: None });
                     if already { inactive.push(was); } else { carried.extend(previous_rig(*rig_id)); }
                     continue;
                 }
@@ -870,6 +905,7 @@ async fn execute_guarded(
                 catalog_name: catalog.context.name.clone(),
                 profile_id: None,
                 changes,
+                shoots: vec![],
                 warnings,
                 applied: false,
                 push,
@@ -1366,6 +1402,7 @@ struct Inputs<'a> {
 
 struct Outcome {
     changes: Vec<Change>,
+    shoots: Vec<Shot>,
     record: ActivatedRig,
     created_project: bool,
 }
@@ -1861,31 +1898,27 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         targets.push((panel.footprint.id.clone(), target_guid, shown));
     }
 
-    // Exposure plans: one per contribution and target.
-    let mut plans = Vec::new();
+    // Exposure plans: one per target, template settings and exposure length.
+    // Contributions that come to the same plan (two objectives on one filter
+    // at one length) share it, and it asks for the sum of their frames; each
+    // is recorded against it. Any other difference makes a plan of its own.
+    struct Part<'c> {
+        contribution: &'c Contribution,
+        objective: &'c Objective,
+        frames: u32,
+    }
+    struct Group<'c> {
+        target_guid: String,
+        target_name: String,
+        panel_id: String,
+        template: ResolvedTemplate,
+        exposure_seconds: f64,
+        /// What makes two rows one plan; a collaboration's rows are its own.
+        key: (String, Option<TemplateSettings>, i64, Option<Uuid>),
+        parts: Vec<Part<'c>>,
+    }
+    let mut groups: Vec<Group> = Vec::new();
     let mut reported_templates = std::collections::BTreeSet::new();
-    // Plans taken over in this activation, so two contributions never take
-    // the same one.
-    let mut claimed = std::collections::BTreeSet::new();
-    // Every (contribution, target) this activation plans; any other plan
-    // Director gave this project is turned off below.
-    let mut planned: std::collections::BTreeSet<(String, String)> =
-        std::collections::BTreeSet::new();
-    // Contributions the plan still holds, on or off. A plan owned by any
-    // other (a rig dropped and added back, an objective made anew) is free
-    // to be taken over again, frames and all, instead of doubled.
-    let held: std::collections::BTreeSet<String> = inputs
-        .plan
-        .contributions
-        .iter()
-        .map(|c| c.id.to_string())
-        .collect();
-    // What each target's contributions take, by template settings, so a
-    // plan Director never owned that takes the same frames at another length
-    // (the template a person changed before the first activation) is turned
-    // off rather than left running beside its replacement.
-    let mut taken: std::collections::BTreeMap<String, Vec<(TemplateSettings, String)>> =
-        std::collections::BTreeMap::new();
     for contribution in inputs.contributions {
         let objective = inputs
             .plan
@@ -1900,8 +1933,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             )));
         };
         let template = resolve_template(tx, &profile_id, contribution)?;
-        let template_id = template.id;
-        if template.created && reported_templates.insert(template_id) {
+        if template.created && reported_templates.insert(template.id) {
             changes.push(Change {
                 kind: "template",
                 action: "create",
@@ -1912,6 +1944,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 ),
             });
         }
+        let settings = template_settings(tx, template.id)?;
         for (panel_id, target_guid, target_name) in targets.iter().filter(|(panel_id, _, _)| {
             contribution.panel_ids.is_empty() || contribution.panel_ids.contains(panel_id)
         }) {
@@ -1922,160 +1955,188 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     .ok_or(Error::Invalid)?,
                 None => frames,
             };
-            let _ = panel_id;
-            let target_row: i64 = tx.query_row(
-                "SELECT Id FROM target WHERE guid=?1",
-                [target_guid],
-                |row| row.get(0),
-            )?;
-            let name = format!(
-                "{target_name} · {} · {} s",
-                template.name, contribution.exposure_seconds
+            let key = (
+                target_guid.clone(),
+                settings
+                    .clone()
+                    .or(Some((format!("#{}", template.id), 0, 0, 0, 0))),
+                (contribution.exposure_seconds * 1000.0).round() as i64,
+                inputs.collaboration.map(|_| contribution.id),
             );
-            let owned: Option<String> = tx
+            let part = Part {
+                contribution,
+                objective,
+                frames,
+            };
+            match groups.iter_mut().find(|group| group.key == key) {
+                Some(group) => group.parts.push(part),
+                None => groups.push(Group {
+                    target_guid: target_guid.clone(),
+                    target_name: target_name.clone(),
+                    panel_id: panel_id.clone(),
+                    template: template.clone(),
+                    exposure_seconds: contribution.exposure_seconds,
+                    key,
+                    parts: vec![part],
+                }),
+            }
+        }
+    }
+
+    let mut plans = Vec::new();
+    let mut shoots = Vec::new();
+    // Plans taken over in this activation, so two groups never take the
+    // same one.
+    let mut claimed = std::collections::BTreeSet::new();
+    // Every plan this activation writes; any other plan on the project's
+    // targets is turned off below.
+    let mut written: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    // Contributions the plan still holds, on or off. A plan owned by any
+    // other (a rig dropped and added back, an objective made anew) is free
+    // to be taken over again, frames and all, instead of doubled.
+    let held: std::collections::BTreeSet<String> = inputs
+        .plan
+        .contributions
+        .iter()
+        .map(|c| c.id.to_string())
+        .collect();
+    // What each target's plans take, by template settings, so a plan left
+    // on that takes the same frames at another length says what replaced it.
+    let mut taken: std::collections::BTreeMap<String, Vec<(TemplateSettings, String)>> =
+        std::collections::BTreeMap::new();
+    for group in &groups {
+        let template = &group.template;
+        let template_id = template.id;
+        let target_guid = &group.target_guid;
+        let exposure_seconds = group.exposure_seconds;
+        let first = &group.parts[0];
+        let target_row: i64 = tx.query_row(
+            "SELECT Id FROM target WHERE guid=?1",
+            [target_guid],
+            |row| row.get(0),
+        )?;
+        let name = format!(
+            "{} · {} · {} s",
+            group.target_name, template.name, exposure_seconds
+        );
+        // The plan an earlier activation wrote for any of the group's
+        // contributions: one still on first, then the oldest row, so a
+        // group that used to be separate plans settles on one of them.
+        let mut owned: Option<(String, &Part)> = None;
+        let mut best: Option<(bool, i64)> = None;
+        for part in &group.parts {
+            let found: Option<(String, Option<i64>, Option<i64>)> = tx
                 .query_row(
-                    "SELECT exposureplan_guid FROM psf_guard_director_plan WHERE target_guid=?1 AND contribution_id=?2",
-                    params![target_guid, contribution.id.to_string()],
-                    |row| row.get(0),
+                    "SELECT d.exposureplan_guid, e.Id, COALESCE(e.enabled, 1)
+                     FROM psf_guard_director_plan d LEFT JOIN exposureplan e ON e.guid = d.exposureplan_guid
+                     WHERE d.target_guid=?1 AND d.contribution_id=?2",
+                    params![target_guid, part.contribution.id.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .optional()?;
-            let owned = match (owned, inputs.collaboration) {
-                (None, Some(a)) => {
-                    a.plan_for(tx, target_guid, &contribution.template.filter_name)?
-                }
-                (owned, _) => owned,
+            let Some((guid, row_id, enabled)) = found else {
+                continue;
             };
-            let frames = match inputs.collaboration {
-                Some(a) => a.frame_goal(tx, owned.as_deref(), frames)?,
-                None => frames,
-            };
-            let detail = format!(
-                "{frames} frames, template #{} {}",
-                template.id, template.name
-            );
-            let plan_guid = match owned {
-                Some(guid) => {
-                    // The length the row runs at: its own, or its
-                    // template's default when it is left at -1.
-                    let existing: Option<(Option<f64>, i64, i64, i64)> = tx
-                        .query_row(
-                            "SELECT CASE WHEN e.exposure IS NULL OR e.exposure < 0 THEN t.defaultexposure ELSE e.exposure END,
-                                    e.desired, e.exposureTemplateId, COALESCE(e.enabled,1)
-                             FROM exposureplan e LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
-                             WHERE e.guid=?1",
-                            [&guid],
-                            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-                        )
-                        .optional()?;
-                    match existing {
-                        Some((exposure0, desired0, template0, enabled0)) => {
-                            let same = exposure0.is_some_and(|exposure| {
-                                (exposure - contribution.exposure_seconds).abs() < 1e-6
-                            }) && desired0 == i64::from(frames)
-                                && template0 == template_id
-                                && enabled0 == 1;
-                            if !same {
-                                tx.execute(
-                                    "UPDATE exposureplan SET exposure=?2, desired=?3, exposureTemplateId=?4, enabled=1, targetid=?5 WHERE guid=?1",
-                                    params![guid, contribution.exposure_seconds, i64::from(frames), template_id, target_row],
-                                )?;
-                            }
-                            changes.push(Change {
-                                kind: "plan",
-                                action: if same { "unchanged" } else { "update" },
-                                name: name.clone(),
-                                detail,
-                            });
-                        }
-                        None => {
-                            insert_plan(
-                                tx,
-                                &guid,
-                                &profile_id,
-                                contribution.exposure_seconds,
-                                frames,
-                                target_row,
-                                template_id,
-                            )?;
-                            changes.push(Change {
-                                kind: "plan",
-                                action: "create",
-                                name: name.clone(),
-                                detail,
-                            });
-                        }
-                    }
-                    guid
-                }
-                // Nothing owned yet: the rig's own plan for the same work on
-                // this target (imported from Target Scheduler, or made by
-                // hand) is taken over rather than doubled.
-                None => match adoptable_plan(
-                    tx,
-                    target_row,
-                    template_id,
-                    contribution.exposure_seconds,
-                    &claimed,
-                    &held,
-                )? {
-                    Some(found) => {
-                        claimed.insert(found.row_id);
+            let rank = (enabled != Some(1), row_id.unwrap_or(i64::MAX));
+            if best.is_none_or(|best| rank < best) {
+                best = Some(rank);
+                owned = Some((guid, part));
+            }
+        }
+        let owner = owned.as_ref().map_or(first, |(_, part)| *part);
+        let owned = match (owned.map(|(guid, _)| guid), inputs.collaboration) {
+            (None, Some(a)) => {
+                a.plan_for(tx, target_guid, &first.contribution.template.filter_name)?
+            }
+            (owned, _) => owned,
+        };
+        let frames = group
+            .parts
+            .iter()
+            .fold(0u32, |sum, part| sum.saturating_add(part.frames));
+        let frames = match inputs.collaboration {
+            Some(a) => a.frame_goal(tx, owned.as_deref(), frames)?,
+            None => frames,
+        };
+        let detail = format!(
+            "{frames} frames, template #{} {}{}",
+            template.id,
+            template.name,
+            if group.parts.len() > 1 {
+                format!(", summed from {} objectives", group.parts.len())
+            } else {
+                String::new()
+            }
+        );
+        let mut turned_on = false;
+        let plan_guid = match owned {
+            Some(guid) => {
+                // The length the row runs at: its own, or its template's
+                // default when it is left at -1.
+                type Existing = (Option<f64>, i64, i64, i64, Option<String>);
+                let existing: Option<Existing> = tx
+                    .query_row(
+                        "SELECT CASE WHEN e.exposure IS NULL OR e.exposure < 0 THEN t.defaultexposure ELSE e.exposure END,
+                                e.desired, e.exposureTemplateId, COALESCE(e.enabled,1), t.name
+                         FROM exposureplan e LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
+                         WHERE e.guid=?1",
+                        [&guid],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                    )
+                    .optional()?;
+                match existing {
+                    Some((exposure0, desired0, template0, enabled0, template_name0)) => {
+                        // What differs, so a check that asks for an
+                        // activation says why.
                         let mut notes = Vec::new();
-                        if found.desired != i64::from(frames) {
-                            notes.push(format!("desired {} → {frames}", found.desired));
+                        match exposure0 {
+                            Some(exposure) if (exposure - exposure_seconds).abs() < 1e-6 => {}
+                            Some(exposure) => {
+                                notes.push(format!("exposure {exposure} s → {exposure_seconds} s"))
+                            }
+                            None => notes.push(format!("exposure → {exposure_seconds} s")),
                         }
-                        if found.template_id != template_id {
+                        if desired0 != i64::from(frames) {
+                            notes.push(format!("desired {desired0} → {frames}"));
+                        }
+                        if template0 != template_id {
+                            let was = match template_name0 {
+                                Some(name) => format!("#{template0} {name}"),
+                                None => format!("#{template0}"),
+                            };
                             notes.push(format!(
-                                "template #{} → #{} {} (same settings)",
-                                found.template_id, template.id, template.name
+                                "template {was} → #{} {}",
+                                template.id, template.name
                             ));
                         }
-                        if !found.enabled {
+                        if enabled0 != 1 {
                             notes.push("turned on".to_string());
+                            turned_on = true;
                         }
-                        // A row at its template's default length (-1) was
-                        // matched on that length, so it already runs at the
-                        // plan's and stays as Target Scheduler wrote it. One
-                        // asking for 0 s is given the length.
-                        let same = notes.is_empty() && !found.zero_length;
+                        let same = notes.is_empty();
                         if !same {
                             tx.execute(
-                                "UPDATE exposureplan SET exposure=?2, desired=?3, exposureTemplateId=?4, enabled=1 WHERE Id=?1",
-                                params![found.row_id, contribution.exposure_seconds, i64::from(frames), template_id],
+                                "UPDATE exposureplan SET exposure=?2, desired=?3, exposureTemplateId=?4, enabled=1, targetid=?5 WHERE guid=?1",
+                                params![guid, exposure_seconds, i64::from(frames), template_id, target_row],
                             )?;
                         }
                         changes.push(Change {
                             kind: "plan",
-                            action: if same { "unchanged" } else { "adopt" },
+                            action: if same { "unchanged" } else { "update" },
                             name: name.clone(),
                             detail: if same {
-                                format!(
-                                    "already in Target Scheduler as plan #{} ({} of {} frames taken)",
-                                    found.row_id, found.acquired, found.desired
-                                )
+                                detail
                             } else {
-                                format!(
-                                    "takes over plan #{} ({} of {} frames taken){}",
-                                    found.row_id,
-                                    found.acquired,
-                                    found.desired,
-                                    if notes.is_empty() {
-                                        String::new()
-                                    } else {
-                                        format!("; {}", notes.join(", "))
-                                    }
-                                )
+                                format!("{detail}; {}", notes.join(", "))
                             },
                         });
-                        found.guid
                     }
                     None => {
-                        let guid = new_guid();
                         insert_plan(
                             tx,
                             &guid,
                             &profile_id,
-                            contribution.exposure_seconds,
+                            exposure_seconds,
                             frames,
                             target_row,
                             template_id,
@@ -2084,89 +2145,205 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                             kind: "plan",
                             action: "create",
                             name: name.clone(),
-                            detail: format!(
-                                "{detail}; no plan on this target takes {} s with these settings",
-                                contribution.exposure_seconds
-                            ),
+                            detail,
                         });
-                        guid
                     }
-                },
-            };
-            let frames = match inputs.collaboration {
-                Some(a) => a.record(
-                    tx,
-                    &plan_guid,
-                    target_guid,
-                    panel_id,
-                    contribution,
-                    inputs.now,
-                )?,
-                None => frames,
-            };
-            tx.execute(
-                "INSERT INTO psf_guard_director_plan(exposureplan_guid,target_guid,contribution_id,objective_id,bandpass_id,purpose,required_frames,plan_revision)
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
-                 ON CONFLICT(exposureplan_guid) DO UPDATE SET contribution_id=excluded.contribution_id, objective_id=excluded.objective_id, required_frames=excluded.required_frames, plan_revision=excluded.plan_revision, bandpass_id=excluded.bandpass_id, purpose=excluded.purpose",
-                params![
-                    plan_guid,
-                    target_guid,
-                    contribution.id.to_string(),
-                    objective.id.to_string(),
-                    objective.bandpass_id,
-                    objective.purpose,
-                    i64::from(frames),
-                    inputs.plan.revision as i64
-                ],
-            )?;
-            planned.insert((contribution.id.to_string(), target_guid.clone()));
-            if let Some(settings) = template_settings(tx, template_id)? {
-                taken
-                    .entry(target_guid.clone())
-                    .or_default()
-                    .push((settings, name.clone()));
+                }
+                guid
             }
+            // Nothing owned yet: the rig's own plan for the same work on this
+            // target (imported from Target Scheduler, or made by hand) is
+            // taken over rather than doubled.
+            None => match adoptable_plan(
+                tx,
+                target_row,
+                template_id,
+                exposure_seconds,
+                &claimed,
+                &held,
+            )? {
+                Some(found) => {
+                    claimed.insert(found.row_id);
+                    let mut notes = Vec::new();
+                    if found.desired != i64::from(frames) {
+                        notes.push(format!("desired {} → {frames}", found.desired));
+                    }
+                    if found.template_id != template_id {
+                        notes.push(format!(
+                            "template #{} → #{} {} (same settings)",
+                            found.template_id, template.id, template.name
+                        ));
+                    }
+                    if !found.enabled {
+                        notes.push("turned on".to_string());
+                        turned_on = true;
+                    }
+                    // A row at its template's default length (-1) was
+                    // matched on that length, so it already runs at the
+                    // plan's and stays as Target Scheduler wrote it. One
+                    // asking for 0 s is given the length.
+                    let same = notes.is_empty() && !found.zero_length;
+                    if !same {
+                        tx.execute(
+                            "UPDATE exposureplan SET exposure=?2, desired=?3, exposureTemplateId=?4, enabled=1 WHERE Id=?1",
+                            params![found.row_id, exposure_seconds, i64::from(frames), template_id],
+                        )?;
+                    }
+                    changes.push(Change {
+                        kind: "plan",
+                        action: if same { "unchanged" } else { "adopt" },
+                        name: name.clone(),
+                        detail: if same {
+                            format!(
+                                "already in Target Scheduler as plan #{} ({} of {} frames taken)",
+                                found.row_id, found.acquired, found.desired
+                            )
+                        } else {
+                            format!(
+                                "takes over plan #{} ({} of {} frames taken){}",
+                                found.row_id,
+                                found.acquired,
+                                found.desired,
+                                if notes.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("; {}", notes.join(", "))
+                                }
+                            )
+                        },
+                    });
+                    found.guid
+                }
+                None => {
+                    let guid = new_guid();
+                    insert_plan(
+                        tx,
+                        &guid,
+                        &profile_id,
+                        exposure_seconds,
+                        frames,
+                        target_row,
+                        template_id,
+                    )?;
+                    changes.push(Change {
+                        kind: "plan",
+                        action: "create",
+                        name: name.clone(),
+                        detail: format!(
+                            "{detail}; no plan on this target takes {exposure_seconds} s with these settings"
+                        ),
+                    });
+                    guid
+                }
+            },
+        };
+        let frames = match inputs.collaboration {
+            Some(a) => a.record(
+                tx,
+                &plan_guid,
+                target_guid,
+                &group.panel_id,
+                first.contribution,
+                inputs.now,
+            )?,
+            None => frames,
+        };
+        // Director's side table keeps one owner per plan: the contribution
+        // whose row found it, so its other rows never clash.
+        tx.execute(
+            "INSERT INTO psf_guard_director_plan(exposureplan_guid,target_guid,contribution_id,objective_id,bandpass_id,purpose,required_frames,plan_revision)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
+             ON CONFLICT(exposureplan_guid) DO UPDATE SET contribution_id=excluded.contribution_id, objective_id=excluded.objective_id, required_frames=excluded.required_frames, plan_revision=excluded.plan_revision, bandpass_id=excluded.bandpass_id, purpose=excluded.purpose",
+            params![
+                plan_guid,
+                target_guid,
+                owner.contribution.id.to_string(),
+                owner.objective.id.to_string(),
+                owner.objective.bandpass_id,
+                owner.objective.purpose,
+                i64::from(frames),
+                inputs.plan.revision as i64
+            ],
+        )?;
+        written.insert(plan_guid.clone());
+        if let Some(settings) = template_settings(tx, template_id)? {
+            taken
+                .entry(target_guid.clone())
+                .or_default()
+                .push((settings, name.clone()));
+        }
+        let exposureplan_guid = Uuid::parse_str(&plan_guid).map_err(|_| bad_guid(&plan_guid))?;
+        // The activation record keeps every contribution against the plan,
+        // each with its own frames, so progress and the program find it
+        // under each objective.
+        for part in &group.parts {
             plans.push(ActivatedPlan {
-                contribution_id: contribution.id,
-                objective_id: objective.id,
+                contribution_id: part.contribution.id,
+                objective_id: part.objective.id,
                 target_guid: Uuid::parse_str(target_guid).map_err(|_| bad_guid(target_guid))?,
-                exposureplan_guid: Uuid::parse_str(&plan_guid).map_err(|_| bad_guid(&plan_guid))?,
-                required_frames: frames,
+                exposureplan_guid,
+                required_frames: if group.parts.len() == 1 {
+                    frames
+                } else {
+                    part.frames
+                },
                 intent: Some(psf_guard_director_meta::activation::PlanIntent {
-                    bandpass_id: objective.bandpass_id.clone(),
-                    purpose: objective.purpose.clone(),
-                    priority: objective.priority,
+                    bandpass_id: part.objective.bandpass_id.clone(),
+                    purpose: part.objective.purpose.clone(),
+                    priority: part.objective.priority,
                 }),
             });
         }
+        let (row_id, desired, acquired, filter, gain, offset): (i64, i64, i64, String, Option<i64>, Option<i64>) = tx.query_row(
+            "SELECT e.Id, IFNULL(e.desired, 0), IFNULL(e.acquired, 0), IFNULL(t.filtername, ''), t.gain, t.offset
+             FROM exposureplan e LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId WHERE e.guid=?1",
+            [&plan_guid],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )?;
+        shoots.push(Shot {
+            plan: row_id,
+            target: group.target_name.clone(),
+            template: template.name.clone(),
+            filter,
+            gain: gain.filter(|g| *g >= 0),
+            offset: offset.filter(|o| *o >= 0),
+            exposure_seconds,
+            desired,
+            acquired,
+            objectives: group.parts.iter().map(|part| part.objective.id).collect(),
+            turned_on,
+        });
     }
-    // A plan Director gave this project that nothing plans now (its rig or
-    // objective turned off or removed, its band changed, its panel gone or
-    // no longer in the contribution's list) is turned off, so Target
-    // Scheduler stops taking it. Its frames and grades stay.
+    // Every other plan on the project's targets is turned off, so Target
+    // Scheduler takes only what the plan has: one an earlier activation
+    // wrote that nothing plans now (its rig or objective turned off or
+    // removed, its band changed, its panel gone), one another length
+    // replaced, and one the plan has no part for at all. Its frames, counts
+    // and grades stay; taking Target Scheduler's values first keeps it.
     {
         let mut statement = tx.prepare(
-            "SELECT d.contribution_id, d.target_guid, e.Id, e.exposure, IFNULL(e.acquired, 0), IFNULL(e.desired, 0), t.name, tg.name
-             FROM psf_guard_director_plan d
-             JOIN psf_guard_director_target dt ON dt.target_guid = d.target_guid
-             JOIN exposureplan e ON e.guid = d.exposureplan_guid
-             LEFT JOIN target tg ON tg.guid = d.target_guid
+            "SELECT e.Id, e.guid, e.exposure, IFNULL(e.acquired, 0), IFNULL(e.desired, 0), t.name, t.defaultexposure,
+                    e.exposureTemplateId, tg.guid, tg.name
+             FROM exposureplan e
+             JOIN target tg ON tg.Id = e.targetid
              LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
-             WHERE dt.project_guid = ?1 AND COALESCE(e.enabled, 1) = 1
+             WHERE tg.projectid = ?1 AND COALESCE(e.enabled, 1) = 1
              ORDER BY e.Id",
         )?;
-        type Owned = (
-            String,
-            String,
+        type Running = (
             i64,
+            Option<String>,
             Option<f64>,
             i64,
             i64,
             Option<String>,
+            Option<f64>,
+            Option<i64>,
+            Option<String>,
             Option<String>,
         );
-        let owned: Vec<Owned> = statement
-            .query_map([&project_guid], |row| {
+        let running: Vec<Running> = statement
+            .query_map([project_row_id], |row| {
                 Ok((
                     row.get(0)?,
                     row.get(1)?,
@@ -2176,127 +2353,71 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     row.get(5)?,
                     row.get(6)?,
                     row.get(7)?,
-                ))
-            })?
-            .collect::<Result<_, _>>()?;
-        for (
-            contribution_id,
-            target_guid,
-            row_id,
-            exposure,
-            acquired,
-            desired,
-            template_name,
-            target_name,
-        ) in owned
-        {
-            if planned.contains(&(contribution_id, target_guid)) {
-                continue;
-            }
-            tx.execute("UPDATE exposureplan SET enabled=0 WHERE Id=?1", [row_id])?;
-            changes.push(Change {
-                kind: "plan",
-                action: "disable",
-                name: format!(
-                    "{} · {} · {} s",
-                    target_name.unwrap_or_default(),
-                    template_name.unwrap_or_default(),
-                    exposure.unwrap_or(0.0)
-                ),
-                detail: format!(
-                    "plan #{row_id} ({acquired} of {desired} frames taken) is no longer in this plan; Target Scheduler stops taking it"
-                ),
-            });
-        }
-    }
-    // The rig's own plans on these targets that no contribution took stay
-    // as they are in Target Scheduler, unless one takes the same frames as a
-    // contribution (same filter, gain, offset, binning and readout mode): that
-    // plan was replaced, so it is turned off. Say which, so the preview
-    // accounts for every plan on the target.
-    for (_, target_guid, target_name) in &targets {
-        let mut statement = tx.prepare(
-            "SELECT e.Id, e.exposure, IFNULL(e.acquired, 0), IFNULL(e.desired, 0), t.name, t.defaultexposure,
-                    e.exposureTemplateId
-             FROM exposureplan e
-             JOIN target tg ON tg.Id = e.targetid
-             LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
-             WHERE tg.guid = ?1 AND COALESCE(e.enabled, 1) = 1
-               AND (e.guid IS NULL OR e.guid NOT IN (SELECT exposureplan_guid FROM psf_guard_director_plan))
-             ORDER BY e.Id",
-        )?;
-        type Unclaimed = (
-            i64,
-            Option<f64>,
-            i64,
-            i64,
-            Option<String>,
-            Option<f64>,
-            Option<i64>,
-        );
-        let unclaimed: Vec<Unclaimed> = statement
-            .query_map([target_guid], |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
+                    row.get(8)?,
+                    row.get(9)?,
                 ))
             })?
             .collect::<Result<_, _>>()?;
         drop(statement);
-        for (row_id, exposure, acquired, desired, template_name, default_exposure, template_id) in
-            unclaimed
+        for (
+            row_id,
+            guid,
+            exposure,
+            acquired,
+            desired,
+            template_name,
+            default_exposure,
+            template_id,
+            target_guid,
+            target_name,
+        ) in running
         {
+            if guid.as_ref().is_some_and(|guid| written.contains(guid)) {
+                continue;
+            }
             let exposure = exposure
                 .filter(|e| *e > 0.0)
                 .or(default_exposure)
                 .unwrap_or(0.0);
-            let name = format!(
-                "{target_name} · {} · {exposure} s",
-                template_name.unwrap_or_default()
-            );
             let settings = match template_id {
                 Some(id) => template_settings(tx, id)?,
                 None => None,
             };
             let replacement = settings.and_then(|settings| {
-                taken.get(target_guid).and_then(|plans| {
-                    plans
-                        .iter()
-                        .find(|(taken, _)| *taken == settings)
-                        .map(|(_, by)| by.clone())
-                })
+                target_guid
+                    .as_ref()
+                    .and_then(|target| taken.get(target))
+                    .and_then(|plans| {
+                        plans
+                            .iter()
+                            .find(|(taken, _)| *taken == settings)
+                            .map(|(_, by)| by.clone())
+                    })
             });
-            match replacement {
-                Some(by) => {
-                    tx.execute("UPDATE exposureplan SET enabled=0 WHERE Id=?1", [row_id])?;
-                    changes.push(Change {
-                        kind: "plan",
-                        action: "disable",
-                        name,
-                        detail: format!(
-                            "plan #{row_id} ({acquired} of {desired} frames taken) is replaced by {by}; Target Scheduler stops taking it"
-                        ),
-                    });
-                }
-                None => changes.push(Change {
-                    kind: "plan",
-                    action: "keep",
-                    name,
-                    detail: format!(
-                        "plan #{row_id} ({acquired} of {desired} frames taken) is not part of this plan; left as it is"
+            tx.execute("UPDATE exposureplan SET enabled=0 WHERE Id=?1", [row_id])?;
+            changes.push(Change {
+                kind: "plan",
+                action: "disable",
+                name: format!(
+                    "{} · {} · {exposure} s",
+                    target_name.unwrap_or_default(),
+                    template_name.unwrap_or_default()
+                ),
+                detail: match replacement {
+                    Some(by) => format!(
+                        "plan #{row_id} ({acquired} of {desired} frames taken), replaced by {by}"
                     ),
-                }),
-            }
+                    None => format!(
+                        "plan #{row_id} ({acquired} of {desired} frames taken), not in the plan"
+                    ),
+                },
+            });
         }
     }
 
     Ok(Outcome {
         changes,
+        shoots,
         record: ActivatedRig {
             rig_id: inputs.rig_id,
             catalog_id: inputs.catalog.id,
@@ -2822,6 +2943,7 @@ fn insert_plan(
 }
 
 /// The template a contribution resolves to, and whether activation made it.
+#[derive(Clone)]
 struct ResolvedTemplate {
     id: i64,
     name: String,
