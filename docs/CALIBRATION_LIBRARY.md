@@ -68,7 +68,8 @@ temperature, and for bias the exposure. A temperature or an angle drifts
 while a set is shot, so a frame joins a session while it sits within 1.5 °C
 (darks) or 1° (flats) of the next; bias is not split by temperature, since
 a bias set is often shot while the sensor cools. Nights split as in
-[Validity boundaries](#validity-boundaries).
+[Validity boundaries](#validity-boundaries). A link to a session keeps
+working when a colder or warmer frame joins it.
 
 The filters narrow the sessions and their frames: rig, type, filter,
 exposure, a temperature range, a range of nights, the grade, whether the
