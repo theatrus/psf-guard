@@ -383,6 +383,26 @@ pub struct CalibrationSyncOutcome {
     pub frames: CalibrationSyncCounts,
     /// Grade rows: measurements, grades and a person's choices.
     pub quality: CalibrationSyncCounts,
+    /// The choices among those rows that a sync changes. Each one changes
+    /// which frames the destination's masters are built from.
+    pub choices: CalibrationChoiceCounts,
+}
+
+/// Frames whose keep-out or use-anyway choice a sync sets or clears.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CalibrationChoiceCounts {
+    /// Now kept out by hand.
+    pub kept_out: usize,
+    /// Now used whatever their grade.
+    pub used_anyway: usize,
+    /// Choices taken away, leaving the grade to decide.
+    pub cleared: usize,
+}
+
+impl CalibrationChoiceCounts {
+    pub fn total(&self) -> usize {
+        self.kept_out + self.used_anyway + self.cleared
+    }
 }
 
 /// How a stack asks for calibration. `Auto` applies every master that can be
@@ -1792,11 +1812,13 @@ pub fn sync_library(
         "psf_guard_calibration_frame",
         "frame_uuid",
     )?;
+    let (quality, choices) = quality::sync_quality(source, destination)?;
     Ok(CalibrationSyncOutcome {
         rigs,
         rig_bindings,
         frames,
-        quality: quality::sync_quality(source, destination)?,
+        quality,
+        choices,
     })
 }
 
@@ -1856,6 +1878,9 @@ fn sync_table_by_key(
                 .iter()
                 .position(|column| column.eq_ignore_ascii_case("source_path"))
         {
+            // The frame at this path keeps a person's choice under its new
+            // UUID; the grades follow from the next grading.
+            quality::carry_choice(destination, &values[path_position], key_value)?;
             destination.execute(
                 "DELETE FROM psf_guard_calibration_frame
                  WHERE source_path = ?1 AND frame_uuid <> ?2",

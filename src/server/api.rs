@@ -639,6 +639,21 @@ impl From<&crate::commands::sync::TableCounts> for SchedulerSyncTableCounts {
     }
 }
 
+/// PSF Guard's calibration library as a full pull carries it.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct SchedulerSyncCalibrationCounts {
+    /// Calibration frame records.
+    pub frames: SchedulerSyncTableCounts,
+    /// Their measurements, grades and choices.
+    pub grades: SchedulerSyncTableCounts,
+    /// Frames the pull sets to Keep out.
+    pub kept_out: usize,
+    /// Frames the pull sets to Use anyway.
+    pub used_anyway: usize,
+    /// Frames whose choice the pull clears, leaving their grade to decide.
+    pub cleared: usize,
+}
+
 /// Grade-push counts. Present only for `push_grades`.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct SchedulerSyncGradeCounts {
@@ -671,6 +686,10 @@ pub struct SchedulerSyncResponse {
     pub imagedata: Option<SchedulerSyncTableCounts>,
     /// Present only for a grade push.
     pub grades: Option<SchedulerSyncGradeCounts>,
+    /// Present only for a full pull. A Keep out or Use anyway it carries
+    /// changes which frames the destination's masters take.
+    #[serde(default)]
+    pub calibration: Option<SchedulerSyncCalibrationCounts>,
     pub grade_filled: usize,
     pub grade_preserved: usize,
     /// Local rows (import or upload) recognized as telescope frames and

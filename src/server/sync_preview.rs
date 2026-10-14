@@ -613,6 +613,7 @@ mod tests {
             acquiredimage: None,
             imagedata: None,
             grades: Some(SchedulerSyncGradeCounts::default()),
+            calibration: None,
             grade_filled: 0,
             grade_preserved: 0,
             adopted: 0,

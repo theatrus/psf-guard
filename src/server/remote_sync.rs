@@ -1572,6 +1572,12 @@ pub(crate) fn result_summary(result: &SchedulerSyncResponse) -> BTreeMap<String,
     if let Some(counts) = &result.imagedata {
         add_table_summary(&mut summary, "imagedata", counts);
     }
+    if let Some(calibration) = &result.calibration {
+        let choices = calibration.kept_out + calibration.used_anyway + calibration.cleared;
+        if choices > 0 {
+            summary.insert("calibration_choices".into(), choices as i64);
+        }
+    }
     if let Some(grades) = &result.grades {
         summary.insert("grades_matched".into(), grades.matched as i64);
         summary.insert("grades_changed".into(), grades.changed as i64);

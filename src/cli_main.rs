@@ -1439,6 +1439,12 @@ pub fn main() -> Result<()> {
                 tc("calibration rigs", &summary.calibration_rigs);
                 tc("rig bindings", &summary.calibration_rig_bindings);
                 tc("calibration FITS", &summary.calibration_frames);
+                tc("calibration grades", &summary.calibration_grades);
+                if let Some(line) =
+                    crate::commands::sync::calibration_choice_line(&summary.calibration_choices)
+                {
+                    println!("    {line}");
+                }
                 tc("calibrated copies", &summary.frame_derivatives);
 
                 // Human-readable byte size.

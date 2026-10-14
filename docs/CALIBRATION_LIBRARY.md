@@ -975,7 +975,10 @@ Scheduler and N.I.N.A. keep working exactly as before, and simply run faster.
 **Merge catalogs** and `sync pull` copy rigs, profile bindings, raw
 calibration-frame records, and their grades. A choice to keep a frame out or
 use it anyway travels too; when both catalogs hold one, the later choice
-wins. They do not copy generated master rows or cached FITS files because
+wins. The preview counts the choices a transfer brings, since each changes
+what the destination's masters are built from. When both machines cataloged
+the same file under different IDs, the destination's choice stays with the
+file. They do not copy generated master rows or cached FITS files because
 those paths belong to the source machine. The destination
 resolves a stale raw path by basename in its configured image folders, then
 builds its own master.

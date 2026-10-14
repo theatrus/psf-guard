@@ -67,6 +67,11 @@ pub struct PullSummary {
     pub calibration_rigs: TableCounts,
     pub calibration_rig_bindings: TableCounts,
     pub calibration_frames: TableCounts,
+    /// Calibration frame grade rows: measurements, grades and choices.
+    pub calibration_grades: TableCounts,
+    /// Frames whose keep-out or use-anyway choice this pull sets or clears.
+    /// Each changes what the destination's masters are built from.
+    pub calibration_choices: crate::calibration::CalibrationChoiceCounts,
     /// Calibrated and registered copies paired with their lights.
     pub frame_derivatives: TableCounts,
     /// Destination acquiredimage IDs inserted or updated by this pull. Server
@@ -98,6 +103,7 @@ impl PullSummary {
             + self.calibration_rigs.inserted
             + self.calibration_rig_bindings.inserted
             + self.calibration_frames.inserted
+            + self.calibration_grades.inserted
             + self.frame_derivatives.inserted
     }
 
@@ -113,6 +119,7 @@ impl PullSummary {
             + self.calibration_rigs.updated
             + self.calibration_rig_bindings.updated
             + self.calibration_frames.updated
+            + self.calibration_grades.updated
             + self.frame_derivatives.updated
     }
 }
@@ -1252,6 +1259,17 @@ pub(crate) fn sync_pull_in_transaction(
         unchanged: calibration.frames.unchanged,
         skipped: 0,
     };
+    summary.calibration_grades = TableCounts {
+        inserted: calibration.quality.inserted,
+        updated: calibration.quality.updated,
+        unchanged: calibration.quality.unchanged,
+        skipped: 0,
+    };
+    summary.calibration_choices = calibration.choices;
+    if let Some(line) = calibration_choice_line(&calibration.choices) {
+        // First, so a long list of entity lines cannot push it out.
+        summary.changes.insert(0, line);
+    }
 
     // Pairings follow their lights, which match across catalogs by guid.
     let derivatives = crate::frame_derivatives::sync_records(src, tx)?;
@@ -1270,6 +1288,31 @@ pub(crate) fn sync_pull_in_transaction(
     crate::db::record_rejection_times_where_kept(tx).context("dating rejected frames")?;
 
     Ok(summary)
+}
+
+/// The preview line for calibration choices a pull carries, when it carries
+/// any: a Keep out or Use anyway made on the source changes which frames the
+/// destination's masters take.
+pub fn calibration_choice_line(
+    choices: &crate::calibration::CalibrationChoiceCounts,
+) -> Option<String> {
+    if choices.total() == 0 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if choices.kept_out > 0 {
+        parts.push(format!("{} kept out", choices.kept_out));
+    }
+    if choices.used_anyway > 0 {
+        parts.push(format!("{} used anyway", choices.used_anyway));
+    }
+    if choices.cleared > 0 {
+        parts.push(format!("{} back to their grade", choices.cleared));
+    }
+    Some(format!(
+        "calibration choices: {}; masters built from these frames change",
+        parts.join(", ")
+    ))
 }
 
 #[cfg(test)]
@@ -1948,5 +1991,70 @@ mod tests {
             ),
             2
         );
+    }
+
+    #[test]
+    fn a_preview_says_which_calibration_choices_a_pull_brings() {
+        // A Keep out made on the source changes the destination's masters
+        // at Apply, so the preview has to say so.
+        let temp = tempfile::tempdir().unwrap();
+        let dark = temp.path().join("dark.fits");
+        std::fs::write(&dark, b"dark").unwrap();
+        let meta = crate::commands::import::headers::FrameMeta {
+            path: dark,
+            readable: true,
+            image_type: Some("DARK".into()),
+            camera: Some("Camera".into()),
+            exposure_s: Some(300.0),
+            ..Default::default()
+        };
+        let open = |name: &str| {
+            let conn = Connection::open(temp.path().join(name)).unwrap();
+            crate::ts_schema::apply_schema(&conn).unwrap();
+            conn
+        };
+        let mut source = open("source.sqlite");
+        let tx = source.transaction().unwrap();
+        crate::calibration::import_calibration_frames(&tx, &[meta], Some("p")).unwrap();
+        tx.commit().unwrap();
+        let uuid: String = source
+            .query_row(
+                "SELECT frame_uuid FROM psf_guard_calibration_frame",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        crate::calibration::set_overrides(
+            &source,
+            &[uuid],
+            Some(crate::calibration::QualityOverride::Exclude),
+        )
+        .unwrap();
+        let destination = open("destination.sqlite");
+
+        let preview = sync_pull(
+            &source,
+            &destination,
+            &PullOptions {
+                dry_run: true,
+                ..opts()
+            },
+        )
+        .unwrap();
+        assert_eq!(preview.calibration_frames.inserted, 1);
+        assert_eq!(preview.calibration_grades.inserted, 1);
+        assert_eq!(preview.calibration_choices.kept_out, 1);
+        assert_eq!(
+            preview.changes.first().map(String::as_str),
+            Some("calibration choices: 1 kept out; masters built from these frames change")
+        );
+
+        sync_pull(&source, &destination, &opts()).unwrap();
+        let again = sync_pull(&source, &destination, &opts()).unwrap();
+        assert_eq!(again.calibration_choices.total(), 0);
+        assert!(again
+            .changes
+            .iter()
+            .all(|line| !line.starts_with("calibration")));
     }
 }
