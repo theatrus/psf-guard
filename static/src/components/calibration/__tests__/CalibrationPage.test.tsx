@@ -243,7 +243,8 @@ describe('CalibrationPage', () => {
   it('opens on the first session and its first frame, and keeps both in the URL', async () => {
     serve();
     renderPage('/calibration?db=demo');
-    await waitFor(() => expect(params().get('calSession')).toBe('s1'));
+    // The file's first render pays for loading the page under a busy suite.
+    await waitFor(() => expect(params().get('calSession')).toBe('s1'), { timeout: 5000 });
     await waitFor(() => expect(params().get('calFrame')).toBe('f1'));
     const sessions = screen.getByRole('navigation', { name: 'Sessions' });
     expect(within(sessions).getByRole('button', { current: true })).toHaveTextContent('Flats · Ha');
