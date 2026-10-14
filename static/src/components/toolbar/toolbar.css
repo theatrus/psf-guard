@@ -132,7 +132,9 @@
 }
 
 /* Filter pills: the name, the value and a chevron in one rounded button.
-   A pill that narrows the view stands out. */
+   A pill that narrows the view stands out. A dark fill keeps the name
+   (about 5.8:1) and the value (about 9.6:1) readable; the lighter input
+   grey left the name near 2.6:1. */
 .toolbar-pill {
   display: inline-flex;
   align-items: center;
@@ -141,9 +143,9 @@
   max-width: 13rem;
   height: var(--toolbar-control-height, 30px);
   padding: 0 0.6rem;
-  border: 1px solid var(--color-border-secondary);
+  border: 1px solid var(--color-border-tertiary);
   border-radius: 999px;
-  background: var(--color-bg-input);
+  background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
   font: inherit;
   font-size: 0.8rem;
@@ -154,7 +156,8 @@
 }
 
 .toolbar-pill:hover {
-  border-color: var(--color-border-tertiary);
+  border-color: var(--color-border-quaternary);
+  background: var(--color-bg-quaternary);
 }
 
 .toolbar-pill:focus-visible,
@@ -172,7 +175,7 @@
 
 .toolbar-pill-label {
   flex: none;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
 .toolbar-pill-value {
@@ -183,7 +186,7 @@
 
 .toolbar-pill svg {
   flex: none;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
 /* A pill around a native select: the select keeps its own list and
@@ -215,7 +218,7 @@
   flex: none;
   width: 13px;
   height: 13px;
-  background: var(--color-text-muted);
+  background: var(--color-text-secondary);
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
   pointer-events: none;
@@ -248,7 +251,7 @@
 .toolbar-search svg {
   position: absolute;
   left: 0.6rem;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   pointer-events: none;
 }
 
@@ -257,12 +260,17 @@
   width: 100%;
   height: var(--toolbar-control-height);
   padding: 0 0.65rem 0 1.85rem;
-  border: 1px solid var(--color-border-secondary);
+  border: 1px solid var(--color-border-tertiary);
   border-radius: 999px;
-  background: var(--color-bg-input);
+  background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
   font: inherit;
   font-size: 0.8rem;
+}
+
+.view-toolbar .toolbar-search input::placeholder {
+  color: var(--color-text-light);
+  opacity: 1;
 }
 
 .view-toolbar .toolbar-search input:focus-visible {
