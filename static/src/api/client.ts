@@ -1002,6 +1002,7 @@ export const apiClient = {
     grade_delay_minutes: number;
     build_new_channels: boolean;
     new_channel_window_days: number;
+    reapply_processing?: boolean;
   }): Promise<StackAutomationSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<StackAutomationSettings>>(

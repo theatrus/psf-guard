@@ -47,6 +47,8 @@ pub(super) struct ProcessingRun {
     scope: ProcessingScope,
     operation: String,
     stoppable: bool,
+    /// Re-applied by the server after the stack refreshed.
+    automatic: bool,
     running: bool,
     created_unix_seconds: i64,
     started_unix_seconds: Option<i64>,
@@ -135,6 +137,7 @@ impl StackPreviewManager {
         origin: super::journal::JournaledStackJob,
     ) -> (Arc<AtomicBool>, bool) {
         let cancel = self.track_cancel(run_id);
+        let automatic = origin.automatic();
         self.remember_origin(run_id, origin);
         self.processing.lock().unwrap().insert(
             run_id.to_string(),
@@ -142,6 +145,7 @@ impl StackPreviewManager {
                 scope,
                 operation,
                 stoppable,
+                automatic,
                 running: false,
                 created_unix_seconds: chrono::Utc::now().timestamp(),
                 started_unix_seconds: None,
@@ -202,6 +206,35 @@ impl StackPreviewManager {
             .unwrap()
             .contains(run_id)
             .then_some(StackJobState::Completed)
+    }
+
+    /// Whether a processing run is the server's re-apply rather than a
+    /// person's.
+    pub(super) fn is_automatic_processing(&self, run_id: &str) -> bool {
+        self.processing
+            .lock()
+            .unwrap()
+            .get(run_id)
+            .is_some_and(|run| run.automatic)
+    }
+
+    /// Re-applies queued or running, which step aside for a person's work.
+    pub(super) fn automatic_processing_ids(&self) -> Vec<String> {
+        self.processing
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, run)| run.automatic)
+            .map(|(run_id, _)| run_id.clone())
+            .collect()
+    }
+
+    /// A person asked for the same processing as a queued re-apply: the run
+    /// is theirs now, with a person's priority once it runs.
+    pub(super) fn adopt_processing(&self, run_id: &str) {
+        if let Some(run) = self.processing.lock().unwrap().get_mut(run_id) {
+            run.automatic = false;
+        }
     }
 
     /// Whether a processing run is running and cannot be stopped now.
@@ -346,7 +379,7 @@ impl StackPreviewManager {
             processed_units,
             total_units,
             created_unix_seconds: run.created_unix_seconds,
-            automatic: false,
+            automatic: run.automatic,
             queue_position: None,
             progress_label: run.running.then_some(progress_label).flatten(),
             processing: Some(ProcessingActivity {
@@ -375,6 +408,7 @@ pub(super) fn test_origin(run_id: &str) -> super::journal::JournaledStackJob {
         request: Box::new(
             serde_json::from_value(serde_json::json!({"model": {"type": "identity"}})).unwrap(),
         ),
+        automatic: false,
         attempts: 0,
         running: false,
     }

@@ -32,6 +32,8 @@ pub struct StackSettingsResponse {
     /// Days back a new channel's frames may reach; 0 takes any age.
     pub new_channel_window_days: u32,
     pub default_new_channel_window_days: u32,
+    /// A refreshed stack gets the processing its previous revision showed.
+    pub reapply_processing: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,6 +50,9 @@ pub struct UpdateStackSettingsRequest {
     /// Omitted keeps the current window; 0 takes any age.
     #[serde(default)]
     pub new_channel_window_days: Option<u32>,
+    /// Omitted keeps the current choice.
+    #[serde(default)]
+    pub reapply_processing: Option<bool>,
 }
 
 fn response(policy: AutomationPolicy) -> StackSettingsResponse {
@@ -62,6 +67,7 @@ fn response(policy: AutomationPolicy) -> StackSettingsResponse {
         build_new_channels: policy.build_new_channels,
         new_channel_window_days: policy.new_channel_window_days,
         default_new_channel_window_days: automatic::DEFAULT_NEW_CHANNEL_WINDOW_DAYS,
+        reapply_processing: policy.reapply_processing,
     }
 }
 
@@ -104,6 +110,9 @@ fn requested_policy(
         new_channel_window_days: request
             .new_channel_window_days
             .unwrap_or(current.new_channel_window_days),
+        reapply_processing: request
+            .reapply_processing
+            .unwrap_or(current.reapply_processing),
     };
     if policy.new_channel_window_days > MAX_NEW_CHANNEL_WINDOW_DAYS {
         return Err(AppError::BadRequest(format!(
@@ -138,6 +147,7 @@ fn stored(policy: AutomationPolicy, method: StackMethod) -> Option<StackAutomati
         new_channel_window_days: (policy.new_channel_window_days
             != defaults.new_channel_window_days)
             .then_some(policy.new_channel_window_days),
+        reapply_processing: (!policy.reapply_processing).then_some(false),
     })
 }
 
@@ -161,6 +171,9 @@ pub async fn update_stack_settings(
     automatic::configure(policy);
     if !policy.enabled {
         state.auto_stacks.clear();
+    }
+    if !policy.reapply_processing {
+        crate::server::stack_preview::reapply::turned_off(&state);
     }
     Ok(Json(ApiResponse::success(response(policy))))
 }
@@ -320,6 +333,7 @@ mod tests {
             grade_delay_minutes: 30,
             build_new_channels: false,
             new_channel_window_days: 7,
+            reapply_processing: false,
         };
         let entry = stored(chosen, StackMethod::default()).expect("a chosen policy is stored");
         assert_eq!(entry.method, None, "the recommended method is not written");
@@ -329,7 +343,17 @@ mod tests {
             "the default delay is not written"
         );
         assert_eq!(entry.grade_delay_minutes, Some(30));
+        assert_eq!(
+            entry.reapply_processing,
+            Some(false),
+            "re-applying is on unless written off"
+        );
         assert_eq!(entry.policy(), chosen);
+        assert!(
+            StackAutomationSettings::default()
+                .policy()
+                .reapply_processing
+        );
     }
 
     #[test]
@@ -341,6 +365,7 @@ mod tests {
             method: None,
             build_new_channels: None,
             new_channel_window_days: None,
+            reapply_processing: None,
         };
         let policy = requested_policy(
             &UpdateStackSettingsRequest {
@@ -349,6 +374,7 @@ mod tests {
                 grade_delay_minutes: Some(45),
                 build_new_channels: None,
                 new_channel_window_days: None,
+                reapply_processing: None,
             },
             Some(&current),
         )
@@ -363,6 +389,7 @@ mod tests {
                 grade_delay_minutes: None,
                 build_new_channels: None,
                 new_channel_window_days: None,
+                reapply_processing: None,
             },
             None,
         )
@@ -374,6 +401,7 @@ mod tests {
                 grade_delay_minutes: Some(MAX_DELAY_MINUTES + 1),
                 build_new_channels: None,
                 new_channel_window_days: None,
+                reapply_processing: None,
             },
             None,
         )

@@ -672,6 +672,10 @@ pub struct StackAutomationSettings {
     /// age. Absent uses the default week.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_channel_window_days: Option<u32>,
+    /// Run a channel's processing again when its stack refreshes; absent
+    /// means on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reapply_processing: Option<bool>,
 }
 
 impl StackAutomationSettings {
@@ -693,6 +697,9 @@ impl StackAutomationSettings {
                 .new_channel_window_days
                 .unwrap_or(defaults.new_channel_window_days)
                 .min(crate::server::stack_preview::automatic::MAX_NEW_CHANNEL_WINDOW_DAYS),
+            reapply_processing: self
+                .reapply_processing
+                .unwrap_or(defaults.reapply_processing),
         }
     }
 }

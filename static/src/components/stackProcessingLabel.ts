@@ -1,4 +1,33 @@
-import type { StackStretchPendingProgress } from '../api/types';
+import type {
+  StackActivityEntry,
+  StackReprocessing,
+  StackStretchPendingProgress,
+} from '../api/types';
+
+/**
+ * The line under a card that shows its previous stack's processed result
+ * while the refreshed stack is processed again: what the re-apply is doing,
+ * from its row in the background jobs when it has one.
+ */
+export function carriedLabel(
+  reprocessing: StackReprocessing,
+  run?: StackActivityEntry
+): string {
+  const lead = 'From the previous stack · reprocessing';
+  if (reprocessing.state === 'failed') {
+    return `${lead} failed${reprocessing.error ? `: ${reprocessing.error}` : ''}`;
+  }
+  if (run) {
+    const status = run.state === 'queued' ? run.detail : run.progress_label ?? run.detail;
+    return `${lead} · ${status}`;
+  }
+  const status = {
+    waiting: 'waiting for the stack to settle',
+    queued: 'queued',
+    running: 'running',
+  }[reprocessing.state];
+  return `${lead} · ${status}`;
+}
 
 /** A tool's name as people say it: "RC-Astro BlurXTerminator" is "BlurXTerminator". */
 export function toolName(stage: string): string {

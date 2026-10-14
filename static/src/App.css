@@ -4291,6 +4291,22 @@
   font-size: 0.68rem;
 }
 
+/* The previous stack's processed result, shown while the refreshed stack is
+   processed again. */
+.stack-preview-carried {
+  margin: 0;
+  padding: 0.3rem 0.65rem;
+  border-left: 3px solid var(--color-primary);
+  color: var(--color-text-secondary);
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.stack-preview-carried[data-carried-state='failed'] {
+  border-left-color: var(--color-error);
+  color: var(--color-error-light);
+}
+
 .stack-color-crop {
   min-width: 0;
   display: flex;

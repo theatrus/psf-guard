@@ -253,5 +253,8 @@ describe('header activity items', () => {
       queued: false, percent: null, stoppable: false, detail: 'Reading the stack',
     });
     expect(summarize(items)).toEqual({ count: 3, queued: 2, percent: 42 });
+    // A re-apply the server queued after its stack refreshed is marked.
+    expect(activityItems([], [{ ...blur, automatic: true }])[0]).toMatchObject({ automatic: true });
+    expect(items[0].automatic).toBeFalsy();
   });
 });
