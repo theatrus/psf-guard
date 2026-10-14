@@ -64,6 +64,7 @@ describe('GroupedImageGrid date filter', () => {
     render(<GroupedImageGrid />, { wrapper: wrapper(`/grid?db=c925&project=1&${window}`) });
     await waitFor(() => expect(screen.getByText(/2 of 3 images/)).toBeInTheDocument());
 
+    fireEvent.click(screen.getByRole('button', { name: 'Status: All' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Rejected' }));
     await waitFor(() => expect(screen.getByTestId('where').textContent).toContain('status='));
     const params = new URLSearchParams(screen.getByTestId('where').textContent ?? '');
@@ -82,8 +83,8 @@ describe('GroupedImageGrid date filter', () => {
     setDisplayPreferences({ ...preferences, showCalibrationChip: false });
     render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1') });
     await waitFor(() => expect(screen.getByText(/1 of 1 images/)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /^Dates/ }));
-    fireEvent.change(screen.getByLabelText('Date range:'), { target: { value: '2024-01-15' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Dates:/ }));
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2024-01-15' } });
     await waitFor(() => expect(
       new URLSearchParams(screen.getByTestId('where').textContent ?? '').get('dateStart'),
     ).toBe('2024-01-15'));
