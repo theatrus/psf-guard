@@ -1,8 +1,10 @@
 # Flexible mosaic panels
 
-Status: model, migration, API, panel editor and activation built
-(2026-10); the open questions at the end are proposals for review.
-Current behaviour lives in [DIRECTOR.md](../DIRECTOR.md#mosaic-panels).
+Status: built (2026-10). The first round placed panels one by one; the
+second made shot panels follow their frames, gave each panel its own camera
+angle and a turn of its own, and gave a rig framed on its own the same panel
+tools. The open questions at the end are proposals for review. Current
+behaviour lives in [DIRECTOR.md](../DIRECTOR.md#mosaic-panels).
 
 ## The problem
 
@@ -68,8 +70,12 @@ A framing's panels are a **layout**: a minimum overlap and a list of panels.
 
 ```json
 { "min_overlap_percent": 20,
-  "panels": [ { "id": "r1c1", "x": 0, "y": 0, "locked": true },
-              { "id": "p2", "x": -0.8, "y": 0, "locked": false } ] }
+  "panels": [ { "id": "r1c1", "x": 0, "y": 0, "locked": true,
+                "measured": { "center": { "ra_degrees": 38.25, "dec_degrees": 61.47 },
+                              "position_angle_degrees": 36.5,
+                              "size": { "width_degrees": 2.3, "height_degrees": 1.6 },
+                              "source": "solved", "size_source": "solved", "frames": 12 } },
+              { "id": "p2", "x": -0.95, "y": 0, "locked": false, "angle_offset_degrees": 6 } ] }
 ```
 
 - **Place.** `x` and `y` are the panel's offset from the framing's center on
@@ -93,16 +99,20 @@ A framing's panels are a **layout**: a minimum overlap and a list of panels.
 - **Center.** The framing's center is the plane's anchor, not the mosaic's
   middle. Adding panels on one side does not move it, so nothing already
   placed moves either.
-- **Rotation: one camera angle per framing.** Every panel of a framing shares
-  the camera angle, as every panel shares the panel size. Reasons: a rig
-  without a rotator shoots every panel at the angle its camera sits at; a
-  locked panel fixes that angle for the panels around it; overlaps stay the
-  overlap of two rectangles on the same axes, and turning the whole mosaic
-  never changes one. A rig that needs another angle or size is framed on its
-  own, as before. Per-panel angles for rotator rigs are an open question.
+- **Shot geometry (`measured`).** A locked panel whose frames were read
+  carries the center, camera angle and field they were shot with, where the
+  numbers came from, and how many frames they were read from. The panel is
+  then drawn, checked and activated as shot, not at its planned place: see
+  [Shot panels follow their frames](#shot-panels-follow-their-frames).
+- **Turn (`angle_offset_degrees`).** A planned panel may turn from the
+  framing's angle on the plane, −180° to 180°, counter-clockwise as the
+  camera sees the sky (the way a larger position angle turns). Absent means
+  0, and a panel at 0 writes no field. See [Turned panels](#turned-panels).
 - **Hard rules** (a save is refused): 1 to 256 panels, distinct ids and
-  places, finite offsets, minimum overlap 0 to 90%, every panel within 30°
-  of the center and the whole mosaic within 30° along each camera axis.
+  places, finite offsets, turns within half a turn, shot geometry only on a
+  locked panel and with a valid center, angle and size, minimum overlap 0 to
+  90%, every panel within 30° of the center (a shot one by where it was
+  shot) and the whole mosaic within 30° along each camera axis.
 - **Issues** (said, never refused): see the next section. A gap may be
   filled later and a lone panel may be meant.
 
@@ -114,12 +124,21 @@ columns and overlap inputs still work on a grid.
 ## Overlap, defined
 
 Overlap is read **per pair, in the camera frame, on the tangent plane at the
-framing's center**, where the panels are laid out. For panels at `a` and `b`:
+framing's center**, from each panel's **outline**: a planned panel is its
+rectangle at its place, turned by its turn; a shot panel is the rectangle its
+camera covered on the plane about its own center, at its own angle and size,
+projected onto the framing's plane. Outlines are convex quadrilaterals, so
+two of them intersect in a convex polygon (Sutherland–Hodgman clipping).
 
-- across `x`: `1 − |aₓ − bₓ|` of a panel width; across `y`: `1 − |a_y − b_y|`
-  of a panel height. Negative is a gap.
-- The **seam** is across the axis with the smaller value; that value is the
-  pair's **thickness**, and the other is its **run** along the seam.
+- Where two outlines intersect, the shared polygon's extent along each
+  camera axis, over the **larger** panel's extent along it, gives the share
+  across each axis. Where they do not, the overlap of their extents along
+  each axis does, negative for a gap.
+- The **seam** is across the axis with the smaller share. The pair's
+  **thickness** is the shared strip's mean width across the seam (its area
+  over its length), over the larger panel's extent; the other share is its
+  **run** along the seam. A turned outline makes the strip wider at one end
+  than the other, and the mean is what counts.
 - Two panels are **joined** when the thickness is at least the minimum (side
   by side, or at a corner, as diagonal neighbours of a grid are).
 - Two panels sit **side by side** when the run is at least half a side. Such a
@@ -131,33 +150,184 @@ framing's center**, where the panels are laid out. For panels at `a` and `b`:
 - A panel joined to nobody is **isolated**; groups of joined panels that never
   meet are **disconnected** (said only when nothing else explains it).
 
-Because every panel of a framing shares the camera angle, these numbers do
-not change when the mosaic turns; a test lays panels out at several angles
-and measures the overlap of their sky footprints in the camera frame.
+For panels of one size on the camera's axes this is exactly the first
+round's rule, `1 − |aₓ − bₓ|` of a panel width across a vertical seam, so
+every layout reads as it did. Shares are of the larger panel, so each of two
+panels of different sizes shares at least the minimum of its own side. The
+browser runs a port of the same code (`panelShape.ts`), held to fixtures the
+core writes, one of them a shot panel beside planned and turned ones.
 
-Two honest limits, the same as N.I.N.A.'s framing assistant: Target
-Scheduler gives every panel the framing's angle at its own center, and at a
-high declination local north turns across a wide mosaic, which narrows the
-overlap at its far corners a little. The tangent plane also enlarges sky away
-from its center, which widens the real overlap of outer panels. Keep the
-minimum at 10% or more for wide mosaics.
+Two honest limits, the same as N.I.N.A.'s framing assistant: the tangent
+plane enlarges sky away from its center, which widens the real overlap of
+outer panels a little, and a rig without a rotator cannot turn each panel
+(below). Keep the minimum at 10% or more for wide mosaics.
+
+## Shot panels follow their frames
+
+A panel's frames say where it really is. When the camera behind a rig
+changes, its old panels keep the field they were shot with and new panels
+use the new field; a locked panel is drawn where its frames were taken.
+
+**Where the numbers come from**, best first, for each framing panel whose
+target has frames that are not rejected (`GET /projects/{id}/mosaic`
+returns them under `measured`):
+
+1. **Fresh pixel-derived solves** (`solved`): the quality scan's persisted
+   plate solves of the frames, only those that still match their file and
+   only real solves (hinted or blind), not embedded WCS. Up to the newest 200
+   frames. The center is the median of their centers on the tangent plane at
+   the first; the camera angle is the median of their position angles, read
+   from each solution's CD matrix (the field rotation the sequence analysis
+   uses, turned to sky handedness), folded to within a quarter turn of the
+   planned angle so frames either side of a meridian flip agree; the field is
+   the median of pixel dimensions times the solved scale.
+2. **The frames' headers** (`header`): up to eight newest frames' FITS
+   headers. The center from an embedded TAN solution's image middle, else the
+   mount's RA and Dec; the angle from the embedded solution, else the
+   rotator's reported angle (`RotatorPosition`, when a rotator was connected),
+   else the planned angle; the field from the header's pixel scale and
+   dimensions.
+3. **The target as planned** (`plan`): Target Scheduler's own coordinates
+   and rotation.
+
+The field (`size_source`) is the solves', else the headers', else the size
+the panel was measured with before, else the plan's panel. The last two keep
+a panel's size steady when the plan moves on to a new camera before any
+frame was read. Where several rigs shot one shared panel, the rig with the
+better source and then more frames speaks for it.
+
+**Prediction or evidence.** Only `solved` is evidence of where the pixels
+point; `header` and `plan` are what the mount and the plan said. The label
+travels with the numbers to the sky ("from 12 solved frames", "from the
+headers of 3 frames", "from the plan") and to the activation preview, so a
+prediction is never shown as a solve.
+
+**Saving it.** The framing view locks a panel with frames and copies the
+server's reading onto it as its own quiet choice, saved with the next save;
+a refetch of the mosaic refreshes it when new solves land. Only the server
+reads frames, so a save that changes a locked panel's shot geometry must
+match what the server reads from the stored draft at that moment, or it is
+refused (`422`, naming the panels). A panel whose frames can no longer be
+read keeps the geometry it had. New geometry is a layout change: the
+`layout_revision` moves, since neighbours' overlaps change.
+
+**Locks.** A shot panel is held as shot: a new panel size does not move it,
+so only a planned locked panel off the center holds the size. Its planned
+place, the framing's center and angle, and its turn still hold while it is
+locked.
+
+## One camera angle per panel on the sky
+
+Every panel of a framing is laid out on one tangent plane, along the camera's
+axes at the framing's angle θ. Away from the center's meridian, north at a
+panel's own center leans against the plane's north, so a camera there at θ
+would draw turned against its neighbours. Activation writes each panel's
+Target Scheduler rotation as the angle that keeps its up along θ (plus its
+own turn) on the plane:
+
+    PAᵢ = θ + turnᵢ + γᵢ,    γᵢ ≈ Δαᵢ · sin δ
+
+where Δαᵢ is the panel's right ascension from the center and δ its
+declination: 3° of right ascension at +60° leans 2.6°. γ is zero on the
+center's meridian, opposite either side of it, and negative in the south.
+
+The core computes PA exactly (`camera_angle_at`), not by the first-order
+sum: with P the panel's center in the center's (east, north, out) frame and
+d = (sin θ, cos θ) the direction to draw, the tangent at P that the gnomonic
+projection draws along d is T ∝ P × w with w = (P_z d_y, −P_z d_x,
+P_y d_x − P_x d_y), and PA is T's position angle at P. The gnomonic plane
+does not keep angles, so for θ away from 0° and 180° the exact angle and
+θ + γ differ, by a few hundredths of a degree three degrees out.
+
+**Tests.** γ for panels 3° apart in right ascension at +60° is 3 · sin 60°
+within 0.01°, positive to the east, antisymmetric, zero on the meridian,
+negative in the south, and equal to the bearing of a 1e-6° step north on the
+plane; a camera turned by the exact angle draws its up along θ to 1e-7°,
+the first-order sum within 0.1°, and without the turn it draws off by −γ.
+A footprint's corners round-trip through the plane and back. The browser
+port matches the core's angles in all three fixtures.
+
+**N.I.N.A.** N.I.N.A.'s framing assistant shares one rotation across a
+mosaic by default; its *Preserve alignment* option (added with its framing
+rework, Bitbucket PR #1233) gives each panel its own rotation far from the
+equator, so the panels form one rectangle on the sky. Director now does the
+latter for every planned panel.
+
+**Reading back.** A Target Scheduler project taken in as a framing reads its
+angle back with the lean taken off (`plane_angle_at`, the exact inverse):
+targets whose rotations agree on one plane angle read as that angle. Targets
+that share one stored rotation, as N.I.N.A. and activations before this
+change wrote them, keep it.
+
+**Frames already shot.** A target with frames whose stored rotation is the
+framing's angle plus its turn, with no lean (what activations wrote before
+this change), keeps that rotation, so new frames match the old. A locked
+panel with frames keeps its target's coordinates and rotation outright: its
+target reads `unchanged`, "kept where its frames were shot".
+
+**Rigs without a rotator** cannot follow γ unattended: they shoot every panel
+at the camera's angle, so outer panels turn by −γ on the plane. See the open
+questions.
+
+## Turned panels
+
+A planned panel may turn on its own (`angle_offset_degrees`), for a rig with
+a rotator or one whose camera is turned by hand. Its outline turns with it,
+so overlaps are read as drawn, and activation writes PA = θ + turn + γ.
+
+- **On the sky.** The chosen unlocked panel has a turn handle past its top
+  edge along its own up; dragging it turns the panel about its middle, read
+  on the framing's plane. The shared strips and their shares follow live. A
+  turn settles within 2° on 0 (the framing's angle), on a neighbour's turn,
+  or on how a shot panel's outline leans. A turn that leaves a thin overlap,
+  a gap or a lone panel the layout did not have springs back with the
+  reason; Alt (Option) turns it anyway, flagged, as a drag does.
+- **Keys.** `[` and `]` turn the chosen panel a degree (Shift: ten), by the
+  key's place, so a keyboard layout or Shift does not change them. They
+  clashed with nothing.
+- **Panel editor.** **Turn** takes a number, **Framing angle** puts it back to
+  0, and a line gives the panel's camera angle here, the framing's turned by
+  north's lean and its own turn.
+- **Locks.** A locked panel keeps its turn: a shot panel's angle is its
+  measured angle, and a save that would turn a locked panel is refused like a
+  move (`422`).
+- **Rigs.** A rig with a rotator turns unattended. For a rig with a fixed or
+  manually turned camera the turn is allowed, since people turn cameras by
+  hand: the panel editor and the activation preview say "turn the camera by
+  hand to X°" for that panel.
+- **Undo.** Each turn is one step, like a move.
+
+## Rigs framed on their own
+
+A rig framed on its own has its own center, angle, size and layout, and the
+same tools: while its card's editor is open, **Mosaic panels** works on its
+panels (the legend names the rig), the sky draws them in the rig's colour
+with choosing, dragging, turning, the + handles, keys and undo, and the
+shared framing stays in sight, plain. Its panels lock by their own frames
+(the targets of that rig's own project) and by hand, its locked panels hold
+its center and angle in the editor, and the server holds them on save as it
+does the shared framing's. Done goes back to the shared framing; a rig that
+is off keeps its framing where it is, drawn dim. Activation writes its panels
+into that rig's own Target Scheduler project, each at its own angle.
 
 ## Locks
 
 A panel is **locked** two ways:
 
 - **by its frames**: a panel whose target has captured frames, read from the
-  rigs that shoot the shared framing. The framing view locks it in the draft
-  as its own quiet choice, saved with the next save, and it cannot be
-  unlocked or removed there;
+  rigs that shoot that framing (the shared one, or a rig's own). The framing
+  view locks it in the draft as its own quiet choice, saved with the next
+  save, and it cannot be unlocked or removed there;
 - **by hand**: the person locks or unlocks any other panel.
 
 A locked panel's center and camera angle on the sky cannot move. The server
-refuses a save (`422`, naming the panels) that moves a panel the body still
-marks locked, or moves the framing's center, angle or panel size under it.
-Unlocking is an edit of its own, so a body may unlock and move a panel in one
-save. A panel at the framing's center does not move with a new panel size,
-so only a locked panel off the center holds the size.
+refuses a save (`422`, naming the panels) that moves or turns a panel the body
+still marks locked, moves the framing's center, angle or panel size under it,
+or gives it shot geometry its frames do not support. Unlocking is an edit of
+its own, so a body may unlock and move a panel in one save; unlocked, a panel
+is planned again and drops its shot geometry. A panel at the framing's center
+does not move with a new panel size, nor does a shot panel, so only a planned
+locked panel off the center holds the size.
 
 The browser keeps a locked mosaic's center, angle, target search and rig
 choice disabled with a line saying why, hides the rotation handle, and offers
@@ -184,6 +354,10 @@ of its size that has frames gets a new target.
 - **Grid.** While nothing is locked, a grid shows its rows, columns and
   overlap, and changing them lays the grid out again. A layout that is no
   grid offers *Lay out as a grid instead*.
+- **Against real edges.** New panels, the + handles and dragging meet a shot
+  panel at its real outline: a panel beside it shares the minimum of the
+  wider of the two sides. Against a shot panel turned off the camera's axes,
+  a new panel is drawn in until its outline shares the minimum.
 - **Drag.** In *Panel* drag mode a drag moves one panel. Each axis settles,
   within 14 screen pixels, on a place lined up with another panel or at the
   minimum overlap beside one. While dragging, the panel's shared strips are
@@ -195,8 +369,9 @@ of its size that has frames gets a new target.
   a panel finer.
 - **Keyboard.** With a panel chosen and the sky focused: arrow keys nudge it
   1% of a panel along the camera axis nearest the arrow's way on screen
-  (Shift: 10%), `L` locks or unlocks it, Delete removes it, Escape lets go,
-  Ctrl+Z and Ctrl+Shift+Z (or Ctrl+Y) undo and redo panel edits.
+  (Shift: 10%), `[` and `]` turn it a degree (Shift: 10°), `L` locks or
+  unlocks it, Delete removes it, Escape lets go, Ctrl+Z and Ctrl+Shift+Z (or
+  Ctrl+Y) undo and redo panel edits.
 - **Undo.** Every panel edit is one step, fifty deep, for this visit; the
   save bar's *Discard* returns to the saved framing.
 
@@ -226,6 +401,13 @@ of its size that has frames gets a new target.
   and a payload with both shapes; a store from schema 25, before draft
   imports; a check that every panel lands within 1e-12° of where the grid had
   it at several sizes, angles and declinations, against the old arithmetic.
+- **Schema 30.** Shot geometry and turns are optional fields a panel without
+  them never writes, so nothing is rewritten: a schema 29 store opens
+  byte for byte the same. The bump keeps a build that cannot read the new
+  fields (panels refuse unknown fields) from opening a store that may hold
+  them. Tests open a schema 29 store with drafts unchanged, round-trip shot
+  geometry and turns, refuse shot geometry on an unlocked panel, and read
+  every older shape as before.
 
 ## Target Scheduler mapping
 
@@ -235,17 +417,22 @@ What Target Scheduler sees does not change shape:
   panel. The flag holds no geometry; with a Mosaic Completion weight it
   favours the panels that are furthest behind, which suits new panels beside
   a long-shot one;
-- one target per panel the rig shoots, at the panel's center with the
-  framing's angle, J2000, named `{target} {panel id}` (`M31 p2`). A framed
-  target that becomes a mosaic keeps its name and its row: activation reads
-  it `unchanged`;
+- one target per panel the rig shoots, at the panel's center, J2000, named
+  `{target} {panel id}` (`M31 p2`), with its own rotation: the framing's
+  angle plus the panel's turn and north's lean at its center. A framed target
+  that becomes a mosaic keeps its name and its row: activation reads it
+  `unchanged`, and a locked panel with frames keeps its target's place and
+  rotation;
 - exposure plans per panel as before. Nothing is written that Target
-  Scheduler cannot read, and optional columns are probed as before.
+  Scheduler cannot read, and optional columns are probed as before. The
+  preview says each target's angle and what it is made of, such as "angle
+  62.6° (framing 60.0°, north here +2.6°)", "as shot, from solved frames", or
+  "turn the camera by hand to 47.2°".
 
 What PSF Guard keeps on its side:
 
-- the layout (ids, places, locks, minimum overlap) in the meta store's
-  framing draft;
+- the layout (ids, places, turns, locks, shot geometry, minimum overlap) in
+  the meta store's framing draft;
 - each target's panel id in the rig database's `psf_guard_director_target`,
   which Target Scheduler and Sync ignore. The Library reads these records to
   show the panels as one mosaic whatever their shape: a grid's ids are its
@@ -264,9 +451,10 @@ What PSF Guard keeps on its side:
 ## Workflow and UI
 
 1. **A framed target.** The Framing tab shows the plan's panel. If it has
-   frames, it is drawn solid in the locked ink with a padlock, the list says
-   "40 frames", and the center, angle and target search say the locked
-   panels hold them.
+   frames, it is drawn solid in the locked ink with a padlock where its
+   frames say it was shot, with where that comes from under its name ("from
+   12 solved frames"); the list says "40 frames", and the center, angle and
+   target search say the locked panels hold them.
 2. **Make it a mosaic.** In *Mosaic panels*, choose *Whole mosaic* or a panel
    (click it on the sky or in the list), then a direction on the pad: E adds
    a column east, N a row north. *Ring around* surrounds it.
@@ -274,17 +462,24 @@ What PSF Guard keeps on its side:
    panel. It settles at the minimum overlap; the shared strips show their
    share in green, or in the warning colour when short. The + on each side
    and corner of the chosen panel adds a panel there.
-4. **Mistakes.** A drop short of the rule springs back and says why; Alt
-   places it anyway, dashed in the warning colour and listed under the panel
-   list. Undo and Redo sit beside the list.
-5. **Save and activate.** The save bar lists what changed ("panels p2, p3
-   added", "r1c1 locked"); activation creates the new targets and leaves the
-   shot one alone.
+4. **Turn a panel.** Choose it and drag its turn handle, press `[` or `]`,
+   or type a turn; the editor gives its camera angle here, and says to turn
+   the camera by hand when a rig has no rotator.
+5. **Mistakes.** A drop or a turn short of the rule springs back and says
+   why; Alt places it anyway, dashed in the warning colour and listed under
+   the panel list. Undo and Redo sit beside the list.
+6. **Save and activate.** The save bar lists what changed ("panels p2, p3
+   added", "panel p4 turned", "r1c1 locked"); activation creates the new
+   targets, each at its own angle, and leaves the shot one alone.
+7. **A rig on its own.** *Frame separately* or *Edit* on a rig's card opens
+   its own panels in the same tools.
 
 States are drawn from data attributes (`data-panel-state='locked' |
-'invalid'`, `data-selected`) and ARIA (`aria-pressed`, `aria-invalid`) with
-tokens scoped on `.framing`: `--framing-panel-locked`,
-`--framing-panel-chosen`, `--framing-panel-invalid` and `--framing-overlap`.
+'invalid'`, `data-selected`, `data-shot`, `data-framing`, `data-rig-index`)
+and ARIA (`aria-pressed`, `aria-invalid`) with tokens scoped on `.framing`:
+`--framing-panel-locked`, `--framing-panel-chosen`, `--framing-panel-invalid`
+and `--framing-overlap`; a rig's own panels take its `--framing-rig-N`
+colour as `--framing-panel`.
 
 On a phone the panel editor stacks under the sky; pad buttons and the panel
 list are tap targets, and *Panel* drag mode works with a finger.
@@ -301,38 +496,66 @@ list are tap targets, and *Panel* drag mode works with a finger.
   registration tool needs and what the layout controls.
 - **A Target Scheduler project per panel.** Loses the mosaic flag and the
   shared project settings, and the Library would need a new grouping.
-- **Per-panel rotation.** See the open questions.
+- **Overlap of the axis-aligned boxes of turned panels.** Cheap, but a turned
+  panel's box overstates what it covers, so a thin seam would pass. The
+  polygon intersection costs little at these counts.
+- **Per-panel angle as an absolute position angle.** A turn relative to the
+  framing keeps meaning when the whole mosaic turns, and 0 is the common case
+  that writes nothing.
+- **Shot geometry stored only on the server side.** The browser needs it to
+  draw and check overlaps live, and the lock check needs it in the draft; the
+  server's own reading on save keeps it honest.
 
 ## Built and proposed
 
-Built: the layout model and its checks in the core and the browser; schema
-29 and older bodies; locks by hand and by frames, held by the server;
-extending beside a panel or the whole mosaic, ring and fill; dragging with
-snapping, shared strips and refusal; keyboard and undo; the add handles;
-activation into separate targets with layout warnings; the Library reading
-Director panels that form no grid; frames of a linked project counted
-against their panels before activation.
+Built, first round: the layout model and its checks in the core and the
+browser; schema 29 and older bodies; locks by hand and by frames, held by the
+server; extending beside a panel or the whole mosaic, ring and fill;
+dragging with snapping, shared strips and refusal; keyboard and undo; the
+add handles; activation into separate targets with layout warnings; the
+Library reading Director panels that form no grid; frames of a linked
+project counted against their panels before activation.
+
+Built, second round: overlap read from polygon outlines in the core and the
+browser; shot panels drawn from their frames (solves, then headers, then the
+plan) with the source on the sky, refreshed as solves land and checked by the
+server on save; schema 30; each panel's camera angle with north's lean at
+activation, read back on import, and kept for targets already shot; turned
+panels with the turn handle, `[` and `]`, snapping, spring-back and undo,
+and a hand-turn note for rigs without a rotator; the same panel tools for a
+rig framed on its own.
 
 Proposed, not built:
 
 - a ghost of the panel a + or a direction would add, shown on hover;
-- the same panel tools for a rig framed on its own (it keeps its grid
-  inputs; a layout made by API is listed as "placed one by one");
 - importing a free layout from a Target Scheduler project without
   Director's record (it still reads only grids);
-- per-panel rotation and per-panel size (below).
+- a warning when a rig without a rotator would need to turn outer panels by
+  more than a set lean (see the open questions).
 
 ## Open questions
 
-1. **Per-panel camera angle.** A rotator rig could shoot each panel at the
+1. ~~**Per-panel camera angle.** A rotator rig could shoot each panel at the
    angle that suits it. Worth it, or keep one angle per framing and frame such
-   a rig on its own?
-2. **Mixed fields.** If the camera changes, should old locked panels keep
-   their old field while new panels use the new one (a size per panel)?
-3. **Unlocking a shot panel.** Panels with frames cannot be unlocked or
+   a rig on its own?~~ Answered: built. Each panel is shot at the framing's
+   angle plus north's lean at its center, and may be turned on its own; a rig
+   without a rotator is told to turn the camera by hand.
+2. ~~**Mixed fields.** If the camera changes, should old locked panels keep
+   their old field while new panels use the new one (a size per panel)?~~
+   Answered: locked panels follow their original shots, not a new camera;
+   new panels use the rig's current field.
+3. ~~**Names.** Panels added since a grid are `p{n}` and their targets
+   `{target} {panel id}`; should they read otherwise?~~ Answered: naming is
+   fine.
+4. **Unlocking a shot panel.** Panels with frames cannot be unlocked or
    removed in the editor. Should there be a deliberate "retire this panel"
    that keeps its target and frames and frees the place?
-4. **`isMosaic` for irregular layouts.** Keep it on for every layout of more
+5. **`isMosaic` for irregular layouts.** Keep it on for every layout of more
    than one panel (as now), or offer a switch per plan?
-5. **Default minimum overlap.** Grids default to 20%. Is that right for free
+6. **Rigs without a rotator and north's lean.** Such a rig shoots every panel
+   at its camera's angle, so outer panels of a wide, northern mosaic turn by
+   −γ against the plane (2.6° three degrees out at +60°) and their seams
+   narrow at one end. Activation writes the leaned angle for the person to
+   set; should it instead keep one angle for such a rig, or warn past a lean?
+7. **Default minimum overlap.** Grids default to 20%. Is that right for free
    layouts, and should the minimum differ between edges and corners?

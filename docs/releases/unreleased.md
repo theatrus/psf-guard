@@ -15,6 +15,15 @@
   panel in the same project and leaves the shot one alone, and the Library
   shows the panels as one mosaic whatever their shape. Saved grids open
   unchanged, as the panels they made.
+- A shot mosaic panel is drawn where its frames were taken, with the field
+  and angle they were shot with, read from their plate solves, else their
+  headers, else the plan; the sky says which. New panels use the rig's
+  current field and meet a shot panel at its real edges. Each panel is now
+  shot at its own camera angle, the plan's turned by north's lean at its
+  center, so wide northern mosaics stay square; targets already shot keep
+  their angle. A panel can also be turned on its own with its handle, `[`
+  and `]`, or a typed turn; a rig without a rotator is told to turn the
+  camera by hand for it. A rig framed on its own gets the same panel tools.
 
 - A **Calibration** page shows a database's calibration library: its sessions
   by night, kind and settings, each frame as a picture drawn for its kind,

@@ -1050,8 +1050,9 @@ follow from the rig split above and from how rigs differ in field size:
   into one stack; the mosaic preview is a review aid for coverage and a
   starting point for processing, not a processed image.
 
-Panels are placed one by one with stable ids and locks, not as a grid; see
-[Flexible mosaic panels](flexible-mosaics.md).
+Panels are placed one by one with stable ids and locks, not as a grid; a
+shot panel follows its frames, and each panel has its own camera angle and
+may turn on its own; see [Flexible mosaic panels](flexible-mosaics.md).
 
 Done: per-rig panel selection in the plan editor (a panel chooser per rig,
 every panel by default), activation writing only the targets and plans a rig

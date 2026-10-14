@@ -1003,8 +1003,10 @@ when the rig's field has changed since it was picked. When the rig that
 sets the size is turned off, here or elsewhere, the first rig that is on,
 knows its optics and shoots the shared framing takes over; with none, the
 size stays and the line says its rig is off. **Outline** draws its field on the sky, labelled
-in small text, and **Frame separately** gives it a grid, camera angle and panel size of its own, edited
-in its card. A separate framing follows the shared center until it is dragged,
+in small text, and **Frame separately** gives it panels, a camera angle and a panel size of its own, edited
+in its card: while the card's editor is open, **Mosaic panels** and the sky work on its
+panels with the same tools as the shared framing's, in the rig's colour, and the shared
+framing stays in sight, plain. A separate framing follows the shared center until it is dragged,
 typed or moved to the view center; **Shared center** puts it back in step.
 **Use shared** drops it. The separate framing of a rig that is off, or no
 longer listed, is drawn dim and stays where it is; one whose rig is gone has
@@ -1034,21 +1036,37 @@ instead** offers to start again.
 
 - **Locked panels stay where they are.** A panel whose target has frames is
   locked by them: it is drawn solid with a padlock, the panel list gives its
-  frames, and it cannot be moved, unlocked or removed here. **Lock** holds any
-  other chosen panel the same way. While a panel is locked, the target's
-  center, camera angle and search wait, and so does the panel size while a
-  locked panel sits off the center, since each would move it. The server
-  refuses a save that would (`422`, naming the panels).
+  frames, and it cannot be moved, turned, unlocked or removed here. **Lock**
+  holds any other chosen panel the same way. While a panel is locked, the
+  target's center, camera angle and search wait, and so does the panel size
+  while a planned locked panel sits off the center, since each would move it.
+  The server refuses a save that would (`422`, naming the panels).
+- **Shot panels are drawn as shot.** A locked panel with frames is drawn
+  where its frames say it was taken, with the field and angle they were shot
+  with, not with the camera the plan uses now; new panels use the rig's
+  current field. Fresh plate solves of the frames speak first, then their
+  FITS headers or rotator readings, then the target as planned, and the sky
+  says which under the panel's name ("from 12 solved frames", "from the
+  headers of 3 frames", "from the plan"). The reading refreshes when new
+  solves land. Only the server reads frames: a save that changes a locked
+  panel's shot geometry to anything else is refused (`422`).
 - **Add panels** beside the chosen panel or round the whole mosaic. The pad's
   N, E, S and W (and the diagonals) are sky directions: each adds on the
   panel side that faces nearest that way at this camera angle. Whole mosaic
   adds a panel at the end of every row or column that way. **Ring around**
   surrounds the mosaic; **Fill holes** fills the gaps of panels on one
   lattice. New panels go in at the minimum overlap or the overlap set beside
-  the pad.
+  the pad, against a shot panel's real edges.
 - **Choose a panel** by clicking it on the sky or in the list. A + on each
   side and corner adds a panel there, and its overlaps with its neighbours
-  are shaded with their share.
+  are shaded with their share. The panel editor gives its camera angle here.
+- **Turn a panel** on its own by dragging the handle past its top edge,
+  with `[` and `]`, or by typing a **Turn**; **Framing angle** puts it back.
+  A turn settles on the framing's angle, a neighbour's, or a shot panel's
+  within 2°. A turn that leaves the overlap short springs back like a drop;
+  Alt turns it anyway. A rig with a rotator turns each panel by itself; for a
+  rig whose camera is fixed or turned by hand, the editor and the activation
+  preview say "turn the camera by hand to X°" for that panel.
 - **Drag a panel** with **Panel** among the sky's drag modes. It settles,
   lined up with another panel or at the minimum overlap beside one. A drop
   that leaves a thin overlap, a gap or a lone panel goes back and says why;
@@ -1056,14 +1074,18 @@ instead** offers to start again.
   colour and listed under the panels. A locked panel does not move; dragging
   it looks around.
 - **Keys**, with a panel chosen and the sky focused: arrows nudge it 1% of a
-  panel (Shift, 10%), L locks or unlocks it, Delete removes it, Escape lets
-  go. Ctrl+Z and Ctrl+Shift+Z undo and redo panel edits, as do the buttons
-  beside the list.
+  panel (Shift, 10%), `[` and `]` turn it a degree (Shift, 10°), L locks or
+  unlocks it, Delete removes it, Escape lets go. Ctrl+Z and Ctrl+Shift+Z undo
+  and redo panel edits, moves and turns alike, as do the buttons beside the
+  list.
 
-Overlap is read between two panels in the camera's frame: how much of a
-side they share across their seam. Two panels side by side should share at
-least the minimum; turning the mosaic never changes an overlap. The rules,
-the stored shape and the migration from grids are in the
+Overlap is read between two panels' outlines in the camera's frame: how much
+of a side they share across their seam, of the larger panel's side. Two
+panels side by side should share at least the minimum; turning the whole
+mosaic never changes an overlap. Each panel is shot at its own camera angle:
+the framing's, plus its own turn, plus north's lean at its center (about
+Δα · sin δ, 2.6° three degrees east at +60°), so its edges run where the
+framing drew them. The rules, the stored shape and the migrations are in the
 [design record](design/flexible-mosaics.md).
 
 ### Finished stacks on the sky
@@ -1093,7 +1115,7 @@ where their solves put them and the rectangles show the new plan.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| GET | `/projects/{id}/mosaic` | Per panel, activated or from a linked project (a linked project's lone target is `r1c1` and targets on a grid are their cells, as the framing taken in from them names them; others keep their names): `panel_id`, `rig`, `catalog_slug`, `target_id`, `progress` (`desired`, `acquired`, `accepted` over its exposure plans), `status` of the best stack (`ready`, `unsolved`, `no_stack`, `missing_target`, `missing_catalog`), `stacks` (each with `key` such as `color:SHO` or `mono:Ha`, `label`, and `wcs` when solved; best first) and `preview`, the first of them. `activation_revision` is `null` before the first activation; `framing_stale` flags a framing saved since. |
+| GET | `/projects/{id}/mosaic` | Per panel, activated or from a linked project (a linked project's lone target is `r1c1` and targets on a grid are their cells, as the framing taken in from them names them; others keep their names): `panel_id`, `rig`, `catalog_slug`, `target_id`, `progress` (`desired`, `acquired`, `accepted` over its exposure plans), `status` of the best stack (`ready`, `unsolved`, `no_stack`, `missing_target`, `missing_catalog`), `stacks` (each with `key` such as `color:SHO` or `mono:Ha`, `label`, and `wcs` when solved; best first) and `preview`, the first of them. `measured` lists, per framing panel with frames that are not rejected, where they were shot: `framing_rig_id` (`null` for the shared framing), `panel_id` and `geometry` (`center`, `position_angle_degrees`, `size`, `source` and `size_source` each `solved`, `header` or `plan`, and `frames`). `activation_revision` is `null` before the first activation; `framing_stale` flags a framing saved since. |
 
 ### A mosaic as one view
 
@@ -1242,8 +1264,14 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   the profile that owns the database's existing projects, with the plan's
   [scheduling limits](#scheduling-limits);
 - one target per panel the rig owns, named after the target with the panel
-  id appended for mosaics, at the panel center with the plan's camera angle,
-  or with the rig's own grid and angle when it is framed on its own.
+  id appended for mosaics, at the panel center with its own camera angle:
+  the framing's (the rig's own when it is framed on its own), plus the
+  panel's turn, plus north's lean at its center. A locked panel with frames
+  keeps its target's place and rotation (`unchanged`, "kept where its frames
+  were shot"), and a target with frames shot at the framing's angle before
+  panels took north's lean keeps that angle. The preview gives each angle and
+  what it is made of, and for a rig without a rotator says to turn the camera
+  by hand for a turned panel.
   A target the project already has (imported from Target Scheduler, or made
   by hand) is taken over rather than doubled: the one with the panel's name,
   else the one at the panel's place, else, for a single-panel framing, the
@@ -1591,7 +1619,7 @@ core computes every footprint, so the browser only draws.
 | --- | --- | --- |
 | POST | `/framing/preview` | Stateless. `center`, `position_angle_degrees`, `panel` (`width_degrees`, `height_degrees`), `layout` (`min_overlap_percent` and `panels`, each `id`, `x`, `y` and `locked`) or, as older clients send it, `mosaic` (`rows`, `columns`, `overlap_percent`), optional `overlays` (other fields to place on the center) and `view` (`center`, `rotation_degrees`). Returns each panel's sky corners, its `row` and `column` and whether it is `locked`, with a view its corners as offsets from the view center with the view's up as `+eta`, and `issues`: each thin overlap, gap, lone panel or set of disconnected groups with the panels and the `percent`. `400` for no panels or more than 256, two panels with one id or on one spot, an extent past 30 degrees, a grid above 16 by 16, or a view that cannot see the center. |
 | GET | `/projects/{id}/framing` | The project and its draft, or `draft: null`. |
-| PUT | `/projects/{id}/framing` | The whole draft with `revision` set to the one read (0 when none existed); a body with `mosaic` in place of `layout` (and in a rig framing) is read as that grid. `409` when it moved; `400` when `project_id` disagrees with the URL, the geometry fails the core's checks, or `view_fov_degrees` is outside 0.02 to 180; `404` for an unknown project or `panel_rig_id`; `422` with the panels' names when it moves a panel it keeps locked, or the center, angle or panel size under one. `layout_revision` moves only when what activation writes changes; centers and angles within 1e-7° of the saved ones count as unchanged, and locks and the minimum overlap are not part of it. |
+| PUT | `/projects/{id}/framing` | The whole draft with `revision` set to the one read (0 when none existed); a body with `mosaic` in place of `layout` (and in a rig framing) is read as that grid. A panel may carry `angle_offset_degrees` (its turn from the framing's angle, −180 to 180; absent is 0) and, when locked, `measured` (its shot geometry, as `GET /projects/{id}/mosaic` reads it). `409` when it moved; `400` when `project_id` disagrees with the URL, the geometry fails the core's checks, or `view_fov_degrees` is outside 0.02 to 180; `404` for an unknown project or `panel_rig_id`; `422` with the panels' names when it moves or turns a panel it keeps locked, moves the center, angle or panel size under a planned one, or gives a locked panel shot geometry other than what its frames say now. `layout_revision` moves only when what activation writes changes; centers and angles within 1e-7° of the saved ones count as unchanged, and locks and the minimum overlap are not part of it; turns and new shot geometry are. |
 | GET | `/rigs/profiles` | Every registered database bound to a rig: `rig`, `catalog_slug`, `catalog_name`, the rig `profile` (or `null`) and its `field_of_view`. Unbound or unreadable databases are left out. |
 
 Offsets are gnomonic (tangent-plane) degrees with east positive, exact for any
