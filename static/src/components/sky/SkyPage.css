@@ -123,9 +123,10 @@
   border-color: var(--color-primary);
 }
 
-.sky-chip.is-on {
-  background: var(--color-primary-alpha-20);
-  border-color: var(--color-primary);
+.sky-chip[aria-pressed='true'],
+.sky-chip[aria-checked='true'] {
+  background: var(--state-on-bg);
+  border-color: var(--state-on-border);
   color: var(--color-text-primary);
 }
 
@@ -137,12 +138,13 @@
   opacity: 0.35;
 }
 
-.sky-chip-filter.is-on {
+/* A filter chip shows its filter's colour when on, as on the map. */
+.sky-chip-filter[aria-pressed='true'] {
   background: color-mix(in srgb, var(--chip-color) 18%, var(--color-bg-secondary));
   border-color: var(--chip-color);
 }
 
-.sky-chip-filter.is-on .sky-chip-swatch {
+.sky-chip-filter[aria-pressed='true'] .sky-chip-swatch {
   opacity: 1;
 }
 

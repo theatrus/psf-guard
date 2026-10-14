@@ -940,7 +940,8 @@ export default function SequenceView() {
                 return (
                   <button
                     key={choice.key}
-                    className={`sequence-tab ${choice.key === activeChoice?.key ? 'active' : ''}`}
+                    className="sequence-tab"
+                    aria-pressed={choice.key === activeChoice?.key}
                     onClick={() => selectSequence(choice)}
                   >
                     <span>{choice.label}</span>

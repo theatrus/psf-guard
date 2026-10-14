@@ -269,7 +269,6 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
           <button
             key={option.value}
             type="button"
-            className={direction === option.value ? 'active' : ''}
             aria-pressed={direction === option.value}
             onClick={() => {
               setDirection(option.value);

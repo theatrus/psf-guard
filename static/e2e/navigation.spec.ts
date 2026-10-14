@@ -526,7 +526,7 @@ test('Sequence keeps a Grid selection that spans session tabs', async ({ page })
   await expect(page.locator('.sequence-tab-selection-count')).toHaveCount(3);
   await expect(page.locator('.sequence-selection-bar')).toContainText('2 selected');
   await expect(page.locator('.sequence-image-card.selected')).toHaveCount(1);
-  await expect(page.locator('.sequence-tab').nth(2)).toHaveClass(/active/);
+  await expect(page.locator('.sequence-tab').nth(2)).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('button', { name: /All sessions/ }).click();
   await expect(page.locator('.sequence-image-card')).toHaveCount(3);
@@ -845,7 +845,7 @@ test('many Sequence tabs wrap into a stable grid without horizontal scrolling', 
   expect(new Set(before.map(tab => Math.round(tab.top))).size).toBeGreaterThan(1);
 
   await tabs.last().click();
-  await expect(tabs.last()).toHaveClass(/active/);
+  await expect(tabs.last()).toHaveAttribute('aria-pressed', 'true');
   const after = await tabs.evaluateAll(elements => elements.map(element => ({
     top: element.getBoundingClientRect().top,
     width: element.getBoundingClientRect().width,
@@ -1038,7 +1038,7 @@ test('detail closes back to the Sequence session that opened it', async ({ page 
   const tabs = page.locator('.sequence-tab');
   await expect(tabs).toHaveCount(2, { timeout: 15_000 });
   await tabs.nth(1).click();
-  await expect(tabs.nth(1)).toHaveClass(/active/);
+  await expect(tabs.nth(1)).toHaveAttribute('aria-pressed', 'true');
   await expect(page).toHaveURL(/current=2/);
 
   const cards = page.locator('.sequence-image-card');
@@ -1057,7 +1057,7 @@ test('detail closes back to the Sequence session that opened it', async ({ page 
   await expect(page).toHaveURL(/#\/sequence\?/);
   await expect(page).not.toHaveURL(/returnTo=/);
   await expect(page).toHaveURL(/current=3/);
-  await expect(tabs.nth(1)).toHaveClass(/active/);
+  await expect(tabs.nth(1)).toHaveAttribute('aria-pressed', 'true');
   await expect(cards.nth(1)).toHaveClass(/current-selection/);
 });
 

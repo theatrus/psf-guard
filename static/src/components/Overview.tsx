@@ -1000,6 +1000,7 @@ export default function Overview() {
                       onClick={() => project.has_files && handleSelectProject(project)}
                       disabled={!project.has_files}
                       aria-label={`Open ${project.display_name} image grid`}
+                      aria-current={isCurrent ? 'true' : undefined}
                     >
                       <span className="project-title">{project.display_name}</span>
                       <span className="project-database" title={`Database ID: ${project.db_id}`}>
@@ -1668,7 +1669,8 @@ export default function Overview() {
                         data-project-key={key}
                         data-current-project={isCurrent ? 'true' : undefined}
                         type="button"
-                        className={`project-archive-item${isCurrent ? ' is-current' : ''}`}
+                        className="project-archive-item"
+                        aria-current={isCurrent ? 'true' : undefined}
                         onClick={() => project.has_files && handleSelectProject(project)}
                         disabled={!project.has_files}
                       >

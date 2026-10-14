@@ -49,8 +49,8 @@
 }
 
 .calibration-tabs button[aria-selected='true'] {
-  color: var(--color-text-primary);
-  border-bottom-color: var(--color-primary);
+  color: var(--state-on-fg);
+  border-bottom-color: var(--state-on-border);
 }
 
 .calibration-page select,
@@ -114,8 +114,8 @@
 }
 
 .calibration-sessions li button[aria-current='true'] {
-  border-color: var(--color-primary);
-  background: var(--color-primary-alpha-10);
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
 }
 
 .calibration-session-head {
@@ -228,7 +228,8 @@
 }
 
 .calibration-thumb[aria-pressed='true'] {
-  border-color: var(--color-primary);
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
 }
 
 .calibration-thumb-poor .calibration-thumb-image,
@@ -328,7 +329,7 @@
 }
 
 .calibration-canvas:focus-visible {
-  box-shadow: 0 0 0 2px var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
 }
 
 .calibration-canvas img {

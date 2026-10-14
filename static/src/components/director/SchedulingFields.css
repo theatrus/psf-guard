@@ -39,7 +39,7 @@
   opacity: 0.7;
 }
 
-.scheduling-field.is-set label { color: var(--color-primary); }
+.scheduling-field.is-set label { color: var(--state-set-fg); }
 .scheduling-source { color: var(--color-text-secondary); }
 
 .director-page .scheduling-clear {

@@ -495,7 +495,7 @@ export default function StackPreviewInspector({
           {artifactSource && (
             <>
               <button
-                className={`stack-artifact-select ${selecting ? 'active' : ''}`}
+                className="stack-artifact-select"
                 type="button"
                 disabled={!loaded || !artifactEnabled || startSearch.isPending}
                 aria-pressed={selecting}

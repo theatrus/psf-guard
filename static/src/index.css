@@ -52,9 +52,8 @@ button {
 button:hover {
   border-color: var(--color-link);
 }
-button:focus,
 button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  outline: 2px solid var(--state-focus-border);
 }
 
 /* Always use dark mode for this app */

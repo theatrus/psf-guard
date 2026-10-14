@@ -64,25 +64,25 @@
 .framing-seg { display: inline-flex; background: var(--color-scrim); border: 1px solid var(--color-scrim-border); border-radius: 6px; overflow: hidden; }
 .framing-seg button { min-height: 28px; height: 28px; padding: 0 9px; gap: 5px; font-size: 12px; color: var(--color-text-on-fill); background: transparent; border: 0; border-radius: 0; border-right: 1px solid var(--color-scrim-border); }
 .framing-seg button:last-child { border-right: 0; }
-.framing-seg button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
-.framing-seg button[aria-pressed="true"] { background: rgba(90, 180, 255, 0.85); color: #06121f; }
-.framing-seg button[aria-pressed="true"]:hover { background: rgba(90, 180, 255, 0.95); }
+.framing-seg button:hover:not(:disabled) { background: var(--color-overlay-white); }
+/* Over the sky a tint would not read, so an on toggle fills. */
+.framing-seg button[aria-pressed='true'], .framing-seg button[aria-pressed='true']:hover { background: var(--state-on-fill); color: var(--state-on-fill-fg); }
 .framing-seg-icons button { width: 30px; padding: 0; }
-.framing-seg-icons button[aria-pressed="false"] { color: rgba(255, 255, 255, 0.6); }
+.framing-seg-icons button[aria-pressed='false'] { color: var(--color-text-muted); }
 @media (max-width: 600px) { .framing-seg button span { display: none; } }
 .framing-stage-status { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; max-width: min(100%, 520px); }
-.framing-stage-status span { background: rgba(0, 0, 0, 0.65); color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-.framing-stage-status [role="alert"] { background: rgba(160, 40, 40, 0.85); }
+.framing-stage-status span { background: var(--color-scrim); color: var(--color-text-on-fill); padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+.framing-stage-status [role='alert'] { background: rgba(160, 40, 40, 0.85); }
 /* A note is a few words; its title gives the reason, so it takes the pointer
    for the tooltip. A drag that starts on it still reaches the stage. */
-.framing-stage-status [role="note"] { color: rgba(255, 255, 255, 0.8); pointer-events: auto; cursor: help; }
-.framing-stage-scale { position: absolute; right: 10px; bottom: 8px; background: rgba(0, 0, 0, 0.65); color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; }
+.framing-stage-status [role='note'] { color: var(--color-text-lighter); pointer-events: auto; cursor: help; }
+.framing-stage-scale { position: absolute; right: 10px; bottom: 8px; background: var(--color-scrim); color: var(--color-text-on-fill); padding: 3px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; }
 .framing-attribution { margin: 4px 0 0; font-size: 11px; line-height: 1.35; }
 .framing-controls fieldset { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 6px 12px 10px; margin: 0 0 10px; min-width: 0; }
 .framing-controls legend { padding: 0 4px; font-weight: 600; }
 .framing-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text-secondary); min-width: 0; }
 .framing-controls label > small:last-child { color: var(--color-text-secondary); }
-.framing-controls input:not([type="checkbox"]), .framing-controls select { width: 100%; min-width: 0; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; }
+.framing-controls input:not([type='checkbox']), .framing-controls select { width: 100%; min-width: 0; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font: inherit; }
 .framing-controls input:disabled, .framing-controls select:disabled { opacity: 0.6; }
 .framing-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: 8px 12px; margin-top: 8px; }
 .framing-input { display: flex; align-items: center; gap: 6px; }
@@ -125,10 +125,9 @@
    scale's width clear and shortens its name to fit. */
 .framing-stage-surveys.is-narrow .framing-layers-chip { max-width: calc(100% - 115px); }
 .framing-layers-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.framing-stage-surveys button { min-height: 26px; padding: 2px 9px; font-size: 12px; border-radius: 12px; background: rgba(0, 0, 0, 0.65); color: #fff; border: 1px solid rgba(255, 255, 255, 0.25); }
-.framing-stage-surveys button[aria-pressed="true"] { background: rgba(90, 180, 255, 0.85); color: #06121f; border-color: #5ab4ff; }
-.framing-stage-surveys button:hover:not(:disabled) { background: rgba(40, 40, 40, 0.85); }
-.framing-stage-surveys button[aria-pressed="true"]:hover { background: rgba(90, 180, 255, 0.95); }
+.framing-stage-surveys button { min-height: 26px; padding: 2px 9px; font-size: 12px; border-radius: 12px; background: var(--color-scrim); color: var(--color-text-on-fill); border: 1px solid var(--color-scrim-border); }
+.framing-stage-surveys button:hover:not(:disabled) { background: var(--color-scrim-hover); }
+.framing-stage-surveys button[aria-pressed='true'], .framing-stage-surveys button[aria-pressed='true']:hover { background: var(--state-on-fill); color: var(--state-on-fill-fg); border-color: var(--state-on-fill); }
 
 /* The chart under the framing, in the Sky view's colours. */
 .framing-graticule path { fill: none; stroke: var(--sky-graticule); stroke-width: 1; vector-effect: non-scaling-stroke; }
@@ -171,7 +170,7 @@
 .framing-catalogs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 8px; }
 .framing-catalogs-title { flex-basis: 100%; font-size: 12px; color: var(--color-text-secondary); }
 .framing-catalogs button { min-height: 24px; padding: 1px 8px; font-size: 12px; border-radius: 12px; color: var(--color-text-secondary); }
-.framing-catalogs button[aria-pressed="true"] { background: rgba(90, 180, 255, 0.18); border-color: #5ab4ff; color: var(--color-text-primary); }
+.framing-catalogs button[aria-pressed='true'] { background: var(--state-on-bg); border-color: var(--state-on-border); color: var(--color-text-primary); }
 .framing-stage-zoom { position: absolute; right: 10px; bottom: 34px; display: flex; flex-direction: column; gap: 4px; }
 .framing-stage-zoom button { width: 30px; min-height: 30px; padding: 0; background: var(--color-scrim); color: var(--color-text-on-fill); border: 1px solid var(--color-scrim-border); border-radius: 4px; }
 .framing-stage-zoom button:hover:not(:disabled) { background: var(--color-scrim-hover); }
@@ -202,16 +201,17 @@
 /* An on/off switch: a track with a knob that slides right when on. */
 .director-page button.framing-rig-switch { flex: none; position: relative; width: 34px; min-width: 34px; height: 18px; min-height: 18px; padding: 0; border: 0; border-radius: 999px; background: var(--color-bg-quaternary); cursor: pointer; }
 .director-page button.framing-rig-switch > span { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--color-text-secondary); transition: left 0.12s; }
-.director-page button.framing-rig-switch[aria-checked="true"] { background: #5ab4ff; }
-.director-page button.framing-rig-switch[aria-checked="true"] > span { left: 18px; background: #fff; }
+.director-page button.framing-rig-switch[aria-checked='true'] { background: var(--state-on-fill); }
+.director-page button.framing-rig-switch[aria-checked='true'] > span { left: 18px; background: var(--color-text-on-fill); }
 .director-page button.framing-rig-switch:disabled { cursor: not-allowed; opacity: 0.6; }
 .framing-rig-pick { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .director-page button.framing-rig-pick { flex: 1; min-height: 0; justify-content: flex-start; padding: 2px 6px; margin: -2px 0; border: 0; border-radius: 6px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .director-page button.framing-rig-pick:hover:not(:disabled) { background: color-mix(in srgb, var(--framing-panel) 12%, transparent); }
 .director-page button.framing-rig-pick:hover:not(:disabled) .framing-rig-swatch { border-color: var(--framing-panel); background: color-mix(in srgb, var(--framing-panel) 35%, transparent); }
 .director-page button.framing-rig-pick:disabled { cursor: default; opacity: 1; }
-/* The rig that sizes the shared panels reads as the selected one. */
-.framing-rig-card.is-framing { border-color: #5ab4ff; background: rgba(80, 180, 255, 0.08); box-shadow: inset 3px 0 0 #5ab4ff; }
+/* The rig that sizes the shared panels reads as the selected one, in the
+   panels' blue so the card and its outline on the sky match. */
+.framing-rig-card.is-framing { border-color: var(--framing-panel); background: color-mix(in srgb, var(--framing-panel) 8%, transparent); box-shadow: inset 3px 0 0 var(--framing-panel); }
 .framing-panel-source { margin: 0 0 6px; font-size: 13px; color: var(--color-text-secondary); }
 .framing-panel-source strong { color: var(--color-text-primary); }
 .director-page .framing-panel-source button { min-height: 24px; margin-left: 6px; padding: 1px 8px; font-size: 12px; }
@@ -220,6 +220,6 @@
 
 /* What the server would refuse, said at the field. */
 .framing-problem { margin: 4px 0 0; font-size: 13px; color: var(--color-error-light); }
-.framing-controls input[aria-invalid="true"] { border-color: var(--color-error-light); }
+.framing-controls input[aria-invalid='true'] { border-color: var(--color-error-light); }
 .framing-orphans { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--color-text-secondary); }
 .framing-orphans li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }

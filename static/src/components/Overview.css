@@ -253,8 +253,9 @@
 .project-show select:focus,
 .project-sort select:focus,
 .project-db-filter select:focus {
-  border-color: var(--color-primary);
-  outline: 2px solid var(--color-primary-alpha-20);
+  outline: none;
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
 }
 
 .sr-only {
@@ -353,7 +354,7 @@
 
 .project-archive-item:focus-visible,
 .project-archive-toggle:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
 }
 
@@ -401,11 +402,13 @@
 }
 
 /* The project the user was working in before they opened the Overview. The
-   ring says "you were here" without competing with the new-images accent. */
+   ring says "you were here" without competing with the new-images accent.
+   The card is a container, so it keeps a class; its open button and the
+   archive row say aria-current. */
 .project-card.is-current,
-.project-archive-item.is-current {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
+.project-archive-item[aria-current='true'] {
+  border-color: var(--state-on-border);
+  box-shadow: 0 0 0 2px var(--state-on-bg);
 }
 
 .project-card.no-files {
@@ -420,7 +423,7 @@
 .project-open-main:focus-visible,
 .project-settings-button:focus-visible,
 .project-frame:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
 }
 
@@ -662,7 +665,7 @@
 
 .target-compact-main:focus-visible,
 .target-settings-button:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: -2px;
 }
 

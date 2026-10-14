@@ -142,6 +142,38 @@ describe('StackPreviewPanel job adoption', () => {
     expect(screen.getByAltText('Sh2 86 Ha stack preview')).not.toHaveAttribute('src', '/selected.png');
     expect(posts).toBe(0);
   });
+
+  it('says which star removal view is shown', async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({
+        groups: [{ job_id: 'ready-job', artifact_revision: 'ready-revision', accepted_only: false,
+          group: { ...runningGroup, state: 'ready', phase: 'ready' } }],
+      })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.get('/api/db/test/stack-previews/ready-job/0/stretch', () => ok({
+        schema_version: 3, stretch_id: 'selected', stretch_version: '0.1',
+        config: { model: { type: 'identity' }, color_strategy: 'linked', max_analysis_samples: 4 },
+        request: { model: { type: 'identity' }, color_strategy: 'linked' },
+        deconvolution: null, input_range: null,
+        linked_statistics: { min: 0, max: 1, median: 0.2 },
+        rc_astro: null,
+        preview_url: '/selected.png', original_preview_url: '/selected-full.png',
+        stars_preview_url: '/stars.png', fits_url: '/selected.fits',
+      })),
+    );
+    render(<StackPreviewPanel dbId="test" projectId={1} images={images}
+      selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
+    const starless = await screen.findByRole('button', { name: 'Starless' });
+    const stars = screen.getByRole('button', { name: 'Stars' });
+    expect(starless).toHaveAttribute('aria-pressed', 'true');
+    expect(stars).toHaveAttribute('aria-pressed', 'false');
+    await user.click(stars);
+    expect(stars).toHaveAttribute('aria-pressed', 'true');
+    expect(starless).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByAltText('Sh2 86 Ha stack preview')).toHaveAttribute('src', '/stars.png');
+  });
+
   it('shows a build that was started before the panel mounted', async () => {
     server.use(
       http.get('/api/stack-activity', () => ok({

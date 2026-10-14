@@ -55,7 +55,7 @@ export default function QualityAnalysisSummary({
         <div className="quality-region-controls">
           <button
             type="button"
-            className={`astrometry-toggle quality-region-toggle ${overlayVisible ? 'active' : ''}`}
+            className="astrometry-toggle quality-region-toggle"
             aria-pressed={overlayVisible}
             onClick={onToggleOverlay}
           >

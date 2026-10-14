@@ -336,7 +336,7 @@
 
 .brand-button:focus-visible,
 .header-button:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
 }
 
@@ -387,10 +387,10 @@
 }
 
 /* One "you are here" for every view button, in the strip or in the scope. */
-.header-view-tabs .header-button[aria-current="page"] {
-  color: var(--color-bg-primary, #111);
-  border-color: var(--color-primary);
-  background: var(--color-primary);
+.header-view-tabs .header-button[aria-current='page'] {
+  color: var(--state-on-fill-fg);
+  border-color: var(--state-on-fill);
+  background: var(--state-on-fill);
 }
 
 .header-button:hover {
@@ -473,8 +473,8 @@
 
 .compact-select:focus {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
 }
 
 .compact-select:disabled {
@@ -517,8 +517,9 @@
 }
 
 .selector-search:focus {
-  border-color: var(--color-primary);
-  outline: 2px solid var(--color-primary-alpha-20);
+  outline: none;
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
 }
 
 .selector-options {
@@ -574,9 +575,9 @@
   outline: none;
 }
 
-.selector-option.is-selected {
-  background: var(--color-primary-alpha-20);
-  color: var(--color-primary);
+.selector-option[aria-current='true'] {
+  background: var(--state-on-bg);
+  color: var(--state-on-fg);
 }
 
 .selector-option small {
@@ -976,7 +977,8 @@
 
 .selector-group select:focus {
   outline: none;
-  border-color: var(--color-primary);
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
 }
 
 .selector-group select option:disabled {
@@ -1094,7 +1096,7 @@
 }
 
 .project-pick-prompt button:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 3px;
 }
 
@@ -1178,8 +1180,8 @@
 
 /* The card the keyboard is on, as in the grid's current card. */
 .image-card.selected {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px var(--color-primary-alpha-30);
+  border-color: var(--state-on-border);
+  box-shadow: var(--state-cursor-ring);
 }
 
 .image-card.status-accepted {
@@ -1944,10 +1946,14 @@
 }
 
 .astrometry-toggle:hover,
-.astrometry-solve:hover:not(:disabled),
-.astrometry-toggle.active {
+.astrometry-solve:hover:not(:disabled) {
   border-color: var(--color-primary);
   background: var(--color-primary-alpha-10);
+}
+
+.astrometry-toggle[aria-pressed='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
 }
 
 .astrometry-solve {
@@ -2564,7 +2570,7 @@
   cursor: pointer;
 }
 
-.comparison-controls input[type="checkbox"] {
+.comparison-controls input[type='checkbox'] {
   cursor: pointer;
 }
 
@@ -3058,7 +3064,7 @@
     display: none;
   }
 
-  .size-control.compact input[type="range"] {
+  .size-control.compact input[type='range'] {
     width: min(150px, 30vw);
   }
 }
@@ -3085,8 +3091,8 @@
 
 .filter-input-group select:focus {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
 }
 
 /* Enhanced selection indicators */
@@ -3098,13 +3104,13 @@
  * itself keeps the accept/reject status color, so a selected card still
  * reads as accepted or rejected at a glance. */
 .image-card-wrapper.multi-selected .image-card {
-  box-shadow: 0 0 0 2px var(--color-warning);
+  box-shadow: 0 0 0 2px var(--state-picked);
   transform: scale(0.98);
 }
 
 .image-card-wrapper.current-selection .image-card {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px var(--color-primary-alpha-50);
+  border-color: var(--state-on-border);
+  box-shadow: var(--state-cursor-ring);
   transform: scale(1.02);
 }
 
@@ -4810,7 +4816,7 @@
   font-size: 0.56rem;
 }
 
-.stack-rc-astro-fields input[aria-invalid="true"] {
+.stack-rc-astro-fields input[aria-invalid='true'] {
   border-color: var(--color-error);
 }
 
@@ -4866,9 +4872,9 @@
   text-decoration: none;
 }
 
-.stack-preview-stars-toggle .is-active {
+.stack-preview-stars-toggle [aria-pressed='true'] {
   color: var(--color-text-primary);
-  background: var(--color-primary-alpha-30);
+  background: var(--state-on-bg);
 }
 
 .stack-color-stage-grid {
@@ -5232,10 +5238,15 @@
 }
 
 .stack-artifact-select:hover:not(:disabled),
-.stack-artifact-select.active,
 .stack-artifact-result button:hover {
   color: var(--color-primary);
   border-color: var(--color-primary);
+}
+
+.stack-artifact-select[aria-pressed='true'] {
+  color: var(--state-on-fg);
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
 }
 
 .stack-artifact-search {
@@ -5531,8 +5542,8 @@
   position: absolute;
   top: 8px;
   right: 8px;
-  background: var(--color-warning);
-  color: white;
+  background: var(--state-picked);
+  color: var(--color-text-on-fill);
   border-radius: 50%;
   width: 24px;
   height: 24px;
@@ -5566,7 +5577,7 @@
   font-size: 0.85rem;
 }
 
-.size-control input[type="range"] {
+.size-control input[type='range'] {
   width: 300px;
   height: 6px;
   -webkit-appearance: none;
@@ -5577,12 +5588,12 @@
   cursor: pointer;
 }
 
-.size-control.compact input[type="range"] {
+.size-control.compact input[type='range'] {
   width: 200px;
   height: 4px;
 }
 
-.size-control input[type="range"]::-webkit-slider-thumb {
+.size-control input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 18px;
@@ -5592,7 +5603,7 @@
   cursor: pointer;
 }
 
-.size-control input[type="range"]::-moz-range-thumb {
+.size-control input[type='range']::-moz-range-thumb {
   width: 18px;
   height: 18px;
   background: var(--color-primary);
@@ -6060,9 +6071,9 @@
 .view-toolbar .sequence-stop-rule {
   width: var(--toolbar-control-height);
   padding: 0;
-  border-color: var(--color-primary-alpha-50);
+  border-color: var(--state-set-border);
   border-radius: 999px;
-  color: var(--color-primary);
+  color: var(--state-set-fg);
 }
 
 @media (max-width: 760px) {
@@ -6089,7 +6100,7 @@
     gap: 0.3rem;
   }
 
-  .size-control.compact input[type="range"] {
+  .size-control.compact input[type='range'] {
     width: min(96px, 20vw);
   }
 
@@ -6338,13 +6349,13 @@
   white-space: nowrap;
 }
 
-.sequence-tab.active {
-  background: var(--color-bg-secondary);
-  color: var(--color-primary);
-  border-color: var(--color-primary);
+.sequence-tab[aria-pressed='true'] {
+  background: var(--state-on-bg);
+  color: var(--state-on-fg);
+  border-color: var(--state-on-border);
 }
 
-.sequence-tab:hover:not(.active) {
+.sequence-tab:hover:not([aria-pressed='true']) {
   background: var(--color-bg-quaternary);
 }
 
@@ -6463,12 +6474,12 @@
 }
 
 .sequence-image-card.selected {
-  border-color: var(--color-warning);
-  box-shadow: 0 0 0 2px var(--color-warning-alpha-40);
+  border-color: var(--state-picked);
+  box-shadow: 0 0 0 2px var(--state-picked-ring);
 }
 
 .sequence-image-card.current-selection {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-on-border);
   outline-offset: 2px;
 }
 
@@ -6553,14 +6564,19 @@
   cursor: pointer;
 }
 
-.sequence-reason-trigger:hover,
-.sequence-reason-trigger[aria-expanded='true'] {
+.sequence-reason-trigger:hover {
   border-color: var(--color-primary);
   color: var(--color-primary);
 }
 
+.sequence-reason-trigger[aria-expanded='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
+  color: var(--state-on-fg);
+}
+
 .sequence-reason-trigger:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
 }
 
@@ -6801,7 +6817,7 @@
   color: var(--color-text-muted);
 }
 
-.penalty-slider input[type="range"] {
+.penalty-slider input[type='range'] {
   width: 90px;
 }
 
@@ -6832,7 +6848,7 @@
   color: var(--color-text-muted);
 }
 
-.penalty-limit input[type="number"] {
+.penalty-limit input[type='number'] {
   box-sizing: border-box;
   width: 100%;
   padding: 0.15rem 0.3rem;

@@ -98,6 +98,8 @@ export default function SkyTimeline({ lanes, nightKeys, fromNight, asOfNight, on
     const first = nightKeys.findIndex((night) => night >= `${year}-01-01`);
     onRange(first <= 0 ? null : nightKeys[first], null);
   };
+  const startsAtYear = (year: string) =>
+    Boolean(fromNight?.startsWith(year)) && fromNight === nightKeys.find((night) => night >= `${year}-01-01`);
 
   return (
     <div className="sky-timeline">
@@ -158,14 +160,15 @@ export default function SkyTimeline({ lanes, nightKeys, fromNight, asOfNight, on
       </div>
       {years.length > 1 && (
         <div className="sky-timeline-years" aria-label="Start year">
-          <button type="button" className={`sky-chip${fromNight ? '' : ' is-on'}`} onClick={() => onRange(null, asOfNight)}>
+          <button type="button" className="sky-chip" aria-pressed={!fromNight} onClick={() => onRange(null, asOfNight)}>
             From the start
           </button>
           {years.map((year) => (
             <button
               key={year}
               type="button"
-              className={`sky-chip${fromNight?.startsWith(year) && fromNight === nightKeys.find((night) => night >= `${year}-01-01`) ? ' is-on' : ''}`}
+              className="sky-chip"
+              aria-pressed={startsAtYear(year)}
               onClick={() => fromYear(year)}
             >
               From {year}

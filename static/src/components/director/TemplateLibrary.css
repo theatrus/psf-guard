@@ -8,7 +8,7 @@
 .template-table th { text-align: left; font-weight: 500; color: var(--color-text-secondary); padding: 4px 6px; white-space: nowrap; }
 .template-table td { padding: 3px 6px; border-top: 1px solid var(--color-border-secondary); vertical-align: middle; }
 .template-table input { width: 100%; min-width: 4.5rem; box-sizing: border-box; background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 5px 7px; font: inherit; }
-.template-table input[type="number"] { min-width: 4rem; }
+.template-table input[type='number'] { min-width: 4rem; }
 .template-table td:first-child input { min-width: 9rem; }
 .template-table tr.is-dirty td { background: color-mix(in srgb, var(--color-primary) 6%, transparent); }
 .template-table .plan-goal { display: inline-flex; align-items: center; gap: 4px; }
@@ -17,7 +17,7 @@
 .template-moon { border: 0; margin: 8px 0; padding: 8px 0; width: min(880px, calc(100vw - 112px)); max-width: 100%; min-width: 0; box-sizing: border-box; position: sticky; left: 0; }
 .template-moon legend { font-weight: 600; }
 .template-moon > label { display: inline-flex; align-items: center; gap: 6px; margin: 0 20px 12px 0; }
-.template-table .template-moon input[type="checkbox"] { width: auto; min-width: 0; }
+.template-table .template-moon input[type='checkbox'] { width: auto; min-width: 0; }
 .template-moon-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px 20px; }
 .template-moon-fields label { display: flex; flex-direction: column; gap: 6px; }
 .template-moon-fields span { display: flex; align-items: center; gap: 6px; color: var(--color-text-secondary); }

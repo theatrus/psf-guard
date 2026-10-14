@@ -292,7 +292,7 @@ describe('SequenceView: rendering states', () => {
     });
     expect(new URLSearchParams(search).get('current')).toBe(String(selectedImageId));
     const tabs = await screen.findAllByRole('button', { name: /L · .* \(5\)/ });
-    expect(tabs[1]).toHaveClass('active');
+    expect(tabs[1]).toHaveAttribute('aria-pressed', 'true');
     expect(document.querySelector(`[data-card-image-id="${selectedImageId}"]`)).toHaveClass(
       'current-selection'
     );
@@ -1089,7 +1089,7 @@ describe('SequenceView: multi-session', () => {
       ).getFullYear();
       expect(tabs[0]).toHaveTextContent(String(year));
     });
-    expect(screen.getByRole('button', { name: 'L · All sessions (10)' })).toHaveClass('active');
+    expect(screen.getByRole('button', { name: 'L · All sessions (10)' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('compares all stack candidates without replacing session scores', async () => {
@@ -1099,7 +1099,7 @@ describe('SequenceView: multi-session', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=2') });
 
     const rollupTab = await screen.findByRole('button', { name: 'L · All sessions (10)' });
-    expect(rollupTab).toHaveClass('active');
+    expect(rollupTab).toHaveAttribute('aria-pressed', 'true');
     expect(document.querySelectorAll('.sequence-image-card')).toHaveLength(10);
     expect(screen.getByText('Stack comparison · matching capture settings across all sessions')).toBeInTheDocument();
     expect(document.querySelector('[data-card-image-id="201"] .quality-badge')).toHaveTextContent('42');
@@ -1131,15 +1131,15 @@ describe('SequenceView: multi-session', () => {
     const tabs = screen.getAllByRole('button', { name: /L · .* \(5\)/ });
 
     // The all-session stack comparison is active by default.
-    expect(screen.getByRole('button', { name: 'L · All sessions (10)' })).toHaveClass('active');
-    expect(tabs[0].classList.contains('active')).toBe(false);
+    expect(screen.getByRole('button', { name: 'L · All sessions (10)' })).toHaveAttribute('aria-pressed', 'true');
+    expect(tabs[0]).toHaveAttribute('aria-pressed', 'false');
 
     // Click second tab
     await user.click(tabs[1]);
 
     // Second tab should now be active
-    expect(tabs[1].classList.contains('active')).toBe(true);
-    expect(tabs[0].classList.contains('active')).toBe(false);
+    expect(tabs[1]).toHaveAttribute('aria-pressed', 'true');
+    expect(tabs[0]).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('keeps cross-session selections visible and reviews all of them', async () => {
@@ -1259,7 +1259,7 @@ describe('SequenceView: multi-session', () => {
     });
 
     const tabs = await screen.findAllByRole('button', { name: /L · .* \(5\)/ });
-    expect(tabs[1]).toHaveClass('active');
+    expect(tabs[1]).toHaveAttribute('aria-pressed', 'true');
     expect(document.querySelectorAll('.sequence-image-card')[1]).toHaveClass(
       'current-selection'
     );

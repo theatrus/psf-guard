@@ -108,7 +108,7 @@ export default function AstrometryPanel({
       {solution && (
         <button
           type="button"
-          className={`astrometry-toggle ${overlayVisible ? 'active' : ''}`}
+          className="astrometry-toggle"
           aria-pressed={overlayVisible}
           onClick={onToggleOverlay}
         >

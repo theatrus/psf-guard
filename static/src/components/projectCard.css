@@ -263,12 +263,12 @@
 }
 
 /* Completion badge variants based on percentage */
-.completion-badge[data-completion="100"] {
+.completion-badge[data-completion='100'] {
   background: var(--color-success);
   color: var(--color-text-on-fill);
 }
 
-.completion-badge[data-completion="0"] {
+.completion-badge[data-completion='0'] {
   background: var(--color-warning-alpha-20);
   color: var(--color-warning);
   border-color: var(--color-warning);
@@ -281,7 +281,8 @@
 .project-density { display: inline-flex; border: 1px solid var(--color-border-secondary); border-radius: 6px; overflow: hidden; align-self: flex-end; }
 .project-density button { min-height: 32px; padding: 4px 12px; border: 0; border-radius: 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; font: inherit; }
 .project-density button + button { border-left: 1px solid var(--color-border-secondary); }
-.project-density button[aria-checked="true"] { background: var(--color-primary-alpha-20); color: var(--color-text-primary); }
+/* Inside the segmented group the group draws the border. */
+.project-density button[aria-checked='true'] { background: var(--state-on-bg); color: var(--color-text-primary); }
 .projects-list.is-compact { gap: 6px; }
 .library-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 10px; border: 1px solid var(--color-border-secondary); border-radius: 25px; background: var(--color-bg-surface); }
 .library-row:hover { border-color: var(--color-border-tertiary); background: var(--color-bg-elevated); }

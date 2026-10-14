@@ -10,7 +10,7 @@
 .observing-preferences fieldset > .priority-inherit { display: flex; align-items: center; }
 .project-priority-list { list-style: none; margin: 0 0 1rem; padding: 0; }
 .project-priority-list li { display: grid; grid-template-columns: 28px minmax(0,1fr) 36px 36px; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--color-border-secondary); }
-.project-priority-list li[aria-current=true] .priority-project-name { font-weight: 600; color: var(--color-primary); }
+.project-priority-list li[aria-current='true'] .priority-project-name { font-weight: 600; color: var(--state-on-fg); }
 .priority-project-name { overflow-wrap: anywhere; }
 .priority-position { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
 .observing-fold > summary { cursor: pointer; list-style-position: inside; }

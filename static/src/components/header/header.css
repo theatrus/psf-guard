@@ -110,8 +110,9 @@
   box-shadow: 0 0 0 2px var(--color-error-alpha-20);
 }
 
-.live-chip[aria-current="page"] {
-  border-color: var(--color-primary);
+.live-chip[aria-current='page'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
 }
 
 /* Background work: a small chip with the overall progress and the job
@@ -128,8 +129,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-.activity-chip[aria-expanded="true"] {
-  border-color: var(--color-primary);
+.activity-chip[aria-expanded='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
 }
 
 .activity-chip-percent {
@@ -530,7 +532,7 @@ div.activity-error {
   box-shadow: var(--shadow-popover);
 }
 
-.header-menu-list [role="menuitem"] {
+.header-menu-list [role='menuitem'] {
   display: flex;
   align-items: center;
   gap: 0.55rem;
@@ -545,8 +547,8 @@ div.activity-error {
   cursor: pointer;
 }
 
-.header-menu-list [role="menuitem"]:hover,
-.header-menu-list [role="menuitem"]:focus-visible {
+.header-menu-list [role='menuitem']:hover,
+.header-menu-list [role='menuitem']:focus-visible {
   background: var(--color-bg-tertiary);
   outline: none;
 }
@@ -583,7 +585,7 @@ div.activity-error {
   transition: max-width 0.18s ease-out, margin-left 0.18s ease-out, opacity 0.14s;
 }
 
-.view-tab[aria-current="page"] .view-tab-name,
+.view-tab[aria-current='page'] .view-tab-name,
 .view-tab:hover .view-tab-name,
 .view-tab:focus-visible .view-tab-name {
   max-width: 9rem;
@@ -592,7 +594,7 @@ div.activity-error {
 }
 
 /* Opening waits; closing does not. */
-.view-tab:not([aria-current="page"]):hover .view-tab-name {
+.view-tab:not([aria-current='page']):hover .view-tab-name {
   transition-delay: 0.15s;
 }
 

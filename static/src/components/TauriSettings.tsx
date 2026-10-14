@@ -1691,7 +1691,7 @@ export default function TauriSettings({
               aria-selected={tab.id === currentTab}
               aria-controls={`settings-panel-${tab.id}`}
               tabIndex={tab.id === currentTab ? 0 : -1}
-              className={`settings-tab${tab.id === currentTab ? ' active' : ''}`}
+              className="settings-tab"
               onClick={() => setActiveTab(tab.id)}
             >
               {tab.label}

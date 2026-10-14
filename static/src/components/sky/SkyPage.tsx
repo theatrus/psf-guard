@@ -316,7 +316,7 @@ export default function SkyPage() {
               type="button"
               role="radio"
               aria-checked={frame === option}
-              className={`sky-chip${frame === option ? ' is-on' : ''}`}
+              className="sky-chip"
               onClick={() => setFrame(option)}
             >
               {option === 'equatorial' ? 'Equatorial' : 'Galactic'}
@@ -330,7 +330,7 @@ export default function SkyPage() {
               type="button"
               role="radio"
               aria-checked={mode === option}
-              className={`sky-chip${mode === option ? ' is-on' : ''}`}
+              className="sky-chip"
               onClick={() => setMode(option)}
             >
               {option === 'aitoff' ? 'Flat' : 'Globe'}
@@ -356,7 +356,7 @@ export default function SkyPage() {
                 key={rig.db_id}
                 type="button"
                 aria-pressed={!hiddenRigs.has(rig.db_id)}
-                className={`sky-chip${hiddenRigs.has(rig.db_id) ? '' : ' is-on'}`}
+                className="sky-chip"
                 onClick={() => toggle(hiddenRigs, rig.db_id, setHiddenRigs)}
               >
                 {rig.db_name}
@@ -370,7 +370,7 @@ export default function SkyPage() {
               key={filter}
               type="button"
               aria-pressed={!hiddenFilters.has(filter)}
-              className={`sky-chip sky-chip-filter${hiddenFilters.has(filter) ? '' : ' is-on'}`}
+              className="sky-chip sky-chip-filter"
               style={{ ['--chip-color' as string]: filterColor(filter) }}
               onClick={() => toggle(hiddenFilters, filter, setHiddenFilters)}
             >
@@ -382,7 +382,7 @@ export default function SkyPage() {
         {plans.enabled && (
           <button
             type="button"
-            className={`sky-chip sky-live-toggle${live ? ' is-on' : ''}`}
+            className="sky-chip sky-live-toggle"
             aria-pressed={live}
             onClick={() => updateParams({ live: live ? null : '1' })}
           >

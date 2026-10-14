@@ -157,3 +157,7 @@
   behind it, such as the two nights a flat master mixes, and the choice
   stays as you move between images. The 🧪 chip in Images and Sequence now
   opens the light on that panel.
+- Screen readers now hear which choice is in effect on more controls: the
+  sequence tabs in Sequence, **Starless** and **Stars** on a stack preview,
+  the start years under the Sky timeline, the plan whose workspace is open
+  in the project picker, and the project you came from in the Library.
