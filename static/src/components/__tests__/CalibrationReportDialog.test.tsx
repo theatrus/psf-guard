@@ -98,21 +98,16 @@ describe('CalibrationReportDialog', () => {
     };
     server.use(
       http.get('/api/db/c925/projects/1/calibration-health', () => HttpResponse.json({ success: true, error: null, data: { health, computed_at: 1, running: false } })),
+      // This catalog's nights split at 06:00 UTC.
       http.get('/api/db/c925/projects/1/calibration-report', () => HttpResponse.json({ success: true, error: null, data: {
-        warnings: [], kinds: [], lights_missing_files: 0,
+        warnings: [], kinds: [], lights_missing_files: 0, night_boundary_seconds: 6 * 3600,
         nights: [{ night: '2026-07-02', lights: 42, filters: [{ ...filter, filter: 'SII', flat_frames: 0, dark_master_frames: 6, dark_master_nights: 1, external_masters: [],
           cannot_calibrate: 'No matching flat: the nearest SII flats are 70° off its rotation' }] }],
       } })),
       http.get('/api/db/c925/projects/1/calibration-report/rejects', () => HttpResponse.json({ success: true, error: null, data: {
-        checked: 50, missing_files: 0, digest: 'd', lights: [
+        checked: 50, missing_files: 0, digest: 'd', night_boundary_seconds: 6 * 3600, lights: [
           { image_id: 7, filter: 'SII', night: '2026-07-01', reason: 'No matching bias or dark' },
         ],
-      } })),
-      // This catalog's nights split at 06:00 UTC.
-      http.get('/api/db/c925/calibrations/sessions', () => HttpResponse.json({ success: true, error: null, data: {
-        sessions: [], total: 0, page: 0, per_page: 1, frames: 0,
-        facets: { filters: [], exposures: [], first_night: null, last_night: null },
-        night_boundary_seconds: 6 * 3600,
       } })),
     );
     function Where() {

@@ -2722,6 +2722,8 @@ export interface ProjectCalibrationReport {
   /** The project's rejected lights, counted whether or not the report includes them. */
   rejected_lights: number;
   rejected_included: boolean;
+  /** Where this catalog's nights split, in seconds after 00:00 UTC. */
+  night_boundary_seconds: number;
 }
 
 export interface CalibrationKindSummary {
@@ -2775,6 +2777,8 @@ export interface ProjectCalibrationGaps {
   checked: number;
   missing_files: number;
   digest: string;
+  /** Where this catalog's nights split, in seconds after 00:00 UTC. */
+  night_boundary_seconds: number;
 }
 
 export interface CalibrationFlatNearMiss {

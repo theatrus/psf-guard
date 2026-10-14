@@ -2190,6 +2190,9 @@ pub struct ProjectCalibrationReport {
     pub rejected_lights: usize,
     /// Whether the report counts the rejected lights.
     pub rejected_included: bool,
+    /// Where this catalog's nights split, in seconds after 00:00 UTC, so a
+    /// link can open one night's lights.
+    pub night_boundary_seconds: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2264,9 +2267,12 @@ pub struct ProjectCalibrationGaps {
     pub checked: usize,
     /// Lights whose file was not found, so could not be read.
     pub missing_files: usize,
-    /// Names this exact list, so rejecting it can refuse a list that
+    /// Identifies this exact list, so rejecting it can refuse a list that
     /// changed after it was shown.
     pub digest: String,
+    /// Where this catalog's nights split, in seconds after 00:00 UTC, so a
+    /// link can open one night's lights.
+    pub night_boundary_seconds: i64,
 }
 
 /// Read every light of a project that is not already rejected and match it
@@ -2332,6 +2338,7 @@ pub fn project_calibration_gaps(
         checked,
         missing_files,
         digest,
+        night_boundary_seconds: boundary,
     })
 }
 
@@ -3167,6 +3174,7 @@ pub fn project_calibration_report(
         lights_missing_files,
         rejected_lights,
         rejected_included: include_rejected,
+        night_boundary_seconds: boundary,
     })
 }
 

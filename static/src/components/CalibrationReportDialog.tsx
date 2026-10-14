@@ -6,7 +6,7 @@ import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
 import type { CalibrationExternalMaster, CalibrationHealthFinding, CalibrationHealthLevel, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
 import Dialog from './Dialog';
-import { calibrationGridHref, calibrationPageHref, nightDates } from './calibration/calibrationLinks';
+import { calibrationGridHref, calibrationPageHref, nightDates, type NightDates } from './calibration/calibrationLinks';
 import './CalibrationReportDialog.css';
 
 interface Props {
@@ -63,16 +63,16 @@ const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.sta
 const lights = (count: number) => `${count.toLocaleString()} light${count === 1 ? '' : 's'}`;
 
 /** Open the Images grid on the lights a calibration level or finding code
- *  covers, in the given filters or all of them, and in one night
- *  (`YYYY-MM-DD`) or all of them. */
-type ShowLights = (calib: string, filterNames: string[], night?: string) => void;
+ *  covers, in the given filters or all of them, and in one night or all of
+ *  them. */
+type ShowLights = (calib: string, filterNames: string[], night?: NightDates) => void;
 
 /** The text of a finding as a link to its lights in the Images grid. */
 function LightsLink({ onShow, calib, filterNames, night, children }: {
   onShow: ShowLights;
   calib: string;
   filterNames: string[];
-  night?: string;
+  night?: NightDates;
   children: ReactNode;
 }) {
   return (
@@ -150,7 +150,7 @@ function UncalibratedLights({ dbId, projectId, onShow }: { dbId: string; project
             <ul className="calibration-report-gap-list">
               {counted.map(([key, { night, filter, count }]) => (
                 <li key={key}>
-                  <LightsLink onShow={onShow} calib="cannot_calibrate" filterNames={filter ? [filter] : []} night={night}>
+                  <LightsLink onShow={onShow} calib="cannot_calibrate" filterNames={filter ? [filter] : []} night={gaps && nightDates(night, gaps.night_boundary_seconds)}>
                     {key}: {count}
                   </LightsLink>
                 </li>
@@ -257,28 +257,13 @@ export default function CalibrationReportDialog({
   });
   const navigate = useNavigate();
   const location = useLocation();
-  const client = useQueryClient();
   const browse = () => {
     onClose();
     navigate(calibrationPageHref(location.search, dbId, projectId));
   };
   const showLights: ShowLights = (calib, filterNames, night) => {
-    const show = (boundary?: number) => {
-      onClose();
-      const dates = night !== undefined && boundary !== undefined ? nightDates(night, boundary) : undefined;
-      navigate(calibrationGridHref(location.search, dbId, projectId, calib, filterNames, dates));
-    };
-    if (night === undefined) {
-      show();
-      return;
-    }
-    // A night's link carries that night's span, which depends on where this
-    // catalog's nights split. Should that not come, all nights show.
-    client.fetchQuery({
-      queryKey: ['db', dbId, 'calibrations', 'night-boundary'],
-      queryFn: () => apiClient.getCalibrationSessions(dbId, { per_page: 1 }).then((page) => page.night_boundary_seconds),
-      staleTime: 5 * 60 * 1000,
-    }).then(show, () => show());
+    onClose();
+    navigate(calibrationGridHref(location.search, dbId, projectId, calib, filterNames, night));
   };
 
   return (
@@ -365,7 +350,7 @@ export default function CalibrationReportDialog({
                       <tr key={`${night.night}:${filter.filter}:gap`} className="calibration-report-masters">
                         <td />
                         <td colSpan={5} className="missing">
-                          <LightsLink onShow={showLights} calib="cannot_calibrate" filterNames={filter.filter ? [filter.filter] : []} night={night.night}>
+                          <LightsLink onShow={showLights} calib="cannot_calibrate" filterNames={filter.filter ? [filter.filter] : []} night={nightDates(night.night, report.data.night_boundary_seconds)}>
                             {filter.filter}: can't be calibrated · {filter.cannot_calibrate}
                           </LightsLink>
                         </td>
