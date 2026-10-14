@@ -38,6 +38,12 @@ pub struct MeasuredGeometry {
     pub frames: u32,
 }
 
+/// Readings closer than these are one place: see
+/// [`MeasuredGeometry::same_place`].
+pub const SAME_CENTER_ARCMIN: f64 = 0.5;
+pub const SAME_ANGLE_DEGREES: f64 = 0.05;
+pub const SAME_SIDE_SHARE: f64 = 1e-3;
+
 fn valid_position(position: &IcrsPosition) -> bool {
     position.ra_degrees.is_finite()
         && (0.0..360.0).contains(&position.ra_degrees)
@@ -53,18 +59,25 @@ impl MeasuredGeometry {
             && self.size.validate().is_ok()
     }
 
-    /// The same place on the sky: center, angle and size within what float
-    /// drift and a JSON round trip leave. How many frames said so, and how
-    /// sure they are, do not move a panel.
+    /// One place for activation and for the panels around it: centers within
+    /// half an arcminute, angles within a twentieth of a degree, sides within
+    /// a thousandth. How many frames said so, and how sure they are, do not
+    /// move a panel either.
+    ///
+    /// A night's new solves move a median by arcseconds, and the server
+    /// refreshes the reading on every save, so a tighter test would call
+    /// each night's solves a new layout. Activation keeps a shot target
+    /// until it is a quarter of a panel away, 4.5′ for a 0.3° field, so half
+    /// an arcminute is a tenth of the narrowest field and still far from a
+    /// change it acts on. A 0.05° turn moves a 2° panel's corner by under
+    /// 4″, and a thousandth of a side is a focus-scale drift.
     pub fn same_place(&self, other: &Self) -> bool {
-        let close = |a: f64, b: f64| (a - b).abs() <= 1e-7;
         let apart = (self.position_angle_degrees - other.position_angle_degrees).rem_euclid(360.0);
-        let ra_apart = (self.center.ra_degrees - other.center.ra_degrees).rem_euclid(360.0);
-        ra_apart.min(360.0 - ra_apart) <= 1e-7
-            && close(self.center.dec_degrees, other.center.dec_degrees)
-            && apart.min(360.0 - apart) <= 1e-7
-            && close(self.size.width_degrees, other.size.width_degrees)
-            && close(self.size.height_degrees, other.size.height_degrees)
+        let side = |a: f64, b: f64| (a - b).abs() <= SAME_SIDE_SHARE * a.abs().max(b.abs());
+        crate::ephemeris::separation_degrees(self.center, other.center) * 60.0 <= SAME_CENTER_ARCMIN
+            && apart.min(360.0 - apart) <= SAME_ANGLE_DEGREES
+            && side(self.size.width_degrees, other.size.width_degrees)
+            && side(self.size.height_degrees, other.size.height_degrees)
     }
 
     /// The same geometry within what float drift and a JSON round trip leave.

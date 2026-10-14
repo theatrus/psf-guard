@@ -304,7 +304,7 @@ async fn a_linked_project_shows_its_stacks_without_an_activation() {
 /// A frame's FITS header with a TAN solution: `width` by `height` pixels of
 /// `scale` arcseconds, centered on `center`, camera up at `angle` east of
 /// north, as the frame lies in the file.
-fn write_solved_header(
+pub(super) fn write_solved_header(
     path: &std::path::Path,
     (width, height): (u32, u32),
     scale: f64,
@@ -343,7 +343,7 @@ fn write_solved_header(
 
 /// A fresh pixel solve of the frame at `path`, the way the quality scan
 /// persists it.
-fn persist_solve(
+pub(super) fn persist_solve(
     cache: &std::path::Path,
     image_id: i32,
     path: &std::path::Path,

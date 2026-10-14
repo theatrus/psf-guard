@@ -128,23 +128,74 @@ fn same_position(a: &IcrsPosition, b: &IcrsPosition) -> bool {
 /// change what activation writes, nor does a shot panel's frame count or
 /// how sure its reading is, only where it puts the panel.
 pub fn same_places(a: &Layout, b: &Layout) -> bool {
+    same_places_in(a, b, None)
+}
+
+/// The shared framing's center and angle, which a rig framing follows
+/// where it has none of its own.
+#[derive(Clone, Copy)]
+struct SharedFrame<'a> {
+    center: &'a IcrsPosition,
+    angle: f64,
+}
+
+/// The framing a layout is planned in: its center, camera angle and panel
+/// size, which say where a planned panel sits on the sky.
+#[derive(Clone, Copy)]
+struct PlannedFrame<'a> {
+    center: &'a IcrsPosition,
+    angle: f64,
+    panel: &'a PanelSize,
+}
+
+fn same_places_in(a: &Layout, b: &Layout, frame: Option<PlannedFrame>) -> bool {
     a.panels.len() == b.panels.len()
         && a.panels.iter().all(|panel| {
             b.panel(&panel.id).is_some_and(|other| {
                 (panel.x - other.x).abs() <= PLACE_TOLERANCE_PANELS
                     && (panel.y - other.y).abs() <= PLACE_TOLERANCE_PANELS
                     && same_angle(panel.angle_offset_degrees, other.angle_offset_degrees)
-                    // A panel redrawn from new solves of its frames moves.
+                    // A panel redrawn from solves that put it elsewhere moves.
                     && match (&panel.measured, &other.measured) {
                         (None, None) => true,
                         (Some(a), Some(b)) => a.same_place(b),
-                        _ => false,
+                        (Some(reading), None) | (None, Some(reading)) => {
+                            reading_in_place(panel, reading, frame)
+                        }
                     }
             })
         })
 }
 
-fn same_rig_framing(a: &RigFraming, b: &RigFraming) -> bool {
+/// Whether a reading the server writes when a panel is locked (or drops
+/// when it is unlocked) leaves the panel where it was planned: within a
+/// quarter of the panel's shorter side, the reach within which activation
+/// keeps a shot target as it is. Such a reading is the server's own, not a
+/// move. Without the panel's size, as for a rig framing sized by its rig's
+/// field, the reading is taken as in place.
+fn reading_in_place(
+    panel: &psf_guard_director_core::framing::PanelPlacement,
+    reading: &psf_guard_director_core::framing::measured::MeasuredGeometry,
+    frame: Option<PlannedFrame>,
+) -> bool {
+    let Some(frame) = frame else {
+        return true;
+    };
+    let Ok(plane) = TangentPlane::at(*frame.center) else {
+        return false;
+    };
+    // The panel's camera-frame place, right and up, as east and north.
+    let (sin, cos) = frame.angle.to_radians().sin_cos();
+    let (x, y) = (
+        panel.x * frame.panel.width_degrees,
+        panel.y * frame.panel.height_degrees,
+    );
+    let planned = plane.deproject([-x * cos + y * sin, x * sin + y * cos]);
+    psf_guard_director_core::ephemeris::separation_degrees(planned, reading.center)
+        <= 0.25 * frame.panel.width_degrees.min(frame.panel.height_degrees)
+}
+
+fn same_rig_framing(a: &RigFraming, b: &RigFraming, shared: SharedFrame) -> bool {
     a.rig_id == b.rig_id
         && match (&a.center, &b.center) {
             (Some(a), Some(b)) => same_position(a, b),
@@ -156,7 +207,15 @@ fn same_rig_framing(a: &RigFraming, b: &RigFraming) -> bool {
             (None, None) => true,
             _ => false,
         }
-        && same_places(&a.layout, &b.layout)
+        && same_places_in(
+            &a.layout,
+            &b.layout,
+            a.panel.as_ref().map(|panel| PlannedFrame {
+                center: a.center.as_ref().unwrap_or(shared.center),
+                angle: a.position_angle_degrees.unwrap_or(shared.angle),
+                panel,
+            }),
+        )
         && a.panel == b.panel
 }
 
@@ -169,7 +228,15 @@ impl FramingDraft {
         self.target_name == other.target_name
             && same_position(&self.center, &other.center)
             && same_angle(self.position_angle_degrees, other.position_angle_degrees)
-            && same_places(&self.layout, &other.layout)
+            && same_places_in(
+                &self.layout,
+                &other.layout,
+                self.panel.as_ref().map(|panel| PlannedFrame {
+                    center: &self.center,
+                    angle: self.position_angle_degrees,
+                    panel,
+                }),
+            )
             && self.panel_rig_id == other.panel_rig_id
             && self.panel == other.panel
             && self.rig_framings.len() == other.rig_framings.len()
@@ -177,7 +244,16 @@ impl FramingDraft {
                 .rig_framings
                 .iter()
                 .zip(&other.rig_framings)
-                .all(|(a, b)| same_rig_framing(a, b))
+                .all(|(a, b)| {
+                    same_rig_framing(
+                        a,
+                        b,
+                        SharedFrame {
+                            center: &self.center,
+                            angle: self.position_angle_degrees,
+                        },
+                    )
+                })
     }
 }
 

@@ -971,8 +971,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         if (canWrite) setPanelNotice(`${pressed} is locked${panelFrames(pressed) > 0 ? ` by its ${panelFrames(pressed)} frames` : ''}: it stays where it is.`);
       }
     }
-    // Locked panels hold the shared center and angle.
-    const holders = kind === 'target' && rig === null && centerHeld ? centerHolders : kind === 'rotate' && angleHeld ? angleHolders : null;
+    // Locked panels hold the shared center and angle: dragging the
+    // rectangle, or the sky with the target on it, looks around instead.
+    const holders = (kind === 'target' && rig === null) || kind === 'sky' ? (centerHeld ? centerHolders : null) : kind === 'rotate' && angleHeld ? angleHolders : null;
     if (holders) {
       kind = 'look';
       setPanelNotice(`${heldBy(holders)} hold the mosaic where it is. Drag one panel with Panel, or unlock them.`);

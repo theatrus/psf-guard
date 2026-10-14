@@ -233,8 +233,17 @@ browser that read the mosaic a minute ago therefore cannot be refused for
 it. The framing view locks a panel with frames and copies the reading onto
 it to draw it, as its own quiet choice; it reads the mosaic again after
 every save, after a refused one and on Reload. Geometry that moves a
-panel's center, angle or size is a layout change: the `layout_revision`
-moves, since neighbours' overlaps change. A new frame count alone is not.
+panel is a layout change, since neighbours' overlaps change: a center more
+than half an arcminute away, an angle more than 0.05°, or a side more than
+a thousandth longer or shorter. A night's new solves move a median by
+arcseconds, and activation keeps a shot target until it is a quarter of a
+panel away (4.5′ for a 0.3° field), so finer changes are the same place to
+activation and do not move `layout_revision`; the reading is still saved.
+A reading that appears when a panel is locked, or goes when it is
+unlocked, is the server's own and no move while it sits within a quarter
+of the panel's shorter side of where the panel is planned. A plan that
+follows its Target Scheduler project keeps following through both, and so
+does a new frame count.
 
 **Locks.** A shot panel is held as shot: a new panel size does not move it,
 so only a planned locked panel off the center holds the size. Its planned
@@ -367,7 +376,8 @@ the center holds the size.
 
 The browser keeps a locked mosaic's center, angle, target search and rig
 choice disabled with a line saying why, hides the rotation handle, and offers
-no regrid. A rig framed on its own that follows the shared center or angle
+no regrid. Dragging the rectangle, or the sky in *Sky* mode, looks around
+instead of moving the held center. A rig framed on its own that follows the shared center or angle
 holds them the same way while it has a locked panel, and its editor will not
 send it back to the shared center or angle, move it to the view center, or
 change its size while that would move one; taking a center or angle of its

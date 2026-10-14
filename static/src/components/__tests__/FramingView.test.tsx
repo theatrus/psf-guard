@@ -1616,4 +1616,41 @@ describe('Mosaic panels', () => {
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: hx / k, clientY: (hy + 40) / k });
     expect(await screen.findByText(/Added p2 beside r1c1/)).toBeInTheDocument();
   });
+
+  it('looks around instead of moving a held center when the sky is dragged', async () => {
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }]));
+    mount();
+    await waitFor(() => expect(document.querySelector("[data-panel-id='r1c1']")).toHaveAttribute('data-panel-state', 'locked'));
+    fireEvent.click(screen.getByRole('button', { name: 'Drag moves the sky' }));
+    const stage = stageOf();
+    const ra = (screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value;
+    const view = screen.getByTestId('framing-view-center').textContent;
+    fireEvent.pointerDown(stage, pointer(100, 100));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: 300, clientY: 200 });
+    expect((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value).toBe(ra);
+    expect(screen.getByTestId('framing-view-center').textContent).not.toBe(view);
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels hold the mosaic where it is');
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].center).toEqual(seed.center);
+  });
+
+  it('holds the shared center against a sky drag for a rig framed on its own that follows it', async () => {
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
+    mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Frame separately' }));
+    fireEvent.click(screen.getByRole('button', { name: "Add a column on the mosaic's east side" }));
+    expect(await screen.findByText(/Added p2 on the E side/)).toBeInTheDocument();
+    const stage = stageOf();
+    fireEvent.keyDown(stage, { key: 'l', code: 'KeyL' });
+    fireEvent.click(screen.getByRole('button', { name: 'Drag moves the sky' }));
+    const ra = (screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value;
+    fireEvent.pointerDown(stage, pointer(100, 100));
+    fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(stage, { pointerId: 1, clientX: 300, clientY: 200 });
+    expect((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value).toBe(ra);
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels of C925 data hold the mosaic where it is');
+  });
 });

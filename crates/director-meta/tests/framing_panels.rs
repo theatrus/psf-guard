@@ -471,13 +471,26 @@ fn a_schema_29_store_opens_unchanged_and_keeps_measured_panels() {
     assert_eq!([raw(&conn, project), raw(&conn, plain)], before);
     assert_eq!(store.framing_draft(project).unwrap().unwrap(), saved);
 
-    // A locked panel keeps the geometry its frames were shot with.
+    // A locked panel keeps the geometry its frames were shot with. Read
+    // where the panel was planned, it is the server's reading of the same
+    // place, not a move: activation keeps that target as it is.
     let mut shot = saved.clone();
     shot.layout.panels[0].measured = Some(measured());
-    assert!(!saved.same_layout(&shot));
+    assert!(saved.same_layout(&shot));
     let shot = store.save_framing_draft(&shot, saved.revision).unwrap();
-    // New geometry is a layout change: activation writes new neighbours.
-    assert_eq!(shot.layout_revision, shot.revision);
+    assert_eq!(shot.layout_revision, saved.layout_revision);
+    // Solves that put it a whole panel away move it.
+    let mut far = shot.clone();
+    far.layout.panels[0]
+        .measured
+        .as_mut()
+        .unwrap()
+        .center
+        .dec_degrees += 1.2;
+    assert!(!shot.same_layout(&far));
+    let far = store.save_framing_draft(&far, shot.revision).unwrap();
+    assert_eq!(far.layout_revision, far.revision);
+    let shot = store.save_framing_draft(&shot, far.revision).unwrap();
     assert_eq!(
         store.framing_draft(project).unwrap().unwrap().layout.panels[0].measured,
         Some(measured())
@@ -551,7 +564,9 @@ fn a_measured_panel_holds_where_it_was_shot_under_a_new_camera() {
         .unwrap();
     let mut shot = with_rig.clone();
     shot.rig_framings[0].layout.panels[0].measured = Some(measured());
-    assert!(!with_rig.same_layout(&shot));
+    // Sized by its rig's field, which the store does not know, a reading
+    // the server writes is taken as in place.
+    assert!(with_rig.same_layout(&shot));
     let shot = store.save_framing_draft(&shot, with_rig.revision).unwrap();
     assert_eq!(
         shot.rig_framings[0].layout.panels[0].measured,
@@ -563,13 +578,29 @@ fn a_measured_panel_holds_where_it_was_shot_under_a_new_camera() {
     counted.layout.panels[1].measured.as_mut().unwrap().frames = 14;
     let counted = store.save_framing_draft(&counted, shot.revision).unwrap();
     assert_eq!(counted.layout_revision, shot.layout_revision);
-    let mut moved = counted.clone();
+    // Another night's solves nudge the median by arcseconds and a
+    // hundredth of a degree: the reading is kept, the layout is the same.
+    let mut nudged = counted.clone();
+    {
+        let reading = nudged.layout.panels[1].measured.as_mut().unwrap();
+        reading.center.dec_degrees += 10.0 / 3600.0;
+        reading.position_angle_degrees += 0.02;
+        reading.frames = 20;
+    }
+    let nudged = store.save_framing_draft(&nudged, counted.revision).unwrap();
+    assert_eq!(nudged.layout_revision, counted.layout_revision);
+    assert_eq!(
+        nudged.layout.panels[1].measured.as_ref().unwrap().frames,
+        20
+    );
+    // A reading that turns the panel a degree moves it.
+    let mut moved = nudged.clone();
     moved.layout.panels[1]
         .measured
         .as_mut()
         .unwrap()
         .position_angle_degrees = 37.5;
-    let moved = store.save_framing_draft(&moved, counted.revision).unwrap();
+    let moved = store.save_framing_draft(&moved, nudged.revision).unwrap();
     assert_eq!(moved.layout_revision, moved.revision);
 }
 
