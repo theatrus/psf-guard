@@ -6,8 +6,8 @@
 
 use psf_guard_director_core::{
     framing::{
-        FramingRequest, Layout, MeasuredGeometry, MeasuredSource, Mosaic, Overlay, PanelPlacement,
-        PanelSize, View,
+        FramingRequest, Layout, LayoutIssueKind, MeasuredGeometry, MeasuredSource, Mosaic, Overlay,
+        PanelPlacement, PanelSize, View,
     },
     visibility::IcrsPosition,
 };
@@ -100,6 +100,121 @@ fn measured_request() -> FramingRequest {
     request
 }
 
+/// A large mosaic across 0h in the south, turned past a half turn: a 6 by
+/// 6 grid, one panel turned with a real gap to its neighbour, a shot panel
+/// across 0h, and one panel left on its own. A view and an overlay away
+/// from the target.
+fn wide_south_request() -> FramingRequest {
+    let mut layout = Layout::grid(Mosaic {
+        rows: 6,
+        columns: 6,
+        overlap_percent: 15,
+    });
+    // East of the grid's east column, turned 25° and just apart.
+    let east = layout
+        .panels
+        .iter()
+        .find(|panel| panel.id == "r3c1")
+        .unwrap()
+        .clone();
+    let mut turned = PanelPlacement::at("p37", east.x - 1.1, east.y);
+    turned.angle_offset_degrees = 25.0;
+    layout.panels.push(turned);
+    layout.panels.push(PanelPlacement::at("p38", 6.5, -4.0));
+    let mut request = FramingRequest {
+        center: IcrsPosition {
+            ra_degrees: 359.6,
+            dec_degrees: -38.0,
+        },
+        position_angle_degrees: 200.0,
+        panel: PanelSize {
+            width_degrees: 1.6,
+            height_degrees: 1.1,
+        },
+        layout,
+        overlays: vec![Overlay {
+            id: "wide".into(),
+            size: PanelSize {
+                width_degrees: 4.0,
+                height_degrees: 2.7,
+            },
+            position_angle_degrees: 200.0,
+        }],
+        view: Some(View {
+            center: IcrsPosition {
+                ra_degrees: 0.4,
+                dec_degrees: -37.2,
+            },
+            rotation_degrees: 20.0,
+        }),
+    };
+    // A corner panel shot a few arcminutes off its plan with a slightly
+    // larger camera, turned 3°.
+    let planned = request.preview().unwrap();
+    let corner = planned
+        .panels
+        .iter()
+        .find(|panel| panel.footprint.id == "r6c6")
+        .unwrap()
+        .footprint
+        .center;
+    let shot = request
+        .layout
+        .panels
+        .iter_mut()
+        .find(|panel| panel.id == "r6c6")
+        .unwrap();
+    shot.locked = true;
+    shot.measured = Some(MeasuredGeometry {
+        center: IcrsPosition {
+            ra_degrees: (corner.ra_degrees + 0.04).rem_euclid(360.0),
+            dec_degrees: corner.dec_degrees - 0.03,
+        },
+        position_angle_degrees: 203.0,
+        size: PanelSize {
+            width_degrees: 1.7,
+            height_degrees: 1.15,
+        },
+        source: MeasuredSource::Header,
+        size_source: MeasuredSource::Header,
+        frames: 6,
+    });
+    request
+}
+
+/// Near the north celestial pole: two pairs of joined panels that never
+/// meet, so the only issue is that they fall apart.
+fn polar_request() -> FramingRequest {
+    FramingRequest {
+        center: IcrsPosition {
+            ra_degrees: 120.0,
+            dec_degrees: 88.6,
+        },
+        position_angle_degrees: 10.0,
+        panel: PanelSize {
+            width_degrees: 1.2,
+            height_degrees: 0.8,
+        },
+        layout: Layout {
+            min_overlap_percent: 20,
+            panels: vec![
+                PanelPlacement::at("r1c1", 0.0, 0.0),
+                PanelPlacement::at("p2", -0.8, 0.0),
+                PanelPlacement::at("p3", 2.5, 0.0),
+                PanelPlacement::at("p4", 2.5, 0.75),
+            ],
+        },
+        overlays: vec![],
+        view: Some(View {
+            center: IcrsPosition {
+                ra_degrees: 300.0,
+                dec_degrees: 89.5,
+            },
+            rotation_degrees: 0.0,
+        }),
+    }
+}
+
 /// Write the fixture when asked, then hold the core to it.
 fn check(name: &str, request: FramingRequest) -> psf_guard_director_core::framing::FramingPreview {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -144,6 +259,39 @@ fn the_measured_layout_fixture_matches_the_core() {
     assert!(preview.panels[0].measured.is_some());
     assert_eq!(preview.panels[0].position_angle_degrees, 36.5);
     assert!(!preview.issues.is_empty(), "{:?}", preview.issues);
+}
+
+#[test]
+fn the_wide_southern_fixture_matches_the_core() {
+    let preview = check("framing-wide-south.json", wide_south_request());
+    assert_eq!(preview.panels.len(), 38);
+    let kinds: Vec<_> = preview.issues.iter().map(|issue| issue.kind).collect();
+    assert!(
+        kinds.contains(&LayoutIssueKind::Gap),
+        "{:?}",
+        preview.issues
+    );
+    assert!(
+        kinds.contains(&LayoutIssueKind::Isolated),
+        "{:?}",
+        preview.issues
+    );
+    // Across 0h both ways.
+    assert!(preview
+        .panels
+        .iter()
+        .any(|panel| panel.footprint.center.ra_degrees < 10.0));
+    assert!(preview
+        .panels
+        .iter()
+        .any(|panel| panel.footprint.center.ra_degrees > 350.0));
+}
+
+#[test]
+fn the_polar_fixture_matches_the_core() {
+    let preview = check("framing-polar-disconnected.json", polar_request());
+    assert_eq!(preview.issues.len(), 1, "{:?}", preview.issues);
+    assert_eq!(preview.issues[0].kind, LayoutIssueKind::Disconnected);
 }
 
 #[test]

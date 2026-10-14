@@ -1,5 +1,5 @@
 import type { DirectorLayout, DirectorLayoutIssue, DirectorMosaic, DirectorOffset, DirectorPanelPlacement, DirectorPanelSize } from '../../api/directorTypes';
-import { boundsOf, shapeIssues, turnedShape, type Bounds, type PanelShape } from './panelShape';
+import { boundsOf, rectangleShape, shapeIssues, type Bounds, type PanelShape } from './panelShape';
 
 /** A mosaic as a set of panels, each with a stable id, its own place and a
  *  lock: the browser's port of `crates/director-core/src/framing/layout.rs`.
@@ -62,7 +62,6 @@ export function asGrid(layout: DirectorLayout): DirectorMosaic | null {
   return fits ? mosaic : null;
 }
 
-export const hasLocked = (layout: DirectorLayout) => layout.panels.some(panel => panel.locked);
 /** A panel's own turn from the framing's angle, 0 when it has none. */
 export const turnOf = (panel: DirectorPanelPlacement) => panel.angle_offset_degrees ?? 0;
 export const findPanel = (layout: DirectorLayout, id: string) => layout.panels.find(panel => panel.id === id);
@@ -97,18 +96,6 @@ export function layoutStructureProblem(layout: DirectorLayout): string | null {
   return null;
 }
 
-/** Edge to edge across and up, in panel sizes. */
-export function layoutSpan(layout: DirectorLayout): [number, number] {
-  if (layout.panels.length === 0) return [0, 0];
-  const xs = layout.panels.map(panel => panel.x); const ys = layout.panels.map(panel => panel.y);
-  return [Math.max(...xs) - Math.min(...xs) + 1, Math.max(...ys) - Math.min(...ys) + 1];
-}
-
-export function layoutExtent(panel: DirectorPanelSize, layout: DirectorLayout): DirectorPanelSize {
-  const [across, up] = layoutSpan(layout);
-  return { width_degrees: panel.width_degrees * across, height_degrees: panel.height_degrees * up };
-}
-
 function bands(values: number[], tolerance: number): number[] {
   const order = values.map((_, index) => index).sort((a, b) => values[a] - values[b]);
   const out = new Array<number>(values.length).fill(0);
@@ -128,15 +115,17 @@ export function layoutCells(layout: DirectorLayout): Array<[number, number]> {
   return rows.map((row, index) => [row, columns[index]]);
 }
 
-/** A panel's outline as planned, in panel sizes: a unit square at its
- *  place, turned by its own turn. A framing with a panel size reads turned
- *  and shot panels by their true outlines (`framingShapes`). */
+/** A panel's place as an unturned unit square, in panel sizes. A turn needs
+ *  the panel's size to draw (a turned unit square would shear a panel that
+ *  is not square), so a framing with a panel size reads turned and shot
+ *  panels by their true outlines (`framingShapes`). */
 export function unitShape(panel: DirectorPanelPlacement): PanelShape {
-  return turnedShape(panel.id, [panel.x, panel.y], 1, 1, turnOf(panel));
+  return rectangleShape(panel.id, [panel.x, panel.y], 1, 1);
 }
 
 /** Where a layout falls short of the minimum overlap rule, read from each
- *  panel's planned outline; the same list the core returns. Two panels are
+ *  panel as an unturned unit square at its place: the core's
+ *  `Layout::issues`. A framing reads its true outlines. Two panels are
  *  joined when they overlap by at least the minimum, side by side or at a
  *  corner. Panels side by side (sharing half a side along their seam) that
  *  overlap by less are a thin overlap, and with uncovered sky between them a
@@ -184,8 +173,8 @@ export function cameraStep(direction: Direction, positionAngle: number): [number
 /** How far a panel reaches in the camera frame, in panel sizes: left,
  *  right, bottom and top of its outline. */
 export type BoxOf = (panel: DirectorPanelPlacement) => Bounds;
-/** The planned outline's reach; a framing passes the true outlines, so a
- *  panel shot with another camera is met at its real edges. */
+/** The planned place's reach; a framing passes the true outlines, so a
+ *  turned panel, or one shot with another camera, is met at its real edges. */
 export const unitBox: BoxOf = panel => boundsOf(unitShape(panel).corners);
 const middle = (box: Bounds): [number, number] => [(box[0] + box[1]) / 2, (box[2] + box[3]) / 2];
 
@@ -300,8 +289,11 @@ export function fillHoles(layout: DirectorLayout): Extended | null {
 
 /** Where a dragged panel settles: each axis pulled to a place that lines it
  *  up with another panel or sets it at the minimum overlap beside one,
- *  against that panel's real edges, when within `tolerance` panel sizes. */
-export function snapPlacement(layout: DirectorLayout, id: string, x: number, y: number, tolerance: number, boxOf: BoxOf = unitBox): { x: number; y: number; snappedX: boolean; snappedY: boolean } {
+ *  against that panel's real edges, when within `tolerance` panel sizes. A
+ *  turned outline shares less across the seam than its reach says; with
+ *  `overlapOf` a place beside a panel is drawn in until it shares the
+ *  minimum, as `extendFrom` does. */
+export function snapPlacement(layout: DirectorLayout, id: string, x: number, y: number, tolerance: number, boxOf: BoxOf = unitBox, overlapOf?: OverlapOf): { x: number; y: number; snappedX: boolean; snappedY: boolean } {
   const share = layout.min_overlap_percent / 100;
   const self = findPanel(layout, id);
   const own = self ? boxOf({ ...self, x, y }) : ([x - 0.5, x + 0.5, y - 0.5, y + 0.5] as Bounds);
@@ -310,11 +302,35 @@ export function snapPlacement(layout: DirectorLayout, id: string, x: number, y: 
   // planned panel, turned or not, past rounding.
   const settle = (d: number) => (Math.abs(d) < 1e-9 ? 0 : d);
   const [ox, oy] = [settle(middle(own)[0] - x), settle(middle(own)[1] - y)];
-  const boxes = layout.panels.filter(panel => panel.id !== id).map(boxOf);
-  const nearest = (value: number, candidates: number[]) => candidates.reduce<number | null>((best, candidate) => Math.abs(candidate - value) <= tolerance && (best === null || Math.abs(candidate - value) < Math.abs(best - value)) ? candidate : best, null);
-  const sx = nearest(x, boxes.flatMap(box => { const c = middle(box)[0] - ox; const gap = beside(box[1] - box[0], width, share); return [c, c - gap, c + gap]; }));
-  const sy = nearest(y, boxes.flatMap(box => { const c = middle(box)[1] - oy; const gap = beside(box[3] - box[2], height, share); return [c, c - gap, c + gap]; }));
-  return { x: sx ?? x, y: sy ?? y, snappedX: sx !== null, snappedY: sy !== null };
+  const others = layout.panels.filter(panel => panel.id !== id);
+  const boxes = others.map(boxOf);
+  // A place lined up with a panel, or beside one (`beside` names it).
+  type Candidate = { value: number; beside?: number };
+  const nearest = (value: number, candidates: Candidate[]) => candidates.reduce<Candidate | null>((best, candidate) => Math.abs(candidate.value - value) <= tolerance && (best === null || Math.abs(candidate.value - value) < Math.abs(best.value - value)) ? candidate : best, null);
+  const along = (axis: 0 | 1, size: number, offset: number): Candidate[] => boxes.flatMap((box, index) => {
+    const c = middle(box)[axis] - offset;
+    const gap = beside(axis === 0 ? box[1] - box[0] : box[3] - box[2], size, share);
+    return [{ value: c }, { value: c - gap, beside: index }, { value: c + gap, beside: index }];
+  });
+  const sx = nearest(x, along(0, width, ox));
+  const sy = nearest(y, along(1, height, oy));
+  let fx = sx?.value ?? x; let fy = sy?.value ?? y;
+  const refine = (axis: 0 | 1, candidate: Candidate | null) => {
+    if (!overlapOf || !self || candidate?.beside === undefined) return;
+    const other = others[candidate.beside].id;
+    const toward = middle(boxes[candidate.beside])[axis] - (axis === 0 ? ox : oy);
+    const at = (t: number) => candidate.value + (toward - candidate.value) * t;
+    const placed = (t: number): DirectorLayout => ({ ...layout, panels: layout.panels.map(panel => panel.id === id ? { ...panel, x: axis === 0 ? at(t) : fx, y: axis === 1 ? at(t) : fy } : panel) });
+    const short = (t: number) => { const overlap = overlapOf(placed(t), id, other); return overlap !== null && overlap + 1e-9 < share; };
+    if (!short(0)) return;
+    // Between the snapped place and the panel's middle, the least step in that shares enough.
+    let low = 0; let high = 1;
+    for (let i = 0; i < 30; i += 1) { const mid = (low + high) / 2; if (short(mid)) low = mid; else high = mid; }
+    if (axis === 0) fx = at(high); else fy = at(high);
+  };
+  refine(0, sx);
+  refine(1, sy);
+  return { x: fx, y: fy, snappedX: sx !== null, snappedY: sy !== null };
 }
 
 /** The turn a turned panel settles on: the nearest of `candidates` (the
@@ -343,11 +359,13 @@ export function issuesFor(issues: DirectorLayoutIssue[], id: string): DirectorLa
 
 /** What moving or turning panel `id` leaves short of the rule that the
  *  layout did not have before. A drop or a turn with any springs back
- *  unless Alt asks for it. */
-export function freshIssues(before: DirectorLayoutIssue[], after: DirectorLayoutIssue[], id: string): DirectorLayoutIssue[] {
+ *  unless Alt asks for it. The panels falling into groups is only said once
+ *  no other issue is, so fixing the last one can show it: it counts as new
+ *  only when the move `split` panels that were joined. */
+export function freshIssues(before: DirectorLayoutIssue[], after: DirectorLayoutIssue[], id: string, split = true): DirectorLayoutIssue[] {
   const key = (issue: DirectorLayoutIssue) => `${issue.kind}:${issue.panels.join(',')}`;
   const had = new Set(before.map(key));
-  return issuesFor(after, id).filter(issue => !had.has(key(issue)));
+  return issuesFor(after, id).filter(issue => !had.has(key(issue)) && (issue.kind !== 'disconnected' || split));
 }
 
 /** A camera-frame place, in panel sizes, as degrees east and north on the framing's plane. */
@@ -398,15 +416,4 @@ export function removePanel(layout: DirectorLayout, id: string): DirectorLayout 
   const panel = findPanel(layout, id);
   if (!panel || panel.locked || layout.panels.length < 2) return layout;
   return { ...layout, panels: layout.panels.filter(other => other.id !== id) };
-}
-
-/** Whether two layouts put the same panels in the same places, turned the
- *  same way and drawn from the same shots, whatever the order. */
-export function samePlaces(a: DirectorLayout, b: DirectorLayout): boolean {
-  return a.panels.length === b.panels.length && a.panels.every(panel => {
-    const other = findPanel(b, panel.id);
-    return !!other && Math.abs(other.x - panel.x) <= 1e-7 && Math.abs(other.y - panel.y) <= 1e-7
-      && Math.abs(wrapTurn(turnOf(other) - turnOf(panel))) <= 1e-7
-      && JSON.stringify(other.measured ?? null) === JSON.stringify(panel.measured ?? null);
-  });
 }

@@ -185,24 +185,33 @@ pub fn shape_overlap(a: &PanelShape, b: &PanelShape) -> Option<ShapeOverlap> {
     if !(span_x > 0.0 && span_y > 0.0) {
         return None;
     }
-    let shared = intersection(&a.corners, &b.corners);
+    let ox = (ab[1].min(bb[1]) - ab[0].max(bb[0])) / span_x;
+    let oy = (ab[3].min(bb[3]) - ab[2].max(bb[2])) / span_y;
+    if ox <= 0.0 && oy <= 0.0 {
+        return None;
+    }
+    // Extents apart along an axis share no area: no clipping needed, and
+    // the answer is the same as clipping would give. Most pairs of a large
+    // mosaic end here.
+    let shared = if ox <= 0.0 || oy <= 0.0 {
+        Vec::new()
+    } else {
+        intersection(&a.corners, &b.corners)
+    };
     // Where they intersect, a turned outline makes the shared strip wider at
     // one end than the other; the strip's mean width across the seam (its
     // area over its length) is what the share counts.
     let mut mean_width = None;
     let (across_x, across_y) = if shared.is_empty() {
-        let ox = (ab[1].min(bb[1]) - ab[0].max(bb[0])) / span_x;
-        let oy = (ab[3].min(bb[3]) - ab[2].max(bb[2])) / span_y;
-        if ox <= 0.0 && oy <= 0.0 {
-            return None;
-        }
         // Outlines that miss each other although their extents overlap on
-        // both axes (turned corners passing by) touch at most.
+        // both axes (turned corners passing by): the gap is the distance
+        // between the outlines, across the axis it mostly runs along.
         if ox > 0.0 && oy > 0.0 {
-            if ox <= oy {
-                (0.0, oy)
+            let (distance, direction) = separation(&a.corners, &b.corners);
+            if direction[0].abs() >= direction[1].abs() {
+                (-distance / span_x, oy)
             } else {
-                (ox, 0.0)
+                (ox, -distance / span_y)
             }
         } else {
             (ox, oy)
@@ -228,6 +237,38 @@ pub fn shape_overlap(a: &PanelShape, b: &PanelShape) -> Option<ShapeOverlap> {
         run,
         vertical_seam,
     })
+}
+
+/// The shortest distance between two convex outlines that do not overlap,
+/// and its direction from `a` toward `b`: the closest of every corner to
+/// every edge, both ways.
+fn separation(a: &[Point], b: &[Point]) -> (f64, Point) {
+    let mut best = (f64::INFINITY, [0.0, 0.0]);
+    let mut closest = |p: Point, from: &[Point], sign: f64| {
+        for i in 0..from.len() {
+            let (s, e) = (from[i], from[(i + 1) % from.len()]);
+            let (dx, dy) = (e[0] - s[0], e[1] - s[1]);
+            let length = dx * dx + dy * dy;
+            let t = if length > 0.0 {
+                (((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / length).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let q = [s[0] + t * dx, s[1] + t * dy];
+            let distance = (p[0] - q[0]).hypot(p[1] - q[1]);
+            if distance < best.0 {
+                // From the corner's outline toward the other's edge.
+                best = (distance, [sign * (q[0] - p[0]), sign * (q[1] - p[1])]);
+            }
+        }
+    };
+    for corner in a {
+        closest(*corner, b, 1.0);
+    }
+    for corner in b {
+        closest(*corner, a, -1.0);
+    }
+    best
 }
 
 fn round_percent(share: f64) -> f64 {
@@ -341,6 +382,30 @@ fn gap_covered(shapes: &[PanelShape], i: usize, j: usize, pair: ShapeOverlap) ->
     };
     let start = along_a.0.max(along_b.0);
     let end = along_a.1.min(along_b.1);
+    // Only a panel reaching into the gap can cover a sample in it, so the
+    // rest are not tried at every sample: a large mosaic has hundreds.
+    let (across_low, across_high) = (low.min(high), low.max(high));
+    let (along_low, along_high) = (start.min(end), start.max(end));
+    let region = if pair.vertical_seam {
+        [across_low, across_high, along_low, along_high]
+    } else {
+        [along_low, along_high, across_low, across_high]
+    };
+    let near: Vec<&PanelShape> = shapes
+        .iter()
+        .enumerate()
+        .filter(|&(k, shape)| {
+            let b = shape.bounds();
+            let t = PLACE_TOLERANCE * (b[1] - b[0]).max(b[3] - b[2]);
+            k != i
+                && k != j
+                && b[0] - t <= region[1]
+                && b[1] + t >= region[0]
+                && b[2] - t <= region[3]
+                && b[3] + t >= region[2]
+        })
+        .map(|(_, shape)| shape)
+        .collect();
     const ACROSS: usize = 3;
     const ALONG: usize = 5;
     for s in 0..ACROSS {
@@ -352,10 +417,7 @@ fn gap_covered(shapes: &[PanelShape], i: usize, j: usize, pair: ShapeOverlap) ->
             } else {
                 [along, across]
             };
-            let covered = shapes
-                .iter()
-                .enumerate()
-                .any(|(k, shape)| k != i && k != j && grown_contains(shape, point));
+            let covered = near.iter().any(|shape| grown_contains(shape, point));
             if !covered {
                 return false;
             }

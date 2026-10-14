@@ -282,8 +282,9 @@ impl Layout {
 
     /// Where the layout falls short of the minimum overlap rule, read from
     /// each planned panel as an unturned unit square at its place; see
-    /// [`shape_issues`]. Turned panels need their size: A framing with a panel size reads measured panels
-    /// as shot ([`super::FramingRequest::issues`]).
+    /// [`shape_issues`]. A turn needs the panel's size to draw, so a framing
+    /// with a panel size reads turned panels turned, and measured panels as
+    /// shot ([`super::FramingRequest::issues`]).
     pub fn issues(&self) -> Vec<LayoutIssue> {
         let shapes: Vec<PanelShape> = self
             .panels

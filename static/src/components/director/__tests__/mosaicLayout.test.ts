@@ -5,9 +5,9 @@ import type { DirectorFramingPreview, DirectorFramingRequest, DirectorLayout, Di
 import { cameraAngleAt, framingBoxes, framingGeometry, framingShapes, northTurn, offsetFrom } from '../framingModel';
 import {
   asGrid, cameraStep, cameraToPlane, extendFrom, extendMosaic, fillHoles, freshIssues, gridLayout, layoutIssues, layoutStructureProblem, movePanel, nextPanelId,
-  planeToCamera, removePanel, ringAround, samePlaces, setLocked, singleLayout, snapPlacement, snapTurn, turnPanel, unitShape, wrapTurn,
+  planeToCamera, removePanel, ringAround, setLocked, singleLayout, snapPlacement, snapTurn, turnPanel, unitShape, wrapTurn,
 } from '../mosaicLayout';
-import { boundsOf, intersection, rectangleShape, shapeIssues, shapeOverlap, sharedStrips, turnedShape } from '../panelShape';
+import { boundsOf, intersection, readShapes, rectangleShape, shapeIssues, shapeOverlap, sharedStrips, splitApart, turnedShape } from '../panelShape';
 
 /** Written by `crates/director-core/tests/framing_fixture.rs`: a locked framed
  *  target with panels added around it, one dragged short of the minimum. */
@@ -18,6 +18,12 @@ const free = JSON.parse(readFileSync(resolve(__dirname, '../../../../../crates/d
  *  turned by 6°. */
 const shot = JSON.parse(readFileSync(resolve(__dirname, '../../../../../crates/director-core/tests/fixtures/framing-measured-layout.json'), 'utf8')) as
   { request: DirectorFramingRequest; preview: DirectorFramingPreview };
+/** Every fixture the core writes, by name: the two above, a 6 by 6 across
+ *  RA 0h in the south with a turned panel just apart, a lone panel and a
+ *  shot corner seen in a turned view, and two groups near the pole. */
+const fixtures = ['framing-free-layout', 'framing-measured-layout', 'framing-wide-south', 'framing-polar-disconnected'].map(name => ({
+  name, ...JSON.parse(readFileSync(resolve(__dirname, `../../../../../crates/director-core/tests/fixtures/${name}.json`), 'utf8')) as { request: DirectorFramingRequest; preview: DirectorFramingPreview },
+}));
 
 const close = (actual: number, expected: number, digits = 9) => expect(actual).toBeCloseTo(expected, digits);
 const place = (id: string, x: number, y: number, locked = false) => ({ id, x, y, locked });
@@ -25,6 +31,29 @@ const layout = (panels: DirectorLayout['panels'], min = 20): DirectorLayout => (
 const lockedSingle = () => setLocked(singleLayout(20), 'r1c1', true);
 
 describe('the panel model port', () => {
+  it.each(fixtures)('lays out $name exactly as the core does: corners, view, angles, overlays, extent and issues', ({ request, preview }) => {
+    const ours = framingGeometry(request);
+    expect(ours.panels.map(p => [p.id, p.row, p.column, p.locked, p.angle_offset_degrees])).toEqual(preview.panels.map(p => [p.id, p.row, p.column, p.locked, p.angle_offset_degrees]));
+    const sameFootprint = (mine: { center: { ra_degrees: number; dec_degrees: number }; corners: Array<{ ra_degrees: number; dec_degrees: number }>; view_corners: Array<[number, number]> | null }, theirs: typeof mine) => {
+      close(mine.center.ra_degrees, theirs.center.ra_degrees); close(mine.center.dec_degrees, theirs.center.dec_degrees);
+      theirs.corners.forEach((corner, c) => { close(mine.corners[c].ra_degrees, corner.ra_degrees); close(mine.corners[c].dec_degrees, corner.dec_degrees); });
+      expect(mine.view_corners === null).toBe(theirs.view_corners === null);
+      theirs.view_corners?.forEach((corner, c) => { close(mine.view_corners![c][0], corner[0]); close(mine.view_corners![c][1], corner[1]); });
+    };
+    preview.panels.forEach((panel, index) => {
+      sameFootprint(ours.panels[index], panel);
+      close(ours.panels[index].position_angle_degrees, panel.position_angle_degrees);
+      expect(ours.panels[index].measured ?? null).toEqual(panel.measured ?? null);
+    });
+    expect(ours.overlays.map(o => o.id)).toEqual(preview.overlays.map(o => o.id));
+    preview.overlays.forEach((overlay, index) => sameFootprint(ours.overlays[index], overlay));
+    expect(ours.view_center_offset === null).toBe(preview.view_center_offset === null);
+    if (preview.view_center_offset) { close(ours.view_center_offset![0], preview.view_center_offset[0]); close(ours.view_center_offset![1], preview.view_center_offset[1]); }
+    close(ours.extent.width_degrees, preview.extent.width_degrees);
+    close(ours.extent.height_degrees, preview.extent.height_degrees);
+    expect(ours.issues).toEqual(preview.issues);
+  });
+
   it('lays out, names and reads back the panels the core does for a free layout', () => {
     const ours = framingGeometry(free.request);
     expect(ours.panels.map(p => [p.id, p.row, p.column, p.locked])).toEqual(free.preview.panels.map(p => [p.id, p.row, p.column, p.locked]));
@@ -269,7 +298,6 @@ describe('shot and turned panels', () => {
     const pairOf = layout([{ id: 'r1c1', x: 0, y: 0, locked: true }, { id: 'p2', x: -0.8, y: 0, locked: false }]);
     const turned = turnPanel(pairOf, 'p2', 12);
     expect(turned.panels[1].angle_offset_degrees).toBe(12);
-    expect(samePlaces(pairOf, turned)).toBe(false);
     expect(turnPanel(pairOf, 'r1c1', 12)).toEqual(pairOf);
     expect(turnPanel(turned, 'p2', 0).panels[1]).toEqual({ id: 'p2', x: -0.8, y: 0, locked: false });
     expect(asGrid(turnPanel(gridLayout({ rows: 1, columns: 2, overlap_percent: 20 }), 'r1c2', 3))).toBeNull();
@@ -299,5 +327,81 @@ describe('shot and turned panels', () => {
     const preview = framingGeometry({ center: middle, position_angle_degrees: 20, panel: { width_degrees: 3, height_degrees: 2 }, layout: layout([{ id: 'r1c1', x: 0, y: 0, locked: false, angle_offset_degrees: -15 }, { id: 'p2', x: -0.9, y: 0, locked: false, angle_offset_degrees: 10 }], 10), overlays: [], view: null });
     close(preview.panels[0].position_angle_degrees, 5);
     close(preview.panels[1].position_angle_degrees, cameraAngleAt(middle, preview.panels[1].center, 30));
+  });
+});
+
+describe('review fixes for turned and grouped panels', () => {
+  const center = { ra_degrees: 38.2, dec_degrees: 61.45 };
+  const size = { width_degrees: 2, height_degrees: 1.5 };
+  const overlapOf = (of: DirectorLayout, a: string, b: string) => {
+    const shapes = framingShapes(center, 0, size, of);
+    return shapeOverlap(shapes.find(x => x.id === a)!, shapes.find(x => x.id === b)!)?.thickness ?? null;
+  };
+
+  it('settles a turned panel beside another at the minimum, not short of it', () => {
+    for (const turn of [5, 10, 20]) {
+      const pairOf = turnPanel(layout([place('r1c1', 0, 0, true), place('p2', -0.8, 0)]), 'p2', turn);
+      const boxes = framingBoxes(center, 0, size, pairOf);
+      // By the reach alone it lands where the outlines share too little.
+      const rough = snapPlacement(pairOf, 'p2', -0.83, 0.01, 0.05, boxes);
+      expect(overlapOf(movePanel(pairOf, 'p2', rough.x, rough.y), 'r1c1', 'p2')!).toBeLessThan(0.2);
+      const settled = snapPlacement(pairOf, 'p2', -0.83, 0.01, 0.05, boxes, overlapOf);
+      expect(settled.snappedX).toBe(true);
+      const share = overlapOf(movePanel(pairOf, 'p2', settled.x, settled.y), 'r1c1', 'p2')!;
+      expect(share).toBeGreaterThanOrEqual(0.2 - 1e-9); expect(share).toBeLessThan(0.2005);
+      expect(shapeIssues(framingShapes(center, 0, size, movePanel(pairOf, 'p2', settled.x, settled.y)), 20)).toEqual([]);
+    }
+  });
+
+  it('measures a gap between turned panels whose reach overlaps, as the core does', () => {
+    const t = 30; const rad = (t * Math.PI) / 180;
+    const a = turnedShape('a', [0, 0], 1, 1, t);
+    const b = turnedShape('b', [1.1 * Math.cos(rad), 1.1 * Math.sin(rad)], 1, 1, t);
+    const pair = shapeOverlap(a, b)!;
+    close(pair.thickness, -0.1 / (Math.cos(rad) + Math.sin(rad)));
+    for (const minimum of [0, 20]) expect(shapeIssues([a, b], minimum).map(issue => issue.kind)).toEqual(['gap']);
+    // Touching outlines still read as a 0% overlap, and extents apart give the same answer as before.
+    const square = rectangleShape('s', [0, 0], 1, 1);
+    expect(shapeOverlap(square, rectangleShape('t', [1, 0], 1, 1))).toMatchObject({ thickness: 0, run: 1 });
+    const apart = shapeOverlap(square, rectangleShape('u', [1.25, 0.3], 1, 1))!;
+    close(apart.thickness, -0.25); close(apart.run, 0.7);
+    expect(shapeOverlap(square, rectangleShape('v', [3, 3], 1, 1))).toBeNull();
+  });
+
+  it('springs nothing back for groups a move did not split, only for a split', () => {
+    // Two islands, and p5 thin against r1c1. Fixing it shows the islands,
+    // which were there before.
+    const before = layout([place('r1c1', 0, 0), place('p2', -0.8, 0), place('p3', 5, 0), place('p4', 5.8, 0), place('p5', 0, 0.9)]);
+    const fixed = movePanel(before, 'p5', 0, 0.8);
+    const read = (of: DirectorLayout) => readShapes(of.panels.map(unitShape), of.min_overlap_percent);
+    expect(read(fixed).issues.map(issue => issue.kind)).toEqual(['disconnected']);
+    expect(splitApart(read(before).groups, read(fixed).groups)).toBe(false);
+    expect(freshIssues(read(before).issues, read(fixed).issues, 'p5', splitApart(read(before).groups, read(fixed).groups))).toEqual([]);
+    // Pulling the bridge out of a row splits it.
+    const row = layout([place('r1c1', 0, 0), place('p2', 0.8, 0), place('p3', 1.6, 0)]);
+    const pulled = movePanel(row, 'p2', 0.8, 5);
+    expect(splitApart(read(row).groups, read(pulled).groups)).toBe(true);
+  });
+
+  it('reads planned places as unturned unit squares, as the core\'s layout does', () => {
+    const turned = layout([place('r1c1', 0, 0), { ...place('p2', -0.8, 0), angle_offset_degrees: 40 }]);
+    expect(layoutIssues(turned)).toEqual([]);
+    expect(boundsOf(unitShape(turned.panels[1]).corners)).toEqual([-1.3, -0.30000000000000004, -0.5, 0.5]);
+  });
+
+  it('reads a 16 by 16 mosaic\'s issues well inside a frame', () => {
+    const panels = [];
+    for (let row = 0; row < 16; row += 1) for (let column = 0; column < 16; column += 1) {
+      panels.push(turnedShape(`r${row + 1}c${column + 1}`, [column * 0.8, row * 0.8], 1, 1, (row + column) % 7 === 0 ? 2 : 0));
+    }
+    // The fastest of several reads, so a busy machine does not fail it; the
+    // clipping of every pair it guards against took over 100 ms.
+    let fastest = Infinity;
+    for (let i = 0; i < 7; i += 1) {
+      const started = performance.now();
+      shapeIssues(panels, 15);
+      fastest = Math.min(fastest, performance.now() - started);
+    }
+    expect(fastest).toBeLessThan(40);
   });
 });

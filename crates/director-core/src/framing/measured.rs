@@ -53,6 +53,20 @@ impl MeasuredGeometry {
             && self.size.validate().is_ok()
     }
 
+    /// The same place on the sky: center, angle and size within what float
+    /// drift and a JSON round trip leave. How many frames said so, and how
+    /// sure they are, do not move a panel.
+    pub fn same_place(&self, other: &Self) -> bool {
+        let close = |a: f64, b: f64| (a - b).abs() <= 1e-7;
+        let apart = (self.position_angle_degrees - other.position_angle_degrees).rem_euclid(360.0);
+        let ra_apart = (self.center.ra_degrees - other.center.ra_degrees).rem_euclid(360.0);
+        ra_apart.min(360.0 - ra_apart) <= 1e-7
+            && close(self.center.dec_degrees, other.center.dec_degrees)
+            && apart.min(360.0 - apart) <= 1e-7
+            && close(self.size.width_degrees, other.size.width_degrees)
+            && close(self.size.height_degrees, other.size.height_degrees)
+    }
+
     /// The same geometry within what float drift and a JSON round trip leave.
     pub fn same(&self, other: &Self) -> bool {
         let close = |a: f64, b: f64| (a - b).abs() <= 1e-7;
@@ -98,17 +112,49 @@ fn fold(angle: f64, reference: f64) -> f64 {
     reference + (angle - reference + 90.0).rem_euclid(180.0) - 90.0
 }
 
-/// The median center, angle and size over `samples`: centers on the plane
-/// at the first sample, so a field across 0h is no trouble; angles folded to
-/// within a quarter turn of `reference` (the plan's angle), so frames either
-/// side of a meridian flip agree. `None` without samples. The angle and the
-/// size are `None` when no sample carries one.
+/// The axis the angles share, modulo a half turn: half the direction of
+/// the mean of their doubled angles. `None` when they cancel out.
+fn axial_mean(angles: &[f64]) -> Option<f64> {
+    let (sin, cos) = angles.iter().fold((0.0, 0.0), |(s, c), angle| {
+        let (sa, ca) = (2.0 * angle.to_radians()).sin_cos();
+        (s + sa, c + ca)
+    });
+    (sin.hypot(cos) > 1e-9 * angles.len() as f64).then(|| sin.atan2(cos).to_degrees() / 2.0)
+}
+
+/// The mean direction of the samples' centers, as a sky position; `None`
+/// when they cancel out.
+fn mean_center(samples: &[FrameSample]) -> Option<IcrsPosition> {
+    let mut sum = [0.0; 3];
+    for sample in samples {
+        let (sa, ca) = sample.center.ra_degrees.to_radians().sin_cos();
+        let (sd, cd) = sample.center.dec_degrees.to_radians().sin_cos();
+        sum = [sum[0] + cd * ca, sum[1] + cd * sa, sum[2] + sd];
+    }
+    let length = (sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2]).sqrt();
+    (length > 1e-9).then(|| IcrsPosition {
+        ra_degrees: sum[1].atan2(sum[0]).to_degrees().rem_euclid(360.0) % 360.0,
+        dec_degrees: (sum[2] / length).clamp(-1.0, 1.0).asin().to_degrees(),
+    })
+}
+
+/// The median center, angle and size over `samples`.
+///
+/// Centers are taken on the plane at the samples' mean direction, so a
+/// field across 0h is no trouble and one stray solve cannot pick the plane
+/// and drop the rest. Angles are folded to within a quarter turn of the
+/// axis they share (their axial mean), so frames either side of a meridian
+/// flip agree even when the camera sits near ±90° from the plan; the
+/// result is then given on the side of the half turn nearest `reference`
+/// (the plan's angle). `None` without samples. The angle and the size are
+/// `None` when no sample carries one.
 pub fn median_geometry(
     samples: &[FrameSample],
     reference: f64,
 ) -> Option<(IcrsPosition, Option<f64>, Option<PanelSize>)> {
     let first = samples.first()?;
-    let plane = TangentPlane::at(first.center).ok()?;
+    let anchor = mean_center(samples).unwrap_or(first.center);
+    let plane = TangentPlane::at(anchor).ok()?;
     let offsets: Vec<[f64; 2]> = samples
         .iter()
         .filter_map(|sample| plane.project(sample.center))
@@ -116,14 +162,15 @@ pub fn median_geometry(
     let mut xs: Vec<f64> = offsets.iter().map(|o| o[0]).collect();
     let mut ys: Vec<f64> = offsets.iter().map(|o| o[1]).collect();
     let center = plane.deproject([median(&mut xs)?, median(&mut ys)?]);
-    let mut angles: Vec<f64> = samples
+    let raw: Vec<f64> = samples
         .iter()
         .filter_map(|sample| sample.position_angle_degrees)
         .filter(|angle| angle.is_finite())
-        .map(|angle| fold(angle, reference))
         .collect();
+    let axis = axial_mean(&raw).unwrap_or(reference);
+    let mut angles: Vec<f64> = raw.iter().map(|angle| fold(*angle, axis)).collect();
     let angle = median(&mut angles).map(|angle| {
-        let wrapped = angle.rem_euclid(360.0);
+        let wrapped = fold(angle, reference).rem_euclid(360.0) % 360.0;
         if wrapped >= 360.0 {
             0.0
         } else {

@@ -105,15 +105,23 @@ export function shapeOverlap(a: PanelShape, b: PanelShape): ShapeOverlap | null 
   const spanX = Math.max(ab[1] - ab[0], bb[1] - bb[0]);
   const spanY = Math.max(ab[3] - ab[2], bb[3] - bb[2]);
   if (!(spanX > 0 && spanY > 0)) return null;
-  const shared = intersection(a.corners, b.corners);
+  const ox = (Math.min(ab[1], bb[1]) - Math.max(ab[0], bb[0])) / spanX;
+  const oy = (Math.min(ab[3], bb[3]) - Math.max(ab[2], bb[2])) / spanY;
+  if (ox <= 0 && oy <= 0) return null;
+  // Extents apart along an axis share no area: no clipping needed, and the
+  // answer is the same as clipping would give. Most pairs of a large mosaic
+  // end here.
+  const shared = ox <= 0 || oy <= 0 ? [] : intersection(a.corners, b.corners);
   let meanWidth: [number, number] | null = null;
   let acrossX: number; let acrossY: number;
   if (shared.length === 0) {
-    const ox = (Math.min(ab[1], bb[1]) - Math.max(ab[0], bb[0])) / spanX;
-    const oy = (Math.min(ab[3], bb[3]) - Math.max(ab[2], bb[2])) / spanY;
-    if (ox <= 0 && oy <= 0) return null;
-    if (ox > 0 && oy > 0) [acrossX, acrossY] = ox <= oy ? [0, oy] : [ox, 0];
-    else [acrossX, acrossY] = [ox, oy];
+    // Outlines that miss each other although their extents overlap on both
+    // axes (turned corners passing by): the gap is the distance between the
+    // outlines, across the axis it mostly runs along.
+    if (ox > 0 && oy > 0) {
+      const { distance, direction } = separation(a.corners, b.corners);
+      [acrossX, acrossY] = Math.abs(direction[0]) >= Math.abs(direction[1]) ? [-distance / spanX, oy] : [ox, -distance / spanY];
+    } else [acrossX, acrossY] = [ox, oy];
   } else {
     const sb = boundsOf(shared);
     const area = Math.abs(signedArea(shared)) / 2;
@@ -125,6 +133,28 @@ export function shapeOverlap(a: PanelShape, b: PanelShape): ShapeOverlap | null 
   return { thickness, run: verticalSeam ? acrossY : acrossX, verticalSeam, shared };
 }
 
+/** The shortest distance between two convex outlines that do not overlap,
+ *  and its direction from `a` toward `b`: the closest of every corner to
+ *  every edge, both ways. */
+function separation(a: Point[], b: Point[]): { distance: number; direction: Point } {
+  let best = { distance: Infinity, direction: [0, 0] as Point };
+  const closest = (p: Point, from: Point[], sign: number) => {
+    for (let i = 0; i < from.length; i += 1) {
+      const s = from[i]; const e = from[(i + 1) % from.length];
+      const dx = e[0] - s[0]; const dy = e[1] - s[1];
+      const length = dx * dx + dy * dy;
+      const t = length > 0 ? Math.min(1, Math.max(0, ((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / length)) : 0;
+      const q: Point = [s[0] + t * dx, s[1] + t * dy];
+      const distance = Math.hypot(p[0] - q[0], p[1] - q[1]);
+      // From the corner's outline toward the other's edge.
+      if (distance < best.distance) best = { distance, direction: [sign * (q[0] - p[0]), sign * (q[1] - p[1])] };
+    }
+  };
+  for (const corner of a) closest(corner, b, 1);
+  for (const corner of b) closest(corner, a, -1);
+  return best;
+}
+
 const roundPercent = (share: number) => Math.round(share * 1000) / 10;
 
 function grownContains(shape: PanelShape, point: Point): boolean {
@@ -134,19 +164,29 @@ function grownContains(shape: PanelShape, point: Point): boolean {
   return [[-1, 0], [1, 0], [0, -1], [0, 1]].some(([dx, dy]) => polygonContains(shape.corners, [point[0] + dx * tolerance, point[1] + dy * tolerance]));
 }
 
-function gapCovered(shapes: PanelShape[], i: number, j: number, pair: ShapeOverlap): boolean {
-  const ab = boundsOf(shapes[i].corners); const bb = boundsOf(shapes[j].corners);
+function gapCovered(shapes: PanelShape[], bounds: Bounds[], i: number, j: number, pair: ShapeOverlap): boolean {
+  const ab = bounds[i]; const bb = bounds[j];
   const [acrossA, acrossB, alongA, alongB]: Array<[number, number]> = pair.verticalSeam
     ? [[ab[0], ab[1]], [bb[0], bb[1]], [ab[2], ab[3]], [bb[2], bb[3]]]
     : [[ab[2], ab[3]], [bb[2], bb[3]], [ab[0], ab[1]], [bb[0], bb[1]]];
   const [low, high] = acrossA[0] + acrossA[1] < acrossB[0] + acrossB[1] ? [acrossA[1], acrossB[0]] : [acrossB[1], acrossA[0]];
   const start = Math.max(alongA[0], alongB[0]); const end = Math.min(alongA[1], alongB[1]);
+  // Only a panel reaching into the gap can cover a sample in it, so the rest
+  // are not tried at every sample: a large mosaic has hundreds.
+  const across: [number, number] = [Math.min(low, high), Math.max(low, high)];
+  const along: [number, number] = [Math.min(start, end), Math.max(start, end)];
+  const region: Bounds = pair.verticalSeam ? [...across, ...along] : [...along, ...across];
+  const near = shapes.filter((_, k) => {
+    const b = bounds[k];
+    const t = PLACE_TOLERANCE * Math.max(b[1] - b[0], b[3] - b[2]);
+    return k !== i && k !== j && b[0] - t <= region[1] && b[1] + t >= region[0] && b[2] - t <= region[3] && b[3] + t >= region[2];
+  });
   for (let s = 0; s < 3; s += 1) {
     const across = low + ((high - low) * (s + 0.5)) / 3;
     for (let t = 0; t < 5; t += 1) {
       const along = start + ((end - start) * (t + 0.5)) / 5;
       const point: Point = pair.verticalSeam ? [across, along] : [along, across];
-      if (!shapes.some((shape, k) => k !== i && k !== j && grownContains(shape, point))) return false;
+      if (!near.some(shape => grownContains(shape, point))) return false;
     }
   }
   return true;
@@ -156,11 +196,23 @@ function gapCovered(shapes: PanelShape[], i: number, j: number, pair: ShapeOverl
  *  the core returns. Shares are of the larger panel's side, so each panel of
  *  a pair shares at least the minimum of its own side. */
 export function shapeIssues(shapes: PanelShape[], minOverlapPercent: number): DirectorLayoutIssue[] {
+  return readShapes(shapes, minOverlapPercent).issues;
+}
+
+/** The rule's reading of a set of panels: what falls short, and which group
+ *  of panels joined by at least the minimum overlap each one is in, named by
+ *  the group's first member in input order. */
+export interface ShapeReading {
+  issues: DirectorLayoutIssue[];
+  groups: Map<string, string>;
+}
+
+export function readShapes(shapes: PanelShape[], minOverlapPercent: number): ShapeReading {
   const minimum = minOverlapPercent / 100;
   const n = shapes.length;
   const issues: DirectorLayoutIssue[] = [];
-  if (n < 2) return issues;
   const linked: number[][] = shapes.map(() => []);
+  const bounds = shapes.map(shape => boundsOf(shape.corners));
   const flagged = shapes.map(() => false);
   for (let i = 0; i < n; i += 1) {
     for (let j = i + 1; j < n; j += 1) {
@@ -172,26 +224,42 @@ export function shapeIssues(shapes: PanelShape[], minOverlapPercent: number): Di
       if (pair.thickness >= -PLACE_TOLERANCE) {
         issues.push({ kind: 'thin_overlap', panels: ids, percent: roundPercent(Math.max(0, pair.thickness)) });
         flagged[i] = true; flagged[j] = true;
-      } else if (-pair.thickness < 1 && !gapCovered(shapes, i, j, pair)) {
+      } else if (-pair.thickness < 1 && !gapCovered(shapes, bounds, i, j, pair)) {
         issues.push({ kind: 'gap', panels: ids, percent: roundPercent(-pair.thickness) });
         flagged[i] = true; flagged[j] = true;
       }
     }
   }
-  for (let i = 0; i < n; i += 1) if (linked[i].length === 0 && !flagged[i]) issues.push({ kind: 'isolated', panels: [shapes[i].id], percent: null });
-  if (issues.length === 0) {
-    const seen = shapes.map(() => false);
-    const starts: string[] = [];
-    for (let start = 0; start < n; start += 1) {
-      if (seen[start]) continue;
-      // A group is named by its first member in input order.
-      const group = [start]; seen[start] = true;
-      for (let next = 0; next < group.length; next += 1) for (const other of linked[group[next]]) if (!seen[other]) { seen[other] = true; group.push(other); }
-      starts.push(shapes[Math.min(...group)].id);
-    }
-    if (starts.length > 1) issues.push({ kind: 'disconnected', panels: starts, percent: null });
+  if (n > 1) for (let i = 0; i < n; i += 1) if (linked[i].length === 0 && !flagged[i]) issues.push({ kind: 'isolated', panels: [shapes[i].id], percent: null });
+  const groups = new Map<string, string>();
+  const seen = shapes.map(() => false);
+  const starts: string[] = [];
+  for (let start = 0; start < n; start += 1) {
+    if (seen[start]) continue;
+    // A group is named by its first member in input order.
+    const group = [start]; seen[start] = true;
+    for (let next = 0; next < group.length; next += 1) for (const other of linked[group[next]]) if (!seen[other]) { seen[other] = true; group.push(other); }
+    const name = shapes[Math.min(...group)].id;
+    for (const member of group) groups.set(shapes[member].id, name);
+    starts.push(name);
   }
-  return issues;
+  if (issues.length === 0 && starts.length > 1) issues.push({ kind: 'disconnected', panels: starts, percent: null });
+  return { issues, groups };
+}
+
+/** Whether panels that shared a group before no longer do: a move that
+ *  splits the mosaic, as opposed to one that only joins groups or fixes the
+ *  last issue that hid a split already there. */
+export function splitApart(before: Map<string, string>, after: Map<string, string>): boolean {
+  const seen = new Map<string, string>();
+  for (const [id, group] of before) {
+    const now = after.get(id);
+    if (now === undefined) continue;
+    const other = seen.get(group);
+    if (other === undefined) seen.set(group, now);
+    else if (other !== now) return true;
+  }
+  return false;
 }
 
 export interface SharedStrip {

@@ -3,7 +3,7 @@ import type { SkyPreview } from '../../api/types';
 import { formatDecShort, formatRaShort, galacticBandQuads, tanPixelToSky } from '../../utils/skyProjection';
 import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
 import { gridLayout, layoutStructureProblem, singleLayout, turnOf, type BoxOf } from './mosaicLayout';
-import { boundsOf, shapeCenter, shapeIssues, turnedShape, type Bounds, type PanelShape, type Point } from './panelShape';
+import { boundsOf, readShapes, shapeCenter, turnedShape, type Bounds, type PanelShape, type Point, type ShapeReading } from './panelShape';
 
 /** The stage's logical pixels; CSS scales the drawing to the element. The
  *  longer side is always 1024, so a 4:3 stage is 1024 × 768. */
@@ -89,7 +89,7 @@ export const MIN_PANEL_DEGREES = 0.01;
 /** The mosaic's extent along the camera axes, as the core computes it:
  *  planned panels at their places, shot ones as shot. */
 export function mosaicExtent(center: DirectorSkyPosition, positionAngle: number, panel: DirectorPanelSize, layout: DirectorLayout): DirectorPanelSize {
-  return extentOf(framingShapes(center, positionAngle, panel, layout));
+  return extentOf(shapesOf(center, positionAngle, panel, layout));
 }
 
 function extentOf(shapes: PanelShape[]): DirectorPanelSize {
@@ -449,10 +449,33 @@ export function framingShapes(center: DirectorSkyPosition, positionAngle: number
   });
 }
 
+/** Each layout's outlines and the rule's reading of them, kept per layout
+ *  object for the center, angle and panel size they were read at. A layout
+ *  is replaced, never changed in place, so a pan, a zoom or an edit
+ *  elsewhere reads it again for free; only a panel edit clips every pair
+ *  again. */
+const readings = new WeakMap<DirectorLayout, { key: string; shapes: PanelShape[]; reading: ShapeReading }>();
+const readingKey = (center: DirectorSkyPosition, positionAngle: number, panel: DirectorPanelSize) => `${center.ra_degrees},${center.dec_degrees},${positionAngle},${panel.width_degrees},${panel.height_degrees}`;
+export function readFraming(center: DirectorSkyPosition, positionAngle: number, panel: DirectorPanelSize, layout: DirectorLayout): { shapes: PanelShape[]; reading: ShapeReading } {
+  const key = readingKey(center, positionAngle, panel);
+  const known = readings.get(layout);
+  if (known && known.key === key) return known;
+  const shapes = framingShapes(center, positionAngle, panel, layout);
+  const entry = { key, shapes, reading: readShapes(shapes, layout.min_overlap_percent) };
+  readings.set(layout, entry);
+  return entry;
+}
+
+/** The outlines alone: read already, or drawn without the rule's reading. */
+function shapesOf(center: DirectorSkyPosition, positionAngle: number, panel: DirectorPanelSize, layout: DirectorLayout): PanelShape[] {
+  const known = readings.get(layout);
+  return known && known.key === readingKey(center, positionAngle, panel) ? known.shapes : framingShapes(center, positionAngle, panel, layout);
+}
+
 /** Each panel's reach in panel sizes, from its true outline, for placing
  *  panels against it. */
 export function framingBoxes(center: DirectorSkyPosition, positionAngle: number, panel: DirectorPanelSize, layout: DirectorLayout): BoxOf {
-  const shot = new Map(framingShapes(center, positionAngle, panel, layout).map(shape => [shape.id, shape]));
+  const shot = new Map(shapesOf(center, positionAngle, panel, layout).map(shape => [shape.id, shape]));
   return placement => {
     const shape = placement.measured && shot.get(placement.id)
       ? shot.get(placement.id)!
@@ -500,7 +523,7 @@ export function framingGeometry(request: DirectorFramingRequest): DirectorFramin
   };
   const footprint = (id: string, at: DirectorOffset, size: DirectorPanelSize, turn: number): DirectorFootprint =>
     withView(id, deprojectFrom(center, at), rectangle(at, size, turn).map(corner => deprojectFrom(center, corner)) as DirectorFootprint['corners']);
-  const shapes = framingShapes(center, angle, panel, layout);
+  const { shapes, reading } = readFraming(center, angle, panel, layout);
   // Rows and columns from where each panel sits, in panel sizes.
   const places = shapes.map(shape => { const [x, y] = shapeCenter(shape); return [x / panel.width_degrees, y / panel.height_degrees]; });
   const rows = bands(places.map(place => -place[1]), 0.1);
@@ -524,7 +547,7 @@ export function framingGeometry(request: DirectorFramingRequest): DirectorFramin
     overlays: request.overlays.map(overlay => footprint(overlay.id, [0, 0], overlay.size, overlay.position_angle_degrees)),
     extent: extentOf(shapes),
     view_center_offset: view ? toView(center) : null,
-    issues: shapeIssues(shapes, layout.min_overlap_percent),
+    issues: reading.issues,
   };
 }
 
@@ -673,7 +696,7 @@ export function handleSky(center: DirectorSkyPosition, positionAngle: number, ha
 export function rotationHandleSky(state: FramingState, extent: DirectorPanelSize, viewFov = state.viewFov): DirectorSkyPosition {
   // Above the top edge of the highest panel, which for a grid is half the extent.
   const top = state.panel && state.layout.panels.length > 0
-    ? Math.max(...framingShapes(state.center, state.positionAngle, state.panel, state.layout).flatMap(shape => shape.corners.map(corner => corner[1])))
+    ? Math.max(...shapesOf(state.center, state.positionAngle, state.panel, state.layout).flatMap(shape => shape.corners.map(corner => corner[1])))
     : extent.height_degrees / 2;
   return handleSky(state.center, state.positionAngle, Number.isFinite(top) ? top : extent.height_degrees / 2, Math.max(0.02, viewFov * 0.03));
 }

@@ -244,13 +244,25 @@ pub fn camera_angle_at(center: IcrsPosition, at: IcrsPosition, theta: f64) -> f6
 /// [`camera_angle_at`], so a target's stored angle reads back as the
 /// framing's.
 pub fn plane_angle_at(center: IcrsPosition, at: IcrsPosition, position_angle: f64) -> f64 {
+    let wrapped = |degrees: f64| (degrees + 180.0).rem_euclid(360.0) - 180.0;
+    let miss = |theta: f64| wrapped(position_angle - camera_angle_at(center, at, theta));
     let mut theta = position_angle - north_turn(center, at);
-    // The map is the identity plus a small, slowly varying term: a few
-    // steps settle it to rounding.
-    for _ in 0..4 {
-        let miss =
-            (position_angle - camera_angle_at(center, at, theta) + 180.0).rem_euclid(360.0) - 180.0;
-        theta += miss;
+    // Newton's method on the angle the camera draws, its slope read a
+    // hair either side: near the center the map is the identity plus a
+    // small term and one step settles it; far out its slope is well away
+    // from one, and a plain fixed point would crawl. Stop at rounding.
+    for _ in 0..50 {
+        let error = miss(theta);
+        if error.abs() < 1e-11 {
+            break;
+        }
+        const STEP: f64 = 1e-4;
+        let slope = (miss(theta - STEP) - miss(theta + STEP)) / (2.0 * STEP);
+        theta += if slope.is_finite() && slope.abs() > 1e-6 {
+            error / slope
+        } else {
+            error
+        };
     }
     normalise_angle(theta)
 }
