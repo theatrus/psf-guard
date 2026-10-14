@@ -244,7 +244,7 @@ describe('CalibrationPage', () => {
     fireEvent.blur(from);
     await waitFor(() => expect(seen.sessions.at(-1)?.get('temp_min')).toBe('-12'));
     expect(seen.sessions.at(-1)?.get('grade')).toBe('poor');
-    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     await waitFor(() => expect(params().get('calKind')).toBeNull());
     expect(params().get('calGrade')).toBeNull();
   });

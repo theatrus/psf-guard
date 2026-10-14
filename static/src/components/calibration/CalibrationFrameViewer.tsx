@@ -84,7 +84,7 @@ export default function CalibrationFrameViewer({
   return (
     <section className="calibration-viewer" aria-label="Frame viewer">
       <div className="calibration-viewer-controls">
-        <div className="calibration-segmented" role="group" aria-label="Stretch">
+        <div className="tool-segmented" role="group" aria-label="Stretch">
           {stretchOptions.map((option) => (
             <button
               key={option.value}
@@ -100,7 +100,7 @@ export default function CalibrationFrameViewer({
         {kind === 'flat' && (
           <button
             type="button"
-            className="calibration-toggle"
+            className="tool-button"
             aria-pressed={shownView === 'session'}
             disabled={!canCompare}
             title={canCompare ? 'Divide by the median of its session’s flats' : 'Needs three flats in the session'}
@@ -112,7 +112,7 @@ export default function CalibrationFrameViewer({
         {spots && spots.features.length > 0 && (
           <button
             type="button"
-            className="calibration-toggle"
+            className="tool-button"
             aria-pressed={showSpots}
             onClick={() => setShowSpots((value) => !value)}
           >
@@ -121,7 +121,7 @@ export default function CalibrationFrameViewer({
         )}
         <button
           type="button"
-          className="calibration-toggle"
+          className="tool-button"
           aria-pressed={full}
           onClick={() => onFull(!full)}
         >

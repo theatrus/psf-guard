@@ -127,7 +127,7 @@ export default function CalibrationFramePanel({
               grade already keeps the frame out. */}
           <div className="calibration-action-row">
             {detail.quality_override !== 'exclude' && (
-              <button type="button" className="calibration-button" disabled={actions.pending || stale}
+              <button type="button" className="tool-button" disabled={actions.pending || stale}
                 title={detail.kept_out
                   ? 'Keep out by hand, whatever later grades say; the frame stays in the library'
                   : 'Leave out of masters and exports; the frame stays in the library'}
@@ -136,25 +136,25 @@ export default function CalibrationFramePanel({
               </button>
             )}
             {detail.quality_override !== 'use' && detail.kept_out && (
-              <button type="button" className="calibration-button" disabled={actions.pending || stale}
+              <button type="button" className="tool-button" disabled={actions.pending || stale}
                 title="Use in masters and exports whatever its grade"
                 onClick={() => actions.choose.mutate({ frameUuids: uuids, choice: 'use' })}>
                 Use anyway
               </button>
             )}
             {detail.quality_override && (
-              <button type="button" className="calibration-button" disabled={actions.pending || stale}
+              <button type="button" className="tool-button" disabled={actions.pending || stale}
                 title="Let the grade decide again"
                 onClick={() => actions.choose.mutate({ frameUuids: uuids, choice: 'clear' })}>
                 Clear
               </button>
             )}
-            <button type="button" className="calibration-button calibration-button-danger"
+            <button type="button" className="tool-button tool-button-danger"
               disabled={actions.pending || stale} onClick={forget}>
               Forget
             </button>
           </div>
-          <div className="calibration-segmented" role="group" aria-label="Serves lights">
+          <div className="tool-segmented" role="group" aria-label="Serves lights">
             {VALIDITY.map((option) => (
               <button key={option.value} type="button" title={option.title} disabled={actions.pending || stale}
                 aria-pressed={(detail.valid_direction ?? 'both') === option.value}
