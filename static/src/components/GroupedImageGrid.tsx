@@ -196,11 +196,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
   const gridScopeKey = JSON.stringify([dbId, projectId, targetId]);
   const organizationNavigationFromRef = useRef<string | null>(null);
-  const { data: serverInfo } = useQuery({
-    queryKey: ['serverInfo'],
-    queryFn: apiClient.getServerInfo,
-    staleTime: 5 * 60 * 1000,
-  });
   const selectionAnchorIdRef = useRef<number | null>(null);
   const selectionBaseIdsRef = useRef<Set<number>>(new Set());
 
@@ -954,7 +949,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 key={`${dbId}:${projectId}`}
                 dbId={dbId}
                 projectId={projectId}
-                canManage={grading.canWrite && !!serverInfo?.allow_database_management}
+                canManage={grading.canWrite}
               />}
             </>
           )}
@@ -1005,7 +1000,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               />
             </>
           )}
-          menu={grading.canWrite && serverInfo?.allow_database_management ? (
+          menu={grading.canWrite ? (
             <button
               type="button"
               className="toolbar-menu-item organization-action"

@@ -131,23 +131,47 @@ Set `allow_read_only_compute = true` to let the viewer start those derived-data
 jobs. This can suit a trusted private server. Leave it off for a public demo,
 where repeated jobs could consume CPU, network data, and cache space.
 
-The editor can also:
+The editor can also, with or without the database-management gate below:
 
 - grade images and use undo or redo;
-- update projects, targets, coordinates, and exposure plans;
-- start quality scans and imports;
+- update projects, targets, coordinates, and exposure plans, and move targets
+  and exposures between projects;
+- start quality scans, and imports from the database's own image folders;
 - save, delete, and import named processing setups (viewers can list, apply,
   and export them);
 - keep calibration frames out or use them anyway, mark their validity, forget
   them, clear generated masters, and invalidate Target Scheduler flat
   coverage;
-- manage databases, peers, and catalogs when the server's database-management
-  gate is also enabled;
-- write local exports and apply database sync previews.
+- set a project's exposure grouping and a catalog's AstroBin filter map;
+- write server exports into the database's configured export folder, and
+  apply database sync previews.
 
 Server checks enforce the role even if a client calls the API directly. The UI
 also leaves Settings out of a viewer's header menu and disables grading
 controls. The menu says who is signed in and holds **Sign out**.
+
+## The database-management gate
+
+`--allow-database-management` (always on in the desktop app) guards the
+routes that let a client name a path on the server or look around its disk.
+Without it, nobody can add a server path to the registry or explore folders
+through the API. It does not guard editing rows inside a catalog: that is the
+editor's work, above. With the gate on, an editor can also:
+
+- register, create, or remove databases, and set their image, export,
+  process, and remote-upload folders;
+- import from a folder outside the database's image folders, and write a
+  local export to a path of their choosing;
+- choose storage folders and limits, the PixInsight program and WBPP runs
+  folder, start and manage WBPP runs, and save a project's process folder;
+- install Seiza catalogs;
+- add, change, or remove sync peers and pair remote clients;
+- repair missing Target Scheduler GUIDs, which copies the catalog file
+  beside itself;
+- move rejected frames to the reject archive, restore them, or empty it;
+- change a database's new-frame scanning and calibrated-copy pairing.
+
+A viewer never gets these, gate or not.
 
 ## API tokens
 
@@ -205,10 +229,10 @@ continue to work when browser authentication is enabled.
 - A deployment can seed a user from an existing secret with
   `psf-guard users add editor --role read-write --password-file PATH`. PSF Guard
   stores only the resulting hash in `auth.json`.
-- Keep `--allow-database-management` off unless browser-side database
-  management is needed. An editor login does not override that gate, and the
-  gate does not override the login: on a network address the server needs
-  both.
+- Keep `--allow-database-management` off unless editors need to name server
+  paths from the browser (see [the gate](#the-database-management-gate)). An
+  editor login does not override that gate, and the gate does not override
+  the login: on a network address the server needs both.
 - Treat `--allow-anonymous-access` as a temporary measure. A public server
   running it has no access control at all.
 - Signing out revokes the current in-memory session. Restarting the server

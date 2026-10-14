@@ -187,7 +187,7 @@ export default function StacksView() {
           key={`${dbId}:${projectId}`}
           dbId={dbId}
           projectId={projectId}
-          canManage={canManage}
+          canManage={access.canWrite}
         />
       </div>
       {selection && (

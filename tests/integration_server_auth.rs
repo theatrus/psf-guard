@@ -59,9 +59,16 @@ fn app_with_auth(config: ServerAuthConfig) -> Router {
 }
 
 fn app_with_management(config: ServerAuthConfig, allow_management: bool) -> Router {
-    let state = Arc::new(AppState::new_for_test(
-        Connection::open_in_memory().unwrap(),
-    ));
+    // A catalog with one project, for the routes that edit its rows.
+    let catalog = Connection::open_in_memory().unwrap();
+    psf_guard::ts_schema::apply_schema(&catalog).unwrap();
+    catalog
+        .execute(
+            "INSERT INTO project (Id, profileId, name, guid) VALUES (1, 'p', 'M42', 'pg')",
+            [],
+        )
+        .unwrap();
+    let state = Arc::new(AppState::new_for_test(catalog));
     state.set_server_auth(Some(
         ServerAuth::from_sources(Some(&config), &auth_registry(), 3000)
             .unwrap()
@@ -183,33 +190,57 @@ fn user_management_app(directory: &tempfile::TempDir) -> Router {
     Router::new().nest("/api", api)
 }
 
-#[tokio::test]
-async fn project_processing_settings_require_an_editor_and_database_management() {
-    for (allow_management, username, password) in [
-        (true, "viewer", "viewer-secret"),
-        (false, "editor", "editor-secret"),
-    ] {
-        let app = app_with_management(auth_config(), allow_management);
-        let (_, cookie, _) = login(&app, username, password).await;
-        let request = Request::builder()
-            .method(Method::PUT)
-            .uri("/api/db/test/projects/1/processing-settings")
-            .header(COOKIE, &cookie)
-            .header("content-type", "application/json")
-            .body(Body::from(r#"{"split_exposure_groups":true}"#))
-            .unwrap();
-        let (status, _, _) = json(&app, request).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
-    }
+async fn put_settings(app: &Router, cookie: &str, body: &str) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method(Method::PUT)
+        .uri("/api/db/test/projects/1/processing-settings")
+        .header(COOKIE, cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, _, body) = json(app, request).await;
+    (status, body)
 }
 
 #[tokio::test]
-async fn organization_requires_an_editor_and_database_management() {
-    for (allow_management, username, password) in [
-        (true, "viewer", "viewer-secret"),
-        (false, "editor", "editor-secret"),
-    ] {
-        let app = app_with_management(auth_config(), allow_management);
+async fn project_grouping_takes_an_editor_and_a_folder_takes_database_management() {
+    let grouping = r#"{"split_exposure_groups":false}"#;
+    let folder = r#"{"split_exposure_groups":false,"process_folder":"m31"}"#;
+
+    // A viewer changes neither.
+    let app = app_with_management(auth_config(), true);
+    let (_, viewer, _) = login(&app, "viewer", "viewer-secret").await;
+    assert_eq!(
+        put_settings(&app, &viewer, grouping).await.0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Grouping is a catalog row: an editor sets it with management off. A
+    // folder is a path the client names: that takes the gate.
+    let app = app_with_management(auth_config(), false);
+    let (_, editor, _) = login(&app, "editor", "editor-secret").await;
+    let (status, body) = put_settings(&app, &editor, grouping).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = put_settings(&app, &editor, folder).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("database management is disabled"));
+
+    let app = app_with_management(auth_config(), true);
+    let (_, editor, _) = login(&app, "editor", "editor-secret").await;
+    let (status, body) = put_settings(&app, &editor, folder).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["process_folder"], "m31");
+}
+
+#[tokio::test]
+async fn organization_takes_an_editor_not_database_management() {
+    // Moving targets and exposures edits catalog rows. The editor's
+    // requests reach the handlers, which find no such targets.
+    for (username, password) in [("viewer", "viewer-secret"), ("editor", "editor-secret")] {
+        let app = app_with_management(auth_config(), false);
         let (_, cookie, _) = login(&app, username, password).await;
         let operation = serde_json::json!({
             "kind": "merge_targets", "source_target_id": 1, "destination_target_id": 2,
@@ -228,10 +259,12 @@ async fn organization_requires_an_editor_and_database_management() {
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap();
-            assert_eq!(
-                app.clone().oneshot(request).await.unwrap().status(),
-                StatusCode::FORBIDDEN
-            );
+            let (status, _, body) = json(&app, request).await;
+            if username == "viewer" {
+                assert_eq!(status, StatusCode::FORBIDDEN, "{action}: {body}");
+            } else {
+                assert_ne!(status, StatusCode::FORBIDDEN, "{action}: {body}");
+            }
         }
     }
 }

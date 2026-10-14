@@ -106,9 +106,11 @@ function RouteProbe() {
 function mountGrid(initial: Image[] = [firstImage, secondImage]) {
   let sourceImages = initial;
   server.use(
+    // Moving exposures edits catalog rows: an editor moves them with
+    // database management off.
     http.get('/api/info', () => HttpResponse.json({
       success: true,
-      data: { version: 'test', allow_database_management: true },
+      data: { version: 'test', allow_database_management: false },
       error: null,
       status: 'ready',
     })),

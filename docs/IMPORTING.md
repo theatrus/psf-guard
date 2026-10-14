@@ -378,8 +378,8 @@ at a time; a selection spanning targets must be moved separately.
 ![Exposure move preview on a phone](exposure-move-phone.png)
 
 Organization stays within one database and one Target Scheduler profile.
-These controls require an editor account and database management to be enabled
-(or the desktop app). A preview changes nothing. If relevant catalog records
+These controls require an editor account; they edit catalog rows, so they do
+not need database management. A preview changes nothing. If relevant catalog records
 change before Apply, PSF Guard asks for a fresh preview.
 
 Image files, capture metadata, grades, rejection reasons, and image GUIDs do
@@ -453,7 +453,7 @@ request to opt out per call.
 Open **Library**, then choose **Planning** on a project (⚙ on a compact row).
 The plan's workspace opens with that database's **Edit in Target Scheduler** expanded in
 its rig's block: project state and limits, target coordinates, rotation and ROI,
-shared exposure templates, and each filter plan. With database management enabled, you can edit
+shared exposure templates, and each filter plan. With an editor account, you can edit
 these fields, add plans, or merge and move imported projects and targets when a
 header name grouped them poorly.
 

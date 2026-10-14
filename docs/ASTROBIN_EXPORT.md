@@ -89,8 +89,8 @@ its terms forbid tools scraping it. Names match ignoring case. On a night
 more than one entry covers, the one that starts latest wins. A filter that
 changed between nights keeps its rows apart, one per id. The map lives in
 the catalog itself (a `psf_guard_astrobin_filter` table Target Scheduler
-ignores), so it travels with the rig's database and needs the
-database-management grant to edit. The table has only its row id: an
+ignores), so it travels with the rig's database, and an editor can change
+it. The table has only its row id: an
 export reads the whole map once and matches names and nights in memory,
 and a map is a handful of rows.
 

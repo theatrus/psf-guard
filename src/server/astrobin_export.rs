@@ -24,9 +24,7 @@ use crate::server::{
     api::ApiResponse,
     database_context::open_scheduler_connection_with_flags,
     extract::DbContext,
-    handlers::{
-        require_database_management_allowed, require_registry_path, update_registry, AppError,
-    },
+    handlers::{require_registry_path, update_registry, AppError},
     state::AppState,
 };
 
@@ -119,13 +117,12 @@ pub async fn get_astrobin_filters(
 }
 
 /// `PUT /api/db/{db_id}/astrobin/filters` — replace the catalog's filter
-/// map. A catalog write, so it sits behind the database-management gate.
+/// map. A catalog row edit: an editor's work, with no database-management
+/// gate, which guards paths a client names.
 pub async fn update_astrobin_filters(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(request): Json<UpdateAstroBinFilterMapRequest>,
 ) -> Result<Json<ApiResponse<AstroBinFilterMapResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
     let entries = crate::astrobin::save_filter_entries(&mut conn, &request.entries)

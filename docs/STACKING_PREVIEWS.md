@@ -1518,7 +1518,8 @@ PUT  /api/settings/stacking
 ```
 
 Project processing settings use `{ "split_exposure_groups": false }`. Writes
-require editor access and the database-management gate. The stacking settings
+require editor access; one that also sets `process_folder`, a path, needs the
+database-management gate. The stacking settings
 carry `automatic_previews`, `arrival_delay_minutes`, `grade_delay_minutes`,
 `build_new_channels`, and `new_channel_window_days` (0 for any age, up to
 3650), with `default_new_channel_window_days` in the response; a PUT may omit

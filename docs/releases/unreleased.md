@@ -168,10 +168,14 @@
   whose frames are all graded builds once more, and so do the flats and
   stacks built on it. A newly imported dark set builds twice: screened
   before grading reaches it, then without the screen once it is graded.
-- Forgetting calibration frames, marking their validity, **Keep out**,
-  **Use anyway** and **Clear generated masters** now need database
-  management, as the guide said, and the Calibration page offers them only
-  to accounts that can write.
+- An editor no longer needs `--allow-database-management` to keep
+  calibration frames out or use them anyway, mark their validity, forget
+  them, clear generated masters, invalidate flat coverage, move targets and
+  exposures, or set a project's exposure grouping or a catalog's AstroBin
+  filter map: these edit catalog rows. The gate now guards what lets a
+  client name a server path or touch files outside the catalog; the
+  authentication guide lists it. Viewers get none of these, and the
+  Calibration page shows them no write buttons.
 - Calibration health catches up on its own. A light whose file was missing
   is judged again once a directory refresh finds it or the image folders
   change. New lights from N.I.N.A. or a CLI regrade are judged once the

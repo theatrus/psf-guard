@@ -432,7 +432,11 @@ pub async fn update_project_settings(
     Path((_db, project_id)): Path<(String, i32)>,
     Json(settings): Json<ProjectProcessingSettings>,
 ) -> Result<Json<ApiResponse<ProjectProcessingSettings>>, AppError> {
-    require_database_management_allowed(&state)?;
+    // Grouping is a catalog row an editor sets. A folder is a path the
+    // client names, which takes the database-management gate.
+    if settings.process_folder.is_some() {
+        require_database_management_allowed(&state)?;
+    }
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
     // A body that names only the grouping keeps the remembered folder.
