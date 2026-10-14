@@ -282,6 +282,13 @@ const normalizeColorJob = (job: StackColorJob): StackColorJob => ({
   ),
 });
 
+/** No answer from the server, or a gateway's while it is down. Not a
+ *  request the page cancelled. */
+const serverUnreachable = (cause: unknown): boolean =>
+  axios.isAxiosError(cause) &&
+  !axios.isCancel(cause) &&
+  (!cause.response || [502, 503, 504].includes(cause.response.status));
+
 const stackStretchError = (cause: unknown, fallback: string): Error => {
   if (axios.isAxiosError<ApiResponse<unknown>>(cause)) {
     return new Error(cause.response?.data?.error || cause.message || fallback);
@@ -2380,7 +2387,12 @@ export const apiClient = {
         if (pending && options?.onProgress) options.onProgress(pending);
         polling = true;
       } catch (cause) {
-        throw stackStretchError(cause, 'Failed to apply stack stretch');
+        // A server restarting answers nothing for a while, or a proxy in
+        // front of it a 502–504. The run comes back from the server's job
+        // journal under the same request, so a poll keeps asking.
+        if (!(polling && serverUnreachable(cause))) {
+          throw stackStretchError(cause, 'Failed to apply stack stretch');
+        }
       }
       if (Date.now() > deadline) {
         throw new Error('Stack processing is still running; try again later');

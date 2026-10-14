@@ -681,11 +681,13 @@ cores by default, while a build you start uses the interactive share, 50%.
 The queue survives a restart. PSF Guard keeps a job journal beside the
 database registry (`<registry>.jobs.json`), rewritten a few seconds after the
 queue changes and once more when the server stops cleanly (Ctrl+C, SIGTERM,
-or quitting the desktop app). It holds stack and color builds queued or
-running, in the order they would run, automatic refreshes still settling with
-their due times, and the WBPP line. A stopping server asks every build to
-stop and waits for it: a running build checkpoints the frames it has
-integrated, and the journal keeps it to resume.
+or quitting the desktop app). It holds stack and color builds and processing
+runs queued or running, in the order they would run, automatic refreshes
+still settling with their due times, and the WBPP line. A stopping server
+asks every build to stop and waits for it: a running build checkpoints the
+frames it has integrated, and the journal keeps it to resume. A running
+RC-Astro tool is killed rather than waited for; see
+[Processing runs wait in the build line](#processing-runs-wait-in-the-build-line).
 
 On start PSF Guard puts them back before the automatic scheduler may start
 anything:
@@ -698,6 +700,12 @@ anything:
 - A build cut off part way resumes from its checkpoint where it can. A build
   cut off by two crashes or killed processes in a row is not started a third
   time, since it is the likelier cause of them. A clean stop does not count.
+- A processing run comes back in its place in the line, under the request
+  that asked for it, so a page left open finds it on its next poll. One whose
+  database or stack is gone, or whose stack was rebuilt, is dropped with a
+  note in the log. Its RC-Astro chain resumes after its last finished step.
+  A run cut off by two restarts in a row, clean stops included, is not
+  started a third time.
 - A build you adopted from the automatic refresh comes back as yours.
 - Settling refreshes keep their due times, or run at once if those passed.
 - Waiting WBPP runs keep their order. A WBPP run the restart cut off is not
@@ -1166,11 +1174,18 @@ no **Stop**; it finishes in moments. A build you start still waits behind
 processing runs asked for earlier unless you move it; automatic refreshes
 stop for processing runs as they do for builds you start.
 
-A server stop lets the RC-Astro tool in hand finish and write its result,
-then starts no further step, and the stop waits for it. A run still waiting
-leaves the line. Processing runs are not written to the job journal, so a
-restart does not bring them back: apply the processing again, and the steps
-that finished come from the cache.
+Processing runs survive a restart: the job journal keeps them with the
+builds, in line order. A server stop kills a running RC-Astro tool at once
+and removes its exchange folder; it does not wait minutes for the tool. The
+steps of the chain that finished stay cached, so after the restart the run
+resumes from the last of them and redoes only the step that was cut. A
+stretch or deconvolution in hand finishes, which takes seconds; the run then
+stops at its next check, before deconvolution or before each tool, and a
+stretch that finished rendering keeps its result. A run still waiting leaves
+the line and comes back in it. A page left open keeps polling through the
+restart and shows the run again once the server is back. Because the tool
+in hand is lost, a stop counts as a cut-off: a run cut off by two restarts
+in a row is not started a third time, and the log says so.
 
 ## Named processing setups
 

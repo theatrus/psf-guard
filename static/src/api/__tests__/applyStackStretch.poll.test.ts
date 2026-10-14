@@ -121,6 +121,48 @@ describe('applyStackStretch polling', () => {
     expect(seen[0].fraction).toBeUndefined();
   });
 
+  it('keeps polling through a server restart and finds the run again', async () => {
+    let calls = 0;
+    server.use(
+      http.post(`/api/db/test/stack-previews/${jobId}/0/stretch`, () => {
+        calls += 1;
+        if (calls === 1) {
+          return HttpResponse.json({
+            success: true,
+            data: { pending: true, queued: false, stage: 'RC-Astro BlurXTerminator', fraction: 0.5 },
+            error: null,
+          }, { status: 202 });
+        }
+        // Down, then a proxy's answer while it starts, then back with the
+        // run restored from its journal.
+        if (calls === 2) return HttpResponse.error();
+        if (calls === 3) return new HttpResponse(null, { status: 502 });
+        if (calls === 4) {
+          return HttpResponse.json({
+            success: true,
+            data: { pending: true, queued: true, queue_position: 0, stage: 'Waiting for the stack worker' },
+            error: null,
+          }, { status: 202 });
+        }
+        return HttpResponse.json(ready);
+      })
+    );
+    const seen: StackStretchPendingProgress[] = [];
+    const preview = await apiClient.applyStackStretch('test', jobId, 0,
+      { model: { type: 'identity' }, color_strategy: 'linked' },
+      { onProgress: (progress) => seen.push(progress), pollIntervalMs: 5 });
+    expect(calls).toBe(5);
+    expect(seen.map((progress) => progress.queued)).toEqual([false, true]);
+    expect(preview.stretch_id).toBe('b'.repeat(64));
+  });
+
+  it('gives up at once when the first request finds no server', async () => {
+    server.use(http.post(`/api/db/test/stack-previews/${jobId}/0/stretch`, () => HttpResponse.error()));
+    await expect(apiClient.applyStackStretch('test', jobId, 0,
+      { model: { type: 'identity' }, color_strategy: 'linked' }, { pollIntervalMs: 5 }))
+      .rejects.toThrow();
+  });
+
   it('surfaces a failed poll as an error', async () => {
     server.use(
       http.post(`/api/db/test/stack-previews/${jobId}/0/stretch`, () =>

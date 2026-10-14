@@ -1391,12 +1391,12 @@ pub(super) mod test_tool {
     }
 
     impl FakeTool {
-        /// Let a held run finish.
+        /// Let the held run in hand finish; the next run holds again.
         pub fn release(&self) {
             std::fs::write(self.dir.path().join("release"), b"").unwrap();
         }
 
-        /// One line per run the tool started.
+        /// One line per run the tool started, naming the tool.
         pub fn invocations_log(&self) -> String {
             std::fs::read_to_string(self.dir.path().join("invocations")).unwrap_or_default()
         }
@@ -1434,9 +1434,10 @@ pub(super) mod test_tool {
 
     /// Install a stand-in that answers `rc-astro <tool> --json` with a
     /// licensed schema and, on a run, copies its input to its output, writes
-    /// a stars sidecar when asked, and counts its runs. A `hold`ing tool
+    /// a stars sidecar when asked, and logs each run. A `hold`ing tool
     /// reports half done, then waits for [`FakeTool::release`] before it
-    /// writes anything, so a test can watch a run in progress or stop it.
+    /// writes anything, so a test can watch a run in progress or stop it;
+    /// each release lets one run through.
     pub(crate) fn install(hold: bool) -> FakeTool {
         use std::os::unix::fs::PermissionsExt;
         let lock = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1447,6 +1448,7 @@ pub(super) mod test_tool {
             format!(
                 r#"echo '{{"event":"progress","done":50.0}}'
 while [ ! -f "{state}/release" ] && [ -d "{state}" ]; do sleep 0.05; done
+rm -f "{state}/release"
 "#
             )
         } else {
@@ -1464,7 +1466,7 @@ if [ "$2" = "--json" ]; then
   echo '{{"schemaVersion":6,"cliVersion":"9.9.9-test","key":"'"$1"'","name":"RC-Astro '"$name"'","mlVersion":4,"parameters":[]}}'
   exit 0
 fi
-echo run >> "{state}/invocations"
+echo "$1" >> "{state}/invocations"
 out=""
 input=""
 stars=0

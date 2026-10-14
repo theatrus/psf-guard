@@ -299,5 +299,7 @@
   far it has got. Stretch, deconvolution and RC-Astro runs wait in the same
   line as builds and appear in the header's background jobs, where they can
   be moved, taken out of the line, or, for an RC-Astro run, stopped; a row
-  opens the target's stacks. A server stop lets the RC-Astro tool in hand
-  finish instead of killing it.
+  opens the target's stacks. Processing runs survive a restart: a server
+  stop kills a running RC-Astro tool instead of waiting for it, and after
+  the restart the run comes back in its place and resumes after the last
+  tool step that finished. A page left open picks it up again.

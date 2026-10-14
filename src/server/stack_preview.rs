@@ -943,8 +943,11 @@ pub struct StackPreviewManager {
     /// for the journal's last write.
     stopped_for_shutdown: Mutex<Option<Vec<(String, journal::JournaledStackJob)>>>,
     /// Stretch, deconvolution and RC-Astro runs waiting in the line or
-    /// running, by run id. They are not journaled: a restart loses them.
+    /// running, by run id. The journal keeps them, through `origins`.
     processing: Mutex<HashMap<String, processing_queue::ProcessingRun>>,
+    /// Processing runs that published their result after a server stop
+    /// began, so its last journal write leaves them out.
+    completed_during_stop: Mutex<HashSet<String>>,
 }
 
 impl StackPreviewManager {
@@ -961,6 +964,7 @@ impl StackPreviewManager {
             origins: Mutex::new(HashMap::new()),
             stopped_for_shutdown: Mutex::new(None),
             processing: Mutex::new(HashMap::new()),
+            completed_during_stop: Mutex::new(HashSet::new()),
         }
     }
 
@@ -1076,10 +1080,11 @@ impl StackPreviewManager {
                     .get(job_id)
                     .map(|job| job.state)
             })
+            .or_else(|| self.processing_state(job_id))
     }
 
-    /// Every build still queued or running, as it was asked for, in the
-    /// order it will run: running first, then the line.
+    /// Every build and processing run still queued or running, as it was
+    /// asked for, in the order it will run: running first, then the line.
     pub fn journal_entries(&self) -> Vec<journal::JournaledStackJob> {
         let mut entries = self.ordered_origins();
         let Some(stopped) = self.stopped_for_shutdown.lock().unwrap().clone() else {
@@ -1087,7 +1092,9 @@ impl StackPreviewManager {
         };
         // A build the stop interrupted comes back unless it finished first.
         // One that stopped at its checkpoint was not cut off, so it does not
-        // count against its attempts; one still running would be.
+        // count against its attempts; one still running would be. A
+        // processing run has no checkpoint: one the stop found running lost
+        // the step in hand, so it keeps the running mark the stop wrote.
         let mut kept = Vec::with_capacity(stopped.len() + entries.len());
         for (job_id, mut origin) in stopped {
             let state = self.job_state(&job_id);
@@ -1097,7 +1104,9 @@ impl StackPreviewManager {
             ) {
                 continue;
             }
-            origin.set_running(state == Some(StackJobState::Running));
+            if !origin.is_processing() {
+                origin.set_running(state == Some(StackJobState::Running));
+            }
             entries.retain(|(entry_id, _)| entry_id != &job_id);
             kept.push(origin);
         }
@@ -1131,13 +1140,22 @@ impl StackPreviewManager {
 
     /// Stop every build for a server stop. A running build checkpoints the
     /// frames it integrated and a waiting one leaves the line; the journal
-    /// puts all of them back on the next start. A running processing run is
-    /// left to finish the tool step in hand, so no tool is killed mid-write;
-    /// it starts no further step.
+    /// puts all of them back on the next start. A running RC-Astro tool is
+    /// killed rather than waited for; the journal, written first, marks its
+    /// run as cut off, and the chain resumes from its last finished step.
     pub fn stop_for_shutdown(&self) {
         let interrupted = self.ordered_origins();
         *self.stopped_for_shutdown.lock().unwrap() = Some(interrupted);
-        self.cancel_all_but_running_processing();
+        let job_ids = self
+            .cancels
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for job_id in job_ids {
+            self.request_cancel(&job_id);
+        }
     }
 
     /// Ask a queued or running job to stop. Returns false when the job is not
@@ -2413,6 +2431,8 @@ fn stack_processing_source(
                 .as_ref()
                 .map(|exposure| exposure.label.clone()),
         },
+        job_id: job_id.to_string(),
+        group_index: group.index,
     })
 }
 
@@ -6992,336 +7012,10 @@ mod tests {
         job
     }
 
-    /// A small linear stack on disk and the scope of its R channel.
-    fn processing_source(cache: &FsPath, revision: &str) -> stretch::StretchSource {
-        let path = cache.join(format!("source-{revision}.fits"));
-        let data = (0..256)
-            .map(|index| 100.0 + (index % 17) as f32 * 7.0)
-            .collect();
-        let image = seiza_stacking::LinearImage::new(16, 16, 1, data).unwrap();
-        seiza_stacking::write_processed_image_fits_f32(&path, &image, &[], &[]).unwrap();
-        stretch::StretchSource {
-            key: format!("mono:{}:0", "e".repeat(64)),
-            revision: revision.into(),
-            path,
-            scope: processing_queue::ProcessingScope {
-                database_id: "db-test".into(),
-                project_id: 7,
-                target_id: 42,
-                target_name: "Target 42".into(),
-                channel: "R".into(),
-                exposure: None,
-            },
-        }
-    }
-
-    fn rc_astro_request(tools: &[&str]) -> stretch::StackViewProcessingRequest {
-        let steps = tools
-            .iter()
-            .map(|tool| serde_json::json!({"tool": tool, "parameters": {}}))
-            .collect::<Vec<_>>();
-        serde_json::from_value(serde_json::json!({
-            "model": {"type": "identity"},
-            "rc_astro": {"steps": steps},
-        }))
-        .unwrap()
-    }
-
     fn test_state() -> Arc<AppState> {
         Arc::new(AppState::new_for_test(
             rusqlite::Connection::open_in_memory().unwrap(),
         ))
-    }
-
-    /// Poll until `check` holds, or fail after ten seconds.
-    async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !check() {
-            assert!(std::time::Instant::now() < deadline, "timed out: {what}");
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    }
-
-    /// Re-send a request as the client's poll does until the run settles:
-    /// its result, or the failure it parked.
-    async fn poll_until_settled(
-        state: &Arc<AppState>,
-        cache: &FsPath,
-        revision: &str,
-        tools: &[&str],
-    ) -> Result<Box<stretch::StackStretchPreview>, AppError> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            match stretch::apply_to_fits(
-                Arc::clone(state),
-                "db-test".into(),
-                cache.into(),
-                processing_source(cache, revision),
-                rc_astro_request(tools),
-                false,
-            )
-            .await
-            {
-                Ok(stretch::StretchApplyOutcome::Pending { .. }) => {}
-                Ok(stretch::StretchApplyOutcome::Ready(preview)) => return Ok(preview),
-                Err(error) => return Err(error),
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the run never settled"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    }
-
-    fn pending_json(state: &AppState, stretch_id: &str) -> serde_json::Value {
-        serde_json::to_value(stretch::pending_status(stretch_id, &state.stack_previews)).unwrap()
-    }
-
-    #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_queued_run_names_what_holds_the_worker_then_reports_its_progress() {
-        let tool = rc_astro::test_tool::install(true);
-        let cache = tempfile::tempdir().unwrap();
-        let state = test_state();
-        // A build holds the worker.
-        assert!(state.stack_previews.insert(running_build("held")));
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
-
-        let source = processing_source(cache.path(), "queued-run");
-        let outcome = stretch::apply_to_fits(
-            Arc::clone(&state),
-            "db-test".into(),
-            cache.path().into(),
-            source,
-            rc_astro_request(&["bxt"]),
-            true,
-        )
-        .await
-        .unwrap();
-        let stretch::StretchApplyOutcome::Pending { stretch_id } = outcome else {
-            panic!("a run behind a build must answer pending");
-        };
-
-        // Waiting: a stage naming the build, and no fraction.
-        let waiting = pending_json(&state, &stretch_id);
-        assert_eq!(waiting["pending"], true);
-        assert_eq!(waiting["queued"], true);
-        assert_eq!(
-            waiting["stage"],
-            "Waiting for the stack build of Target 42 · Ha to finish"
-        );
-        assert_eq!(waiting["waiting_for"], "the stack build of Target 42 · Ha");
-        assert_eq!(waiting["queue_position"], 0);
-        assert!(waiting.get("fraction").is_none());
-
-        // The header lists it behind the build, in the line.
-        let active = state.stack_previews.active();
-        assert_eq!(active.len(), 2);
-        assert_eq!(active[0].kind, StackActivityKind::Mono);
-        let queued = &active[1];
-        assert_eq!(queued.kind, StackActivityKind::Processing);
-        assert_eq!(queued.job_id, stretch_id);
-        assert_eq!(queued.state, StackJobState::Queued);
-        assert_eq!(queued.queue_position, Some(0));
-        assert_eq!(queued.label, "Target 42 · R");
-        let processing = queued.processing.as_ref().unwrap();
-        assert_eq!(processing.operation, "BlurXTerminator");
-        assert_eq!(
-            processing.waiting_for.as_deref(),
-            Some("the stack build of Target 42 · Ha")
-        );
-
-        // The build finishes; the run takes the worker and reports progress.
-        state.stack_previews.update("held", |job| {
-            job.state = StackJobState::Completed;
-        });
-        drop(busy);
-        eventually("the tool reports half done", || {
-            pending_json(&state, &stretch_id)["fraction"].as_f64() == Some(0.5)
-        })
-        .await;
-        let running = pending_json(&state, &stretch_id);
-        assert_eq!(running["queued"], false);
-        assert_eq!(running["stage"], "RC-Astro BlurXTerminator");
-        let entry = state.stack_previews.active().remove(0);
-        assert_eq!(entry.state, StackJobState::Running);
-        assert_eq!(entry.queue_position, None);
-        assert_eq!(
-            entry.progress_label.as_deref(),
-            Some("BlurXTerminator · 50%")
-        );
-        assert_eq!(entry.processing.unwrap().fraction, Some(0.5));
-        // Identical requests join the run instead of starting another.
-        let again = stretch::apply_to_fits(
-            Arc::clone(&state),
-            "db-test".into(),
-            cache.path().into(),
-            processing_source(cache.path(), "queued-run"),
-            rc_astro_request(&["bxt"]),
-            true,
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            again,
-            stretch::StretchApplyOutcome::Pending { .. }
-        ));
-
-        // Done: the poll gets the result and the run leaves the list.
-        tool.release();
-        let preview = poll_until_settled(&state, cache.path(), "queued-run", &["bxt"])
-            .await
-            .unwrap();
-        assert_eq!(preview.stretch_id, stretch_id);
-        assert_eq!(preview.rc_astro.unwrap().steps.len(), 1);
-        eventually("the run leaves the list", || {
-            state.stack_previews.active().is_empty()
-        })
-        .await;
-        assert_eq!(tool.invocations(), 1);
-        assert!(state.shutdown.running().is_empty());
-    }
-
-    #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn stopping_a_running_rc_astro_run_kills_the_tool_and_removes_its_folder() {
-        let tool = rc_astro::test_tool::install(true);
-        let cache = tempfile::tempdir().unwrap();
-        let state = test_state();
-        // Held at first, so the request answers at once instead of waiting
-        // for the result.
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
-        let source = processing_source(cache.path(), "stopped-run");
-        let outcome = stretch::apply_to_fits(
-            Arc::clone(&state),
-            "db-test".into(),
-            cache.path().into(),
-            source,
-            rc_astro_request(&["bxt"]),
-            true,
-        );
-        let stretch::StretchApplyOutcome::Pending { stretch_id } = outcome.await.unwrap() else {
-            panic!("a queued run must answer pending");
-        };
-        drop(busy);
-        eventually("the tool starts", || {
-            tool.pid().is_some() && tool.workdir().is_some()
-        })
-        .await;
-        let pid = tool.pid().unwrap();
-        let workdir = tool.workdir().unwrap();
-        assert!(workdir.is_dir());
-
-        // The header's Stop reaches it, as it reaches a build.
-        assert!(!state.stack_previews.processing_unstoppable(&stretch_id));
-        assert!(state.stack_previews.request_cancel(&stretch_id));
-        let refusal = poll_until_settled(&state, cache.path(), "stopped-run", &["bxt"])
-            .await
-            .err()
-            .unwrap();
-        assert!(
-            matches!(&refusal, AppError::BadRequest(message) if message == stretch::STOPPED_MESSAGE),
-            "{refusal:?}"
-        );
-        let alive = std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap()
-            .success();
-        assert!(!alive, "the tool was killed");
-        assert!(!workdir.exists(), "its exchange folder was removed");
-        eventually("the run leaves the list", || {
-            state.stack_previews.active().is_empty()
-        })
-        .await;
-    }
-
-    #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_server_stop_lets_the_tool_in_hand_finish_and_starts_no_more() {
-        let tool = rc_astro::test_tool::install(true);
-        let cache = tempfile::tempdir().unwrap();
-        let state = test_state();
-        // Held at first, so both requests answer at once.
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
-        let start = |tools: &'static [&'static str], revision: &'static str, select| {
-            let state = Arc::clone(&state);
-            let root = cache.path().to_path_buf();
-            async move {
-                let source = processing_source(&root, revision);
-                stretch::apply_to_fits(
-                    state,
-                    "db-test".into(),
-                    root,
-                    source,
-                    rc_astro_request(tools),
-                    select,
-                )
-                .await
-            }
-        };
-        let stretch::StretchApplyOutcome::Pending { stretch_id: chain } =
-            start(&["bxt", "nxt"], "stop-chain", true).await.unwrap()
-        else {
-            panic!("pending");
-        };
-        let stretch::StretchApplyOutcome::Pending { stretch_id: behind } =
-            start(&["bxt"], "stop-behind", true).await.unwrap()
-        else {
-            panic!("pending");
-        };
-        drop(busy);
-        eventually("BlurXTerminator runs", || tool.invocations() == 1).await;
-        assert_eq!(state.shutdown.running().len(), 2, "both runs hold the stop");
-
-        state.shutdown.begin();
-        state.stack_previews.stop_for_shutdown();
-        // The run in hand is not killed; the one waiting leaves the line.
-        let flags = state.stack_previews.cancels.lock().unwrap().clone();
-        assert!(
-            !flags[&chain].load(Ordering::Relaxed),
-            "the tool in hand runs on"
-        );
-        let refusal = poll_until_settled(&state, cache.path(), "stop-behind", &["bxt"])
-            .await
-            .err()
-            .unwrap();
-        assert!(
-            matches!(&refusal, AppError::BadRequest(message) if message.contains("before this processing started")),
-            "{refusal:?}"
-        );
-        assert!(state.stack_previews.processing_wait(&behind).is_none());
-
-        tool.release();
-        tokio::time::timeout(std::time::Duration::from_secs(10), state.shutdown.drained())
-            .await
-            .expect("the stop waits only for the tool in hand");
-        assert_eq!(tool.invocations(), 1, "NoiseXTerminator never started");
-        let refusal = poll_until_settled(&state, cache.path(), "stop-chain", &["bxt", "nxt"])
-            .await
-            .err()
-            .unwrap();
-        assert!(
-            matches!(&refusal, AppError::BadRequest(message) if message.starts_with("The server stopped")),
-            "{refusal:?}"
-        );
-        // The finished BlurXTerminator step is kept for the next apply.
-        let kept = std::fs::read_dir(crate::server::storage::stack_folder(
-            cache.path(),
-            crate::server::storage::stack_kind::RC_ASTRO,
-        ))
-        .unwrap()
-        .count();
-        assert_eq!(kept, 1);
-        assert!(state.stack_previews.active().is_empty());
     }
 
     #[test]
@@ -7344,6 +7038,7 @@ mod tests {
             },
             "BlurXTerminator".into(),
             true,
+            processing_queue::test_origin(&run_id),
         );
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
@@ -7379,5 +7074,505 @@ mod tests {
         );
         drop(busy);
         state.stack_previews.finish_processing(&run_id);
+    }
+
+    /// Processing runs driven through the stand-in `rc-astro`, a shell
+    /// script, and the helpers only they use.
+    #[cfg(unix)]
+    mod processing_runs {
+        use super::*;
+
+        /// A small linear stack on disk and the scope of its R channel.
+        fn processing_source(cache: &FsPath, revision: &str) -> stretch::StretchSource {
+            let path = cache.join(format!("source-{revision}.fits"));
+            let data = (0..256)
+                .map(|index| 100.0 + (index % 17) as f32 * 7.0)
+                .collect();
+            let image = seiza_stacking::LinearImage::new(16, 16, 1, data).unwrap();
+            seiza_stacking::write_processed_image_fits_f32(&path, &image, &[], &[]).unwrap();
+            stretch::StretchSource {
+                key: format!("mono:{}:0", "e".repeat(64)),
+                revision: revision.into(),
+                path,
+                scope: processing_queue::ProcessingScope {
+                    database_id: "db-test".into(),
+                    project_id: 7,
+                    target_id: 42,
+                    target_name: "Target 42".into(),
+                    channel: "R".into(),
+                    exposure: None,
+                },
+                job_id: "e".repeat(64),
+                group_index: 0,
+            }
+        }
+
+        fn rc_astro_request(tools: &[&str]) -> stretch::StackViewProcessingRequest {
+            let steps = tools
+                .iter()
+                .map(|tool| serde_json::json!({"tool": tool, "parameters": {}}))
+                .collect::<Vec<_>>();
+            serde_json::from_value(serde_json::json!({
+                "model": {"type": "identity"},
+                "rc_astro": {"steps": steps},
+            }))
+            .unwrap()
+        }
+
+        /// Poll until `check` holds, or fail after ten seconds.
+        async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !check() {
+                assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }
+
+        /// Re-send a request as the client's poll does until the run settles:
+        /// its result, or the failure it parked.
+        async fn poll_until_settled(
+            state: &Arc<AppState>,
+            cache: &FsPath,
+            revision: &str,
+            tools: &[&str],
+        ) -> Result<Box<stretch::StackStretchPreview>, AppError> {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                match stretch::apply_to_fits(
+                    Arc::clone(state),
+                    "db-test".into(),
+                    cache.into(),
+                    processing_source(cache, revision),
+                    rc_astro_request(tools),
+                    false,
+                )
+                .await
+                {
+                    Ok(stretch::StretchApplyOutcome::Pending { .. }) => {}
+                    Ok(stretch::StretchApplyOutcome::Ready(preview)) => return Ok(preview),
+                    Err(error) => return Err(error),
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the run never settled"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }
+
+        fn pending_json(state: &AppState, stretch_id: &str) -> serde_json::Value {
+            serde_json::to_value(stretch::pending_status(stretch_id, &state.stack_previews))
+                .unwrap()
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_queued_run_names_what_holds_the_worker_then_reports_its_progress() {
+            let tool = rc_astro::test_tool::install(true);
+            let cache = tempfile::tempdir().unwrap();
+            let state = test_state();
+            // A build holds the worker.
+            assert!(state.stack_previews.insert(running_build("held")));
+            let busy = Arc::clone(&state.stack_previews.permit)
+                .try_acquire_owned()
+                .unwrap();
+
+            let source = processing_source(cache.path(), "queued-run");
+            let outcome = stretch::apply_to_fits(
+                Arc::clone(&state),
+                "db-test".into(),
+                cache.path().into(),
+                source,
+                rc_astro_request(&["bxt"]),
+                true,
+            )
+            .await
+            .unwrap();
+            let stretch::StretchApplyOutcome::Pending { stretch_id } = outcome else {
+                panic!("a run behind a build must answer pending");
+            };
+
+            // Waiting: a stage naming the build, and no fraction.
+            let waiting = pending_json(&state, &stretch_id);
+            assert_eq!(waiting["pending"], true);
+            assert_eq!(waiting["queued"], true);
+            assert_eq!(
+                waiting["stage"],
+                "Waiting for the stack build of Target 42 · Ha to finish"
+            );
+            assert_eq!(waiting["waiting_for"], "the stack build of Target 42 · Ha");
+            assert_eq!(waiting["queue_position"], 0);
+            assert!(waiting.get("fraction").is_none());
+
+            // The header lists it behind the build, in the line.
+            let active = state.stack_previews.active();
+            assert_eq!(active.len(), 2);
+            assert_eq!(active[0].kind, StackActivityKind::Mono);
+            let queued = &active[1];
+            assert_eq!(queued.kind, StackActivityKind::Processing);
+            assert_eq!(queued.job_id, stretch_id);
+            assert_eq!(queued.state, StackJobState::Queued);
+            assert_eq!(queued.queue_position, Some(0));
+            assert_eq!(queued.label, "Target 42 · R");
+            let processing = queued.processing.as_ref().unwrap();
+            assert_eq!(processing.operation, "BlurXTerminator");
+            assert_eq!(
+                processing.waiting_for.as_deref(),
+                Some("the stack build of Target 42 · Ha")
+            );
+
+            // The build finishes; the run takes the worker and reports progress.
+            state.stack_previews.update("held", |job| {
+                job.state = StackJobState::Completed;
+            });
+            drop(busy);
+            eventually("the tool reports half done", || {
+                pending_json(&state, &stretch_id)["fraction"].as_f64() == Some(0.5)
+            })
+            .await;
+            let running = pending_json(&state, &stretch_id);
+            assert_eq!(running["queued"], false);
+            assert_eq!(running["stage"], "RC-Astro BlurXTerminator");
+            let entry = state.stack_previews.active().remove(0);
+            assert_eq!(entry.state, StackJobState::Running);
+            assert_eq!(entry.queue_position, None);
+            assert_eq!(
+                entry.progress_label.as_deref(),
+                Some("BlurXTerminator · 50%")
+            );
+            assert_eq!(entry.processing.unwrap().fraction, Some(0.5));
+            // Identical requests join the run instead of starting another.
+            let again = stretch::apply_to_fits(
+                Arc::clone(&state),
+                "db-test".into(),
+                cache.path().into(),
+                processing_source(cache.path(), "queued-run"),
+                rc_astro_request(&["bxt"]),
+                true,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(
+                again,
+                stretch::StretchApplyOutcome::Pending { .. }
+            ));
+
+            // Done: the poll gets the result and the run leaves the list.
+            tool.release();
+            let preview = poll_until_settled(&state, cache.path(), "queued-run", &["bxt"])
+                .await
+                .unwrap();
+            assert_eq!(preview.stretch_id, stretch_id);
+            assert_eq!(preview.rc_astro.unwrap().steps.len(), 1);
+            eventually("the run leaves the list", || {
+                state.stack_previews.active().is_empty()
+            })
+            .await;
+            assert_eq!(tool.invocations(), 1);
+            assert!(state.shutdown.running().is_empty());
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn stopping_a_running_rc_astro_run_kills_the_tool_and_removes_its_folder() {
+            let tool = rc_astro::test_tool::install(true);
+            let cache = tempfile::tempdir().unwrap();
+            let state = test_state();
+            // Held at first, so the request answers at once instead of waiting
+            // for the result.
+            let busy = Arc::clone(&state.stack_previews.permit)
+                .try_acquire_owned()
+                .unwrap();
+            let source = processing_source(cache.path(), "stopped-run");
+            let outcome = stretch::apply_to_fits(
+                Arc::clone(&state),
+                "db-test".into(),
+                cache.path().into(),
+                source,
+                rc_astro_request(&["bxt"]),
+                true,
+            );
+            let stretch::StretchApplyOutcome::Pending { stretch_id } = outcome.await.unwrap()
+            else {
+                panic!("a queued run must answer pending");
+            };
+            drop(busy);
+            eventually("the tool starts", || {
+                tool.pid().is_some() && tool.workdir().is_some()
+            })
+            .await;
+            let pid = tool.pid().unwrap();
+            let workdir = tool.workdir().unwrap();
+            assert!(workdir.is_dir());
+
+            // The header's Stop reaches it, as it reaches a build.
+            assert!(!state.stack_previews.processing_unstoppable(&stretch_id));
+            assert!(state.stack_previews.request_cancel(&stretch_id));
+            let refusal = poll_until_settled(&state, cache.path(), "stopped-run", &["bxt"])
+                .await
+                .err()
+                .unwrap();
+            assert!(
+                matches!(&refusal, AppError::BadRequest(message) if message == stretch::STOPPED_MESSAGE),
+                "{refusal:?}"
+            );
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(!alive, "the tool was killed");
+            assert!(!workdir.exists(), "its exchange folder was removed");
+            eventually("the run leaves the list", || {
+                state.stack_previews.active().is_empty()
+            })
+            .await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_server_stop_kills_the_tool_and_journals_the_run_as_cut_off() {
+            let tool = rc_astro::test_tool::install(true);
+            let cache = tempfile::tempdir().unwrap();
+            let state = test_state();
+            // Held at first, so both requests answer at once.
+            let busy = Arc::clone(&state.stack_previews.permit)
+                .try_acquire_owned()
+                .unwrap();
+            let start = |tools: &'static [&'static str], revision: &'static str, select| {
+                let state = Arc::clone(&state);
+                let root = cache.path().to_path_buf();
+                async move {
+                    let source = processing_source(&root, revision);
+                    stretch::apply_to_fits(
+                        state,
+                        "db-test".into(),
+                        root,
+                        source,
+                        rc_astro_request(tools),
+                        select,
+                    )
+                    .await
+                }
+            };
+            let stretch::StretchApplyOutcome::Pending { stretch_id: chain } =
+                start(&["bxt", "nxt"], "stop-chain", true).await.unwrap()
+            else {
+                panic!("pending");
+            };
+            let stretch::StretchApplyOutcome::Pending { stretch_id: behind } =
+                start(&["bxt"], "stop-behind", true).await.unwrap()
+            else {
+                panic!("pending");
+            };
+            drop(busy);
+            eventually("BlurXTerminator runs", || {
+                tool.pid().is_some() && tool.workdir().is_some()
+            })
+            .await;
+            let pid = tool.pid().unwrap();
+            let workdir = tool.workdir().unwrap();
+            assert_eq!(state.shutdown.running().len(), 2, "both runs hold the stop");
+
+            state.shutdown.begin();
+            state.stack_previews.stop_for_shutdown();
+            // Written before the kill lands: the run in hand is cut off, the one
+            // waiting is not.
+            let journaled = |entries: Vec<journal::JournaledStackJob>| {
+                entries
+                    .into_iter()
+                    .map(|entry| match entry {
+                        journal::JournaledStackJob::Processing {
+                            run_id,
+                            running,
+                            attempts,
+                            ..
+                        } => (run_id, running, attempts),
+                        other => panic!("unexpected {other:?}"),
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let expected = vec![(chain.clone(), true, 0), (behind.clone(), false, 0)];
+            assert_eq!(journaled(state.stack_previews.journal_entries()), expected);
+
+            // The stop waits for the kill and the reap, not for the tool.
+            tokio::time::timeout(std::time::Duration::from_secs(5), state.shutdown.drained())
+                .await
+                .expect("the stop does not wait for the tool to finish");
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success();
+            assert!(!alive, "the tool was killed");
+            assert!(!workdir.exists(), "its exchange folder was removed");
+            assert_eq!(tool.invocations(), 1, "NoiseXTerminator never started");
+            assert!(state.stack_previews.active().is_empty());
+            // The last journal write still has both, in their order.
+            assert_eq!(journaled(state.stack_previews.journal_entries()), expected);
+            // A page still polling hears that the run is pending, not that it
+            // failed: it finds the run again after the restart.
+            for (revision, tools) in [
+                ("stop-chain", &["bxt", "nxt"][..]),
+                ("stop-behind", &["bxt"][..]),
+            ] {
+                let poll = stretch::apply_to_fits(
+                    Arc::clone(&state),
+                    "db-test".into(),
+                    cache.path().into(),
+                    processing_source(cache.path(), revision),
+                    rc_astro_request(tools),
+                    false,
+                )
+                .await;
+                assert!(
+                    matches!(poll, Ok(stretch::StretchApplyOutcome::Pending { .. })),
+                    "{revision}"
+                );
+            }
+        }
+
+        /// A database whose stack folder holds one finished mono stack of
+        /// target 42's R channel, as a restarted server finds it on disk.
+        fn state_with_stack_on_disk(cache: &FsPath, registry: &FsPath) -> (Arc<AppState>, String) {
+            let job_id = "d".repeat(64);
+            let mut ctx = crate::server::database_context::DatabaseContext::new_for_test(
+                rusqlite::Connection::open_in_memory().unwrap(),
+            );
+            ctx.stack_root = cache.to_path_buf();
+            let mut job = completed_job(&job_id, vec![ready_group(42, "R", 1)]);
+            job.database_id = ctx.id.clone();
+            job.artifact_revision = "revision-on-disk".into();
+            let manifest = manifest_path(cache, &job_id);
+            std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+            stretch::write_json_atomic(&manifest, &job).unwrap();
+            let fits = fits_path(cache, &job_id, 0);
+            if !fits.is_file() {
+                let data = (0..256)
+                    .map(|index| 100.0 + (index % 17) as f32 * 7.0)
+                    .collect();
+                let image = seiza_stacking::LinearImage::new(16, 16, 1, data).unwrap();
+                seiza_stacking::write_processed_image_fits_f32(&fits, &image, &[], &[]).unwrap();
+            }
+            let state = test_state();
+            state
+                .databases
+                .write()
+                .unwrap()
+                .insert(ctx.id.clone(), Arc::new(ctx));
+            *state.registry_path.write().unwrap() = Some(registry.to_path_buf());
+            (state, job_id)
+        }
+
+        /// What the browser sends for the R stack, first or as a poll.
+        async fn apply_on_disk(
+            state: &Arc<AppState>,
+            job_id: &str,
+            tools: &[&str],
+            select: bool,
+        ) -> Result<stretch::StretchApplyOutcome, AppError> {
+            let ctx = state.get_database("test").unwrap();
+            let source = stack_processing_source(state, &ctx, job_id, 0).unwrap();
+            stretch::apply_to_fits(
+                Arc::clone(state),
+                ctx.id.clone(),
+                ctx.stack_root.clone(),
+                source,
+                rc_astro_request(tools),
+                select,
+            )
+            .await
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn a_run_cut_off_by_a_restart_comes_back_and_resumes_from_its_cached_step() {
+            let tool = rc_astro::test_tool::install(true);
+            let cache = tempfile::tempdir().unwrap();
+            let registry_dir = tempfile::tempdir().unwrap();
+            let registry = registry_dir.path().join("reg.json");
+            let (before, job_id) = state_with_stack_on_disk(cache.path(), &registry);
+            let busy = Arc::clone(&before.stack_previews.permit)
+                .try_acquire_owned()
+                .unwrap();
+            let stretch::StretchApplyOutcome::Pending { stretch_id } =
+                apply_on_disk(&before, &job_id, &["bxt", "nxt"], true)
+                    .await
+                    .unwrap()
+            else {
+                panic!("pending");
+            };
+            drop(busy);
+            // BlurXTerminator finishes and is cached; NoiseXTerminator is in hand
+            // when the server stops.
+            eventually("BlurXTerminator runs", || tool.invocations() == 1).await;
+            tool.release();
+            eventually("NoiseXTerminator runs", || tool.invocations() == 2).await;
+            before.shutdown.begin();
+            before.stack_previews.stop_for_shutdown();
+            tokio::time::timeout(std::time::Duration::from_secs(5), before.shutdown.drained())
+                .await
+                .unwrap();
+            journal::write_now(&before);
+            let path = journal::journal_path(&registry);
+            let written = journal::read(&path).unwrap();
+            assert!(matches!(
+                written.stack.as_slice(),
+                [journal::JournaledStackJob::Processing { run_id, running: true, attempts: 0, .. }]
+                    if run_id == &stretch_id
+            ));
+            drop(before);
+
+            // The restart: a new server reads the journal and puts the run back.
+            let (after, _) = state_with_stack_on_disk(cache.path(), &registry);
+            journal::restore(&after).await;
+            // The page left open re-sends its poll and joins the restored run,
+            // under the same id.
+            let poll = apply_on_disk(&after, &job_id, &["bxt", "nxt"], false).await;
+            assert!(matches!(
+                &poll,
+                Ok(stretch::StretchApplyOutcome::Pending { stretch_id: id }) if id == &stretch_id
+            ));
+            assert_eq!(pending_json(&after, &stretch_id)["pending"], true);
+            assert!(matches!(
+                after.stack_previews.journal_entries().as_slice(),
+                [journal::JournaledStackJob::Processing { attempts: 1, .. }]
+            ));
+            // Only the step that was cut runs again.
+            eventually("NoiseXTerminator runs again", || tool.invocations() == 3).await;
+            tool.release();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let preview = loop {
+                if let Ok(stretch::StretchApplyOutcome::Ready(preview)) =
+                    apply_on_disk(&after, &job_id, &["bxt", "nxt"], false).await
+                {
+                    break preview;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the run never finished"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            };
+            assert_eq!(preview.stretch_id, stretch_id);
+            assert_eq!(preview.rc_astro.unwrap().steps.len(), 2);
+            assert_eq!(
+                tool.invocations_log().lines().collect::<Vec<_>>(),
+                vec!["bxt", "nxt", "nxt"]
+            );
+            // The selection the person made before the restart now shows it.
+            let ctx = after.get_database("test").unwrap();
+            let source = stack_processing_source(&after, &ctx, &job_id, 0).unwrap();
+            let selected =
+                stretch::selected_processing(&ctx.stack_root, &source.key, &source.revision)
+                    .unwrap();
+            assert_eq!(
+                selected.map(|selected| selected.stretch_id),
+                Some(stretch_id)
+            );
+            eventually("the run leaves the list", || {
+                after.stack_previews.active().is_empty()
+            })
+            .await;
+            assert!(after.stack_previews.journal_entries().is_empty());
+        }
     }
 }
