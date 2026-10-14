@@ -69,6 +69,15 @@
   separate **Activate…** button. The bar's button says **Activate again…**
   once the plan has been activated. An exposure plan the preview updates
   says what changes, such as `desired 100 → 150`.
+- Activation turns off Target Scheduler exposure plans the plan doesn't have
+  (another length of a band it shoots), and the preview now lists them
+  first, open and in the warning colour, under **Turns off in Target
+  Scheduler**, with the count in the rig's line and in the bar ("Not synced:
+  turns off 1 plan in ultracat131"). To keep one, **Take Target Scheduler's
+  values**: it now brings each exposure length in as its own objective, so a
+  30 s L plan made in N.I.N.A. beside the plan's 300 s one becomes an
+  "Unsaturated stars" objective and stays on. A project imported from Target
+  Scheduler does the same with each band's lengths.
 - Automatic import no longer changes what Target Scheduler will shoot in
   projects it did not create. There it only adds image rows to exposure
   plans that already exist, and leaves their counts alone. Frames that would

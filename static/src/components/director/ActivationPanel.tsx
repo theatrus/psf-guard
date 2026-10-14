@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Download, Eye, Send } from 'lucide-react';
+import { Check, Download, Eye, Send, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationPushReport, DirectorActivationReport, DirectorTakenValues } from '../../api/directorTypes';
 import { describeFailure, useDrafts } from './pageDraftsState';
-import { useActivationState, writesRows } from './activationState';
+import { turnedOff, useActivationState, writesRows } from './activationState';
 import './ActivationPanel.css';
 import CollaborationActivation from './CollaborationActivation';
 import type { CollaborationVisit } from '../../api/collaborationTypes';
@@ -59,20 +59,23 @@ interface Take {
 }
 
 /** What the last preview or apply did in one rig's database: a line of
- *  counts, its warnings, where its rows go, and every row it touches. Where
- *  a preview would overwrite Target Scheduler's rows, the plan can take
- *  them instead. */
+ *  counts, its warnings, what it turns off in Target Scheduler, where its
+ *  rows go, and every other row it touches. Where a preview would
+ *  overwrite Target Scheduler's rows, the plan can take them instead. */
 export function RigActivation({ rig, applied, take }: { rig: ReportRig; applied: boolean; take?: Take }) {
   const summary = KINDS
     .filter(({ kind }) => rig.changes.some(change => change.kind === kind))
     .map(({ kind, label }) => `${label}: ${counts(rig.changes, kind)}`);
+  const off = turnedOff(rig.changes);
   return <div className="activation-rig" aria-label={`${rig.catalog_name} activation`}>
     <p className="activation-rig-summary">
       <strong>{applied ? 'Applied' : 'Preview'}</strong>{rig.applied && <> <Check size={14} aria-label="applied" /></>}
+      {off && <strong className="activation-off-count"> · {applied ? 'Turned off' : 'Turns off'} {off}</strong>}
       {summary.length > 0 ? ` · ${summary.join(' · ')}` : ''}
       {rig.push && <span className={rig.push.error ? 'director-error' : 'director-muted'}> · {describePush(rig.push, rig.applied)}</span>}
     </p>
     {rig.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
+    <TurnedOff rig={rig} applied={applied} />
     <RigChanges rig={rig} />
     {take && !applied && differsFromTargetScheduler(rig) && <div className="director-actions">
       <button type="button" disabled={take.pending} title={`Write ${rig.catalog_name}'s Target Scheduler values into the plan instead`} onClick={take.run}>
@@ -87,14 +90,28 @@ export function RigActivation({ rig, applied, take }: { rig: ReportRig; applied:
   </div>;
 }
 
-/** Every row activation touches in one rig's database, by kind, saying what
- *  happens to it and which existing row it lands on. */
+/** What activation turns off in Target Scheduler, on its own and open
+ *  above the rest, so it is never missed: plans the plan does not have, and
+ *  a project whose rig is off. */
+function TurnedOff({ rig, applied }: { rig: ReportRig; applied: boolean }) {
+  const off = rig.changes.filter(change => change.action === 'disable');
+  if (off.length === 0) return null;
+  return <div className="activation-off" role="note" aria-label={`Turned off in ${rig.catalog_name}`}>
+    <h4><TriangleAlert size={14} aria-hidden="true" />{applied ? 'Turned off in Target Scheduler' : 'Turns off in Target Scheduler'}</h4>
+    <ul>{off.map((change, index) => <li key={`${change.name}-${index}`}><strong>{change.name}</strong>{change.detail && <span> {change.detail}</span>}</li>)}</ul>
+    {!applied && off.some(change => change.kind === 'plan') && <p>To keep one, take Target Scheduler's values or add it to the plan.</p>}
+  </div>;
+}
+
+/** Every other row activation touches in one rig's database, by kind,
+ *  saying what happens to it and which existing row it lands on. */
 function RigChanges({ rig }: { rig: ReportRig }) {
-  if (rig.changes.length === 0) return null;
-  return <details className="activation-changes" open={writesRows(rig)}>
+  const changes = rig.changes.filter(change => change.action !== 'disable');
+  if (changes.length === 0) return null;
+  return <details className="activation-changes" open={writesRows({ ...rig, changes })}>
     <summary>What changes in {rig.catalog_name}</summary>
     {KINDS.map(({ kind, label }) => {
-      const of = rig.changes.filter(change => change.kind === kind);
+      const of = changes.filter(change => change.kind === kind);
       if (of.length === 0) return null;
       const order = (action: DirectorActivationAction) => ACTIONS.findIndex(entry => entry.action === action);
       return <div key={kind} className="activation-changes-kind">

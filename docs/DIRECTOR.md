@@ -483,8 +483,11 @@ plans. The first time a project is listed, what Target Scheduler already
 holds for it becomes Director's own drafts: its targets become the framing
 (center and rotation from the rows, a grid of panels when the targets form
 one, the rig's field as the panel size when its optics are known) and its
-exposure plans become the plan (one objective per bandpass with the frames
-a panel wants, bound to the template each plan uses at its exposure).
+exposure plans become the plan (one objective per bandpass and exposure
+length with the frames a panel wants, bound to the template each plan uses
+at its exposure; a band at two lengths gets an objective for each, the
+shorter for unsaturated stars and the longer for faint detail, and a
+length under a second beside a longer one is test frames and stays out).
 Director plans one target or one mosaic per project. A project whose targets
 are separate, not panels of one grid, is drafted as its first target with
 that target's own exposure plans, and the listing says so; Target Scheduler
@@ -1174,8 +1177,9 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   mode) at another length is turned off as replaced: for example a G_120
   plan when the plan's G objective moved to G_300 before the first
   activation. Its frames and settings stay; the preview lists it as
-  `disable`, "replaced by …". To keep both lengths running, give the plan
-  an objective for each.
+  `disable`, "replaced by …". To keep both lengths running, take Target
+  Scheduler's values (below), which brings each length in as an objective
+  of its own, or give the plan an objective for each.
 
 Rows are owned by GUID. A target or exposure plan activation would take over
 but that has no GUID yet refuses the rig, which says which row and points at
@@ -1189,6 +1193,13 @@ with `keep` the rig's own plans for work no objective asks for, which stay as
 they are in Target Scheduler. A `disable` counts as a change, so the plan
 asks to be activated until it is applied. A template
 activation creates is listed under `template`.
+
+What a preview turns off is never folded away: each rig's block lists it
+first, open and in the warning colour, under **Turns off in Target
+Scheduler**, with "To keep one, take Target Scheduler's values or add it to
+the plan." The rig's line counts it ("Turns off 1 plan"), and when turning
+plans off is all an activation would do there, the bar says so: "Not
+synced: turns off 1 plan in ultracat131".
 
 A plan an earlier activation made that nothing plans now is turned off
 (`disable`, `enabled = 0`), so Target Scheduler stops taking it: its
@@ -1221,12 +1232,20 @@ ones to keep, a rig's block in the preview offers **Take Target Scheduler's
 values** instead of overwriting them. It reads that rig's linked project the
 way an import does and writes it into the saved plan:
 
-- each band's frames: the band's goal where only this rig shoots it, else
-  this rig's own goal. Goals compare by the frames they come to at the rig's
-  exposure length, so six hours of 300 s frames and 72 frames are the same;
-- the template and exposure length of each band, and which bands are on: a
-  band the project no longer shoots is turned off for the rig, unless some
-  exposure plan used a template Director cannot read, when none is;
+- each exposure length of each band, as an import reads it, as its own
+  part: it lands on the rig's part at the same length, else on another of
+  its parts in that band (taking the template and length), else on an
+  objective of that band other rigs shoot, else on a new objective, for
+  unsaturated stars if it is the shorter of two. So an exposure plan made in
+  N.I.N.A., such as L 30 s beside the plan's L 300 s, joins the plan and the
+  next activation keeps it instead of turning it off;
+- each part's frames: the objective's goal where only this rig shoots it,
+  else this rig's own goal. Goals compare by the frames they come to at the
+  rig's exposure length, so six hours of 300 s frames and 72 frames are the
+  same;
+- which parts are on: a part of the rig's that no exposure plan lands on is
+  turned off for the rig, unless some exposure plan used a template
+  Director cannot read, when none is;
 - the framing, when the project's targets moved by more than 1″ and no other
   rig uses the same layout: the rig's own framing if it has one, else the
   shared one. A single panel can sit anywhere; a grid moved by hand is

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../../api/client';
-import type { DirectorActivationRig } from '../../api/directorTypes';
+import type { DirectorActivationChange, DirectorActivationRig } from '../../api/directorTypes';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { shootingRigs } from './planModel';
 import { retryWhenBusy } from './retry';
@@ -15,6 +15,20 @@ export const writesRows = (rig: DirectorActivationRig) => rig.changes.some(chang
 const holdsPlan = (rig: DirectorActivationRig) => rig.profile_id !== null && rig.changes.length > 0 && !writesRows(rig);
 
 const listed = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+
+/** What a rig's turn-offs come to, in a few words: "1 plan", "2 plans",
+ *  "the project", "the project and 1 plan"; empty for none. */
+export function turnedOff(changes: DirectorActivationChange[]): string {
+  const off = changes.filter(change => change.action === 'disable');
+  const plans = off.filter(change => change.kind !== 'project').length;
+  return listed([
+    off.some(change => change.kind === 'project') ? 'the project' : '',
+    plans > 0 ? `${plans} plan${plans === 1 ? '' : 's'}` : '',
+  ].filter(Boolean));
+}
+
+/** Whether every row activation would write in this rig turns one off. */
+const onlyTurnsOff = (rig: DirectorActivationRig) => rig.changes.every(change => change.action === 'unchanged' || change.action === 'keep' || change.action === 'disable');
 
 const failure = (error: unknown) => isAxiosError(error) ? error.response?.data?.error || error.message
   : error instanceof Error ? error.message : 'The check failed';
@@ -65,18 +79,22 @@ export function useActivationState(projectId: string) {
   // Rigs whose rows an activation would change: any row created, taken
   // over, updated or turned off.
   const changed = new Set((check.data?.rigs ?? []).filter(writesRows).map(rig => rig.rig.id));
-  // Those the record calls up to date.
-  const differing = matches || !last.data || parts.length > 0 ? []
-    : (check.data?.rigs ?? []).filter(rig => changed.has(rig.rig.id) && !missingIds.includes(rig.rig.id)).map(rig => rig.catalog_name);
+  // Those the record calls up to date: rigs where activation would only
+  // turn plans off are said apart, since that is what to look out for.
+  const differingRigs = matches || !last.data || parts.length > 0 ? []
+    : (check.data?.rigs ?? []).filter(rig => changed.has(rig.rig.id) && !missingIds.includes(rig.rig.id));
+  const differing = differingRigs.filter(rig => !onlyTurnsOff(rig)).map(rig => rig.catalog_name);
+  const turningOff = differingRigs.filter(onlyTurnsOff).map(rig => `turns off ${turnedOff(rig.changes)} in ${rig.catalog_name}`);
   // Everything the rigs lack: the saved parts, the rigs left out, then the
   // rigs whose rows differ.
-  const behind = matches ? [] : [...parts, ...missing, ...differing];
+  const behind = matches ? [] : [...parts, ...missing, ...differingRigs.map(rig => rig.catalog_name)];
   // Why the rigs are not synced, said once for the bar, the summary's
   // tooltip and the activation panel.
   const reasons = last.data ? [
     parts.length > 0 && `saved ${listed(parts)} not activated yet`,
     missing.length > 0 && `${listed(missing)} not activated yet`,
     differing.length > 0 && `${listed(differing)} ${differing.length === 1 ? 'differs' : 'differ'} from the plan`,
+    ...turningOff,
   ].filter(Boolean).join('; ') : 'not activated yet';
   const notSynced = `Not synced: ${reasons}`;
   // A check that failed, or a rig it could not read (its database locked,
@@ -90,10 +108,11 @@ export function useActivationState(projectId: string) {
   /** One rig's line on the Rigs tab: synced or not, and why. */
   const rigSync = (rigId: string): { text: string; title?: string } => {
     const unread = skipped.find(rig => rig.rig.id === rigId);
+    const report = check.data?.rigs.find(rig => rig.rig.id === rigId);
     if (holding.has(rigId)) return { text: 'synced' };
     if (unread) return { text: "couldn't check", title: unread.warnings.join(' ') };
     if (!activated.has(rigId)) return { text: 'not synced · not activated yet' };
-    if (changed.has(rigId)) return { text: 'not synced · differs from the plan' };
+    if (report && changed.has(rigId)) return { text: onlyTurnsOff(report) ? `not synced · turns off ${turnedOff(report.changes)}` : 'not synced · differs from the plan' };
     if (parts.length > 0) return { text: `not synced · saved ${listed(parts)} not activated yet` };
     return { text: 'synced' };
   };

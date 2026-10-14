@@ -113,20 +113,50 @@ describe('Activation panel', () => {
       { kind: 'plan', action: 'adopt', name: 'IC 1805 r1c1 · Ha 300 · 300 s', detail: 'takes over plan #11 (12 of 40 frames taken); desired 40 → 72' },
       { kind: 'plan', action: 'create', name: 'IC 1805 r1c1 · OIII 300 · 300 s', detail: '72 frames, template #4 OIII 300' },
       { kind: 'plan', action: 'keep', name: 'IC 1805 r1c1 · Ha 300 · 600 s', detail: 'plan #12 (0 of 10 frames taken) is not part of this plan; left as it is' },
-      { kind: 'plan', action: 'disable', name: 'IC 1805 r1c1 · SII 300 · 300 s', detail: 'plan #14 (3 of 72 frames taken) is off for this rig; Target Scheduler stops taking it' },
+      { kind: 'plan', action: 'disable', name: 'IC 1805 r1c1 · Ha 300 · 120 s', detail: 'plan #14 (3 of 72 frames taken), replaced by IC 1805 r1c1 · Ha 300 · 300 s' },
     ] }] };
     server.use(http.post('/api/director/v1/projects/project/activation/preview', () => HttpResponse.json(ok(takeover))));
     fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     const rigSummary = await screen.findByLabelText('RedCat 61 activation');
+    expect(rigSummary).toHaveTextContent('Preview · Turns off 1 plan · Project: 1 updated');
     expect(rigSummary).toHaveTextContent('Targets: 1 taken over');
     expect(rigSummary).toHaveTextContent('Exposure plans: 1 new, 1 taken over, 1 turned off, 1 left as is');
+    // What it turns off stands on its own, open, above the rest.
+    const off = within(rigSummary).getByRole('note', { name: 'Turned off in RedCat 61' });
+    expect(off).toHaveTextContent('Turns off in Target Scheduler');
+    expect(off).toHaveTextContent('IC 1805 r1c1 · Ha 300 · 120 s plan #14 (3 of 72 frames taken), replaced by IC 1805 r1c1 · Ha 300 · 300 s');
+    expect(off).toHaveTextContent("To keep one, take Target Scheduler's values or add it to the plan.");
     const changes = screen.getByText('What changes in RedCat 61').closest('details')!;
+    expect(off.compareDocumentPosition(changes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(changes).toHaveAttribute('open');
     expect(changes).toHaveTextContent('Taken overIC 1805 r1c1 · Ha 300 · 300 s takes over plan #11 (12 of 40 frames taken); desired 40 → 72');
     expect(changes).toHaveTextContent('Left as isIC 1805 r1c1 · Ha 300 · 600 s plan #12');
-    expect(changes).toHaveTextContent('Turned offIC 1805 r1c1 · SII 300 · 300 s plan #14');
+    expect(changes).not.toHaveTextContent('Turned off');
     expect(changes).toHaveTextContent('Exposure templates');
     expect(changes).toHaveTextContent('New#4 OIII 300');
+  });
+  it('shows what a preview only turns off, with the details closed and the count once applied', async () => {
+    fixture(); mount();
+    const offOnly = (applied: boolean): DirectorActivationReport => ({ ...report(applied), rigs: [{ rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', profile_id: 'p', applied, warnings: [], push: null, changes: [
+      { kind: 'project', action: 'unchanged', name: 'Heart', detail: '' },
+      { kind: 'plan', action: 'unchanged', name: 'Heart · G_300 · 300 s', detail: '120 frames' },
+      { kind: 'plan', action: 'disable', name: 'Heart · G_120 · 120 s', detail: 'plan #34 (2 of 120 frames taken), replaced by Heart · G_300 · 300 s' },
+      { kind: 'plan', action: 'disable', name: 'Heart · G_60 · 60 s', detail: 'plan #35 (0 of 10 frames taken), replaced by Heart · G_300 · 300 s' },
+    ] }] });
+    server.use(
+      http.post('/api/director/v1/projects/project/activation/preview', () => HttpResponse.json(ok(offOnly(false)))),
+      http.post('/api/director/v1/projects/project/activation/apply', () => HttpResponse.json(ok({ ...offOnly(true), activation_revision: 2 }))),
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
+    const rigSummary = await screen.findByLabelText('RedCat 61 activation');
+    expect(rigSummary).toHaveTextContent('Preview · Turns off 2 plans');
+    expect(within(rigSummary).getByRole('note', { name: 'Turned off in RedCat 61' })).toHaveTextContent('Heart · G_120 · 120 s plan #34');
+    expect(screen.getByText('What changes in RedCat 61').closest('details')).not.toHaveAttribute('open');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    const applied = await screen.findByRole('note', { name: 'Turned off in RedCat 61' });
+    expect(applied).toHaveTextContent('Turned off in Target Scheduler');
+    expect(applied).not.toHaveTextContent('To keep one');
+    expect(screen.getByLabelText('RedCat 61 activation')).toHaveTextContent('Applied · Turned off 2 plans');
   });
 
   it('drops a stale preview when apply is refused', async () => {

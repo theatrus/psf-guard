@@ -185,10 +185,11 @@ describe('project workspace', () => {
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     answer();
     const due = await screen.findByRole('region', { name: 'Activation due' });
-    expect(due).toHaveTextContent('Not synced: C925 data differs from the plan');
+    // Turning a plan off is all it would do, and the bar says so.
+    expect(due).toHaveTextContent('Not synced: turns off 1 plan in C925 data');
     expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: /Rigs/ }));
-    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/^not synced · differs from the plan/)).toBeInTheDocument();
+    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/^not synced · turns off 1 plan/)).toBeInTheDocument();
     fireEvent.click(within(due).getByRole('button', { name: 'Activate again…' }));
     expect(screen.getByRole('dialog', { name: 'Activate on the rigs' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /close/i }));
@@ -198,7 +199,14 @@ describe('project workspace', () => {
     fireEvent.change(screen.getByLabelText('Stub goal'), { target: { value: '120' } });
     expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
     expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Not synced$/);
-    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', 'Not synced: C925 data differs from the plan');
+    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', 'Not synced: turns off 1 plan in C925 data');
+  });
+  it('says a rig differs from the plan when activation would change more than turn plans off', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, matches: true,
+      plans: [{ action: 'update', name: 'M31 · Ha · 300 s', detail: '40 frames; desired 100 → 40' }, { action: 'disable', name: 'M31 · Ha · 120 s', detail: 'plan #9 (0 of 10 frames taken), replaced by M31 · Ha · 300 s' }] });
+    expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent(/^Not synced: C925 data differs from the plan/);
+    fireEvent.click(screen.getByRole('tab', { name: /Rigs/ }));
+    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/^not synced · differs from the plan/)).toBeInTheDocument();
   });
   it('asks again for a rig the last activation left out, though the revisions match', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4, rigs: [] } });
