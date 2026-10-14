@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { FolderInput } from 'lucide-react';
+import { ChartColumn, Check, Columns2, FolderInput, Layers, RotateCcw, ScanSearch, X } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type { Image, ProjectMosaic } from '../api/types';
 import { GradingStatus } from '../api/types';
@@ -13,6 +13,9 @@ import { useDbProjectTarget, useGridState, useFilters } from '../hooks/useUrlSta
 import ImageCard from './ImageCard';
 import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
+import { imageFilterCount } from '../utils/imageFilterCount';
+import ViewToolbar from './toolbar/ViewToolbar';
+import SelectionBar from './toolbar/SelectionBar';
 import { availableFlags, matchesFlagFilter } from '../utils/flagFilter';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
@@ -49,6 +52,7 @@ import { mosaicLabel, useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
 import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
+import { chipFocus } from '../utils/calibrationFocus';
 import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
@@ -160,7 +164,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     setCurrentImageId,
     setCurrentImageSelection,
   } = useGridState();
-  const { filters, updateFilters } = useFilters();
+  const { filters, updateFilters, clearFilters } = useFilters();
   
   // Adapter function to convert between FilterOptions and URL state
   const handleFilterChange = useCallback((filterOptions: FilterOptions) => {
@@ -193,8 +197,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Navigation helpers
   const [searchParams] = useSearchParams();
   
-  const navigateToDetail = useCallback((imageId: number) => {
-    navigate(imageDetailPath(imageId, searchParams, 'grid'));
+  const navigateToDetail = useCallback((imageId: number, calibrationFocus?: string) => {
+    navigate(imageDetailPath(imageId, searchParams, 'grid', calibrationFocus));
   }, [navigate, searchParams]);
   
   const navigateToComparison = useCallback((leftId: number, rightId: number) => {
@@ -635,6 +639,27 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     }
   }, [selectedImages, grading, setSelectedImages]);
 
+  const clearSelection = useCallback(() => {
+    setSelectedImages(new Set());
+    setLastSelectedImageId(null);
+    selectionAnchorIdRef.current = null;
+    selectionBaseIdsRef.current = new Set();
+  }, [setSelectedImages]);
+
+  // What Compare opens: the two selected images, or the cursor's image and
+  // the next one after it.
+  const comparePair = useMemo((): [number, number] | null => {
+    if (selectedImages.size === 2) {
+      const [left, right] = Array.from(selectedImages);
+      return left !== right ? [left, right] : null;
+    }
+    if (lastSelectedImageId === null) return null;
+    const currentIndex = flatImages.findIndex(image => image.id === lastSelectedImageId);
+    if (currentIndex === -1) return null;
+    const next = flatImages.slice(currentIndex + 1).find(image => image.id !== lastSelectedImageId);
+    return next ? [lastSelectedImageId, next.id] : null;
+  }, [flatImages, lastSelectedImageId, selectedImages]);
+
   // Switch to appropriate grouping mode when changing between single/multi-project
   const prevProjectId = useRef(projectId);
   useEffect(() => {
@@ -867,232 +892,197 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   return (
     <>
       <div ref={containerRef} className="grouped-image-container">
-        <div className="image-controls sticky">
-          {/* Combined Controls Row */}
-          <div className="controls-row-combined">
-            <FilterControls 
+        <ViewToolbar
+          label="Image tools"
+          className="image-controls"
+          sticky
+          filters={(
+            <FilterControls
               onFilterChange={handleFilterChange}
               availableFilters={availableFilters}
               availableFlags={availableFlagsForScope}
               currentFilters={filters}
             />
-            
-            <div className="controls-section">
-              <ThumbnailSizeControl
-                id="grid-thumbnail-size"
-                value={imageSize}
-                onChange={setImageSize}
-              />
-              
-              <div className="grouping-control compact">
-                <label>Group:</label>
-                <select 
-                  value={groupingMode} 
+          )}
+          activeFilters={imageFilterCount(filters)}
+          onClearFilters={clearFilters}
+          controls={(
+            <ThumbnailSizeControl
+              id="grid-thumbnail-size"
+              value={imageSize}
+              onChange={setImageSize}
+              icons
+            />
+          )}
+          view={(
+            <>
+              <div className="toolbar-field">
+                <label className="toolbar-caption" htmlFor="grid-grouping">Group</label>
+                <select
+                  id="grid-grouping"
+                  value={groupingMode}
                   onChange={(e) => setGroupingMode(e.target.value as GroupingMode)}
                 >
-                  {isMultiProjectMode 
-                    ? MULTI_PROJECT_MODES.map(mode => (
-                        <option key={mode} value={mode}>
-                          {GROUPING_MODE_LABELS[mode]}
-                        </option>
-                      ))
-                    : SINGLE_PROJECT_MODES.map(mode => (
-                        <option key={mode} value={mode}>
-                          {GROUPING_MODE_LABELS[mode]}
-                        </option>
-                      ))
-                  }
+                  {(isMultiProjectMode ? MULTI_PROJECT_MODES : SINGLE_PROJECT_MODES).map(mode => (
+                    <option key={mode} value={mode}>
+                      {GROUPING_MODE_LABELS[mode]}
+                    </option>
+                  ))}
                 </select>
               </div>
-
-              <SecondaryScoreToggle className="compact" />
+              <div className="toolbar-field">
+                <span className="toolbar-caption">Chips</span>
+                <SecondaryScoreToggle />
+              </div>
               {dbId && projectId != null && <ProjectExposureGrouping
                 key={`${dbId}:${projectId}`}
                 dbId={dbId}
                 projectId={projectId}
                 canManage={grading.canWrite && !!serverInfo?.allow_database_management}
               />}
-            </div>
-            
-            {/* Undo/Redo Toolbar */}
-            <div className="toolbar-section">
-            <UndoRedoToolbar
-              canUndo={grading.canUndo}
-              canRedo={grading.canRedo}
-              isProcessing={grading.isLoading}
-              undoStackSize={grading.undoStackSize}
-              redoStackSize={grading.redoStackSize}
-              onUndo={grading.undo}
-              onRedo={grading.redo}
-              getLastAction={grading.getLastAction}
-              getNextRedoAction={grading.getNextRedoAction}
-              className="compact"
-            />
-              <button
-                className="toolbar-button compare-button compact"
-                onClick={() => {
-                  if (selectedImages.size === 2) {
-                    // Use the two selected images for comparison
-                    const selectedArray = Array.from(selectedImages);
-                    // Prevent comparing same image with itself
-                    if (selectedArray[0] !== selectedArray[1]) {
-                      navigateToComparison(selectedArray[0], selectedArray[1]);
-                    }
-                  } else if (lastSelectedImageId) {
-                    // Use current image + next different image for comparison
-                    const currentIndex = flatImages.findIndex(image => image.id === lastSelectedImageId);
-                    if (currentIndex !== -1) {
-                      // Find the next image that is different from the current one
-                      for (let i = currentIndex + 1; i < flatImages.length; i++) {
-                        const nextImageId = flatImages[i].id;
-                        if (lastSelectedImageId !== nextImageId) {
-                          navigateToComparison(lastSelectedImageId, nextImageId);
-                          break;
-                        }
-                      }
-                    }
-                  }
-                }}
-                disabled={(() => {
-                  if (selectedImages.size === 2) {
-                    const selectedArray = Array.from(selectedImages);
-                    return selectedArray[0] === selectedArray[1]; // Same image selected twice
-                  }
-                  if (lastSelectedImageId) {
-                    const currentIndex = flatImages.findIndex(image => image.id === lastSelectedImageId);
-                    if (currentIndex === -1) return true; // Image not found
-                    
-                    // Check if there's any different image after current position
-                    for (let i = currentIndex + 1; i < flatImages.length; i++) {
-                      if (flatImages[i].id !== lastSelectedImageId) return false; // Found different image
-                    }
-                    return true; // No different image found
-                  }
-                  return true; // No valid selection
-                })()}
-                title={selectedImages.size === 2 ? "Compare selected images (C)" : "Compare images side-by-side (C)"}
-              >
-                Compare
-              </button>
-              <QualityScanButton
-                scan={spatialScan}
-                targetId={targetId}
-                canWrite={grading.canWrite}
-                className="toolbar-button compact quality-scan-button"
+            </>
+          )}
+          tools={(
+            <>
+              <UndoRedoToolbar
+                canUndo={grading.canUndo}
+                canRedo={grading.canRedo}
+                isProcessing={grading.isLoading}
+                undoStackSize={grading.undoStackSize}
+                redoStackSize={grading.redoStackSize}
+                onUndo={grading.undo}
+                onRedo={grading.redo}
+                getLastAction={grading.getLastAction}
+                getNextRedoAction={grading.getNextRedoAction}
+                className="compact"
               />
-              {grading.canWrite && serverInfo?.allow_database_management && (
-                <button
-                  type="button"
-                  className="toolbar-button compact organization-action"
-                  disabled={!canMoveImages}
-                  title={canMoveImages ? 'Move selected exposures to another target or project' : 'Select exposures from one target to move'}
-                  onClick={() => {
-                    if (!dbId || !canMoveImages) return;
-                    const source = imagesToMove[0];
-                    setOrganizationScope({
-                      kind: 'move_images',
-                      dbId,
-                      sourceTargetId: source.target_id,
-                      sourceTargetName: source.target_name,
-                      sourceProjectId: source.project_id,
-                      imageIds: imagesToMove.map(image => image.id),
-                    });
-                  }}
-                >
-                  <FolderInput size={14} aria-hidden="true" /> Move exposures
-                </button>
-              )}
-              {/* The statistics open below the summary; their switch sits
-                  with the other tools. */}
               <button
                 type="button"
-                className="toolbar-button compact stats-toggle"
+                className="tool-button icon-at-1600 compare-button"
+                onClick={() => {
+                  if (comparePair) navigateToComparison(comparePair[0], comparePair[1]);
+                }}
+                disabled={!comparePair}
+                title={selectedImages.size === 2 ? "Compare selected images (C)" : "Compare images side-by-side (C)"}
+              >
+                <Columns2 size={14} aria-hidden="true" />
+                <span className="tool-button-label">Compare</span>
+              </button>
+              {/* The statistics open below the toolbar. */}
+              <button
+                type="button"
+                className="tool-button icon-at-1600 stats-toggle"
                 aria-pressed={showStats}
                 aria-controls={showStats ? 'grid-stats-dashboard' : undefined}
                 title={showStats ? 'Hide image statistics' : 'Show image statistics'}
                 onClick={() => setShowStats(!showStats)}
               >
-                <span aria-hidden="true">▥</span> Stats
+                <ChartColumn size={14} aria-hidden="true" />
+                <span className="tool-button-label">Stats</span>
               </button>
-            </div>
-            
-            <div className="stats-section">
-              <div className="grid-summary">
-                <div className="grid-stats">
-                  {mosaic && <>{mosaicLabel(mosaic)} • </>}
-                  {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
-                  {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
-                  {filters.filterNames.length > 0 && ` • ${filters.filterNames.join(', ')}`}
-                  {filters.searchTerm && ` • "${filters.searchTerm}"`}
-                  {calibrationFilterActive && ` • ${filters.calibration.map(calibrationFilterLabel).join(', ')}`}
-                  {calibrationFilterActive && calibration.updating && ' (updating)'}
-                  {' • '}
-                  <span className="grid-quality-state" title={qualityStatus.title}>
-                    {qualityStatus.label}
-                  </span>
-                </div>
-              </div>
-              <div
-                className={`selection-action-bar ${selectedImages.size > 1 ? 'active' : ''}`}
-                aria-label="Selected image actions"
-                aria-hidden={selectedImages.size <= 1}
+              <QualityScanButton
+                scan={spatialScan}
+                targetId={targetId}
+                canWrite={grading.canWrite}
+                className="tool-button icon-at-1360 quality-scan-button"
+                icon={<ScanSearch size={14} aria-hidden="true" />}
+              />
+            </>
+          )}
+          menu={grading.canWrite && serverInfo?.allow_database_management ? (
+            <button
+              type="button"
+              className="toolbar-menu-item organization-action"
+              disabled={!canMoveImages}
+              title={canMoveImages ? 'Move selected exposures to another target or project' : 'Select exposures from one target to move'}
+              onClick={() => {
+                if (!dbId || !canMoveImages) return;
+                const source = imagesToMove[0];
+                setOrganizationScope({
+                  kind: 'move_images',
+                  dbId,
+                  sourceTargetId: source.target_id,
+                  sourceTargetName: source.target_name,
+                  sourceProjectId: source.project_id,
+                  imageIds: imagesToMove.map(image => image.id),
+                });
+              }}
+            >
+              <FolderInput size={14} aria-hidden="true" /> Move exposures
+            </button>
+          ) : undefined}
+          summary={(
+            <span className="grid-stats">
+              {mosaic && <>{mosaicLabel(mosaic)} • </>}
+              {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
+              {filters.status !== 'all' && ` • ${statusFilterLabel(filters.status)}`}
+              {filters.filterNames.length > 0 && ` • ${filters.filterNames.join(', ')}`}
+              {filters.searchTerm && ` • "${filters.searchTerm}"`}
+              {calibrationFilterActive && ` • ${filters.calibration.map(calibrationFilterLabel).join(', ')}`}
+              {calibrationFilterActive && calibration.updating && ' (updating)'}
+              {' • '}
+              <span className="grid-quality-state" title={qualityStatus.title}>
+                {qualityStatus.label}
+              </span>
+            </span>
+          )}
+          selection={(
+            <SelectionBar
+              count={selectedImages.size}
+              minimum={2}
+              hint="Ctrl- or ⌘-click to add images, Shift-click for a range"
+              onClear={clearSelection}
+            >
+              <button
+                type="button"
+                className="tool-button tool-button-accept"
+                disabled={!grading.canWrite}
+                title="Accept the selected images (A)"
+                onClick={() => gradeBatch('accepted')}
               >
-                <div className="selection-count">
-                  {selectedImages.size} selected
-                </div>
-                <div className="batch-buttons">
-                  {/* Stacks lives beside Images; a selection travels there
-                      as the set to stack. */}
-                  <button
-                    type="button"
-                    className="action-button stack"
-                    disabled={selectedImages.size <= 1 || projectId == null}
-                    onClick={() =>
-                      navigate(`/stacks?${searchParams.toString()}`, {
-                        state: { stackImageIds: [...selectedImages] },
-                      })
-                    }
-                  >
-                    Stack selected
-                  </button>
-                  <button
-                    className="action-button accept"
-                    disabled={selectedImages.size <= 1 || !grading.canWrite}
-                    onClick={() => gradeBatch('accepted')}
-                  >
-                    Accept
-                  </button>
-                  <button
-                    className="action-button reject"
-                    disabled={selectedImages.size <= 1 || !grading.canWrite}
-                    onClick={() => gradeBatch('rejected')}
-                  >
-                    Reject
-                  </button>
-                  <button
-                    className="action-button pending"
-                    disabled={selectedImages.size <= 1 || !grading.canWrite}
-                    onClick={() => gradeBatch('pending')}
-                  >
-                    Pending
-                  </button>
-                  <button
-                    className="action-button"
-                    disabled={selectedImages.size <= 1}
-                    onClick={() => {
-                      setSelectedImages(new Set());
-                      setLastSelectedImageId(null);
-                      selectionAnchorIdRef.current = null;
-                      selectionBaseIdsRef.current = new Set();
-                    }}
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+                <Check size={14} aria-hidden="true" />
+                <span className="tool-button-label">Accept</span>
+              </button>
+              <button
+                type="button"
+                className="tool-button tool-button-reject"
+                disabled={!grading.canWrite}
+                title="Reject the selected images (X)"
+                onClick={() => gradeBatch('rejected')}
+              >
+                <X size={14} aria-hidden="true" />
+                <span className="tool-button-label">Reject</span>
+              </button>
+              <button
+                type="button"
+                className="tool-button"
+                disabled={!grading.canWrite}
+                title="Set the selected images back to Pending (U)"
+                onClick={() => gradeBatch('pending')}
+              >
+                <RotateCcw size={14} aria-hidden="true" />
+                <span className="tool-button-label">Pending</span>
+              </button>
+              <span className="selection-actions-divider" aria-hidden="true" />
+              {/* Stacks lives beside Images; a selection travels there
+                  as the set to stack. */}
+              <button
+                type="button"
+                className="tool-button"
+                disabled={projectId == null}
+                title="Stack the selected images"
+                onClick={() =>
+                  navigate(`/stacks?${searchParams.toString()}`, {
+                    state: { stackImageIds: [...selectedImages] },
+                  })
+                }
+              >
+                <Layers size={14} aria-hidden="true" />
+                <span className="tool-button-label">Stack selected</span>
+              </button>
+            </SelectionBar>
+          )}
+        />
 
 
         {showStats && (
@@ -1158,6 +1148,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                             qualityScoreScope={quality.scopeByImage.get(image.id)}
                             basisScores={quality.basisScoresByImage.get(image.id)}
                             calibration={calibration.marks.get(image.id)}
+                            onCalibrationClick={(mark) =>
+                              navigateToDetail(image.id, chipFocus(mark.codes, filters.calibration))}
                             qualityPresentation="compact"
                             showTarget={severalTargets}
                             isSelected={

@@ -665,8 +665,23 @@ on the compact row and the card; it opens the Calibration report, whose
 
 The image views mark the same lights. In Images, Sequence and a mosaic's
 sequence, a **🧪** chip under the score chips is red on a Poor light and
-yellow on one to check; hover it for its findings. The chip has its own
-toggle beside the 🌙 and layers toggles, and in **Settings › Review**.
+yellow on one to check; hover it for its findings, or click it to open the
+light on its **Calibration** panel. The chip has its own toggle beside the
+🌙 and layers toggles, and in **Settings › Review**.
+
+An image's detail view has a **Calibration** panel. It lists the light's
+findings in words, worst first, as the library stands now, and for bias,
+darks, dark flats and flats the frames each master would take: how many,
+from which nights and at what sensor temperatures, the suspect frames it
+takes, the frames kept out and why, the frames that match but lose to a
+nearer set, and the frames refused with the reading that disagrees. Each
+night opens those frames on the Calibration page. Choosing a finding picks
+out the frames behind it, such as the two nights of a mixed flat master or
+the three darks of a thin one, and folds the kinds it is not about; **Show
+every kind** opens them all. The choice is kept in the address
+(`calibFocus`), so it stays chosen from image to image and in a shared
+link. Opened from the chip, or from Images filtered by a finding, the
+panel comes into view with that finding chosen.
 Images has a **Calibration** filter: **Poor**, **Check**, or both. Sequence
 adds **Poor calibration** to **Select**, so the lights can go straight to
 **Review rejection**. In the Calibration report, each Quality finding, each

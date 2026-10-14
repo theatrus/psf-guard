@@ -4,6 +4,8 @@ import { apiClient } from '../../api/client';
 import type { CalibrationKind, LibraryCalibrationMaster } from '../../api/types';
 import { CalibrationMasterInspector } from '../CalibrationMasterInspector';
 import { KIND_LABELS, formatTime, plural } from './calibrationLabels';
+import PillSelect from '../toolbar/PillSelect';
+import ViewToolbar from '../toolbar/ViewToolbar';
 import type { useCalibrationActions } from './useCalibrationActions';
 
 interface CalibrationMasterListProps {
@@ -66,27 +68,39 @@ export default function CalibrationMasterList({ dbId, dbName, canManage, opened,
   };
   return (
     <section className="calibration-masters" aria-label="Masters">
-      <div className="calibration-masters-toolbar">
-        <label>
-          Type
-          <select value={kind} onChange={(event) => setKind(event.target.value as CalibrationKind | '')}>
-            <option value="">All</option>
-            {(['flat', 'dark_flat', 'dark', 'bias'] as const).map((value) => (
-              <option key={value} value={value}>{KIND_LABELS[value]}</option>
-            ))}
-          </select>
-        </label>
-        <label className="calibration-check">
-          <input type="checkbox" checked={onDisk} onChange={(event) => setOnDisk(event.target.checked)} />
-          Files on disk only
-        </label>
-        <span className="calibration-muted">{plural(masters.length, 'master')}</span>
-        {canManage && (catalog.data?.masters.length ?? 0) > 0 && (
-          <button type="button" className="calibration-button calibration-button-danger" disabled={actions.pending} onClick={clear}>
+      <ViewToolbar
+        label="Master filters"
+        filters={(
+          <>
+            <PillSelect
+              label="Type"
+              active={kind !== ''}
+              value={kind}
+              onChange={(event) => setKind(event.target.value as CalibrationKind | '')}
+            >
+              <option value="">All</option>
+              {(['flat', 'dark_flat', 'dark', 'bias'] as const).map((value) => (
+                <option key={value} value={value}>{KIND_LABELS[value]}</option>
+              ))}
+            </PillSelect>
+            <label className="toolbar-pill toolbar-pill-check">
+              <input type="checkbox" checked={onDisk} onChange={(event) => setOnDisk(event.target.checked)} />
+              Files on disk only
+            </label>
+          </>
+        )}
+        activeFilters={Number(kind !== '') + Number(onDisk)}
+        onClearFilters={() => {
+          setKind('');
+          setOnDisk(false);
+        }}
+        menu={canManage && (catalog.data?.masters.length ?? 0) > 0 ? (
+          <button type="button" className="toolbar-menu-item toolbar-menu-item-danger" disabled={actions.pending} onClick={clear}>
             Clear generated masters
           </button>
-        )}
-      </div>
+        ) : undefined}
+        summary={plural(masters.length, 'master')}
+      />
       {actions.error && <p className="calibration-error" role="alert">{actions.error}</p>}
       {catalog.isLoading && <p className="calibration-muted">Loading…</p>}
       {catalog.error && <p className="calibration-error">Could not read the masters: {catalog.error.message}</p>}
@@ -103,7 +117,7 @@ export default function CalibrationMasterList({ dbId, dbName, canManage, opened,
                 <div className="calibration-master-card-head">
                   <span className={`calibration-kind calibration-kind-${master.kind}`}>{KIND_LABELS[master.kind]}</span>
                   <strong>{masterTitle(master)}</strong>
-                  <button type="button" className="calibration-button" disabled={!master.available}
+                  <button type="button" className="tool-button" disabled={!master.available}
                     onClick={() => onOpen(master.id)} aria-label={`View ${KIND_LABELS[master.kind]} master ${master.label}`}>
                     View
                   </button>

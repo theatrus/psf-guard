@@ -1,0 +1,949 @@
+/*
+ * The toolbar Images, Sequence and Calibration share: one row of controls
+ * and a slim status row, one pill style for filters and one set of
+ * buttons. ViewToolbar.tsx explains the layout; the buttons are also used
+ * on their own, such as in the calibration frame panel.
+ */
+
+.view-toolbar {
+  --toolbar-control-height: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.view-toolbar.sticky {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+}
+
+/* The control row: filters, the size slider, then the tools at the end.
+   Pills give up width before the row overflows. */
+.view-toolbar-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  min-width: 0;
+}
+
+.view-toolbar .view-toolbar-toggle {
+  display: none;
+}
+
+.view-toolbar-filters {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.view-toolbar-filters > * {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.view-toolbar-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.view-toolbar-primary {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+/* Shown only on a phone, where the sliders fold away. */
+.toolbar-phone-only {
+  display: none;
+}
+
+.view-toolbar-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+/* The status row: what is shown on the left, what is selected on the
+   right. Its controls are a little shorter, and it keeps one height
+   whether or not anything is selected, so the page under a sticky
+   toolbar never jumps. */
+.view-toolbar-status {
+  --toolbar-control-height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 1rem;
+  min-width: 0;
+  min-height: 30px;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--color-border-primary);
+}
+
+.view-toolbar-summary {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 0.35rem 0.6rem;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.view-toolbar-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: var(--color-bg-primary);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Filter pills: the name, the value and a chevron in one rounded button.
+   A pill that narrows the view stands out. A dark fill with a light name
+   (about 7.9:1) and a semibold near-white value (about 11:1) reads at a
+   glance; the input grey with a muted name was near 2.6:1. */
+.toolbar-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  box-sizing: border-box;
+  max-width: 13rem;
+  height: var(--toolbar-control-height, 30px);
+  padding: 0 0.6rem;
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.toolbar-pill:hover {
+  border-color: var(--color-border-quaternary);
+  background: var(--color-bg-quaternary);
+}
+
+.toolbar-pill:focus-visible,
+.toolbar-pill:has(select:focus-visible) {
+  outline: none;
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
+}
+
+.toolbar-pill-label {
+  flex: none;
+  color: var(--color-text-lighter);
+}
+
+.toolbar-pill-value {
+  min-width: 0;
+  color: var(--color-text-strong);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar-pill svg {
+  flex: none;
+  color: var(--color-text-lighter);
+}
+
+/* A pill around a native select: the select keeps its own list and
+   keyboard. */
+.toolbar-pill.toolbar-pill-select select {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+  max-width: 10rem;
+  height: 100%;
+  padding: 0 0.1rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-strong);
+  font: inherit;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  outline: none;
+}
+
+.toolbar-pill.toolbar-pill-select select option {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+/* The chevron a native select draws no longer, in the pill's colour. */
+.toolbar-pill-select::after {
+  content: '';
+  flex: none;
+  width: 13px;
+  height: 13px;
+  background: var(--color-text-lighter);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  pointer-events: none;
+}
+
+.toolbar-pill-check input {
+  margin: 0;
+}
+
+.toolbar-pill-clear {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.toolbar-pill-clear:hover {
+  border-color: var(--color-border-secondary);
+  color: var(--color-text-primary);
+}
+
+/* Search: a pill-shaped field with a magnifier. */
+.toolbar-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 10.5rem;
+  min-width: 7rem;
+}
+
+.toolbar-search svg {
+  position: absolute;
+  left: 0.6rem;
+  color: var(--color-text-secondary);
+  pointer-events: none;
+}
+
+.view-toolbar .toolbar-search input {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--toolbar-control-height);
+  padding: 0 0.65rem 0 1.85rem;
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.view-toolbar .toolbar-search input::placeholder {
+  color: var(--color-text-secondary);
+  opacity: 1;
+}
+
+.view-toolbar .toolbar-search input:focus-visible {
+  outline: none;
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
+}
+
+/* The thumbnail slider in the control row: an icon at each end and the
+   width in small type; the name is the tooltip. */
+.view-toolbar .size-control.compact {
+  gap: 0.35rem;
+  color: var(--color-text-muted);
+}
+
+.view-toolbar .size-control.compact label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.view-toolbar .size-control.compact input[type='range'] {
+  width: 7.5rem;
+  height: var(--toolbar-control-height);
+  margin: 0;
+  background: transparent;
+}
+
+.view-toolbar .size-control.compact input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 3px;
+  background: var(--color-bg-tertiary);
+}
+
+.view-toolbar .size-control.compact input[type='range']::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+}
+
+.view-toolbar .size-control.compact input[type='range']::-moz-range-track {
+  height: 4px;
+  border-radius: 3px;
+  background: var(--color-bg-tertiary);
+}
+
+.view-toolbar .size-control.compact .size-value {
+  min-width: 2.6rem;
+  font-size: 0.7rem;
+}
+
+/* Fields inside a panel: a small caption over its control. */
+.toolbar-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.toolbar-caption {
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.toolbar-field select,
+.toolbar-field input[type='text'],
+.toolbar-field input[type='number'],
+.toolbar-field input[type='date'] {
+  box-sizing: border-box;
+  height: var(--toolbar-control-height, 30px);
+  max-width: 12rem;
+  padding: 0 0.55rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: normal;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.toolbar-field input[type='number'] {
+  width: 6rem;
+}
+
+.toolbar-field select:focus-visible,
+.toolbar-field input:focus-visible {
+  outline: none;
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
+}
+
+/* A slider with its value after it. */
+.toolbar-range {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: var(--toolbar-control-height);
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.toolbar-range input[type='range'] {
+  width: 7rem;
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+
+.toolbar-range output {
+  min-width: 2rem;
+  color: var(--color-primary);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Buttons: one shape for every action in a toolbar or panel. */
+.tool-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  box-sizing: border-box;
+  height: var(--toolbar-control-height, 30px);
+  padding: 0 0.65rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  /* Colours fade; sizes never animate, so a bar does not wobble. */
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+}
+
+.tool-button:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+.tool-button:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 1px;
+}
+
+.tool-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tool-button-accept {
+  border-color: var(--color-success);
+  background: var(--color-success);
+  color: var(--color-text-on-fill);
+}
+
+.tool-button-accept:hover:not(:disabled) {
+  border-color: var(--color-success-hover);
+  background: var(--color-success-hover);
+}
+
+.tool-button-reject {
+  border-color: var(--color-error);
+  background: var(--color-error);
+  color: var(--color-text-on-fill);
+}
+
+.tool-button-reject:hover:not(:disabled) {
+  border-color: var(--color-error-dark);
+  background: var(--color-error-dark);
+}
+
+.tool-button-danger {
+  border-color: var(--color-border-error);
+  background: transparent;
+  color: var(--color-error);
+}
+
+.tool-button-danger:hover:not(:disabled) {
+  border-color: var(--color-error);
+}
+
+.tool-button-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.tool-button-quiet:hover:not(:disabled) {
+  border-color: var(--color-border-secondary);
+  color: var(--color-text-primary);
+}
+
+.tool-button-label {
+  white-space: nowrap;
+}
+
+/* Choices that sit side by side, one of them on. */
+.tool-segmented {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+}
+
+.tool-segmented button {
+  height: calc(var(--toolbar-control-height, 30px) - 2px);
+  padding: 0 0.6rem;
+  border: 0;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.tool-segmented button + button {
+  border-left: 1px solid var(--color-border-secondary);
+}
+
+.tool-segmented button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* Undo and redo, as icon buttons of the same shape; the tooltip says what
+   they undo or redo. */
+.view-toolbar .undo-redo-toolbar.compact {
+  gap: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.view-toolbar .undo-redo-buttons {
+  gap: 0.35rem;
+}
+
+.view-toolbar .undo-redo-toolbar.compact .undo-button,
+.view-toolbar .undo-redo-toolbar.compact .redo-button {
+  box-sizing: border-box;
+  justify-content: center;
+  width: var(--toolbar-control-height);
+  min-width: var(--toolbar-control-height);
+  height: var(--toolbar-control-height);
+  padding: 0;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  font-size: 0.82rem;
+  transform: none;
+}
+
+.view-toolbar .undo-button .button-text,
+.view-toolbar .redo-button .button-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.view-toolbar .undo-button .stack-count,
+.view-toolbar .redo-button .stack-count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  margin: 0;
+}
+
+/* Panels under a pill or a button: the filter lists, View and ⋯. */
+.toolbar-popover {
+  position: relative;
+}
+
+.toolbar-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 11rem;
+  max-height: 20rem;
+  overflow-y: auto;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.toolbar-menu[hidden] {
+  display: none;
+}
+
+.view-toolbar-tools .toolbar-menu {
+  right: 0;
+  left: auto;
+}
+
+.multi-select-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 1.6rem;
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.multi-select-choice input {
+  margin: 0;
+}
+
+.toolbar-range-panel {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.15rem 0;
+}
+
+.toolbar-range-panel .tool-button {
+  justify-self: start;
+}
+
+/* View: how the view draws its images. */
+.view-toolbar-view {
+  gap: 0.75rem;
+  min-width: 15rem;
+  max-height: none;
+  overflow: visible;
+  padding: 0.7rem 0.8rem;
+}
+
+.view-toolbar .scoring-penalty-control summary {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  height: var(--toolbar-control-height);
+  padding: 0 0.7rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
+
+/* ⋯: a short list of actions. */
+.toolbar-overflow {
+  gap: 2px;
+  min-width: 13rem;
+  padding: 0.3rem;
+}
+
+.toolbar-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.toolbar-menu-item:hover:not(:disabled) {
+  background: var(--color-bg-tertiary);
+}
+
+.toolbar-menu-item:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.toolbar-menu-item-danger {
+  color: var(--color-error);
+}
+
+/* The selection: at rest a count, whose tooltip says how to select; once
+   something is, a highlighted bar with the count and the actions. Both are
+   one box of the same height. */
+.selection-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  min-width: 0;
+  height: calc(var(--toolbar-control-height, 26px) + 4px);
+  padding: 0 1px 0 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.selection-action-bar.active {
+  color: var(--color-text-primary);
+}
+
+.selection-action-bar.active .selection-count {
+  color: var(--state-set-fg);
+  font-weight: 600;
+}
+
+.selection-note {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+}
+
+.selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.selection-actions-divider {
+  width: 1px;
+  height: 1.1rem;
+  margin: 0 0.1rem;
+  background: var(--color-border-secondary);
+}
+
+/* States. Every control takes them from here, with the tokens in App.css:
+   set when a filter or rule narrows what is shown, on when a toggle is
+   pressed or a menu is open. */
+.toolbar-pill.is-set,
+.toolbar-pill-check:has(input:checked),
+.toolbar-search.is-set input,
+.selection-action-bar.active {
+  border-color: var(--state-set-border);
+  background: var(--state-set-bg);
+}
+
+.tool-button[aria-pressed='true'],
+.tool-button[aria-expanded='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
+}
+
+/* Inside a segmented group the group draws the border. */
+.tool-segmented button[aria-pressed='true'] {
+  background: var(--state-on-bg);
+  color: var(--color-text-primary);
+}
+
+/* Narrower desktops: Compare and Stats keep their icons, then the
+   analysis button too. */
+@media (max-width: 1599px) {
+  .view-toolbar-tools .tool-button.icon-at-1600:has(svg) > .tool-button-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .view-toolbar-tools .tool-button.icon-at-1600:has(svg) {
+    width: var(--toolbar-control-height);
+    padding: 0;
+  }
+}
+
+@media (max-width: 1359px) {
+  .view-toolbar-tools .tool-button.icon-at-1360:has(svg) > .tool-button-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .view-toolbar-tools .tool-button.icon-at-1360:has(svg) {
+    width: var(--toolbar-control-height);
+    padding: 0;
+  }
+}
+
+/* A tablet: the tools take a line of their own. */
+@media (max-width: 1180px) {
+  .view-toolbar-bar {
+    flex-wrap: wrap;
+  }
+}
+
+/* A phone: Filters, View and the tools in one row, the filters folded
+   behind the Filters button; the slider follows, in that row when it
+   fits, else on a line of its own; then the status row. */
+@media (max-width: 760px) {
+  .view-toolbar {
+    padding: 0.4rem 0.5rem;
+  }
+
+  .view-toolbar:not(.sticky) {
+    position: relative;
+  }
+
+  .view-toolbar-bar {
+    gap: 0.4rem;
+  }
+
+  .view-toolbar .view-toolbar-toggle {
+    display: inline-flex;
+    order: 0;
+  }
+
+  /* Room for the selection rule: the button keeps its icon and count. */
+  .view-toolbar:has(.view-toolbar-primary) .view-toolbar-toggle-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .view-toolbar-primary {
+    flex: 1 1 0;
+    order: 1;
+  }
+
+  .view-toolbar-tools {
+    order: 2;
+  }
+
+  .view-toolbar-filters {
+    display: none;
+    flex: 1 1 100%;
+    order: 3;
+  }
+
+  .view-toolbar-controls {
+    display: none;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    order: 4;
+    gap: 0.5rem 0.8rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--color-border-primary);
+  }
+
+  .view-toolbar.is-open .view-toolbar-controls {
+    display: flex;
+  }
+
+  .view-toolbar.is-open .view-toolbar-filters + .view-toolbar-controls {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .view-toolbar-controls > * {
+    flex: 1 1 10rem;
+  }
+
+  .view-toolbar .view-toolbar-controls .size-control.compact input[type='range'],
+  .view-toolbar-controls .toolbar-range input[type='range'] {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+
+  .view-toolbar-controls .scoring-penalty-control {
+    flex: none;
+  }
+
+  .view-toolbar-controls .scoring-penalty-panel {
+    position: static;
+    min-width: 0;
+    margin-top: 0.4rem;
+    box-shadow: none;
+  }
+
+  .toolbar-phone-only {
+    display: inline;
+  }
+
+  .view-toolbar.is-open .view-toolbar-filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 0.45rem;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--color-border-primary);
+  }
+
+  .view-toolbar-filters .toolbar-pill,
+  .view-toolbar-filters .toolbar-search {
+    width: 100%;
+    max-width: none;
+  }
+
+  .view-toolbar-filters .toolbar-pill-select select {
+    flex: 1;
+    max-width: none;
+  }
+
+  .view-toolbar-filters .toolbar-search,
+  .view-toolbar-filters .toolbar-popover:has(> .toolbar-menu:not([hidden])) {
+    grid-column: 1 / -1;
+  }
+
+  /* Lists open in place inside the panel. */
+  .view-toolbar-filters .toolbar-menu {
+    position: static;
+    margin-top: 4px;
+    box-shadow: none;
+  }
+
+  /* View and ⋯ open across the toolbar's width. */
+  .view-toolbar-tools .toolbar-popover {
+    position: static;
+  }
+
+  .view-toolbar-tools .toolbar-menu {
+    right: 0.5rem;
+    left: 0.5rem;
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+
+  .view-toolbar-tools .tool-button:has(svg) > .tool-button-label,
+  .selection-actions .tool-button:has(svg) > .tool-button-label,
+  .view-toolbar-status .tool-button-quiet:has(svg) > .tool-button-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .view-toolbar-tools .tool-button:has(svg):has(> .tool-button-label),
+  .selection-actions .tool-button:has(svg),
+  .view-toolbar-status .tool-button-quiet:has(svg):has(> .tool-button-label) {
+    width: calc(var(--toolbar-control-height) + 4px);
+    padding: 0;
+  }
+
+  .view-toolbar-status {
+    gap: 0.35rem 0.5rem;
+  }
+
+  .view-toolbar-summary {
+    flex: 1 1 0;
+  }
+
+  .selection-action-bar {
+    justify-content: flex-start;
+  }
+
+  .selection-note {
+    display: none;
+  }
+}

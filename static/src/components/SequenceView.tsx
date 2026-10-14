@@ -16,14 +16,18 @@ import { useSequenceAnalysis } from '../hooks/useSequenceAnalysis';
 import { useSpatialScan } from '../hooks/useSpatialScan';
 import ScoringPenaltyControl from './ScoringPenaltyControl';
 import { useGrading } from '../hooks/useGrading';
-import { useDbProjectTarget, useGridState } from '../hooks/useUrlState';
+import { useDbProjectTarget, useGridState, useSequenceSelectionRule } from '../hooks/useUrlState';
 import { useProjectMosaic } from '../hooks/useProjectMosaic';
 import MosaicSequence from './MosaicSequence';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import ImageCard from './ImageCard';
 import Dialog from './Dialog';
+import ViewToolbar from './toolbar/ViewToolbar';
+import SelectionBar from './toolbar/SelectionBar';
+import PillSelect from './toolbar/PillSelect';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
+import { ScanSearch, X } from 'lucide-react';
 import type { CalibrationLightMark, Image, ScoredSequence, ImageQualityResult } from '../api/types';
 import {
   imageDetailNavigationState,
@@ -43,6 +47,15 @@ import {
   qualityScoreDescription,
   type QualityScoreScope,
 } from '../utils/qualityScore';
+import {
+  followRule,
+  handChanges,
+  parseSelectionRule,
+  ruleSelection,
+  SELECTION_RULES,
+  selectionRuleOf,
+  type SelectionRuleId,
+} from '../utils/sequenceSelectionRules';
 
 interface SequenceChoice {
   key: string;
@@ -74,6 +87,11 @@ function sequenceKey(sequence: ScoredSequence): string {
   ].join('-');
 }
 
+/** One rule's answer, as a key that changes only when the answer does. */
+function rulePicksKey(rule: SelectionRuleId, picks: ReadonlySet<number>): string {
+  return `${rule}:${[...picks].sort((a, b) => a - b).join(',')}`;
+}
+
 function qualityColor(score: number): string {
   if (score >= 0.7) return 'var(--color-success)';
   if (score >= 0.5) return 'var(--color-warning)';
@@ -101,10 +119,18 @@ export default function SequenceView() {
 
   const filterName = searchParams.get('filterName') || undefined;
   const requestedScoreScope = searchParams.get('scoreScope');
-  const [threshold, setThreshold] = useState(0.5);
+  const {
+    cutoff: threshold,
+    rule: selectionRule,
+    setCutoff: setThreshold,
+    setRule: setSelectionRule,
+  } = useSequenceSelectionRule();
   const [showRejectReview, setShowRejectReview] = useState(false);
   const selectionAnchorIdRef = useRef<number | null>(null);
   const selectionBaseIdsRef = useRef<Set<number>>(new Set());
+  // What the selection rule picked when it last ran: the frames that differ
+  // from it were clicked by hand since. Null until the rule first runs.
+  const ruleBaseRef = useRef<{ key: string; picks: Set<number> } | null>(null);
   const spatialScan = useSpatialScan(dbId, targetId ?? undefined, filterName);
 
   // Fetch targets for the project to allow selection
@@ -180,6 +206,8 @@ export default function SequenceView() {
       if (inferredSelection === null) entrySelectionRef.current = null;
       selectionAnchorIdRef.current = null;
       selectionBaseIdsRef.current = new Set();
+      // A rule stays on in the new scope and selects there afresh.
+      ruleBaseRef.current = null;
       setSelectedImages(inferredSelection ?? new Set());
     }
   }, [selectionScope, setSelectedImages]);
@@ -405,14 +433,15 @@ export default function SequenceView() {
     urlCurrentImageId,
   ]);
 
-  const replaceSelectedImages = useCallback((ids: Set<number>) => {
+  // A selection set as a whole is the base of the next Shift-click range,
+  // anchored on the image under the cursor.
+  const anchorSelection = useCallback((ids: ReadonlySet<number>) => {
     const anchorId = activeImageIdRef.current;
     const base = new Set(ids);
     if (anchorId !== null) base.delete(anchorId);
     selectionAnchorIdRef.current = anchorId;
     selectionBaseIdsRef.current = base;
-    setSelectedImages(ids);
-  }, [setSelectedImages]);
+  }, []);
 
   // Get unique filter names from available targets
   const availableFilters = useMemo(() => {
@@ -423,96 +452,85 @@ export default function SequenceView() {
     return Array.from(filters).sort();
   }, [images]);
 
-  // Select all images below threshold
-  const selectBelowThreshold = useCallback(() => {
-    if (!activeSequence) return;
-    const ids = new Set<number>();
-    activeSequence.images.forEach(img => {
-      if (img.quality_score < threshold) {
-        ids.add(img.image_id);
-      }
+  // Selection rules. A rule chosen under Select frames stays on: it lives
+  // in the URL as selectRule and selects again whenever its answer
+  // changes, as the cutoff moves, the scores or calibration marks reload,
+  // or another session tab opens. It always answers for the view on screen.
+  //
+  // The rule and the person share the selection (see followRule): a click
+  // by hand neither turns the rule off nor gets undone when the rule
+  // selects again. Choosing "By hand" or Stop rule turns the rule off and
+  // keeps the frames; Clear, and rejecting the selection, turn it off and
+  // empty the selection.
+  const ruleInputs = useMemo(
+    () => ({ cutoff: threshold, calibration: calibration.marks }),
+    [calibration.marks, threshold],
+  );
+  const ruleCounts = useMemo(() => new Map(SELECTION_RULES.map(rule => [
+    rule.id,
+    activeSequence ? ruleSelection(rule.id, activeSequence.images, ruleInputs).size : 0,
+  ])), [activeSequence, ruleInputs]);
+  const rulePicks = useMemo(
+    () => selectionRule && activeSequence && !isAnalyzing
+      ? ruleSelection(selectionRule, activeSequence.images, ruleInputs)
+      : null,
+    [activeSequence, isAnalyzing, ruleInputs, selectionRule],
+  );
+  const currentRulePicksKey = selectionRule && rulePicks ? rulePicksKey(selectionRule, rulePicks) : null;
+
+  const applyRuleSelection = useCallback((update: (previous: Set<number>) => Set<number>) => {
+    setSelectedImages(previous => {
+      const next = update(previous);
+      anchorSelection(next);
+      return next;
     });
-    replaceSelectedImages(ids);
-  }, [activeSequence, replaceSelectedImages, threshold]);
+  }, [anchorSelection, setSelectedImages]);
 
-  // Select frames for which a detector named cloud or obstruction evidence.
-  // A low relative score alone must not masquerade as a diagnosis.
-  const selectCloudedSequence = useCallback(() => {
-    if (!activeSequence) return;
-    replaceSelectedImages(new Set(
-      activeSequence.images
-        .filter(image => image.category === 'likely_clouds'
-          || image.category === 'possible_obstruction')
-        .map(image => image.image_id),
-    ));
-  }, [activeSequence, replaceSelectedImages]);
-
-  const selectAstrometryIssues = useCallback(() => {
-    if (!activeSequence) return;
-    replaceSelectedImages(new Set(
-      activeSequence.images
-        .filter(img => (img.flags ?? []).some(flag =>
-          flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift' || flag === 'rotation_skew'))
-        .map(img => img.image_id)
-    ));
-  }, [activeSequence, replaceSelectedImages]);
-
-  const selectUnsolved = useCallback(() => {
-    if (!activeSequence) return;
-    replaceSelectedImages(new Set(
-      activeSequence.images
-        .filter(img => img.pointing?.solve_failed && img.pointing.image_quality_evidence)
-        .map(img => img.image_id)
-    ));
-  }, [activeSequence, replaceSelectedImages]);
-
-  const selectRecommended = useCallback(() => {
-    if (!activeSequence) return;
-    replaceSelectedImages(new Set(
-      activeSequence.images
-        .filter(img => !!img.regrade_reason)
-        .map(img => img.image_id)
-    ));
-  }, [activeSequence, replaceSelectedImages]);
-
-  const selectPoorCalibration = useCallback(() => {
-    if (!activeSequence) return;
-    replaceSelectedImages(new Set(
-      activeSequence.images
-        .filter(img => calibration.marks.get(img.image_id)?.level === 'poor')
-        .map(img => img.image_id)
-    ));
-  }, [activeSequence, calibration.marks, replaceSelectedImages]);
-
-  const applySelectionPreset = useCallback((preset: string) => {
-    switch (preset) {
-      case 'threshold':
-        selectBelowThreshold();
-        break;
-      case 'clouded':
-        selectCloudedSequence();
-        break;
-      case 'off-target':
-        selectAstrometryIssues();
-        break;
-      case 'unsolved':
-        selectUnsolved();
-        break;
-      case 'recommended':
-        selectRecommended();
-        break;
-      case 'poor-calibration':
-        selectPoorCalibration();
-        break;
+  useEffect(() => {
+    if (!selectionRule) {
+      ruleBaseRef.current = null;
+      return;
     }
-  }, [
-    selectAstrometryIssues,
-    selectBelowThreshold,
-    selectCloudedSequence,
-    selectPoorCalibration,
-    selectRecommended,
-    selectUnsolved,
-  ]);
+    if (!rulePicks || currentRulePicksKey === null) return;
+    const base = ruleBaseRef.current;
+    if (base?.key === currentRulePicksKey) return;
+    ruleBaseRef.current = { key: currentRulePicksKey, picks: rulePicks };
+    applyRuleSelection(previous => {
+      if (base) return followRule(previous, base.picks, rulePicks);
+      // Opened with a rule in the URL. With nothing selected the rule
+      // selects afresh; a selection the URL carries stays as it was left,
+      // so a reload or a trip to Detail keeps the clicks made by hand.
+      return previous.size === 0 ? new Set(rulePicks) : previous;
+    });
+  }, [applyRuleSelection, currentRulePicksKey, rulePicks, selectionRule]);
+
+  const chooseRule = useCallback((rule: SelectionRuleId | null) => {
+    if (rule === null) {
+      ruleBaseRef.current = null;
+      setSelectionRule(null);
+      return;
+    }
+    if (!activeSequence) {
+      // Chosen while the scores load: the rule selects once they arrive.
+      ruleBaseRef.current = null;
+      selectionAnchorIdRef.current = null;
+      selectionBaseIdsRef.current = new Set();
+      setSelectionRule(rule, new Set());
+      return;
+    }
+    // A rule chosen replaces the selection with what it picks.
+    const picks = ruleSelection(rule, activeSequence.images, ruleInputs);
+    ruleBaseRef.current = { key: rulePicksKey(rule, picks), picks };
+    anchorSelection(picks);
+    setSelectionRule(rule, picks);
+  }, [activeSequence, anchorSelection, ruleInputs, setSelectionRule]);
+
+  const clearSelection = useCallback(() => {
+    ruleBaseRef.current = null;
+    selectionAnchorIdRef.current = null;
+    selectionBaseIdsRef.current = new Set();
+    setSelectionRule(null, new Set());
+  }, [setSelectionRule]);
 
   const selectedForReview = useMemo(() => {
     const selected = new Map<number, ImageQualityResult>();
@@ -547,11 +565,10 @@ export default function SequenceView() {
     for (const [reason, ids] of byReason) {
       await grading.gradeBatch(ids, 'rejected', reason);
     }
-    setSelectedImages(new Set());
-    selectionAnchorIdRef.current = null;
-    selectionBaseIdsRef.current = new Set();
+    // The rule's work is done once its frames are rejected.
+    clearSelection();
     setShowRejectReview(false);
-  }, [grading, selectedForReview, setSelectedImages]);
+  }, [clearSelection, grading, selectedForReview]);
 
   // Toggle individual image selection
   const toggleImage = useCallback((imageId: number) => {
@@ -633,7 +650,7 @@ export default function SequenceView() {
     if (currentImageId !== null) toggleImage(currentImageId);
   }, sequenceHotkeyOptions, [toggleImage]);
 
-  const openImage = useCallback((imageId: number) => {
+  const openImage = useCallback((imageId: number, calibrationFocus?: string) => {
     const scroller = document.querySelector<HTMLElement>('.app-main');
     const anchor = document.querySelector<HTMLElement>(
       `.sequence-image-card[data-card-image-id="${imageId}"]`,
@@ -642,7 +659,7 @@ export default function SequenceView() {
     const offsetTop = scroller && anchor
       ? anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
       : 0;
-    navigate(imageDetailPath(imageId, searchParams, 'sequence'), {
+    navigate(imageDetailPath(imageId, searchParams, 'sequence', calibrationFocus), {
       state: imageDetailNavigationState({ scrollTop, imageId, offsetTop }),
     });
   }, [navigate, searchParams]);
@@ -668,6 +685,19 @@ export default function SequenceView() {
       navigate(`/sequence?${params.toString()}`, { replace: true });
     }
   }, [navigate, searchParams, selectedImages]);
+
+  const chooseFilter = useCallback((filter: string | undefined) => {
+    const params = new URLSearchParams(searchParams);
+    if (filter) {
+      params.set('filterName', filter);
+    } else {
+      params.delete('filterName');
+    }
+    params.delete('scoreScope');
+    navigate(`/sequence?${params.toString()}`);
+  }, [navigate, searchParams]);
+
+  const ruleHandChanges = rulePicks ? handChanges(selectedImages, rulePicks) : 0;
 
   if (!projectId) {
     return (
@@ -721,44 +751,97 @@ export default function SequenceView() {
 
   return (
     <div className="sequence-view">
-      {/* Controls bar */}
-      <div className="sequence-controls sticky">
-        <div className="sequence-primary-row">
-          <h2>Sequence Analysis</h2>
-          <div className="sequence-primary-actions">
-            {availableFilters.length > 1 && (
-              <div className="filter-input-group">
-                <label htmlFor="sequence-filter">Filter:</label>
-                <select
-                  id="sequence-filter"
-                  value={filterName || 'all'}
-                  onChange={(e) => {
-                    const val = e.target.value === 'all' ? undefined : e.target.value;
-                    const params = new URLSearchParams(searchParams);
-                    if (val) {
-                      params.set('filterName', val);
-                    } else {
-                      params.delete('filterName');
-                    }
-                    params.delete('scoreScope');
-                    navigate(`/sequence?${params.toString()}`);
-                  }}
-                >
-                  <option value="all">All Filters</option>
-                  {availableFilters.map(f => (
-                    <option key={f} value={f}>{f}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-            <QualityScanButton
-              scan={spatialScan}
-              targetId={targetId}
-              canWrite={grading.canWrite}
-              className="header-button"
+      <h2 className="visually-hidden">Sequence Analysis</h2>
+      <ViewToolbar
+        label="Sequence tools"
+        className="sequence-controls"
+        sticky
+        filters={availableFilters.length > 1 ? (
+          <PillSelect
+            label="Filter"
+            id="sequence-filter"
+            active={!!filterName}
+            value={filterName || 'all'}
+            onChange={(e) => chooseFilter(e.target.value === 'all' ? undefined : e.target.value)}
+          >
+            <option value="all">All</option>
+            {availableFilters.map(f => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </PillSelect>
+        ) : undefined}
+        // One filter pill: choosing All clears it.
+        activeFilters={filterName ? 1 : 0}
+        controls={(
+          <>
+            <ThumbnailSizeControl
+              id="sequence-thumbnail-size"
+              value={imageSize}
+              onChange={setImageSize}
+              icons
             />
+            <span
+              className="toolbar-range"
+              title="Frames scoring under the cutoff are marked; the Below the cutoff rule selects them"
+            >
+              <label htmlFor="sequence-threshold">Cutoff</label>
+              <input
+                id="sequence-threshold"
+                aria-label="Score cutoff"
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={threshold}
+                onChange={(e) => setThreshold(parseFloat(e.target.value))}
+              />
+              <output htmlFor="sequence-threshold">{threshold.toFixed(2)}</output>
+            </span>
+            <ScoringPenaltyControl />
+          </>
+        )}
+        primary={(
+          <>
+            <PillSelect
+              label="Select"
+              aria-label="Select frames"
+              id="sequence-select-rule"
+              pillClassName="sequence-select-rule"
+              active={!!selectionRule}
+              pillTitle={selectionRule
+                ? `${selectionRuleOf(selectionRule).description}. The rule stays on: it selects again when the cutoff or the scores change.`
+                : 'Choose a rule to select frames. It stays on, and selects again when the cutoff or the scores change.'}
+              value={selectionRule ?? ''}
+              onChange={(e) => chooseRule(parseSelectionRule(e.target.value))}
+            >
+              <option value="">By hand</option>
+              {SELECTION_RULES.map(rule => (
+                <option key={rule.id} value={rule.id} title={rule.description}>
+                  {rule.label} ({ruleCounts.get(rule.id) ?? 0})
+                </option>
+              ))}
+            </PillSelect>
+            {selectionRule && (
+              <button
+                type="button"
+                className="tool-button tool-button-quiet sequence-stop-rule"
+                aria-label="Stop rule"
+                title="Turn the rule off; the frames it chose stay selected"
+                onClick={() => chooseRule(null)}
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            )}
+          </>
+        )}
+        view={(
+          <div className="toolbar-field">
+            <span className="toolbar-caption">Chips</span>
+            <SecondaryScoreToggle />
           </div>
-          <div className="sequence-history-actions">
+        )}
+        tools={(
+          <>
             <UndoRedoToolbar
               canUndo={grading.canUndo}
               canRedo={grading.canRedo}
@@ -771,74 +854,44 @@ export default function SequenceView() {
               getNextRedoAction={grading.getNextRedoAction}
               className="compact"
             />
-          </div>
-        </div>
-
-        <div className="sequence-review-row">
-          <ThumbnailSizeControl
-            id="sequence-thumbnail-size"
-            value={imageSize}
-            onChange={setImageSize}
-          />
-          <div className="threshold-control">
-            <label htmlFor="sequence-threshold">Score threshold:</label>
-            <input
-              id="sequence-threshold"
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={threshold}
-              onChange={(e) => setThreshold(parseFloat(e.target.value))}
+            <QualityScanButton
+              scan={spatialScan}
+              targetId={targetId}
+              canWrite={grading.canWrite}
+              className="tool-button icon-at-1360 quality-scan-button"
+              icon={<ScanSearch size={14} aria-hidden="true" />}
             />
-            <span className="threshold-value">{threshold.toFixed(2)}</span>
-          </div>
-          <ScoringPenaltyControl />
-          <SecondaryScoreToggle />
-          <div className="selection-preset-control">
-            <label htmlFor="sequence-select-preset">Select:</label>
-            <select
-              id="sequence-select-preset"
-              value=""
-              onChange={(event) => applySelectionPreset(event.target.value)}
+          </>
+        )}
+        // On a phone the cutoff slider folds away; its value stays in sight.
+        summary={<span className="toolbar-phone-only">Cutoff {threshold.toFixed(2)}</span>}
+        selection={(
+          <SelectionBar
+            className="sequence-selection-bar"
+            count={selectedForReview.length}
+            hint={selectionRule
+              ? `No frames match “${selectionRuleOf(selectionRule).label}”`
+              : 'Click frames, or choose a rule under Select frames'}
+            note={selectionRule && (
+              <>
+                Rule: {selectionRuleOf(selectionRule).label}
+                {ruleHandChanges > 0 && ` · ${ruleHandChanges} changed by hand`}
+              </>
+            )}
+            onClear={clearSelection}
+          >
+            <button
+              type="button"
+              className="tool-button tool-button-reject"
+              disabled={!grading.canWrite}
+              title="Check each frame's evidence, then reject them"
+              onClick={() => setShowRejectReview(true)}
             >
-              <option value="" disabled>Choose images…</option>
-              <option value="threshold">Below score threshold</option>
-              <option value="clouded">Clouded</option>
-              <option value="off-target">Off target</option>
-              <option value="unsolved">Unsolved</option>
-              <option value="recommended">Recommended</option>
-              <option value="poor-calibration">Poor calibration</option>
-            </select>
-          </div>
-          {selectedForReview.length > 0 && (
-            <div className="sequence-selection-slot">
-              <div className="selection-action-bar sequence-selection-bar" aria-label="Selected image actions">
-                <span className="selection-count">{selectedForReview.length} selected</span>
-                <button
-                  type="button"
-                  className="action-button reject"
-                  disabled={!grading.canWrite}
-                  onClick={() => setShowRejectReview(true)}
-                >
-                  Review rejection
-                </button>
-                <button
-                  type="button"
-                  className="header-button"
-                  onClick={() => {
-                    setSelectedImages(new Set());
-                    selectionAnchorIdRef.current = null;
-                    selectionBaseIdsRef.current = new Set();
-                  }}
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+              <span className="tool-button-label">Review rejection</span>
+            </button>
+          </SelectionBar>
+        )}
+      />
 
       {/* Error state */}
       {analysisError && (
@@ -1197,7 +1250,8 @@ const SequenceStrip = memo(function SequenceStrip({
   imageSize: number;
   stripRef: RefObject<HTMLDivElement | null>;
   onSelect: (id: number, event: React.MouseEvent) => void;
-  onOpen: (id: number) => void;
+  /** Open a light, on its calibration account with a finding chosen. */
+  onOpen: (id: number, calibrationFocus?: string) => void;
 }) {
   useEffect(() => {
     if (currentImageId === null) return;
@@ -1253,6 +1307,7 @@ const SequenceStrip = memo(function SequenceStrip({
             qualityScoreScope={scoreScope}
             basisScores={basisScoresByImage.get(quality.image_id)}
             calibration={calibrationByImage.get(quality.image_id)}
+            onCalibrationClick={(mark) => onOpen(quality.image_id, mark.codes[0])}
             isSelected={selectedImages.has(quality.image_id)}
             onClick={(event) => onSelect(quality.image_id, event)}
             onDoubleClick={() => onOpen(quality.image_id)}

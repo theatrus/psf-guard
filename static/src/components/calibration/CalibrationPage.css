@@ -57,66 +57,17 @@
 .calibration-page input[type='number'],
 .calibration-page input[type='date'] {
   box-sizing: border-box;
-  height: 2rem;
-  padding: 0.2rem 0.5rem;
+  height: 30px;
+  padding: 0 0.55rem;
   border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
   background: var(--color-bg-input);
   color: var(--color-text-primary);
   font: inherit;
-  font-size: 0.85rem;
-  letter-spacing: normal;
-  text-transform: none;
-  font-weight: normal;
-}
-
-.calibration-filters {
-  padding: 0.4rem 0.8rem 0.55rem;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 10px;
-  background: var(--color-bg-secondary);
-}
-
-.calibration-filters summary {
-  cursor: pointer;
   font-size: 0.82rem;
-  font-weight: 600;
-}
-
-.calibration-filter-fields {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.5rem 0.8rem;
-  padding-top: 0.35rem;
-}
-
-.calibration-filter-fields > label,
-.calibration-sort,
-.calibration-masters-toolbar > label {
-  display: grid;
-  gap: 0.2rem;
-  color: var(--color-text-muted);
-  font-size: 0.72rem;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.calibration-filter-fields input[type='number'] {
-  width: 5.5rem;
-}
-
-.calibration-filter-fields > .calibration-check {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 2rem;
-  color: var(--color-text-secondary);
-  font-size: 0.85rem;
-  font-weight: normal;
   letter-spacing: normal;
   text-transform: none;
+  font-weight: normal;
 }
 
 .calibration-layout {
@@ -341,56 +292,6 @@
   gap: 0.45rem;
 }
 
-.calibration-segmented {
-  display: inline-flex;
-  overflow: hidden;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 6px;
-}
-
-.calibration-segmented button {
-  padding: 0.3rem 0.6rem;
-  border: 0;
-  background: var(--color-bg-secondary);
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: 0.82rem;
-  cursor: pointer;
-}
-
-.calibration-segmented button + button {
-  border-left: 1px solid var(--color-border-secondary);
-}
-
-.calibration-segmented button[aria-pressed='true'] {
-  background: var(--color-primary-alpha-20);
-  color: var(--color-text-primary);
-}
-
-.calibration-segmented button:disabled,
-.calibration-toggle:disabled,
-.calibration-button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.calibration-toggle {
-  padding: 0.3rem 0.6rem;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 6px;
-  background: var(--color-bg-secondary);
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: 0.82rem;
-  cursor: pointer;
-}
-
-.calibration-toggle[aria-pressed='true'] {
-  border-color: var(--color-primary);
-  background: var(--color-primary-alpha-20);
-  color: var(--color-text-primary);
-}
-
 .calibration-zoom {
   display: inline-flex;
   align-items: center;
@@ -585,7 +486,6 @@
   gap: 0.5rem;
 }
 
-.calibration-button,
 .calibration-page .browse-button,
 .calibration-page .remove-button {
   padding: 0.35rem 0.75rem;
@@ -598,12 +498,10 @@
   cursor: pointer;
 }
 
-.calibration-button:hover:not(:disabled),
 .calibration-page .browse-button:hover:not(:disabled) {
   border-color: var(--color-primary);
 }
 
-.calibration-button-danger,
 .calibration-page .remove-button {
   border-color: var(--color-border-error);
   color: var(--color-error);
@@ -637,29 +535,6 @@
 .calibration-masters {
   display: grid;
   gap: 0.75rem;
-}
-
-.calibration-masters-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.5rem 0.9rem;
-}
-
-.calibration-masters-toolbar .calibration-button-danger {
-  margin-left: auto;
-}
-
-.calibration-masters-toolbar > .calibration-check {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 2rem;
-  color: var(--color-text-secondary);
-  font-size: 0.85rem;
-  font-weight: normal;
-  letter-spacing: normal;
-  text-transform: none;
 }
 
 .calibration-master-cards {

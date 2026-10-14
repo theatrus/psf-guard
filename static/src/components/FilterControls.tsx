@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { Search } from 'lucide-react';
 import {
   parseStatusFilter,
   STATUS_FILTER_OPTIONS,
@@ -10,6 +11,8 @@ import {
 import { flagFilterLabel } from '../utils/flagFilter';
 import { CALIBRATION_LEVELS, calibrationFilterLabel } from '../utils/calibrationFilter';
 import MultiSelectMenu from './MultiSelectMenu';
+import ToolbarPopover from './toolbar/ToolbarPopover';
+import type { ImageFilterState } from '../utils/imageFilterCount';
 
 export interface FilterOptions {
   status: StatusFilter;
@@ -32,34 +35,33 @@ interface FilterControlsProps {
   availableFilters: string[];
   /** Quality flags any loaded image carries; the Flag select offers these. */
   availableFlags?: string[];
-  currentFilters: {
-    status: string;
-    filterNames: string[];
-    dateRange: {
-      start: string | null;
-      end: string | null;
-    };
-    searchTerm: string;
-    flags?: string[];
-    calibration?: string[];
-  };
+  currentFilters: ImageFilterState;
 }
 
+/** A night as the date field holds it, said short: "Apr 16". */
+function shortDate(date: Date): string {
+  return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+    .toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function dateRangeLabel(start: Date | null, end: Date | null): string {
+  if (start && end) return `${shortDate(start)} – ${shortDate(end)}`;
+  if (start) return `From ${shortDate(start)}`;
+  if (end) return `To ${shortDate(end)}`;
+  return 'Any';
+}
+
+/**
+ * The Images filters, as pills for the shared toolbar: Status, Filter,
+ * Flag and Calibration keep any of several values; Dates and Search
+ * narrow further.
+ */
 export default function FilterControls({
   onFilterChange,
   availableFilters,
   availableFlags = [],
   currentFilters,
 }: FilterControlsProps) {
-  const [showDateFilters, setShowDateFilters] = useState(
-    Boolean(currentFilters.dateRange.start || currentFilters.dateRange.end),
-  );
-  useEffect(() => {
-    if (currentFilters.dateRange.start || currentFilters.dateRange.end) {
-      setShowDateFilters(true);
-    }
-  }, [currentFilters.dateRange.end, currentFilters.dateRange.start]);
-
   // Convert URL state (strings) to component state (Date objects)
   const filters = useMemo(() => ({
     status: parseStatusFilter(currentFilters.status),
@@ -73,73 +75,15 @@ export default function FilterControls({
     calibration: currentFilters.calibration ?? [],
   }), [currentFilters]);
 
-  const handleStatusChange = (status: StatusFilter) => {
-    const newFilters = { ...filters, status };
-    onFilterChange(newFilters);
-  };
-  // Every grade ticked is All; unticking the last one goes back to All too,
-  // rather than showing nothing.
-  const shownStatuses = statusWords(filters.status);
-  const toggleStatus = (word: StatusWord) => {
-    const next = shownStatuses.includes(word)
-      ? shownStatuses.filter((shown) => shown !== word)
-      : [...shownStatuses, word];
-    handleStatusChange(statusFilterOf(next));
-  };
-
-  const handleFilterNamesChange = (filterNames: string[]) => {
-    onFilterChange({ ...filters, filterNames });
-  };
+  const change = (changes: Partial<FilterOptions>) => onFilterChange({ ...filters, ...changes });
 
   const handleDateChange = (field: 'start' | 'end', value: string) => {
-    const date = value ? new Date(value) : null;
-    const newFilters = {
-      ...filters,
-      dateRange: {
-        ...filters.dateRange,
-        [field]: date,
-      },
-    };
-    onFilterChange(newFilters);
+    change({ dateRange: { ...filters.dateRange, [field]: value ? new Date(value) : null } });
   };
 
-  const handleSearchChange = (searchTerm: string) => {
-    const newFilters = { ...filters, searchTerm };
-    onFilterChange(newFilters);
-  };
-
-  const handleFlagsChange = (flags: string[]) => {
-    onFilterChange({ ...filters, flags });
-  };
-
-  const handleCalibrationChange = (calibration: string[]) => {
-    onFilterChange({ ...filters, calibration });
-  };
-
-  const resetFilters = () => {
-    const defaultFilters: FilterOptions = {
-      status: 'all',
-      filterNames: [],
-      dateRange: {
-        start: null,
-        end: null,
-      },
-      searchTerm: '',
-      flags: [],
-      calibration: [],
-    };
-    onFilterChange(defaultFilters);
-    setShowDateFilters(false);
-  };
-
-  const dateFilterCount = Number(filters.dateRange.start !== null)
-    + Number(filters.dateRange.end !== null);
-  const hasFilters = filters.status !== 'all'
-    || filters.filterNames.length > 0
-    || dateFilterCount > 0
-    || filters.searchTerm !== ''
-    || filters.flags.length > 0
-    || filters.calibration.length > 0;
+  // Every grade shown is All; the boxes start ticked, and unticking the
+  // last one goes back to All rather than showing nothing.
+  const shownStatuses = filters.status === 'all' ? [] : statusWords(filters.status);
   // A chosen filter or flag stays offered even when the current scope has
   // no image carrying it, so the list keeps showing what the URL asked for.
   const filterOptions = [...availableFilters, ...filters.filterNames.filter((name) => !availableFilters.includes(name))]
@@ -150,105 +94,96 @@ export default function FilterControls({
   const levels: string[] = CALIBRATION_LEVELS.map((level) => level.value);
   const calibrationOptions = [...levels, ...filters.calibration.filter((value) => !levels.includes(value))]
     .map((value) => ({ value, label: calibrationFilterLabel(value) }));
+  const { start, end } = filters.dateRange;
 
   return (
-    <div className="filter-controls compact">
-      <div className="filter-row compact filter-primary-row">
-        <div className="filter-input-group status-filter" role="group" aria-labelledby="image-status-filter">
-          <span id="image-status-filter">Status:</span>
-          {STATUS_FILTER_OPTIONS.map((option) => (
-            <label key={option.value} className="status-choice">
-              <input
-                type="checkbox"
-                checked={shownStatuses.includes(option.value)}
-                onChange={() => toggleStatus(option.value)}
-              />
-              {option.label}
-            </label>
-          ))}
-        </div>
+    <>
+      <MultiSelectMenu
+        id="image-status-filter"
+        label="Status"
+        options={STATUS_FILTER_OPTIONS}
+        chosen={shownStatuses}
+        onChange={(words) => change({ status: statusFilterOf(words as StatusWord[]) })}
+        everyIsAll
+        tickAllWhenEmpty
+        title="Show images with these grades"
+      />
 
-        <MultiSelectMenu
-          id="image-channel-filter"
-          label="Filter:"
-          options={filterOptions}
-          chosen={filters.filterNames}
-          onChange={handleFilterNamesChange}
-          everyIsAll
-        />
+      <MultiSelectMenu
+        id="image-channel-filter"
+        label="Filter"
+        options={filterOptions}
+        chosen={filters.filterNames}
+        onChange={(filterNames) => change({ filterNames })}
+        everyIsAll
+      />
 
-        <MultiSelectMenu
-          id="image-flag-filter"
-          label="Flag:"
-          options={flagOptions}
-          chosen={filters.flags}
-          onChange={handleFlagsChange}
-          title="Keep only images whose quality analysis raised any of these flags"
-        />
+      <MultiSelectMenu
+        id="image-flag-filter"
+        label="Flag"
+        options={flagOptions}
+        chosen={filters.flags}
+        onChange={(flags) => change({ flags })}
+        title="Keep only images whose quality analysis raised any of these flags"
+      />
 
-        <MultiSelectMenu
-          id="image-calibration-filter"
-          label="Calibration:"
-          options={calibrationOptions}
-          chosen={filters.calibration}
-          onChange={handleCalibrationChange}
-          title="Keep only lights the calibration library serves poorly (Poor) or that are worth a look (Check)"
-        />
+      <MultiSelectMenu
+        id="image-calibration-filter"
+        label="Calibration"
+        options={calibrationOptions}
+        chosen={filters.calibration}
+        onChange={(calibration) => change({ calibration })}
+        title="Keep only lights the calibration library serves poorly (Poor) or that are worth a look (Check)"
+      />
 
-        <div className="filter-input-group search-filter">
-          <label htmlFor="image-search-filter">Search:</label>
-          <input
-            id="image-search-filter"
-            type="text" 
-            placeholder="Target name..."
-            value={filters.searchTerm}
-            onChange={(e) => handleSearchChange(e.target.value)}
-          />
-        </div>
-
-        <button
-          type="button"
-          className={`reset-button compact more-filters-button${dateFilterCount > 0 ? ' active' : ''}`}
-          aria-expanded={showDateFilters}
-          aria-controls="image-date-filters"
-          onClick={() => setShowDateFilters(open => !open)}
-        >
-          Dates{dateFilterCount > 0 ? ` (${dateFilterCount})` : ''}
-        </button>
-
-        <button
-          type="button"
-          className="reset-button compact"
-          onClick={resetFilters}
-          disabled={!hasFilters}
-        >
-          Reset
-        </button>
-      </div>
-
-      {showDateFilters && (
-        <div id="image-date-filters" className="filter-row compact filter-secondary-row">
-          <div className="filter-input-group date-range">
-            <label htmlFor="image-date-start">Date range:</label>
+      <ToolbarPopover
+        id="image-date-filter"
+        label="Dates"
+        value={dateRangeLabel(start, end)}
+        active={Boolean(start || end)}
+        title="Keep only images taken between these dates"
+      >
+        <div className="toolbar-range-panel">
+          <label className="toolbar-field">
+            <span className="toolbar-caption">From</span>
             <input
               id="image-date-start"
               type="date"
-              className="compact-date"
-              value={filters.dateRange.start ? filters.dateRange.start.toISOString().split('T')[0] : ''}
+              value={start ? start.toISOString().split('T')[0] : ''}
               onChange={(e) => handleDateChange('start', e.target.value)}
             />
-            <span className="date-separator">to</span>
+          </label>
+          <label className="toolbar-field">
+            <span className="toolbar-caption">To</span>
             <input
               id="image-date-end"
-              aria-label="End date"
               type="date"
-              className="compact-date"
-              value={filters.dateRange.end ? filters.dateRange.end.toISOString().split('T')[0] : ''}
+              value={end ? end.toISOString().split('T')[0] : ''}
               onChange={(e) => handleDateChange('end', e.target.value)}
             />
-          </div>
+          </label>
+          <button
+            type="button"
+            className="tool-button tool-button-quiet"
+            disabled={!start && !end}
+            onClick={() => change({ dateRange: { start: null, end: null } })}
+          >
+            Any date
+          </button>
         </div>
-      )}
-    </div>
+      </ToolbarPopover>
+
+      <label className={`toolbar-search${filters.searchTerm ? ' is-set' : ''}`} title="Keep only targets whose name contains this">
+        <Search size={13} aria-hidden="true" />
+        <input
+          id="image-search-filter"
+          type="text"
+          aria-label="Search"
+          placeholder="Search targets"
+          value={filters.searchTerm}
+          onChange={(e) => change({ searchTerm: e.target.value })}
+        />
+      </label>
+    </>
   );
 }

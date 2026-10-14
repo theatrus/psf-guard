@@ -133,3 +133,23 @@
   after the restart, and imports and calibration grading stop at a commit.
   The log says what the stop is still waiting for. A stack build stopped this
   way no longer counts toward the two restarts that drop a build.
+- Images, Sequence and the Calibration page share one compact toolbar: a
+  row of filter pills such as **Status: All**, the thumbnail size slider and
+  the tools, with display settings under **View** and rarely used tools such
+  as **Move exposures** under **⋯**. A slim row below shows the counts, and
+  once images are selected, **Accept**, **Reject**, **Pending** and **Stack
+  selected** on Images or **Review rejection** on Sequence. On a phone the
+  filters and sliders fold behind a **Filters** button that counts the
+  filters in use.
+- In Sequence, the **Select** pill says what each rule selects and how many
+  frames, and a chosen rule stays on: moving the score cutoff or rescoring
+  selects again, frames you clicked by hand stay as you left them, and the
+  address keeps the rule. **×** beside the pill turns the rule off and keeps
+  the frames; **Clear** drops them.
+- An image's detail view has a **Calibration** panel: the light's
+  calibration findings in words, and for each kind the frames its master
+  would take, by night and sensor temperature, with suspect, kept-out,
+  unused and refused frames and why. Choosing a finding picks out the frames
+  behind it, such as the two nights a flat master mixes, and the choice
+  stays as you move between images. The 🧪 chip in Images and Sequence now
+  opens the light on that panel.

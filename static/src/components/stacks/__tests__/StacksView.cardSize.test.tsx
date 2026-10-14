@@ -41,7 +41,7 @@ describe('Stacks card size', () => {
     expect(screen.getByText('Fit')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Fit' })).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Card size:'), { target: { value: '700' } });
+    fireEvent.change(screen.getByLabelText('Card size'), { target: { value: '700' } });
     expect(screen.getByTestId('card-size')).toHaveTextContent('700');
     expect(screen.getByTestId('where')).toHaveTextContent('cardsize=700');
     expect(window.localStorage.getItem(KEY)).toBe('700');

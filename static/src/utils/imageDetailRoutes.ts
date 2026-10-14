@@ -1,3 +1,5 @@
+import { CALIBRATION_FOCUS_PARAM } from '../hooks/useUrlState';
+
 export type ImageDetailReturnView = 'grid' | 'sequence';
 
 const RETURN_TO_PARAM = 'returnTo';
@@ -56,12 +58,17 @@ export function imageDetailReturnView(
   return searchParams.get(RETURN_TO_PARAM) === 'sequence' ? 'sequence' : 'grid';
 }
 
+/** The detail of one image. `calibrationFocus` opens it on its calibration
+ *  panel with that finding chosen (see CALIBRATION_FOCUS_PARAM). */
 export function imageDetailPath(
   imageId: number,
   searchParams: URLSearchParams,
   returnView: ImageDetailReturnView,
+  calibrationFocus?: string,
 ): string {
   const params = new URLSearchParams(searchParams);
+  if (calibrationFocus) params.set(CALIBRATION_FOCUS_PARAM, calibrationFocus);
+  else params.delete(CALIBRATION_FOCUS_PARAM);
   if (returnView === 'sequence') {
     params.set(RETURN_TO_PARAM, 'sequence');
     params.set('current', String(imageId));
@@ -76,6 +83,7 @@ export function imageDetailClosePath(searchParams: URLSearchParams): string {
   const params = new URLSearchParams(searchParams);
   const returnView = imageDetailReturnView(params);
   params.delete(RETURN_TO_PARAM);
+  params.delete(CALIBRATION_FOCUS_PARAM);
   const query = params.toString();
   return `/${returnView}${query ? `?${query}` : ''}`;
 }

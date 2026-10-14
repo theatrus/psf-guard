@@ -33,6 +33,25 @@
   --color-primary-alpha-80: rgba(97, 218, 251, 0.8);
   --color-primary-alpha-90: rgba(97, 218, 251, 0.9);
 
+  /* Interaction states, so every control says them the same way.
+     Set: a filter or rule narrows what is shown.
+     On: a toggle is pressed, a menu is open, or this is the current view.
+     Focus: keyboard focus. */
+  --state-set-border: var(--color-primary-alpha-70);
+  --state-set-bg: var(--color-primary-alpha-10);
+  --state-set-fg: var(--color-primary);
+  --state-on-border: var(--color-primary);
+  --state-on-bg: var(--color-primary-alpha-20);
+  --state-focus-border: var(--color-primary);
+  --state-focus-ring: 0 0 0 2px var(--color-primary-alpha-20);
+
+  /* Text that must stand out on a control, and text on a coloured fill. */
+  --color-text-strong: #f2f2f2;
+  --color-text-on-fill: #fff;
+
+  /* Panels that float over the page. */
+  --shadow-popover: 0 8px 22px rgb(0 0 0 / 35%);
+
   /* Status Colors */
   --color-success: #4caf50;
   --color-success-light: #81c784;
@@ -1056,17 +1075,6 @@
 .toolbar-button svg {
   width: 20px;
   height: 20px;
-}
-
-.compare-button {
-  margin-left: 1rem;
-  background: var(--color-bg-slider);
-  padding: 0.4rem 0.8rem;
-  font-size: 0.85rem;
-}
-
-.compare-button:hover:not(:disabled) {
-  background: var(--color-bg-slider-hover);
 }
 
 /* Image Grid */
@@ -2951,246 +2959,29 @@
   padding: 0;
 }
 
-.image-controls {
-  background: var(--color-bg-secondary);
-  padding: 0.45rem 0.75rem;
-  margin: 0;
-  border-radius: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.image-controls.sticky {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  border-radius: 0;
-  margin: 0;
-  border-bottom: 1px solid var(--color-bg-tertiary);
-}
-
-/* Combined Controls Layout */
-/* The filters take a row of their own, so a long value never squeezes
-   them into a column; the view settings and the tools share the next row,
-   and the summary closes the bar. */
-.controls-row-combined {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "filters filters"
-    "view tools"
-    "summary summary";
-  align-items: center;
-  gap: 0.45rem 0.75rem;
-  min-width: 0;
-}
-
-.controls-section {
-  grid-area: view;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 1rem;
-  min-width: 0;
-}
-
-.toolbar-section {
-  grid-area: tools;
-  align-self: start;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.controls-row-combined > .stats-section {
-  grid-area: summary;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  min-height: 2rem;
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  min-width: 0;
-}
-
-.grid-summary {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  min-width: 0;
-}
-
+/* The Images summary: one line on a wide screen, cut short when long;
+   it wraps on a phone. */
 .grid-stats {
+  flex: 0 1 auto;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.toolbar-button.stats-toggle {
-  flex: 0 0 auto;
-}
-
-.toolbar-button.stats-toggle[aria-pressed="true"] {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-/* Every button, select and field in the image toolbar shares one height,
-   border, corner, fill and type size. */
-.image-controls {
-  --toolbar-control-height: 30px;
-}
-
-.image-controls .multi-select-button,
-.image-controls .reset-button.compact,
-.image-controls .toolbar-button.compact,
-.image-controls .undo-redo-toolbar.compact .undo-button,
-.image-controls .undo-redo-toolbar.compact .redo-button,
-.image-controls .grouping-control select,
-.image-controls .filter-input-group input[type="text"],
-.image-controls .filter-input-group input[type="date"] {
-  box-sizing: border-box;
-  height: var(--toolbar-control-height);
-  padding: 0 0.65rem;
-  border: 1px solid var(--color-bg-quaternary);
-  border-radius: 4px;
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  font-size: 0.8rem;
-  line-height: 1;
-  /* Colours fade; sizes never animate, so the bar does not wobble while
-     its styles settle. */
-  transition: background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s;
-}
-
-.image-controls .multi-select-button,
-.image-controls .reset-button.compact,
-.image-controls .toolbar-button.compact,
-.image-controls .undo-redo-toolbar.compact .undo-button,
-.image-controls .undo-redo-toolbar.compact .redo-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  white-space: nowrap;
-}
-
-.image-controls .undo-redo-toolbar.compact .undo-button,
-.image-controls .undo-redo-toolbar.compact .redo-button {
-  width: var(--toolbar-control-height);
-  padding: 0;
-}
-
-/* A choice never changes how wide Filter and Flag are; a long one is cut
-   short and shown whole on hover. */
-.image-controls .multi-select-button {
-  width: 9.5rem;
-  justify-content: space-between;
-}
-
-.image-controls .filter-input-group input[type="text"] {
-  width: 11rem;
-}
-
-.image-controls .selection-action-bar .action-button {
-  height: var(--toolbar-control-height);
-}
-
-/* Compact toolbar styles */
-.toolbar-button.compact {
-  padding: 0.3rem 0.6rem;
-  font-size: 0.8rem;
-}
-
-.quality-scan-button {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-.compare-button.compact {
-  padding: 0.3rem 0.6rem;
-  font-size: 0.8rem;
-}
-
 @media (max-width: 768px) {
-  .controls-row-combined {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "filters"
-      "view"
-      "tools"
-      "summary";
-    gap: 0.35rem;
-  }
-  
-  .controls-section {
-    justify-content: space-between;
-  }
-  
-  .toolbar-section {
-    justify-content: space-between;
-    flex-wrap: wrap;
-  }
-  
-  .controls-row-combined > .stats-section {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.25rem;
-    font-size: 0.8rem;
-    min-height: 2rem;
-    margin: 0;
-    padding: 0;
-    text-align: left;
+  .grid-stats {
+    white-space: normal;
   }
 
-  .controls-row-combined .grid-stats {
-    white-space: normal;
+  /* With images selected, the status row gives the actions its width. */
+  .view-toolbar-status:has(.selection-action-bar.active) .grid-stats {
+    display: none;
   }
 
   .size-control.compact input[type="range"] {
     width: min(150px, 30vw);
   }
-}
-
-/* Filter Controls */
-.filter-controls {
-  grid-area: filters;
-  flex: 1;
-  max-width: 100%;
-  min-width: 0;
-}
-
-.filter-controls.compact {
-  flex: 1;
-}
-
-.filter-row {
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  flex-wrap: wrap;
-  min-height: 36px;
-}
-
-.filter-row.compact {
-  gap: 0.5rem;
-  min-height: 32px;
-}
-
-.filter-secondary-row {
-  padding-top: 0.35rem;
-  margin-top: 0.35rem;
-  border-top: 1px solid var(--color-border-primary);
-}
-
-.more-filters-button.active {
-  color: var(--color-primary);
-  border-color: var(--color-primary-alpha-50);
 }
 
 .filter-input-group {
@@ -3199,119 +2990,7 @@
   gap: 0.4rem;
 }
 
-.filter-input-group.date-range {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-.date-separator {
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
-  margin: 0 0.2rem;
-}
-
-.filter-input-group label {
-  color: var(--color-text-muted);
-  font-weight: 500;
-  font-size: 0.85rem;
-  white-space: nowrap;
-  min-width: fit-content;
-}
-
-/* Status keeps any mix of grades: one box per grade, all ticked for All. */
-.status-filter > span {
-  color: var(--color-text-muted);
-  font-weight: 500;
-  font-size: 0.85rem;
-  white-space: nowrap;
-}
-
-.status-filter .status-choice {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  color: var(--color-text-secondary);
-  font-weight: 400;
-  cursor: pointer;
-}
-
-.status-filter .status-choice input {
-  margin: 0;
-}
-
-/* Filter and Flag keep any of several values: a button that says what is
-   kept, over a list of boxes. */
-.multi-select {
-  position: relative;
-}
-
-.multi-select > span {
-  color: var(--color-text-muted);
-  font-weight: 500;
-  font-size: 0.85rem;
-  white-space: nowrap;
-}
-
-.multi-select-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  max-width: 12rem;
-  padding: 0.3rem 0.6rem;
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-quaternary);
-  border-radius: 3px;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-
-.multi-select-button:hover {
-  border-color: var(--color-bg-input);
-}
-
-.multi-select-value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.multi-select-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 30;
-  display: grid;
-  gap: 0.3rem;
-  min-width: 10rem;
-  max-height: 18rem;
-  overflow-y: auto;
-  padding: 0.5rem 0.65rem;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-bg-quaternary);
-  border-radius: 6px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-}
-
-.multi-select-choice {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--color-text-secondary);
-  font-weight: 400;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.multi-select-choice input {
-  margin: 0;
-}
-
-.filter-input-group select,
-.filter-input-group input[type="date"],
-.filter-input-group input[type="text"] {
+.filter-input-group select {
   background: var(--color-bg-tertiary);
   color: var(--color-text-primary);
   border: 1px solid var(--color-bg-quaternary);
@@ -3321,178 +3000,14 @@
   transition: all 0.2s;
 }
 
-.compact-date {
-  width: 120px !important;
-  min-width: 120px !important;
-  padding: 0.25rem 0.4rem !important;
-  font-size: 0.8rem !important;
-}
-
-.filter-input-group select:hover,
-.filter-input-group input[type="date"]:hover,
-.filter-input-group input[type="text"]:hover {
+.filter-input-group select:hover {
   border-color: var(--color-bg-input);
 }
 
-.filter-input-group select:focus,
-.filter-input-group input[type="date"]:focus,
-.filter-input-group input[type="text"]:focus {
+.filter-input-group select:focus {
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
-}
-
-.filter-input-group input[type="text"] {
-  min-width: 160px;
-  max-width: 200px;
-}
-
-.filter-input-group input[type="date"] {
-  min-width: 130px;
-  max-width: 150px;
-}
-
-.reset-button {
-  background: var(--color-bg-quaternary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-input);
-  padding: 0.4rem 1rem;
-  border-radius: 4px;
-  font-size: 0.95rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-
-.reset-button.compact {
-  padding: 0.25rem 0.6rem;
-  font-size: 0.8rem;
-}
-
-.reset-button:hover {
-  background: var(--color-bg-input);
-  border-color: var(--color-bg-button);
-}
-
-.reset-button:active {
-  background: var(--color-bg-tertiary);
-}
-
-.reset-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-/* Selection Actions */
-.selection-action-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-width: 0;
-  background: var(--color-primary-alpha-10);
-  border: 1px solid var(--color-primary-alpha-50);
-  border-radius: 6px;
-  padding: 0.3rem 0.5rem;
-}
-
-.controls-row-combined .selection-action-bar {
-  justify-content: flex-end;
-  min-width: 21rem;
-  padding: 0.2rem 0.4rem;
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.controls-row-combined .selection-action-bar.active {
-  opacity: 1;
-  visibility: visible;
-  pointer-events: auto;
-}
-
-.selection-count {
-  color: var(--color-primary);
-  font-weight: 600;
-  font-size: 0.82rem;
-  white-space: nowrap;
-}
-
-.batch-buttons {
-  display: flex;
-  gap: 0.35rem;
-  justify-content: center;
-  flex-wrap: nowrap;
-}
-
-.batch-buttons .action-button {
-  flex: 0 0 auto;
-  padding: 0.32rem 0.65rem;
-  font-size: 0.8rem;
-  min-width: 0;
-}
-
-.toolbar-section .undo-redo-toolbar.compact,
-.sequence-history-actions .undo-redo-toolbar.compact {
-  background: transparent;
-  border: 0;
-  padding: 0;
-}
-
-.toolbar-section .undo-redo-toolbar.compact .undo-button,
-.toolbar-section .undo-redo-toolbar.compact .redo-button {
-  min-width: 34px;
-  padding: 0.3rem 0.45rem;
-}
-
-.toolbar-section .undo-redo-toolbar.compact .button-text {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-@media (max-width: 768px) {
-  /* The captions go on a phone; each status box keeps its own name. */
-  .filter-primary-row .filter-input-group label:not(.status-choice):not(.multi-select-choice),
-  .filter-primary-row .status-filter > span,
-  .filter-primary-row .multi-select > span:first-child {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  .filter-primary-row .filter-input-group select {
-    max-width: 6.5rem;
-  }
-
-  .filter-primary-row .search-filter {
-    flex: 1 1 9rem;
-  }
-
-  .filter-primary-row .search-filter input[type="text"] {
-    min-width: 7rem;
-    width: 100%;
-    max-width: none;
-  }
-
-  .controls-row-combined .selection-action-bar {
-    min-width: 0;
-    max-width: 100%;
-    overflow-x: auto;
-  }
 }
 
 /* Enhanced selection indicators */
@@ -5794,8 +5309,13 @@
     padding-inline: 0.5rem;
   }
 
+  /* On a phone the Images toolbar scrolls away with the page: a tap
+     selects one image only, so its selection actions are rarely in use. */
   .grouped-image-container > .image-controls.sticky {
-    position: static;
+    position: relative;
+    z-index: 100;
+    border-top: 1px solid var(--color-border-secondary);
+    border-radius: 10px;
   }
 
   .stack-preview-panel {
@@ -6007,49 +5527,6 @@
   font-weight: 500;
   min-width: 40px;
   font-size: 0.75rem;
-}
-
-.grouping-control {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-}
-
-.grouping-control.compact {
-  gap: 0.5rem;
-}
-
-.grouping-control.compact label {
-  font-size: 0.85rem;
-}
-
-.grouping-control.compact select {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.8rem;
-}
-
-.grouping-control label {
-  color: var(--color-text-muted);
-  font-weight: 500;
-}
-
-.grouping-control select {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-quaternary);
-  padding: 0.4rem 0.8rem;
-  border-radius: 4px;
-  font-size: 0.95rem;
-  cursor: pointer;
-  outline: none;
-}
-
-.grouping-control select:hover {
-  border-color: var(--color-bg-input);
-}
-
-.grouping-control select:focus {
-  border-color: var(--color-primary);
 }
 
 .image-groups {
@@ -6490,167 +5967,42 @@
   color: var(--color-text-muted);
 }
 
-/* Sequence Controls */
-.sequence-controls {
-  background: var(--color-bg-secondary);
-  padding: 0.45rem 0.75rem;
-  border-bottom: 1px solid var(--color-bg-tertiary);
+/* Sequence: the selection rule's pill takes the room its rule needs, and
+   stands out while a rule is on. */
+.view-toolbar .sequence-select-rule {
+  max-width: 20rem;
 }
 
-.sequence-controls.sticky {
-  position: sticky;
-  top: 0;
-  z-index: 100;
+.view-toolbar .toolbar-pill.sequence-select-rule select {
+  max-width: 15rem;
 }
 
-.sequence-primary-row {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.5rem 0.75rem;
-  min-width: 0;
-}
-
-.sequence-primary-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
-}
-
-.sequence-primary-row h2 {
-  margin: 0;
-  font-size: 1.1rem;
+.view-toolbar .sequence-stop-rule {
+  width: var(--toolbar-control-height);
+  padding: 0;
+  border-color: var(--color-primary-alpha-50);
+  border-radius: 999px;
   color: var(--color-primary);
-  white-space: nowrap;
 }
 
-.sequence-review-row {
-  display: grid;
-  grid-template-columns: auto auto auto minmax(12rem, 1fr);
-  align-items: center;
-  gap: 0.5rem 0.9rem;
-  min-width: 0;
-  padding-top: 0.35rem;
-  margin-top: 0.35rem;
-  border-top: 1px solid var(--color-border-primary);
-}
-
-.selection-preset-control {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.selection-preset-control label {
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  font-weight: 500;
-}
-
-.selection-preset-control select {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-quaternary);
-  border-radius: 3px;
-  padding: 0.3rem 0.45rem;
-  font-size: 0.82rem;
-}
-
-.sequence-selection-slot {
-  min-width: 0;
-}
-
-.sequence-selection-bar {
-  justify-content: flex-start;
-  margin-left: auto;
-  width: fit-content;
-  max-width: 100%;
-}
-
-.sequence-selection-bar .action-button {
-  flex: 0 0 auto;
-  padding: 0.38rem 0.65rem;
-  font-size: 0.82rem;
-}
-
-.threshold-control {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.threshold-control label {
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  font-weight: 500;
-}
-
-.threshold-control input[type="range"] {
-  width: 100px;
-  height: 4px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: var(--color-bg-tertiary);
-  border-radius: 3px;
-  outline: none;
-  cursor: pointer;
-}
-
-.threshold-control input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 14px;
-  height: 14px;
-  background: var(--color-warning);
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.threshold-control input[type="range"]::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  background: var(--color-warning);
-  border-radius: 50%;
-  cursor: pointer;
-  border: none;
-}
-
-.threshold-value {
-  color: var(--color-warning);
-  font-weight: 500;
-  font-size: 0.85rem;
-  min-width: 30px;
-}
-
-@media (max-width: 900px) {
-  .sequence-primary-row {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas:
-      "title actions history";
+@media (max-width: 760px) {
+  .view-toolbar .sequence-select-rule {
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
-  .sequence-primary-row h2 { grid-area: title; }
-  .sequence-primary-actions { grid-area: actions; }
-  .sequence-history-actions { grid-area: history; }
-
-  .sequence-review-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  .view-toolbar .sequence-select-rule .toolbar-pill-label {
+    display: none;
   }
 
-  .sequence-selection-slot {
-    grid-column: 1 / -1;
+  .view-toolbar .toolbar-pill.sequence-select-rule select {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
   }
 }
 
 @media (max-width: 620px) {
-  .controls-section {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    gap: 0.5rem 0.75rem;
-  }
-
   .size-control.compact {
     min-width: 0;
     flex: 0 0 auto;
@@ -6663,84 +6015,6 @@
 
   .size-control .size-value {
     min-width: 36px;
-  }
-
-  .grouping-control.compact {
-    min-width: 0;
-    gap: 0.35rem;
-  }
-
-  .grouping-control.compact select {
-    width: 6.75rem;
-    max-width: 100%;
-  }
-
-  .sequence-primary-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      "title history"
-      "actions actions"
-      "status status";
-  }
-
-  .sequence-primary-actions {
-    flex-wrap: wrap;
-  }
-
-  .sequence-selection-bar {
-    margin-left: 0;
-  }
-
-  .threshold-control input[type="range"] {
-    width: min(100px, 20vw);
-  }
-
-  .selection-preset-control label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  .selection-preset-control select {
-    width: 100%;
-  }
-}
-
-@media (max-width: 480px) {
-  /* One control per row: side by side, the threshold slider and its value
-     run off the panel edge. */
-  .sequence-review-row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .threshold-control {
-    justify-content: space-between;
-  }
-
-  .threshold-control input[type="range"] {
-    flex: 1;
-    width: auto;
-    min-width: 0;
-  }
-}
-
-@media (max-width: 400px) {
-  .grouping-control.compact label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
   }
 }
 
