@@ -247,7 +247,9 @@ file or folder name at any depth, so `Hocus Focus` and `**/Hocus Focus/**`
 do the same thing. A pattern with a `/` reads from the image folder: `/FLAT`
 or `FLAT/*.fits` match only at the top. `*` stays within one folder name and
 `**` crosses folders. A bad pattern is refused when you save, with the
-pattern and the reason.
+pattern and the reason. So is a full path such as `/data/Images/Hocus Focus`
+or `C:\Images\Hocus Focus`, which could never match; the error gives the
+pattern to write instead, here `/Hocus Focus`.
 
 The three light filters apply only to frames that would become lights.
 Calibration frames still go to the calibration library, which never writes
@@ -257,6 +259,11 @@ frames too.
 A `.psfguardignore` file in a folder skips that folder and everything below
 it, on every import: manual, automatic, the CLI, and a new catalog made from
 images. Its contents are not read. This works with no scan rules at all.
+
+An import that starts inside an image folder, as **Review** does for held
+frames, still honors both: when the folder it starts in, or one above it
+within the image folder, is excluded or holds a `.psfguardignore` file, it
+reads nothing there.
 
 The preview and the automatic import's status line say what the rules left
 out: "12 skipped by scan rules", "1 folder(s) skipped by .psfguardignore",
@@ -296,7 +303,10 @@ Ask first is the default because the scheduler database is often shared
 with N.I.N.A. and synced to the rig, so a project the run made would land on
 the live rig without anyone seeing it first. A database saved before this
 setting existed asks first too. Held frames are read again on the next run,
-until they are imported or a scan rule leaves them out.
+until they are imported or a scan rule leaves them out. Lights the light
+filters leave out are not read again while their file stays the same size
+and age; the status line still counts them. Changing the filters reads them
+all once more.
 
 Under Ask first and Leave out, a run also leaves scheduling alone in projects
 it did not make. Attaching a frame to a target can add an exposure template,

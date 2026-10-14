@@ -1671,9 +1671,6 @@ pub async fn update_database_route(
     }
     if let Some(scan_rules) = req.scan_rules.as_ref() {
         let scan_rules = scan_rules.normalized();
-        scan_rules
-            .validate()
-            .map_err(|error| AppError::BadRequest(error.to_string()))?;
         let entry = reg
             .databases
             .iter_mut()
@@ -1681,6 +1678,10 @@ pub async fn update_database_route(
             .ok_or(AppError::InternalError(
                 "registry update lost the entry".into(),
             ))?;
+        let roots: Vec<PathBuf> = entry.image_dirs.iter().map(PathBuf::from).collect();
+        scan_rules
+            .validate(&roots)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
         // Rules that change nothing are stored as none.
         entry.scan_rules = (scan_rules != Default::default()).then_some(scan_rules);
     }
@@ -3503,6 +3504,9 @@ fn run_import_blocking(
     let scan_rule_report = collected.skipped;
     let mut files = collected.files;
     let mut prefiltered = 0usize;
+    let light_filter = ctx.scan_rules.light_filter();
+    // Lights the filters left out of an earlier run, unchanged since.
+    let mut left_out = Vec::new();
     if options.only_new && !files.is_empty() {
         let conn = open_scheduler_connection_with_flags(
             &ctx.database_path,
@@ -3512,18 +3516,26 @@ fn run_import_blocking(
         let known = imp::known_files(&conn, &files)?;
         prefiltered = known.len();
         files.retain(|path| !known.contains(path));
+        left_out = crate::server::autoimport::take_left_out(
+            &ctx.database_path,
+            &light_filter,
+            dirs,
+            &mut files,
+        );
         job::set_prefiltered(&ctx.import_job, prefiltered);
         if files.is_empty() {
             // Nothing new: no header reads, no transaction, no migration.
             job::set_scan_totals(&ctx.import_job, 0, 0);
-            return Ok(imp::ImportOutcome {
+            let mut outcome = imp::ImportOutcome {
                 scanned: prefiltered,
                 skipped_existing: prefiltered,
                 dry_run: options.dry_run,
                 scan_rules: scan_rule_report,
                 new_targets: options.new_targets,
                 ..Default::default()
-            });
+            };
+            imp::count_left_out(&mut outcome, &left_out);
+            return Ok(outcome);
         }
     }
     job::set_scan_totals(&ctx.import_job, files.len(), 0);
@@ -3556,12 +3568,20 @@ fn run_import_blocking(
     options.pair_derivatives &= ctx
         .pair_calibrated_copies
         .load(std::sync::atomic::Ordering::Relaxed);
-    options.light_filter = ctx.scan_rules.light_filter();
+    options.light_filter = light_filter;
     options.match_by_position = ctx.scan_rules.match_by_position;
     let mut outcome = imp::import_frames(&mut conn, frames, &options)?;
+    if options.only_new {
+        crate::server::autoimport::remember_left_out(
+            &ctx.database_path,
+            &light_filter,
+            &outcome.left_out_files,
+        );
+    }
     outcome.scanned += prefiltered;
     outcome.skipped_existing += prefiltered;
     outcome.scan_rules = scan_rule_report;
+    imp::count_left_out(&mut outcome, &left_out);
     Ok(outcome)
 }
 

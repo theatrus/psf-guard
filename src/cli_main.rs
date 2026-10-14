@@ -405,7 +405,7 @@ pub fn main() -> Result<()> {
                 ..ScanRules::default()
             }
             .normalized();
-            rules.validate()?;
+            rules.validate(&dirs)?;
             let collected = collect_image_files(&dirs, &rules.path_filter(&dirs)?)?;
             let files = collected.files;
             println!("Found {} FITS file(s); reading headers...", files.len());
@@ -514,10 +514,10 @@ pub fn main() -> Result<()> {
                 .unwrap_or_default();
             rules.exclude.extend(exclude);
             let rules = rules.normalized();
-            rules.validate()?;
             let roots: Vec<PathBuf> = entry
                 .map(|entry| entry.image_dirs.iter().map(PathBuf::from).collect())
                 .unwrap_or_default();
+            rules.validate(&roots)?;
 
             let dirs: Vec<PathBuf> = directories.iter().map(PathBuf::from).collect();
             let collected = collect_image_files(&dirs, &rules.path_filter(&roots)?)?;

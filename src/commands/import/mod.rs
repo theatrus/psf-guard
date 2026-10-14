@@ -29,7 +29,7 @@ use grouping::{build_plan, ImportPlan, TemplateKey, DEFAULT_TIME_GAP_DAYS};
 use headers::FrameMeta;
 use rayon::prelude::*;
 use rusqlite::{params, Connection, TransactionBehavior};
-use scan_rules::{LeftOutReason, LightFilter, PathFilter, ScanRuleReport};
+use scan_rules::{LeftOutReason, LightFilter, PathFilter, ScanRuleReport, WalkRootSkip};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -288,6 +288,10 @@ pub struct ImportOutcome {
     /// Those frames by reason.
     #[serde(default)]
     pub left_out: Vec<LeftOutSummary>,
+    /// Each of those files, so a run that imports only new files can skip
+    /// it next time while it stays unchanged.
+    #[serde(skip)]
+    pub left_out_files: Vec<(PathBuf, LeftOutReason)>,
     /// What the run did with lights that match no existing target.
     #[serde(default)]
     pub new_targets: NewTargets,
@@ -332,6 +336,35 @@ pub struct ImportOutcome {
 /// The key a rig is told apart by when the catalog learns it.
 fn rig_key(frame: &FrameMeta) -> String {
     crate::calibration::rig_label(frame).to_ascii_lowercase()
+}
+
+/// Count lights an earlier run's filters left out, which this run skipped
+/// unread, as if it had read them again.
+pub fn count_left_out(outcome: &mut ImportOutcome, files: &[(PathBuf, LeftOutReason)]) {
+    if files.is_empty() {
+        return;
+    }
+    let mut left_out: std::collections::BTreeMap<LeftOutReason, (usize, String)> = outcome
+        .left_out
+        .drain(..)
+        .map(|summary| (summary.reason, (summary.frames, summary.example)))
+        .collect();
+    for (path, reason) in files {
+        let entry = left_out
+            .entry(*reason)
+            .or_insert_with(|| (0, path.display().to_string()));
+        entry.0 += 1;
+    }
+    outcome.scanned += files.len();
+    outcome.skipped_by_filter += files.len();
+    outcome.left_out = left_out
+        .into_iter()
+        .map(|(reason, (frames, example))| LeftOutSummary {
+            reason,
+            frames,
+            example,
+        })
+        .collect();
 }
 
 /// Count a light the filters left out, keeping its first file as the
@@ -421,6 +454,18 @@ pub fn collect_image_files(dirs: &[PathBuf], filter: &PathFilter) -> Result<Coll
                 "Path does not exist or is not accessible: {}",
                 dir.display()
             );
+        }
+        // A walk that starts inside a skipped folder reads none of it.
+        match filter.skips_walk_root(dir) {
+            Some(WalkRootSkip::Excluded) => {
+                collected.skipped.folders_skipped += 1;
+                continue;
+            }
+            Some(WalkRootSkip::Ignored) => {
+                collected.skipped.ignored_folders += 1;
+                continue;
+            }
+            None => {}
         }
         let mut stack = vec![dir.clone()];
         while let Some(d) = stack.pop() {
@@ -561,6 +606,7 @@ pub fn import_frames(
             outcome.skipped_existing += 1;
         } else if let Some(reason) = options.light_filter.refuses(&frame) {
             note_left_out(&mut left_out, reason, &frame);
+            outcome.left_out_files.push((frame.path.clone(), reason));
         } else if from_other_rig(&frame, &known_rigs) {
             outcome.skipped_other_rig += 1;
             let entry = strangers
@@ -616,6 +662,7 @@ pub fn import_frames(
             let frame = derivatives[index].clone();
             if let Some(reason) = options.light_filter.refuses(&frame) {
                 note_left_out(&mut left_out, reason, &frame);
+                outcome.left_out_files.push((frame.path.clone(), reason));
                 continue;
             }
             if from_other_rig(&frame, &known_rigs) {
@@ -3126,6 +3173,23 @@ mod tests {
         assert!(!plain
             .iter()
             .any(|path| path.starts_with(root.join("PierCam"))));
+
+        // A walk that starts inside either folder, as a Review of held
+        // frames does, reads nothing from it.
+        let inside = [
+            root.join("Hocus Focus").join("AutoFocus_1"),
+            root.join("PierCam").join("2026-10-01"),
+        ];
+        let collected = collect_image_files(&inside, &filter).unwrap();
+        assert!(collected.files.is_empty(), "{:?}", collected.files);
+        assert_eq!(
+            collected.skipped,
+            ScanRuleReport {
+                files_skipped: 0,
+                folders_skipped: 1,
+                ignored_folders: 1,
+            }
+        );
     }
 
     #[test]

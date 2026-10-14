@@ -615,6 +615,31 @@ async fn autofocus_frames_stay_out_by_pattern_ignore_file_or_target_name() {
     assert_eq!(outcome["left_out"][0]["frames"], 3, "{progress}");
     assert_eq!(outcome["projects_created"], 0, "{progress}");
     assert_eq!(target_names(&db_path), vec!["M31"]);
+    assert_eq!(progress["total_files"], 3, "{progress}");
+
+    // The next run skips them unread while they stay unchanged, and still
+    // says why they are out.
+    let progress = run_now(&state, &slug).await;
+    let outcome = &progress["outcome"];
+    assert_eq!(progress["total_files"], 0, "no header read: {progress}");
+    assert_eq!(outcome["skipped_by_filter"], 3, "{progress}");
+    assert_eq!(
+        outcome["left_out"][0]["reason"], "no_target_name",
+        "{progress}"
+    );
+    assert_eq!(outcome["left_out"][0]["frames"], 3, "{progress}");
+    // A file that changed is read again.
+    let touched = std::fs::File::options()
+        .write(true)
+        .open(autofocus.join("af_01.fits"))
+        .unwrap();
+    touched
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(60))
+        .unwrap();
+    drop(touched);
+    let progress = run_now(&state, &slug).await;
+    assert_eq!(progress["total_files"], 1, "{progress}");
+    assert_eq!(progress["outcome"]["skipped_by_filter"], 3, "{progress}");
 
     // Without any of them, the frames become "Unknown Target", which is
     // what the reporter had to clean out by hand.
@@ -696,6 +721,19 @@ async fn scan_rules_save_check_their_patterns_and_clear_when_empty() {
         body.to_string().contains("exclude pattern \\\"[abc\\\""),
         "the error says which pattern: {body}"
     );
+
+    // A full path never matches, since patterns read from the image
+    // folder; the error says how to write it.
+    let full = images.join("PierCam").display().to_string();
+    let (status, body) = put_settings(
+        &state,
+        &slug,
+        json!({ "scan_rules": { "exclude": [full] } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.to_string().contains("is a full path"), "{body}");
+    assert!(body.to_string().contains("/PierCam"), "{body}");
 
     let (status, body) = put_settings(
         &state,
