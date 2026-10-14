@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import type { StackActivityEntry, StackReprocessing, StackStretchPreview } from '../../api/types';
@@ -17,7 +18,7 @@ function wrapper() {
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    return <QueryClientProvider client={queryClient}><MemoryRouter>{children}</MemoryRouter></QueryClientProvider>;
   };
 }
 
