@@ -48,6 +48,27 @@ describe('session image grouping', () => {
     expect([...resolveExpandedGroups(groups, 'session', new Set([NO_EXPANDED_GROUPS]))]).toEqual([]);
   });
 
+  it('ignores open groups a link names that are not here, and opens the defaults when it names none', () => {
+    // An All projects link from before All projects grouped by project
+    // names filter groups.
+    const projects = groupGridImages([
+      { ...image(1, 1, 'HA'), project_display_name: 'Alpha' },
+      { ...image(2, 2, 'OIII'), project_id: 2, project_display_name: 'Beta' },
+    ], 'project');
+    expect(projects.map((group) => group.filterName)).toEqual(['Alpha', 'Beta']);
+    expect([...resolveExpandedGroups(projects, 'project', new Set(['HA']))]).toEqual(['Alpha', 'Beta']);
+    // One it does name still opens alone.
+    expect([...resolveExpandedGroups(projects, 'project', new Set(['HA', 'Beta']))]).toEqual(['Beta']);
+    // Collapse-all stays collapsed.
+    expect([...resolveExpandedGroups(projects, 'project', new Set([NO_EXPANDED_GROUPS]))]).toEqual([]);
+
+    const sessions = [
+      { filterName: 'newest', images: [image(2, 2)] },
+      { filterName: 'older', images: [image(1, 1)] },
+    ];
+    expect([...resolveExpandedGroups(sessions, 'session', new Set(['gone']))]).toEqual(['newest']);
+  });
+
   it('keeps a live session key stable when its end time changes', () => {
     const start = Math.floor(new Date('2026-01-15T20:00:00').getTime() / 1000);
     const before = groupImagesBySession([image(1, start), image(2, start + 60)])[0];
@@ -169,6 +190,35 @@ describe('grid groups in either order', () => {
     const newest = groupGridImages(frames, 'session', 'newest');
     expect(newest.map(imageGroupKey)).toEqual(oldest.map(imageGroupKey));
     expect(ids(newest)).toEqual(ids(oldest).map((group) => [...group].reverse()));
+  });
+
+  it('keeps exposure sub-groups in place under newest first as frames arrive', () => {
+    const short = { key: 'short', label: '30 s', min_seconds: 30, max_seconds: 30 };
+    const long = { key: 'long', label: '300 s', min_seconds: 300, max_seconds: 300 };
+    const night = [
+      { ...image(1, day('2026-10-01', 20)), exposure_group: short },
+      { ...image(2, day('2026-10-01', 21)), exposure_group: long },
+      { ...image(3, day('2026-10-01', 22)), exposure_group: short },
+    ];
+    // Later the same night, another long frame comes in.
+    const later = [...night, { ...image(4, day('2026-10-01', 23)), exposure_group: long }];
+
+    for (const mode of ['filter', 'session', 'date', 'both'] as const) {
+      const before = groupGridImages(night, mode, 'newest');
+      const after = groupGridImages(later, mode, 'newest');
+      // The sub-groups keep their order as the frames arrive (a session's
+      // heading grows with it; its key and exposure do not)...
+      const exposures = (groups: { filterName: string }[]) =>
+        groups.map((group) => group.filterName.split(' · ').pop());
+      expect(exposures(after), mode).toEqual(['30 s', '300 s']);
+      expect(exposures(before), mode).toEqual(['30 s', '300 s']);
+      expect(after.map(imageGroupKey), mode).toEqual(before.map(imageGroupKey));
+      // ...and the same order as oldest first; only their frames turn.
+      const oldest = groupGridImages(later, mode);
+      expect(after.map(imageGroupKey), mode).toEqual(oldest.map(imageGroupKey));
+      expect(ids(after), mode).toEqual(ids(oldest).map((group) => [...group].reverse()));
+    }
+    expect(ids(groupGridImages(later, 'filter', 'newest'))).toEqual([[3, 1], [4, 2]]);
   });
 
   it('mirrors frames with the same capture time exactly', () => {

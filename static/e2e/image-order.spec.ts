@@ -129,15 +129,17 @@ test('a project opened from the Library remembers newest first and marks its new
   expect(byTime[0].acquired_date).toBeLessThan(byTime[2].acquired_date);
 
   // This browser last saw Project Alpha when only its oldest frame was in,
-  // and chose newest first.
-  await page.goto('/');
+  // and chose newest first. Written from a page of the same origin that is
+  // not the app: a Library still loading would seed its own marker for the
+  // project the first time it lists it, over this one.
+  await page.goto('/api/info');
   await page.evaluate(({ key, latest }) => {
     window.localStorage.setItem('psf-guard:project-seen:v2', JSON.stringify({
       [key]: { latestImage: latest, totalImages: 1, targets: {} },
     }));
     window.localStorage.setItem('psf-guard.display-preferences', JSON.stringify({ imageOrder: 'newest' }));
   }, { key: `${dbId}:1`, latest: byTime[0].acquired_date });
-  await page.reload();
+  await page.goto('/');
 
   await page.getByRole('button', { name: 'Open Project Alpha image grid' }).click();
   const wrappers = page.locator('.image-card-wrapper');

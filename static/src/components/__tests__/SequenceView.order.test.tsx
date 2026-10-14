@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse, type JsonBodyType } from 'msw';
 import { server } from '../../test/msw-server';
-import { setDisplayPreferences } from '../../hooks/useDisplayPreferences';
+import { adoptAccountPreferences, setDisplayPreferences } from '../../hooks/useDisplayPreferences';
 import { PROJECT_SEEN_STORAGE_KEY, projectSeenKey } from '../../utils/projectRecency';
 import SequenceView from '../SequenceView';
 import normalFixture from '../../__fixtures__/sequence-analysis-normal.json';
@@ -134,6 +134,19 @@ describe('SequenceView order', () => {
     await waitFor(() => expect(stripIds()[0]).toBe(1));
     expect(params().get('current')).toBe('9');
     expect(card(9)).toHaveClass('current-selection');
+  });
+
+  it('a saved order that arrives after the strip drew moves the cursor of a view at rest', async () => {
+    handlers();
+    render(<SequenceView />, { wrapper: wrapper('/sequence?db=test&project=1&target=1') });
+    await waitFor(() => expect(card(1)).toHaveClass('current-selection'));
+    await waitFor(() => expect(params().get('current')).toBe('1'));
+
+    act(() => adoptAccountPreferences({ imageOrder: 'newest' }));
+    await waitFor(() => expect(stripIds()[0]).toBe(10));
+    await waitFor(() => expect(card(10)).toHaveClass('current-selection'));
+    expect(params().get('current')).toBe('10');
+    expect(params().has('order')).toBe(false);
   });
 
   it('lists the session tabs newest first, each filter\'s all-sessions tab still first', async () => {

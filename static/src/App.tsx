@@ -17,7 +17,8 @@ import SiteBanner from './components/SiteBanner';
 import UpdateNotice from './components/UpdateNotice';
 import BuildRefresh from './components/BuildRefresh';
 import TauriSettings from './components/TauriSettings';
-import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget, withoutPlanningParams } from './hooks/useUrlState';
+import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget } from './hooks/useUrlState';
+import { scopeForView } from './utils/viewScope';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
   OPEN_SETTINGS_EVENT,
@@ -50,9 +51,10 @@ function AppContent() {
   // on an empty view. The Overview keeps it too: it shows every database, but
   // holding the scope lets it point at the project the user left and hand the
   // same scope back to Images or Sequence.
-  // Planning's own params (which workspace is open) stay behind.
+  // Planning's own params (which workspace is open) stay behind, and so
+  // does a view's own thumbnail size when the view changes.
   const toScoped = (path: string) => {
-    const query = withoutPlanningParams(location.search).toString();
+    const query = scopeForView(location.search, location.pathname, path).toString();
     return query ? `${path}?${query}` : path;
   };
   const [showHelp, setShowHelp] = useState(false);

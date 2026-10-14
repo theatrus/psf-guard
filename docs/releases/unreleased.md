@@ -263,14 +263,26 @@
   order on screen. Flipping a view you have not moved in keeps the page
   where it is and puts the cursor on the new first card; once you have
   moved, the current image, the selection and its place on screen stay put.
-  The address keeps it as `order=newest`, the View button shows it, and the
-  choice is remembered as the default for links that name no order.
+  A project's exposure groups keep their order either way, so they do not
+  trade places as frames arrive. The address keeps it as `order=newest`,
+  the View button shows it, and the choice is remembered as the default for
+  links that name no order.
 - Signed in to a server with user accounts, your view choices follow you to
   any browser: the sort order, the grouping, the thumbnail sizes, the chips,
   the Library's rows and the project picker's grouping. A link still wins
-  over them. The first time you sign in, this browser's choices become
-  yours. A viewer saves theirs too. Without accounts, and in the desktop
-  app, the browser keeps them as before.
+  over them. Each change saves only what it changed, so a tab left open
+  never undoes a choice made since on another device, and a change made
+  while your choices are still loading is kept. The first account to sign
+  in on a browser takes the choices it made before; later accounts start
+  from the defaults. When your saved order arrives after the frames have
+  drawn, a view you have not moved in puts the cursor on the new first card
+  and stays at the top. A viewer saves theirs too. Without accounts, and in
+  the desktop app, the browser keeps them as before.
+- Images and Sequence each keep their own thumbnail size: moving between
+  them from the header no longer carries one view's size to the other.
+- A link that names open groups the view no longer has, such as an All
+  projects link from before All projects grouped by project, opens the
+  default groups instead of none.
 - Frames captured since your last visit to a project from the Library carry
   a small dot before their date in Images and Sequence: the frames the
   Library's "new" badge counted, plus any captured since. They keep it until

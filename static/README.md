@@ -70,8 +70,11 @@ Interaction states take the `--state-*` tokens:
   its underline and `--state-on-fg`. Where a tint would not read, such as
   the header's current view or a toggle over an image, the control fills
   with `--state-on-fill`.
-- **Set**: a filter or rule narrows what is shown. Mark it `.is-set` and use
-  `--state-set-*`.
+- **Set**: a control whose value is off its default, so the view differs
+  from how it opens: a filter or rule that narrows what is shown, or a
+  changed sort, such as View when Newest first is on. Mark it `.is-set` and
+  use `--state-set-*`. A control that only opens a panel says it with
+  `aria-expanded`, not `.is-set`.
 - **Focus**: `--state-focus-border` with `--state-focus-ring` on fields and
   boxed controls, or `outline: 2px solid var(--state-focus-border)`.
 

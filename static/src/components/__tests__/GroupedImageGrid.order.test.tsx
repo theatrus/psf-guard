@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
-import { setDisplayPreferences } from '../../hooks/useDisplayPreferences';
+import { adoptAccountPreferences, setDisplayPreferences } from '../../hooks/useDisplayPreferences';
 import {
   PROJECT_SEEN_STORAGE_KEY,
   projectSeenKey,
@@ -128,6 +128,32 @@ describe('GroupedImageGrid order', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'View' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Newest first' }));
+    await waitFor(() => expect(cardIds()).toEqual([5, 3, 1, 4, 2]));
+    expect(params().get('current')).toBe('1');
+    expect(document.querySelector('[data-image-id="1"]')).toHaveClass('current-selection');
+  });
+
+  it('a saved order that arrives after the frames drew moves the cursor of a view at rest', async () => {
+    // A fresh browser: the frames draw oldest first, then the signed-in
+    // user's document says newest first.
+    render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1') });
+    await waitFor(() => expect(cardIds()).toEqual([1, 3, 5, 2, 4]));
+    await waitFor(() => expect(params().get('current')).toBe('1'));
+
+    act(() => adoptAccountPreferences({ imageOrder: 'newest' }));
+    await waitFor(() => expect(cardIds()).toEqual([5, 3, 1, 4, 2]));
+    await waitFor(() => expect(params().get('current')).toBe('5'));
+    expect(document.querySelector('[data-image-id="5"]')).toHaveClass('current-selection');
+    // The link still names no order: the saved one keeps deciding.
+    expect(params().has('order')).toBe(false);
+  });
+
+  it('a saved order that arrives after the person moved keeps their frame', async () => {
+    render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1') });
+    await waitFor(() => expect(cardIds()).toEqual([1, 3, 5, 2, 4]));
+    fireEvent.click(document.querySelector('[data-image-id="1"] .image-card')!);
+
+    act(() => adoptAccountPreferences({ imageOrder: 'newest' }));
     await waitFor(() => expect(cardIds()).toEqual([5, 3, 1, 4, 2]));
     expect(params().get('current')).toBe('1');
     expect(document.querySelector('[data-image-id="1"]')).toHaveClass('current-selection');
