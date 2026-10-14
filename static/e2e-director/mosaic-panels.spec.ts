@@ -65,6 +65,16 @@ test('a shot target stays put while panels are added round it, and activates as 
     await page.mouse.up();
     await expect(page.getByText(/Not placed: r1c1 and p2 overlap by only/)).toBeVisible();
     await expect(panel('p2')).not.toHaveAttribute('data-panel-state', 'invalid');
+    // The note offers to place it anyway, without Alt.
+    await expect(page.getByTestId('framing-mosaic-notice').getByRole('button', { name: 'Place anyway' })).toBeVisible();
+    // Escape in the middle of a drag puts the panel back.
+    await page.mouse.move(bx, by);
+    await page.mouse.down();
+    await page.mouse.move(bx - width * 0.06, by, { steps: 4 });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await expect(page.getByTestId('framing-mosaic-notice')).toContainText('Put p2 back.');
+    expect(Math.abs((await middleOf(page, 'p2'))[0] - bx)).toBeLessThan(2);
 
     // Turn the north-east panel ten degrees on its own. The rig has no
     // rotator; planning sets the angle all the same.

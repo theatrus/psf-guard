@@ -22,10 +22,11 @@ function separationArcmin(a: { ra_degrees: number; dec_degrees: number }, b: { r
 export function describeLayoutChanges(before: DirectorLayout, after: DirectorLayout): string[] {
   const was = asGrid(before);
   const now = asGrid(after);
+  // A lock is no place, so a grid locked by hand is still the same grid.
+  const locks = after.panels.flatMap(panel => { const old = findPanel(before, panel.id); return old && old.locked !== panel.locked ? [`${panel.id} ${panel.locked ? 'locked' : 'unlocked'}`] : []; });
   if (was && now) {
-    if (same(was, now)) return [];
     const grid = (m: DirectorMosaic) => `${m.rows}×${m.columns}, ${m.overlap_percent}% overlap`;
-    return [`mosaic ${grid(was)} → ${grid(now)}`];
+    return [...(same(was, now) ? [] : [`mosaic ${grid(was)} → ${grid(now)}`]), ...locks];
   }
   const changes: string[] = [];
   const list = (ids: string[]) => ids.length > 3 ? `${ids.slice(0, 3).join(', ')} and ${ids.length - 3} more` : ids.join(', ');
@@ -33,12 +34,11 @@ export function describeLayoutChanges(before: DirectorLayout, after: DirectorLay
   const removed = before.panels.filter(panel => !findPanel(after, panel.id)).map(panel => panel.id);
   const moved = after.panels.filter(panel => { const old = findPanel(before, panel.id); return !!old && (Math.abs(old.x - panel.x) > 1e-9 || Math.abs(old.y - panel.y) > 1e-9); }).map(panel => panel.id);
   const turned = after.panels.filter(panel => { const old = findPanel(before, panel.id); return !!old && Math.abs(turnOf(old) - turnOf(panel)) > 1e-9; }).map(panel => panel.id);
-  const locked = after.panels.filter(panel => { const old = findPanel(before, panel.id); return !!old && old.locked !== panel.locked; });
   if (added.length) changes.push(`panel${added.length === 1 ? '' : 's'} ${list(added)} added`);
   if (removed.length) changes.push(`panel${removed.length === 1 ? '' : 's'} ${list(removed)} removed`);
   if (moved.length) changes.push(`panel${moved.length === 1 ? '' : 's'} ${list(moved)} moved`);
   if (turned.length) changes.push(`panel${turned.length === 1 ? '' : 's'} ${list(turned)} turned`);
-  for (const panel of locked) changes.push(`${panel.id} ${panel.locked ? 'locked' : 'unlocked'}`);
+  changes.push(...locks);
   if (before.min_overlap_percent !== after.min_overlap_percent) changes.push(`minimum overlap ${before.min_overlap_percent}% → ${after.min_overlap_percent}%`);
   return changes;
 }

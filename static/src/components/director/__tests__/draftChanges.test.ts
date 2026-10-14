@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DirectorPlanDraft } from '../../../api/directorTypes';
 import { describeFramingChanges, describePlanChanges } from '../draftChanges';
 import type { FramingState } from '../framingModel';
-import { gridLayout } from '../mosaicLayout';
+import { gridLayout, setLocked } from '../mosaicLayout';
 
 const framing: FramingState = {
   targetName: 'M33', center: { ra_degrees: 23.4621, dec_degrees: 30.66 }, positionAngle: 0,
@@ -30,6 +30,15 @@ describe('what the save bar says changed', () => {
     ]);
     expect(describeFramingChanges(framing, { ...framing, rigFramings: [{ rig_id: 'rig-b', center: null, position_angle_degrees: 10, layout: gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }), panel: null }] }, rigName))
       .toEqual(['C925 framed separately']);
+  });
+
+  it('names a lock or unlock on a grid, which is still the same grid', () => {
+    const locked = { ...framing, layout: setLocked(framing.layout, 'r1c1', true) };
+    expect(describeFramingChanges(framing, locked)).toEqual(['r1c1 locked']);
+    expect(describeFramingChanges(locked, framing)).toEqual(['r1c1 unlocked']);
+    const grown = { ...locked, layout: setLocked(gridLayout({ rows: 1, columns: 2, overlap_percent: 20 }), 'r1c2', true) };
+    expect(describeFramingChanges(framing, grown)).toEqual(['mosaic 1×1, 20% overlap → 1×2, 20% overlap']);
+    expect(describeFramingChanges({ ...framing, layout: gridLayout({ rows: 1, columns: 2, overlap_percent: 20 }) }, grown)).toEqual(['r1c2 locked']);
   });
 
   it('names plan changes by bandpass and rig', () => {

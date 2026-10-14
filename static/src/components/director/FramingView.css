@@ -265,6 +265,8 @@
 .framing-mosaic { display: flex; flex-direction: column; gap: 10px; }
 .framing-mosaic-note { margin: 4px 0 0; font-size: 12px; }
 .framing-mosaic-notice { margin: 0; padding: 6px 9px; font-size: 13px; color: var(--color-text-primary); background: var(--color-bg-secondary); border-left: 3px solid var(--color-border-tertiary); border-radius: 4px; }
+/* Empty, the live region stays in the page but takes no room, so its first words are heard. */
+.framing-mosaic-notice[data-empty='true'] { position: absolute; width: 1px; height: 1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .framing-regrid summary { cursor: pointer; font-size: 13px; color: var(--color-text-secondary); }
 .framing-extend { display: flex; flex-direction: column; gap: 6px; }
 .framing-extend-head, .framing-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }

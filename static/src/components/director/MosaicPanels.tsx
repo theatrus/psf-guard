@@ -41,6 +41,10 @@ export interface MosaicPanelsProps {
   invalid: boolean;
   /** What the last panel edit did, or why it did not. */
   notice: string;
+  /** Counts notices, so the same words said twice are announced twice. */
+  noticeKey?: number;
+  /** What the notice offers, such as placing a sprung-back panel anyway. */
+  noticeAction?: { label: string; run: () => void } | null;
   /** Why the grid cannot be laid out again, such as a locked panel. */
   gridBlocked: string | null;
   /** A rig framed on its own names its grid fields after itself. */
@@ -94,7 +98,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
       <div className="framing-extend-head">
         <span className="framing-catalogs-title">Add panels</span>
         <div className="framing-scope" role="group" aria-label="Add beside">
-          <button type="button" aria-pressed={scope === 'panel'} disabled={!chosen} title={chosen ? `Beside ${chosen.id}` : 'Choose a panel on the sky or in the list'} onClick={() => props.onScope('panel')}>{chosen ? `Beside ${chosen.id}` : 'Beside a panel'}</button>
+          <button type="button" aria-pressed={scope === 'panel' && !!chosen} disabled={!chosen} title={chosen ? `Beside ${chosen.id}` : 'Choose a panel on the sky or in the list'} onClick={() => props.onScope('panel')}>{chosen ? `Beside ${chosen.id}` : 'Beside a panel'}</button>
           <button type="button" aria-pressed={scope === 'mosaic' || !chosen} onClick={() => props.onScope('mosaic')}>Whole mosaic</button>
         </div>
       </div>
@@ -113,7 +117,11 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
       <p className="director-muted framing-mosaic-note">N, E, S and W are on the sky: each adds on the panel side facing nearest that way at this camera angle. Panels go in at {overlap}% overlap.</p>
     </div>
 
-    {props.notice && <p className="framing-mosaic-notice" role="status" data-testid="framing-mosaic-notice">{props.notice}</p>}
+    {/* Mounted before it has words, so a screen reader hears the first. */}
+    <p className="framing-mosaic-notice" role="status" data-testid="framing-mosaic-notice" data-empty={props.notice ? undefined : 'true'}>
+      {props.notice && <span key={props.noticeKey ?? 0}>{props.notice}</span>}
+      {props.notice && props.noticeAction && canWrite && <> <button type="button" className="link-button" onClick={props.noticeAction.run}>{props.noticeAction.label}</button></>}
+    </p>
     <div className="framing-panel-head">
       <span className="framing-catalogs-title">{layout.panels.length} panel{layout.panels.length === 1 ? '' : 's'}{locked.length > 0 ? ` · ${locked.length} locked` : ''}</span>
       <span className="framing-history">
