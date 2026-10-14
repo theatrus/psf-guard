@@ -18,6 +18,8 @@ const GROUP_NOTES: Record<CalibrationRuleField['group'], string> = {
   matching:
     'Which frames calibrate a light. A change builds new masters for the stacks it touches.',
   darks: 'Which darks a master takes. A change builds new masters for the stacks it touches.',
+  flat_groups:
+    'Which nights share a flat master. Measured groups split where the flats differ, such as where dust came or went. A change builds new masters for the stacks it touches.',
   checks:
     'What the Library, Images and the Calibration panel flag. Nothing is rebuilt. Check only shows a finding but never calls a light one that can\'t be calibrated, so stacks keep it.',
   grades:
@@ -163,6 +165,7 @@ export default function CalibrationMatchingSettings() {
       </p>
       {fieldset('matching')}
       {fieldset('darks')}
+      {fieldset('flat_groups')}
       <fieldset className="calibration-settings-group" disabled={save.isPending}>
         <legend>Flat masters</legend>
         <label className="review-preference">

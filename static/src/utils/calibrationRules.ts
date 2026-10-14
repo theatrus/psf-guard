@@ -20,6 +20,7 @@ export type RuleDraft = string | boolean | { suspect: string; poor: string };
 export const RULE_GROUPS: ReadonlyArray<{ group: CalibrationRuleField['group']; legend: string }> = [
   { group: 'matching', legend: 'Matching' },
   { group: 'darks', legend: 'Dark masters' },
+  { group: 'flat_groups', legend: 'Flat groups' },
   { group: 'checks', legend: 'Light checks' },
   { group: 'grades', legend: 'Frame grades' },
 ];

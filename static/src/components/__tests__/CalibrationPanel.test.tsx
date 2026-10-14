@@ -127,7 +127,7 @@ describe('CalibrationPanel', () => {
     const mixed = await screen.findByRole('button', { name: /mixes flats from 2 nights/ });
     expect(mixed).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: /only 3 frames/ })).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByText(/One master averages flats from different nights/)).toBeInTheDocument();
+    expect(screen.getByText(/One master averages flats from nights not measured against each other/)).toBeInTheDocument();
 
     const flats = screen.getByTestId('calibration-kind-flat');
     expect(flats).toHaveClass('is-about', 'is-check');
@@ -175,6 +175,60 @@ describe('CalibrationPanel', () => {
     await waitFor(() => expect(focus()).toBe('thin_dark'));
     fireEvent.click(screen.getByRole('button', { name: /only 3 frames/ }));
     await waitFor(() => expect(focus()).toBe('none'));
+  });
+
+  it('says how its flats were chosen around a measured change, and how alike its nights measure', async () => {
+    const event = {
+      key: 'e1', start: 1759600000, end: 1759700000, dust: 0.016, broad: 0.002, camera_side: true,
+      filters: ['Ha', 'OIII'], what: 'new dust: 2 shadows near (1418, 3540)',
+    };
+    show('/detail/8?db=c925&project=1&calib=flats_differ', {
+      ...explanation,
+      findings: [{
+        code: 'flats_differ', level: 'check', kinds: ['flat'],
+        reason: 'New dust came between this light and every flat that matches it',
+      }],
+      kinds: [kind('flat', {
+        master: { frames: 46, nights: 2 },
+        used: [{ night: '2026-10-06', frames: 6 }, { night: '2026-10-01', frames: 40 }],
+        matching_unused: [{ night: '2026-10-08', frames: 20 }],
+        alike: { nights: 2, dust: 0.0021, broad: 0.0064 },
+        chosen_by: 'No flats from its side of the new dust; these are from before it',
+        basis: { basis: 'no_same_side', event, placement: { by: 'time', side: 'after' } },
+      })],
+    });
+    const finding = await screen.findByRole('button', { name: /New dust came between/ });
+    expect(finding).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText(/A measured change, such as new dust, lies between this light and its flats/)).toBeInTheDocument();
+    expect(screen.getByTestId('calibration-flat-alike'))
+      .toHaveTextContent('Measured alike: dust within 0.2%, pattern within 0.6% across 2 nights');
+    const chosenBy = screen.getByTestId('calibration-flat-chosen-by');
+    expect(chosenBy).toHaveTextContent('Chosen by');
+    expect(chosenBy).toHaveTextContent('No flats from its side of the new dust');
+    // Flats from across a change: worth a check.
+    expect(chosenBy).toHaveClass('is-check');
+    // The finding picks out both sides' nights: the ones taken and the ones left.
+    const flats = screen.getByTestId('calibration-kind-flat');
+    expect(flats.querySelector('.light-calibration-kind-heading')).toHaveClass('is-focus');
+    const nights = within(flats).getAllByRole('listitem');
+    expect(nights).toHaveLength(3);
+    expect(nights.every((night) => night.classList.contains('is-focus'))).toBe(true);
+  });
+
+  it('reads flats taken from their own side of a change as a plain note', async () => {
+    const event = {
+      key: 'e1', start: 1759600000, end: 1759700000, dust: 0.016, broad: 0.002, camera_side: true,
+      filters: ['Ha'], what: 'new dust',
+    };
+    show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
+      chosen_by: "The light's own side of the new dust",
+      basis: { basis: 'same_side', event, placement: { by: 'time', side: 'after' }, left_out: 20 },
+    })] });
+    fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
+    const chosenBy = await screen.findByTestId('calibration-flat-chosen-by');
+    expect(chosenBy).toHaveTextContent("The light's own side of the new dust");
+    expect(chosenBy).not.toHaveClass('is-check');
+    expect(screen.queryByTestId('calibration-flat-alike')).toBeNull();
   });
 
   it('says so when the library has no finding for the light', async () => {

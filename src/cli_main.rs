@@ -1583,6 +1583,25 @@ pub fn main() -> Result<()> {
                 )?;
             }
         },
+        Commands::FlatGroups {
+            catalog,
+            work,
+            images,
+            map_prefix,
+            report,
+            lights,
+            fresh,
+        } => {
+            crate::commands::flat_groups::run(
+                std::path::Path::new(&catalog),
+                std::path::Path::new(&work),
+                &images,
+                &map_prefix,
+                report.as_deref().map(std::path::Path::new),
+                lights,
+                fresh,
+            )?;
+        }
         Commands::SkyMaps { action } => {
             crate::commands::sky_maps::run(action)?;
         }

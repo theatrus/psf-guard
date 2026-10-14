@@ -106,6 +106,23 @@
   autofocus frames, tests and other folders out of every import, with exclude
   and include patterns and filters for frames with no image type, no target
   name or a short exposure. A `.psfguardignore` file skips its folder.
+- PSF Guard measures how alike each night's flats are and keeps nights
+  that differ, such as before and after new dust, out of one master. A
+  light takes flats from its own side of each measured change: its own
+  angle's when there are some, else the nearest other angle when the rig's
+  flats barely depend on the angle, else its own flats corrected across
+  the change. The light's Calibration panel says how its flats were
+  chosen, and **Flats from across a change** flags a light that had to
+  take flats from the other side, or was shot during the change. Nights
+  measured alike now mix without the **mixed flats** Check. The
+  Calibration page's new **Flat groups** tab shows each rig's changes and
+  each filter's groups, why they split, and the two nights' ratio. Three
+  settings under **Settings › Calibration › Flat groups** set the limits
+  or turn it off. `psf-guard flat-groups` measures a copy of a catalog
+  from the command line.
+- Tracked sky flats with stars no longer read as dew or frost: the flat-set
+  check counts only spots that take light away, and **Compare with
+  session** draws stars at neutral grey.
 - The Sequence score chart puts a dot under each bar for the frame's grade:
   green for accepted, red for rejected, faint grey for pending. The bar's
   tooltip starts with the grade and the reject reason, and the dots change

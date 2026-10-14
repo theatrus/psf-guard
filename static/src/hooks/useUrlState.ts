@@ -225,6 +225,9 @@ export const CALIBRATION_PARAMS = [
   'calStretch',
   'calFull',
   'calMaster',
+  'calRotation',
+  'calEarlier',
+  'calLater',
 ] as const;
 
 /** The image detail's chosen calibration finding, or `all`. */

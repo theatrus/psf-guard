@@ -61,6 +61,11 @@ pub struct CalibrationQualityProgress {
     /// What the last finished pass measured and graded.
     pub last_measured: Option<MeasureOutcome>,
     pub last_graded: Option<GradeOutcome>,
+    /// What the last pass measured for flat groups.
+    pub last_flat_groups: Option<crate::calibration::flat_groups::job::PassOutcome>,
+    /// Within the current stage, for the flat-group stages.
+    pub stage_done: usize,
+    pub stage_total: usize,
     /// Why the last pass stopped early, if it did.
     pub last_error: Option<String>,
 }
@@ -341,7 +346,70 @@ fn run_pass(
     });
     let graded = crate::calibration::grade_library(&conn)?;
     update(job, |progress| progress.last_graded = Some(graded.clone()));
+    if !state.shutdown.is_stopping() {
+        // Grades decide which flats are in use; groups come from those.
+        match measure_flat_groups(state, path, job, &conn) {
+            Ok(outcome) => update(job, |progress| progress.last_flat_groups = Some(outcome)),
+            Err(error) => tracing::info!(
+                "Paused measuring flat groups in {path}: {error:#}. The next pass continues."
+            ),
+        }
+    }
     Ok((measured, graded))
+}
+
+/// The flat-group stages: responses, comparisons and light evidence (see
+/// [`crate::calibration::flat_groups::job`]), on workers from the
+/// background budget, each read waiting while interactive work runs.
+fn measure_flat_groups(
+    state: &AppState,
+    path: &str,
+    job: &Job,
+    conn: &Connection,
+) -> anyhow::Result<crate::calibration::flat_groups::job::PassOutcome> {
+    use crate::calibration::flat_groups;
+    let Some(ctx) = state
+        .all_databases()
+        .into_iter()
+        .find(|ctx| ctx.database_path == path)
+    else {
+        return Ok(Default::default());
+    };
+    if !flat_groups::store::tables_exist(conn) {
+        return Ok(Default::default());
+    }
+    let dir = ctx
+        .cache()
+        .ensure_category_dir(flat_groups::CACHE_CATEGORY)?;
+    flat_groups::register_response_dir(std::path::Path::new(path), dir.clone());
+    let tree = ctx.get_directory_tree()?;
+    let budget =
+        crate::concurrency::plan_workers(None, &state.worker_policy(), Priority::Background, None);
+    let lease = state.lease_workers(Priority::Background, budget.workers);
+    let pool = ComputePool::take("calibration-flat-groups", lease.workers)?;
+    let keep_going = || !state.shutdown.is_stopping();
+    let yield_now = || {
+        while state.interactive_job_active() && !state.shutdown.is_stopping() {
+            std::thread::sleep(YIELD_POLL);
+        }
+    };
+    let mut progress = |stage: &str, done: usize, total: usize| {
+        update(job, |progress| {
+            progress.stage = Some(stage.to_string());
+            progress.stage_done = done;
+            progress.stage_total = total;
+        });
+    };
+    let find_light = |name: &str| tree.find_file_first(name).cloned();
+    flat_groups::job::run(flat_groups::job::Pass {
+        conn,
+        dir: &dir,
+        keep_going: &keep_going,
+        yield_now: &yield_now,
+        progress: &mut progress,
+        find_light: &find_light,
+        pool: Some(&pool),
+    })
 }
 
 #[derive(Debug, Serialize)]

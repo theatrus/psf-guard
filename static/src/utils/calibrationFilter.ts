@@ -21,6 +21,7 @@ const CODE_LABELS: Record<CalibrationHealthCode, string> = {
   mixed_flats: 'Flats from several nights',
   suspect_frames: 'Suspect frames',
   short_after_keep_out: 'Short after keep-out',
+  flats_differ: 'Flats differ',
 };
 
 export function calibrationFilterLabel(value: string): string {

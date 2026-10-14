@@ -1,0 +1,235 @@
+/* Flat groups: a split is not a fault, so groups, splits and changes use
+   the neutral text colours. */
+.flat-groups {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.flat-groups-measuring {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.flat-groups-rig {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.flat-groups-rig-head {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.flat-groups-rig-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+
+.flat-groups-block {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.flat-groups-block h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+}
+
+.flat-events,
+.flat-unmeasured,
+.flat-group ul {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.flat-event,
+.flat-split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.75rem;
+  min-width: 0;
+}
+
+.flat-event {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  font-size: 0.85rem;
+}
+
+.flat-event-text {
+  display: grid;
+  gap: 0.15rem;
+  flex: 1 1 18rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.flat-group {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  font-size: 0.85rem;
+}
+
+.flat-group-head {
+  margin-bottom: 0.35rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.flat-group li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.75rem;
+  min-width: 0;
+}
+
+.flat-session-night {
+  font-variant-numeric: tabular-nums;
+}
+
+.flat-split {
+  padding: 0.1rem 0.7rem;
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+}
+
+.flat-split p {
+  flex: 1 1 18rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.flat-unmeasured li {
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+/* The ratio picture of two sessions. */
+.flat-ratio-viewer {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+}
+
+.flat-ratio-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.flat-ratio-head > div {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.flat-ratio-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.flat-ratio-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.flat-ratio-legend {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.flat-ratio-swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border: 2px solid currentcolor;
+  border-radius: 50%;
+}
+
+.flat-ratio-legend .flat-ratio-swatch.is-gone {
+  margin-left: 0.5rem;
+}
+
+.flat-ratio-swatch.is-new {
+  color: var(--color-flat-dust-new);
+}
+
+.flat-ratio-swatch.is-gone {
+  color: var(--color-flat-dust-gone);
+}
+
+.flat-ratio-canvas {
+  position: relative;
+  width: 100%;
+  max-width: 60rem;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--color-bg-image);
+}
+
+/* Without the session's grid the picture's own shape decides. */
+.flat-ratio-canvas.is-unsized {
+  min-height: 8rem;
+}
+
+.flat-ratio-canvas img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.flat-ratio-canvas img.is-pending {
+  visibility: hidden;
+}
+
+.flat-ratio-spots {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.flat-ratio-spot {
+  fill: none;
+  stroke-width: 2;
+}
+
+.flat-ratio-spot.is-new {
+  stroke: var(--color-flat-dust-new);
+}
+
+.flat-ratio-spot.is-gone {
+  stroke: var(--color-flat-dust-gone);
+}

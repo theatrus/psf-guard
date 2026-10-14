@@ -22,6 +22,7 @@ describe('calibration filter', () => {
   it('says each value in a few words', () => {
     expect(calibrationFilterLabel('poor')).toBe('Poor');
     expect(calibrationFilterLabel('cannot_calibrate')).toBe("Can't be calibrated");
+    expect(calibrationFilterLabel('flats_differ')).toBe('Flats differ');
     expect(calibrationFilterLabel('something_new')).toBe('something_new');
   });
 });

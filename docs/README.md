@@ -32,6 +32,7 @@ work. Historical checklists record delivery; they do not track current work.
 - [Reject archive safety model](design/reject-archive.md)
 - [Reject removal](design/reject-removal.md)
 - [Calibrated subs](design/calibrated-subs.md)
+- [Flat grouping](design/flat-grouping.md)
 
 ## Component-specific guides
 

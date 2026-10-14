@@ -9,7 +9,7 @@ import type {
 export const NO_FINDING = 'none';
 
 /** One part of a kind's account, which a finding can point at. */
-export type CalibrationPart = 'master' | 'used' | 'suspect' | 'kept_out' | 'refused' | 'other';
+export type CalibrationPart = 'master' | 'used' | 'unused' | 'suspect' | 'kept_out' | 'refused' | 'other';
 
 /**
  * The finding the calibration panel shows: the one the detail chose, else
@@ -64,6 +64,9 @@ export function focusParts(
       return new Set(['suspect']);
     case 'short_after_keep_out':
       return new Set(['master', 'kept_out']);
+    case 'flats_differ':
+      // The flats it takes and those on the other side of the change.
+      return new Set(['master', 'used', 'unused']);
   }
 }
 
@@ -75,9 +78,10 @@ export const FINDING_HINTS: Record<LightCalibrationFinding['code'], string> = {
   thin_bias: 'A master from few bias frames adds its own noise to the flats and lights.',
   flat_spots: 'Spots that change between flats, such as drying dew, end up in the master.',
   old_flats: 'Dust moves between nights; flats shot long before or after may not match it.',
-  mixed_flats: 'One master averages flats from different nights, each with its own dust.',
+  mixed_flats: 'One master averages flats from nights not measured against each other, each with its own dust.',
   suspect_frames: 'The master takes frames whose grade says they are worth a look.',
   short_after_keep_out: 'Frames kept out by hand leave too few for a clean master.',
+  flats_differ: 'A measured change, such as new dust, lies between this light and its flats.',
 };
 
 const KIND_LABELS: Record<CalibrationKind, string> = {

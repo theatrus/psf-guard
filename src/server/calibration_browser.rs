@@ -461,6 +461,12 @@ pub enum StatusItem {
         midtone: Option<f64>,
         shadow: Option<f64>,
     },
+    /// One flat session divided by another (the Flat groups view).
+    Ratio {
+        earlier: String,
+        later: String,
+        stretch: Option<crate::server::flat_groups::RatioStretch>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -472,6 +478,11 @@ pub struct StatusRequest {
 enum Resolved {
     Frame(Result<Box<FrameToDraw>, AppError>, FramePicture),
     Master(Option<Box<RecordedLibraryMaster>>, DisplayOptions),
+    Ratio(
+        String,
+        String,
+        Option<crate::server::flat_groups::RatioStretch>,
+    ),
 }
 
 /// POST /api/db/{db}/calibrations/generation-status — whether each frame
@@ -538,6 +549,11 @@ pub async fn post_generation_status(
                         },
                     )
                 }
+                StatusItem::Ratio {
+                    earlier,
+                    later,
+                    stretch,
+                } => Resolved::Ratio(earlier, later, stretch),
             });
         }
         resolved
@@ -554,6 +570,9 @@ pub async fn post_generation_status(
                     Resolved::Master(master, display) => master
                         .ok_or(AppError::NotFound)
                         .and_then(|master| master_job(&ctx, &master, &display)),
+                    Resolved::Ratio(earlier, later, stretch) => {
+                        crate::server::flat_groups::status_job(&ctx, earlier, later, stretch)
+                    }
                 };
                 match job {
                     Ok(job) => stack_masters::generation_status(&state, job),

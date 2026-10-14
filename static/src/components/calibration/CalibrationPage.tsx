@@ -15,6 +15,7 @@ import CalibrationFrameStrip from './CalibrationFrameStrip';
 import CalibrationFrameViewer from './CalibrationFrameViewer';
 import CalibrationMasterList from './CalibrationMasterList';
 import CalibrationSessionList from './CalibrationSessionList';
+import FlatGroupsTab from './FlatGroupsTab';
 import { fileName, nightLabel, plural, sessionDetails, sessionTitle } from './calibrationLabels';
 import { useCalibrationActions } from './useCalibrationActions';
 import type { ValidityChoice } from './useCalibrationActions';
@@ -28,6 +29,7 @@ const STRIP_FRAMES = 500;
 
 const TABS: { value: CalibrationTab; label: string }[] = [
   { value: 'frames', label: 'Frames' },
+  { value: 'groups', label: 'Flat groups' },
   { value: 'masters', label: 'Masters' },
   { value: 'scheduler', label: 'Scheduler flats' },
 ];
@@ -100,7 +102,7 @@ export default function CalibrationPage() {
         <div className="calibration-tabs" role="tablist" aria-label="Calibration views">
           {TABS.map((tab) => (
             <button key={tab.value} type="button" role="tab" aria-selected={state.tab === tab.value}
-              onClick={() => state.setTab(tab.value)}>
+              data-testid={`calibration-tab-${tab.value}`} onClick={() => state.setTab(tab.value)}>
               {tab.label}
             </button>
           ))}
@@ -145,6 +147,9 @@ function CalibrationLibrary({
 
   if (state.tab === 'scheduler') {
     return <SchedulerFlatHistory dbId={dbId} canManage={canManage} />;
+  }
+  if (state.tab === 'groups') {
+    return <FlatGroupsTab dbId={dbId} state={state} />;
   }
   if (state.tab === 'masters') {
     return (

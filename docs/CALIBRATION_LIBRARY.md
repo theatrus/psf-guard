@@ -27,6 +27,8 @@ Guard-owned tables:
 - `psf_guard_calibration_frame`
 - `psf_guard_calibration_frame_quality`
 - `psf_guard_calibration_master`
+- `psf_guard_flat_response`, `psf_guard_flat_comparison` and
+  `psf_guard_flat_light_evidence` (see [Flat groups](#flat-groups))
 
 The catalog stores paths, file fingerprints, capture settings, and provenance.
 It does not store FITS pixels or master blobs in SQLite. Reading an untouched
@@ -337,8 +339,10 @@ one flat to the next. Every frame has one, so across-frame clipping keeps a
 middling copy of each spot, and each light divided by that master gets a
 bright bead at every spot wherever the sky is bright. So PSF Guard reads a
 freshly built flat master back against its own inputs. Pixels where the
-master departs from the smooth response around it by more than 10% are its
-features. A frame that departs from the master by more than 5% of the local
+master falls below the smooth response around it by more than 10% are its
+features. Only dips count: dew, frost and dust take light away, while a
+star in a sky flat adds it and sits on other pixels in each frame, so a
+set of tracked sky flats is not mistaken for a drying window. A frame that departs from the master by more than 5% of the local
 response at a fifth of those pixels (never fewer than sixteen, never more
 than one in two hundred thousand of the sensor) was not looking at the same
 window. A dust shadow or a dead cluster is a feature too, but one every
@@ -356,7 +360,152 @@ The check runs once per build, before the master is published, so nothing
 else can pick up a master that is about to be set aside. The master's record
 keeps the judgement: a cached master repeats its note, and a set that was
 set aside is remembered rather than read again. Flat masters built before
-this check rebuild once; bias and dark masters stay as they are.
+this check rebuild once; bias and dark masters stay as they are. A
+judgement made before stars stopped counting is made again the next time
+its master is used.
+
+## Flat groups
+
+Dust moves, arrives and leaves between nights. A light divided by flats
+from the wrong side of such a change carries the difference as a faint
+ghost. So PSF Guard measures how alike each night's flats are, keeps
+nights that differ out of one master, and gives every light flats from its
+own side of each change.
+
+### Measuring
+
+After each grading pass, a background stage reads every flat session once
+more: one night of one rig, filter, sensor mode and rotator angle, with at
+least three flats in use. It takes at most 16 of them, bins each to at most
+1,024 px on the long side, divides each by its median and keeps the
+sigma-clipped median of them: the session's **response**. Stars that move
+between frames drop out. Stars that sit still, as in tracked sky flats,
+are masked when two responses are compared.
+
+Two responses are compared as later ÷ earlier, after the dark-flat or bias
+level is taken out. Two numbers come from the ratio, each in percent of
+the sky background a light would be left with if it took the other night's
+flats:
+
+- **Dust**: the deepest shadow that appeared, left or moved. A spot counts
+  only where one of the two responses holds a dip; a bright leftover star
+  is not dust.
+- **Light pattern**: the largest broad difference, such as a changed
+  vignette, after a straight gradient is taken out. Background extraction
+  removes a gradient from the stack.
+
+Sessions that could share a master, and each session and the next, are
+compared. The numbers are kept in the catalog without limits applied, so a
+changed limit regroups at once and reads no pixel. The stage waits while
+interactive work runs, uses the background share of the CPU, and keeps each
+result as it goes. The quality progress reports `measuring flat sessions`,
+`comparing flat sessions` and `reading lights shot during a change`.
+
+A read-only catalog, or one from an older build, has no place for the
+numbers and groups flats by time, as before.
+
+### Groups and changes
+
+Within one rig, filter, sensor mode and rotator angle, sessions join into
+**groups** in time order. Two sessions are alike when their dust and light
+pattern are both within the limits: 1% dust and 2% light pattern by
+default. Each group holds only sessions measured alike with every other
+session it was compared with, so a slow drift cannot chain nights that
+differ into one master.
+
+Between two groups lies a **split**, a window from the last flat before it
+to the first flat after it. Splits of one rig whose windows overlap and
+whose shadows sit at the same sensor position are one **change**. Dust on
+the camera side turns with the camera, so the same shadow shows in every
+filter and at every angle: a change seen in two filters or at two angles
+applies to every light of the rig. A change seen in one filter, as filter
+dust, applies to that filter only.
+
+### Which side a light is on
+
+A light stands before or after a change:
+
+1. **By time**, when it was shot outside the change's window.
+2. **By its imaging session**, when it was shot inside the window but the
+   continuous run of lights it belongs to (one N.I.N.A. profile, no gap of
+   three hours) reaches outside it.
+3. **By its own pixels**, when the whole run lies inside the window. The
+   stage takes the median of up to eight of the run's lights, divides it by
+   a flat from one side, and fits what is left against the change's map.
+   Over a smooth field this decides. Over a nebula the fit is weighed
+   against the same fit at places where nothing changed, and is usually
+   undecided.
+4. Otherwise it is **undetermined**.
+
+### Which flats a light takes
+
+A light no change touches takes the nearest flats, as before. Otherwise,
+in this order:
+
+1. Its own angle's flats from its own side of every change.
+2. When it has none, its own side's flats at the nearest other angle, if
+   this rig's flats measure alike across angles. Flats of one filter shot
+   at two angles within one flat session show how much the angle matters;
+   that difference must be within the split limits.
+3. Otherwise, when the change is on the camera side, its own angle's flats
+   from the other side, carried across the change with the change's map:
+   later ÷ earlier, measured from a pair of sessions in the light's
+   filter, or another filter when its own has none. The corrected master
+   is written beside the original and reused.
+4. Otherwise its own angle's flats from the other side, and the light is
+   flagged: no flats from before (or after) the change at its angle.
+
+An undetermined light keeps the nearest flats and is flagged. The light's
+Calibration panel says which of these chose its flats, under **Chosen
+by**, with the change and how the light was placed. When its flat master
+mixes nights, the panel says how alike they measured.
+
+### Flat groups tab
+
+The Calibration page's **Flat groups** tab shows each rig's limits, how
+much its flats depend on the rotator angle, its changes, newest first,
+and each filter and angle's groups with every session's difference from
+the night before. Each split says why it split, with the values and the
+limits. **Compare** opens the ratio of the two sessions, later ÷ earlier,
+at ±3%, ±1% or ±0.5%, with new shadows and departed ones circled. Stars
+draw at neutral grey. Sessions that could not be measured are listed with
+the reason, such as too few flats.
+
+### Settings and checks
+
+Three settings sit under **Settings › Calibration › Flat groups**, global
+or per rig: **Group flats** (by measurement, or by time only as before),
+**Dust that splits flats** and **Light pattern that splits flats**. They
+are matching settings: a change rebuilds the masters and stacks whose
+flats it changes.
+
+**Flats from across a change** (`check_flats_differ`) raises Check when
+a light's flats are all from the other side of a change at its angle and
+nothing can stand in, or when the light was shot during a change and
+nothing tells which side it is on. **Flats from several nights**
+(`check_mixed_flats`) now fires only when a master mixes nights that were
+not measured against each other; nights measured alike mix without a word.
+
+### Flat groups API
+
+`GET /api/db/{db}/calibrations/flat-groups` returns each rig's limits,
+angle difference, changes, families, groups, splits and unmeasured
+sessions. `GET /api/db/{db}/calibrations/flat-groups/ratio?earlier=&later=&stretch=`
+answers `202` while the picture is queued and the PNG once it is ready;
+`POST /api/db/{db}/calibrations/generation-status` reports on it with
+`{"target": "ratio", …}`. In a light's calibration explanation the flat
+kind gains `chosen_by`, `basis` and `alike`.
+
+`psf-guard flat-groups CATALOG --work DIR` measures a catalog on a copy: it
+opens the catalog read-only, copies it into `DIR`, writes responses and
+comparisons there, and prints the groups, splits, changes and angle
+difference. `--images` finds lights for the pixel evidence, `--lights`
+says how each light's flats would be chosen, `--map-prefix FROM=TO`
+rewrites calibration paths recorded on another machine, and `--report`
+writes it all as JSON. It never writes the catalog or a frame.
+
+See the [flat grouping design record](design/flat-grouping.md) for the
+metric, keys and the validation on real flats.
 
 ## Frame grades
 
@@ -771,7 +920,11 @@ it, and what it would get is judged on two levels.
 **Check**: worth a look; the light still calibrates.
 
 - Its flats were shot more than 30 days from it.
-- Its flat master takes flats from more than one night.
+- Its flat master takes flats from nights not measured against each other
+  (see [Flat groups](#flat-groups)).
+- Its flats are from across a measured change, such as new dust, with
+  nothing to stand in, or it was shot during the change and nothing tells
+  which side it is on.
 - Its masters use frames graded suspect.
 - Frames kept out by hand leave its bias, darks or flats under five frames.
 - Its bias master would use fewer than five frames while a dark serves it,
@@ -939,6 +1092,9 @@ ASI2600MM)`. An editor can open the rig's settings from there.
 | `dark_reach_days` | Dark reach | 183 days | 1–3650 | matching |
 | `complete_dark_frames` | Complete night | 10 darks | 2–64 | matching |
 | `dark_choice` | Dark choice | complete set first | complete, nearest | matching |
+| `flat_grouping` | Group flats | by measurement | measured, time | matching |
+| `flat_split_dust_pct` | Dust that splits flats | 1% | 0.1–10% | matching |
+| `flat_split_pattern_pct` | Light pattern that splits flats | 2% | 0.2–20% | matching |
 | `flat_max_age_days` | Flat age limit | 60 days | 0 (no limit)–3650 | light checks |
 | `flat_check_age_days` | Flats worth a look after | 30 days | 0 (off)–3650 | light checks |
 | `thin_master_frames` | Thin master below | 5 frames | 2–64 | light checks |
@@ -950,7 +1106,8 @@ ASI2600MM)`. An editor can open the rig's settings from there.
 | `check_thin_bias` | Thin bias master | flag (Poor without a dark, Check with one) | flag, advisory, off | light checks |
 | `check_flat_spots` | Changing spots in flats | flag (as the spot limits grade them) | flag, advisory, off | light checks |
 | `check_old_flats` | Old flats | flag (Check) | flag, off | light checks |
-| `check_mixed_flats` | Flats from several nights | flag (Check) | flag, off | light checks |
+| `check_mixed_flats` | Flats from several nights not measured against each other | flag (Check) | flag, off | light checks |
+| `check_flats_differ` | Flats from across a change | flag (Check) | flag, off | light checks |
 | `check_suspect_frames` | Suspect frames in its masters | flag (Check) | flag, off | light checks |
 | `check_short_after_keep_out` | Short after keeping frames out | flag (Check) | flag, off | light checks |
 | `grade_bias_level` | Bias level, in the set's noise | suspect 1, poor 3 | 0–1000 | frame grades |

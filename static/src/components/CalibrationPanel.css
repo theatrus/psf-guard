@@ -312,6 +312,21 @@
   font-style: italic;
 }
 
+/* How the flats were chosen around a measured change. Flats from across
+   one take the check emphasis a finding has; the rest read as plain notes. */
+.light-calibration-alike,
+.light-calibration-chosen-by {
+  color: var(--color-text-secondary);
+}
+
+.light-calibration-chosen-by.is-check {
+  padding: 0.25rem 0.4rem;
+  border-left: 3px solid var(--color-calibration-check);
+  border-radius: 4px;
+  background: var(--color-calibration-check-bg);
+  color: var(--color-text-primary);
+}
+
 /* What the chosen finding points at. */
 .light-calibration-panel .is-focus.is-poor {
   background: var(--color-calibration-poor-bg);

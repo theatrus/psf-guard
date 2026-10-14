@@ -163,6 +163,11 @@
   --quality-background-rise: rgb(250 235 70);
   --quality-background-fall: rgb(90 160 255);
 
+  /* Dust marked on the ratio picture of two flat sessions: a shadow that
+     came (darker in the later flats) and one that went (brighter). */
+  --color-flat-dust-new: rgb(255 140 90);
+  --color-flat-dust-gone: rgb(110 200 255);
+
   /* Border Colors */
   --color-border-primary: #333;
   --color-border-secondary: #444;

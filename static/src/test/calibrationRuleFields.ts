@@ -153,6 +153,57 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "default": "complete"
   },
   {
+    "key": "flat_grouping",
+    "group": "flat_groups",
+    "label": "Group flats",
+    "help": "Measured: nights mix in one master only when their flats measure alike, and a light takes flats from its own side of every measured change, such as new dust. By time: one master takes the flats within the flat session.",
+    "effect": "matching",
+    "kind": {
+      "type": "choice",
+      "options": [
+        {
+          "value": "measured",
+          "label": "By measurement"
+        },
+        {
+          "value": "time",
+          "label": "By time only"
+        }
+      ]
+    },
+    "default": "measured"
+  },
+  {
+    "key": "flat_split_dust_pct",
+    "group": "flat_groups",
+    "label": "Dust that splits flats",
+    "help": "The largest dust difference two nights' flats may have and still share a master: what moved, new or vanished dust would leave in a light calibrated with the other night's flats, in percent of the sky background.",
+    "effect": "matching",
+    "kind": {
+      "type": "number",
+      "min": 0.1,
+      "max": 10.0,
+      "step": 0.1,
+      "unit": "%"
+    },
+    "default": 1.0
+  },
+  {
+    "key": "flat_split_pattern_pct",
+    "group": "flat_groups",
+    "label": "Light pattern that splits flats",
+    "help": "The largest broad difference two nights' flats may have, such as a changed vignette, after a straight gradient is removed, in percent of the sky background.",
+    "effect": "matching",
+    "kind": {
+      "type": "number",
+      "min": 0.2,
+      "max": 20.0,
+      "step": 0.1,
+      "unit": "%"
+    },
+    "default": 2.0
+  },
+  {
     "key": "flat_max_age_days",
     "group": "checks",
     "label": "Flat age limit",
@@ -316,7 +367,21 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "check_mixed_flats",
     "group": "checks",
     "label": "Flats from several nights",
-    "help": "Its flat master takes flats from more than one night.",
+    "help": "Its flat master takes flats from nights not measured against each other. Nights whose flats measure alike mix without a word.",
+    "effect": "flags",
+    "kind": {
+      "type": "check",
+      "levels": [
+        "check"
+      ]
+    },
+    "default": "flag"
+  },
+  {
+    "key": "check_flats_differ",
+    "group": "checks",
+    "label": "Flats from across a change",
+    "help": "A measured change, such as new dust, lies between the light and its flats, or the light was shot while it happened and nothing tells which side it is on.",
     "effect": "flags",
     "kind": {
       "type": "check",

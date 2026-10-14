@@ -55,6 +55,9 @@ pub enum GenKind {
     /// A raw calibration frame in the stretch its kind calls for, or a flat
     /// against its session. Always encoded as PNG.
     CalibrationFrame(Box<crate::server::calibration_browser::render::RenderSpec>),
+    /// One flat session divided by another, from their cached responses.
+    /// Always encoded as PNG.
+    FlatRatio(Box<crate::server::flat_groups::RatioSpec>),
 }
 
 /// A resolved generation request: where the source is, where the artifact goes.
@@ -395,6 +398,7 @@ fn generate_with_fingerprint(
         GenKind::CalibrationFrame(spec) => {
             crate::server::calibration_browser::render::render(&job.fits_path, &tmp, spec)
         }
+        GenKind::FlatRatio(spec) => crate::server::flat_groups::render_ratio(spec, &tmp),
     };
 
     // Clean up the temp file on both a generation failure and a rename
