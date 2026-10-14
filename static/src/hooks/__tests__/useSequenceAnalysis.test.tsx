@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
@@ -18,10 +19,13 @@ function createWrapper() {
     },
   });
   return function Wrapper({ children }: { children: ReactNode }) {
+    // Scoring reads the link's values over the person's defaults.
     return (
-      <QueryClientProvider client={queryClient}>
-        {children}
-      </QueryClientProvider>
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          {children}
+        </QueryClientProvider>
+      </MemoryRouter>
     );
   };
 }

@@ -3115,6 +3115,11 @@
     display: none;
   }
 
+  /* The scoring note takes a line of its own under the counts. */
+  .view-toolbar-summary:has(> .scoring-changed-note) {
+    flex-wrap: wrap;
+  }
+
   .size-control.compact input[type='range'] {
     width: min(150px, 30vw);
   }
@@ -6836,6 +6841,13 @@
   color: var(--color-text-primary);
 }
 
+/* The view scores differently from the person's defaults. */
+.scoring-penalty-control.is-set summary {
+  border-color: var(--state-set-border);
+  background: var(--state-set-bg);
+  color: var(--state-set-fg);
+}
+
 .scoring-penalty-panel {
   position: absolute;
   z-index: 30;
@@ -6844,7 +6856,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  min-width: 230px;
+  min-width: 270px;
   padding: 0.7rem;
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border-secondary);
@@ -6899,10 +6911,107 @@
   font-size: 0.8rem;
 }
 
-.penalty-reset {
-  align-self: flex-end;
+/* A value off its default names it in its label's colour. */
+.penalty-slider.is-set .penalty-label,
+.penalty-limit.is-set .penalty-label {
+  color: var(--state-set-fg);
+}
+
+.penalty-defaults-note {
+  margin: 0.35rem 0 0;
+  color: var(--color-text-muted);
   font-size: 0.75rem;
-  padding: 0.2rem 0.5rem;
+}
+
+.penalty-settings-link {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--color-link);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.penalty-settings-link:hover {
+  color: var(--color-link-hover);
+}
+
+.penalty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+/* Unavailable, but still focusable, so a press never drops focus. */
+.scoring-penalty-panel .penalty-actions .tool-button[aria-disabled='true'] {
+  border-color: var(--color-border-secondary);
+  cursor: default;
+  opacity: 0.45;
+}
+
+.penalty-error {
+  margin: -0.2rem 0 0;
+  color: var(--color-error);
+  font-size: 0.75rem;
+  white-space: normal;
+}
+
+/* Images, the detail view and Stacks: this view scores with its own
+   values from Sequence, not the defaults. */
+.scoring-changed-note {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.45rem;
+  box-sizing: border-box;
+  min-height: 1.5rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--state-set-border);
+  border-radius: 6px;
+  background: var(--state-set-bg);
+  color: var(--state-set-fg);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.scoring-changed-note button {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--color-link);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.scoring-changed-note button:hover {
+  color: var(--color-link-hover);
+}
+
+/* Beside Build: the whole row, in words. */
+.scoring-changed-build {
+  flex: 1 1 100%;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.82rem;
+  white-space: normal;
+}
+
+.scoring-changed-build strong {
+  font-weight: 600;
+}
+
+.scoring-changed-build button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.detail-info > .scoring-changed-note {
+  margin: 0 0 0.75rem;
 }
 
 /* A master integrated by other software, shown beside its kind badge. */

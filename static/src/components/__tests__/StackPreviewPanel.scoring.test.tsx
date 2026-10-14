@@ -1,12 +1,14 @@
-import { act, render, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import {
   SCORING_DEFAULTS,
-  setScoringPreferences,
+  setScoringDefaults,
 } from '../../hooks/useScoringPreferences';
 import type { StackScoringSettings } from '../../api/types';
 import StackPreviewPanel from '../StackPreviewPanel';
@@ -16,12 +18,17 @@ const images = [
   { id: 2, target_id: 42, target_name: 'Sh2 86', filter_name: 'Ha', grading_status: 1 },
 ];
 
-function wrapper() {
+function wrapper(entry = '/stacks?db=test&project=1') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    // The panel scores with the link's values over the person's defaults.
+    return (
+      <MemoryRouter initialEntries={[entry]}>
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      </MemoryRouter>
+    );
   };
 }
 
@@ -91,7 +98,7 @@ function mockLatest(scoring?: StackScoringSettings) {
   );
 }
 
-function renderPanel() {
+function renderPanel(entry?: string) {
   return render(
     <StackPreviewPanel
       dbId="test"
@@ -100,12 +107,12 @@ function renderPanel() {
       selectionSource="visible"
       onOpenImage={() => undefined}
     />,
-    { wrapper: wrapper() }
+    { wrapper: wrapper(entry) }
   );
 }
 
-beforeEach(() => setScoringPreferences({ ...SCORING_DEFAULTS }));
-afterEach(() => setScoringPreferences({ ...SCORING_DEFAULTS }));
+beforeEach(() => setScoringDefaults({ ...SCORING_DEFAULTS }));
+afterEach(() => setScoringDefaults({ ...SCORING_DEFAULTS }));
 
 describe('StackPreviewPanel scoring provenance', () => {
   it('treats an old artifact without scoring metadata as calibrated', async () => {
@@ -118,7 +125,7 @@ describe('StackPreviewPanel scoring provenance', () => {
     );
   });
 
-  it('marks a remembered artifact stale when scoring settings change', async () => {
+  it('marks a remembered artifact stale when the scoring defaults change', async () => {
     mockLatest({
       penalty_satellite: 1,
       penalty_pointing: 1,
@@ -133,12 +140,63 @@ describe('StackPreviewPanel scoring provenance', () => {
     );
 
     act(() => {
-      setScoringPreferences({ ...SCORING_DEFAULTS, satellite: 0 });
+      setScoringDefaults({ ...SCORING_DEFAULTS, satellite: 0 });
     });
 
     await waitFor(() =>
       expect(view.container.querySelector('.stack-preview-outdated'))
         .toHaveTextContent('Out of date — scoring settings changed')
     );
+  });
+});
+
+describe('StackPreviewPanel and a view\'s own scoring', () => {
+  const VIEW = '/stacks?db=test&project=1&penaltySatellite=0&penaltyPointing=1'
+    + '&penaltyTemporal=1&maxHfr=off&minStars=40';
+
+  function mockBuild() {
+    const submitted: Record<string, unknown>[] = [];
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({ groups: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.post('/api/db/:dbId/projects/:projectId/stack-previews/channels', async ({ request }) => {
+        submitted.push(await request.json() as Record<string, unknown>);
+        return ok([]);
+      }),
+    );
+    return submitted;
+  }
+
+  it('builds with the link\'s scoring, and says so beside Build', async () => {
+    setScoringDefaults({ ...SCORING_DEFAULTS, hfrRejectAbove: 3 });
+    const submitted = mockBuild();
+    renderPanel(VIEW);
+    const note = await screen.findByRole('note');
+    expect(note).toHaveTextContent('Builds here use this view\'s scoring, not your defaults');
+    expect(note).toHaveTextContent('Satellite trails off (default 100%)');
+    expect(note).toHaveTextContent('Max HFR off (default 3)');
+    expect(note).toHaveTextContent('Min stars 40 (default off)');
+    await userEvent.click(screen.getByRole('button', { name: 'Build stacks' }));
+    await waitFor(() => expect(submitted).toHaveLength(1));
+    expect(submitted[0].scoring).toEqual({ penalty_satellite: 0, star_count_reject_below: 40 });
+  });
+
+  it('builds with the defaults once the view is reset', async () => {
+    setScoringDefaults({ ...SCORING_DEFAULTS, hfrRejectAbove: 3 });
+    const submitted = mockBuild();
+    renderPanel(VIEW);
+    await userEvent.click(await screen.findByRole('button', { name: 'Reset to default' }));
+    await waitFor(() => expect(screen.queryByRole('note')).toBeNull());
+    await userEvent.click(screen.getByRole('button', { name: 'Build stacks' }));
+    await waitFor(() => expect(submitted).toHaveLength(1));
+    expect(submitted[0].scoring).toEqual({ hfr_reject_above: 3 });
+  });
+
+  it('says nothing while the view scores as the defaults do', async () => {
+    mockBuild();
+    renderPanel();
+    await screen.findByRole('button', { name: 'Build stacks' });
+    expect(screen.queryByRole('note')).toBeNull();
   });
 });

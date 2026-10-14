@@ -1,4 +1,4 @@
-import { withoutPlanningParams } from '../../hooks/useUrlState';
+import { keepScoringInScope, withoutPlanningParams } from '../../hooks/useUrlState';
 
 /**
  * The calibration page for one database, from wherever a person is. The
@@ -11,7 +11,7 @@ export function calibrationPageHref(search: string, dbId: string, projectId?: nu
   }
   params.set('db', dbId);
   if (projectId !== undefined) params.set('project', String(projectId));
-  return `/calibration?${params}`;
+  return `/calibration?${keepScoringInScope(search, params)}`;
 }
 
 /** One night's lights, as the grid's date filter reads them. */
@@ -68,7 +68,7 @@ export function calibrationGridHref(
     params.set('dateStart', night.dateStart);
     params.set('dateEnd', night.dateEnd);
   }
-  return `/grid?${params}`;
+  return `/grid?${keepScoringInScope(search, params)}`;
 }
 
 /** One master in the Calibration page's Masters list. */

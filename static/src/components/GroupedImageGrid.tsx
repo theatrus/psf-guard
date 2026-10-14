@@ -55,6 +55,7 @@ import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
 import { chipFocus } from '../utils/calibrationFocus';
 import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
+import ScoringChangedNote from './ScoringChangedNote';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
 
 interface GroupedImageGridProps {
@@ -1015,6 +1016,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             </button>
           ) : undefined}
           summary={(
+            <>
             <span className="grid-stats">
               {mosaic && <>{mosaicLabel(mosaic)} • </>}
               {filteredImages.length} of {allImages.length} images • {imageGroups.length} groups
@@ -1028,6 +1030,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 {qualityStatus.label}
               </span>
             </span>
+            {/* The badges and Flagged follow scoring set in Sequence. */}
+            <ScoringChangedNote />
+            </>
           )}
           selection={(
             <SelectionBar

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { isMergedPath, useDbProjectTarget, useScopedDbId, withoutPlanningParams } from '../hooks/useUrlState';
+import { isMergedPath, keepScoringInScope, useDbProjectTarget, useScopedDbId, withoutPlanningParams } from '../hooks/useUrlState';
 import { useMergedProjects, useMergedTargets } from '../hooks/useDatabases';
 import {
   buildProjectTargetNavigation,
@@ -166,6 +166,7 @@ export default function ProjectTargetSelector() {
       const scope = withoutPlanningParams(location.search);
       scope.set('db', db); scope.set('project', String(project));
       if (target === null) scope.delete('target'); else scope.set('target', String(target));
+      keepScoringInScope(location.search, scope);
       navigate(plans.hrefFor(plans.planFor(db, project) ?? `${db}:${project}`, scope));
       return;
     }
@@ -174,6 +175,7 @@ export default function ProjectTargetSelector() {
       next.set('db', db);
       if (project === null) next.delete('project'); else next.set('project', String(project));
       if (target === null) next.delete('target'); else next.set('target', String(target));
+      keepScoringInScope(location.search, next);
       navigate(`/grid?${next}`);
     } else {
       setDbProjectTarget(db, project, target);

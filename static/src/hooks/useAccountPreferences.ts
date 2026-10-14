@@ -3,6 +3,7 @@ import { apiClient } from '../api/client';
 import {
   adoptAccountPreferences,
   claimBrowserPreferences,
+  claimBrowserScoring,
   getDisplayPreferences,
   retireBrowserPreferences,
   setPreferencesAccount,
@@ -132,7 +133,14 @@ export function useAccountPreferences(username: string | undefined): void {
       const local = getDisplayPreferences();
       let base = document;
       if (Object.keys(document).length > 0) {
-        // Their document wins over what this browser had for them.
+        // Their document wins over what this browser had for them. One
+        // saved before the scoring defaults existed takes this browser's,
+        // if they are the first account here, and saves them.
+        const scoring = claimBrowserScoring(document);
+        if (scoring) {
+          base = { ...document, ...scoring };
+          for (const key of Object.keys(scoring) as AccountPreferenceKey[]) unsaved.add(key);
+        }
         retireBrowserPreferences();
       } else {
         // A new account, or one re-created under an old name: start from

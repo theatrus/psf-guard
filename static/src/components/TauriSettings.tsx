@@ -61,6 +61,13 @@ import PathField from './PathField';
  */
 type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'performance' | 'review' | 'rigs' | 'templates' | 'users' | 'agents';
 
+/** An intent that only picks a tab. */
+type TabIntent = Extract<SettingsIntent, SettingsTab>;
+const TAB_INTENTS: readonly TabIntent[] = ['rigs', 'templates', 'stacking', 'storage', 'review'];
+function isTabIntent(intent: SettingsIntent | null): intent is TabIntent {
+  return TAB_INTENTS.includes(intent as TabIntent);
+}
+
 const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
   '%YEAR%/%TARGET%/%NIGHT%/%TYPE%';
 const REMOTE_UPLOAD_DIRECTORY_TEMPLATE_PRESETS = [
@@ -173,7 +180,7 @@ export default function TauriSettings({
   const [formRemoteUploadTokenCopyState, setFormRemoteUploadTokenCopyState] =
     useState<'idle' | 'copied' | 'failed'>('idle');
   const [showAddForm, setShowAddForm] = useState(false);
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialIntent === 'rigs' || initialIntent === 'templates' || initialIntent === 'stacking' || initialIntent === 'storage' ? initialIntent : 'databases');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(isTabIntent(initialIntent) ? initialIntent : 'databases');
   const director = useDirectorStatus();
   const planningEnabled = !!director.data?.enabled && director.data.protocol_version === 1;
   // true = "create a brand-new TS database from image folders" flow (no
@@ -482,7 +489,7 @@ export default function TauriSettings({
   useEffect(() => {
     if (initialIntent === 'create') { setActiveTab('databases'); startCreate(); }
     if (initialIntent === 'add') { setActiveTab('databases'); void startAdd(); }
-    if (initialIntent === 'rigs' || initialIntent === 'templates' || initialIntent === 'stacking' || initialIntent === 'storage') setActiveTab(initialIntent);
+    if (isTabIntent(initialIntent)) setActiveTab(initialIntent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialIntent]);
 

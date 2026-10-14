@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import {
   getDisplayPreferences,
@@ -7,6 +7,15 @@ import {
   setPreferencesAccount,
   useDisplayPreferences,
 } from '../useDisplayPreferences';
+
+/** The Scoring control's defaults as built in. */
+const BUILT_IN_SCORING = {
+  scoringPenaltySatellite: 1,
+  scoringPenaltyPointing: 1,
+  scoringPenaltyTemporal: 1,
+  scoringHfrRejectAbove: null,
+  scoringStarCountRejectBelow: null,
+};
 
 describe('display preferences', () => {
   beforeEach(() => {
@@ -35,6 +44,7 @@ describe('display preferences', () => {
       imageGroupingAllProjects: 'project',
       gridThumbnailSize: 300,
       sequenceThumbnailSize: 150,
+      ...BUILT_IN_SCORING,
     });
   });
 
@@ -121,6 +131,7 @@ describe('display preferences', () => {
       imageGroupingAllProjects: 'project',
       gridThumbnailSize: 300,
       sequenceThumbnailSize: 150,
+      ...BUILT_IN_SCORING,
     });
   });
 
@@ -218,5 +229,105 @@ describe('display preferences per account', () => {
     expect(preferences.sequenceThumbnailSize).toBe(150);
     expect(preferences.imageGrouping).toBe('filter');
     expect(preferences.imageGroupingAllProjects).toBe('project');
+  });
+});
+
+describe('the Scoring control\'s earlier setting', () => {
+  const LEGACY = 'psf-guard.penalty-scales';
+  const OWN = 'psf-guard.display-preferences';
+
+  /** The module as a fresh page load finds it. */
+  async function load() {
+    vi.resetModules();
+    return import('../useDisplayPreferences');
+  }
+
+  beforeEach(() => window.localStorage.clear());
+
+  it('becomes this browser\'s scoring defaults on the first load', async () => {
+    window.localStorage.setItem(OWN, JSON.stringify({ libraryDensity: 'detailed' }));
+    window.localStorage.setItem(LEGACY, JSON.stringify({
+      satellite: 0, pointing: 1, temporal: 1.5, hfrRejectAbove: 2.55, starCountRejectBelow: null,
+    }));
+    const fresh = await load();
+    expect(fresh.getDisplayPreferences()).toMatchObject({
+      libraryDensity: 'detailed',
+      scoringPenaltySatellite: 0,
+      scoringPenaltyPointing: 1,
+      scoringPenaltyTemporal: 1.5,
+      scoringHfrRejectAbove: 2.55,
+      scoringStarCountRejectBelow: null,
+    });
+    // Moved, not copied: the old key is gone and the browser's own
+    // preferences hold the values, ready for a first sign-in.
+    expect(window.localStorage.getItem(LEGACY)).toBeNull();
+    expect(JSON.parse(window.localStorage.getItem(OWN)!)).toMatchObject({
+      libraryDensity: 'detailed',
+      scoringPenaltySatellite: 0,
+      scoringHfrRejectAbove: 2.55,
+    });
+    // The first account to sign in here takes them with the rest.
+    expect(fresh.claimBrowserPreferences()).toMatchObject({
+      libraryDensity: 'detailed',
+      scoringPenaltySatellite: 0,
+      scoringHfrRejectAbove: 2.55,
+    });
+  });
+
+  it('leaves defaults this browser already has alone', async () => {
+    window.localStorage.setItem(OWN, JSON.stringify({ scoringHfrRejectAbove: 4 }));
+    window.localStorage.setItem(LEGACY, JSON.stringify({ satellite: 0, hfrRejectAbove: 2.55 }));
+    const fresh = await load();
+    expect(fresh.getDisplayPreferences()).toMatchObject({
+      scoringPenaltySatellite: 1,
+      scoringHfrRejectAbove: 4,
+    });
+    expect(window.localStorage.getItem(LEGACY)).toBeNull();
+  });
+
+  it('with none, keeps the built-in defaults', async () => {
+    const fresh = await load();
+    expect(fresh.getDisplayPreferences()).toMatchObject(BUILT_IN_SCORING);
+    expect(window.localStorage.getItem(OWN)).toBeNull();
+  });
+
+  it.each(['5', 'true', '"x"', '[1,2]', 'null'])(
+    'loads, with every default, over a stored %s that is not an object',
+    async (raw) => {
+      window.localStorage.setItem(OWN, raw);
+      window.localStorage.setItem(`${OWN}@alice`, raw);
+      window.localStorage.setItem(LEGACY, JSON.stringify({ satellite: 0 }));
+      const fresh = await load();
+      expect(fresh.getDisplayPreferences()).toMatchObject({
+        imageOrder: 'oldest',
+        scoringPenaltySatellite: 0,
+      });
+      fresh.setPreferencesAccount('alice');
+      expect(fresh.getDisplayPreferences()).toMatchObject({ scoringPenaltySatellite: 0 });
+      fresh.setPreferencesAccount(null);
+    },
+  );
+
+  it('drops an earlier value the rules refuse, keeping the rest', async () => {
+    window.localStorage.setItem(LEGACY, JSON.stringify({
+      satellite: 0.35, pointing: 0, starCountRejectBelow: 12.5, hfrRejectAbove: 250,
+    }));
+    const fresh = await load();
+    expect(fresh.getDisplayPreferences()).toMatchObject({
+      scoringPenaltySatellite: 1,
+      scoringPenaltyPointing: 0,
+      scoringHfrRejectAbove: null,
+      scoringStarCountRejectBelow: null,
+    });
+  });
+
+  it('offers its scoring defaults only to a document without any', async () => {
+    window.localStorage.setItem(LEGACY, JSON.stringify({ starCountRejectBelow: 40 }));
+    const fresh = await load();
+    expect(fresh.claimBrowserScoring({ imageOrder: 'newest' })).toEqual({ ...BUILT_IN_SCORING, scoringStarCountRejectBelow: 40 });
+    expect(fresh.claimBrowserScoring({ scoringPenaltySatellite: 1 })).toBeNull();
+    // Once an account has claimed this browser's choices, nobody else gets them.
+    fresh.retireBrowserPreferences();
+    expect(fresh.claimBrowserScoring({ imageOrder: 'newest' })).toBeNull();
   });
 });

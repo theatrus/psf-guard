@@ -1432,6 +1432,144 @@
   margin: 0.4rem 0 0;
 }
 
+/* Settings › Review › Sequence scoring. */
+.scoring-defaults {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.scoring-defaults h3 {
+  margin: 0.4rem 0 0;
+  font-size: 0.95rem;
+}
+
+.scoring-defaults-intro {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.scoring-defaults-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.scoring-defaults-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.scoring-defaults-group legend {
+  margin-bottom: 0.4rem;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.scoring-default {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8.5rem;
+  align-items: start;
+  gap: 0.25rem 0.75rem;
+}
+
+.scoring-default-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.scoring-default-text small {
+  color: var(--color-text-muted);
+}
+
+.scoring-default-input {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.scoring-default-input input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.scoring-default-unit {
+  flex: none;
+  width: 1.4rem;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.scoring-default-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--color-error);
+  font-size: 0.8rem;
+}
+
+.scoring-defaults-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Unavailable, but still focusable, so a press never drops focus. */
+.tauri-settings .scoring-defaults-actions .save-button[aria-disabled='true'] {
+  background-color: var(--color-bg-button);
+  color: var(--color-text-disabled);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.tauri-settings .scoring-defaults-actions .cancel-button[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.scoring-defaults-newer {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--state-set-border);
+  border-radius: 6px;
+  background: var(--state-set-bg);
+  color: var(--color-text-primary);
+  font-size: 0.85rem;
+}
+
+.scoring-defaults-newer button {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--color-link);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .scoring-default {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .scoring-default-input {
+    max-width: 10rem;
+  }
+}
+
 .calibration-settings-group {
   min-width: 0;
   margin: 0 0 1rem;

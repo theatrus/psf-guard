@@ -23,6 +23,7 @@ import type {
 import StackPreviewInspector from './StackPreviewInspector';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
+import ScoringChangedNote from './ScoringChangedNote';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
 import { colorSourceKey } from './stackColorSources';
 import { defaultColorProcessing } from './stackColorProcessing';
@@ -840,6 +841,9 @@ export default function StackPreviewPanel({
           </div>
           {!collapsed && (
           <div className="stack-preview-actions">
+            {/* A build records the scoring it picked frames with, and the
+                automatic refresh reuses it: never use a view's own silently. */}
+            <ScoringChangedNote build />
             <label className="stack-preview-checkbox">
               <input
                 type="checkbox"

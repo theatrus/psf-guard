@@ -186,12 +186,42 @@ and set point per exposure; PSF Guard imports carry the sensor temperature
 from the FITS header. API callers can change the margin with
 `sensor_temp_tolerance_c`.
 
-The preference is remembered and applies to every scoring surface —
-Sequence view, grid badges, and the detail panel — so a frame scores the
-same everywhere. The zero-star cap does not scale: a frame measured to
-have no stars is ruined whatever the preference. API callers pass
-`penalty_satellite`, `penalty_pointing`, `penalty_temporal`,
-`hfr_reject_above`, or `star_count_reject_below` on the analysis endpoints.
+**Defaults and the current view.** Every view starts from your scoring
+defaults, set in **Settings › Review › Sequence scoring**. Each field shows
+its built-in value, and **Reset to built-in defaults** brings back the
+calibrated scoring: every penalty at 100% and no limits. A change in the
+toolbar applies to the current view only. The control then reads
+**Scoring (changed)**, and its popover offers **Save as default**, which
+makes the view's values your defaults, and **Reset to default**, which
+returns the view to them.
+
+The same rules hold in the toolbar, the address and Settings, and the server
+checks them too: a penalty from 0% to 200% in steps of 10%, a Max HFR above
+0 and up to 100 pixels, and a Min stars that is a whole number from 1 to
+1,000,000. Either limit may be empty, which turns it off. A value outside
+them is refused and shown, never quietly changed.
+
+Once any value differs from your defaults, the address names all five:
+`penaltySatellite`, `penaltyPointing`, `penaltyTemporal` (1 is 100%),
+`maxHfr` and `minStars`, with `off` for a limit turned off. A link therefore
+scores the same for whoever opens it, whatever their defaults. A reload, the
+project's other targets, Images, the detail view and Stacks keep the view's
+scoring, so a frame scores the same everywhere in the project. Those views
+show **Scoring (changed)** with a **Reset**, and Stacks says beside **Build**
+which values a build will use: a stack records the scoring it picked its
+frames with, and the automatic refresh reuses it. Moving to another project
+or database drops the view's scoring, and the defaults apply there.
+
+Signed in to a server with user accounts, your defaults are saved with your
+account (see [view preferences](AUTHENTICATION.md#view-preferences));
+otherwise the browser keeps them. The values an earlier version's Scoring
+control remembered become the browser's defaults the first time this version
+loads.
+
+The zero-star cap does not scale: a frame measured to have no stars is
+ruined whatever the setting. API callers pass `penalty_satellite`,
+`penalty_pointing`, `penalty_temporal`, `hfr_reject_above`, or
+`star_count_reject_below` on the analysis endpoints.
 
 Capture sessions split at a Target Scheduler session change, a capture-profile
 change, or a 60-minute gap. Frames measured from calibrated pixels (a light

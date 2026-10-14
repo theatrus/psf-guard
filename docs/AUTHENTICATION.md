@@ -238,6 +238,8 @@ A signed-in user's view choices follow them to any browser or device:
 
 - Images and Sequence: the sort order, the grouping (one for a project, one
   for All projects), the thumbnail sizes, and the chips.
+- Sequence scoring: the penalty and reject-limit defaults each view's
+  Scoring control starts from.
 - Library: compact or detailed rows.
 - The project picker's grouping, and moving on after a grade.
 
@@ -250,9 +252,19 @@ load is tried again after 1 s, then 2 s, 4 s and so on up to a minute, and
 a change made in the meantime is applied over the document when it comes
 and saved then. A change made in one tab is saved by that tab; the user's
 other tabs in the same browser follow it without saving it again. A link
-that names an order or a grouping still wins; the saved choice fills in
-what a link leaves out. A viewer saves their own preferences too: they
-change no catalog, so the role does not gate them.
+that names an order, a grouping or a scoring value still wins; the saved
+choice fills in what a link leaves out. A viewer saves their own preferences too: they
+change no catalog, so the role does not gate them. A viewer cannot open
+Settings, so they save scoring defaults with the Scoring control's **Save
+as default**.
+
+**Scoring defaults** are personal, not a catalog setting. They change the
+scores and reject recommendations this person sees, and what their own
+actions use. Saving them changes nothing anyone else sees: others see only
+what those actions produce, as with a grade. The one lasting product is a
+stack: it records the scoring its build used, and the automatic refresh of
+that project reuses the newest build's scoring for everyone, as it did
+before. A project's first automatic build uses the built-in scoring.
 
 **First sign-in.** If the user has no document yet, they start from the
 defaults, with one exception: the first account to sign in on a browser
@@ -277,7 +289,9 @@ another user.
   still running an older build; current builds send `PATCH`.
 
 A document holds only the keys PSF Guard knows, each checked for its type
-and range, and is limited to 4 KiB; only a `PATCH` may set a key to `null`.
+and range (a scoring penalty from 0 to 2 in steps of 0.1, a Max HFR above 0
+and up to 100, a Min stars a whole number from 1 to 1,000,000, a limit
+`null` when off), and is limited to 4 KiB; only a `PATCH` may set a key to `null`.
 Both writes drop keys they do not know and name them in `ignored`. A
 request body is limited to 16 KiB, and the server stops reading a longer
 one there and answers `413`.

@@ -17,6 +17,7 @@ import ImageFileLocation from './ImageFileLocation';
 import TiltInspector from './TiltInspector';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import QualityAnalysisSummary from './QualityAnalysisSummary';
+import ScoringChangedNote from './ScoringChangedNote';
 import QualityRegionOverlay from './QualityRegionOverlay';
 import CalibrationPanel from './CalibrationPanel';
 import DetailSection from './DetailSection';
@@ -929,6 +930,9 @@ export default function ImageDetailView({
                 )}
               </div>
             )}
+
+            {/* The score and reason follow scoring set in Sequence. */}
+            <ScoringChangedNote />
 
             <QualityAnalysisSummary
               quality={quality}

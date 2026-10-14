@@ -1,103 +1,117 @@
-import { useSyncExternalStore } from 'react';
+import { useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { PenaltyScaleParams } from '../api/types';
+import {
+  clearedScoringParams,
+  fieldsFromScoring,
+  sameScoring,
+  scoringFromFields,
+  scoringFromParams,
+  scoringParamUpdates,
+  type ScoringPreferences,
+} from '../utils/scoring';
+import {
+  getDisplayPreferences,
+  setDisplayPreferences,
+  useDisplayPreferences,
+} from './useDisplayPreferences';
+import { useUrlParams } from './useUrlState';
 
-/**
- * How hard each kind of event evidence hits the quality score, shared
- * across every scoring surface (Sequence view, grid badges, detail panel).
+export {
+  SCORING_DEFAULTS,
+  penaltyKeyOf,
+  sameScoring,
+  type ScoringPreferences,
+} from '../utils/scoring';
+
+/*
+ * How hard each kind of event evidence hits the quality score, and the
+ * absolute reject limits, as every scoring surface uses them: the Sequence
+ * view, the grid badges, the detail panel and stack builds.
  *
- * Each value multiplies that evidence's built-in penalty: 0 ignores it,
- * 1 (the default) keeps the calibrated behavior, 2 doubles the hit. Kept
- * as one shared preference so a satellite trail cannot cost a frame its
- * badge in one view and nothing in another.
+ * Two layers:
+ * - The person's defaults, set in Settings › Review or with the Scoring
+ *   control's Save as default. They live with the View panel's choices
+ *   (useDisplayPreferences), so a signed-in user's follow them to another
+ *   browser.
+ * - The current view's own changes, from the Scoring control. They live in
+ *   the link (SCORING_PARAMS), all five once any differs, so they apply to
+ *   this view, travel with it to the project's other targets, Images, the
+ *   detail view and Stacks (which say so, see ScoringChangedNote), stay
+ *   behind when the project or database changes (keepScoringInScope), and
+ *   a value the link names wins over the defaults.
  */
-export interface ScoringPreferences {
-  satellite: number;
-  pointing: number;
-  temporal: number;
-  /** Absolute HFR ceiling: recommend rejecting frames whose measured HFR
-   * exceeds this. `null` (the default) turns the check off. */
-  hfrRejectAbove: number | null;
-  /** Absolute star-count floor: recommend rejecting frames with fewer
-   * measured stars. `null` (the default) turns the check off. */
-  starCountRejectBelow: number | null;
+
+/** The saved defaults now, outside React. */
+export function scoringDefaults(): ScoringPreferences {
+  return scoringFromFields(getDisplayPreferences());
 }
 
-const STORAGE_KEY = 'psf-guard.penalty-scales';
-
-/** The calibrated defaults. The single source for the store's fallback,
- * the control's Reset button, and its "changed" indicator. */
-export const SCORING_DEFAULTS: ScoringPreferences = {
-  satellite: 1,
-  pointing: 1,
-  temporal: 1,
-  hfrRejectAbove: null,
-  starCountRejectBelow: null,
-};
-const DEFAULTS = SCORING_DEFAULTS;
-
-type Listener = () => void;
-
-const listeners = new Set<Listener>();
-
-function sanitize(value: unknown): number {
-  const scale = typeof value === 'number' && Number.isFinite(value) ? value : 1;
-  return Math.min(2, Math.max(0, scale));
+/** Save new defaults. */
+export function setScoringDefaults(next: ScoringPreferences): void {
+  setDisplayPreferences({ ...getDisplayPreferences(), ...fieldsFromScoring(next) });
 }
 
-/** A reject limit is any positive finite number; everything else is "off". */
-function sanitizeLimit(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+/** One snapshot per distinct set of values, so a caller can key effects
+ *  and memos on it. */
+function useStableScoring(scoring: ScoringPreferences): ScoringPreferences {
+  const { satellite, pointing, temporal, hfrRejectAbove, starCountRejectBelow } = scoring;
+  return useMemo(
+    () => ({ satellite, pointing, temporal, hfrRejectAbove, starCountRejectBelow }),
+    [satellite, pointing, temporal, hfrRejectAbove, starCountRejectBelow],
+  );
 }
 
-function normalize(parsed: Partial<ScoringPreferences>): ScoringPreferences {
+/** The saved defaults. */
+export function useScoringDefaults(): ScoringPreferences {
+  const preferences = useDisplayPreferences();
+  return useStableScoring(scoringFromFields(preferences));
+}
+
+/** The scoring the current view uses: what the link names, over the
+ *  defaults. */
+export function useScoringPreferences(): ScoringPreferences {
+  const [searchParams] = useSearchParams();
+  const defaults = useScoringDefaults();
+  return useStableScoring(scoringFromParams(searchParams, defaults));
+}
+
+/** The view's scoring with the ways to change it, for the Scoring control. */
+export function useViewScoring() {
+  const { updateParams } = useUrlParams();
+  const scoring = useScoringPreferences();
+  const defaults = useScoringDefaults();
+
+  /** Score this view with `next`; the defaults stay as they are. */
+  const setScoring = useCallback((next: ScoringPreferences) => {
+    updateParams(scoringParamUpdates(next, scoringDefaults()));
+  }, [updateParams]);
+
+  /** Make `next` the defaults, which this view then uses. */
+  const saveAsDefault = useCallback((next: ScoringPreferences) => {
+    setScoringDefaults(next);
+    updateParams(clearedScoringParams());
+  }, [updateParams]);
+
+  /** Go back to the defaults in this view. */
+  const resetToDefault = useCallback(() => {
+    updateParams(clearedScoringParams());
+  }, [updateParams]);
+
   return {
-    satellite: sanitize(parsed.satellite),
-    pointing: sanitize(parsed.pointing),
-    temporal: sanitize(parsed.temporal),
-    hfrRejectAbove: sanitizeLimit(parsed.hfrRejectAbove),
-    starCountRejectBelow: sanitizeLimit(parsed.starCountRejectBelow),
+    scoring,
+    defaults,
+    changed: !sameScoring(scoring, defaults),
+    setScoring,
+    saveAsDefault,
+    resetToDefault,
   };
 }
 
-function readStored(): ScoringPreferences {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULTS };
-    return normalize(JSON.parse(raw) as Partial<ScoringPreferences>);
-  } catch {
-    return { ...DEFAULTS };
-  }
-}
-
-let current = readStored();
-
-// A second tab writes the same localStorage key: adopt its value so two
-// windows cannot score the same frame differently.
-if (typeof window !== 'undefined') {
-  window.addEventListener('storage', (event) => {
-    if (event.key !== STORAGE_KEY) return;
-    current = readStored();
-    listeners.forEach((listener) => listener());
-  });
-}
-
-export function setScoringPreferences(next: ScoringPreferences): void {
-  current = normalize(next);
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
-  } catch {
-    // Keep the in-memory preference even when it cannot be persisted.
-  }
-  listeners.forEach((listener) => listener());
-}
-
-export function scoringPreferences(): ScoringPreferences {
-  return current;
-}
-
-/** A preference snapshot as request query params; defaults are omitted so
- * the server's calibrated behavior needs no parameters at all. Pure — pass
- * the same snapshot used for the query key so key and payload agree. */
+/** A scoring snapshot as request query params; the calibrated values are
+ * omitted so the server's built-in behavior needs no parameters at all.
+ * Pure: pass the same snapshot used for the query key so key and payload
+ * agree. */
 export function penaltyParamsOf(preferences: ScoringPreferences): PenaltyScaleParams {
   const params: PenaltyScaleParams = {};
   if (preferences.satellite !== 1) params.penalty_satellite = preferences.satellite;
@@ -108,40 +122,4 @@ export function penaltyParamsOf(preferences: ScoringPreferences): PenaltyScalePa
     params.star_count_reject_below = preferences.starCountRejectBelow;
   }
   return params;
-}
-
-/** The same snapshot as react-query key segments. Every scoring query key
- * spreads this, so a preference change refetches every surface. */
-export function penaltyKeyOf(preferences: ScoringPreferences): (number | null)[] {
-  return [
-    preferences.satellite,
-    preferences.pointing,
-    preferences.temporal,
-    preferences.hfrRejectAbove,
-    preferences.starCountRejectBelow,
-  ];
-}
-
-/** Whether two preferences score identically — the one comparison every
- * "is this default?" and "is this stale?" check should share, so a new
- * scoring knob added to `penaltyKeyOf` reaches all of them at once. */
-export function sameScoring(left: ScoringPreferences, right: ScoringPreferences): boolean {
-  const rightKey = penaltyKeyOf(right);
-  return penaltyKeyOf(left).every((value, index) => value === rightKey[index]);
-}
-
-function subscribe(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
-}
-
-function snapshot(): ScoringPreferences {
-  return current;
-}
-
-/** Subscribe to the shared preference. Returns the current snapshot. */
-export function useScoringPreferences(): ScoringPreferences {
-  return useSyncExternalStore(subscribe, snapshot);
 }
