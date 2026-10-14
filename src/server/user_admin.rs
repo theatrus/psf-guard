@@ -138,6 +138,25 @@ pub async fn remove_user(
         .await
         .map_err(|error| AppError::InternalError(format!("User update task failed: {error}")))?
         .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    // Their view preferences go with them, so a later account of the same
+    // name starts clean. The account is already gone; a failure here only
+    // leaves a stale entry, which is logged.
+    let database_registry_path = require_registry_path(&state)?;
+    let preferences_state = Arc::clone(&state);
+    let forgotten = tokio::task::spawn_blocking(move || {
+        let _guard = preferences_state.user_preferences_write.lock().unwrap();
+        crate::user_preferences::forget_user(&database_registry_path, &username)
+    })
+    .await;
+    match forgotten {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            tracing::warn!("Could not drop a removed user's view preferences: {error}")
+        }
+        Err(error) => {
+            tracing::warn!("Could not drop a removed user's view preferences: {error}")
+        }
+    }
     Ok(Json(ApiResponse::success(auth.user_summaries())))
 }
 

@@ -506,6 +506,23 @@
   opacity: 0.5;
 }
 
+.tool-segmented button:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: -2px;
+}
+
+/* View's Sort: oldest or newest first, each with its arrow. */
+.image-order-toggle {
+  justify-self: start;
+}
+
+.image-order-toggle button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
 /* Undo and redo, as icon buttons of the same shape; the tooltip says what
    they undo or redo. */
 .view-toolbar .undo-redo-toolbar.compact {
@@ -722,6 +739,13 @@
 .selection-action-bar.active {
   border-color: var(--state-set-border);
   background: var(--state-set-bg);
+}
+
+/* View with a setting off its default, such as newest first. */
+.toolbar-menu-button.is-set {
+  border-color: var(--state-set-border);
+  background: var(--state-set-bg);
+  color: var(--state-set-fg);
 }
 
 .tool-button[aria-pressed='true'],

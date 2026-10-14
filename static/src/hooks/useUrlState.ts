@@ -1,6 +1,6 @@
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useCallback, useMemo, useRef } from 'react';
-import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE } from '../types/grouping';
+import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE, MULTI_PROJECT_MODES } from '../types/grouping';
 import { parseStatusFilter } from '../utils/statusFilter';
 import { listFilterOf } from '../utils/listFilter';
 import {
@@ -9,6 +9,19 @@ import {
   parseSelectionRule,
   type SelectionRuleId,
 } from '../utils/sequenceSelectionRules';
+import {
+  DEFAULT_IMAGE_ORDER,
+  IMAGE_ORDER_PARAM,
+  parseImageOrder,
+  type ImageOrder,
+} from '../utils/imageOrder';
+import {
+  DEFAULT_GRID_THUMBNAIL_SIZE,
+  DEFAULT_SEQUENCE_THUMBNAIL_SIZE,
+  getDisplayPreferences,
+  setDisplayPreferences,
+  useDisplayPreferences,
+} from './useDisplayPreferences';
 
 /**
  * Hook for managing URL search parameters as state
@@ -296,16 +309,34 @@ export function useFilters() {
   };
 }
 
+/** Which view's thumbnails a size belongs to. */
+export type ThumbnailView = 'grid' | 'sequence';
+
 /**
- * Hook for managing grid state in URL
+ * Hook for managing grid state in URL. The grouping and the thumbnail size
+ * fall back to the person's saved choices when the link names none, and
+ * choosing one saves it (see useDisplayPreferences).
  */
-export function useGridState(defaultImageSize = 300) {
+export function useGridState(view: ThumbnailView = 'grid') {
   const { getParam, getNumberParam, getBooleanParam, getArrayParam, getNumberArrayParam, updateParams } = useUrlParams();
-  
-  const groupingMode = useMemo(() => (getParam('grouping') as GroupingMode) || DEFAULT_SINGLE_PROJECT_MODE, [getParam]);
+  const preferences = useDisplayPreferences();
+  // No project in the link is All projects, which has groupings of its own.
+  const allProjects = getParam('project') === null;
+  const preferredGrouping: GroupingMode = (allProjects
+    ? preferences.imageGroupingAllProjects
+    : preferences.imageGrouping) ?? DEFAULT_SINGLE_PROJECT_MODE;
+  const preferredSize = (view === 'sequence'
+    ? preferences.sequenceThumbnailSize
+    : preferences.gridThumbnailSize)
+    ?? (view === 'sequence' ? DEFAULT_SEQUENCE_THUMBNAIL_SIZE : DEFAULT_GRID_THUMBNAIL_SIZE);
+
+  const groupingMode = useMemo(
+    () => (getParam('grouping') as GroupingMode) || preferredGrouping,
+    [getParam, preferredGrouping],
+  );
   const imageSize = useMemo(
-    () => getNumberParam('size') || defaultImageSize,
-    [defaultImageSize, getNumberParam],
+    () => getNumberParam('size') || preferredSize,
+    [preferredSize, getNumberParam],
   );
   const showStats = useMemo(() => getBooleanParam('stats'), [getBooleanParam]);
   const expandedGroups = useMemo(() => new Set(getArrayParam('expanded')), [getArrayParam]);
@@ -314,13 +345,31 @@ export function useGridState(defaultImageSize = 300) {
   const selectedImagesRef = useRef(selectedImages);
   selectedImagesRef.current = selectedImages;
   
+  /** Choose a grouping, and keep it as the default for links that name
+   *  none, for one project or for All projects as the mode says. */
   const setGroupingMode = useCallback((mode: GroupingMode) => {
+    const saved = getDisplayPreferences();
+    if ((MULTI_PROJECT_MODES as readonly GroupingMode[]).includes(mode)) {
+      setDisplayPreferences({ ...saved, imageGroupingAllProjects: mode });
+    } else {
+      setDisplayPreferences({ ...saved, imageGrouping: mode });
+    }
     updateParams({ grouping: mode, expanded: null });
   }, [updateParams]);
-  
-  const setImageSize = useCallback((size: number) => {
-    updateParams({ size });
+
+  /** Drop the link's grouping, as when the view moves between one project
+   *  and All projects: the saved choice for the new scope applies. */
+  const resetGroupingMode = useCallback(() => {
+    updateParams({ grouping: null, expanded: null });
   }, [updateParams]);
+
+  const setImageSize = useCallback((size: number) => {
+    const saved = getDisplayPreferences();
+    setDisplayPreferences(view === 'sequence'
+      ? { ...saved, sequenceThumbnailSize: size }
+      : { ...saved, gridThumbnailSize: size });
+    updateParams({ size });
+  }, [updateParams, view]);
   
   const setShowStats = useCallback((show: boolean) => {
     updateParams({ stats: show ? true : null });
@@ -363,6 +412,7 @@ export function useGridState(defaultImageSize = 300) {
     currentImageId,
     selectedImages,
     setGroupingMode,
+    resetGroupingMode,
     setImageSize,
     setShowStats,
     setExpandedGroups,
@@ -400,4 +450,34 @@ export function useSequenceSelectionRule() {
   }, [updateParams]);
 
   return { cutoff, rule, setCutoff, setRule };
+}
+
+/**
+ * The order Images and Sequence show their frames in (`order`), one key for
+ * both views, so it travels between them and into the detail view's next
+ * and previous. A link that names no order opens in the one last chosen in
+ * this browser. Choosing writes both; oldest first leaves the URL clean.
+ */
+export function useImageOrder() {
+  const { getParam, updateParams } = useUrlParams();
+  const preferences = useDisplayPreferences();
+  const order: ImageOrder = parseImageOrder(getParam(IMAGE_ORDER_PARAM))
+    ?? preferences.imageOrder
+    ?? DEFAULT_IMAGE_ORDER;
+
+  /** Choose an order. `alongside` writes other keys in the same change,
+   *  such as the new `current`: each URL hook writes from the params it
+   *  last saw, so two writes in one turn would lose the first. */
+  const setOrder = useCallback((
+    next: ImageOrder,
+    alongside: Record<string, string | number | null> = {},
+  ) => {
+    setDisplayPreferences({ ...getDisplayPreferences(), imageOrder: next });
+    updateParams({
+      ...alongside,
+      [IMAGE_ORDER_PARAM]: next === DEFAULT_IMAGE_ORDER ? null : next,
+    });
+  }, [updateParams]);
+
+  return { order, setOrder };
 }

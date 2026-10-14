@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Image } from '../../api/types';
 import {
+  groupGridImages,
   groupImagesBySession,
   NO_EXPANDED_GROUPS,
   resolveExpandedGroups,
@@ -125,5 +126,54 @@ describe('server exposure partitions', () => {
     ] }]);
     expect(groups.map((group) => group.filterName)).toEqual(['2026-09-11 · R · 30 s', '2026-09-11 · G · 30 s']);
     expect(new Set(groups.map(imageGroupKey)).size).toBe(2);
+  });
+});
+
+describe('grid groups in either order', () => {
+  const day = (date: string, hour: number) => Date.parse(`${date}T${String(hour).padStart(2, '0')}:00:00Z`) / 1000;
+  const frames = [
+    image(1, day('2026-10-01', 20), 'HA'),
+    image(2, day('2026-10-01', 21), 'OIII'),
+    image(3, day('2026-10-02', 20), 'HA'),
+    image(4, day('2026-10-02', 22), 'OIII'),
+    image(5, day('2026-10-02', 23), 'HA'),
+  ];
+  const ids = (groups: { images: Image[] }[]) => groups.map((group) => group.images.map((entry) => entry.id));
+  const names = (groups: { filterName: string }[]) => groups.map((group) => group.filterName);
+
+  it('keeps filter groups A to Z and turns each group\'s frames around', () => {
+    expect(names(groupGridImages(frames, 'filter'))).toEqual(['HA', 'OIII']);
+    expect(ids(groupGridImages(frames, 'filter'))).toEqual([[1, 3, 5], [2, 4]]);
+    expect(names(groupGridImages(frames, 'filter', 'newest'))).toEqual(['HA', 'OIII']);
+    expect(ids(groupGridImages(frames, 'filter', 'newest'))).toEqual([[5, 3, 1], [4, 2]]);
+  });
+
+  it('keeps date groups newest night first in both orders', () => {
+    expect(names(groupGridImages(frames, 'date'))).toEqual(['2026-10-02', '2026-10-01']);
+    expect(ids(groupGridImages(frames, 'date'))).toEqual([[3, 4, 5], [1, 2]]);
+    expect(ids(groupGridImages(frames, 'date', 'newest'))).toEqual([[5, 4, 3], [2, 1]]);
+  });
+
+  it('puts each filter\'s newest night first under Filter + Date newest first', () => {
+    expect(names(groupGridImages(frames, 'both'))).toEqual([
+      'HA - 2026-10-01', 'HA - 2026-10-02', 'OIII - 2026-10-01', 'OIII - 2026-10-02',
+    ]);
+    expect(names(groupGridImages(frames, 'both', 'newest'))).toEqual([
+      'HA - 2026-10-02', 'HA - 2026-10-01', 'OIII - 2026-10-02', 'OIII - 2026-10-01',
+    ]);
+    expect(ids(groupGridImages(frames, 'both', 'newest'))[0]).toEqual([5, 3]);
+  });
+
+  it('keeps sessions and their keys, with each session\'s frames turned around', () => {
+    const oldest = groupGridImages(frames, 'session');
+    const newest = groupGridImages(frames, 'session', 'newest');
+    expect(newest.map(imageGroupKey)).toEqual(oldest.map(imageGroupKey));
+    expect(ids(newest)).toEqual(ids(oldest).map((group) => [...group].reverse()));
+  });
+
+  it('mirrors frames with the same capture time exactly', () => {
+    const ties = [image(7, 100), image(8, 100), image(9, 50)];
+    expect(ids(groupGridImages(ties, 'filter'))).toEqual([[9, 7, 8]]);
+    expect(ids(groupGridImages(ties, 'filter', 'newest'))).toEqual([[8, 7, 9]]);
   });
 });

@@ -232,6 +232,47 @@ Remote image upload and scheduler sync use neither. Their
 `Authorization: Bearer ...` keys remain scoped to the configured database and
 continue to work when browser authentication is enabled.
 
+## View preferences
+
+A signed-in user's view choices follow them to any browser or device:
+
+- Images and Sequence: the sort order, the grouping (one for a project, one
+  for All projects), the thumbnail sizes, and the chips.
+- Library: compact or detailed rows.
+- The project picker's grouping, and moving on after a grade.
+
+**Saving.** The browser loads the user's document at sign-in, applies it,
+and saves each change a moment after changes stop, or as the page
+closes. A link that names an order or a grouping still wins; the saved
+choice fills in what a link leaves out. A viewer saves their own
+preferences too: they change no catalog, so the role does not gate them.
+
+**First sign-in.** If the user has no document yet, the browser's own
+choices become theirs. Each user's copy in a browser is kept apart from the
+browser's own and from other users', so signing in as someone else on the
+same browser does not hand one person's choices to the next.
+
+**The API.** `GET` and `PUT /api/me/preferences` read and replace the
+document of whoever is signed in; no request can name another user. A
+document holds only the keys PSF Guard knows, each checked for its type and
+range, and is limited to 4 KiB. A `PUT` drops keys it does not know and
+names them in `ignored`.
+
+**Storage.** The server keeps the documents in `user-preferences.json`
+beside `auth.json` (`<stem>.user-preferences.json` beside a custom
+registry). It replaces the file atomically on each save, sets mode `0600` on
+Unix, and keeps a `schema_version`. Fields a newer build wrote survive a
+save by an older one. Removing a user, in Settings or with the CLI, removes
+their preferences.
+
+**No accounts.** A server without accounts, and the desktop app, keep these
+choices in the browser's own storage, as before.
+
+**What stays out.** Exposure grouping is not a personal preference: it is a
+project setting in the catalog, shared by everyone who opens the project.
+The image detail's folded panels stay in each browser, since a phone and a
+desk want different panels open.
+
 ## Deployment notes
 
 - Put the public server behind HTTPS. Login passwords otherwise cross the

@@ -2,13 +2,21 @@ import { useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/client';
-import { CALIBRATION_FOCUS_PARAM, useDbProjectTarget, useFilters, useGridState } from './useUrlState';
+import {
+  CALIBRATION_FOCUS_PARAM,
+  useDbProjectTarget,
+  useFilters,
+  useGridState,
+  useImageOrder,
+} from './useUrlState';
 import type { Image } from '../api/types';
 import {
-  groupImagesBySession,
+  groupGridImages,
+  groupImagesByPanel,
   imageGroupKey,
   resolveExpandedGroups,
 } from '../utils/imageGrouping';
+import { useProjectMosaic } from './useProjectMosaic';
 import {
   imageDetailClosePath,
   imageDetailPath,
@@ -27,9 +35,14 @@ export function useImageNavigation(currentImageId?: number) {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { dbId, projectId, targetId } = useDbProjectTarget();
+  const { dbId, projectId, targetId, mosaic: mosaicScope } = useDbProjectTarget();
   const { filters } = useFilters();
   const { groupingMode, expandedGroups } = useGridState();
+  const { order } = useImageOrder();
+  // In a mosaic's scope the grid lists frames under their panels; walk
+  // them the same way.
+  const { data: projectMosaic } = useProjectMosaic(mosaicScope ? dbId : null, mosaicScope ? projectId : null);
+  const mosaic = mosaicScope ? projectMosaic ?? null : null;
   // The grid filters by quality flag too, so keyboard navigation reads
   // the same scoped quality results the grid does. Without a flag filter
   // the analysis is not fetched: the detail view must not pay for a
@@ -114,67 +127,13 @@ export function useImageNavigation(currentImageId?: number) {
     calibration.marks,
   ]);
 
-  // Group and sort images the same way as GroupedImageGrid
-  const imageGroups = useMemo(() => {
-    if (groupingMode === 'session') {
-      return groupImagesBySession(filteredImages);
-    }
-
-    const groups = new Map<string, Image[]>();
-    
-    filteredImages.forEach(image => {
-      let groupKey: string;
-      
-      if (groupingMode === 'filter') {
-        groupKey = image.filter_name || 'No Filter';
-      } else if (groupingMode === 'date') {
-        // Group by date (YYYY-MM-DD)
-        if (image.acquired_date) {
-          const date = new Date(image.acquired_date * 1000);
-          groupKey = date.toISOString().split('T')[0];
-        } else {
-          groupKey = 'Unknown Date';
-        }
-      } else { // 'both'
-        // Group by both filter and date
-        const filterName = image.filter_name || 'No Filter';
-        let dateStr = 'Unknown Date';
-        if (image.acquired_date) {
-          const date = new Date(image.acquired_date * 1000);
-          dateStr = date.toISOString().split('T')[0];
-        }
-        groupKey = `${filterName} - ${dateStr}`;
-      }
-      
-      if (!groups.has(groupKey)) {
-        groups.set(groupKey, []);
-      }
-      groups.get(groupKey)!.push(image);
-    });
-
-    // Convert to array and sort
-    const sorted = Array.from(groups.entries())
-      .map(([groupName, images]) => ({ 
-        filterName: groupName,
-        images: images.sort((a, b) => {
-          // Within each group, sort by acquired date (oldest first - chronological order)
-          const dateA = a.acquired_date || 0;
-          const dateB = b.acquired_date || 0;
-          return dateA - dateB; // Oldest first
-        })
-      }));
-    
-    // Sort groups
-    if (groupingMode === 'date') {
-      // Sort by date descending (newest first)
-      sorted.sort((a, b) => b.filterName.localeCompare(a.filterName));
-    } else {
-      // Sort alphabetically
-      sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
-    }
-    
-    return sorted;
-  }, [filteredImages, groupingMode]);
+  // The grid's own groups, in the order it shows them.
+  const imageGroups = useMemo(
+    () => mosaic
+      ? groupImagesByPanel(filteredImages, mosaic, images => groupGridImages(images, groupingMode, order))
+      : groupGridImages(filteredImages, groupingMode, order),
+    [filteredImages, groupingMode, mosaic, order],
+  );
 
   const visibleExpandedGroups = useMemo(
     () => resolveExpandedGroups(imageGroups, groupingMode, expandedGroups),

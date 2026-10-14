@@ -878,8 +878,13 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
     }
     // MCP carries every operation as a POST and ends sessions with DELETE;
     // each tool checks the role itself. Token management checks ownership
-    // in its handlers so a viewer can mint and revoke their own tokens.
-    if path == "/mcp" || path.starts_with("/mcp/") || path.starts_with("/auth/tokens") {
+    // in its handlers so a viewer can mint and revoke their own tokens. A
+    // viewer saves their own view preferences: they change no catalog.
+    if path == "/mcp"
+        || path.starts_with("/mcp/")
+        || path.starts_with("/auth/tokens")
+        || path == "/me/preferences"
+    {
         return false;
     }
     if method != Method::POST {

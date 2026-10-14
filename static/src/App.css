@@ -61,6 +61,10 @@
   --state-picked-ring: var(--color-warning-alpha-40);
   --state-cursor-ring: 0 0 0 3px var(--color-primary-alpha-50);
 
+  /* New: a frame captured since the last visit from the Library, in the
+     Library's own accent for its new frames. */
+  --color-new: var(--color-primary);
+
   /* Text that must stand out on a control, and text on a coloured fill. */
   --color-text-strong: #f2f2f2;
   --color-text-on-fill: #fff;
@@ -1345,6 +1349,19 @@
 
 .image-date {
   color: var(--color-text-hint);
+}
+
+/* A new frame: a dot before its date, small enough to leave the chips,
+   the grade and the selection marker the eye's first stop. */
+.image-new-mark {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 0.35rem 0 2px;
+  border-radius: 50%;
+  background: var(--color-new);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-new) 30%, transparent);
+  vertical-align: 0.1em;
 }
 
 .image-facts .stat-hfr,

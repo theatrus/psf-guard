@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import {
+  getDisplayPreferences,
   setDetailSection,
   setDisplayPreferences,
+  setPreferencesAccount,
   useDisplayPreferences,
 } from '../useDisplayPreferences';
 
@@ -28,6 +30,11 @@ describe('display preferences', () => {
       projectPickerGrouping: 'activity',
       libraryDensity: 'compact',
       detailSections: {},
+      imageOrder: 'oldest',
+      imageGrouping: 'filter',
+      imageGroupingAllProjects: 'project',
+      gridThumbnailSize: 300,
+      sequenceThumbnailSize: 150,
     });
   });
 
@@ -109,7 +116,33 @@ describe('display preferences', () => {
       projectPickerGrouping: 'database',
       libraryDensity: 'compact',
       detailSections: {},
+      imageOrder: 'oldest',
+      imageGrouping: 'filter',
+      imageGroupingAllProjects: 'project',
+      gridThumbnailSize: 300,
+      sequenceThumbnailSize: 150,
     });
+  });
+
+  it('remembers the image order, and reads oldest first when none or a bad one is stored', () => {
+    const base = {
+      showNightChip: true,
+      showAllChip: true, showCalibrationChip: true,
+      advanceOnGrade: true,
+      projectPickerGrouping: 'activity',
+      libraryDensity: 'compact',
+    } as const;
+    act(() => setDisplayPreferences({ ...base, imageOrder: 'newest' }));
+    expect(renderHook(() => useDisplayPreferences()).result.current.imageOrder).toBe('newest');
+    expect(JSON.parse(window.localStorage.getItem('psf-guard.display-preferences')!).imageOrder)
+      .toBe('newest');
+
+    act(() => setDisplayPreferences({ ...base, imageOrder: 'sideways' as unknown as 'newest' }));
+    expect(renderHook(() => useDisplayPreferences()).result.current.imageOrder).toBe('oldest');
+
+    // A preference saved before the order existed.
+    act(() => setDisplayPreferences(base));
+    expect(renderHook(() => useDisplayPreferences()).result.current.imageOrder).toBe('oldest');
   });
 
   it('falls back to the default on malformed stored values', () => {
@@ -138,5 +171,52 @@ describe('display preferences', () => {
     const { result } = renderHook(() => useDisplayPreferences());
     expect(result.current.showNightChip).toBe(false);
     expect(result.current.showAllChip).toBe(false);
+  });
+});
+
+describe('display preferences per account', () => {
+  const base = {
+    showNightChip: true,
+    showAllChip: true, showCalibrationChip: true,
+    advanceOnGrade: true,
+    projectPickerGrouping: 'activity',
+    libraryDensity: 'compact',
+  } as const;
+
+  it('keeps a signed-in user\'s copy apart from the browser\'s own', () => {
+    window.localStorage.clear();
+    setPreferencesAccount(null);
+    act(() => setDisplayPreferences({ ...base, imageOrder: 'newest' }));
+
+    // A first sign-in starts from what the browser chose...
+    act(() => setPreferencesAccount('alice'));
+    expect(getDisplayPreferences().imageOrder).toBe('newest');
+    // ...and the user's changes stay theirs.
+    act(() => setDisplayPreferences({ ...base, imageOrder: 'oldest', imageGrouping: 'date' }));
+    expect(window.localStorage.getItem('psf-guard.display-preferences@alice')).toContain('"date"');
+
+    act(() => setPreferencesAccount(null));
+    expect(getDisplayPreferences().imageOrder).toBe('newest');
+    expect(getDisplayPreferences().imageGrouping).toBe('filter');
+
+    act(() => setPreferencesAccount('alice'));
+    expect(getDisplayPreferences().imageGrouping).toBe('date');
+    act(() => setPreferencesAccount(null));
+    window.localStorage.clear();
+  });
+
+  it('reads a size or grouping it cannot use as the default', () => {
+    act(() => setDisplayPreferences({
+      ...base,
+      gridThumbnailSize: 20,
+      sequenceThumbnailSize: 9999,
+      imageGrouping: 'project' as 'filter',
+      imageGroupingAllProjects: 'session' as 'project',
+    }));
+    const preferences = getDisplayPreferences();
+    expect(preferences.gridThumbnailSize).toBe(300);
+    expect(preferences.sequenceThumbnailSize).toBe(150);
+    expect(preferences.imageGrouping).toBe('filter');
+    expect(preferences.imageGroupingAllProjects).toBe('project');
   });
 });

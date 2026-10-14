@@ -50,6 +50,9 @@ pub struct AppState {
     /// Serializes read-modify-write cycles on the processing-setups file that
     /// sits beside the registry. The file is tiny; a mutex beats a cache.
     pub processing_setups_write: Mutex<()>,
+    /// Serializes read-modify-write cycles on the user preferences file
+    /// beside the registry, as for processing setups.
+    pub user_preferences_write: Mutex<()>,
     /// Whether HTTP clients are allowed to call the database CRUD endpoints.
     /// Required *in addition to* `registry_path` being set, so an
     /// untrustworthy client cannot mutate the user's configuration even if
@@ -475,6 +478,7 @@ impl AppState {
             registry_path: RwLock::new(None),
             director: None,
             processing_setups_write: Mutex::new(()),
+            user_preferences_write: Mutex::new(()),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
             server_auth: RwLock::new(None),
@@ -690,6 +694,7 @@ impl AppState {
             registry_path: RwLock::new(None),
             director: None,
             processing_setups_write: Mutex::new(()),
+            user_preferences_write: Mutex::new(()),
             allow_database_management: RwLock::new(false),
             site_banner: RwLock::new(None),
             server_auth: RwLock::new(None),

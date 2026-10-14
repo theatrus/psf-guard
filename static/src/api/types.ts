@@ -1870,6 +1870,16 @@ export interface AuthStatus {
   can_compute: boolean;
 }
 
+/** The signed-in user's view preferences, as `/api/me/preferences` keeps
+ *  them: the keys of `DisplayPreferences` the server knows. */
+export interface AccountPreferences {
+  schema_version: number;
+  preferences: Record<string, unknown>;
+  updated_unix_seconds?: number;
+  /** Keys the server did not know, and so did not keep. */
+  ignored?: string[];
+}
+
 export interface AuthUserSummary {
   username: string;
   role: AccessRole;

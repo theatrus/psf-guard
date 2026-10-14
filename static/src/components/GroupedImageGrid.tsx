@@ -9,13 +9,17 @@ import { GradingStatus } from '../api/types';
 import { useGrading } from '../hooks/useGrading';
 import { useSpatialScan } from '../hooks/useSpatialScan';
 import { useStableScrollAnchor } from '../hooks/useStableScrollAnchor';
-import { useDbProjectTarget, useGridState, useFilters } from '../hooks/useUrlState';
+import { useDbProjectTarget, useGridState, useFilters, useImageOrder } from '../hooks/useUrlState';
+import { cardIsOnScreen, useReorderAnchor, viewIsAtRest } from '../hooks/useReorderAnchor';
+import type { ImageOrder } from '../utils/imageOrder';
+import { useNewFrameIds } from '../hooks/useNewFrames';
 import ImageCard from './ImageCard';
 import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
 import { imageFilterCount } from '../utils/imageFilterCount';
 import ViewToolbar from './toolbar/ViewToolbar';
 import SelectionBar from './toolbar/SelectionBar';
+import ImageOrderToggle from './toolbar/ImageOrderToggle';
 import { availableFlags, matchesFlagFilter } from '../utils/flagFilter';
 import StatsDashboard from './StatsDashboard';
 import UndoRedoToolbar from './UndoRedoToolbar';
@@ -26,20 +30,16 @@ import {
   type GroupingMode, 
   SINGLE_PROJECT_MODES,
   MULTI_PROJECT_MODES,
-  DEFAULT_SINGLE_PROJECT_MODE,
-  DEFAULT_MULTI_PROJECT_MODE,
   GROUPING_MODE_LABELS,
   getNextSingleProjectMode,
   getNextMultiProjectMode 
 } from '../types/grouping';
 import {
-  groupImagesBySession,
+  groupGridImages,
   groupImagesByPanel,
   imageGroupKey,
-  type ImageGroup,
   NO_EXPANDED_GROUPS,
   resolveExpandedGroups,
-  splitImageGroupsByExposure,
 } from '../utils/imageGrouping';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
 import {
@@ -56,85 +56,6 @@ import { chipFocus } from '../utils/calibrationFocus';
 import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
-
-/** The grid's groups for one set of images in a grouping mode. */
-function groupImages(filteredImages: Image[], groupingMode: GroupingMode): ImageGroup[] {
-  if (groupingMode === 'session') {
-    return splitImageGroupsByExposure(groupImagesBySession(filteredImages));
-  }
-
-  const groups = new Map<string, Image[]>();
-
-  filteredImages.forEach(image => {
-    let groupKey: string;
-
-    // Helper functions for building group keys
-    const getProjectPart = () => image.project_display_name || 'Unknown Project';
-    const getFilterPart = () => image.filter_name || 'No Filter';
-    const getDatePart = () => {
-      if (image.acquired_date) {
-        const date = new Date(image.acquired_date * 1000);
-        return date.toISOString().split('T')[0];
-      }
-      return 'Unknown Date';
-    };
-
-    // Build group key based on mode
-    switch (groupingMode) {
-      case 'filter':
-        groupKey = getFilterPart();
-        break;
-      case 'date':
-        groupKey = getDatePart();
-        break;
-      case 'both':
-        groupKey = `${getFilterPart()} - ${getDatePart()}`;
-        break;
-      case 'project':
-        groupKey = getProjectPart();
-        break;
-      case 'project+filter':
-        groupKey = `${getProjectPart()} - ${getFilterPart()}`;
-        break;
-      case 'project+date':
-        groupKey = `${getProjectPart()} - ${getDatePart()}`;
-        break;
-      case 'project+date+filter':
-        groupKey = `${getProjectPart()} - ${getDatePart()} - ${getFilterPart()}`;
-        break;
-      default:
-        groupKey = getFilterPart();
-    }
-
-    if (!groups.has(groupKey)) {
-      groups.set(groupKey, []);
-    }
-    groups.get(groupKey)!.push(image);
-  });
-
-  // Convert to array and sort
-  const sorted = Array.from(groups.entries())
-    .map(([groupName, images]) => ({
-      filterName: groupName, // Keep property name for compatibility
-      images: images.sort((a, b) => {
-        // Within each group, sort by acquired date (oldest first - chronological order)
-        const dateA = a.acquired_date || 0;
-        const dateB = b.acquired_date || 0;
-        return dateA - dateB; // Oldest first
-      })
-    }));
-
-  // Sort groups based on mode
-  if (groupingMode === 'date' || groupingMode.includes('date')) {
-    // Sort by group name descending for date-based grouping (newest first)
-    sorted.sort((a, b) => b.filterName.localeCompare(a.filterName));
-  } else {
-    // Sort alphabetically for other modes
-    sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
-  }
-
-  return splitImageGroupsByExposure(sorted);
-}
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -168,6 +89,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     currentImageId: urlCurrentImageId,
     selectedImages,
     setGroupingMode,
+    resetGroupingMode,
     setImageSize,
     setExpandedGroups,
     setSelectedImages,
@@ -175,6 +97,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     setCurrentImageSelection,
   } = useGridState();
   const { filters, updateFilters, clearFilters } = useFilters();
+  const { order, setOrder } = useImageOrder();
   
   // Adapter function to convert between FilterOptions and URL state
   const handleFilterChange = useCallback((filterOptions: FilterOptions) => {
@@ -373,12 +296,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   
   // Group images based on selected mode, under their panels in a mosaic.
-  const imageGroups = useMemo(
-    () => mosaic
-      ? groupImagesByPanel(filteredImages, mosaic, images => groupImages(images, groupingMode))
-      : groupImages(filteredImages, groupingMode),
+  const groupsIn = useCallback(
+    (inOrder: ImageOrder) => mosaic
+      ? groupImagesByPanel(filteredImages, mosaic, images => groupGridImages(images, groupingMode, inOrder))
+      : groupGridImages(filteredImages, groupingMode, inOrder),
     [filteredImages, groupingMode, mosaic],
   );
+  const imageGroups = useMemo(() => groupsIn(order), [groupsIn, order]);
 
   const visibleExpandedGroups = useMemo(
     () => resolveExpandedGroups(imageGroups, groupingMode, expandedGroups),
@@ -415,6 +339,50 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   }, [flatImages, lastSelectedImageId, selectedImages, urlCurrentImageId]);
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
+
+  // Whether the person has moved the cursor in this scope, by keys or a
+  // click. Until then the view is as it opened.
+  const touchedScopeRef = useRef<string | null>(null);
+  const markTouched = useCallback(() => {
+    touchedScopeRef.current = gridScopeKey;
+  }, [gridScopeKey]);
+
+  // Turning the order around. At rest, the page stays put and the cursor
+  // moves to the new first card. Once the person has moved, the cursor's
+  // image, the selection and the cursor's card's place on screen stay.
+  const cardOf = useCallback((imageId: number | null) =>
+    containerRef.current?.querySelector<HTMLElement>(`[data-image-id="${imageId}"]`) ?? null, []);
+  const captureReorder = useReorderAnchor(order, () => cardOf(activeImageIdRef.current));
+  const chooseOrder = useCallback((next: ImageOrder) => {
+    if (next === order) return;
+    const firstId = flatImages[0]?.id ?? null;
+    const atRest = viewIsAtRest({
+      currentId: activeImageIdRef.current,
+      firstId,
+      touched: touchedScopeRef.current === gridScopeKey,
+      firstOnScreen: cardIsOnScreen(cardOf(firstId)),
+    });
+    if (!atRest) {
+      captureReorder('anchor');
+      setOrder(next);
+      return;
+    }
+    const groups = groupsIn(next);
+    const shown = resolveExpandedGroups(groups, groupingMode, expandedGroups);
+    const nextFirst = groups.find(group => shown.has(imageGroupKey(group)))?.images[0]?.id ?? null;
+    captureReorder('rest');
+    if (nextFirst === null) {
+      setOrder(next);
+      return;
+    }
+    activeImageIdRef.current = nextFirst;
+    selectionAnchorIdRef.current = nextFirst;
+    setLastSelectedImageId(nextFirst);
+    setOrder(next, { current: nextFirst, groupIndex: null, imageIndex: null });
+  }, [captureReorder, cardOf, expandedGroups, flatImages, gridScopeKey, groupingMode, groupsIn, order, setOrder]);
+
+  // Frames captured since the last visit from the Library.
+  const newImageIds = useNewFrameIds(dbId, allImages);
 
   // Keep the cursor on an image ID. Group positions can move when new images
   // arrive or the grouping mode changes.
@@ -467,6 +435,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     if (newIndex === currentIndex) return;
 
     const newImage = flatImages[newIndex];
+    markTouched();
     activeImageIdRef.current = newImage.id;
     setCurrentImageId(newImage.id);
     requestAnimationFrame(() => {
@@ -475,6 +444,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     });
   }, [
     flatImages,
+    markTouched,
     setCurrentImageId,
   ]);
 
@@ -496,6 +466,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         ?.getBoundingClientRect() ?? null,
     );
     if (newIndex === currentIndex) return;
+    markTouched();
 
     const storedAnchorId = selectionAnchorIdRef.current;
     const anchorId = storedAnchorId !== null && flatImages.some(
@@ -520,11 +491,12 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       containerRef.current?.querySelector(`[data-image-id="${newImage.id}"]`)
         ?.scrollIntoView({ block: 'nearest' });
     });
-  }, [flatImages, setCurrentImageId, setSelectedImages]);
+  }, [flatImages, markTouched, setCurrentImageId, setSelectedImages]);
 
   const toggleCurrentImageSelection = useCallback(() => {
     const currentImageId = activeImageIdRef.current;
     if (currentImageId === null) return;
+    markTouched();
     selectionAnchorIdRef.current = currentImageId;
     setSelectedImages((selected) => {
       const next = new Set(selected);
@@ -538,7 +510,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       selectionBaseIdsRef.current = base;
       return next;
     });
-  }, [setSelectedImages]);
+  }, [markTouched, setSelectedImages]);
 
   const gradeImage = useCallback(async (
     status: 'accepted' | 'rejected' | 'pending',
@@ -571,6 +543,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   // Handle image selection with shift+click support
   const handleImageSelection = useCallback((imageId: number, event: React.MouseEvent) => {
+    markTouched();
     const storedAnchorId = selectionAnchorIdRef.current;
     const selectionAnchorId = storedAnchorId !== null && flatImages.some(
       image => image.id === storedAnchorId,
@@ -622,6 +595,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     }
   }, [
     flatImages,
+    markTouched,
     setCurrentImageId,
     setCurrentImageSelection,
     setSelectedImages,
@@ -673,18 +647,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       const isNowMultiProject = projectId === null;
       
       if (wasMultiProject !== isNowMultiProject) {
-        // Switching between single and multi-project modes
-        if (isNowMultiProject) {
-          // Switched to multi-project, set appropriate default grouping
-          setGroupingMode(DEFAULT_MULTI_PROJECT_MODE);
-        } else {
-          // Switched to single project, set appropriate default grouping
-          setGroupingMode(DEFAULT_SINGLE_PROJECT_MODE);
-        }
+        // Between one project and All projects the groupings differ: drop
+        // the link's, so the saved choice for the new scope applies.
+        resetGroupingMode();
       }
       prevProjectId.current = projectId;
     }
-  }, [projectId, setGroupingMode]);
+  }, [projectId, resetGroupingMode]);
   
   // Clear date filters when project/target changes to avoid "no results" scenarios
   const filtersRef = useRef(filters);
@@ -925,6 +894,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               icons
             />
           )}
+          viewNote={order === 'newest' ? 'newest first' : undefined}
           view={(
             <>
               <div className="toolbar-field">
@@ -941,6 +911,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                   ))}
                 </select>
               </div>
+              <ImageOrderToggle
+                order={order}
+                onChange={chooseOrder}
+                title="The frames in each group by capture time. Date and Session groups always start with the newest night."
+              />
               <div className="toolbar-field">
                 <span className="toolbar-caption">Chips</span>
                 <SecondaryScoreToggle />
@@ -1163,6 +1138,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                               navigateToDetail(image.id, chipFocus(mark.codes, filters.calibration))}
                             qualityPresentation="compact"
                             showTarget={severalTargets}
+                            isNew={newImageIds.has(image.id)}
                             isSelected={
                               selectedImages.has(image.id) ||
                               image.id === activeImageId

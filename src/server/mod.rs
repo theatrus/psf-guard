@@ -49,6 +49,7 @@ pub mod storage_settings;
 pub mod sync_preview;
 pub mod update_notice;
 pub mod user_admin;
+pub mod user_preferences;
 pub mod wbpp_queue;
 pub mod wbpp_run;
 
@@ -567,6 +568,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(user_admin::list_tokens).post(user_admin::create_token),
         )
         .route("/auth/tokens/{id}", delete(user_admin::revoke_token))
+        .route(
+            "/me/preferences",
+            get(user_preferences::get_preferences).put(user_preferences::put_preferences),
+        )
         .route("/info", get(handlers::get_server_info))
         .route("/stack-activity", get(stack_preview::get_stack_activity))
         .route(

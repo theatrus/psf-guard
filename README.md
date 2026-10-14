@@ -117,7 +117,9 @@ undo/redo, and comparison controls in stable rows. Preview generation, stack
 status, and database refreshes preserve the first visible image instead of
 moving the review position. Arrow keys move the image cursor; `Space` toggles
 its selection in both Grid and Sequence views. Shift+Click selects a range and
-Ctrl/Cmd+Click toggles one frame.
+Ctrl/Cmd+Click toggles one frame. **View › Sort** shows the newest frames
+first, and a small dot marks frames captured since your last visit from the
+Library ([details](docs/SCREENING.md#order-and-new-frames)).
 
 <details>
 <summary>Responsive grid layout</summary>

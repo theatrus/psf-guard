@@ -6,6 +6,8 @@ import { imageDetailPath } from '../utils/imageDetailRoutes';
 import { mosaicLabel } from '../hooks/useProjectMosaic';
 import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
+import { useImageOrder } from '../hooks/useUrlState';
+import { useNewFrameIds } from '../hooks/useNewFrames';
 
 interface MosaicSequenceProps {
   dbId: string;
@@ -13,9 +15,9 @@ interface MosaicSequenceProps {
   images: Image[];
 }
 
-/** A mosaic's frames in capture order, every panel's interleaved and each
- *  card named by its panel. Scoring stays per panel: each panel's own
- *  sequence is one click away. */
+/** A mosaic's frames in capture order, or newest first, every panel's
+ *  interleaved and each card named by its panel. Scoring stays per panel:
+ *  each panel's own sequence is one click away. */
 export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -23,6 +25,8 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const { showCalibrationChip } = useDisplayPreferences();
   const calibration = useCalibrationMarks(dbId, mosaic.project_id, showCalibrationChip);
+  const { order } = useImageOrder();
+  const newImageIds = useNewFrameIds(dbId, images);
 
   const panelOf = useMemo(
     () => new Map(mosaic.panels.map(panel => [panel.target_id, panel])),
@@ -35,8 +39,8 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
   const frames = useMemo(
     () => images
       .filter(image => panelOf.has(image.target_id) && (!filterName || image.filter_name === filterName))
-      .sort((a, b) => (a.acquired_date ?? 0) - (b.acquired_date ?? 0) || a.id - b.id),
-    [images, panelOf, filterName],
+      .sort((a, b) => ((a.acquired_date ?? 0) - (b.acquired_date ?? 0) || a.id - b.id) * (order === 'newest' ? -1 : 1)),
+    [images, panelOf, filterName, order],
   );
 
   const withParams = (change: (params: URLSearchParams) => void) => {
@@ -54,7 +58,7 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
       <div className="sequence-header">
         <h2>{mosaicLabel(mosaic)}</h2>
         <p className="mosaic-sequence-note">
-          Every panel's frames in capture order. Scores come from each panel's sequence.
+          Every panel's frames {order === 'newest' ? 'newest first' : 'in capture order'}. Scores come from each panel's sequence.
         </p>
         <div className="mosaic-sequence-controls">
           {filters.length > 1 && (
@@ -86,7 +90,7 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
       {frames.length === 0 ? (
         <div className="empty-state">No frames for this mosaic yet.</div>
       ) : (
-        <ol className="mosaic-sequence-frames" aria-label="Frames in capture order">
+        <ol className="mosaic-sequence-frames" aria-label={order === 'newest' ? 'Frames, newest first' : 'Frames in capture order'}>
           {frames.map(image => {
             const panel = panelOf.get(image.target_id)!;
             return (
@@ -99,6 +103,7 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
                   onCalibrationClick={(mark) =>
                     navigate(imageDetailPath(image.id, searchParams, 'sequence', mark.codes[0]))}
                   isSelected={image.id === selectedId}
+                  isNew={newImageIds.has(image.id)}
                   qualityPresentation="compact"
                   lazyPreview
                   onClick={() => setSelectedId(image.id)}
