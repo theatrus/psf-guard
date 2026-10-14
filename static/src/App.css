@@ -33,6 +33,25 @@
   --color-primary-alpha-80: rgba(97, 218, 251, 0.8);
   --color-primary-alpha-90: rgba(97, 218, 251, 0.9);
 
+  /* Interaction states, so every control says them the same way.
+     Set: a filter or rule narrows what is shown.
+     On: a toggle is pressed, a menu is open, or this is the current view.
+     Focus: keyboard focus. */
+  --state-set-border: var(--color-primary-alpha-70);
+  --state-set-bg: var(--color-primary-alpha-10);
+  --state-set-fg: var(--color-primary);
+  --state-on-border: var(--color-primary);
+  --state-on-bg: var(--color-primary-alpha-20);
+  --state-focus-border: var(--color-primary);
+  --state-focus-ring: 0 0 0 2px var(--color-primary-alpha-20);
+
+  /* Text that must stand out on a control, and text on a coloured fill. */
+  --color-text-strong: #f2f2f2;
+  --color-text-on-fill: #fff;
+
+  /* Panels that float over the page. */
+  --shadow-popover: 0 8px 22px rgb(0 0 0 / 35%);
+
   /* Status Colors */
   --color-success: #4caf50;
   --color-success-light: #81c784;

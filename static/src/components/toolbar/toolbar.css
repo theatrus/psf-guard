@@ -163,14 +163,8 @@
 .toolbar-pill:focus-visible,
 .toolbar-pill:has(select:focus-visible) {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
-}
-
-.toolbar-pill.is-set,
-.toolbar-pill-check:has(input:checked) {
-  border-color: var(--color-primary-alpha-70);
-  background: var(--color-primary-alpha-10);
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
 }
 
 .toolbar-pill-label {
@@ -180,7 +174,7 @@
 
 .toolbar-pill-value {
   min-width: 0;
-  color: #f2f2f2;
+  color: var(--color-text-strong);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -202,7 +196,7 @@
   padding: 0 0.1rem;
   border: 0;
   background: transparent;
-  color: #f2f2f2;
+  color: var(--color-text-strong);
   font: inherit;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -278,13 +272,8 @@
 
 .view-toolbar .toolbar-search input:focus-visible {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
-}
-
-.toolbar-search.is-set input {
-  border-color: var(--color-primary-alpha-70);
-  background: var(--color-primary-alpha-10);
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
 }
 
 /* The thumbnail slider in the control row: an icon at each end and the
@@ -376,8 +365,8 @@
 .toolbar-field select:focus-visible,
 .toolbar-field input:focus-visible {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
 }
 
 /* A slider with its value after it. */
@@ -432,7 +421,7 @@
 }
 
 .tool-button:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 1px;
 }
 
@@ -441,16 +430,10 @@
   cursor: default;
 }
 
-.tool-button[aria-pressed='true'],
-.tool-button[aria-expanded='true'] {
-  border-color: var(--color-primary);
-  background: var(--color-primary-alpha-20);
-}
-
 .tool-button-accept {
   border-color: var(--color-success);
   background: var(--color-success);
-  color: #fff;
+  color: var(--color-text-on-fill);
 }
 
 .tool-button-accept:hover:not(:disabled) {
@@ -461,7 +444,7 @@
 .tool-button-reject {
   border-color: var(--color-error);
   background: var(--color-error);
-  color: #fff;
+  color: var(--color-text-on-fill);
 }
 
 .tool-button-reject:hover:not(:disabled) {
@@ -515,11 +498,6 @@
 
 .tool-segmented button + button {
   border-left: 1px solid var(--color-border-secondary);
-}
-
-.tool-segmented button[aria-pressed='true'] {
-  background: var(--color-primary-alpha-20);
-  color: var(--color-text-primary);
 }
 
 .tool-segmented button:disabled {
@@ -592,7 +570,7 @@
   border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
   background: var(--color-bg-elevated);
-  box-shadow: 0 8px 22px rgb(0 0 0 / 35%);
+  box-shadow: var(--shadow-popover);
 }
 
 .toolbar-menu[hidden] {
@@ -706,13 +684,11 @@
 }
 
 .selection-action-bar.active {
-  border-color: var(--color-primary-alpha-50);
-  background: var(--color-primary-alpha-10);
   color: var(--color-text-primary);
 }
 
 .selection-action-bar.active .selection-count {
-  color: var(--color-primary);
+  color: var(--state-set-fg);
   font-weight: 600;
 }
 
@@ -734,6 +710,29 @@
   height: 1.1rem;
   margin: 0 0.1rem;
   background: var(--color-border-secondary);
+}
+
+/* States. Every control takes them from here, with the tokens in App.css:
+   set when a filter or rule narrows what is shown, on when a toggle is
+   pressed or a menu is open. */
+.toolbar-pill.is-set,
+.toolbar-pill-check:has(input:checked),
+.toolbar-search.is-set input,
+.selection-action-bar.active {
+  border-color: var(--state-set-border);
+  background: var(--state-set-bg);
+}
+
+.tool-button[aria-pressed='true'],
+.tool-button[aria-expanded='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
+}
+
+/* Inside a segmented group the group draws the border. */
+.tool-segmented button[aria-pressed='true'] {
+  background: var(--state-on-bg);
+  color: var(--color-text-primary);
 }
 
 /* Narrower desktops: Compare and Stats keep their icons, then the
