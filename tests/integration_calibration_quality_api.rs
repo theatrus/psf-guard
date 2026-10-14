@@ -1,8 +1,8 @@
 //! Calibration frame grades over HTTP: the progress route counts the
 //! library's grades, the library listing carries each frame's grade, and a
 //! person's choice to use a poor frame or keep a good one out is refused when
-//! malformed and recorded when not. Every route that changes the library
-//! waits for the database-management gate.
+//! malformed and recorded when not. Changing the library takes an editor,
+//! not the database-management gate.
 
 use std::io::Write as _;
 use std::sync::Arc;
@@ -292,10 +292,131 @@ async fn grades_are_counted_listed_and_overridden() {
     assert!(frame(&details, "dark-3.fits")["kept_out"].is_string());
 }
 
+/// The real API with user accounts, as the server wires it, over the same
+/// catalog: a viewer and an editor, database management off.
+async fn signed_in(server: &Server) -> (Router, String, String, String) {
+    use psf_guard::auth_registry::{AccessRole, AuthRegistry, AuthUserRecord};
+    let mut users = AuthRegistry::default();
+    users
+        .add(
+            AuthUserRecord::new("viewer", AccessRole::ReadOnly, "viewer-secret").unwrap(),
+            false,
+        )
+        .unwrap();
+    users
+        .add(
+            AuthUserRecord::new("editor", AccessRole::ReadWrite, "editor-secret").unwrap(),
+            false,
+        )
+        .unwrap();
+    let registry = server._dir.path().join("config.json");
+    users
+        .save(&AuthRegistry::path_for_database_registry(&registry))
+        .unwrap();
+    let config = psf_guard::config::ServerAuthConfig {
+        session_hours: Some(1),
+        secure_cookie: Some(false),
+        allow_read_only_compute: false,
+    };
+    server.state.set_server_auth(Some(
+        psf_guard::server::auth::ServerAuth::from_sources(Some(&config), &users, 3000)
+            .unwrap()
+            .unwrap(),
+    ));
+    server.state.set_registry_path(Some(registry));
+    server.state.set_allow_database_management(false);
+    let app = Router::new().nest(
+        "/api",
+        psf_guard::server::api_router(Arc::clone(&server.state)),
+    );
+    let login = |username: &'static str, password: &'static str| {
+        let app = app.clone();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/auth/login")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({"username": username, "password": password}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            response.headers()["set-cookie"]
+                .to_str()
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap()
+                .to_string()
+        }
+    };
+    let viewer = login("viewer", "viewer-secret").await;
+    let editor = login("editor", "editor-secret").await;
+    let minted = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/tokens")
+                .header("cookie", &editor)
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"label": "script", "read_only": true}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(minted.status(), StatusCode::OK);
+    let bytes = minted.into_body().collect().await.unwrap().to_bytes();
+    let minted: Value = serde_json::from_slice(&bytes).unwrap();
+    let token = minted["data"]["token"].as_str().unwrap().to_string();
+    (app, viewer, editor, token)
+}
+
+/// Send as a signed-in user (`cookie`) or with a bearer token.
+async fn send_as(
+    app: &Router,
+    who: (&str, &str),
+    method: &str,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder().method(method).uri(uri);
+    request = request.header(who.0, who.1);
+    let body = if body.is_null() {
+        Body::empty()
+    } else {
+        request = request.header("content-type", "application/json");
+        Body::from(body.to_string())
+    };
+    let response = app
+        .clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
 #[tokio::test]
-async fn library_changes_wait_for_database_management() {
+async fn editors_change_the_library_without_database_management_and_viewers_cannot() {
+    // Keep out, validity marks, Forget and Clear masters edit catalog rows
+    // and the masters PSF Guard made: an editor's work, like grading. The
+    // database-management gate guards paths a client names, not these.
     let server = server();
-    let (_, details) = call(&server.app, "GET", DETAILS, Value::Null).await;
+    let (app, viewer, editor, token) = signed_in(&server).await;
+    let bearer = format!("Bearer {token}");
+    let (_, details) = send_as(&app, ("cookie", &editor), "GET", DETAILS, Value::Null).await;
     let uuid = |name: &str| {
         frame(&details, name)["frame_uuid"]
             .as_str()
@@ -323,29 +444,32 @@ async fn library_changes_wait_for_database_management() {
         ("DELETE", format!("{FRAMES}/{first}"), Value::Null),
     ];
 
-    server.state.set_allow_database_management(false);
-    for (method, uri, body) in &writes {
-        let (status, response) = call(&server.app, method, uri, body.clone()).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {response}");
-        assert!(
-            response["error"]
-                .as_str()
-                .unwrap()
-                .contains("database management is disabled"),
-            "{method} {uri}: {response}"
-        );
+    for who in [
+        ("cookie", viewer.as_str()),
+        ("authorization", bearer.as_str()),
+    ] {
+        for (method, uri, body) in &writes {
+            let (status, response) = send_as(&app, who, method, uri, body.clone()).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {response}");
+            assert!(
+                response["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("read-only access"),
+                "{method} {uri}: {response}"
+            );
+        }
     }
-    let (_, unchanged) = call(&server.app, "GET", DETAILS, Value::Null).await;
+    let (_, unchanged) = send_as(&app, ("cookie", &editor), "GET", DETAILS, Value::Null).await;
     assert_eq!(unchanged["data"]["frames"].as_array().unwrap().len(), 4);
-    let kept = frame(&unchanged, "dark-0.fits");
-    assert!(kept["quality_override"].is_null(), "{kept}");
-    assert!(kept["valid_direction"].is_null(), "{kept}");
+    assert!(frame(&unchanged, "dark-0.fits")["quality_override"].is_null());
 
-    server.state.set_allow_database_management(true);
+    assert!(!server.state.database_management_allowed());
     for (method, uri, body) in &writes {
-        let (status, response) = call(&server.app, method, uri, body.clone()).await;
+        let (status, response) =
+            send_as(&app, ("cookie", &editor), method, uri, body.clone()).await;
         assert_eq!(status, StatusCode::OK, "{method} {uri}: {response}");
     }
-    let (_, changed) = call(&server.app, "GET", DETAILS, Value::Null).await;
+    let (_, changed) = send_as(&app, ("cookie", &editor), "GET", DETAILS, Value::Null).await;
     assert_eq!(changed["data"]["frames"].as_array().unwrap().len(), 2);
 }

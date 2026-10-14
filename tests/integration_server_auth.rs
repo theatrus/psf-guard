@@ -237,12 +237,15 @@ async fn organization_requires_an_editor_and_database_management() {
 }
 
 #[tokio::test]
-async fn flat_history_invalidation_requires_an_editor_and_database_management() {
-    for (allow_management, username, password) in [
-        (true, "viewer", "viewer-secret"),
-        (false, "editor", "editor-secret"),
+async fn flat_history_invalidation_takes_an_editor_not_database_management() {
+    // Invalidating coverage edits catalog rows, as grading does. The
+    // database-management gate guards paths a client names. The editor's
+    // request reaches the handler, which finds no such record.
+    for (username, password, expected) in [
+        ("viewer", "viewer-secret", StatusCode::FORBIDDEN),
+        ("editor", "editor-secret", StatusCode::NOT_FOUND),
     ] {
-        let app = app_with_management(auth_config(), allow_management);
+        let app = app_with_management(auth_config(), false);
         let (_, cookie, _) = login(&app, username, password).await;
         let request = Request::builder()
             .method(Method::POST)
@@ -257,10 +260,8 @@ async fn flat_history_invalidation_requires_an_editor_and_database_management() 
                 .to_string(),
             ))
             .unwrap();
-        assert_eq!(
-            app.clone().oneshot(request).await.unwrap().status(),
-            StatusCode::FORBIDDEN
-        );
+        let (status, _, body) = json(&app, request).await;
+        assert_eq!(status, expected, "{username}: {body}");
     }
 }
 

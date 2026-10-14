@@ -19,7 +19,7 @@ use super::{
     api::ApiResponse,
     database_context::{open_scheduler_connection_with_flags, DatabaseContext},
     extract::DbContext,
-    handlers::{require_database_management_allowed, AppError},
+    handlers::AppError,
     remote_audit::{AuditAction, AuditOutcome, AuditRecord},
     remote_sync::{authenticated_catalog, require_catalog},
     state::AppState,
@@ -793,11 +793,9 @@ pub async fn list(
 }
 
 pub async fn invalidate(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(request): Json<InvalidateRequest>,
 ) -> Result<Json<ApiResponse<InvalidateResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let invalidated = database_task(ctx.0, true, move |conn| {
         invalidate_records(conn, &request, chrono::Utc::now().timestamp())
     })

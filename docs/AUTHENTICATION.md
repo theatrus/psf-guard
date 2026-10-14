@@ -138,8 +138,11 @@ The editor can also:
 - start quality scans and imports;
 - save, delete, and import named processing setups (viewers can list, apply,
   and export them);
-- manage databases, peers, catalogs, and calibration records when the matching
-  server management gate is also enabled;
+- keep calibration frames out or use them anyway, mark their validity, forget
+  them, clear generated masters, and invalidate Target Scheduler flat
+  coverage;
+- manage databases, peers, and catalogs when the server's database-management
+  gate is also enabled;
 - write local exports and apply database sync previews.
 
 Server checks enforce the role even if a client calls the API directly. The UI

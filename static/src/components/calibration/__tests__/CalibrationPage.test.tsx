@@ -422,7 +422,7 @@ describe('CalibrationPage', () => {
     expect(params().get('calView')).toBe('session');
   });
 
-  it('keeps a frame out, marks its validity and forgets it, behind the management gate', async () => {
+  it('keeps a frame out, marks its validity and forgets it', async () => {
     const seen = serve();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderPage('/calibration?db=demo&calSession=s1&calFrame=f1');
@@ -437,7 +437,7 @@ describe('CalibrationPage', () => {
     await waitFor(() => expect(params().get('calFrame')).toBe('f2'));
   });
 
-  it('keeps a frame out by hand even when its grade already does, and no writes on a read-only server', async () => {
+  it('keeps a frame out by hand even when its grade already does, with database management off too', async () => {
     const seen = serve();
     const first = renderPage('/calibration?db=demo&calSession=s1&calFrame=f2');
     const panel = await screen.findByRole('complementary', { name: 'Frame' });
@@ -462,16 +462,18 @@ describe('CalibrationPage', () => {
     expect(within(pinned).getByRole('button', { name: 'Clear' })).toBeInTheDocument();
     second.unmount();
 
+    // Those are row edits: an editor makes them whether or not the server
+    // allows database management.
     serve({ manage: false });
     renderPage('/calibration?db=demo&calSession=s1&calFrame=f2');
-    const readOnly = await screen.findByRole('complementary', { name: 'Frame' });
-    await within(readOnly).findByRole('heading', { name: 'f2.fits' });
-    expect(await screen.findByText(/read-only/)).toBeInTheDocument();
-    expect(within(readOnly).queryByRole('button', { name: 'Use anyway' })).toBeNull();
-    expect(within(readOnly).queryByRole('button', { name: 'Forget' })).toBeNull();
+    const unmanaged = await screen.findByRole('complementary', { name: 'Frame' });
+    await within(unmanaged).findByRole('heading', { name: 'f2.fits' });
+    expect(within(unmanaged).getByRole('button', { name: 'Use anyway' })).toBeInTheDocument();
+    expect(within(unmanaged).getByRole('button', { name: 'Forget' })).toBeInTheDocument();
+    expect(screen.queryByText(/view frames, not change them/)).toBeNull();
   });
 
-  it('offers no writes to a viewer, though the server allows management', async () => {
+  it('offers no writes to a viewer', async () => {
     serve();
     const frames = renderPage('/calibration?db=demo&calSession=s1&calFrame=f2', { canWrite: false });
     const panel = await screen.findByRole('complementary', { name: 'Frame' });

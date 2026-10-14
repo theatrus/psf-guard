@@ -674,20 +674,9 @@ async fn http_routes_enforce_token_scope_sync_grant_management_and_echo_origin()
     assert_eq!(page["data"]["total"], 1);
     assert_eq!(page["data"]["records"][0]["target_guid"], TARGET);
     let record_id = page["data"]["records"][0]["record_id"].as_str().unwrap();
+    // An editor's row edit: no database-management gate.
     let invalidation = json!({"record_ids":[record_id],"reason":"Flat panel reflection"});
-    assert_eq!(
-        call(
-            &router,
-            "POST",
-            "/api/db/test/flat-history/invalidate",
-            None,
-            Some(invalidation.clone())
-        )
-        .await
-        .0,
-        StatusCode::FORBIDDEN
-    );
-    state.set_allow_database_management(true);
+    assert!(!state.database_management_allowed());
     assert_eq!(
         call(
             &router,

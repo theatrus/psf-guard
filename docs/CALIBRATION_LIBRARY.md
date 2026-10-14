@@ -124,7 +124,7 @@ its level, clipped share, noise and spots; for a bias or dark its level,
 spread, noise, row and column banding and hot pixels. Below them are the
 limits the frame crossed, each with its value and the limit.
 
-With database management enabled, the panel can keep the frame out of
+With an editor account, the panel can keep the frame out of
 masters and exports, use a poor one anyway, or clear that choice (see
 [Choosing for yourself](#choosing-for-yourself)), mark which lights it
 serves (see [Validity boundaries](#validity-boundaries)), and forget it. The
@@ -145,7 +145,7 @@ check set aside, one from other software, and one whose file is gone.
 **View** opens the master in the same inspector a stack's **Masters** button
 opens (see [Inspect calibration masters](STACKING_PREVIEWS.md#inspect-calibration-masters)),
 with display stretch, zoom and an unchanged FITS download, but no stack
-needed. With database management enabled, **Clear generated masters**
+needed. With an editor account, **Clear generated masters**
 removes them all while keeping every raw frame and catalog record. It waits
 for any active stack preview; stacks build masters again when they need
 them.
@@ -159,7 +159,7 @@ The NINA plugin sends Target Scheduler's `flathistory` coverage records during
 grade pulls and applied reconciles. Open the database's
 [Calibration page](#browse-the-library) and choose **Scheduler flats**. Filter by target,
 source, filter, or status, then select the suspect coverage records and choose
-**Invalidate coverage** with a reason. This requires database management access.
+**Invalidate coverage** with a reason. This takes an editor account.
 
 The next plugin grade pull or applied reconcile removes those exact, unchanged
 history rows from the source scheduler database and reports the result here.
@@ -323,8 +323,8 @@ side, is recorded and left ungraded. An ungraded frame stays in use.
 
 The calibration page shows each graded frame's grade and main reason, such
 as **Poor · stray light** or **Suspect · noise**, with the numbers behind
-it, and each session counts its frames by grade and those kept out. With
-database management enabled, each frame offers:
+it, and each session counts its frames by grade and those kept out. With an
+editor account, each frame offers:
 
 - **Keep out**: leave the frame out of masters and exports whatever its
   grade, as rejecting does for a light. It is offered for every frame,

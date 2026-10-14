@@ -133,7 +133,6 @@ pub async fn forget_calibration_frame(
     ctx: DbContext,
     Path((_db_id, frame_uuid)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
-    require_database_management_allowed(&state)?;
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
     let outcome = crate::calibration::forget_frame(&mut conn, &frame_uuid).map_err(AppError::db)?;
@@ -157,7 +156,6 @@ pub async fn forget_calibration_frames(
     ctx: DbContext,
     Json(request): Json<ForgetCalibrationFramesRequest>,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
-    require_database_management_allowed(&state)?;
     if request.frame_uuids.is_empty() {
         return Err(AppError::BadRequest("no frames given".into()));
     }
@@ -192,7 +190,6 @@ pub async fn set_calibration_validity(
     ctx: DbContext,
     Json(request): Json<SetCalibrationValidityRequest>,
 ) -> Result<Json<ApiResponse<SetCalibrationValidityResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let direction = match request.direction.as_str() {
         "both" => None,
         "forward" => Some(crate::calibration::ValidDirection::Forward),
@@ -235,7 +232,6 @@ pub async fn set_calibration_quality_override(
     ctx: DbContext,
     Json(request): Json<SetCalibrationQualityOverrideRequest>,
 ) -> Result<Json<ApiResponse<SetCalibrationValidityResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let choice = match request.choice.as_str() {
         "clear" => None,
         "use" => Some(crate::calibration::QualityOverride::Use),
@@ -267,7 +263,6 @@ pub async fn clear_calibration_masters(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
-    require_database_management_allowed(&state)?;
     let _permit = state
         .stack_previews
         .acquire_maintenance_permit()

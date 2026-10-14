@@ -6,7 +6,6 @@ import { useAccess } from '../../auth/access';
 import type { CalibrationSession } from '../../api/types';
 import { useDbProjectTarget } from '../../hooks/useUrlState';
 import { useAllDatabases, useMergedProjects } from '../../hooks/useDatabases';
-import { isTauriApp } from '../../utils/tauri';
 import SchedulerFlatHistory from '../SchedulerFlatHistory';
 import PillSelect from '../toolbar/PillSelect';
 import CalibrationFilters from './CalibrationFilters';
@@ -124,15 +123,11 @@ function CalibrationLibrary({
   dbName: string;
   state: ReturnType<typeof useCalibrationUrlState>;
 }) {
-  const { data: serverInfo } = useQuery({
-    queryKey: ['serverInfo'],
-    queryFn: apiClient.getServerInfo,
-    staleTime: 5 * 60 * 1000,
-  });
-  // Writes need the role's write access as well as the server's
-  // database-management gate, as in Stacks.
+  // Keep out, validity marks, Forget and Clear masters edit catalog rows:
+  // an editor's work, like grading. The database-management gate guards
+  // paths a client names, which nothing here does.
   const access = useAccess();
-  const canManage = access.canWrite && (isTauriApp() || (serverInfo?.allow_database_management ?? false));
+  const canManage = access.canWrite;
   const actions = useCalibrationActions(dbId);
   const summary = useQuery({
     queryKey: ['db', dbId, 'calibrations'],
@@ -151,11 +146,7 @@ function CalibrationLibrary({
   return (
     <>
       {!canManage && (
-        <p className="calibration-notice">
-          {access.canWrite
-            ? 'This server is read-only: frames can be viewed, not changed.'
-            : 'Your account can view frames, not change them.'}
-        </p>
+        <p className="calibration-notice">Your account can view frames, not change them.</p>
       )}
       {summary.data && summary.data.frame_count === 0 ? (
         <p className="calibration-empty">
