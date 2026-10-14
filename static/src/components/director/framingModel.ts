@@ -1,8 +1,9 @@
-import type { DirectorFootprint, DirectorFramingDraft, DirectorFramingPreview, DirectorFramingRequest, DirectorLayout, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey, DirectorRigFraming} from '../../api/directorTypes';
+import type { DirectorFootprint, DirectorFramingDraft, DirectorFramingPreview, DirectorFramingRequest, DirectorLayout, DirectorMeasuredGeometry, DirectorMosaic, DirectorOffset, DirectorPanelSize, DirectorRigProfileSummary, DirectorSkyPosition, DirectorSurvey, DirectorRigFraming} from '../../api/directorTypes';
 import type { SkyPreview } from '../../api/types';
 import { formatDecShort, formatRaShort, galacticBandQuads, tanPixelToSky } from '../../utils/skyProjection';
 import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
-import { cameraToPlane, gridLayout, layoutCells, layoutExtent, layoutIssues, layoutStructureProblem, singleLayout } from './mosaicLayout';
+import { gridLayout, layoutStructureProblem, singleLayout, turnOf, type BoxOf } from './mosaicLayout';
+import { boundsOf, shapeCenter, shapeIssues, turnedShape, type Bounds, type PanelShape, type Point } from './panelShape';
 
 /** The stage's logical pixels; CSS scales the drawing to the element. The
  *  longer side is always 1024, so a 4:3 stage is 1024 × 768. */
@@ -85,9 +86,16 @@ export function roundRa(raDegrees: number, places: number): number {
 export const MAX_EXTENT_DEGREES = 30;
 export const MIN_PANEL_DEGREES = 0.01;
 
-/** The mosaic's extent along the camera axes, as the core computes it. */
-export function mosaicExtent(panel: DirectorPanelSize, layout: DirectorLayout): DirectorPanelSize {
-  return layoutExtent(panel, layout);
+/** The mosaic's extent along the camera axes, as the core computes it:
+ *  planned panels at their places, shot ones as shot. */
+export function mosaicExtent(center: DirectorSkyPosition, positionAngle: number, panel: DirectorPanelSize, layout: DirectorLayout): DirectorPanelSize {
+  return extentOf(framingShapes(center, positionAngle, panel, layout));
+}
+
+function extentOf(shapes: PanelShape[]): DirectorPanelSize {
+  if (shapes.length === 0) return { width_degrees: 0, height_degrees: 0 };
+  const b = boundsOf(shapes.flatMap(shape => shape.corners));
+  return { width_degrees: b[1] - b[0], height_degrees: b[3] - b[2] };
 }
 
 /** Something the server would refuse to save, named by the field it is in. */
@@ -109,9 +117,15 @@ function layoutProblems(prefix: string, who: string, center: DirectorSkyPosition
   if (panel) {
     if (![panel.width_degrees, panel.height_degrees].every(side => within(side, MIN_PANEL_DEGREES, MAX_EXTENT_DEGREES))) say('panel', `panel sides ${MIN_PANEL_DEGREES}° to ${MAX_EXTENT_DEGREES}°`);
     else if (!structure) {
-      const extent = mosaicExtent(panel, layout);
-      if (extent.width_degrees > MAX_EXTENT_DEGREES || extent.height_degrees > MAX_EXTENT_DEGREES) say('mosaic', `mosaic ${formatDegrees(extent.width_degrees)} × ${formatDegrees(extent.height_degrees)}, over ${MAX_EXTENT_DEGREES}°`);
-      else if (layout.panels.some(p => Math.abs(p.x * panel.width_degrees) > MAX_EXTENT_DEGREES || Math.abs(p.y * panel.height_degrees) > MAX_EXTENT_DEGREES)) say('mosaic', `a panel more than ${MAX_EXTENT_DEGREES}° from the center`);
+      // Every panel within the reach the flat layout stays honest in, a
+      // shot one by where it was shot.
+      const far = layout.panels.some(p => {
+        const at = p.measured ? offsetFrom(center, p.measured.center) : [p.x * panel.width_degrees, p.y * panel.height_degrees];
+        return !at || Math.abs(at[0]) > MAX_EXTENT_DEGREES || Math.abs(at[1]) > MAX_EXTENT_DEGREES;
+      });
+      const extent = far ? null : mosaicExtent(center, angle, panel, layout);
+      if (!extent) say('mosaic', `a panel more than ${MAX_EXTENT_DEGREES}° from the center`);
+      else if (extent.width_degrees > MAX_EXTENT_DEGREES || extent.height_degrees > MAX_EXTENT_DEGREES) say('mosaic', `mosaic ${formatDegrees(extent.width_degrees)} × ${formatDegrees(extent.height_degrees)}, over ${MAX_EXTENT_DEGREES}°`);
     }
   }
   return problems;
@@ -372,14 +386,106 @@ function rectangle(center: DirectorOffset, size: DirectorPanelSize, angleDegrees
   return [corner(-1, 1), corner(-1, -1), corner(1, -1), corner(1, 1)];
 }
 
+/** Unit vectors at a sky position: toward it, east and north. */
+function basis(position: DirectorSkyPosition): [number[], number[], number[]] {
+  const rad = Math.PI / 180;
+  const sa = Math.sin(position.ra_degrees * rad); const ca = Math.cos(position.ra_degrees * rad);
+  const sd = Math.sin(position.dec_degrees * rad); const cd = Math.cos(position.dec_degrees * rad);
+  return [[cd * ca, cd * sa, sd], [-sa, ca, 0], [-sd * ca, -sd * sa, cd]];
+}
+const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+/** The position angle a camera at `at` takes so its up draws at `theta`
+ *  (east of north) on the tangent plane about `center`: `theta` plus north's
+ *  lean there, about `Δα · sin δ`. The core's `camera_angle_at`, exactly. */
+export function cameraAngleAt(center: DirectorSkyPosition, at: DirectorSkyPosition, theta: number): number {
+  const [z, x, y] = basis(center);
+  const [p, east, north] = basis(at);
+  const px = dot(p, x); const py = dot(p, y); const pz = dot(p, z);
+  if (pz <= 1e-9) return normaliseAngle(theta);
+  const rad = (theta * Math.PI) / 180;
+  const dx = Math.sin(rad); const dy = Math.cos(rad);
+  const w = [pz * dy, -pz * dx, py * dx - px * dy];
+  let t = [py * w[2] - pz * w[1], pz * w[0] - px * w[2], px * w[1] - py * w[0]];
+  const drawn = [t[0] * pz - px * t[2], t[1] * pz - py * t[2]];
+  if (drawn[0] * dx + drawn[1] * dy < 0) t = t.map(v => -v);
+  const tangent = [0, 1, 2].map(i => t[0] * x[i] + t[1] * y[i] + t[2] * z[i]);
+  return normaliseAngle((Math.atan2(dot(tangent, east), dot(tangent, north)) * 180) / Math.PI);
+}
+
+/** North's lean at `at` on the plane about `center`, in (-180, 180]. */
+export function northTurn(center: DirectorSkyPosition, at: DirectorSkyPosition): number {
+  const angle = cameraAngleAt(center, at, 0);
+  return ((((angle + 180) % 360) + 360) % 360) - 180;
+}
+
+/** A plane offset (east, north) in the camera frame (right, up), degrees. */
+export function planeToCameraDegrees(offset: DirectorOffset, positionAngle: number): Point {
+  const rad = (positionAngle * Math.PI) / 180;
+  return [-offset[0] * Math.cos(rad) + offset[1] * Math.sin(rad), offset[0] * Math.sin(rad) + offset[1] * Math.cos(rad)];
+}
+/** A camera-frame place (right, up) as a plane offset: the same reflection. */
+export const cameraDegreesToPlane = (place: Point, positionAngle: number): DirectorOffset => planeToCameraDegrees(place, positionAngle);
+
+/** A shot panel's corners on the sky: the rectangle its camera covered on
+ *  the plane about its own center, at the angle it was shot. */
+export function measuredCorners(measured: DirectorMeasuredGeometry): DirectorFootprint['corners'] {
+  return rectangle([0, 0], measured.size, measured.position_angle_degrees).map(corner => deprojectFrom(measured.center, corner)) as DirectorFootprint['corners'];
+}
+
+/** Every panel's outline in the camera frame, in degrees: planned panels as
+ *  rectangles at their places and turns, shot ones as shot, projected onto
+ *  the framing's plane. The core's `FramingRequest::shapes`. */
+export function framingShapes(center: DirectorSkyPosition, positionAngle: number, panel: DirectorPanelSize, layout: DirectorLayout): PanelShape[] {
+  return layout.panels.map(placement => {
+    if (placement.measured) {
+      const corners = measuredCorners(placement.measured).map(corner => {
+        const offset = offsetFrom(center, corner);
+        return offset ? planeToCameraDegrees(offset, positionAngle) : [NaN, NaN] as Point;
+      });
+      return { id: placement.id, corners: corners as PanelShape['corners'] };
+    }
+    return turnedShape(placement.id, [placement.x * panel.width_degrees, placement.y * panel.height_degrees], panel.width_degrees, panel.height_degrees, turnOf(placement));
+  });
+}
+
+/** Each panel's reach in panel sizes, from its true outline, for placing
+ *  panels against it. */
+export function framingBoxes(center: DirectorSkyPosition, positionAngle: number, panel: DirectorPanelSize, layout: DirectorLayout): BoxOf {
+  const shot = new Map(framingShapes(center, positionAngle, panel, layout).map(shape => [shape.id, shape]));
+  return placement => {
+    const shape = placement.measured && shot.get(placement.id)
+      ? shot.get(placement.id)!
+      : turnedShape(placement.id, [placement.x * panel.width_degrees, placement.y * panel.height_degrees], panel.width_degrees, panel.height_degrees, turnOf(placement));
+    const b = boundsOf(shape.corners);
+    return [b[0] / panel.width_degrees, b[1] / panel.width_degrees, b[2] / panel.height_degrees, b[3] / panel.height_degrees] as Bounds;
+  };
+}
+
+/** One-based bands of values, a new one where the next value is more than
+ *  `tolerance` past the last: the core's rows and columns. */
+function bands(values: number[], tolerance: number): number[] {
+  const order = values.map((_, index) => index).sort((a, b) => values[a] - values[b]);
+  const out = new Array<number>(values.length).fill(0);
+  let band = 0; let last: number | null = null;
+  for (const index of order) {
+    if (last === null || values[index] - last > tolerance) band += 1;
+    last = values[index];
+    out[index] = band;
+  }
+  return out;
+}
+
 /** The same geometry `POST /framing/preview` returns, computed here so the
  *  rectangles follow the pointer: each panel placed on the tangent plane at
- *  the target, corners taken to the sky, then onto the view's plane. A
- *  footprint past the view plane's horizon has no view corners. The server
- *  recomputes this from the saved draft when it activates, so nothing
- *  depends on the browser's copy being kept. */
+ *  the target, corners taken to the sky, then onto the view's plane; a shot
+ *  panel where its frames were taken. Each panel's camera angle carries
+ *  north's lean at its center. A footprint past the view plane's horizon has
+ *  no view corners. The server recomputes this from the saved draft when it
+ *  activates, so nothing depends on the browser's copy being kept. */
 export function framingGeometry(request: DirectorFramingRequest): DirectorFramingPreview {
   const { center, panel, layout } = request;
+  const angle = request.position_angle_degrees;
   const view = request.view;
   const toView = (position: DirectorSkyPosition): DirectorOffset | null => {
     if (!view) return null;
@@ -388,23 +494,37 @@ export function framingGeometry(request: DirectorFramingRequest): DirectorFramin
     const rad = (view.rotation_degrees * Math.PI) / 180;
     return [offset[0] * Math.cos(rad) - offset[1] * Math.sin(rad), offset[0] * Math.sin(rad) + offset[1] * Math.cos(rad)];
   };
-  const footprint = (id: string, at: DirectorOffset, size: DirectorPanelSize, angle: number): DirectorFootprint => {
-    const corners = rectangle(at, size, angle).map(corner => deprojectFrom(center, corner)) as DirectorFootprint['corners'];
+  const withView = (id: string, middle: DirectorSkyPosition, corners: DirectorFootprint['corners']): DirectorFootprint => {
     const mapped = view ? corners.map(toView) : null;
-    return { id, center: deprojectFrom(center, at), corners, view_corners: mapped && mapped.every(Boolean) ? mapped as DirectorFootprint['view_corners'] : null };
+    return { id, center: middle, corners, view_corners: mapped && mapped.every(Boolean) ? mapped as DirectorFootprint['view_corners'] : null };
   };
-  const cells = layoutCells(layout);
-  const panels: DirectorFramingPreview['panels'] = layout.panels.map((placement, index) => ({
-    row: cells[index][0], column: cells[index][1], locked: placement.locked,
-    ...footprint(placement.id, cameraToPlane(placement.x, placement.y, panel, request.position_angle_degrees), panel, request.position_angle_degrees),
-  }));
+  const footprint = (id: string, at: DirectorOffset, size: DirectorPanelSize, turn: number): DirectorFootprint =>
+    withView(id, deprojectFrom(center, at), rectangle(at, size, turn).map(corner => deprojectFrom(center, corner)) as DirectorFootprint['corners']);
+  const shapes = framingShapes(center, angle, panel, layout);
+  // Rows and columns from where each panel sits, in panel sizes.
+  const places = shapes.map(shape => { const [x, y] = shapeCenter(shape); return [x / panel.width_degrees, y / panel.height_degrees]; });
+  const rows = bands(places.map(place => -place[1]), 0.1);
+  const columns = bands(places.map(place => place[0]), 0.1);
+  const panels: DirectorFramingPreview['panels'] = layout.panels.map((placement, index) => {
+    const turn = turnOf(placement);
+    const shown = placement.measured
+      ? withView(placement.id, placement.measured.center, measuredCorners(placement.measured))
+      : footprint(placement.id, cameraDegreesToPlane(shapeCenter(shapes[index]), angle), panel, angle + turn);
+    return {
+      row: rows[index], column: columns[index], locked: placement.locked,
+      position_angle_degrees: placement.measured ? placement.measured.position_angle_degrees : cameraAngleAt(center, shown.center, angle + turn),
+      angle_offset_degrees: turn,
+      ...(placement.measured ? { measured: placement.measured } : {}),
+      ...shown,
+    };
+  });
   return {
     schema_version: 1,
     panels,
     overlays: request.overlays.map(overlay => footprint(overlay.id, [0, 0], overlay.size, overlay.position_angle_degrees)),
-    extent: layoutExtent(panel, layout),
+    extent: extentOf(shapes),
     view_center_offset: view ? toView(center) : null,
-    issues: layoutIssues(layout),
+    issues: shapeIssues(shapes, layout.min_overlap_percent),
   };
 }
 
@@ -553,9 +673,30 @@ export function handleSky(center: DirectorSkyPosition, positionAngle: number, ha
 export function rotationHandleSky(state: FramingState, extent: DirectorPanelSize, viewFov = state.viewFov): DirectorSkyPosition {
   // Above the top edge of the highest panel, which for a grid is half the extent.
   const top = state.panel && state.layout.panels.length > 0
-    ? (Math.max(...state.layout.panels.map(panel => panel.y)) + 0.5) * state.panel.height_degrees
+    ? Math.max(...framingShapes(state.center, state.positionAngle, state.panel, state.layout).flatMap(shape => shape.corners.map(corner => corner[1])))
     : extent.height_degrees / 2;
-  return handleSky(state.center, state.positionAngle, top, Math.max(0.02, viewFov * 0.03));
+  return handleSky(state.center, state.positionAngle, Number.isFinite(top) ? top : extent.height_degrees / 2, Math.max(0.02, viewFov * 0.03));
+}
+
+/** One panel's turn handle on the sky: past its top edge along its own up,
+ *  a few per cent of the view out, on the framing's plane. `place` is the
+ *  panel's middle in camera-frame degrees. */
+export function panelHandleSky(center: DirectorSkyPosition, positionAngle: number, place: Point, turn: number, halfHeight: number, viewFov: number): DirectorSkyPosition {
+  // Further out than the framing's own handle, clear of the + on its top edge.
+  const reach = halfHeight + Math.max(0.03, viewFov * 0.05);
+  const rad = (turn * Math.PI) / 180;
+  // The panel's up in the camera frame, turned counter-clockwise by its turn.
+  const tip: Point = [place[0] - reach * Math.sin(rad), place[1] + reach * Math.cos(rad)];
+  return deprojectFrom(center, cameraDegreesToPlane(tip, positionAngle));
+}
+
+/** The turn from the framing's angle that points a panel's up from its
+ *  middle (camera-frame degrees) at a sky position. */
+export function turnToward(center: DirectorSkyPosition, positionAngle: number, place: Point, position: DirectorSkyPosition): number | null {
+  const offset = offsetFrom(center, position);
+  if (!offset) return null;
+  const [x, y] = planeToCameraDegrees(offset, positionAngle);
+  return (Math.atan2(-(x - place[0]), y - place[1]) * 180) / Math.PI;
 }
 
 /** How much wider than its footprint a fitted view is. */

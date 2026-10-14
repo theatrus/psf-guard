@@ -1,7 +1,7 @@
 import type { DirectorContribution, DirectorGoal, DirectorLayout, DirectorMosaic, DirectorPlanDraft } from '../../api/directorTypes';
 import { formatDegrees, type FramingState } from './framingModel';
 import { KNOWN_BANDPASSES, PURPOSES } from './planModel';
-import { asGrid, findPanel } from './mosaicLayout';
+import { asGrid, findPanel, turnOf } from './mosaicLayout';
 
 /** What the save bar says changed: a few words per change, against the
  *  state the section loaded with. */
@@ -32,10 +32,12 @@ export function describeLayoutChanges(before: DirectorLayout, after: DirectorLay
   const added = after.panels.filter(panel => !findPanel(before, panel.id)).map(panel => panel.id);
   const removed = before.panels.filter(panel => !findPanel(after, panel.id)).map(panel => panel.id);
   const moved = after.panels.filter(panel => { const old = findPanel(before, panel.id); return !!old && (Math.abs(old.x - panel.x) > 1e-9 || Math.abs(old.y - panel.y) > 1e-9); }).map(panel => panel.id);
+  const turned = after.panels.filter(panel => { const old = findPanel(before, panel.id); return !!old && Math.abs(turnOf(old) - turnOf(panel)) > 1e-9; }).map(panel => panel.id);
   const locked = after.panels.filter(panel => { const old = findPanel(before, panel.id); return !!old && old.locked !== panel.locked; });
   if (added.length) changes.push(`panel${added.length === 1 ? '' : 's'} ${list(added)} added`);
   if (removed.length) changes.push(`panel${removed.length === 1 ? '' : 's'} ${list(removed)} removed`);
   if (moved.length) changes.push(`panel${moved.length === 1 ? '' : 's'} ${list(moved)} moved`);
+  if (turned.length) changes.push(`panel${turned.length === 1 ? '' : 's'} ${list(turned)} turned`);
   for (const panel of locked) changes.push(`${panel.id} ${panel.locked ? 'locked' : 'unlocked'}`);
   if (before.min_overlap_percent !== after.min_overlap_percent) changes.push(`minimum overlap ${before.min_overlap_percent}% → ${after.min_overlap_percent}%`);
   return changes;

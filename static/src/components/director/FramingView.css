@@ -246,6 +246,18 @@
 .framing-overlap[data-short='true'] text { fill: var(--framing-panel-invalid); }
 .framing-add-handle circle { fill: color-mix(in srgb, var(--framing-panel-chosen) 35%, transparent); stroke: var(--framing-panel-chosen); stroke-width: 2; }
 .framing-add-handle path { stroke: var(--framing-ink); stroke-width: 2.5; stroke-linecap: round; }
+/* The chosen panel's own turn handle, past its top edge along its up. */
+.framing-turn-handle line { stroke: var(--framing-panel-chosen); stroke-width: 1.5; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+.framing-turn-handle circle { fill: color-mix(in srgb, var(--framing-panel-chosen) 35%, transparent); stroke: var(--framing-panel-chosen); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+/* Where a shot panel's outline comes from, under its name. */
+.framing-panel text.framing-panel-shot { font-size: 15px; fill: var(--framing-panel-locked); }
+/* A rig framed on its own keeps its colour while its panels are edited. */
+.framing-panels[data-rig-index='0'] { --framing-panel: var(--framing-rig-0); }
+.framing-panels[data-rig-index='1'] { --framing-panel: var(--framing-rig-1); }
+.framing-panels[data-rig-index='2'] { --framing-panel: var(--framing-rig-2); }
+.framing-panels[data-rig-index='3'] { --framing-panel: var(--framing-rig-3); }
+/* The shared framing, plain, while a rig's own panels are edited. */
+.framing-panel-outline { fill: none; stroke: var(--framing-panel); stroke-width: 1.5; stroke-dasharray: 6 5; opacity: 0.7; vector-effect: non-scaling-stroke; }
 .framing-stage[data-drag='panel'] { cursor: move; }
 .framing-stage:focus-visible { outline: 2px solid var(--state-focus-border); outline-offset: 2px; }
 
@@ -277,4 +289,8 @@
 .framing-chosen { padding-left: 10px; border-left: 3px solid var(--color-border-tertiary); }
 .framing-chosen p { margin: 0; font-size: 13px; }
 .framing-chosen .director-actions { margin-top: 6px; gap: 6px; }
+.framing-chosen-angle { margin-top: 4px; }
+.framing-turn { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin-top: 6px; }
+.framing-turn label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text-secondary); }
+.framing-turn .framing-input { max-width: 120px; }
 .framing-issues { margin: 0; padding-left: 18px; font-size: 13px; color: var(--color-error-light); }

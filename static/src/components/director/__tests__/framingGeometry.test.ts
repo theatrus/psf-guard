@@ -25,6 +25,8 @@ describe('framing geometry port', () => {
       close(mine.center.ra_degrees, panel.center.ra_degrees); close(mine.center.dec_degrees, panel.center.dec_degrees);
       panel.corners.forEach((corner, c) => { close(mine.corners[c].ra_degrees, corner.ra_degrees); close(mine.corners[c].dec_degrees, corner.dec_degrees); });
       panel.view_corners!.forEach((corner, c) => { close(mine.view_corners![c][0], corner[0]); close(mine.view_corners![c][1], corner[1]); });
+      // Each panel's camera angle, the framing's turned by north's lean there.
+      close(mine.position_angle_degrees, panel.position_angle_degrees);
     }
     const overlay = theirs.overlays[0];
     overlay.view_corners!.forEach((corner, c) => { close(ours.overlays[0].view_corners![c][0], corner[0]); close(ours.overlays[0].view_corners![c][1], corner[1]); });

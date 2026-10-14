@@ -66,6 +66,16 @@ test('a shot target stays put while panels are added round it, and activates as 
     await expect(page.getByText(/Not placed: r1c1 and p2 overlap by only/)).toBeVisible();
     await expect(panel('p2')).not.toHaveAttribute('data-panel-state', 'invalid');
 
+    // Turn the north-east panel ten degrees on its own. The rig has no
+    // rotator, so the camera is turned by hand for that panel.
+    await page.getByRole('list', { name: 'Panels' }).getByRole('button', { name: /p4/ }).click();
+    await expect(page.getByTestId('framing-turn-handle')).toBeVisible();
+    await page.getByTestId('framing-stage').focus();
+    await page.keyboard.press('Shift+BracketRight');
+    await expect(page.getByLabel('p4 turn degrees')).toHaveValue('10');
+    await expect(page.getByTestId('framing-chosen-angle')).toContainText('turned +10.0° from the framing');
+    await expect(page.getByTestId('framing-hand-turn')).toContainText('No rotator: turn the camera by hand to');
+
     // Save, then activate: three new targets beside the untouched one.
     const saveBar = page.getByRole('region', { name: 'Unsaved changes' });
     await saveBar.getByRole('button', { name: 'Save changes' }).click();
@@ -74,6 +84,9 @@ test('a shot target stays put while panels are added round it, and activates as 
     const dialog = page.getByRole('dialog', { name: 'Activate on the rigs' });
     await dialog.getByRole('button', { name: 'Preview' }).click();
     await expect(dialog.getByLabel('Askar data activation')).toContainText('Heart Nebula p2');
+    // Each panel says the angle it is shot at; the turned one is turned by hand.
+    await expect(dialog.getByLabel('Askar data activation')).toContainText('turned +10.0°');
+    await expect(dialog.getByLabel('Askar data activation')).toContainText('turn the camera by hand to');
     await dialog.getByRole('button', { name: 'Apply' }).click();
     await expect(dialog.getByText(/^Applied/).first()).toBeVisible();
 
@@ -82,6 +95,10 @@ test('a shot target stays put while panels are added round it, and activates as 
       const targets = after.prepare('SELECT name, ra, dec FROM target ORDER BY Id').all() as Array<{ name: string; ra: number; dec: number }>;
       expect(targets.map(target => target.name)).toEqual(['Heart Nebula', 'Heart Nebula p2', 'Heart Nebula p3', 'Heart Nebula p4']);
       expect(targets[0]).toMatchObject({ ra: 2.5466667, dec: 61.45 });
+      // The turned panel is shot at the framing angle plus its turn and north's lean at +61°.
+      const turned = (after.prepare("SELECT rotation FROM target WHERE name = 'Heart Nebula p4'").get() as { rotation: number }).rotation;
+      expect(Math.abs(turned - 10)).toBeLessThan(3);
+      expect(turned).not.toBe(10);
       expect((after.prepare('SELECT isMosaic FROM project').get() as { isMosaic: number }).isMosaic).toBe(1);
       expect((after.prepare('SELECT acquired FROM exposureplan WHERE targetid = 1').get() as { acquired: number }).acquired).toBe(12);
     } finally {
