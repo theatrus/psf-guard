@@ -145,4 +145,54 @@ describe('CalibrationRigSettings', () => {
     expect(screen.getByRole('region', { name: 'Askar 120 · ASI2600MM calibration settings' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /RedCat 51/ })).toHaveAttribute('aria-expanded', 'false');
   });
+
+  it('keeps what is being edited for a rig no catalog lists when the page draws again', async () => {
+    server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current([rig(REDCAT, 'RedCat 51 · ASI533MC')]))));
+    const focus = { uuid: ASKAR, name: 'Askar 120 · ASI2600MM' };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const page = () => (
+      <QueryClientProvider client={queryClient}>
+        <CalibrationRigSettings focusRig={focus} />
+      </QueryClientProvider>
+    );
+    const view = render(page());
+    const editor = await screen.findByRole('region', { name: 'Askar 120 · ASI2600MM calibration settings' });
+    const own = within(editor).getByRole('button', { name: 'Thin master below: own value' });
+    fireEvent.click(own);
+    expect(own).toHaveAttribute('aria-pressed', 'true');
+    // The parent draws again, and the settings come back with a global change.
+    view.rerender(page());
+    expect(within(editor).getByRole('button', { name: 'Thin master below: own value' })).toHaveAttribute('aria-pressed', 'true');
+    queryClient.setQueryData(
+      ['calibration-settings'],
+      current([rig(REDCAT, 'RedCat 51 · ASI533MC')], { thin_master_frames: 6 }).data,
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: /RedCat 51/ })).toBeInTheDocument());
+    expect(within(editor).getByRole('button', { name: 'Thin master below: own value' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(editor).getByRole('button', { name: 'Save rig' })).toBeEnabled();
+  });
+
+  it('has nothing to save on opening, whatever order the server lists a limit in', async () => {
+    // serde_json sends an object's keys sorted: poor before suspect.
+    server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current([
+      rig(ASKAR, 'Askar 120 · ASI2600MM', { grade_flat_illumination: { poor: 0.1, suspect: 0.05 } }),
+    ]))));
+    render(<CalibrationRigSettings />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole('button', { name: /Askar 120/ }));
+    const editor = screen.getByRole('region', { name: 'Askar 120 · ASI2600MM calibration settings' });
+    expect(within(editor).getByRole('button', { name: 'Save rig' })).toBeDisabled();
+  });
+
+  it('marks a rig with values of its own on its badge, not as a set control', async () => {
+    server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current([
+      rig(ASKAR, 'Askar 120 · ASI2600MM', { dark_reach_days: 400 }),
+      rig(REDCAT, 'RedCat 51 · ASI533MC'),
+    ]))));
+    render(<CalibrationRigSettings />, { wrapper: wrapper() });
+    const askar = await screen.findByRole('button', { name: /Askar 120/ });
+    const badge = askar.querySelector('.calibration-rig-count');
+    expect(badge).toHaveClass('has-own-values');
+    expect(badge).not.toHaveClass('is-set');
+    expect(screen.getByRole('button', { name: /RedCat 51/ }).querySelector('.calibration-rig-count')).not.toHaveClass('has-own-values');
+  });
 });

@@ -2136,10 +2136,10 @@
   white-space: nowrap;
 }
 
-.calibration-rig-count.is-set {
-  border-color: var(--state-set-border);
-  background: var(--state-set-bg);
-  color: var(--state-set-fg);
+.calibration-rig-count.has-own-values {
+  border-color: var(--color-own-values-border);
+  background: var(--color-own-values-bg);
+  color: var(--color-own-values-text);
 }
 
 .calibration-rig-editor {

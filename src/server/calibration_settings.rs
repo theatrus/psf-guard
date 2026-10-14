@@ -22,7 +22,8 @@ use rusqlite::OpenFlags;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::calibration::rules::{self, FieldSpec, RuleValues};
 use crate::calibration::{DarkChoice, ExternalMasterPolicy};
@@ -197,7 +198,8 @@ fn checked(key: &str, value: &Value) -> Result<(), AppError> {
     if value.is_null() {
         return Ok(());
     }
-    rules::validate(spec, value).map_err(AppError::BadRequest)
+    rules::validate(spec, value).map_err(AppError::BadRequest)?;
+    rules::stack_limit(spec, value).map_err(AppError::BadRequest)
 }
 
 /// The global edits a request makes, key to new value (`None` clears),
@@ -378,9 +380,48 @@ async fn respond(
     )))
 }
 
+/// The most rigs that may have values of their own. Far more than any
+/// observatory has, and a bound on what one editor can make the registry
+/// hold.
+const MAX_RIGS: usize = 256;
+
+/// Writes of the calibration block, numbered in the order they were made
+/// under the registry's lock.
+static WRITTEN: AtomicU64 = AtomicU64::new(0);
+/// The newest write put in force.
+static APPLIED: Mutex<u64> = Mutex::new(0);
+
+/// Change the calibration block, save the registry, and only once it is
+/// saved put the settings in force. A save that fails changes nothing in
+/// force. Writes go into force in the order they were saved: a write that
+/// lost the race to a newer one is already part of it, so it is skipped.
+async fn save_and_apply(
+    state: &Arc<AppState>,
+    edit: impl FnOnce(&mut CalibrationSettings) -> Result<(), AppError>,
+) -> Result<Option<CalibrationSettings>, AppError> {
+    let (written, calibration) = update_registry(state, |registry| {
+        let mut settings = registry.calibration.clone().unwrap_or_default();
+        edit(&mut settings)?;
+        registry.calibration = tidy(settings);
+        Ok((
+            WRITTEN.fetch_add(1, Ordering::SeqCst) + 1,
+            registry.calibration.clone(),
+        ))
+    })
+    .await?;
+    let mut applied = APPLIED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if written > *applied {
+        apply(state, calibration.as_ref());
+        *applied = written;
+    }
+    Ok(calibration)
+}
+
 /// Put the saved settings in force and judge what they decide again: grades
-/// when a grade limit changed (the health pass follows the grading), else
-/// only the lights' health. No pixels are read for either.
+/// when a setting grading reads changed (the health pass follows the
+/// grading), else only the lights' health. No pixels are read for either.
 fn apply(state: &Arc<AppState>, settings: Option<&CalibrationSettings>) {
     let before = crate::calibration::rule_book();
     crate::calibration::configure(settings);
@@ -406,9 +447,7 @@ pub async fn update_calibration_settings(
     Json(request): Json<UpdateCalibrationSettingsRequest>,
 ) -> Result<Json<ApiResponse<CalibrationSettingsResponse>>, AppError> {
     let edits = global_edits(&request)?;
-    let applied = Arc::clone(&state);
-    let calibration = update_registry(&state, |registry| {
-        let mut settings = registry.calibration.clone().unwrap_or_default();
+    let calibration = save_and_apply(&state, |settings| {
         apply_edits(&mut settings.rules, edits);
         if let Some(masking) = request.flat_star_masking {
             settings.flat_star_masking = masking.then_some(true);
@@ -416,11 +455,7 @@ pub async fn update_calibration_settings(
         if let Some(exclude) = request.exclude_uncalibrated {
             settings.exclude_uncalibrated = exclude.then_some(true);
         }
-        registry.calibration = tidy(settings);
-        // Under the registry's lock, so two saves put their settings in
-        // force in the order they were written.
-        apply(&applied, registry.calibration.as_ref());
-        Ok(registry.calibration.clone())
+        Ok(())
     })
     .await?;
     Ok(respond(&state, calibration).await)
@@ -461,12 +496,16 @@ pub async fn update_rig_calibration_settings(
             values.insert(field.clone(), value.clone());
         }
     }
-    let applied = Arc::clone(&state);
-    let calibration = update_registry(&state, |registry| {
-        let mut settings = registry.calibration.clone().unwrap_or_default();
+    let calibration = save_and_apply(&state, |settings| {
         if values.is_empty() {
             settings.rigs.remove(&key);
         } else {
+            if !settings.rigs.contains_key(&key) && settings.rigs.len() >= MAX_RIGS {
+                return Err(AppError::BadRequest(format!(
+                    "at most {MAX_RIGS} rigs can have settings of their own; let one \
+                     inherit everything first"
+                )));
+            }
             settings.rigs.insert(
                 key.clone(),
                 RigCalibrationSettings {
@@ -475,9 +514,7 @@ pub async fn update_rig_calibration_settings(
                 },
             );
         }
-        registry.calibration = tidy(settings);
-        apply(&applied, registry.calibration.as_ref());
-        Ok(registry.calibration.clone())
+        Ok(())
     })
     .await?;
     Ok(respond(&state, calibration).await)
@@ -490,13 +527,9 @@ pub async fn delete_rig_calibration_settings(
     Path(rig_uuid): Path<String>,
 ) -> Result<Json<ApiResponse<CalibrationSettingsResponse>>, AppError> {
     let key = rig_key(&rig_uuid)?;
-    let applied = Arc::clone(&state);
-    let calibration = update_registry(&state, |registry| {
-        let mut settings = registry.calibration.clone().unwrap_or_default();
+    let calibration = save_and_apply(&state, |settings| {
         settings.rigs.remove(&key);
-        registry.calibration = tidy(settings);
-        apply(&applied, registry.calibration.as_ref());
-        Ok(registry.calibration.clone())
+        Ok(())
     })
     .await?;
     Ok(respond(&state, calibration).await)

@@ -44,15 +44,10 @@ test('flat star masking defaults off and persists on and off across reloads', as
     request.method() === 'PUT' && request.url().endsWith('/api/settings/calibration')
   );
   await settings.getByRole('button', { name: 'Save', exact: true }).click();
-  // The panel sends every check it shows, each at its default (`null`), and
-  // stacks keep lights they cannot calibrate.
+  // The panel sends only what changed, so what another tab saved, or a
+  // value this build cannot read, is kept.
   const body = (await sent).postDataJSON();
-  expect(body).toEqual({
-    flat_star_masking: true,
-    exclude_uncalibrated: false,
-    rules: Object.fromEntries((original.fields ?? []).map((field) => [field.key, null])),
-  });
-  expect(Object.keys(body.rules)).toContain('rotation_tolerance_deg');
+  expect(body).toEqual({ flat_star_masking: true });
   await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   await expect.poll(async () =>
     (await (await request.get('/api/settings/calibration')).json()).data

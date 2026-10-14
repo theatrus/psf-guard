@@ -316,6 +316,18 @@ async fn every_value_is_checked_against_its_setting() {
             json!({ "rotation_tolerance_deg": 200 }),
             "0 to 180",
         ),
+        // Stacks hold a master flat to Seiza's 2° and 1 mm for now, so a
+        // wider tolerance would match flats the final pass refuses.
+        (
+            SETTINGS,
+            json!({ "rules": { "rotation_tolerance_deg": 5 } }),
+            "can't be wider than 2° yet",
+        ),
+        (
+            path.as_str(),
+            json!({ "rules": { "focal_length_tolerance_mm": 5 } }),
+            "can't be wider than 1 mm yet",
+        ),
         (
             path.as_str(),
             json!({ "rules": { "flat_session_hours": 0 } }),
@@ -506,5 +518,101 @@ async fn a_rigs_values_are_kept_beside_the_global_ones_and_put_in_force() {
     )
     .unwrap();
     assert!(saved.get("calibration").is_none(), "{saved}");
+    reset();
+}
+
+/// A save that fails changes nothing in force: the settings go into force
+/// only once the registry holds them, so a restart cannot take them back.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_change_the_registry_could_not_save_is_not_put_in_force() {
+    use std::os::unix::fs::PermissionsExt;
+    let _turn = TURN.lock().await;
+    let server = server();
+    let editor = login(&server.app, "editor", "editor-secret").await;
+    // A registry that reads but cannot be written: its folder is read-only.
+    let (status, body) = send(
+        &server.app,
+        Method::PUT,
+        SETTINGS,
+        &editor,
+        Some(json!({ "rules": { "thin_master_frames": 4 } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let folder = server.dir.path().to_path_buf();
+    let writable = std::fs::metadata(&folder).unwrap().permissions();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let (status, body) = send(
+        &server.app,
+        Method::PUT,
+        SETTINGS,
+        &editor,
+        Some(json!({ "rules": { "thin_master_frames": 8 } })),
+    )
+    .await;
+    let (rig_status, _) = send(
+        &server.app,
+        Method::PUT,
+        &rig_path(&server.rig_uuid),
+        &editor,
+        Some(json!({ "rules": { "flat_max_age_days": 400 } })),
+    )
+    .await;
+    std::fs::set_permissions(&folder, writable).unwrap();
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert_eq!(rig_status, StatusCode::INTERNAL_SERVER_ERROR);
+    // Still the saved value, for every rig.
+    let book = psf_guard::calibration::rule_book();
+    assert_eq!(book.global().thin_master_frames, 4);
+    assert_eq!(book.for_rig(&server.rig_uuid).flat_max_age_days, 60.0);
+    reset();
+}
+
+/// One editor cannot make the registry hold settings for any number of
+/// rigs.
+#[tokio::test]
+async fn the_number_of_rigs_with_settings_of_their_own_is_bounded() {
+    let _turn = TURN.lock().await;
+    let server = server();
+    let editor = login(&server.app, "editor", "editor-secret").await;
+    for index in 0..256u32 {
+        let (status, body) = send(
+            &server.app,
+            Method::PUT,
+            &rig_path(&format!("00000000-0000-0000-0000-{index:012}")),
+            &editor,
+            Some(json!({ "rules": { "thin_master_frames": 4 } })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    let (status, body) = send(
+        &server.app,
+        Method::PUT,
+        &rig_path(&server.rig_uuid),
+        &editor,
+        Some(json!({ "rules": { "thin_master_frames": 3 } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("at most 256 rigs"),
+        "{body}"
+    );
+    // A rig already listed may still change.
+    let (status, body) = send(
+        &server.app,
+        Method::PUT,
+        &rig_path("00000000-0000-0000-0000-000000000007"),
+        &editor,
+        Some(json!({ "rules": { "thin_master_frames": 3 } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     reset();
 }

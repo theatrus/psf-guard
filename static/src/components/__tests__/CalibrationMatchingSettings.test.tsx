@@ -31,9 +31,6 @@ const current = (rules: Record<string, unknown> = {}, flatStarMasking = false) =
   error: null,
 });
 
-/** The rules a save sends: every key, `null` for the default. */
-const everyRule = (set: Record<string, unknown> = {}) =>
-  Object.fromEntries(CALIBRATION_RULE_FIELDS.map((field) => [field.key, set[field.key] ?? null]));
 
 describe('CalibrationMatchingSettings', () => {
   it('shows each default as the empty field\'s placeholder and nothing to save', async () => {
@@ -72,13 +69,8 @@ describe('CalibrationMatchingSettings', () => {
     // The default, typed out, is still the default.
     fireEvent.change(screen.getByLabelText('Complete night'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() =>
-      expect(saved).toEqual({
-        flat_star_masking: false,
-        exclude_uncalibrated: false,
-        rules: everyRule({ dark_reach_days: 90 }),
-      }),
-    );
+    // Only what changed: the default typed out changes nothing.
+    await waitFor(() => expect(saved).toEqual({ rules: { dark_reach_days: 90 } }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
     expect(screen.getByLabelText('Dark reach')).toHaveValue(90);
   });
@@ -104,9 +96,7 @@ describe('CalibrationMatchingSettings', () => {
     fireEvent.change(mixed, { target: { value: 'off' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect((saved as { rules: Record<string, unknown> } | null)?.rules).toEqual(
-        everyRule({ check_no_flat: 'advisory', check_mixed_flats: 'off' }),
-      ),
+      expect(saved).toEqual({ rules: { check_no_flat: 'advisory', check_mixed_flats: 'off' } }),
     );
   });
 
@@ -132,9 +122,7 @@ describe('CalibrationMatchingSettings', () => {
     fireEvent.change(poor, { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect((saved as { rules: Record<string, unknown> } | null)?.rules).toEqual(
-        everyRule({ grade_flat_illumination: { suspect: 0.05, poor: null } }),
-      ),
+      expect(saved).toEqual({ rules: { grade_flat_illumination: { suspect: 0.05, poor: null } } }),
     );
   });
 
@@ -241,5 +229,64 @@ describe('CalibrationMatchingSettings', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load calibration settings.');
     expect(screen.queryByRole('checkbox', { name: 'Mask stars in flats' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+
+  it('sends only what was edited, so another tab\'s save stands', async () => {
+    // Tab A saved Dark reach after this tab read the settings.
+    let stored: Record<string, unknown> = {};
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current(stored))),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = (await request.json()) as Record<string, unknown>;
+        stored = { ...stored, ...(saved.rules as Record<string, unknown>) };
+        return HttpResponse.json(current(stored));
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const thin = await screen.findByLabelText('Thin master below');
+    stored = { dark_reach_days: 30 };
+    fireEvent.change(thin, { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toEqual({ rules: { thin_master_frames: 4 } }));
+    expect(stored).toEqual({ dark_reach_days: 30, thin_master_frames: 4 });
+    // The answer brings tab A's value into the field nobody edited here.
+    await waitFor(() => expect(screen.getByLabelText('Dark reach')).toHaveValue(30));
+  });
+
+  it('never clears a value this build cannot read', async () => {
+    // A newer build saved a dark choice this one does not know; the server
+    // hides it, so the field shows the default.
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current())),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(current());
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Mask stars in flats' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toEqual({ flat_star_masking: true }));
+    expect(saved).not.toHaveProperty('rules');
+  });
+
+  it('keeps unsaved edits when the settings are read afresh', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current())));
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CalibrationMatchingSettings />
+      </QueryClientProvider>,
+    );
+    const reach = await screen.findByLabelText('Dark reach');
+    fireEvent.change(reach, { target: { value: '45' } });
+    // A rig's save hands back the settings with a rig changed.
+    const answer = current({ thin_master_frames: 3 }).data;
+    queryClient.setQueryData(['calibration-settings'], answer);
+    await waitFor(() => expect(screen.getByLabelText('Thin master below')).toHaveValue(3));
+    expect(screen.getByLabelText('Dark reach')).toHaveValue(45);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

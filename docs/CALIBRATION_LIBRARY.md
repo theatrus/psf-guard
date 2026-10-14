@@ -766,7 +766,9 @@ for it.
 A rig is the calibration library's rig (see [Rig identity](#rig-identity)):
 its telescope, camera, frame size and binning. Its key is a hash of those,
 so one rig has one key in every catalog and its values follow it from
-database to database. A light's rig is read off its own header; a
+database to database. The header text is taken as written, lower-cased but
+not trimmed, so a renamed N.I.N.A. profile or a stray space in `TELESCOP` or
+`INSTRUME` makes another rig, which starts with no values of its own. A light's rig is read off its own header; a
 calibration frame is graded by its own rig's limits. The **Rigs** list
 shows every rig an open catalog records, with its databases and frame
 count; a rig opened from a light's Calibration panel shows even when no
@@ -789,7 +791,10 @@ it inherits and from where; **Own value** sets or clears one, and
   master. A stack's key takes the matching settings that differ from their
   defaults, so a setting that changes only which matching darks or flats a
   master keeps, such as the complete night or the flat session, still
-  builds the stack again; a stack nobody tuned keeps its key.
+  builds the stack again; a stack nobody tuned keeps its key. The dark
+  temperature, flat rotation and flat focal length tolerances also decide
+  which frames are graded against each other, so changing one grades the
+  frames again too.
 - WBPP exports and runs match the same way when they are planned, so one
   planned after a change takes the new frames (see [Export](#export)).
 - **Light checks** change only what is flagged. The health pass judges the
@@ -874,6 +879,10 @@ it refuses:
   flat within 2° and 1 mm. A wider flat tolerance lets a light take flats
   further off, but one master's flats still agree with each other that
   closely.
+- For now the stack also holds a master flat to its light at 2° and 1 mm
+  when it calibrates, whatever matching allowed, so a wider flat rotation or
+  focal length tolerance is refused when saved. Wider values take effect
+  once Seiza checks the light with the rig's own tolerances.
 - Camera, frame size, binning, gain, offset, readout mode, Bayer layout,
   filter and telescope must agree; they are identity, not tolerance.
 - The integrator's own stray-light screen, which applies only while some
@@ -896,7 +905,13 @@ kind, out of range, or a grade whose suspect limit comes after its poor one
 is refused, naming the setting.
 
 The registry keeps the values in its `calibration` block, the server's
-beside the keys older builds read and each rig's under `rigs`.
+beside the keys older builds read and each rig's under `rigs`. At most 256
+rigs can have values of their own. A setting goes into force only once the
+registry is saved, so a save that fails changes nothing.
+
+An older build reads the keys it knows. If it saves the registry, it drops
+`rigs` and every key it does not know, so after a downgrade the rigs' values
+and the new global ones must be set again.
 
 ## Stack previews
 

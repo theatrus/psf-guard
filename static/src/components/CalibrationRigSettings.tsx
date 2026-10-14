@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
@@ -14,8 +14,11 @@ import {
   describeRuleValue,
   draftOf,
   parseDraft,
+  rulesKey,
+  sameRules,
   type RuleDraft,
 } from '../utils/calibrationRules';
+import { invalidateCalibrationViews } from '../utils/calibrationQueries';
 import CalibrationRuleControl from './CalibrationRuleControl';
 
 /** A rig to open on arrival, as a light's Calibration panel names it. */
@@ -28,6 +31,9 @@ interface CalibrationRigSettingsProps {
   /** Open this rig's values, adding it to the list if no catalog records it. */
   focusRig?: CalibrationRigFocus | null;
 }
+
+/** The values of a rig no catalog lists yet: none, the same object every render. */
+const NO_RULES: CalibrationRuleValues = Object.freeze({}) as CalibrationRuleValues;
 
 function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
@@ -64,7 +70,7 @@ export default function CalibrationRigSettings({ focusRig = null }: CalibrationR
   const listed = data.rigs ?? [];
   const rigs: RigSettings[] =
     focusRig && !listed.some((rig) => rig.rig_uuid === focusRig.uuid)
-      ? [{ rig_uuid: focusRig.uuid, name: focusRig.name, databases: [], frames: 0, rules: {} }, ...listed]
+      ? [{ rig_uuid: focusRig.uuid, name: focusRig.name, databases: [], frames: 0, rules: NO_RULES }, ...listed]
       : listed;
 
   return (
@@ -99,7 +105,7 @@ export default function CalibrationRigSettings({ focusRig = null }: CalibrationR
                 >
                   <span className="calibration-rig-name">{rig.name}</span>
                   {meta && <span className="calibration-rig-meta">{meta}</span>}
-                  <span className={`calibration-rig-count${own > 0 ? ' is-set' : ''}`}>
+                  <span className={`calibration-rig-count${own > 0 ? ' has-own-values' : ''}`}>
                     {own > 0 ? plural(own, 'own value') : 'Inherits all'}
                   </span>
                 </button>
@@ -136,13 +142,20 @@ function RigEditor({ rig, fields, globalRules }: RigEditorProps) {
   // The values the rig sets for itself, as edited; a key not here inherits.
   const [own, setOwn] = useState<Record<string, RuleDraft>>(() => ownDrafts(fields, rig.rules));
   const [preset, setPreset] = useState<string | null>(null);
+  // Start again from the saved values only when they change, not each time
+  // the settings are read afresh: a global save hands back new objects with
+  // the same values, and must not throw away what is being edited here.
+  const latest = useRef({ fields, rules: rig.rules });
+  latest.current = { fields, rules: rig.rules };
+  const savedKey = rulesKey(rig.rules);
+  const fieldKeys = fields.map((field) => field.key).join(',');
   useEffect(() => {
-    setOwn(ownDrafts(fields, rig.rules));
-  }, [fields, rig.rules]);
+    setOwn(ownDrafts(latest.current.fields, latest.current.rules));
+  }, [savedKey, fieldKeys]);
 
   const settled = (updated: CalibrationSettings) => {
     queryClient.setQueryData(['calibration-settings'], updated);
-    void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[2] === 'image-calibration' });
+    invalidateCalibrationViews(queryClient);
     setPreset(null);
   };
   const save = useMutation({
@@ -183,9 +196,7 @@ function RigEditor({ rig, fields, globalRules }: RigEditorProps) {
       result.ok && result.value !== null ? [[key, result.value]] : [],
     ),
   );
-  const canonical = (rules: CalibrationRuleValues) =>
-    JSON.stringify(Object.keys(rules).sort().map((key) => [key, rules[key]]));
-  const dirty = canonical(values) !== canonical(rig.rules);
+  const dirty = !sameRules(values, rig.rules);
 
   const toggle = (field: CalibrationRuleField) =>
     setOwn((previous) => {

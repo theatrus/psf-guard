@@ -45,6 +45,27 @@ export function sameRuleValue(left: CalibrationRuleValue | undefined, right: Cal
   return left === right;
 }
 
+/** Whether two sets of values hold the same keys and values, whatever order they came in. */
+export function sameRules(left: CalibrationRuleValues, right: CalibrationRuleValues): boolean {
+  const keys = Object.keys(left);
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every((key) => key in right && sameRuleValue(left[key], right[key]))
+  );
+}
+
+/** A key for a set of values that changes only when the values do, not their order. */
+export function rulesKey(rules: CalibrationRuleValues): string {
+  return JSON.stringify(
+    Object.keys(rules)
+      .sort()
+      .map((key) => {
+        const value = rules[key];
+        return [key, isLimits(value) ? [value.suspect ?? null, value.poor ?? null] : value];
+      }),
+  );
+}
+
 /** The labels a check's modes show: what the check then raises. */
 export function checkOptions(field: CalibrationRuleField): { value: CalibrationCheckMode; label: string }[] {
   if (field.kind.type !== 'check') return [];

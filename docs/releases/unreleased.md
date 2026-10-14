@@ -369,4 +369,6 @@
   lights that can't be calibrated** on, every export leaves out the lights a
   stack would, in either layout, from the CLI and in the AstroBin export,
   and says how many and why. The WBPP runner scripts list the settings in
-  force and warn about frames an earlier export left in the folder.
+  force and warn about frames an earlier export left in the folder. An
+  older PSF Guard that saves its settings drops the rigs' values and the new
+  settings, so set them again after a downgrade.

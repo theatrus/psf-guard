@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { CalibrationRuleField, CalibrationRuleValue, CalibrationRuleValues } from '../api/types';
@@ -11,6 +11,7 @@ import {
   type RuleDraft,
 } from '../utils/calibrationRules';
 import CalibrationRuleControl from './CalibrationRuleControl';
+import { invalidateCalibrationViews } from '../utils/calibrationQueries';
 
 /** What each group's settings change, said once above them. */
 const GROUP_NOTES: Record<CalibrationRuleField['group'], string> = {
@@ -58,22 +59,24 @@ export default function CalibrationMatchingSettings() {
 
   const fields = useMemo(() => settings.data?.fields ?? [], [settings.data]);
   const rules: CalibrationRuleValues = useMemo(() => settings.data?.rules ?? {}, [settings.data]);
+  // Only what the person edited. A field not here shows the saved value, so
+  // the settings read afresh (another tab's save, a rig's save) reach every
+  // field nobody is editing, and a save sends only what was edited: what
+  // another tab saved, or a value this build cannot read, is kept.
   const [drafts, setDrafts] = useState<Record<string, RuleDraft>>({});
-  const [flatStarMasking, setFlatStarMasking] = useState(false);
-  const [excludeUncalibrated, setExcludeUncalibrated] = useState(false);
-  useEffect(() => {
-    if (!settings.data) return;
-    setDrafts(Object.fromEntries(fields.map((field) => [field.key, globalDraft(field, rules[field.key])])));
-    setFlatStarMasking(settings.data.flat_star_masking ?? false);
-    setExcludeUncalibrated(settings.data.exclude_uncalibrated ?? false);
-  }, [settings.data, fields, rules]);
+  const [flatStarMasking, setFlatStarMasking] = useState<boolean | null>(null);
+  const [excludeUncalibrated, setExcludeUncalibrated] = useState<boolean | null>(null);
 
   const save = useMutation({
     mutationFn: apiClient.updateCalibrationSettings,
     onSuccess: (updated) => {
       queryClient.setQueryData(['calibration-settings'], updated);
-      // A light's account names the limits it was checked by.
-      void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[2] === 'image-calibration' });
+      setDrafts({});
+      setFlatStarMasking(null);
+      setExcludeUncalibrated(null);
+      // A light's account names the limits it was checked by, and the
+      // Library, Grid and reports show what the checks now find.
+      invalidateCalibrationViews(queryClient);
     },
   });
 
@@ -88,21 +91,32 @@ export default function CalibrationMatchingSettings() {
   }
 
   const current = settings.data!;
+  const savedMasking = current.flat_star_masking ?? false;
+  const savedExclude = current.exclude_uncalibrated ?? false;
+  const masking = flatStarMasking ?? savedMasking;
+  const exclude = excludeUncalibrated ?? savedExclude;
   const parsed = new Map(
-    fields.map((field) => [field.key, parseDraft(field, drafts[field.key] ?? globalDraft(field, rules[field.key]))]),
+    fields
+      .filter((field) => field.key in drafts)
+      .map((field) => [field.key, parseDraft(field, drafts[field.key])]),
   );
   const invalid = [...parsed.values()].some((result) => !result.ok);
-  const changed = fields.some((field) => {
+  // What the save sends: each edited value that differs from the saved one,
+  // `null` to go back to the default.
+  const edits: Record<string, CalibrationRuleValue | null> = {};
+  for (const field of fields) {
     const result = parsed.get(field.key);
-    if (!result?.ok) return false;
+    if (!result?.ok) continue;
     const before = wanted(field, rules[field.key] ?? null);
     const after = wanted(field, result.value);
-    return before === null || after === null ? before !== after : !sameRuleValue(before, after);
-  });
-  const dirty =
-    changed ||
-    excludeUncalibrated !== (current.exclude_uncalibrated ?? false) ||
-    flatStarMasking !== (current.flat_star_masking ?? false);
+    const same = before === null || after === null ? before === after : sameRuleValue(before, after);
+    if (!same) edits[field.key] = after;
+  }
+  const update: Parameters<typeof apiClient.updateCalibrationSettings>[0] = {};
+  if (Object.keys(edits).length > 0) update.rules = edits;
+  if (masking !== savedMasking) update.flat_star_masking = masking;
+  if (exclude !== savedExclude) update.exclude_uncalibrated = exclude;
+  const dirty = Object.keys(update).length > 0;
 
   const row = (field: CalibrationRuleField) => {
     const result = parsed.get(field.key);
@@ -154,7 +168,7 @@ export default function CalibrationMatchingSettings() {
         <label className="review-preference">
           <input
             type="checkbox"
-            checked={flatStarMasking}
+            checked={masking}
             onChange={(event) => setFlatStarMasking(event.target.checked)}
           />
           <span>Mask stars in flats</span>
@@ -175,7 +189,7 @@ export default function CalibrationMatchingSettings() {
         <label className="review-preference">
           <input
             type="checkbox"
-            checked={excludeUncalibrated}
+            checked={exclude}
             onChange={(event) => setExcludeUncalibrated(event.target.checked)}
           />
           <span>
@@ -195,18 +209,7 @@ export default function CalibrationMatchingSettings() {
         type="button"
         className="save-button"
         disabled={invalid || !dirty || save.isPending}
-        onClick={() =>
-          save.mutate({
-            flat_star_masking: flatStarMasking,
-            exclude_uncalibrated: excludeUncalibrated,
-            rules: Object.fromEntries(
-              fields.map((field) => {
-                const result = parsed.get(field.key);
-                return [field.key, result?.ok ? wanted(field, result.value) : null];
-              }),
-            ),
-          })
-        }
+        onClick={() => save.mutate(update)}
       >
         {save.isPending ? 'Saving…' : 'Save'}
       </button>

@@ -592,8 +592,10 @@ fn session_grouping_note(comment: &str) -> String {
 }
 
 /// Text from the catalog or the settings, made safe inside one comment line:
-/// a line break or a JavaScript line separator would end the comment, and a
-/// `%` in a batch file's `REM` line is expanded before the line is read.
+/// a line break or a JavaScript line separator would end the comment, a `%`
+/// in a batch file's `REM` line is expanded before the line is read, and
+/// PixInsight's preprocessor opens a block comment at `/*` even inside a
+/// `//` line, so `/*` and `*/` are split apart in the script.
 fn comment_text(comment: &str, text: &str) -> String {
     let flat: String = text
         .chars()
@@ -607,6 +609,8 @@ fn comment_text(comment: &str, text: &str) -> String {
         .collect();
     if comment.starts_with("REM") {
         flat.replace('%', "%%")
+    } else if comment.starts_with("//") {
+        flat.replace("/*", "/ *").replace("*/", "* /")
     } else {
         flat
     }
@@ -1566,6 +1570,31 @@ mod tests {
             batch.contains("REM No darks are exported for Rig alert(1) 100%%:"),
             "{batch}"
         );
+
+        // Nor opens a block comment in the PixInsight script: a rig name, a
+        // reason and a stale path from the catalog, each with `/*` or `*/`.
+        let mut plan = plan_with(&["lights"]);
+        plan.calibration_settings = vec!["Use darks: off (for Esprit 100 /* f5.5)".into()];
+        plan.without_darks = vec!["Esprit 100 /* f5.5".into()];
+        plan.uncalibrated = vec![(
+            4,
+            "a.fits".into(),
+            "No matching bias, and darks are not used (set for RC /* 8 */)".into(),
+        )];
+        let spec = WbppScriptSpec {
+            stale_frames: vec!["lights/M42/*old.fits".into()],
+            ..Default::default()
+        };
+        let js = js_runner(&plan, &spec);
+        assert!(!js.contains("/*") && !js.contains("*/"), "{js}");
+        assert!(
+            js.contains("//   Use darks: off (for Esprit 100 / * f5.5)"),
+            "{js}"
+        );
+        assert!(js.contains("(set for RC / * 8 * /)"), "{js}");
+        assert!(js.contains("such as lights/M42/ *old.fits."), "{js}");
+        // The shell runner keeps the text as it is.
+        assert!(shell_script(&plan, &spec).contains("lights/M42/*old.fits"));
 
         // Matched by the defaults, the runner says that much and no more.
         let shell = shell_script(&plan_with(&["lights"]), &WbppScriptSpec::default());

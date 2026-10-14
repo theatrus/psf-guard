@@ -72,6 +72,12 @@
      Library's own accent for its new frames. */
   --color-new: var(--color-primary);
 
+  /* A rig that sets calibration values of its own, on its badge in the
+     Rigs list. A count, not a control, so it is not a "set" state. */
+  --color-own-values-border: var(--color-primary-alpha-70);
+  --color-own-values-bg: var(--color-primary-alpha-10);
+  --color-own-values-text: var(--color-primary);
+
   /* Text that must stand out on a control, and text on a coloured fill. */
   --color-text-strong: #f2f2f2;
   --color-text-on-fill: #fff;
