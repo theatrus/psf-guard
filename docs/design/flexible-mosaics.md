@@ -48,15 +48,25 @@ Findings from the code before this change, for the record.
   `psf_guard_director_target (target_guid, project_guid, panel_id,
   framing_revision)`. A panel that moved more than a quarter of its size and
   has frames gets a new target; the old one keeps its frames, and its
-  `panel_id` is retired as `{id}~{revision}`.
+  `panel_id` is retired as `{id}~{revision}`. A target not yet owned is
+  taken over by name, by the panel it stands for (a lone target is `r1c1`)
+  only within a quarter of the panel's shorter side, or by place. One with
+  frames found further away is left as it is and the panel gets a new
+  target, so taking it over never moves frames; the preview says how far
+  away it sits.
 - **Import.** A Target Scheduler project becomes a framing draft: one target
   is a single panel at its center, targets on a grid become that grid
   (measured on the plane of their mean center), and separate targets are
-  drafted as the first alone.
+  drafted as the first alone. A plan that still follows its project keeps
+  the minimum overlap, and each panel's lock and shot geometry, when it is
+  taken in again; a move in Target Scheduler that would move a locked panel
+  ends the following, and the drafts stay as they are.
 - **Library.** `mosaic_scope.rs` treats a project as a mosaic when Director's
   record names every target's panel as `r{row}c{column}`, or when the targets'
-  coordinates form a full grid. Images, Sequence and Stacks then show the
-  panels together, Stacks in a CSS grid by row and column.
+  coordinates form a full grid. Two live panels at least make a mosaic: a
+  single panel beside its retired `{id}~{revision}` target is one target.
+  Images, Sequence and Stacks then show the panels together, Stacks in a CSS
+  grid by row and column.
 - **Target Scheduler's mosaic mode.** A project's `isMosaic` flag holds no
   geometry. Its only effect is the *Mosaic Completion* scoring rule (weight 0
   by default), which favours the targets of a mosaic project that are least
@@ -133,7 +143,14 @@ two of them intersect in a convex polygon (Sutherland–Hodgman clipping).
 - Where two outlines intersect, the shared polygon's extent along each
   camera axis, over the **larger** panel's extent along it, gives the share
   across each axis. Where they do not, the overlap of their extents along
-  each axis does, negative for a gap.
+  each axis does, negative for a gap. Outlines that miss although their
+  extents overlap on both axes (turned corners passing by) are apart by the
+  shortest distance between them, across the axis that distance mostly runs
+  along, so two turned panels side by side with sky between them read as a
+  gap, not as touching.
+- Extents apart along an axis share no area, so such a pair is not clipped,
+  and a gap is checked for cover only against panels that reach into it.
+  The answers are the same; a 16 by 16 mosaic reads in a few milliseconds.
 - The **seam** is across the axis with the smaller share. The pair's
   **thickness** is the shared strip's mean width across the seam (its area
   over its length), over the larger panel's extent; the other share is its
@@ -173,21 +190,27 @@ returns them under `measured`):
 
 1. **Fresh pixel-derived solves** (`solved`): the quality scan's persisted
    plate solves of the frames, only those that still match their file and
-   only real solves (hinted or blind), not embedded WCS. Up to the newest 200
+   only real solves (hinted or blind), not embedded WCS. Up to the newest 60
    frames. The center is the median of their centers on the tangent plane at
-   the first; the camera angle is the median of their position angles, read
-   from each solution's CD matrix (the field rotation the sequence analysis
-   uses, turned to sky handedness), folded to within a quarter turn of the
-   planned angle so frames either side of a meridian flip agree; the field is
-   the median of pixel dimensions times the solved scale.
+   their mean center, so one stray solve does not pick the plane; the camera
+   angle is the median of their position angles, read from each solution's
+   CD matrix (the field rotation the sequence analysis uses, turned to sky
+   handedness), each folded by a half turn onto their own axis (about their
+   axial mean) so frames either side of a meridian flip agree wherever the
+   plan points, then given on the half nearer the planned angle; the field is
+   the median of pixel dimensions times the solved scale. On real N.I.N.A. 3
+   frames from rotator rigs, the angle read this way is the sky angle the
+   rotator reported, to within a degree or a half turn, so the sign is
+   N.I.N.A.'s and Target Scheduler's.
 2. **The frames' headers** (`header`): up to eight newest frames' FITS
-   headers. The center from an embedded TAN solution's image middle, else the
+   headers, each read once per version of its file (its size and
+   modification time); a read that fails is tried again next time. The center from an embedded TAN solution's image middle, else the
    mount's RA and Dec; the angle from the embedded solution, else the
    rotator's reported angle (`RotatorPosition`, when a rotator was connected),
    else the planned angle; the field from the header's pixel scale and
    dimensions.
 3. **The target as planned** (`plan`): Target Scheduler's own coordinates
-   and rotation.
+   and rotation, when they are J2000; a target kept in JNow gives none.
 
 The field (`size_source`) is the solves', else the headers', else the size
 the panel was measured with before, else the plan's panel. The last two keep
@@ -201,14 +224,17 @@ travels with the numbers to the sky ("from 12 solved frames", "from the
 headers of 3 frames", "from the plan") and to the activation preview, so a
 prediction is never shown as a solve.
 
-**Saving it.** The framing view locks a panel with frames and copies the
-server's reading onto it as its own quiet choice, saved with the next save;
-a refetch of the mosaic refreshes it when new solves land. Only the server
-reads frames, so a save that changes a locked panel's shot geometry must
-match what the server reads from the stored draft at that moment, or it is
-refused (`422`, naming the panels). A panel whose frames can no longer be
-read keeps the geometry it had. New geometry is a layout change: the
-`layout_revision` moves, since neighbours' overlaps change.
+**Saving it.** Only the server reads frames, so it writes the shot geometry
+itself: on every save that keeps a panel locked, the panel's `measured` is
+the server's reading of its frames at that moment, keyed by the stored
+draft's framings, whatever the body sent; a panel whose frames can no longer
+be read keeps the geometry it had, and an unlocked panel carries none. A
+browser that read the mosaic a minute ago therefore cannot be refused for
+it. The framing view locks a panel with frames and copies the reading onto
+it to draw it, as its own quiet choice; it reads the mosaic again after
+every save, after a refused one and on Reload. Geometry that moves a
+panel's center, angle or size is a layout change: the `layout_revision`
+moves, since neighbours' overlaps change. A new frame count alone is not.
 
 **Locks.** A shot panel is held as shot: a new panel size does not move it,
 so only a planned locked panel off the center holds the size. Its planned
@@ -324,18 +350,32 @@ A panel is **locked** two ways:
 - **by hand**: the person locks or unlocks any other panel.
 
 A locked panel's center and camera angle on the sky cannot move. The server
-refuses a save (`422`, naming the panels) that moves or turns a panel the body
-still marks locked, moves the framing's center, angle or panel size under it,
-or gives it shot geometry its frames do not support. Unlocking is an edit of
-its own, so a body may unlock and move a panel in one save; unlocked, a panel
-is planned again and drops its shot geometry. A panel at the framing's center
-does not move with a new panel size, nor does a shot panel, so only a planned
-locked panel off the center holds the size.
+refuses a save (`422`, naming the panels) that moves or turns a panel locked
+in both the stored draft and the body, or moves the framing's center, angle
+or panel size under it. That includes the shared center or angle a rig's own
+framing follows (its `center` or angle is `null`), and a panel size given or
+taken away (a rig framing's typed size dropped back to its rig's field). The
+refusal says what holds: "Locked panel r1c1 would move. A locked panel keeps
+its place, its turn, and the center, camera angle and panel size it was
+placed with, including a shared center or angle a rig's own framing follows.
+Unlock it first.", naming the rig for a rig's framing. Unlocking and locking
+are edits of their own, so a body may unlock and move a panel in one save, or
+place a panel and lock it there; unlocked, a panel is planned again and
+drops its shot geometry. A panel at the framing's center does not move with
+a new panel size, nor does a shot panel, so only a planned locked panel off
+the center holds the size.
 
 The browser keeps a locked mosaic's center, angle, target search and rig
 choice disabled with a line saying why, hides the rotation handle, and offers
-no regrid. Activation keeps its backstop: a panel moved more than a quarter
-of its size that has frames gets a new target.
+no regrid. A rig framed on its own that follows the shared center or angle
+holds them the same way while it has a locked panel, and its editor will not
+send it back to the shared center or angle, move it to the view center, or
+change its size while that would move one; taking a center or angle of its
+own where it is moves nothing and stays open. A panel that turns out to have
+frames after it was moved here (the mosaic was still being read) goes back
+to its saved place as it locks, with a note. Activation keeps its backstop:
+a panel moved more than a quarter of its size that has frames gets a new
+target.
 
 ## Adding and placing panels
 
@@ -364,19 +404,32 @@ of its size that has frames gets a new target.
 - **Drag.** In *Panel* drag mode a drag moves one panel. Each axis settles,
   within 14 screen pixels, on a place lined up with another panel or at the
   minimum overlap beside one. While dragging, the panel's shared strips are
-  shaded with their share. A drop that leaves a thin overlap, a gap or a lone
-  panel the layout did not have springs back with the reason; holding Alt
-  (Option) places it anyway, flagged. Settling stays on with Alt: a drag
-  across the screen bends a hair off the camera's axes, so a free drop would
-  land a fraction of a percent short of its neighbour; the arrow keys place
-  a panel finer.
+  shaded with their share. Beside a turned panel, or as a turned panel, the
+  settled place is drawn in until the outlines share the minimum, as adding
+  does. A drop that leaves a thin overlap, a gap or a lone panel the layout
+  did not have springs back with the reason; holding Alt (Option), or
+  **Place anyway** in the note, places it anyway, flagged. The panels
+  falling into groups counts only when the move split joined panels, not
+  when fixing the last issue shows groups that were already apart. Settling
+  stays on with Alt: a drag across the screen bends a hair off the camera's
+  axes, so a free drop would land a fraction of a percent short of its
+  neighbour; the arrow keys place a panel finer. The drop is checked where
+  the last move put the panel. One pointer drags at a time: a second finger
+  or a pen is ignored until it lets go, and a cancelled touch, a lost
+  capture, Escape or a move with no button held (the release was lost) puts
+  the panel back. The handles take a press within 22 CSS pixels and are
+  drawn larger on a small stage or a touch screen.
 - **Keyboard.** With a panel chosen and the sky focused: arrow keys nudge it
   1% of a panel along the camera axis nearest the arrow's way on screen
   (Shift: 10%), `[` and `]` turn it a degree (Shift: 10°), `L` locks or
   unlocks it, Delete removes it, Escape lets go, Ctrl+Z and Ctrl+Shift+Z (or
-  Ctrl+Y) undo and redo panel edits.
+  Ctrl+Y) undo and redo panel edits. `[`, `]` and `L` go by the key's place,
+  so any keyboard layout has them. A key pressed on one of the buttons over
+  the sky is that button's; only undo, redo and Escape during a drag reach
+  the panels from there.
 - **Undo.** Every panel edit is one step, fifty deep, for this visit; the
-  save bar's *Discard* returns to the saved framing.
+  save bar's *Discard*, **Back to saved framing** and a framing saved
+  elsewhere start the history afresh.
 
 ## Migration
 
