@@ -1,7 +1,10 @@
 import { expect, test } from '@playwright/test';
+import { mkdtempSync } from 'node:fs';
+import * as path from 'node:path';
 import {
   registerFixtureDb,
   resetDatabases,
+  tmpBase,
   waitForCacheReady,
 } from './helpers';
 
@@ -117,6 +120,38 @@ test('overview puts projects ahead of a compact catalog summary', async ({
   await expect(page).toHaveURL(
     new RegExp(`#\\/grid\\?db=${encodeURIComponent(dbId)}&project=1(?:&|$)`)
   );
+});
+
+test('the Projects toolbar keeps every control inside its edge', async ({
+  page,
+  request,
+}) => {
+  // A second, empty catalog brings the Database filter, the widest pill.
+  const incoming = mkdtempSync(path.join(tmpBase(), 'toolbar-second-'));
+  const created = await request.post('/api/databases/create', {
+    data: { name: 'Second Rig', image_dirs: [incoming], slug: 'second-rig' },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+
+  for (const width of [1024, 860]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    const toolbar = page.locator('.projects-toolbar');
+    await expect(
+      toolbar.getByRole('combobox', { name: 'Filter projects by database' })
+    ).toBeVisible({ timeout: 15_000 });
+    const outside = await toolbar.evaluate((bar) => {
+      const edge = bar.getBoundingClientRect();
+      return [...bar.querySelectorAll('*')]
+        .filter((element) => {
+          const box = element.getBoundingClientRect();
+          return box.width > 0 && (box.right > edge.right + 0.5 || box.left < edge.left - 0.5);
+        })
+        .map((element) => `${element.tagName.toLowerCase()}.${String(element.className).split(' ')[0]}`);
+    });
+    expect(outside, `controls past the toolbar at ${width}px`).toEqual([]);
+    await expect(page.getByRole('radio', { name: 'Detailed' })).toBeInViewport({ ratio: 1 });
+  }
 });
 
 test('compact rows keep each pill kind in one column', async ({ page }) => {

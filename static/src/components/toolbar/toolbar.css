@@ -252,10 +252,11 @@
   pointer-events: none;
 }
 
-.view-toolbar .toolbar-search input {
+/* Outside a view toolbar too, as on the Library. */
+.toolbar-search input {
   box-sizing: border-box;
   width: 100%;
-  height: var(--toolbar-control-height);
+  height: var(--toolbar-control-height, 30px);
   padding: 0 0.65rem 0 1.85rem;
   border: 1px solid var(--color-border-tertiary);
   border-radius: 999px;
@@ -265,12 +266,12 @@
   font-size: 0.8rem;
 }
 
-.view-toolbar .toolbar-search input::placeholder {
+.toolbar-search input::placeholder {
   color: var(--color-text-secondary);
   opacity: 1;
 }
 
-.view-toolbar .toolbar-search input:focus-visible {
+.toolbar-search input:focus-visible {
   outline: none;
   border-color: var(--state-focus-border);
   box-shadow: var(--state-focus-ring);
@@ -729,8 +730,10 @@
   background: var(--state-on-bg);
 }
 
-/* Inside a segmented group the group draws the border. */
-.tool-segmented button[aria-pressed='true'] {
+/* Inside a segmented group the group draws the border. A group of radios,
+   such as the Library's Compact / Detailed, marks its choice checked. */
+.tool-segmented button[aria-pressed='true'],
+.tool-segmented button[aria-checked='true'] {
   background: var(--state-on-bg);
   color: var(--color-text-primary);
 }

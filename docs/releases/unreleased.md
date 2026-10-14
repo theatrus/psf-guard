@@ -237,4 +237,6 @@
   its space empty. A long name ends in "…" and shows in full on hover. On a
   laptop the dates show how long ago the last frame was and keep the range
   in the tooltip; on a tablet a row takes two or three lines, and on a phone
-  it stacks one pill kind per place.
+  it stacks one pill kind per place. The Projects toolbar uses the pills
+  Images and Sequence use and wraps into rows instead of running off the
+  edge, so **Compact** / **Detailed** stays in reach on a narrow window.

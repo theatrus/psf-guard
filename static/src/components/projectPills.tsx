@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { ProjectCalibrationHealthSummary } from '../api/types';
 import type { LibraryDensity } from '../hooks/useDisplayPreferences';
 import { ago, percentDone, stateLabel } from './libraryFamilies';
+import './toolbar/toolbar.css';
 
 /** The pills the Library rows and the plan list share, so a project reads
  *  the same way wherever it is listed: which database, what state Target
@@ -92,9 +93,10 @@ export function FoldButton({ open, name, onClick }: { open: boolean; name: strin
     aria-label={`${open ? 'Hide' : 'Show'} details for ${name}`} title={open ? 'Fold to a row' : 'Show details'} onClick={onClick}>{open ? '▾' : '▸'}</button>;
 }
 
-/** The Compact / Detailed switch both lists carry. */
+/** The Compact / Detailed switch both lists carry, as the toolbar's
+ *  segmented group: one radio of two is on. */
 export function DensityToggle({ density, onChange }: { density: LibraryDensity; onChange: (next: LibraryDensity) => void }) {
-  return <div className="project-density" role="radiogroup" aria-label="Project view">
+  return <div className="tool-segmented project-density" role="radiogroup" aria-label="Project view">
     <button type="button" role="radio" aria-checked={density === 'compact'} onClick={() => onChange('compact')}>Compact</button>
     <button type="button" role="radio" aria-checked={density === 'detailed'} onClick={() => onChange('detailed')}>Detailed</button>
   </div>;

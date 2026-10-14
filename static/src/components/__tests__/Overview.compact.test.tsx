@@ -176,6 +176,23 @@ describe('compact Library', () => {
     expect(within(rows[0]).getByRole('button', { name: /image grid$/ })).toHaveAttribute('title', 'Heart Nebula');
   });
 
+  it('draws its toolbar in the shared pills, set while a filter in the address narrows the list', async () => {
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    twoRigs();
+    render(<Overview />, { wrapper: wrapper('/?show=active&dbfilter=c925&q=heart') });
+    const database = await screen.findByRole('combobox', { name: 'Filter projects by database' });
+    const pill = (element: HTMLElement) => element.closest('.toolbar-pill, .toolbar-search')!;
+    expect(database).toHaveValue('c925');
+    expect(pill(database)).toHaveClass('is-set');
+    expect(pill(screen.getByRole('combobox', { name: 'Show projects' }))).toHaveClass('is-set');
+    expect(pill(screen.getByRole('searchbox', { name: 'Search projects or targets' }))).toHaveClass('is-set');
+    // Sorting arranges the list; it narrows nothing.
+    expect(pill(screen.getByRole('combobox', { name: 'Sort within groups' }))).not.toHaveClass('is-set');
+    // Compact / Detailed is the segmented group, its choice a checked radio.
+    expect(screen.getByRole('radiogroup', { name: 'Project view' })).toHaveClass('tool-segmented');
+    expect(screen.getByRole('radio', { name: 'Compact' })).toHaveAttribute('aria-checked', 'true');
+  });
+
   it('narrows the Library to projects with calibration issues', async () => {
     setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
     twoRigs();

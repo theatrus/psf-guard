@@ -195,12 +195,25 @@
   font-size: 1.5em;
 }
 
+/* The Projects toolbar: the heading, the filters (database, show, search),
+   then how the list is arranged (sort, Compact / Detailed), in the pills
+   Images and Sequence use. Nothing is ever clipped; as the width runs out:
+   - the search gives up width first, down to its minimum;
+   - then the controls take a row of their own under the heading, the
+     filters at the left and the arrangement at the right;
+   - then the arrangement drops to a row of its own at the right;
+   - a phone stacks the controls at full width (below). */
 .projects-toolbar {
   display: flex;
-  align-items: end;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 18px;
+  gap: 12px 24px;
   margin-bottom: 20px;
+}
+
+.projects-toolbar-heading {
+  flex: none;
 }
 
 .projects-toolbar p {
@@ -209,65 +222,48 @@
   font-size: 0.82rem;
 }
 
+/* Each basis is about the width its group needs on one line, so the rows
+   break at set widths and in one order. Beside the heading the controls
+   need about 56rem; with less they wrap under it and take the full row.
+   The filters need about 36rem beside the arrangement; with less the
+   arrangement drops below them. */
 .projects-toolbar-controls {
   display: flex;
-  align-items: end;
-  gap: 12px;
+  flex: 1 1 56rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
 }
 
-.project-search input,
-.project-show select,
-.project-sort select,
-.project-db-filter select {
-  box-sizing: border-box;
-  min-height: 36px;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 6px;
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: 0.84rem;
+.projects-toolbar-filters {
+  display: flex;
+  flex: 1 1 36rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
-.project-search input {
-  width: min(310px, 34vw);
-  padding: 7px 10px;
+.projects-toolbar-view {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
 }
 
-.project-show,
-.project-sort,
-.project-db-filter {
-  display: grid;
-  gap: 3px;
-  color: var(--color-text-muted);
-  font-size: 0.7rem;
+/* A select keeps the width of its longest choice, up to the shared pill's
+   cap; the search takes what is left. */
+.projects-toolbar .toolbar-pill {
+  flex: none;
 }
 
-.project-show select,
-.project-sort select,
-.project-db-filter select {
-  padding: 6px 26px 6px 9px;
-}
-
-.project-search input:focus,
-.project-show select:focus,
-.project-sort select:focus,
-.project-db-filter select:focus {
-  outline: none;
-  border-color: var(--state-focus-border);
-  box-shadow: var(--state-focus-ring);
-}
-
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+.projects-toolbar .toolbar-search {
+  flex: 1 1 10rem;
+  min-width: 10rem;
 }
 
 .project-activity-group + .project-activity-group {
@@ -1180,23 +1176,35 @@
     justify-content: flex-end;
   }
 
+  /* The heading, then each control at full width; the Compact / Detailed
+     switch ends the last row at the right. */
   .projects-toolbar {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .projects-toolbar-controls {
+  .projects-toolbar-controls,
+  .projects-toolbar-filters {
+    flex: none;
+    flex-direction: column;
     align-items: stretch;
   }
 
-  .project-search {
-    flex: 1;
-  }
-
-  .project-search input {
+  .projects-toolbar .toolbar-pill,
+  .projects-toolbar .toolbar-search {
+    flex: none;
     width: 100%;
+    max-width: none;
   }
 
+  .projects-toolbar .toolbar-pill-select select {
+    flex: 1;
+    max-width: none;
+  }
+
+  .projects-toolbar-view {
+    margin-left: 0;
+  }
 }
 
 @media (max-width: 480px) {
@@ -1215,10 +1223,6 @@
 
   .project-card {
     padding: 12px;
-  }
-
-  .projects-toolbar-controls {
-    flex-direction: column;
   }
 
   .project-archive-item {

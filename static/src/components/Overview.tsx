@@ -10,7 +10,8 @@ import { stage, stageShort } from './director/planCardModel';
 import type { DirectorPlanRow } from '../api/directorTypes';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Merge } from 'lucide-react';
+import { Merge, Search } from 'lucide-react';
+import PillSelect from './toolbar/PillSelect';
 import { apiClient } from '../api/client';
 import type {
   ExportChoice,
@@ -848,16 +849,21 @@ export default function Overview() {
 
       <div className="content-grid">
         <div className="projects-section">
+          {/* The filters, then how the list is arranged, in the pills
+              Images and Sequence use. Overview.css wraps them into rows as
+              the width runs out. */}
           <div className="projects-toolbar">
-            <div>
+            <div className="projects-toolbar-heading">
               <h2>Projects</h2>
               <p>Grouped by the latest captured frame.</p>
             </div>
             <div className="projects-toolbar-controls">
-              {databases && databases.length > 1 && (
-                <label className="project-db-filter">
-                  <span>Database</span>
-                  <select
+              <div className="projects-toolbar-filters">
+                {databases && databases.length > 1 && (
+                  <PillSelect
+                    label="Database"
+                    active={!!dbFilter}
+                    pillClassName="project-db-filter"
                     value={dbFilter ?? 'all'}
                     onChange={(event) => updateParams({ dbfilter: event.target.value })}
                     aria-label="Filter projects by database"
@@ -868,39 +874,46 @@ export default function Overview() {
                         {db.name}
                       </option>
                     ))}
-                  </select>
-                </label>
-              )}
-              <label className="project-show">
-                <span>Show</span>
-                <select value={show} onChange={(event) => updateParams({ show: event.target.value })} aria-label="Show projects">
+                  </PillSelect>
+                )}
+                <PillSelect
+                  label="Show"
+                  active={show !== 'all'}
+                  pillClassName="project-show"
+                  value={show}
+                  onChange={(event) => updateParams({ show: event.target.value })}
+                  aria-label="Show projects"
+                >
                   {SHOW_OPTIONS.filter((option) => plans.enabled || !option.planning).map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
-                </select>
-              </label>
-              <label className="project-search">
-                <span className="sr-only">Search projects or targets</span>
-                <input
-                  type="search"
-                  value={projectSearch}
-                  onChange={(event) => setProjectSearch(event.target.value)}
-                  placeholder="Search projects or targets"
-                  aria-label="Search projects or targets"
-                />
-              </label>
-              <label className="project-sort">
-                <span>Sort within groups</span>
-                <select
+                </PillSelect>
+                <label className={`toolbar-search project-search${projectSearch ? ' is-set' : ''}`}>
+                  <Search size={13} aria-hidden="true" />
+                  <input
+                    type="search"
+                    value={projectSearch}
+                    onChange={(event) => setProjectSearch(event.target.value)}
+                    placeholder="Search projects or targets"
+                    aria-label="Search projects or targets"
+                  />
+                </label>
+              </div>
+              <div className="projects-toolbar-view">
+                <PillSelect
+                  label="Sort"
+                  pillClassName="project-sort"
+                  pillTitle="Sort within groups"
                   value={projectSort}
                   onChange={(event) => setProjectSort(event.target.value as ProjectSort)}
+                  aria-label="Sort within groups"
                 >
                   <option value="recent">Newest first</option>
                   <option value="name">Name A–Z</option>
                   <option value="images">Most images</option>
-                </select>
-              </label>
-              <DensityToggle density={density} onChange={chooseDensity} />
+                </PillSelect>
+                <DensityToggle density={density} onChange={chooseDensity} />
+              </div>
             </div>
           </div>
 
