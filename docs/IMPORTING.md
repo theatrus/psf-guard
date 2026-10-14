@@ -112,15 +112,19 @@ The grouping rules stay conservative:
   dates are within 14 days by default.
 - Target coordinates use the median FITS coordinates. Target Scheduler stores
   RA as decimal hours and Dec as degrees.
-- Filter, gain, offset, binning, and numeric readout mode define a shared
-  exposure template. The most common exposure length for that template becomes
-  its default. A template left at -1 for gain, offset, or readout mode runs at
-  the camera's default, so a plan on it takes a frame with any value there; a
-  plan on a template that matches exactly comes first. A new plan always goes
-  on the exact template, made if needed, so Target Scheduler shoots at the
-  frames' own settings.
-- Each distinct template and exposure length becomes an exposure plan. The
-  imported frame count seeds its desired and acquired counts.
+- Filter, gain, offset, binning, and numeric readout mode group the lights,
+  and each group's exposure length becomes an exposure plan. The imported
+  frame count seeds its desired and acquired counts.
+- A new plan goes on an existing exposure template with the same filter,
+  binning, and default exposure length, whose gain, offset, and readout mode
+  each match the lights or are left at -1 (the camera's default); one that
+  matches exactly comes first. Two groups that land on the same template,
+  such as two gains on a camera-default template, share one plan.
+- With no such template, the plan goes on a template pinned to the lights'
+  own gain, offset, and readout mode, named for them (for example
+  `L G100 O30 1x1`). PSF Guard makes it when the profile has none, with the
+  most common exposure length of those lights as its default. You can move
+  a plan to another template later; a sync carries the change.
 
 ![The shared exposure-template view for a real narrowband project](project-plan-narrowband.png)
 
@@ -147,6 +151,15 @@ The matching rules prevent common duplicates and splits:
 - otherwise, coordinates within 0.5 degrees attach to the existing target,
   unless the database's scan rules turn **Match targets by position** off; and
 - unmatched frames create new project and target rows.
+
+Lights that attach to an existing target join one of its exposure plans when
+the plan's exposure length (its own, or its template's default when the plan
+leaves it unset) equals theirs, and its template has the same filter and
+binning, with gain, offset, and readout mode each equal to the lights' or left
+at -1. A plan on a template that matches exactly comes first. When no plan
+fits and the run may add one, the new plan's template is chosen as for a new
+target, above. Automatic import, **Review**, remote uploads and the CLI follow
+the same rules.
 
 The same scan catalogs calibration frames and deduplicates them by canonical
 path and file fingerprint. A dry run reports those changes but rolls back the

@@ -194,10 +194,14 @@
   warmer frame joins the session. Every dark and flat session gets a new
   address once with this version, so a link saved before it opens the first
   session instead.
-- Import attaches a light to an exposure plan whose template is left at the
-  camera's default gain, offset or readout mode (-1), instead of holding it
-  as having no exposure plan or adding a second template and plan. A plan
-  import adds still goes on a template with the lights' own settings.
+- Import attaches lights to an exposure plan of their length whose template
+  has their filter and binning, with gain, offset and readout mode equal to
+  theirs or left at the camera's default (-1). Before, it held such lights
+  as having no exposure plan, or added a second template and plan. A new
+  plan goes on a template of the lights' filter, binning and length, again
+  allowing -1 for the rest, and only without one does import make a
+  template pinned to the lights' gain and offset. Groups that land on one
+  template share one plan.
 - The transfer preview counts the **Keep out** and **Use anyway** choices a
   pull brings, since they change the destination's masters, and a choice
   made on the destination stays with a file the source cataloged under
