@@ -202,6 +202,13 @@ Current behavior: [importing](docs/IMPORTING.md) and
 - Use the shared async preview poller; do not add one timer per image.
 - Database mutations and catalog installation must remain behind the Tauri or
   server database-management gate.
+- Colours and interaction states come from the theme tokens in
+  `static/src/App.css`; follow the Styling section of `static/README.md`.
+  Write no colour literals in CSS or inline styles; add a token named by its
+  meaning instead. Style on and open from the control's ARIA attribute with
+  the `--state-on-*` tokens, a narrowing filter with `.is-set`, and focus
+  with `--state-focus-*`. `src/__tests__/themeTokens.test.ts` fails on a new
+  literal or a new state class.
 
 ## Change workflow
 
