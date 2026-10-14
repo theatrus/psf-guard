@@ -1281,7 +1281,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "A plan's framing draft: centre, rotation, panels for a mosaic, and the rig each panel uses."
+        description = "A plan's framing draft: centre, rotation, the mosaic's panels (each with its id, place and lock), and the rig whose field sizes them."
     )]
     async fn get_framing(
         &self,
@@ -1426,7 +1426,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Save a plan's framing: send the whole object get_framing returned under `draft`, changed (centre, rotation, mosaic, panel rigs). Refuses a stale revision."
+        description = "Save a plan's framing: send the whole object get_framing returned under `draft`, changed (centre, rotation, `layout` panels with their places and locks, panel rigs). Refuses a stale revision, and a change that would move a locked panel."
     )]
     async fn save_framing(
         &self,

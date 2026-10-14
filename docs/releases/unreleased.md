@@ -4,6 +4,18 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- A plan's mosaic panels are placed one by one. A framed target that already
+  has frames stays locked where they were shot, and **Mosaic panels** adds
+  panels beside it or round the whole mosaic to the north, east, south, west
+  or a corner, as a ring, or by filling holes. With **Panel** you drag one
+  panel on the sky: it settles at the minimum overlap, shows what it shares
+  with its neighbours, and a drop that would leave a gap or too thin an
+  overlap goes back unless you hold Alt. Arrow keys nudge the chosen panel,
+  and panel edits undo. Activation adds a Target Scheduler target per new
+  panel in the same project and leaves the shot one alone, and the Library
+  shows the panels as one mosaic whatever their shape. Saved grids open
+  unchanged, as the panels they made.
+
 - A **Calibration** page shows a database's calibration library: its sessions
   by night, kind and settings, each frame as a picture drawn for its kind,
   and a flat divided by the rest of its session so that drying dew stands
