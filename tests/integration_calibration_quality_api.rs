@@ -1,7 +1,8 @@
 //! Calibration frame grades over HTTP: the progress route counts the
 //! library's grades, the library listing carries each frame's grade, and a
 //! person's choice to use a poor frame or keep a good one out is refused when
-//! malformed and recorded when not.
+//! malformed and recorded when not. Every route that changes the library
+//! waits for the database-management gate.
 
 use std::io::Write as _;
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
-    routing::{get, put},
+    routing::{delete, get, put},
     Router,
 };
 use http_body_util::BodyExt;
@@ -67,6 +68,7 @@ fn write_dark(path: &std::path::Path, level: f64, seed: u64) {
 struct Server {
     _dir: tempfile::TempDir,
     database: std::path::PathBuf,
+    state: Arc<AppState>,
     app: Router,
 }
 
@@ -119,10 +121,28 @@ fn server() -> Server {
             "/api/db/{db_id}/calibrations/quality",
             get(calibration_quality::get_progress),
         )
-        .with_state(state);
+        .route(
+            "/api/db/{db_id}/calibrations/frames/validity",
+            put(handlers::set_calibration_validity),
+        )
+        .route(
+            "/api/db/{db_id}/calibrations/frames/{frame_uuid}",
+            delete(handlers::forget_calibration_frame),
+        )
+        .route(
+            "/api/db/{db_id}/calibrations/frames",
+            delete(handlers::forget_calibration_frames),
+        )
+        .route(
+            "/api/db/{db_id}/calibrations/masters",
+            delete(handlers::clear_calibration_masters),
+        )
+        .with_state(Arc::clone(&state));
+    state.set_allow_database_management(true);
     Server {
         _dir: dir,
         database,
+        state,
         app,
     }
 }
@@ -151,6 +171,9 @@ async fn call(app: &Router, method: &str, uri: &str, body: Value) -> (StatusCode
 const DETAILS: &str = "/api/db/rig/calibrations/details";
 const QUALITY: &str = "/api/db/rig/calibrations/quality";
 const CHOICE: &str = "/api/db/rig/calibrations/frames/quality";
+const VALIDITY: &str = "/api/db/rig/calibrations/frames/validity";
+const FRAMES: &str = "/api/db/rig/calibrations/frames";
+const MASTERS: &str = "/api/db/rig/calibrations/masters";
 
 fn frame<'a>(details: &'a Value, name: &str) -> &'a Value {
     details["data"]["frames"]
@@ -267,4 +290,62 @@ async fn grades_are_counted_listed_and_overridden() {
     let (_, details) = call(&server.app, "GET", DETAILS, Value::Null).await;
     assert!(frame(&details, "dark-0.fits")["quality_override"].is_null());
     assert!(frame(&details, "dark-3.fits")["kept_out"].is_string());
+}
+
+#[tokio::test]
+async fn library_changes_wait_for_database_management() {
+    let server = server();
+    let (_, details) = call(&server.app, "GET", DETAILS, Value::Null).await;
+    let uuid = |name: &str| {
+        frame(&details, name)["frame_uuid"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (first, second) = (uuid("dark-0.fits"), uuid("dark-1.fits"));
+    let writes = [
+        (
+            "PUT",
+            CHOICE.to_string(),
+            json!({"frame_uuids": [first], "choice": "exclude"}),
+        ),
+        (
+            "PUT",
+            VALIDITY.to_string(),
+            json!({"frame_uuids": [first], "direction": "forward"}),
+        ),
+        ("DELETE", MASTERS.to_string(), Value::Null),
+        (
+            "DELETE",
+            FRAMES.to_string(),
+            json!({"frame_uuids": [second]}),
+        ),
+        ("DELETE", format!("{FRAMES}/{first}"), Value::Null),
+    ];
+
+    server.state.set_allow_database_management(false);
+    for (method, uri, body) in &writes {
+        let (status, response) = call(&server.app, method, uri, body.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}: {response}");
+        assert!(
+            response["error"]
+                .as_str()
+                .unwrap()
+                .contains("database management is disabled"),
+            "{method} {uri}: {response}"
+        );
+    }
+    let (_, unchanged) = call(&server.app, "GET", DETAILS, Value::Null).await;
+    assert_eq!(unchanged["data"]["frames"].as_array().unwrap().len(), 4);
+    let kept = frame(&unchanged, "dark-0.fits");
+    assert!(kept["quality_override"].is_null(), "{kept}");
+    assert!(kept["valid_direction"].is_null(), "{kept}");
+
+    server.state.set_allow_database_management(true);
+    for (method, uri, body) in &writes {
+        let (status, response) = call(&server.app, method, uri, body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{method} {uri}: {response}");
+    }
+    let (_, changed) = call(&server.app, "GET", DETAILS, Value::Null).await;
+    assert_eq!(changed["data"]["frames"].as_array().unwrap().len(), 2);
 }
