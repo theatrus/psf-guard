@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, RwLock, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// The kept results, below the database's cache folder.
 const CACHE_FILE: &str = "calibration-health.json";
@@ -46,6 +46,14 @@ const HEADERS_DIR: &str = "calibration-health-headers";
 
 /// How often a pass looks again while interactive work runs.
 const YIELD_POLL: Duration = Duration::from_millis(250);
+
+/// How often the views may ask for a pass on one catalog. A change the
+/// server makes asks for its own pass at once; the views catch the ones
+/// nobody announces, such as N.I.N.A. writing lights.
+const VIEW_ASK_INTERVAL: Duration = Duration::from_secs(120);
+
+/// How long the views wait to ask again after a pass that failed.
+const VIEW_ASK_AFTER_FAILURE: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct HealthCache {
@@ -89,6 +97,24 @@ fn read_headers(cache_dir: &FsPath, project: i32) -> BTreeMap<i32, KeptHeader> {
         .filter(|kept| kept.version == env!("CARGO_PKG_VERSION"))
         .map(|kept| kept.lights)
         .unwrap_or_default()
+}
+
+/// Remove the kept headers of projects the catalog no longer holds,
+/// whether or not the results file still lists them.
+fn remove_gone_headers(cache_dir: &FsPath, keys: &BTreeMap<i32, String>) {
+    let Ok(entries) = std::fs::read_dir(cache_dir.join(HEADERS_DIR)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let project = name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".json"))
+            .and_then(|stem| stem.parse::<i32>().ok());
+        if project.is_some_and(|project| !keys.contains_key(&project)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn write_headers(
@@ -176,6 +202,30 @@ struct Job {
     /// The server that last asked, so a directory refresh can ask again.
     state: Mutex<Weak<AppState>>,
     work: Mutex<WorkDone>,
+    views: Mutex<ViewAsks>,
+}
+
+/// When the views last asked for a pass, and when a pass last failed.
+#[derive(Debug, Default, Clone, Copy)]
+struct ViewAsks {
+    asked: Option<Instant>,
+    failed: Option<Instant>,
+}
+
+impl ViewAsks {
+    /// Whether a view may ask for a pass now. Not while grading runs: it
+    /// changes every key with each batch it commits, and asks for a pass
+    /// when it ends. Not more often than [`VIEW_ASK_INTERVAL`], and not for
+    /// [`VIEW_ASK_AFTER_FAILURE`] after a pass failed, so a pass that keeps
+    /// failing does not run again for every poll.
+    fn may_ask(&self, grading: bool, now: Instant) -> bool {
+        let since = |at: Option<Instant>, wait: Duration| {
+            at.is_none_or(|at| now.saturating_duration_since(at) >= wait)
+        };
+        !grading
+            && since(self.asked, VIEW_ASK_INTERVAL)
+            && since(self.failed, VIEW_ASK_AFTER_FAILURE)
+    }
 }
 
 /// What the passes over one catalog have done since the server started.
@@ -234,12 +284,15 @@ pub fn request(state: &Arc<AppState>, path: &str) {
     std::thread::spawn(move || {
         let _work = work;
         loop {
-            if let Err(error) = run_pass(&state, &path, &job) {
-                tracing::info!(
-                    "Paused working out calibration health in {path}: {error:#}. \
-                     The next pass picks it up."
-                );
-            }
+            let failed = run_pass(&state, &path, &job)
+                .inspect_err(|error| {
+                    tracing::info!(
+                        "Paused working out calibration health in {path}: {error:#}. \
+                         The next pass picks it up."
+                    );
+                })
+                .is_err();
+            job.views.lock().unwrap_or_else(|p| p.into_inner()).failed = failed.then(Instant::now);
             let mut flags = job.flags.lock().unwrap_or_else(|p| p.into_inner());
             if state.shutdown.is_stopping() {
                 // Let go of the catalog: the next start judges the rest.
@@ -305,16 +358,10 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
     let mut files = crate::calibration::health_file_digests(&conn, &ctx.image_dirs, &tree)?;
     let mut cache = read_cache(&ctx.cache_dir_path);
     let known = cache.projects.len();
-    let gone: Vec<i32> = cache
+    cache
         .projects
-        .keys()
-        .filter(|project| !keys.contains_key(project))
-        .copied()
-        .collect();
-    for project in gone {
-        cache.projects.remove(&project);
-        let _ = std::fs::remove_file(headers_path(&ctx.cache_dir_path, project));
-    }
+        .retain(|project, _| keys.contains_key(project));
+    remove_gone_headers(&ctx.cache_dir_path, &keys);
     let stale: Vec<(i32, String, String)> = keys
         .into_iter()
         .filter_map(|(project, key)| {
@@ -448,11 +495,24 @@ fn fresh(path: &str, cache_dir: &FsPath) -> anyhow::Result<(BTreeMap<i32, Cached
 
 /// Ask for a pass when a view finds a result behind the catalog. Nothing
 /// else asks when N.I.N.A. writes new lights or the CLI regrades some; a
-/// pass that runs already just runs once more.
+/// pass that runs already just runs once more. See [`ViewAsks::may_ask`]
+/// for when a view holds back.
 fn catch_up(state: &Arc<AppState>, ctx: &DbContext, behind: bool) {
-    if behind {
-        request(state, &ctx.database_path);
+    if !behind {
+        return;
     }
+    let path = &ctx.database_path;
+    let grading = crate::server::calibration_quality::running(path);
+    {
+        let job = job(path);
+        let mut views = job.views.lock().unwrap_or_else(|p| p.into_inner());
+        let now = Instant::now();
+        if !views.may_ask(grading, now) {
+            return;
+        }
+        views.asked = Some(now);
+    }
+    request(state, path);
 }
 
 async fn fresh_for(
@@ -700,6 +760,39 @@ mod tests {
         let stopped = judge_project(&pool, &library, &lights, &none, &stopping, &|| false);
         assert!(stopped.is_err());
         assert!(asked.load(Ordering::SeqCst) < 20, "{asked:?}");
+    }
+
+    #[test]
+    fn headers_of_projects_gone_from_the_catalog_are_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        for project in [1, 2] {
+            write_headers(temp.path(), project, BTreeMap::new()).unwrap();
+        }
+        // Results from other rules are not even read; the headers of the
+        // project that went still go.
+        let keys = BTreeMap::from([(1, "k".to_string())]);
+        remove_gone_headers(temp.path(), &keys);
+        assert!(headers_path(temp.path(), 1).is_file());
+        assert!(!headers_path(temp.path(), 2).exists());
+    }
+
+    #[test]
+    fn views_hold_back_while_grading_runs_and_after_asking_or_failing() {
+        let start = Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let mut views = ViewAsks::default();
+        assert!(views.may_ask(false, start));
+        assert!(!views.may_ask(true, start), "grading asks when it ends");
+
+        // Once asked, the views wait their interval.
+        views.asked = Some(start);
+        assert!(!views.may_ask(false, at(60)));
+        assert!(views.may_ask(false, at(VIEW_ASK_INTERVAL.as_secs())));
+
+        // A pass that failed holds them back longer.
+        views.failed = Some(at(10));
+        assert!(!views.may_ask(false, at(VIEW_ASK_INTERVAL.as_secs() + 10)));
+        assert!(views.may_ask(false, at(VIEW_ASK_AFTER_FAILURE.as_secs() + 10)));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Calibration health over HTTP: the Library's list and a project's detail
 //! come from the background pass's kept results only, a result whose key no
-//! longer matches the catalog is not shown, and the pass the view asks for
-//! replaces it. A pass judges only what changed, reads only the headers of
+//! longer matches the catalog is not shown, and a view that finds one asks
+//! for a pass, though not more often than every couple of minutes. A pass judges only what changed, reads only the headers of
 //! lights whose file changed, and a directory refresh that finds a light's
 //! file again judges its project again.
 
@@ -270,8 +270,9 @@ async fn health_is_shown_only_once_worked_out_and_while_it_still_holds() {
     wait_for_quiet(&server).await;
     assert_eq!(calibration_health::work_done(&server.database), work);
 
-    // A light rejected since: the kept result no longer holds, so it is
-    // not shown until the pass the view asks for replaces it.
+    // A light rejected since, as the CLI does it: the kept result no longer
+    // holds, so it is not shown until the next pass replaces it. The view
+    // asked for a pass a moment ago, so it does not ask again so soon.
     let connection = Connection::open(&server.database).unwrap();
     connection
         .execute(
@@ -280,10 +281,12 @@ async fn health_is_shown_only_once_worked_out_and_while_it_still_holds() {
         )
         .unwrap();
     drop(connection);
-    let busy = server.state.begin_interactive_job();
     let (_, body) = call(&server.app, LIST).await;
     assert_eq!(body["data"]["projects"], json!([]));
-    assert_eq!(body["data"]["running"], true, "the view asked for a pass");
+    assert_eq!(body["data"]["running"], false, "views ask at most so often");
+    // A reject in the app asks for a pass itself.
+    let busy = server.state.begin_interactive_job();
+    calibration_health::request(&server.state, &server.database);
     // The marks keep the last result, and say it is stale, so the grid
     // does not lose them while the next pass runs.
     let (_, body) = call(&server.app, LIGHTS).await;

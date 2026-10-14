@@ -115,6 +115,17 @@ fn job(path: &str) -> Arc<Job> {
     )
 }
 
+/// Whether a grading pass runs over the catalog at `path`. It commits
+/// grades in batches, and each batch changes every project's calibration
+/// health key.
+pub fn running(path: &str) -> bool {
+    job(path)
+        .flags
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .running
+}
+
 /// Where grading stands for the catalog at `path`.
 pub fn progress(path: &str) -> CalibrationQualityProgress {
     job(path)

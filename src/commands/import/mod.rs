@@ -1236,13 +1236,8 @@ fn attach_frames_to_target(
             // never on one left at the camera's defaults, so the scheduler
             // shoots at the gain the frames were shot at.
             None => {
-                let template_id = find_or_create_template(
-                    conn,
-                    &key,
-                    &target.profile_id,
-                    exposure_s,
-                    outcome,
-                )?;
+                let template_id =
+                    find_or_create_template(conn, &key, &target.profile_id, exposure_s, outcome)?;
                 let id = insert_exposure_plan(
                     conn,
                     &target.profile_id,
@@ -3584,10 +3579,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome.targets_created, 1);
-        assert_eq!(
-            (outcome.templates_created, outcome.plans_created),
-            (2, 2)
-        );
+        assert_eq!((outcome.templates_created, outcome.plans_created), (2, 2));
         let plans: Vec<(i64, i64, i64, i64)> = conn
             .prepare(
                 "SELECT IFNULL(t.gain, -1), IFNULL(t.offset, -1), e.acquired, e.exposureTemplateId
@@ -3598,7 +3590,9 @@ mod tests {
                  ORDER BY t.gain",
             )
             .unwrap()
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
