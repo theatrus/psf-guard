@@ -368,8 +368,12 @@ is still caught by a clean set from another night. A lone frame with
 nothing to compare against stays in use. The frame panel gives each measured
 dark's and dark-flat's level and spread in ADU beside its session's. The
 verdict also goes into the frame's `stray_light`
-column, which older PSF Guard builds read. Master building applies the same
-rule to its own inputs, which catches a dark the job has not reached yet.
+column, which older PSF Guard builds read. While some dark in a master's set
+has no grade yet, master building applies the same rule to its own inputs,
+which catches a dark the job has not reached yet. Once every dark in the set
+is graded or chosen, it leaves the grades to decide, so **Use anyway** puts a
+dark back into its master. A master's record lists only the frames it
+combined.
 
 ## Upgrades and backups
 

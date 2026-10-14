@@ -3541,8 +3541,8 @@ fn resolve_or_build_masters_pinned(
             // The integrator reads the headers, so it catches what selection
             // could not: a catalog holds only what it recorded at import.
             Ok(Some(master)) => {
-                // The integrator's own dark screening names stray light in
-                // its reason; it catches darks the library has not measured.
+                // The integrator's own dark screen gives stray light as its
+                // reason; it runs only while some dark is not graded yet.
                 let (stray, other): (Vec<_>, Vec<_>) = master
                     .skipped
                     .iter()
@@ -4417,7 +4417,18 @@ fn adopt_external_master(
     recording_blocker: Option<&str>,
 ) -> Result<AdoptedMaster> {
     let frames = std::slice::from_ref(frame);
-    let source_hash = source_set_hash(frames, None, None, false);
+    // A copy is not integrated, so nothing is screened; a dark keeps the key
+    // it was first adopted under.
+    let source_hash = source_set_hash(
+        frames,
+        None,
+        None,
+        false,
+        matches!(
+            frame.kind,
+            CalibrationKind::Dark | CalibrationKind::DarkFlat
+        ),
+    );
     let master_uuid = stable_uuid(&format!("{}:{source_hash}", kind.as_str()));
     let path = root.join(format!("{}-{source_hash}.fits", kind.as_str()));
     let expected_kind = match kind {
@@ -4614,7 +4625,9 @@ fn place_unit_range_float_on_adu_scale(frame: &mut seiza_stacking::FitsFrame) ->
 /// well those frames agreed about the features it kept.
 struct BuiltAttempt {
     master: BuiltMaster,
-    /// The frames the integrator combined, in the order they were offered.
+    /// The frames the integrator combined, in the order they were offered:
+    /// on a fresh build, those given less those it refused; on a cache hit
+    /// or memo, which combined nothing now, those given.
     used: Vec<CalibrationFrame>,
     /// How the frames agreed with the master: measured on a fresh flat
     /// build, read back from the record on a cache hit, absent otherwise.
@@ -4689,7 +4702,22 @@ fn build_master_once(
     let bias_dependency = inputs.bias_dependency;
     let dark_dependency = inputs.dark_dependency;
     let flat_star_masking = kind == CalibrationKind::Flat && flat_star_masking;
-    let source_hash = source_set_hash(frames, bias_dependency, dark_dependency, flat_star_masking);
+    // The integrator's own stray-light screen is for darks the library has
+    // not graded yet. Once every dark is graded or chosen, the grades have
+    // kept the poor ones out, and the screen would only overrule a person
+    // who chose to use one anyway.
+    let dark_level_screening = matches!(kind, CalibrationKind::Dark | CalibrationKind::DarkFlat)
+        && !quality::all_judged(conn, frames).unwrap_or_else(|error| {
+            tracing::warn!("reading dark grades: {error:#}; screening every dark");
+            false
+        });
+    let source_hash = source_set_hash(
+        frames,
+        bias_dependency,
+        dark_dependency,
+        flat_star_masking,
+        dark_level_screening,
+    );
     let master_uuid = stable_uuid(&format!("{}:{source_hash}", kind.as_str()));
     let path = root.join(format!("{}-{source_hash}.fits", kind.as_str()));
     // A flat set this build once judged unstable keeps its record as a memo
@@ -4839,9 +4867,7 @@ fn build_master_once(
         defect_suppression: (kind == CalibrationKind::Flat)
             .then(seiza_stacking::ImpulseFilterOptions::default),
         flat_star_masking: flat_star_masking.then(seiza_stacking::FlatStarMaskingOptions::default),
-        // Library health keeps measured darks that caught stray light out of
-        // the selection; this catches the ones not measured yet.
-        dark_level_screening: matches!(kind, CalibrationKind::Dark | CalibrationKind::DarkFlat)
+        dark_level_screening: dark_level_screening
             .then(seiza_stacking::DarkLevelScreening::default),
         cancel,
         progress,
@@ -4907,14 +4933,28 @@ fn build_master_once(
             frame.defect_pixels_replaced
         );
     }
+    // The integrator reports each input it combined, in order: the frames
+    // given less those it refused. Only those are the master's sources.
+    let combined: Vec<CalibrationFrame> = frames
+        .iter()
+        .filter(|frame| !skipped.iter().any(|(path, _)| *path == frame.source_path))
+        .cloned()
+        .collect();
     let stability = (kind == CalibrationKind::Flat).then(|| {
-        let stability = flat_set_stability(
+        let mut stability = flat_set_stability(
             frames,
             &skipped,
             &frame.image,
             frame.bayer,
             stability_calibration.as_ref(),
         );
+        // Line the judgement up with the frames combined.
+        stability.disagreement = frames
+            .iter()
+            .zip(std::mem::take(&mut stability.disagreement))
+            .filter(|(frame, _)| !skipped.iter().any(|(path, _)| *path == frame.source_path))
+            .map(|(_, disagree)| disagree)
+            .collect();
         tracing::info!(
             "master flat kept {} feature pixel(s); frames disagree at {:?} of them (drift from {})",
             stability.feature_pixels,
@@ -4944,13 +4984,6 @@ fn build_master_once(
         "flat_star_masking": frame.flat_star_masking,
         "defect_pixels_replaced": frame.defect_pixels_replaced,
     });
-    // The integrator reports each input it combined, in order: the frames
-    // given less those it refused.
-    let combined: Vec<CalibrationFrame> = frames
-        .iter()
-        .filter(|frame| !skipped.iter().any(|(path, _)| *path == frame.source_path))
-        .cloned()
-        .collect();
     let named = combined.len() == frame.input_statistics.len();
     statistics["input_statistics"] = frame
         .input_statistics
@@ -4987,7 +5020,7 @@ fn build_master_once(
             flat_star_masking: frame.flat_star_masking,
             stability_note: None,
         },
-        used: frames.to_vec(),
+        used: combined,
         stability,
         memo: false,
         staged: Some(StagedMaster {
@@ -6107,6 +6140,7 @@ fn source_set_hash(
     bias_dependency: Option<&BuiltMaster>,
     dark_dependency: Option<&BuiltMaster>,
     flat_star_masking: bool,
+    dark_level_screening: bool,
 ) -> String {
     let mut values = frames
         .iter()
@@ -6123,14 +6157,10 @@ fn source_set_hash(
     if flat_star_masking {
         values.push("flat-star-masking=native-v1".into());
     }
-    // Dark masters leave out inputs that caught stray light, so one built
-    // before that rule is a different master from the same frames.
-    if frames.iter().any(|frame| {
-        matches!(
-            frame.kind,
-            CalibrationKind::Dark | CalibrationKind::DarkFlat
-        )
-    }) {
+    // A screened dark master leaves out inputs that caught stray light, so it
+    // is a different master from the same frames than one built without the
+    // screen (as every dark master was before the screen existed).
+    if dark_level_screening {
         values.push("dark-level-screening=v1".into());
     }
     hex_digest(&format!(
@@ -10191,6 +10221,120 @@ mod tests {
         forget_frames(&mut conn, &quiet).unwrap();
         assert_eq!(grade_library(&conn).unwrap().poor, 0);
         assert_eq!(select_for_light(&conn, &light).unwrap().dark.len(), 1);
+    }
+
+    #[test]
+    fn a_dark_used_anyway_goes_into_its_master() {
+        // Three steady darks and one that caught dawn. Before grading, the
+        // integrator's own screen leaves the bright one out and the master
+        // records only the three it combined. Once graded, a person's Use
+        // anyway must put it back: no screen overrules that choice.
+        let temp = tempfile::tempdir().unwrap();
+        let mut meta = Vec::new();
+        for (index, value) in [503.0, 503.0, 503.0, 900.0].into_iter().enumerate() {
+            let path = temp.path().join(format!("dark-{index}.fits"));
+            quality::tests::write_frame(&path, "DARK", (64, 64), "2026-09-10T10:00:00", |x, y| {
+                value + 5.0 * quality::tests::noise(x, y, index as u64)
+            });
+            meta.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light_path = temp.path().join("light.fits");
+        quality::tests::write_frame(
+            &light_path,
+            "LIGHT",
+            (64, 64),
+            "2026-09-11T03:00:00",
+            |_, _| 1_100.0,
+        );
+        let mut conn = Connection::open(temp.path().join("catalog.sqlite")).unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            import_calibration_frames(&tx, &meta, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let uuid_of = |name: &str| -> String {
+            conn.query_row(
+                "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE source_path LIKE ?1",
+                [format!("%{name}")],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        let leaked = uuid_of("dark-3.fits");
+        let mut every: Vec<String> = (0..4)
+            .map(|index| uuid_of(&format!("dark-{index}.fits")))
+            .collect();
+        every.sort();
+        let recorded = |master: &str| -> (i64, Vec<String>, usize) {
+            let (count, uuids, statistics): (i64, String, String) = conn
+                .query_row(
+                    "SELECT source_count, source_frame_uuids, statistics_json
+                     FROM psf_guard_calibration_master WHERE cache_path LIKE ?1",
+                    [format!("%{master}")],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            let mut uuids: Vec<String> = serde_json::from_str(&uuids).unwrap();
+            uuids.sort();
+            let statistics: serde_json::Value = serde_json::from_str(&statistics).unwrap();
+            let inputs = statistics["input_statistics"].as_array().unwrap().len();
+            (count, uuids, inputs)
+        };
+        let cache = temp.path().join("cache");
+        let build = || {
+            resolve_or_build_masters(
+                &conn,
+                &cache,
+                std::slice::from_ref(&light_path),
+                None,
+                None,
+                CalibrationMode::Auto,
+            )
+            .unwrap()
+            .1
+        };
+
+        let screened = build();
+        assert_eq!(screened.dark_frames, 4, "nothing graded keeps any out");
+        assert!(
+            screened
+                .warning
+                .as_deref()
+                .is_some_and(|warning| warning.contains("caught stray light")),
+            "{:?}",
+            screened.warning
+        );
+        let (count, uuids, inputs) = recorded(screened.dark_master.as_deref().unwrap());
+        assert_eq!(count, 3, "the record holds what the integrator combined");
+        assert_eq!(inputs, 3);
+        assert!(!uuids.contains(&leaked));
+
+        let (_, graded) = quality::measure_and_grade(&conn).unwrap();
+        assert_eq!(graded.poor, 1);
+        assert_eq!(
+            quality::set_overrides(
+                &conn,
+                std::slice::from_ref(&leaked),
+                Some(QualityOverride::Use)
+            )
+            .unwrap(),
+            1
+        );
+        let used = build();
+        assert_eq!(used.dark_frames, 4);
+        assert!(
+            used.warning
+                .as_deref()
+                .is_none_or(|warning| !warning.contains("stray light")),
+            "{:?}",
+            used.warning
+        );
+        let master = used.dark_master.as_deref().unwrap();
+        assert_ne!(Some(master), screened.dark_master.as_deref());
+        let (count, uuids, inputs) = recorded(master);
+        assert_eq!(count, 4, "the dark used anyway is in the master");
+        assert_eq!(inputs, 4);
+        assert_eq!(uuids, every);
     }
 
     #[test]

@@ -155,6 +155,39 @@ pub(super) fn kept_out_reason(
     }
 }
 
+/// Whether every frame carries a person's choice or a grade this build made
+/// from its current file. Such a set needs no screen of its own: the grades
+/// already keep the poor frames out, and a choice must stand.
+pub(super) fn all_judged(conn: &Connection, frames: &[CalibrationFrame]) -> Result<bool> {
+    if !table_exists(conn) {
+        return Ok(false);
+    }
+    let mut statement = conn.prepare(
+        "SELECT 1 FROM psf_guard_calibration_frame_quality
+         WHERE frame_uuid = ?1
+           AND (override_choice IS NOT NULL
+                OR (grade IS NOT NULL AND algorithm_version = ?2
+                    AND source_fingerprint IS ?3))",
+    )?;
+    for frame in frames {
+        let judged = statement
+            .query_row(
+                params![
+                    frame.frame_uuid,
+                    FRAME_QUALITY_ALGORITHM_VERSION,
+                    frame.source_fingerprint
+                ],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !judged {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// What was measured on one frame, as stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
