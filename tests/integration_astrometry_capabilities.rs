@@ -175,7 +175,7 @@ async fn missing_catalog_is_a_successful_diagnostic_response() {
 }
 
 #[tokio::test]
-async fn catalog_install_requires_database_management_permission() {
+async fn catalog_install_reports_idle_until_started() {
     let directory = tempdir().unwrap();
     let state = Arc::new(
         AppState::from_databases_with_astrometry(
@@ -209,16 +209,7 @@ async fn catalog_install_requires_database_management_permission() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["progress"]["phase"], "idle");
 
-    let response = build_app(state)
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/astrometry/catalogs/install")
-                .header("content-type", "application/json")
-                .body(Body::from(r#"{"preset":"blind_deep"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // Starting an install takes an editor and no database management: it
+    // writes only into the configured catalog folder. A real start would
+    // download catalogs, so the auth tests check only who may ask.
 }
