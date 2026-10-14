@@ -2248,7 +2248,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     exposure.unwrap_or(0.0)
                 ),
                 detail: format!(
-                    "plan #{row_id} ({acquired} of {desired} frames taken) is no longer in this plan; Target Scheduler stops taking it"
+                    "plan #{row_id} ({acquired} of {desired} frames taken), no longer in this plan"
                 ),
             });
         }
@@ -2323,7 +2323,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         action: "disable",
                         name,
                         detail: format!(
-                            "plan #{row_id} ({acquired} of {desired} frames taken) is replaced by {by}; Target Scheduler stops taking it"
+                            "plan #{row_id} ({acquired} of {desired} frames taken), replaced by {by}"
                         ),
                     });
                 }

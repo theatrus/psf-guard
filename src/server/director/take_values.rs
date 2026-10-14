@@ -261,12 +261,19 @@ fn same_angle(a: f64, b: f64) -> bool {
     apart.min(360.0 - apart) <= SAME_ANGLE_DEGREES
 }
 
-/// Fold the rig's Target Scheduler values into the plan. Where only this
-/// rig shoots a band, its frames become the band's goal; where other rigs
-/// share it, they become this rig's own goal. A band the project no longer
-/// shoots is turned off for this rig, unless the read left some exposure
-/// plan out, when nothing is turned off. The framing follows the project's
-/// targets when they moved and no other rig uses the same layout.
+/// Fold the rig's Target Scheduler values into the plan. Each length of a
+/// band the project shoots is a part of the plan (see
+/// [`import_drafts::read_drafts`]), so a band shot at two lengths keeps both
+/// and the next activation turns neither off. A part read lands on this
+/// rig's part at the same length, else on another of its parts in that
+/// band (the same purpose first), taking its template and length, else on
+/// an objective of that band other rigs shoot, else on a new objective.
+/// Where only this rig shoots an objective, its frames become the
+/// objective's goal; where other rigs share it, this rig's own goal. A part
+/// of this rig's that no exposure plan lands on is turned off, unless the
+/// read left some exposure plan out, when nothing is turned off. The
+/// framing follows the project's targets when they moved and no other rig
+/// uses the same layout.
 fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read) -> Merged {
     let mut taken = Vec::new();
     let mut left = Vec::new();
@@ -275,31 +282,101 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
         .drafts
         .plan
         .unwrap_or_else(|| PlanDraft::empty(plan.project_id, 0));
-    let mut shot = BTreeSet::new();
-    for objective in &source.objectives {
-        let Some(read_part) = source
-            .contributions
+    let read_parts: Vec<(&Objective, &Contribution)> = source
+        .objectives
+        .iter()
+        .filter_map(|o| {
+            source
+                .contributions
+                .iter()
+                .find(|c| c.objective_id == o.id)
+                .map(|c| (o, c))
+        })
+        .collect();
+    let same_length = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    let rig_part = |objective: Uuid| {
+        plan.contributions
             .iter()
-            .find(|c| c.objective_id == objective.id)
-        else {
-            continue;
+            .find(|c| c.objective_id == objective && c.rig_id == rig)
+    };
+    // Where each part read lands, worked out on the plan as saved.
+    let mut landing: Vec<Option<Uuid>> = vec![None; read_parts.len()];
+    let mut landed = BTreeSet::new();
+    type Fits<'a> = &'a dyn Fn(&Objective, &Objective, &Contribution) -> bool;
+    let passes: [Fits; 4] = [
+        &|planned, _, part| {
+            rig_part(planned.id)
+                .is_some_and(|c| same_length(c.exposure_seconds, part.exposure_seconds))
+        },
+        &|planned, read, _| rig_part(planned.id).is_some() && planned.purpose == read.purpose,
+        &|planned, _, _| rig_part(planned.id).is_some(),
+        &|planned, _, _| rig_part(planned.id).is_none(),
+    ];
+    for fits in passes {
+        for (i, (objective, part)) in read_parts.iter().enumerate() {
+            if landing[i].is_some() {
+                continue;
+            }
+            if let Some(planned) = plan.objectives.iter().find(|o| {
+                o.bandpass_id == objective.bandpass_id
+                    && !landed.contains(&o.id)
+                    && fits(o, objective, part)
+            }) {
+                landing[i] = Some(planned.id);
+                landed.insert(planned.id);
+            }
+        }
+    }
+    for (i, (objective, read_part)) in read_parts.iter().enumerate() {
+        // A band read at one length says its filter; at more, each length.
+        let lengths = read_parts
+            .iter()
+            .filter(|(o, _)| o.bandpass_id == objective.bandpass_id)
+            .count();
+        let label = if lengths > 1 {
+            format!(
+                "{} {} s",
+                read_part.template.filter_name, read_part.exposure_seconds
+            )
+        } else {
+            read_part.template.filter_name.clone()
         };
-        shot.insert(objective.bandpass_id.clone());
-        let label = &read_part.template.filter_name;
-        let Some(index) = next
-            .objectives
-            .iter()
-            .position(|o| o.bandpass_id == objective.bandpass_id)
+        let Some(index) = landing[i].and_then(|id| next.objectives.iter().position(|o| o.id == id))
         else {
+            // A purpose this rig does not yet shoot the band for, if there
+            // is one; the plan can hold two of the same.
+            let used: BTreeSet<&str> = next
+                .objectives
+                .iter()
+                .filter(|o| {
+                    o.bandpass_id == objective.bandpass_id
+                        && next
+                            .contributions
+                            .iter()
+                            .any(|c| c.objective_id == o.id && c.rig_id == rig)
+                })
+                .map(|o| o.purpose.as_str())
+                .collect();
+            let purpose = [
+                objective.purpose.as_str(),
+                "faint_detail",
+                "unsaturated_stars",
+            ]
+            .into_iter()
+            .find(|p| !used.contains(p))
+            .unwrap_or(objective.purpose.as_str())
+            .to_owned();
             let id = Uuid::new_v4();
+            landed.insert(id);
             next.objectives.push(Objective {
                 id,
-                ..objective.clone()
+                purpose,
+                ..(*objective).clone()
             });
             next.contributions.push(Contribution {
                 id: Uuid::new_v4(),
                 objective_id: id,
-                ..read_part.clone()
+                ..(*read_part).clone()
             });
             taken.push(format!(
                 "{label}: added, {} with {}",
@@ -352,7 +429,7 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
                     notes.push(format!("template {}", read_part.template.name));
                     part.template = read_part.template.clone();
                 }
-                if (part.exposure_seconds - read_part.exposure_seconds).abs() > 1e-6 {
+                if !same_length(part.exposure_seconds, read_part.exposure_seconds) {
                     notes.push(format!("{} s", read_part.exposure_seconds));
                     part.exposure_seconds = read_part.exposure_seconds;
                 }
@@ -366,7 +443,7 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
                     id: Uuid::new_v4(),
                     objective_id: planned.id,
                     goal: own_goal,
-                    ..read_part.clone()
+                    ..(*read_part).clone()
                 });
                 notes.push(format!("shot here with {}", read_part.template.name));
             }
@@ -375,23 +452,12 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
             taken.push(format!("{label}: {}", notes.join(", ")));
         }
     }
-    // Bands this rig shoots in the plan that the project no longer has.
-    let bands: Vec<(Uuid, String)> = next
-        .objectives
-        .iter()
-        .map(|o| (o.id, o.bandpass_id.clone()))
-        .collect();
+    // This rig's parts no exposure plan in the project landed on.
     for part in next
         .contributions
         .iter_mut()
-        .filter(|c| c.rig_id == rig && c.enabled)
+        .filter(|c| c.rig_id == rig && c.enabled && !landed.contains(&c.objective_id))
     {
-        let Some((_, band)) = bands.iter().find(|(id, _)| *id == part.objective_id) else {
-            continue;
-        };
-        if shot.contains(band) {
-            continue;
-        }
         if read.left_out {
             left.push(format!(
                 "{}: kept on; Target Scheduler has exposure plans Director cannot read",
@@ -404,6 +470,11 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
             ));
             part.enabled = false;
         }
+    }
+    for short in &read.drafts.test_frames {
+        left.push(format!(
+            "{short}: under a second, so left out as test frames"
+        ));
     }
     if read.draft_project {
         left.push("Project: a Draft in Target Scheduler; an activation makes it Active".into());

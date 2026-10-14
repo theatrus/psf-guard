@@ -466,6 +466,74 @@ async fn an_imported_plan_takes_each_bands_main_exposure_plan() {
     assert_eq!(plan["data"]["plan"]["objectives"][0]["goal"]["value"], 40);
 }
 
+/// A band shot at two lengths (long frames for faint detail, short ones
+/// for star cores) imports as two objectives, so an activation keeps both
+/// plans; a length under a second beside them is test frames and stays out.
+#[tokio::test]
+async fn a_band_at_two_lengths_imports_as_two_objectives() {
+    let f = Fixture::new();
+    let path = register(&f, "lum", "Lum rig", &[(1, "M81", Some(Uuid::new_v4()))]);
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (1, 'profile-x', 'L 300', 'L', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, 'tmpl-l');
+         INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'M81', 1, 9.926, 69.07, 2, 0.0, 100, 1, 'tgt-1');
+         INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         VALUES ('profile-x', -1, 80, 10, 10, 1, 1, 1, 'ep-long'), ('profile-x', 30, 40, 0, 0, 1, 1, 1, 'ep-short'),
+                ('profile-x', 0.5, 5, 5, 0, 1, 1, 1, 'ep-test');",
+    )
+    .unwrap();
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let project = listed["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["name"] == "M81")
+        .unwrap()["project"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, plan) = call(
+        &f.app,
+        "GET",
+        &format!("/projects/{project}/plan"),
+        Value::Null,
+        None,
+    )
+    .await;
+    let plan = &plan["data"]["plan"];
+    let parts: Vec<(String, f64, u64)> = plan["objectives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| {
+            let part = plan["contributions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["objective_id"] == o["id"])
+                .unwrap();
+            (
+                o["purpose"].as_str().unwrap().to_owned(),
+                part["exposure_seconds"].as_f64().unwrap(),
+                o["goal"]["value"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            ("unsaturated_stars".to_owned(), 30.0, 40),
+            ("faint_detail".to_owned(), 300.0, 80),
+        ],
+        "{plan}"
+    );
+}
+
 #[tokio::test]
 async fn a_target_scheduler_project_is_imported_as_framing_and_plan_drafts_once() {
     let f = Fixture::new();

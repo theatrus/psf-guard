@@ -998,11 +998,11 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
     );
     assert_eq!(
         details[2],
-        "IC 1805 r1c1 · Ha 300 · 600 s | plan #12 (0 of 10 frames taken) is replaced by IC 1805 r1c1 · Ha 300 · 300 s; Target Scheduler stops taking it"
+        "IC 1805 r1c1 · Ha 300 · 600 s | plan #12 (0 of 10 frames taken), replaced by IC 1805 r1c1 · Ha 300 · 300 s"
     );
     assert_eq!(
         details[3],
-        "IC 1805 r1c1 · Ha copy · 120 s | plan #14 (2 of 20 frames taken) is replaced by IC 1805 r1c1 · Ha 300 · 300 s; Target Scheduler stops taking it"
+        "IC 1805 r1c1 · Ha copy · 120 s | plan #14 (2 of 20 frames taken), replaced by IC 1805 r1c1 · Ha 300 · 300 s"
     );
     assert_eq!(
         details[4],
@@ -2063,7 +2063,7 @@ async fn the_check_lists_a_replaced_plan_left_on_under_an_up_to_date_record() {
         recorded_plan_revision(&a.f, a.project).await,
         plan_revision(&a.f, a.project)
     );
-    let replaced = "disable IC 1805 r1c1 · Ha 120 · 120 s | plan #34 (2 of 120 frames taken) is replaced by IC 1805 r1c1 · Ha 300 · 300 s; Target Scheduler stops taking it";
+    let replaced = "disable IC 1805 r1c1 · Ha 120 · 120 s | plan #34 (2 of 120 frames taken), replaced by IC 1805 r1c1 · Ha 300 · 300 s";
     let checked = check_now(&a.f, a.project).await;
     assert_eq!(plan_writes(&checked), [replaced], "{checked}");
     let (status, preview) = call(
@@ -2483,6 +2483,98 @@ async fn a_target_moved_in_target_scheduler_moves_the_framing() {
     );
     let checked = check_now(&a.f, a.project).await;
     assert_eq!(actions(&checked, "target"), ["unchanged"], "{checked}");
+}
+
+/// A second length of a band made in N.I.N.A. (Ha 30 s beside the plan's
+/// Ha 300 s) is turned off by the next activation, and the preview says so.
+/// Taking Target Scheduler's values brings it in as an objective of its
+/// own, for unsaturated stars, so the check then finds nothing to change
+/// and the activation keeps both.
+#[tokio::test]
+async fn a_second_length_made_in_nina_is_turned_off_unless_taken_into_the_plan() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut framing = store.framing_draft(a.project).unwrap().unwrap();
+        let revision = framing.revision;
+        framing.mosaic = Mosaic {
+            rows: 1,
+            columns: 1,
+            overlap_percent: 20,
+        };
+        store.save_framing_draft(&framing, revision).unwrap();
+    }
+    activate_now(&a.f, a.project, "first").await;
+    a.db.execute(
+        "INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid)
+         SELECT 30, 'profile-a', 30, 60, 4, 4, Id, 1, 1, 'aaaaaaaa-0000-4000-8000-000000000030' FROM target",
+        [],
+    )
+    .unwrap();
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        plan_writes(&preview["data"]),
+        ["disable IC 1805 · Ha 300 · 30 s | plan #30 (4 of 60 frames taken), replaced by IC 1805 · Ha 300 · 300 s"],
+        "{preview}"
+    );
+
+    let (status, taken) = take_values(&a.f, a.project, a.rig).await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    assert_eq!(
+        taken["data"]["taken"],
+        json!(["Ha 30 s: added, 60 frames with Ha 300"]),
+        "{taken}"
+    );
+    let plan = {
+        let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        store.plan_draft(a.project).unwrap().unwrap()
+    };
+    let mut parts: Vec<(String, String, f64)> = plan
+        .objectives
+        .iter()
+        .map(|o| {
+            let part = plan
+                .contributions
+                .iter()
+                .find(|c| c.objective_id == o.id)
+                .unwrap();
+            (
+                o.bandpass_id.clone(),
+                o.purpose.clone(),
+                part.exposure_seconds,
+            )
+        })
+        .collect();
+    parts.sort_by(|a, b| a.2.total_cmp(&b.2));
+    assert_eq!(
+        parts,
+        [
+            ("h_alpha".to_owned(), "unsaturated_stars".to_owned(), 30.0),
+            ("h_alpha".to_owned(), "faint_detail".to_owned(), 300.0),
+        ]
+    );
+    let checked = check_now(&a.f, a.project).await;
+    assert!(plan_writes(&checked).is_empty(), "{checked}");
+    assert_eq!(
+        actions(&checked, "plan"),
+        ["unchanged", "unchanged"],
+        "{checked}"
+    );
+    activate_now(&a.f, a.project, "both lengths").await;
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE Id=30 AND enabled=1 AND exposure=30 AND acquired=4"),
+        1
+    );
+    assert_eq!(count("SELECT count(*) FROM exposureplan"), 2, "no twins");
 }
 
 /// A band turned off in Target Scheduler is turned off for that rig, and
