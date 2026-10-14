@@ -1,8 +1,6 @@
 /* The image detail's calibration account. Poor is red and Check amber, as
-   on the calibration chip. */
+   on the calibration chip: both take the calibration tokens in App.css. */
 .light-calibration-panel {
-  --calibration-poor: #d64545;
-  --calibration-check: #c9971c;
   border-top: 1px solid var(--color-bg-tertiary);
   padding-top: 1rem;
   scroll-margin-top: 0.75rem;
@@ -50,15 +48,15 @@
 }
 
 .light-calibration-panel-badge.is-poor {
-  border-color: var(--calibration-poor);
-  color: #fff;
-  background: var(--calibration-poor);
+  border-color: var(--color-calibration-poor);
+  color: var(--color-text-on-fill);
+  background: var(--color-calibration-poor);
 }
 
 .light-calibration-panel-badge.is-check {
-  border-color: var(--calibration-check);
-  color: #1a1a1a;
-  background: var(--calibration-check);
+  border-color: var(--color-calibration-check);
+  color: var(--color-bg-primary);
+  background: var(--color-calibration-check);
 }
 
 .light-calibration-panel-readings,
@@ -100,26 +98,28 @@
 }
 
 .light-calibration-finding:focus-visible {
-  outline: 2px solid var(--color-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
 }
 
 .light-calibration-finding.is-poor {
-  border-left-color: var(--calibration-poor);
+  border-left-color: var(--color-calibration-poor);
 }
 
 .light-calibration-finding.is-check {
-  border-left-color: var(--calibration-check);
+  border-left-color: var(--color-calibration-check);
 }
 
-.light-calibration-finding.is-chosen.is-poor {
-  border-color: var(--calibration-poor);
-  background: rgb(214 69 69 / 14%);
+/* The chosen finding keeps its level's colour rather than the cyan on
+   state: it names what is wrong. */
+.light-calibration-finding[aria-pressed='true'].is-poor {
+  border-color: var(--color-calibration-poor);
+  background: var(--color-calibration-poor-bg);
 }
 
-.light-calibration-finding.is-chosen.is-check {
-  border-color: var(--calibration-check);
-  background: rgb(201 151 28 / 14%);
+.light-calibration-finding[aria-pressed='true'].is-check {
+  border-color: var(--color-calibration-check);
+  background: var(--color-calibration-check-bg);
 }
 
 .light-calibration-finding-level {
@@ -130,11 +130,11 @@
 }
 
 .light-calibration-finding.is-poor .light-calibration-finding-level {
-  color: var(--calibration-poor);
+  color: var(--color-calibration-poor);
 }
 
 .light-calibration-finding.is-check .light-calibration-finding-level {
-  color: var(--calibration-check);
+  color: var(--color-calibration-check);
 }
 
 .light-calibration-focus-note {
@@ -180,11 +180,11 @@
 }
 
 .light-calibration-kind.is-about.is-poor {
-  border-color: var(--calibration-poor);
+  border-color: var(--color-calibration-poor);
 }
 
 .light-calibration-kind.is-about.is-check {
-  border-color: var(--calibration-check);
+  border-color: var(--color-calibration-check);
 }
 
 .light-calibration-kind.is-folded {
@@ -274,13 +274,13 @@
 
 /* What the chosen finding points at. */
 .light-calibration-panel .is-focus.is-poor {
-  background: rgb(214 69 69 / 16%);
-  box-shadow: inset 3px 0 0 var(--calibration-poor);
+  background: var(--color-calibration-poor-bg);
+  box-shadow: inset 3px 0 0 var(--color-calibration-poor);
 }
 
 .light-calibration-panel .is-focus.is-check {
-  background: rgb(201 151 28 / 16%);
-  box-shadow: inset 3px 0 0 var(--calibration-check);
+  background: var(--color-calibration-check-bg);
+  box-shadow: inset 3px 0 0 var(--color-calibration-check);
 }
 
 .light-calibration-part.is-focus,
@@ -301,6 +301,6 @@ button.score-chip.calibration-chip:hover {
 }
 
 button.score-chip.calibration-chip:focus-visible {
-  outline: 2px solid var(--color-text-primary);
+  outline: 2px solid var(--state-focus-border);
   outline-offset: 1px;
 }

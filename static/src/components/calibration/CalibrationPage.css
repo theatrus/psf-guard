@@ -244,7 +244,7 @@
   height: 5rem;
   overflow: hidden;
   border-radius: 4px;
-  background: #050505;
+  background: var(--color-bg-image);
 }
 
 .calibration-thumb-image > * {
@@ -267,7 +267,7 @@
 }
 
 .calibration-thumb-note {
-  color: #9a9a9a;
+  color: var(--color-text-muted);
   font-size: 0.72rem;
 }
 
@@ -322,7 +322,7 @@
   height: clamp(18rem, calc(100vh - 33rem), 46rem);
   overflow: hidden;
   border-radius: 8px;
-  background: #050505;
+  background: var(--color-bg-image);
   outline: none;
   touch-action: none;
 }
@@ -369,16 +369,16 @@
   gap: 0.4rem;
   padding: 0.25rem 0.6rem;
   border-radius: 999px;
-  background: rgb(0 0 0 / 65%);
-  color: #eee;
+  background: var(--color-scrim);
+  color: var(--color-text-on-fill);
   font-size: 0.8rem;
 }
 
 .calibration-spinner {
   width: 0.75rem;
   height: 0.75rem;
-  border: 2px solid rgb(255 255 255 / 30%);
-  border-top-color: #fff;
+  border: 2px solid var(--color-scrim-border);
+  border-top-color: var(--color-text-on-fill);
   border-radius: 50%;
   animation: calibration-spin 0.9s linear infinite;
 }

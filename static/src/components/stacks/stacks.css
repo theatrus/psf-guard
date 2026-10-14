@@ -84,7 +84,7 @@
   width: 100%;
   aspect-ratio: 3 / 2;
   object-fit: contain;
-  background: #000;
+  background: var(--color-bg-image);
 }
 
 .wbpp-stack-meta {
@@ -179,7 +179,7 @@
 }
 
 .mosaic-stacks-sky-bg {
-  fill: #05070d;
+  fill: var(--sky-bg);
 }
 
 .mosaic-stacks-sky-panel polygon {
@@ -189,11 +189,11 @@
 }
 
 .mosaic-stacks-sky-panel text {
-  fill: #fff;
+  fill: var(--color-text-on-fill);
   font-size: 22px;
   font-weight: 600;
   paint-order: stroke;
-  stroke: #000;
+  stroke: var(--color-halo);
   stroke-width: 4px;
 }
 

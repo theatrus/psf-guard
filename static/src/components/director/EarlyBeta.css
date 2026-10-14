@@ -8,7 +8,7 @@
   line-height: 1.4;
   white-space: nowrap;
   color: var(--color-warning-light);
-  background: rgba(255, 197, 107, 0.12);
+  background: var(--color-status-caution-bg);
 }
 
 .early-beta-heading {

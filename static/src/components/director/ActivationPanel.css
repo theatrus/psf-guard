@@ -7,7 +7,7 @@
 .activation-changes-kind li { padding: 2px 0; }
 .activation-action { display: inline-block; min-width: 6.5em; margin-right: 6px; padding: 0 6px; border-radius: 999px; font-size: 12px; text-align: center; background: var(--color-bg-tertiary); color: var(--color-text-secondary); }
 .activation-action.is-create { background: var(--color-primary-alpha-20); color: var(--color-text-primary); }
-.activation-action.is-adopt { background: rgba(123, 228, 149, 0.15); color: #7be495; }
+.activation-action.is-adopt { background: var(--color-status-good-bg); color: var(--color-status-good); }
 .activation-action.is-update { background: var(--color-warning-alpha-20); color: var(--color-text-primary); }
 .activation-rig { margin: 6px 0 4px; font-size: 14px; }
 .activation-rig-summary { margin: 0 0 4px; }
@@ -19,10 +19,10 @@
 .activation-shoots ul, .activation-on ul { margin: 0; padding-left: 0; list-style: none; }
 .activation-shoots li, .activation-on li { padding: 2px 0; overflow-wrap: anywhere; }
 .activation-shoots p { margin: 0; font-size: 13px; }
-.activation-on { border-color: rgba(123, 228, 149, 0.5); }
-.activation-on h4 { color: #7be495; }
+.activation-on { border-color: color-mix(in srgb, var(--color-status-good) 50%, transparent); }
+.activation-on h4 { color: var(--color-status-good); }
 /* What activation turns off: open, above the other changes, in the warning colour. */
-.activation-off { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--color-warning-light); border-radius: 6px; background: rgba(255, 197, 107, 0.08); }
+.activation-off { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--color-warning-light); border-radius: 6px; background: color-mix(in srgb, var(--color-status-caution) 8%, transparent); }
 .activation-off h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--color-warning-light); }
 .activation-off ul { margin: 0; padding-left: 0; list-style: none; }
 .activation-off li { padding: 2px 0; overflow-wrap: anywhere; }

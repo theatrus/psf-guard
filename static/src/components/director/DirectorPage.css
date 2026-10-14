@@ -61,7 +61,7 @@
   .director-page .rig-setup-nav.workspace-tabs button.workspace-tab { white-space: nowrap; }
   .rig-setup-content { padding: 12px; }
 }
-.rig-profile-form fieldset { border: 1px solid var(--border-color, #444); border-radius: 6px; padding: 0.5rem 0.75rem 0.75rem; margin: 0 0 0.75rem; min-width: 0; }
+.rig-profile-form fieldset { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 0.5rem 0.75rem 0.75rem; margin: 0 0 0.75rem; min-width: 0; }
 .rig-profile-form legend { padding: 0 0.35rem; font-weight: 600; }
 .rig-profile-source { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: center; margin: 0 0 0.5rem; }
 .rig-profile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.5rem 1rem; }
@@ -116,9 +116,9 @@ select.library-pill-state option { color: var(--color-text-primary); background:
 .director-dashboard-table td { padding: 6px; vertical-align: top; border-top: 1px solid var(--color-border-secondary); }
 .director-dashboard-table .director-cell-label { display: none; }
 .director-connectivity { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; background: var(--color-bg-secondary); color: var(--color-text-secondary); }
-.director-connectivity.is-online { background: rgba(60, 170, 90, 0.18); color: #2f8f4e; }
-.director-connectivity.is-stale { background: rgba(230, 170, 40, 0.18); color: #a8720d; }
-.director-connectivity.is-offline { background: rgba(200, 60, 60, 0.15); color: #b93a3a; }
+.director-connectivity.is-online { background: var(--color-status-good-bg); color: var(--color-status-good); }
+.director-connectivity.is-stale { background: var(--color-status-caution-bg); color: var(--color-status-caution); }
+.director-connectivity.is-offline { background: var(--color-status-bad-bg); color: var(--color-status-bad); }
 @media (max-width: 800px) { .director-dashboard-table thead { display: none; } .director-dashboard-table tr { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--color-border-secondary); } .director-dashboard-table td { border: none; padding: 0; } .director-dashboard-table .director-cell-label { display: inline; color: var(--color-text-secondary); margin-right: 6px; } }
 /* Attaching another database's project to a plan, under Databases. */
 .director-attach { margin: 8px 0 12px; }
@@ -142,8 +142,8 @@ select.library-pill-state option { color: var(--color-text-primary); background:
 .workspace-pill { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 10px; border: 0; border-radius: 999px; font: inherit; font-size: 12px; line-height: 1.2; background: var(--color-bg-tertiary); color: var(--color-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .workspace-pill small { color: var(--color-text-hint); font-size: 12px; }
 .workspace-pill.is-strong { color: var(--color-text-primary); font-weight: 600; }
-.workspace-pill.is-ok { color: #7be495; background: rgba(123, 228, 149, 0.12); }
-.workspace-pill.is-missing, .workspace-pill.is-behind { color: var(--color-warning-light); background: rgba(255, 197, 107, 0.12); }
+.workspace-pill.is-ok { color: var(--color-status-good); background: var(--color-status-good-bg); }
+.workspace-pill.is-missing, .workspace-pill.is-behind { color: var(--color-warning-light); background: var(--color-status-caution-bg); }
 a.workspace-pill { text-decoration: none; }
 a.workspace-pill:hover { color: var(--color-text-primary); }
 .workspace-tabs { display: flex; gap: 6px; margin-top: 0; overflow-x: auto; border-bottom: 1px solid var(--color-border-secondary); scrollbar-width: thin; }
@@ -180,7 +180,7 @@ a.workspace-pill:hover { color: var(--color-text-primary); }
 .horizon-editor { display: grid; gap: 0.4rem; margin-top: 0.5rem; min-width: 0; }
 .horizon-paste { display: grid; gap: 0.2rem; }
 .horizon-paste textarea { background: var(--color-bg-secondary); color: var(--color-text-primary); border: 1px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; width: 100%; box-sizing: border-box; font-family: var(--font-mono, monospace); font-size: 13px; resize: vertical; }
-.horizon-upload { position: relative; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; padding: 4px 10px; border: 1px solid var(--color-border-secondary, #555); border-radius: 4px; }
+.horizon-upload { position: relative; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; padding: 4px 10px; border: 1px solid var(--color-border-secondary); border-radius: 4px; }
 .horizon-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .director-sites { margin-top: 1.5rem; }
 .director-site-new { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }

@@ -396,7 +396,7 @@
 .tauri-settings .save-button {
   padding: 10px 20px;
   background-color: var(--color-success);
-  color: white;
+  color: var(--color-text-on-fill);
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -419,9 +419,9 @@
 .tauri-settings .db-entry {
   margin-bottom: 8px;
   overflow: hidden;
-  border: 1px solid var(--color-border, #444);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 4px;
-  background-color: var(--color-bg-input, rgba(255, 255, 255, 0.02));
+  background-color: var(--color-bg-input);
 }
 
 .tauri-settings .db-entry.editing {
@@ -449,8 +449,8 @@
 
 .tauri-settings .db-row-slug {
   font-size: 11px;
-  color: var(--color-text-secondary, #999);
-  background: var(--color-bg-button, rgba(255, 255, 255, 0.05));
+  color: var(--color-text-secondary);
+  background: var(--color-bg-button);
   padding: 1px 6px;
   border-radius: 3px;
   margin-left: 6px;
@@ -505,7 +505,7 @@
 }
 
 .tauri-settings .muted {
-  color: var(--color-text-secondary, #999);
+  color: var(--color-text-secondary);
 }
 
 .tauri-settings .info-panel-content .db-list {
@@ -520,12 +520,12 @@
 
 .tauri-settings .info-panel-content .db-list code {
   font-size: 11px;
-  color: var(--color-text-secondary, #999);
+  color: var(--color-text-secondary);
 }
 
 .tauri-settings .info-panel-content .db-list .image-dirs {
   font-size: 12px;
-  color: var(--color-text-secondary, #999);
+  color: var(--color-text-secondary);
 }
 
 .tauri-settings .db-add-buttons {
@@ -543,9 +543,9 @@
 .tauri-settings .import-progress-panel {
   margin-top: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--color-border, #444);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
-  background: var(--color-bg-secondary, rgba(255, 255, 255, 0.03));
+  background: var(--color-bg-secondary);
   font-size: 13px;
 }
 
@@ -567,7 +567,7 @@
 .tauri-settings .import-project-list {
   margin: 8px 0 0 0;
   padding-left: 18px;
-  color: var(--color-text-secondary, #999);
+  color: var(--color-text-secondary);
 }
 
 .tauri-settings .import-confirm-buttons {
@@ -883,7 +883,7 @@
 
 .tauri-settings .autoimport-held {
   padding: 2px 4px 2px 10px;
-  border-left: 3px solid var(--color-warning, #e0a020);
+  border-left: 3px solid var(--color-warning);
   background: var(--color-bg-tertiary);
 }
 
@@ -1224,7 +1224,7 @@
   gap: 0.6rem;
   padding: 0.75rem;
   margin-bottom: 0.75rem;
-  border: 1px solid var(--border-color, #333);
+  border: 1px solid var(--color-border-primary);
   border-radius: 6px;
 }
 
@@ -1258,8 +1258,8 @@
 .remote-peer-preview {
   margin-top: 0.75rem;
   padding: 0.6rem 0.75rem;
-  border-left: 3px solid var(--accent-color, #4a9eff);
-  background: rgba(74, 158, 255, 0.08);
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-primary-alpha-10);
 }
 
 .remote-peer-preview p {
@@ -1342,7 +1342,7 @@
 }
 
 .tauri-settings .user-management .status-message.error {
-  border: 1px solid var(--color-danger, #c44);
+  border: 1px solid var(--color-error);
 }
 
 .tauri-settings .api-tokens {
@@ -1354,7 +1354,7 @@
 .tauri-settings .token-secret {
   margin: 0 0 16px;
   padding: 14px 16px;
-  border: 1px solid var(--color-primary-alpha-40, var(--color-border-secondary));
+  border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
   background: var(--color-primary-alpha-10);
 }
@@ -1557,7 +1557,7 @@
 
 .stack-method-preset-buttons button {
   padding: 0.4rem 0.9rem;
-  border: 1px solid var(--color-border, #444);
+  border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
   background: transparent;
   color: var(--color-text-primary);
@@ -1603,7 +1603,7 @@
 
 .remote-sync-previews {
   margin-top: 1.2rem;
-  border-top: 1px solid var(--color-border, #444);
+  border-top: 1px solid var(--color-border-secondary);
   padding-top: 0.8rem;
 }
 
@@ -1627,7 +1627,7 @@
 .remote-sync-previews td {
   text-align: left;
   padding: 0.3rem 0.8rem 0.3rem 0;
-  border-bottom: 1px solid var(--color-border, #333);
+  border-bottom: 1px solid var(--color-border-primary);
   white-space: nowrap;
 }
 
@@ -1648,7 +1648,7 @@
 
 .remote-sync-preview-changes summary {
   cursor: pointer;
-  color: var(--color-primary, #4da3ff);
+  color: var(--color-primary);
 }
 
 .remote-sync-preview-changes ul {
@@ -1680,7 +1680,7 @@
 .import-other-rig {
   margin: 6px 0;
   padding: 6px 10px;
-  border-left: 3px solid var(--color-warning, #e0a020);
+  border-left: 3px solid var(--color-warning);
   background: var(--color-bg-tertiary);
   color: var(--color-text-secondary);
   font-size: 0.9em;
@@ -1696,7 +1696,7 @@
 .astrobin-settings-table td {
   text-align: left;
   padding: 0.25rem 1rem 0.25rem 0;
-  border-bottom: 1px solid var(--color-border, #444);
+  border-bottom: 1px solid var(--color-border-secondary);
 }
 
 .astrobin-settings-add {
@@ -1717,11 +1717,11 @@
 }
 
 .pixinsight-status.is-ready {
-  color: var(--color-success, #1e8449);
+  color: var(--color-success);
 }
 
 .pixinsight-status.is-missing {
-  color: var(--color-warning, #b9770e);
+  color: var(--color-warning);
 }
 
 /* Setups: one card per panel, and one shape for every field row inside. */
@@ -1734,9 +1734,9 @@
 .tauri-settings .settings-setups > * {
   margin: 0;
   padding: 18px 20px 20px;
-  border: 1px solid var(--color-border-secondary, var(--color-border, #444));
+  border: 1px solid var(--color-border-secondary);
   border-radius: 10px;
-  background: var(--color-bg-secondary, transparent);
+  background: var(--color-bg-secondary);
 }
 
 .tauri-settings .settings-setups h3 {
@@ -1846,11 +1846,11 @@
 }
 
 .tauri-settings .settings-warning {
-  border-left: 3px solid var(--color-warning, #f0b429);
+  border-left: 3px solid var(--color-warning);
 }
 
 .tauri-settings .settings-error {
-  color: var(--color-error, #ff6b6b);
+  color: var(--color-error);
 }
 
 .tauri-settings .agent-connect {

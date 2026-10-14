@@ -11,6 +11,8 @@
   --color-bg-button: #666;
   --color-bg-slider: #4a5568;
   --color-bg-slider-hover: #5a6578;
+  /* Behind an image, a stack or a chart of the sky. */
+  --color-bg-image: #05070a;
 
   /* Text Colors */
   --color-text-primary: #e0e0e0;
@@ -34,23 +36,53 @@
   --color-primary-alpha-90: rgba(97, 218, 251, 0.9);
 
   /* Interaction states, so every control says them the same way.
-     Set: a filter or rule narrows what is shown.
-     On: a toggle is pressed, a menu is open, or this is the current view.
-     Focus: keyboard focus. */
+     Set: a filter or rule narrows what is shown (.is-set).
+     On: a toggle is pressed, a menu is open, a tab or row is chosen, or
+     this is the current view (aria-pressed, aria-expanded, aria-selected,
+     aria-checked, aria-current). A tab marks it with its underline and
+     label; a boxed control with its border and fill. Where a tint would
+     not read, such as the header's current view or a toggle drawn over an
+     image, the control fills instead.
+     Focus: keyboard focus, as a ring on fields and boxed controls or an
+     outline elsewhere. */
   --state-set-border: var(--color-primary-alpha-70);
   --state-set-bg: var(--color-primary-alpha-10);
   --state-set-fg: var(--color-primary);
   --state-on-border: var(--color-primary);
   --state-on-bg: var(--color-primary-alpha-20);
+  --state-on-fg: var(--color-primary);
+  --state-on-fill: var(--color-primary);
+  --state-on-fill-fg: var(--color-bg-primary);
   --state-focus-border: var(--color-primary);
   --state-focus-ring: 0 0 0 2px var(--color-primary-alpha-20);
+
+  /* Images picked in a grid or a sequence, and the one the keyboard is on. */
+  --state-picked: var(--color-warning);
+  --state-picked-ring: var(--color-warning-alpha-40);
+  --state-cursor-ring: 0 0 0 3px var(--color-primary-alpha-50);
 
   /* Text that must stand out on a control, and text on a coloured fill. */
   --color-text-strong: #f2f2f2;
   --color-text-on-fill: #fff;
+  --shadow-text-on-fill: 0 1px 2px rgb(0 0 0 / 50%);
 
-  /* Panels that float over the page. */
+  /* Links and plain buttons, from the base styles in index.css. */
+  --color-link: #646cff;
+  --color-link-hover: #535bf2;
+
+  /* Shadows: a popover or menu, a card lifted on hover, a panel resting
+     on the page, and a dialog. */
   --shadow-popover: 0 8px 22px rgb(0 0 0 / 35%);
+  --shadow-raised: 0 4px 12px rgb(0 0 0 / 30%);
+  --shadow-panel: 0 8px 24px rgb(0 0 0 / 18%);
+  --shadow-dialog: 0 12px 40px rgb(0 0 0 / 50%);
+
+  /* Labels and controls drawn over an image or a chart of the sky, and the
+     dark edge that keeps a line or a label readable there. */
+  --color-scrim: rgb(0 0 0 / 65%);
+  --color-scrim-border: rgb(255 255 255 / 25%);
+  --color-scrim-hover: rgb(40 40 40 / 85%);
+  --color-halo: rgb(0 0 0 / 70%);
 
   /* Status Colors */
   --color-success: #4caf50;
@@ -68,6 +100,38 @@
   --color-warning-light: #ffd54f;
   --color-warning-alpha-20: rgba(255, 152, 0, 0.2);
   --color-warning-alpha-40: rgba(255, 152, 0, 0.4);
+
+  /* Status in pills, chips and badges: light text on a faint tint. */
+  --color-status-good: #7be495;
+  --color-status-good-bg: rgb(123 228 149 / 12%);
+  --color-status-caution: #f2c94c;
+  --color-status-caution-bg: rgb(242 201 76 / 12%);
+  --color-status-bad: #ff6b6b;
+  --color-status-bad-bg: rgb(255 107 107 / 12%);
+
+  /* Quality scores and other good, fair and poor readings. */
+  --color-score-good: var(--color-success);
+  --color-score-fair: var(--color-warning);
+  --color-score-poor: var(--color-error);
+
+  /* Calibration levels, on the image chip and the detail's calibration
+     panel. */
+  --color-calibration-poor: #d64545;
+  --color-calibration-poor-bg: rgb(214 69 69 / 14%);
+  --color-calibration-check: #c9971c;
+  --color-calibration-check-bg: rgb(201 151 28 / 14%);
+
+  /* Quality regions drawn on an image, and their legend. */
+  --quality-low-stars: rgb(255 105 105);
+  --quality-low-stars-fill: rgb(235 60 60 / 34%);
+  --quality-extinction: rgb(255 190 85);
+  --quality-extinction-fill: rgb(245 160 40 / 34%);
+  --quality-star-loss: rgb(245 125 245);
+  --quality-star-loss-fill: rgb(225 80 225 / 32%);
+  --quality-glow: rgb(105 235 235);
+  --quality-glow-fill: rgb(70 210 210 / 30%);
+  --quality-background-rise: rgb(250 235 70);
+  --quality-background-fall: rgb(90 160 255);
 
   /* Border Colors */
   --color-border-primary: #333;
@@ -87,6 +151,20 @@
 
   /* Special Colors */
   --color-blue: #2196f3;
+
+  /* A measured series in a chart, such as a stack's signal to noise. */
+  --color-chart-line: #6ea8fe;
+
+  /* Charts of the sky: the Sky view, the framing and a mosaic's sky. */
+  --sky-bg: var(--color-bg-image);
+  --sky-star: rgb(235 240 255 / 85%);
+  --sky-figure: rgb(150 175 235 / 32%);
+  --sky-figure-name: rgb(170 185 230 / 45%);
+  --sky-graticule: rgb(150 170 220 / 18%);
+  --sky-label: rgb(190 200 235 / 70%);
+  --sky-milky-way: rgb(200 210 255 / 4.5%);
+  --sky-panel-bg: rgb(14 18 34 / 95%);
+  --sky-panel-border: rgb(120 140 200 / 35%);
 }
 
 .app {
@@ -155,7 +233,7 @@
 }
 
 .site-banner__link:hover {
-  color: #ffffff;
+  color: var(--color-text-on-fill);
 }
 
 .update-notice {
@@ -166,18 +244,18 @@
   flex: 0 0 auto;
   padding: 0.55rem 1rem;
   color: var(--color-text-primary);
-  background: rgba(33, 150, 243, 0.14);
-  border-bottom: 1px solid rgba(97, 218, 251, 0.35);
+  background: color-mix(in srgb, var(--color-blue) 14%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-primary) 35%, transparent);
   line-height: 1.3;
 }
 
 .update-notice--recommended {
-  background: rgba(255, 152, 0, 0.14);
+  background: color-mix(in srgb, var(--color-warning) 14%, transparent);
   border-bottom-color: var(--color-warning-alpha-40);
 }
 
 .update-notice--required {
-  background: rgba(244, 67, 54, 0.16);
+  background: color-mix(in srgb, var(--color-error) 16%, transparent);
   border-bottom-color: var(--color-error-alpha-20);
 }
 
@@ -419,7 +497,7 @@
   border: 1px solid var(--color-border-primary);
   border-radius: 9px;
   background: var(--color-bg-secondary);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 35%);
+  box-shadow: var(--shadow-popover);
 }
 
 .combined-selector-popover {
@@ -824,7 +902,7 @@
   border-radius: 8px;
   width: 400px;
   max-width: 90vw;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-raised);
   border: 1px solid var(--color-bg-quaternary);
 }
 
@@ -953,7 +1031,7 @@
   background:
     linear-gradient(135deg, var(--color-primary-alpha-10), transparent 60%),
     var(--color-bg-secondary);
-  box-shadow: 0 14px 40px rgb(0 0 0 / 18%);
+  box-shadow: var(--shadow-panel);
 }
 
 .project-pick-icon {
@@ -1095,9 +1173,10 @@
 .image-card:hover {
   border-color: var(--color-bg-quaternary);
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-raised);
 }
 
+/* The card the keyboard is on, as in the grid's current card. */
 .image-card.selected {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-primary-alpha-30);
@@ -1284,12 +1363,12 @@
 
 .image-status.status-accepted {
   background: var(--color-success);
-  color: white;
+  color: var(--color-text-on-fill);
 }
 
 .image-status.status-rejected {
   background: var(--color-error);
-  color: white;
+  color: var(--color-text-on-fill);
 }
 
 .image-status.status-pending {
@@ -1662,23 +1741,23 @@
 }
 
 .quality-region-low-stars {
-  fill: rgba(235, 60, 60, 0.34);
-  stroke: rgb(255, 105, 105);
+  fill: var(--quality-low-stars-fill);
+  stroke: var(--quality-low-stars);
 }
 
 .quality-region-extinction {
-  fill: rgba(245, 160, 40, 0.34);
-  stroke: rgb(255, 190, 85);
+  fill: var(--quality-extinction-fill);
+  stroke: var(--quality-extinction);
 }
 
 .quality-region-star-loss {
-  fill: rgba(225, 80, 225, 0.32);
-  stroke: rgb(245, 125, 245);
+  fill: var(--quality-star-loss-fill);
+  stroke: var(--quality-star-loss);
 }
 
 .quality-region-glow {
-  fill: rgba(70, 210, 210, 0.3);
-  stroke: rgb(105, 235, 235);
+  fill: var(--quality-glow-fill);
+  stroke: var(--quality-glow);
 }
 
 .quality-region-border {
@@ -1688,11 +1767,11 @@
 }
 
 .quality-region-background-rise {
-  stroke: rgb(250, 235, 70);
+  stroke: var(--quality-background-rise);
 }
 
 .quality-region-background-fall {
-  stroke: rgb(90, 160, 255);
+  stroke: var(--quality-background-fall);
   stroke-dasharray: 0.18 0.1;
 }
 
@@ -1727,34 +1806,34 @@
 }
 
 .quality-region-swatch.quality-region-low-stars {
-  color: rgb(255, 105, 105);
-  background: rgba(235, 60, 60, 0.34);
+  color: var(--quality-low-stars);
+  background: var(--quality-low-stars-fill);
 }
 
 .quality-region-swatch.quality-region-extinction {
-  color: rgb(255, 190, 85);
-  background: rgba(245, 160, 40, 0.34);
+  color: var(--quality-extinction);
+  background: var(--quality-extinction-fill);
 }
 
 .quality-region-swatch.quality-region-star-loss {
-  color: rgb(245, 125, 245);
-  background: rgba(225, 80, 225, 0.32);
+  color: var(--quality-star-loss);
+  background: var(--quality-star-loss-fill);
 }
 
 .quality-region-swatch.quality-region-background-rise {
-  color: rgb(250, 235, 70);
+  color: var(--quality-background-rise);
   background: transparent;
 }
 
 .quality-region-swatch.quality-region-background-fall {
-  color: rgb(90, 160, 255);
+  color: var(--quality-background-fall);
   background: transparent;
   border-style: dashed;
 }
 
 .quality-region-swatch.quality-region-glow {
-  color: rgb(105, 235, 235);
-  background: rgba(70, 210, 210, 0.3);
+  color: var(--quality-glow);
+  background: var(--quality-glow-fill);
 }
 
 .quality-region-note {
@@ -2240,7 +2319,7 @@
 
 .action-button.accept {
   background: var(--color-success);
-  color: white;
+  color: var(--color-text-on-fill);
 }
 
 .action-button.accept:hover {
@@ -2249,7 +2328,7 @@
 
 .action-button.reject {
   background: var(--color-error);
-  color: white;
+  color: var(--color-text-on-fill);
 }
 
 .action-button.reject:hover {
@@ -2258,7 +2337,7 @@
 
 .action-button.pending {
   background: var(--color-bg-button);
-  color: white;
+  color: var(--color-text-on-fill);
 }
 
 .action-button.pending:hover {
@@ -2651,7 +2730,7 @@
 
 .panel-actions .action-button.accept:hover {
   background: var(--color-success);
-  color: white;
+  color: var(--color-text-on-fill);
 }
 
 .panel-actions .action-button.reject {
@@ -2660,7 +2739,7 @@
 
 .panel-actions .action-button.reject:hover {
   background: var(--color-error);
-  color: white;
+  color: var(--color-text-on-fill);
 }
 
 .panel-actions .action-button.pending {
@@ -2669,7 +2748,7 @@
 
 .panel-actions .action-button.pending:hover {
   background: var(--color-warning);
-  color: white;
+  color: var(--color-text-on-fill);
 }
 
 .panel-empty {
@@ -3045,7 +3124,7 @@
     var(--color-bg-secondary);
   border: 1px solid var(--color-bg-tertiary);
   border-radius: 10px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  box-shadow: var(--shadow-panel);
 }
 
 .stack-preview-heading {
@@ -3172,7 +3251,7 @@
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.6rem 0;
-  border-bottom: 1px solid var(--color-border, #444);
+  border-bottom: 1px solid var(--color-border-secondary);
   margin-bottom: 0.6rem;
 }
 
@@ -3229,8 +3308,8 @@
   border-radius: 10px;
   font-size: 0.66rem;
   font-weight: 700;
-  color: white;
-  text-shadow: 0 1px 2px rgb(0 0 0 / 50%);
+  color: var(--color-text-on-fill);
+  text-shadow: var(--shadow-text-on-fill);
   opacity: 0.85;
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 35%);
 }
@@ -3248,11 +3327,11 @@
 }
 
 .score-chip.calibration-chip.is-poor {
-  background-color: #d64545;
+  background-color: var(--color-calibration-poor);
 }
 
 .score-chip.calibration-chip.is-check {
-  background-color: #c9971c;
+  background-color: var(--color-calibration-check);
 }
 
 /* Keep the chips clear of the selection marker, like the badge above. */
@@ -3563,7 +3642,7 @@
   display: block;
   width: 100%;
   aspect-ratio: 3 / 2;
-  background: #07090c;
+  background: var(--color-bg-image);
 }
 
 .stack-preview-image {
@@ -3576,10 +3655,10 @@
   right: 0.55rem;
   bottom: 0.5rem;
   padding: 0.18rem 0.4rem;
-  border: 1px solid rgb(255 255 255 / 24%);
+  border: 1px solid var(--color-scrim-border);
   border-radius: 4px;
-  color: rgb(255 255 255 / 88%);
-  background: rgb(0 0 0 / 62%);
+  color: var(--color-text-primary);
+  background: var(--color-scrim);
   font-size: 0.66rem;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -3854,7 +3933,7 @@
 }
 
 .stack-snr-chart .stack-snr-measured {
-  stroke: var(--color-accent, #6ea8fe);
+  stroke: var(--color-chart-line);
 }
 
 .stack-snr-chart .stack-snr-ideal {
@@ -3865,7 +3944,7 @@
 }
 
 .stack-snr-chart circle {
-  fill: var(--color-accent, #6ea8fe);
+  fill: var(--color-chart-line);
 }
 
 .stack-snr-chart .stack-snr-axis {
@@ -3890,7 +3969,7 @@
 .stack-snr-key {
   display: inline-block;
   width: 1.1rem;
-  border-top: 2px solid var(--color-accent, #6ea8fe);
+  border-top: 2px solid var(--color-chart-line);
 }
 
 .stack-snr-key.ideal {
@@ -4181,14 +4260,14 @@
 }
 
 .stack-color-crop-summary strong {
-  color: var(--color-warning, #d9a441);
+  color: var(--color-warning);
   font-weight: 600;
 }
 
 .stack-color-image {
   background:
     linear-gradient(45deg, rgb(255 255 255 / 3%) 25%, transparent 25% 75%, rgb(255 255 255 / 3%) 75%),
-    #05070a;
+    var(--color-bg-image);
   background-size: 18px 18px;
 }
 
@@ -4772,7 +4851,7 @@
   gap: 2px;
   padding: 2px;
   border-radius: 5px;
-  background: rgb(0 0 0 / 55%);
+  background: var(--color-scrim);
 }
 
 .stack-preview-stars-toggle button,
@@ -4917,7 +4996,7 @@
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-bg-quaternary);
   border-radius: 10px;
-  box-shadow: 0 24px 80px rgb(0 0 0 / 65%);
+  box-shadow: var(--shadow-dialog);
 }
 
 .stack-inspector-header {
@@ -4959,7 +5038,7 @@
 .stack-inspector-canvas {
   flex: 1;
   min-height: 0;
-  background: #05070a;
+  background: var(--color-bg-image);
 }
 
 .stack-inspector-body {
@@ -4988,7 +5067,7 @@
   justify-content: center;
   gap: 0.65rem;
   color: var(--color-text-muted);
-  background: #05070a;
+  background: var(--color-bg-image);
 }
 
 .stack-inspector-loading.error {
@@ -5136,7 +5215,7 @@
   pointer-events: none;
   border: 2px solid var(--color-primary);
   background: color-mix(in srgb, var(--color-primary) 14%, transparent);
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 70%);
+  box-shadow: 0 0 0 1px var(--color-halo);
 }
 
 .stack-artifact-select,
@@ -5258,7 +5337,7 @@
   height: 100%;
   min-height: 96px;
   object-fit: cover;
-  background: #05070a;
+  background: var(--color-bg-image);
 }
 
 .stack-artifact-result > div {
@@ -5722,7 +5801,7 @@
   left: 50%;
   transform: translateX(-50%);
   background: var(--color-success);
-  color: white;
+  color: var(--color-text-on-fill);
   padding: 0.4rem 0.8rem;
   border-radius: 4px;
   font-size: 0.8rem;
@@ -5977,6 +6056,7 @@
   max-width: 15rem;
 }
 
+/* The stop button shows only while a rule is on, so it takes the set look. */
 .view-toolbar .sequence-stop-rule {
   width: var(--toolbar-control-height);
   padding: 0;
@@ -6039,7 +6119,7 @@
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border-tertiary);
   border-radius: 8px;
-  box-shadow: 0 12px 40px rgb(0 0 0 / 50%);
+  box-shadow: var(--shadow-dialog);
 }
 
 .dialog-header,
@@ -6415,8 +6495,8 @@
   border-radius: 10px;
   font-size: 0.7rem;
   font-weight: 700;
-  color: white;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  color: var(--color-text-on-fill);
+  text-shadow: var(--shadow-text-on-fill);
   z-index: 5;
 }
 
@@ -6430,8 +6510,8 @@
   border-radius: 4px;
   font-size: 0.65rem;
   font-weight: 600;
-  color: white;
-  background: rgba(244, 67, 54, 0.8);
+  color: var(--color-text-on-fill);
+  background: color-mix(in srgb, var(--color-error) 80%, transparent);
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
@@ -6507,7 +6587,7 @@
   border-radius: 8px;
   background: var(--color-bg-elevated);
   color: var(--color-text-primary);
-  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  box-shadow: var(--shadow-popover);
   font-size: 0.82rem;
 }
 
@@ -6566,8 +6646,8 @@
   gap: 8px;
   padding: 8px;
   text-align: center;
-  color: var(--color-text-secondary, #888);
-  background: var(--color-bg-primary, #1a1a1a);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-primary);
   z-index: 20;
   pointer-events: none;
 }
@@ -6584,7 +6664,7 @@
 }
 
 .preview-status-error {
-  color: #666;
+  color: var(--color-text-hint);
 }
 .auth-page {
   min-height: 100vh;
@@ -6610,7 +6690,7 @@
   border: 1px solid var(--color-border-secondary);
   border-radius: 1rem;
   background: var(--color-bg-elevated);
-  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 30%);
+  box-shadow: var(--shadow-dialog);
 }
 
 .auth-card h1,
@@ -6655,7 +6735,7 @@
   border: 0;
   border-radius: 0.5rem;
   background: var(--color-primary);
-  color: #07111a;
+  color: var(--color-text-dark);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
@@ -6709,7 +6789,7 @@
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-popover);
 }
 
 .penalty-slider {
@@ -6768,7 +6848,7 @@
 /* A master integrated by other software, shown beside its kind badge. */
 .calibration-kind-master {
   margin-left: 0.35rem;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-overlay-white);
   color: var(--color-text-muted);
   border: 1px dashed currentColor;
 }
@@ -6887,7 +6967,7 @@
 
 .detail-copy-note {
   flex-basis: 100%;
-  color: var(--text-secondary, #999);
+  color: var(--color-text-muted);
 }
 
 /* Grid: other software left copies of this light, or its own file is one. */
@@ -6900,8 +6980,8 @@
   display: inline-flex;
   align-items: center;
   height: 18px;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.55);
+  color: var(--color-text-on-fill);
+  background: var(--color-scrim);
   pointer-events: auto;
 }
 
