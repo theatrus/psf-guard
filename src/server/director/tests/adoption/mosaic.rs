@@ -281,7 +281,9 @@ async fn a_linked_project_shows_its_stacks_without_an_activation() {
     let panels = data["panels"].as_array().unwrap();
     assert_eq!(panels.len(), 1, "{mosaic}");
     let panel = &panels[0];
-    assert_eq!(panel["panel_id"], "M31 Panel 1");
+    // The lone target is the framing's single panel, so its frames lock that panel.
+    assert_eq!(panel["panel_id"], "r1c1");
+    assert_eq!(panel["target_name"], "M31 Panel 1");
     assert_eq!(panel["target_id"], 5);
     assert_eq!(
         panel["progress"],

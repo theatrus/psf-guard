@@ -100,6 +100,45 @@ fn progress(
     Ok(total)
 }
 
+/// The panel each target of a linked project stands for, named the way the
+/// framing taken in from it names its panels: a lone target is the single
+/// panel `r1c1`, and targets on a grid are its cells. Targets that form no
+/// grid keep their names. So the framing view knows which of its panels
+/// already have frames before any activation.
+fn linked_panel_ids(
+    connection: &rusqlite::Connection,
+    project: Uuid,
+    targets: &[(i64, String, Option<Uuid>)],
+) -> Result<Vec<String>, Error> {
+    if targets.len() == 1 {
+        return Ok(vec!["r1c1".into()]);
+    }
+    let row: Option<i64> = connection
+        .query_row(
+            "SELECT Id FROM project WHERE lower(guid) = lower(?1)",
+            [project.to_string()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(StoreError::from)?;
+    let cells = match row {
+        Some(row) => super::inferred_mosaic(connection, row)?.unwrap_or_default(),
+        None => vec![],
+    };
+    Ok(targets
+        .iter()
+        .map(|(target_id, name, _)| {
+            cells
+                .iter()
+                .find(|cell| cell.target_id == *target_id)
+                .map_or_else(
+                    || name.clone(),
+                    |cell| format!("r{}c{}", cell.row, cell.column),
+                )
+        })
+        .collect())
+}
+
 /// A linked project's targets: row, name and GUID.
 fn project_targets(
     connection: &rusqlite::Connection,
@@ -300,9 +339,11 @@ pub(super) async fn get(
                     }
                 };
                 for source in linked {
-                    for (target_id, name, guid) in project_targets(&connection, source).map_err(StoreError::from)? {
+                    let targets = project_targets(&connection, source).map_err(StoreError::from)?;
+                    let ids = linked_panel_ids(&connection, source, &targets)?;
+                    for ((target_id, name, guid), panel_id) in targets.into_iter().zip(ids) {
                         let progress = target_progress(&connection, target_id).map_err(StoreError::from)?;
-                        panels.push(panel(&binding.rig, context, name.clone(), guid, Some((target_id, name)), Some(progress)));
+                        panels.push(panel(&binding.rig, context, panel_id, guid, Some((target_id, name)), Some(progress)));
                     }
                 }
             }
