@@ -18,6 +18,7 @@ import TiltInspector from './TiltInspector';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import QualityAnalysisSummary from './QualityAnalysisSummary';
 import QualityRegionOverlay from './QualityRegionOverlay';
+import CalibrationPanel from './CalibrationPanel';
 import {
   colorPreviewEnabled,
   setColorPreview,
@@ -874,6 +875,8 @@ export default function ImageDetailView({
                 setShowPsf(false);
               } : undefined}
             />
+
+            <CalibrationPanel dbId={dbId} imageId={imageId} projectId={projectId ?? null} />
 
             <AstrometryPanel
               analysis={astrometry}

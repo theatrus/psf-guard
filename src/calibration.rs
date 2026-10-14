@@ -20,8 +20,8 @@ mod health;
 mod quality;
 pub use health::{
     current_keys as health_keys, project_health, project_lights, summarize as summarize_health,
-    HealthCode, HealthFinding, HealthLevel, HealthLibrary, LightResult, NightFilterLights,
-    ProjectHealth, ProjectLight, FLAT_CHECK_AGE_DAYS, HEALTH_ALGORITHM_VERSION,
+    HealthCode, HealthFinding, HealthLevel, HealthLibrary, LightFinding, LightResult,
+    NightFilterLights, ProjectHealth, ProjectLight, FLAT_CHECK_AGE_DAYS, HEALTH_ALGORITHM_VERSION,
 };
 /// Synthetic frames for tests elsewhere in the crate.
 #[cfg(test)]
@@ -2519,6 +2519,9 @@ fn same_filter(light: &Signature, frame: &Signature) -> bool {
 pub struct CalibrationExplanation {
     pub light: ExplainedLight,
     pub kinds: Vec<KindExplanation>,
+    /// What the library's health check finds for this light now, poor
+    /// first, each naming the kinds it is about.
+    pub findings: Vec<LightFinding>,
 }
 
 /// The readings matching compares, as the light's header gives them.
@@ -2554,6 +2557,9 @@ pub struct KindExplanation {
     /// Frames that match but stay out, each with its file and why: graded
     /// poor or kept out by hand. They are counted under `refused` too.
     pub kept_out: Vec<KeptOutFrame>,
+    /// Frames the master would take though they are graded suspect, each
+    /// with its file and the grade's reason.
+    pub suspect: Vec<SuspectFrame>,
     /// Flats for other filters, counted rather than listed.
     pub other_filters: usize,
     /// Frames from another camera or sensor size, counted.
@@ -2616,6 +2622,13 @@ pub struct KeptOutFrame {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SuspectFrame {
+    pub file: String,
+    pub night: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RefusedFrames {
     pub night: String,
     pub frames: usize,
@@ -2628,6 +2641,14 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
         |at: Option<i64>| at.map_or_else(|| "unknown".to_string(), |at| night_of(at, boundary));
     let selected = select_for_light(conn, light)?;
     let light_signature = light_signature(light);
+    let suspect_reasons = quality::suspect_reasons(conn)?;
+    let file_of = |frame: &CalibrationFrame| {
+        frame
+            .source_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    };
     let by_night = |frames: &[CalibrationFrame]| {
         let mut nights: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
         for frame in frames {
@@ -2654,6 +2675,7 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
     for (kind, chosen) in [
         (CalibrationKind::Bias, &selected.bias),
         (CalibrationKind::Dark, &selected.dark),
+        (CalibrationKind::DarkFlat, &selected.dark_flat),
         (CalibrationKind::Flat, &selected.flat),
     ] {
         let master = coherent_master_subset(kind, chosen);
@@ -2709,13 +2731,24 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
             .iter()
             .filter(|frame| frame.kind == kind)
             .map(|frame| KeptOutFrame {
-                file: frame
-                    .source_path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
+                file: file_of(frame),
                 night: night(frame.captured_at),
                 reason: frame.kept_out.clone().unwrap_or_default(),
+            })
+            .collect();
+        let suspect = master
+            .iter()
+            .filter_map(|frame| {
+                let reason = suspect_reasons.get(&frame.frame_uuid)?;
+                Some(SuspectFrame {
+                    file: file_of(frame),
+                    night: night(frame.captured_at),
+                    reason: if reason.is_empty() {
+                        "Graded suspect".to_string()
+                    } else {
+                        reason.clone()
+                    },
+                })
             })
             .collect();
         kinds.push(KindExplanation {
@@ -2730,10 +2763,18 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
             matching_unused: by_night(&unused),
             refused,
             kept_out,
+            suspect,
             other_filters,
             other_cameras,
         });
     }
+    let health = HealthLibrary::load(conn)?;
+    let mut findings = if health.is_empty() {
+        Vec::new()
+    } else {
+        health.findings(light)?
+    };
+    findings.sort_by_key(|finding| std::cmp::Reverse(finding.level));
     Ok(CalibrationExplanation {
         light: ExplainedLight {
             file: light
@@ -2757,6 +2798,7 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
             focal_length_mm: light.focal_length_mm,
         },
         kinds,
+        findings,
     })
 }
 
