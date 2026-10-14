@@ -603,21 +603,8 @@ impl HealthLibrary {
                 );
             }
         }
-        let nights: BTreeSet<String> = flat
-            .raw()
-            .iter()
-            .filter_map(|frame| frame.captured_at)
-            .map(|at| night_of(at, self.boundary))
-            .collect();
-        if nights.len() > 1 {
-            found.push(
-                Check::MixedFlats,
-                check(
-                    HealthCode::MixedFlats,
-                    format!("Its flat master mixes flats from {} nights", nights.len()),
-                )
-                .about([CalibrationKind::Flat]),
-            );
+        if let Some(finding) = self.mixed_flats(flat.raw()) {
+            found.push(Check::MixedFlats, finding);
         }
         let mut suspect = 0;
         let mut suspect_kinds = Vec::new();
@@ -676,6 +663,27 @@ impl HealthLibrary {
             }
         }
         Ok(found.judgement)
+    }
+
+    /// The mixed-flats check ([`Check::MixedFlats`], `check_mixed_flats`):
+    /// the flats one master would take, counted by the night each was shot.
+    /// More than one night is worth a look. The check's mode decides what
+    /// [`Self::judge`] makes of the finding; this decides only whether
+    /// there is one, so a rule about flats that measure alike can replace it
+    /// here alone.
+    fn mixed_flats(&self, flats: &[CalibrationFrame]) -> Option<LightFinding> {
+        let nights: BTreeSet<String> = flats
+            .iter()
+            .filter_map(|frame| frame.captured_at)
+            .map(|at| night_of(at, self.boundary))
+            .collect();
+        (nights.len() > 1).then(|| {
+            check(
+                HealthCode::MixedFlats,
+                format!("Its flat master mixes flats from {} nights", nights.len()),
+            )
+            .about([CalibrationKind::Flat])
+        })
     }
 
     /// Seiza's master verdict on a flat set and how many changing spots it

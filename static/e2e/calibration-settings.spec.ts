@@ -11,11 +11,12 @@ async function openCalibration(page: Page) {
 }
 
 test.beforeEach(async ({ request }) => {
+  await resetDatabases(request);
+  await registerFixtureDb(request);
+  // Read after the databases settle: the settings list each open catalog's rigs.
   const response = await request.get('/api/settings/calibration');
   expect(response.ok()).toBeTruthy();
   original = (await response.json()).data;
-  await resetDatabases(request);
-  await registerFixtureDb(request);
 });
 
 test.afterEach(async ({ request }) => {
@@ -43,18 +44,15 @@ test('flat star masking defaults off and persists on and off across reloads', as
     request.method() === 'PUT' && request.url().endsWith('/api/settings/calibration')
   );
   await settings.getByRole('button', { name: 'Save', exact: true }).click();
-  // The panel sends every field it shows; the dark and flat-age settings
-  // stay at their defaults, and stacks keep lights they cannot calibrate.
-  expect((await sent).postDataJSON()).toEqual({
-    rotation_tolerance_deg: original.rotation_tolerance_deg,
-    external_masters: original.external_masters,
+  // The panel sends every check it shows, each at its default (`null`), and
+  // stacks keep lights they cannot calibrate.
+  const body = (await sent).postDataJSON();
+  expect(body).toEqual({
     flat_star_masking: true,
-    dark_reach_days: null,
-    complete_dark_frames: null,
-    dark_choice: 'complete',
-    flat_max_age_days: null,
     exclude_uncalibrated: false,
+    rules: Object.fromEntries((original.fields ?? []).map((field) => [field.key, null])),
   });
+  expect(Object.keys(body.rules)).toContain('rotation_tolerance_deg');
   await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   await expect.poll(async () =>
     (await (await request.get('/api/settings/calibration')).json()).data

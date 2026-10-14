@@ -15,6 +15,8 @@ import { CALIBRATION_FOCUS_PARAM, useFilters, useUrlParams } from '../hooks/useU
 import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
 import { useCalibrationSection } from '../hooks/useDetailSections';
 import { calibrationFilterLabel } from '../utils/calibrationFilter';
+import { openSettings } from '../utils/settingsIntent';
+import { useAccess } from '../auth/access';
 import { calibrationPageHref } from './calibration/calibrationLinks';
 import DetailSection from './DetailSection';
 import { CalibrationIcon } from './ScoreChipIcons';
@@ -217,6 +219,8 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
         <p className="light-calibration-panel-message">The library calibrates this light with no findings.</p>
       ))}
 
+      {explanation && <LightRules explanation={explanation} />}
+
       {explanation && kinds.length === 0 && (
         <p className="light-calibration-panel-message">The library holds no calibration frames.</p>
       )}
@@ -235,6 +239,70 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
         );
       })}
     </DetailSection>
+  );
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  global: 'global',
+  rig: 'this rig',
+  default: 'default',
+};
+
+/**
+ * The rules the light was checked by: what a setting kept from being
+ * flagged, and every limit that differs from its default with who set it.
+ * An editor can open the rig's own settings from here.
+ */
+function LightRules({ explanation }: { explanation: ImageCalibrationExplanation }) {
+  const { canWrite } = useAccess();
+  const rules = explanation.rules;
+  const waived = explanation.waived ?? [];
+  if (!rules && waived.length === 0) return null;
+  const notes = rules?.notes ?? [];
+  return (
+    <div className="light-calibration-rules" data-testid="calibration-rules">
+      {waived.length > 0 && (
+        <div className="light-calibration-part">
+          <span className="light-calibration-part-label">Not flagged</span>
+          <ul className="light-calibration-waived">
+            {waived.map((finding) => (
+              <li key={`${finding.code}:${finding.reason}`}>{finding.reason}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {rules && (
+        <div className="light-calibration-part">
+          <span className="light-calibration-part-label">
+            {rules.rig_has_settings ? `Checked by ${rules.rig_name}'s own settings` : 'Checked by the global settings'}
+          </span>
+          {notes.length > 0 ? (
+            <ul className="light-calibration-rule-notes" aria-label="Settings that differ from the defaults">
+              {notes.map((note) => (
+                <li key={note.key}>
+                  <span>{note.label}</span>
+                  <strong>{note.text}</strong>
+                  <span className="light-calibration-muted">{SOURCE_LABEL[note.source] ?? note.source}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="light-calibration-muted">Every limit is at its default.</p>
+          )}
+          {canWrite && (
+            <button
+              type="button"
+              className="light-calibration-tune"
+              onClick={() =>
+                openSettings('calibration', { rig: { uuid: rules.rig_uuid, name: rules.rig_name } })
+              }
+            >
+              Tune checks for {rules.rig_name}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

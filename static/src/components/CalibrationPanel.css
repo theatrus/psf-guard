@@ -152,7 +152,46 @@
   line-height: 1.45;
 }
 
+/* The rules the light was checked by, and what they kept from being flagged. */
+.light-calibration-rules {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+}
+
+.light-calibration-waived li {
+  padding: 0.15rem 0.35rem;
+  color: var(--color-text-secondary);
+}
+
+.light-calibration-rule-notes li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
+  padding: 0.15rem 0.35rem;
+}
+
+.light-calibration-rule-notes strong {
+  font-weight: 600;
+}
+
+.light-calibration-rules p {
+  margin: 0;
+  padding: 0 0.35rem;
+}
+
+.light-calibration-tune {
+  margin-top: 0.35rem;
+}
+
+.light-calibration-tune:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 1px;
+}
+
 .light-calibration-show-all,
+.light-calibration-tune,
 .light-calibration-more {
   flex: none;
   border: 1px solid var(--color-border-tertiary);
@@ -166,6 +205,7 @@
 }
 
 .light-calibration-show-all:hover,
+.light-calibration-tune:hover,
 .light-calibration-more:hover {
   color: var(--color-text-primary);
   border-color: var(--color-border-quaternary);

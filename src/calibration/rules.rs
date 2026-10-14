@@ -921,6 +921,7 @@ pub fn describe(spec: &FieldSpec, value: &Value) -> String {
         FieldKind::Limits { unit, percent, .. } => {
             let step = |name: &str| match value.get(name).and_then(finite) {
                 Some(number) if *percent => format!("{}{unit}", format_number(number * 100.0)),
+                Some(number) if *unit == "×" => format!("{}×", format_number(number)),
                 Some(number) => format!("{} {unit}", format_number(number)),
                 None => "never".into(),
             };

@@ -11,13 +11,14 @@ import type {
 import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
-import type { SettingsIntent } from '../utils/settingsIntent';
+import type { SettingsIntent, SettingsRig } from '../utils/settingsIntent';
 import ReviewPreferences from './ReviewPreferences';
 import DirectorRigs from './director/DirectorRigs';
 import TemplateLibrary from './director/TemplateLibrary';
 import './director/DirectorPage.css';
 import { useDirectorStatus } from '../hooks/useDirectorStatus';
 import CalibrationMatchingSettings from './CalibrationMatchingSettings';
+import CalibrationRigSettings from './CalibrationRigSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import StackMethodSettings from './StackMethodSettings';
 import WorkerShareSettings from './WorkerShareSettings';
@@ -63,7 +64,7 @@ type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' 
 
 /** An intent that only picks a tab. */
 type TabIntent = Extract<SettingsIntent, SettingsTab>;
-const TAB_INTENTS: readonly TabIntent[] = ['rigs', 'templates', 'stacking', 'storage', 'review'];
+const TAB_INTENTS: readonly TabIntent[] = ['rigs', 'templates', 'stacking', 'storage', 'review', 'calibration'];
 function isTabIntent(intent: SettingsIntent | null): intent is TabIntent {
   return TAB_INTENTS.includes(intent as TabIntent);
 }
@@ -90,6 +91,8 @@ interface TauriSettingsProps {
    * image folders" instead of dropping them at the top of the modal.
    */
   initialIntent?: SettingsIntent | null;
+  /** With the `calibration` intent: the rig whose own settings to open. */
+  initialRig?: SettingsRig | null;
 }
 
 /**
@@ -111,6 +114,7 @@ export default function TauriSettings({
   isOpen,
   onClose,
   initialIntent = null,
+  initialRig = null,
 }: TauriSettingsProps) {
   const isTauri = isTauriApp();
   const access = useAccess();
@@ -1949,6 +1953,7 @@ export default function TauriSettings({
           {currentTab === 'calibration' && (
             <div className="settings-setups">
               <CalibrationMatchingSettings />
+              <CalibrationRigSettings focusRig={initialRig} />
             </div>
           )}
 
