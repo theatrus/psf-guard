@@ -88,10 +88,10 @@
   stack's master inspector opens a master on the page with **Open in
   Calibration**.
 - The header is narrower. Its views show as icons; the current one keeps
-  its name. Hovering any other slides its name out, and the current one
-  folds to its icon meanwhile, still highlighted. The Sky comes first,
-  apart from the views that follow the header's scope. Settings, keyboard
-  shortcuts, server information and sign out sit in one menu at the right.
+  its name. Resting the pointer on any other slides its name out. The Sky
+  comes first, apart from the views that follow the header's scope.
+  Settings, keyboard shortcuts, server information and sign out sit in one
+  menu at the right.
   The **Editor** and **Read only** label is gone; the menu says who is
   signed in.
 - Saving a project or adding an exposure plan no longer fails with "database
