@@ -2088,6 +2088,38 @@ async fn the_check_lists_a_replaced_plan_left_on_under_an_up_to_date_record() {
     assert_eq!(actions(&after, "project"), ["unchanged"], "{after}");
 }
 
+/// Opening a plan runs the check, so it must not queue for the turn at the
+/// rig databases that discovery, adoption and activations take: it answers
+/// while that turn is held, and a preview, which writes, still waits.
+#[tokio::test]
+async fn the_check_answers_while_another_job_holds_the_rig_databases() {
+    let a = activated().await;
+    activate_now(&a.f, a.project, "first").await;
+    let turn =
+        a.f.state
+            .director
+            .as_ref()
+            .unwrap()
+            .discovery_admission
+            .clone()
+            .acquire_owned()
+            .await
+            .unwrap();
+    let checked = check_now(&a.f, a.project).await;
+    assert!(plan_writes(&checked).is_empty(), "{checked}");
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{preview}");
+    drop(turn);
+    activate_now(&a.f, a.project, "after the turn").await;
+}
+
 /// A plan activation owns follows its objective to another length in place,
 /// whether the template changes (the editor then takes the template's
 /// default length) or only the exposure, and the check says what changes.
@@ -2144,8 +2176,8 @@ async fn an_owned_plan_moved_to_another_length_is_updated_in_place_and_the_check
     assert_eq!(
         plan_writes(&checked),
         [
-            "update IC 1805 r1c1 · Ha 300 · 300 s | 40 frames, template #1 Ha 300; exposure 120 s → 300 s, template #2 → #1 Ha 300",
-            "update IC 1805 r2c1 · Ha 300 · 300 s | 40 frames, template #1 Ha 300; exposure 120 s → 300 s, template #2 → #1 Ha 300",
+            "update IC 1805 r1c1 · Ha 300 · 300 s | 40 frames, template #1 Ha 300; exposure 120 s → 300 s, template #2 Ha 120 → #1 Ha 300",
+            "update IC 1805 r2c1 · Ha 300 · 300 s | 40 frames, template #1 Ha 300; exposure 120 s → 300 s, template #2 Ha 120 → #1 Ha 300",
         ],
         "{checked}"
     );

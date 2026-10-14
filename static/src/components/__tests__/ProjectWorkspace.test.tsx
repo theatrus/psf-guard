@@ -40,7 +40,7 @@ vi.mock('../director/ObservingPreferences', () => ({ default: () => <output>Obse
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 function Where() { return <output data-testid="where">{useLocation().search}</output>; }
 /** The saved framing, plan and last activation the summary reads. */
-function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number; rigs?: string[] }; databaseManagement?: boolean; matches?: boolean; plans?: Array<{ action: string; name: string; detail: string }> } = {}) {
+function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number; rigs?: string[] }; databaseManagement?: boolean; matches?: boolean; plans?: Array<{ action: string; name: string; detail: string }>; checkAfter?: Promise<void>; check?: 'fails' | 'unreadable' } = {}) {
   return [
     http.get('/api/director/v1/projects/project/framing', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, draft: saved.framing ? {
       project_id: 'project', revision: saved.framingRevision ?? 2, layout_revision: saved.layoutRevision, target_name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 20 },
@@ -54,11 +54,18 @@ function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; l
     http.get('/api/director/v1/status', () => ok({ protocol_version: 1, enabled: true, instance_id: 'instance', database_management: saved.databaseManagement ?? true })),
     // What an activation would change, from a copy of each rig's rows: by
     // default the rig lacks the plan; `matches` holds it already, but for
-    // any exposure `plans` rows.
-    http.get('/api/director/v1/projects/project/activation/check', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, framing_revision: 2, plan_revision: saved.planRevision ?? 1, panels: 1,
-      warnings: [], preview_digest: '0'.repeat(64), applied: false, activation_revision: null,
-      rigs: (saved.shoots ? ['rig-catalog'] : []).map(id => ({ rig: { id, name: 'C925', revision: 1 }, catalog_slug: 'catalog', catalog_name: 'C925 data', profile_id: 'profile', warnings: [], applied: false, push: null,
-        changes: [{ kind: 'project', action: saved.matches ? 'unchanged' : 'create', name: 'Andromeda', detail: '' }, ...(saved.plans ?? []).map(plan => ({ kind: 'plan', ...plan }))] })) })),
+    // any exposure `plans` rows. `checkAfter` holds the answer back; `check`
+    // fails it, or reports the rig's database unreadable.
+    http.get('/api/director/v1/projects/project/activation/check', async () => {
+      await saved.checkAfter;
+      if (saved.check === 'fails') return HttpResponse.json({ success: false, data: null, error: 'The check failed: disk I/O error' }, { status: 500 });
+      const unreadable = saved.check === 'unreadable';
+      return ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, framing_revision: 2, plan_revision: saved.planRevision ?? 1, panels: 1,
+        warnings: [], preview_digest: '0'.repeat(64), applied: false, activation_revision: null,
+        rigs: (saved.shoots ? ['rig-catalog'] : []).map(id => ({ rig: { id, name: 'C925', revision: 1 }, catalog_slug: 'catalog', catalog_name: 'C925 data', profile_id: unreadable ? null : 'profile',
+          warnings: unreadable ? ['Its database could not be read: file is not a database.'] : [], applied: false, push: null,
+          changes: unreadable ? [] : [{ kind: 'project', action: saved.matches ? 'unchanged' : 'create', name: 'Andromeda', detail: '' }, ...(saved.plans ?? []).map(plan => ({ kind: 'plan', ...plan }))] })) });
+    }),
   ];
 }
 const rig = { id: 'rig', name: 'C925', revision: 1 };
@@ -169,8 +176,14 @@ describe('project workspace', () => {
   it('asks again when the record is up to date but activation would still change a rig\'s rows', async () => {
     // SNR G132: the record has the saved plan, but the rig still runs the
     // G_120 plan the G_300 one replaced, and activation would turn it off.
-    mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, matches: true,
+    let answer = () => {};
+    const checkAfter = new Promise<void>(resolve => { answer = resolve; });
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, matches: true, checkAfter,
       plans: [{ action: 'unchanged', name: 'SNR G132 · G_300 · 300 s', detail: '' }, { action: 'disable', name: 'SNR G132 · G_120 · 120 s', detail: 'plan #34 (2 of 120 frames taken) is replaced by SNR G132 · G_300 · 300 s' }] });
+    // The record answers at once while the check runs, and nothing asks yet.
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent('On the rigs'));
+    expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
+    answer();
     const due = await screen.findByRole('region', { name: 'Activation due' });
     expect(due).toHaveTextContent('C925 data differs from the plan');
     expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
@@ -189,6 +202,20 @@ describe('project workspace', () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4, rigs: [] } });
     expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent('C925 data not activated yet');
     expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
+  });
+  it('says the rigs could not be checked, without asking, when the check fails', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, check: 'fails' });
+    const summary = await screen.findByRole('region', { name: 'Plan summary' });
+    await waitFor(() => expect(within(summary).getByTestId('summary-activation')).toHaveTextContent("Couldn't check the rigs"));
+    expect(within(summary).getByTestId('summary-activation')).toHaveAttribute('title', 'The check failed: disk I/O error');
+    expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
+    expect(within(summary).getByRole('button', { name: 'Activate…' })).toBeInTheDocument();
+  });
+  it('says which rig could not be checked when its database could not be read', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, check: 'unreadable' });
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent("Couldn't check C925 data"));
+    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', 'Its database could not be read: file is not a database.');
+    expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
   });
   it('does not ask for an activation when the rigs already hold a plan none was recorded for', async () => {
     // A plan taken in from Target Scheduler: the rows it came from match it.

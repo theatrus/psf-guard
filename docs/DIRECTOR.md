@@ -448,12 +448,17 @@ joined since), or a rig's rows differ from the plan though the last
 activation had it (N.I.N.A. changed them, or an old plan another length
 replaced is still on). Its **Activate…** button, **Activate again…** once
 the plan has been activated, opens the preview and apply over the page. The
-summary ends with where the plan stands as a label (**Checking the rigs…**
-while the [check](#activation) runs, **On the rigs** when nothing is
-missing), and an **Activate…** button beside it opens the same dialog at
-any time, to push the last activation again. On a server that does not
-write rig databases the summary says **Drafts only** and no bar asks. Older
-links to the Plan, Rig databases or Activate tabs open Exposures or Rigs. A plan with no linked database yet starts its framing
+summary ends with where the plan stands as a label, and an **Activate…**
+button beside it opens the same dialog at any time, to push the last
+activation again. When the last activation had the saved plan, framing and
+rigs, the label says **On the rigs** at once while the
+[check](#activation) runs, and changes only if the check finds rows to
+write. Otherwise it says **Checking the rigs…** until the check answers.
+When the check fails, or cannot read a rig's database, the label says
+**Couldn't check the rigs** (or the rig), with the reason in its tooltip,
+and no bar asks. On a server that does not write rig databases the summary
+says **Drafts only** and no bar asks. Older links to the Plan, Rig
+databases or Activate tabs open Exposures or Rigs. A plan with no linked database yet starts its framing
 by looking a name up in the CDS catalogs or by typing a center; activation
 then creates and links the Target Scheduler project in each rig database.
 Its **Library** link goes back with the scope it came from. A project
@@ -1239,7 +1244,9 @@ rows that already match, and rows can differ under a record that has the
 saved plan. A rig whose rows would all read `unchanged` or `keep` already
 holds the plan; any other action asks for an activation. An `update` of an
 exposure plan says what changes, such as `desired 100 → 150` or
-`exposure 120 s → 300 s`.
+`exposure 120 s → 300 s`. The check writes nothing, so it does not wait
+for the turn at the rig databases that discovery, adoption, previews and
+activations take one at a time: opening a plan never queues behind them.
 Panel ids are places in the grid, so growing the grid or turning a mosaic can
 move a panel to other sky. A panel that moves by more than a quarter of its
 size and already has frames gets a new target at its new place; the old

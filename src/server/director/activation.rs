@@ -379,7 +379,19 @@ async fn execute_guarded(
         .values()
         .cloned()
         .collect();
-    let catalog_permit = admit(&service.discovery_admission).await?;
+    // A check runs on an in-memory copy of each rig's planning tables, taken
+    // in one read transaction, and writes nothing, so it skips the turn at
+    // the rig databases that discovery, adoption and activations queue for:
+    // opening a plan never waits behind them, nor they behind it. The copy
+    // cannot hold half of an activation, which commits each rig database in
+    // one transaction; the pooled reader below bounds how many checks run.
+    // Previews write and roll back, and applies write, so both still take
+    // the turn.
+    let catalog_permit = if on_copy && expected.is_none() {
+        None
+    } else {
+        Some(admit(&service.discovery_admission).await?)
+    };
     let peers = registered_peers(&state);
     let known_peers = peers.clone();
     // Everything up to the record runs on a pooled reader: the store's one
@@ -1957,18 +1969,19 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 Some(guid) => {
                     // The length the row runs at: its own, or its
                     // template's default when it is left at -1.
-                    let existing: Option<(Option<f64>, i64, i64, i64)> = tx
+                    type Existing = (Option<f64>, i64, i64, i64, Option<String>);
+                    let existing: Option<Existing> = tx
                         .query_row(
                             "SELECT CASE WHEN e.exposure IS NULL OR e.exposure < 0 THEN t.defaultexposure ELSE e.exposure END,
-                                    e.desired, e.exposureTemplateId, COALESCE(e.enabled,1)
+                                    e.desired, e.exposureTemplateId, COALESCE(e.enabled,1), t.name
                              FROM exposureplan e LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
                              WHERE e.guid=?1",
                             [&guid],
-                            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
                         )
                         .optional()?;
                     match existing {
-                        Some((exposure0, desired0, template0, enabled0)) => {
+                        Some((exposure0, desired0, template0, enabled0, template_name0)) => {
                             // What differs, so a check that asks for an
                             // activation says why.
                             let mut notes = Vec::new();
@@ -1988,8 +2001,12 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                                 notes.push(format!("desired {desired0} → {frames}"));
                             }
                             if template0 != template_id {
+                                let was = match template_name0 {
+                                    Some(name) => format!("#{template0} {name}"),
+                                    None => format!("#{template0}"),
+                                };
                                 notes.push(format!(
-                                    "template #{template0} → #{} {}",
+                                    "template {was} → #{} {}",
                                     template.id, template.name
                                 ));
                             }

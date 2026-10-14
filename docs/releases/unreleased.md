@@ -66,8 +66,9 @@
   an old plan another length replaced that is still on. The plan's summary
   shows where it stands as a label, with a separate **Activate…** button;
   the bar at the top says **Activate again…** once the plan has been
-  activated. An exposure plan the preview updates says what changes, such as
-  `desired 100 → 150`.
+  activated. If the rigs cannot be checked, the summary says so instead of
+  **On the rigs**. An exposure plan the preview updates says what changes,
+  such as `desired 100 → 150`.
 - Automatic import no longer changes what Target Scheduler will shoot in
   projects it did not create. There it only adds image rows to exposure
   plans that already exist, and leaves their counts alone. Frames that would

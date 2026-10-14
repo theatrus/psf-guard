@@ -136,7 +136,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const status = useDirectorStatus();
   const manageable = status.data?.database_management ?? true;
   const client = useQueryClient();
-  const { last, planRevision, framingRevision, behind, behindText, matches, checking } = useActivationState(projectId);
+  const { last, planRevision, framingRevision, behind, behindText, matches, checking, unchecked } = useActivationState(projectId);
   const [report, setReport] = useState<DirectorActivationReport | null>(null);
   const [visits, setVisits] = useState<CollaborationVisit[]>([]);
   const busy = useRef(false);
@@ -186,7 +186,9 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
     <CollaborationActivation projectId={projectId} value={visits} disabled={pending || !canWrite} onChange={next => { setVisits(next); setReport(null); }} />
     {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
     {last.data && behind.length > 0 && <p className="activation-behind" role="note">{behindText}</p>}
-    {last.data && behind.length === 0 && !checking && !unsavedPlan && planRevision !== undefined && <p className="director-muted">Rigs are up to date</p>}
+    {last.data && behind.length === 0 && !checking && !unsavedPlan && planRevision !== undefined && (unchecked
+      ? <p className="director-muted" title={unchecked.title}>{unchecked.text}</p>
+      : <p className="director-muted">Rigs are up to date</p>)}
     {!last.data && last.isSuccess && <p className="director-muted">{matches ? 'The rigs already match the saved plan' : 'Not activated yet'}</p>}
     {error && !(apply.isError && httpStatus(apply.error) === 409) && <p className="director-error" role="alert">{message(error)}</p>}
     {((apply.isError && httpStatus(apply.error) === 409) || tookStale) && <p className="director-error" role="alert">Changed since the preview. Preview again.</p>}

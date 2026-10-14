@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { apiClient } from '../../api/client';
 import type { DirectorActivationRig } from '../../api/directorTypes';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
@@ -15,12 +16,16 @@ const holdsPlan = (rig: DirectorActivationRig) => rig.profile_id !== null && rig
 
 const listed = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 
+const failure = (error: unknown) => isAxiosError(error) ? error.response?.data?.error || error.message
+  : error instanceof Error ? error.message : 'The check failed';
+
 /** What the rig databases hold against what is saved here: the last
  *  activation, which saved parts (plan, framing) it has not sent yet, which
  *  rigs shooting the saved plan it left out (one skipped with a warning, or
- *  added since), and which rigs' rows differ from the plan though the record
- *  is up to date. The queries share their cache keys with the editors and
- *  the activation panel, so the page asks the server once. */
+ *  added since), which rigs' rows differ from the plan though the record is
+ *  up to date, and whether the rigs could be checked at all. The queries
+ *  share their cache keys with the editors and the activation panel, so the
+ *  page asks the server once. */
 export function useActivationState(projectId: string) {
   const last = useQuery({ queryKey: ['directorActivation', projectId], queryFn: () => apiClient.getDirectorActivation(projectId), retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const savedPlan = useQuery({ queryKey: ['directorPlan', projectId], queryFn: () => apiClient.getDirectorPlan(projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
@@ -50,7 +55,11 @@ export function useActivationState(projectId: string) {
   const holding = new Set((check.data?.rigs ?? []).filter(holdsPlan).map(rig => rig.rig.id));
   // Every rig shooting the plan holds it, and no rig turned off has a change waiting.
   const matches = needsCheck && check.isSuccess && shooting.every(id => holding.has(id)) && (check.data?.rigs ?? []).every(holdsPlan);
-  const checking = needsCheck && check.isPending;
+  // A record with the saved plan, framing and rigs answers at once; the
+  // check runs behind it and speaks up only when it finds rows to write.
+  // Without a record, or with one behind, the page waits for the check.
+  const recordCurrent = !!last.data && parts.length === 0 && left.length === 0;
+  const checking = needsCheck && check.isPending && !recordCurrent;
   const missingIds = matches ? [] : left.filter(id => !holding.has(id));
   const missing = missingIds.map(id => profiles.data?.find(rig => rig.rig.id === id)?.catalog_name ?? 'a rig');
   // Rigs whose rows an activation would change: any row created, taken
@@ -67,15 +76,24 @@ export function useActivationState(projectId: string) {
     missing.length > 0 && `${listed(missing)} not activated yet`,
     differing.length > 0 && `${listed(differing)} ${differing.length === 1 ? 'differs' : 'differ'} from the plan`,
   ].filter(Boolean).join('; ');
-  return { last, savedPlan, savedFraming, planRevision, framingRevision, behind, behindText, matches, holding, changed, checking };
+  // A check that failed, or a rig it could not read (its database locked,
+  // unreadable or not on this server, or a row it refuses): said, never
+  // asked about, with the reason in `title`.
+  const skipped = (check.data?.rigs ?? []).filter(rig => rig.changes.length === 0);
+  const unchecked = !needsCheck || matches ? null
+    : check.isError ? { text: "Couldn't check the rigs", title: failure(check.error) }
+    : skipped.length > 0 ? { text: `Couldn't check ${listed(skipped.map(rig => rig.catalog_name || rig.rig.name))}`, title: skipped.flatMap(rig => rig.warnings).join(' ') }
+    : null;
+  return { last, savedPlan, savedFraming, planRevision, framingRevision, behind, behindText, matches, holding, changed, checking, unchecked };
 }
 
 /** Whether the page should ask for an activation: someone may write, the
  *  server writes rig databases, the saved plan shoots something, and the
  *  rigs lack the saved plan, its layout or a rig that shoots it, or their
  *  rows differ from it. The save bar comes first, so the page also waits for
- *  unsaved edits, and it waits for the check rather than ask and then take
- *  it back. */
+ *  unsaved edits. Where the record cannot answer it waits for the check
+ *  rather than ask and then take it back; where it can, it asks once the
+ *  check finds rows to write. */
 export function useActivationDue(projectId: string, canWrite: boolean, unsaved: number): boolean {
   const { last, savedPlan, behind, matches, checking } = useActivationState(projectId);
   const status = useDirectorStatus();
