@@ -8,7 +8,7 @@ import { AccessContext, useAccess } from '../../auth/access';
 import ActivationPanel from '../director/ActivationPanel';
 import { DraftProvider } from '../director/pageDrafts';
 import { useDraftSection, usePageDrafts } from '../director/pageDraftsState';
-import type { DirectorActivationReport } from '../../api/directorTypes';
+import type { DirectorActivationRemotePush, DirectorActivationReport } from '../../api/directorTypes';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rig = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'RedCat', revision: 1 };
@@ -27,15 +27,20 @@ function report(applied: boolean): DirectorActivationReport {
     warnings: [], preview_digest: 'd'.repeat(64), applied, activation_revision: applied ? 1 : null,
   };
 }
-function fixture(conflict = false, activated = false) {
+const desert = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+/** The Desert rig's push to its site, as the activation record keeps it. */
+const sitePush = (applied: boolean, error?: string): DirectorActivationRemotePush => ({ rig_id: desert, peer_id: 'obs', peer_name: 'observatory-pi', applied, attempted_at_ms: 1_700_000_100_000, ...(error ? { error } : {}) });
+function fixture(conflict = false, activated = false, pushes: DirectorActivationRemotePush[] = [], afterPush: DirectorActivationRemotePush[] = pushes) {
   const applies: Array<{ preview_digest: string }> = [];
   let previews = 0;
-  let pushes = 0;
+  let pushCount = 0;
   server.use(
     http.get('/api/director/v1/projects/project/activation', () => HttpResponse.json(ok({ activation: activated
-      ? { project_id: 'project', revision: 2, framing_revision: 2, plan_revision: 3, coordinator_instance_id: 'c', applied_at_ms: 1_700_000_000_000, rigs: [] } : null }))),
-    http.post('/api/director/v1/projects/project/activation/push', () => { pushes++; return HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, activation_revision: 2, warnings: [],
-      rigs: [{ rig: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Desert', revision: 1 }, catalog_name: 'Desert copy', push: { peer_id: 'obs', peer_name: 'Observatory', applied: false, summary: {}, error: 'peer refused the key' } }] })); }),
+      ? { project_id: 'project', revision: 2, framing_revision: 2, plan_revision: 3, coordinator_instance_id: 'c', applied_at_ms: 1_700_000_000_000, rigs: [],
+        ...((pushCount > 0 ? afterPush : pushes).length > 0 ? { pushes: pushCount > 0 ? afterPush : pushes } : {}) } : null }))),
+    http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ rig: { id: desert, name: 'Desert', revision: 1 }, catalog_slug: 'desert', catalog_name: 'Desert copy' }]))),
+    http.post('/api/director/v1/projects/project/activation/push', () => { pushCount++; return HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, activation_revision: 2, warnings: [],
+      rigs: [{ rig: { id: desert, name: 'Desert', revision: 1 }, catalog_name: 'Desert copy', push: { peer_id: 'obs', peer_name: 'observatory-pi', applied: false, summary: {}, error: 'peer refused the key' } }] })); }),
     http.post('/api/director/v1/projects/project/activation/preview', () => { previews++; return HttpResponse.json(ok(report(false))); }),
     http.post('/api/director/v1/projects/project/activation/apply', async ({ request }) => {
       applies.push(await request.json() as { preview_digest: string });
@@ -43,7 +48,7 @@ function fixture(conflict = false, activated = false) {
       return HttpResponse.json(ok(report(true)));
     }),
   );
-  return { applies, previewCount: () => previews, pushCount: () => pushes };
+  return { applies, previewCount: () => previews, pushCount: () => pushCount };
 }
 /** A page with one draft section, as the project workspace has. */
 function Page({ unsaved, save }: { unsaved: boolean; save: () => Promise<boolean> }) {
@@ -212,13 +217,34 @@ describe('Activation panel', () => {
     expect(previewCount()).toBe(1);
   });
 
-  it('pushes the last activation again and shows a peer that refused', async () => {
-    const { pushCount } = fixture(false, true); mount();
-    expect(await screen.findByText(/^Last activated /)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Push again' }));
-    expect(await screen.findByText(/Pushed again/)).toBeInTheDocument();
-    expect(screen.getByText('Desert copy: Push to Observatory failed: peer refused the key')).toBeInTheDocument();
+  it('offers to send the last activation only to a site that has not had it, with why and when', async () => {
+    const { pushCount } = fixture(false, true, [sitePush(false, 'connection refused')], [sitePush(false, 'peer refused the key')]); mount();
+    const unsent = await screen.findByRole('note', { name: 'Not sent to remote sites' });
+    await waitFor(() => expect(unsent).toHaveTextContent('Desert copy: not sent to observatory-pi: connection refused · tried'));
+    expect(screen.getByText(/^Not synced: observatory-pi hasn't received this activation/)).toBeInTheDocument();
+    fireEvent.click(within(unsent).getByRole('button', { name: 'Send to observatory-pi again' }));
+    expect(await screen.findByText(/Sent again/)).toBeInTheDocument();
+    expect(screen.getByText('Desert copy: Push to observatory-pi failed: peer refused the key')).toBeInTheDocument();
+    // The record says how it went, and the block with it.
+    await waitFor(() => expect(screen.getByRole('note', { name: 'Not sent to remote sites' })).toHaveTextContent('peer refused the key'));
     expect(pushCount()).toBe(1);
+  });
+  it('says a push that has not run yet without "again"', async () => {
+    fixture(false, true, [{ rig_id: desert, peer_id: 'obs', peer_name: 'observatory-pi', applied: false }]); mount();
+    const unsent = await screen.findByRole('note', { name: 'Not sent to remote sites' });
+    expect(within(unsent).getByRole('button', { name: 'Send to observatory-pi' })).toBeInTheDocument();
+    expect(unsent).not.toHaveTextContent('tried');
+  });
+  it('offers no send when no rig is remote, or every site has the activation', async () => {
+    fixture(false, true); const first = mount();
+    expect(await screen.findByText(/^Last activated /)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Send|Push)/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('note', { name: 'Not sent to remote sites' })).not.toBeInTheDocument();
+    first.unmount();
+    fixture(false, true, [sitePush(true)]); mount();
+    expect(await screen.findByText(/^Last activated /)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Send|Push)/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/hasn't received/)).not.toBeInTheDocument();
   });
 
   it("takes a rig's Target Scheduler values instead of overwriting them, then previews again", async () => {

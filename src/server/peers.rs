@@ -198,24 +198,27 @@ pub async fn check_peer(
         Ok(client) => client,
         Err(error) => return Ok(Json(ApiResponse::success(unreachable(error)))),
     };
-    Ok(Json(ApiResponse::success(
-        match client.capabilities().await {
-            Ok(capabilities) => PeerCheck {
-                reachable: true,
-                product: Some(capabilities.product),
-                product_version: Some(capabilities.product_version),
-                protocol_version: Some(capabilities.protocol_version),
-                catalogs: capabilities
-                    .catalogs
-                    .iter()
-                    .map(|catalog| catalog.id.clone())
-                    .collect(),
-                capabilities: capabilities.capabilities,
-                error: None,
-            },
-            Err(error) => unreachable(error),
+    let check = match client.capabilities().await {
+        Ok(capabilities) => PeerCheck {
+            reachable: true,
+            product: Some(capabilities.product),
+            product_version: Some(capabilities.product_version),
+            protocol_version: Some(capabilities.protocol_version),
+            catalogs: capabilities
+                .catalogs
+                .iter()
+                .map(|catalog| catalog.id.clone())
+                .collect(),
+            capabilities: capabilities.capabilities,
+            error: None,
         },
-    )))
+        Err(error) => unreachable(error),
+    };
+    // The peer answers again: an activation that missed it goes now.
+    if check.reachable {
+        crate::server::director::peer_reached(&state, &peer.id);
+    }
+    Ok(Json(ApiResponse::success(check)))
 }
 
 /// Run one direction against a peer on behalf of the UI.
@@ -265,6 +268,13 @@ pub async fn sync_with_peer(
         // from the old contents.
         context.clear_directory_tree_cache();
         let _ = context.ensure_cache_available();
+    }
+    // The peer answered; an activation that missed it goes once this sync
+    // lets go of the apply lock. Not after a pull that wrote: the site's
+    // rows may have replaced the activated ones here, and sending them back
+    // would mark as sent an activation the site never got.
+    if request.dry_run || direction != RemoteDirection::Pull {
+        crate::server::director::peer_reached(&state, &peer.id);
     }
     if !request.dry_run && direction == RemoteDirection::Pull {
         state.auto_stacks.touch_database(

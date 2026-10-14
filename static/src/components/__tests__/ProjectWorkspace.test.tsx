@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import ProjectWorkspace from '../director/ProjectWorkspace';
+import type { DirectorActivationRemotePush } from '../../api/directorTypes';
 
 vi.mock('../ProjectSchedulerDialog', () => ({
   ProjectPlanEditor: ({ dbId, projectId }: { dbId: string; projectId: number }) => <output>{`Source editor ${dbId}:${projectId}`}</output>,
@@ -40,7 +41,7 @@ vi.mock('../director/ObservingPreferences', () => ({ default: () => <output>Obse
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 function Where() { return <output data-testid="where">{useLocation().search}</output>; }
 /** The saved framing, plan and last activation the summary reads. */
-function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number; rigs?: string[] }; databaseManagement?: boolean; matches?: boolean; plans?: Array<{ action: string; name: string; detail: string }>; checkAfter?: Promise<void>; check?: 'fails' | 'unreadable' } = {}) {
+function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number; rigs?: string[]; pushes?: () => DirectorActivationRemotePush[] }; databaseManagement?: boolean; matches?: boolean; plans?: Array<{ action: string; name: string; detail: string }>; checkAfter?: Promise<void>; check?: 'fails' | 'unreadable' } = {}) {
   return [
     http.get('/api/director/v1/projects/project/framing', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, draft: saved.framing ? {
       project_id: 'project', revision: saved.framingRevision ?? 2, layout_revision: saved.layoutRevision, target_name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 20 },
@@ -50,7 +51,8 @@ function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; l
       objectives: [{ id: 'o1', bandpass_id: 'h_alpha', purpose: 'faint_detail', goal: { kind: 'frames', value: 40 }, priority: 1 }] } })),
     // The rigs the activation reached: by default each rig the plan shoots.
     http.get('/api/director/v1/projects/project/activation', () => ok({ activation: saved.activated ? { project_id: 'project', revision: 3, framing_revision: 2, plan_revision: saved.activated.plan_revision,
-      coordinator_instance_id: 'c', applied_at_ms: 1, rigs: (saved.activated.rigs ?? (saved.shoots ? ['rig-catalog'] : [])).map(id => ({ rig_id: id, catalog_id: 'x', project_guid: 'guid', profile_id: 'p', targets: [], plans: [] })) } : null })),
+      coordinator_instance_id: 'c', applied_at_ms: 1, rigs: (saved.activated.rigs ?? (saved.shoots ? ['rig-catalog'] : [])).map(id => ({ rig_id: id, catalog_id: 'x', project_guid: 'guid', profile_id: 'p', targets: [], plans: [] })),
+      ...(saved.activated.pushes ? { pushes: saved.activated.pushes() } : {}) } : null })),
     http.get('/api/director/v1/status', () => ok({ protocol_version: 1, enabled: true, instance_id: 'instance', database_management: saved.databaseManagement ?? true })),
     // What an activation would change, from a copy of each rig's rows: by
     // default the rig lacks the plan; `matches` holds it already, but for
@@ -138,6 +140,8 @@ describe('project workspace', () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 1, shoots: true });
     const due = await screen.findByRole('region', { name: 'Activation due' });
     expect(due).toHaveTextContent('Not synced: not activated yet');
+    // No rig is remote, so there is nothing to send.
+    expect(within(due).queryByRole('button', { name: /^Send/ })).not.toBeInTheDocument();
     // Said once: the summary leaves it to the bar.
     expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
     expect(screen.queryByText('Activation project')).not.toBeInTheDocument();
@@ -212,6 +216,46 @@ describe('project workspace', () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4, rigs: [] } });
     expect(await screen.findByRole('region', { name: 'Activation due' })).toHaveTextContent('Not synced: C925 data not activated yet');
     expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
+  });
+  it('says a remote site that missed the activation is not synced, and sends it there again', async () => {
+    // The rows here match the plan, but observatory-pi was offline at Apply.
+    let sent = false;
+    const posts: string[] = [];
+    const push = (): DirectorActivationRemotePush[] => [{ rig_id: 'rig-catalog', peer_id: 'obs', peer_name: 'observatory-pi', applied: sent, attempted_at_ms: 1_700_000_100_000, ...(sent ? {} : { error: 'connection refused' }) }];
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4, pushes: push }, matches: true });
+    server.use(http.post('/api/director/v1/projects/project/activation/push', () => { posts.push('push'); sent = true;
+      return ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, activation_revision: 3, warnings: [],
+        rigs: [{ rig: { id: 'rig-catalog', name: 'C925', revision: 1 }, catalog_name: 'C925 data', push: { peer_id: 'obs', peer_name: 'observatory-pi', applied: true, summary: {}, error: null } }] }); }));
+    const due = await screen.findByRole('region', { name: 'Activation due' });
+    expect(due).toHaveTextContent("Not synced: observatory-pi hasn't received this activation");
+    // The rows match, so the send comes first; Activate… still opens the
+    // dialog, since the summary's button hides while the bar is up.
+    expect(within(due).getByRole('button', { name: 'Send to observatory-pi again' })).toHaveAttribute('title', 'connection refused');
+    expect(within(due).getByRole('button', { name: 'Send to observatory-pi again' })).toHaveClass('is-primary');
+    expect(within(due).getByRole('button', { name: 'Activate…' })).not.toHaveClass('is-primary');
+    expect(screen.queryByTestId('summary-activation')).not.toBeInTheDocument();
+    // The rig's line says where it was not sent.
+    fireEvent.click(screen.getByRole('tab', { name: /Rigs/ }));
+    expect(within(await screen.findByRole('group', { name: 'C925 data' })).getByText(/^not synced · not sent to observatory-pi/)).toHaveAttribute('title', 'connection refused');
+    // With edits unsaved the save bar comes first, and the summary says it.
+    fireEvent.click(screen.getByRole('tab', { name: /Exposures/ }));
+    fireEvent.change(screen.getByLabelText('Stub goal'), { target: { value: '120' } });
+    expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Not synced$/);
+    expect(screen.getByTestId('summary-activation')).toHaveAttribute('title', "Not synced: observatory-pi hasn't received this activation");
+    fireEvent.change(screen.getByLabelText('Stub goal'), { target: { value: '40' } });
+    fireEvent.click(within(await screen.findByRole('region', { name: 'Activation due' })).getByRole('button', { name: 'Send to observatory-pi again' }));
+    // Sent: the record says so, and the plan reads Synced.
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Activation due' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('summary-activation')).toHaveTextContent(/^Synced$/));
+    expect(posts).toEqual(['push']);
+  });
+  it('offers both an activation and the send when the rows differ and a site missed the last one', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 5, shoots: true, activated: { plan_revision: 4, pushes: () => [{ rig_id: 'rig-catalog', peer_id: 'obs', peer_name: 'observatory-pi', applied: false }] } });
+    const due = await screen.findByRole('region', { name: 'Activation due' });
+    expect(due).toHaveTextContent("Not synced: saved plan not activated yet; observatory-pi hasn't received this activation");
+    expect(within(due).getByRole('button', { name: 'Send to observatory-pi' })).not.toHaveClass('is-primary');
+    expect(within(due).getByRole('button', { name: 'Activate again…' })).toHaveClass('is-primary');
   });
   it('says the rigs could not be checked, without asking, when the check fails', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, check: 'fails' });
