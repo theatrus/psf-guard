@@ -394,7 +394,7 @@ function CopyMark({ copies }: { copies?: ImageCopy[] }) {
 }
 
 function qualityColor(score: number): string {
-  if (score >= 0.7) return 'var(--color-success)';
-  if (score >= 0.5) return 'var(--color-warning)';
-  return 'var(--color-error)';
+  if (score >= 0.7) return 'var(--color-score-good)';
+  if (score >= 0.5) return 'var(--color-score-fair)';
+  return 'var(--color-score-poor)';
 }

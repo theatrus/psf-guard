@@ -123,6 +123,10 @@
   position: relative;
 }
 
+.tauri-settings .welcome-message.is-warning {
+  border-color: var(--color-border-warning);
+}
+
 .tauri-settings .welcome-message h3 {
   margin: 0 0 12px 0;
   font-size: 20px;

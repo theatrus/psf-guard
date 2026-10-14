@@ -94,9 +94,9 @@ function rulePicksKey(rule: SelectionRuleId, picks: ReadonlySet<number>): string
 }
 
 function qualityColor(score: number): string {
-  if (score >= 0.7) return 'var(--color-success)';
-  if (score >= 0.5) return 'var(--color-warning)';
-  return 'var(--color-error)';
+  if (score >= 0.7) return 'var(--color-score-good)';
+  if (score >= 0.5) return 'var(--color-score-fair)';
+  return 'var(--color-score-poor)';
 }
 
 /** The grade mark under a chart bar: the grid's accepted and rejected
@@ -1236,8 +1236,8 @@ const SequenceTimeline = memo(function SequenceTimeline({
                 fill={qualityColor(img.quality_score)}
                 opacity={isSelected || isCurrent ? 1 : 0.7}
                 stroke={isCurrent
-                  ? 'var(--color-primary)'
-                  : isSelected ? 'var(--color-warning)' : 'none'}
+                  ? 'var(--state-on-border)'
+                  : isSelected ? 'var(--state-picked)' : 'none'}
                 strokeWidth={isCurrent ? 2 : isSelected ? 1 : 0}
                 style={{ cursor: 'pointer' }}
                 onClick={(event) => onSelect(img.image_id, event)}

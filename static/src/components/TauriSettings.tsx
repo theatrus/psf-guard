@@ -1750,7 +1750,7 @@ export default function TauriSettings({
           )}
 
           {!managementAllowed && (
-            <div className="welcome-message" style={{ borderColor: 'var(--color-border-warning, #c62)' }}>
+            <div className="welcome-message is-warning">
               <h3>🔒 Database management is read-only</h3>
               <p>
                 This server was launched without
