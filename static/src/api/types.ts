@@ -2118,6 +2118,18 @@ export interface SchedulerSyncGradeCounts {
   transitions: Record<string, number>;
 }
 
+/** PSF Guard's calibration library as a full pull carries it. */
+export interface SchedulerSyncCalibrationCounts {
+  frames: SchedulerSyncTableCounts;
+  grades: SchedulerSyncTableCounts;
+  /** Frames the pull sets to Keep out. */
+  kept_out: number;
+  /** Frames the pull sets to Use anyway. */
+  used_anyway: number;
+  /** Frames whose choice the pull clears, leaving their grade to decide. */
+  cleared: number;
+}
+
 export interface SchedulerSyncResponse {
   kind: SchedulerSyncKind;
   dry_run: boolean;
@@ -2140,6 +2152,8 @@ export interface SchedulerSyncResponse {
   total_updated: number;
   /** Per-entity change lines, capped server-side; absent on old previews. */
   changes?: string[];
+  /** Present only for a full pull; absent on old previews. */
+  calibration?: SchedulerSyncCalibrationCounts | null;
 }
 
 export interface SchedulerSyncPreviewResponse {

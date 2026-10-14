@@ -29,6 +29,20 @@ const operationLabel = (kind: SchedulerSyncKind) => {
   }
 };
 
+/** The Keep out and Use anyway choices a pull carries: each changes which
+ * frames the destination's masters take, so the preview says so. */
+const calibrationChoiceLine = (result: SchedulerSyncResponse) => {
+  const calibration = result.calibration;
+  if (!calibration) return null;
+  const parts = [
+    calibration.kept_out > 0 ? `${calibration.kept_out} kept out` : null,
+    calibration.used_anyway > 0 ? `${calibration.used_anyway} used anyway` : null,
+    calibration.cleared > 0 ? `${calibration.cleared} back to their grade` : null,
+  ].filter((part): part is string => part !== null);
+  if (parts.length === 0) return null;
+  return `Calibration choices: ${parts.join(', ')}. Masters built from these frames change.`;
+};
+
 export default function SchedulerSyncControls({
   databases,
   disabled = false,
@@ -380,6 +394,9 @@ export default function SchedulerSyncControls({
                   ? `, captures +${pending.result.acquiredimage.inserted}/${pending.result.acquiredimage.updated}`
                   : ''}
               </small>
+              {calibrationChoiceLine(pending.result) && (
+                <small>{calibrationChoiceLine(pending.result)}</small>
+              )}
             </>
           )}
           <small>
