@@ -75,6 +75,8 @@ export default function CalibrationPage() {
         rig = undefined;
       }
       shownDb.current = dbId;
+      // Back in a database, a project opens on its rig again.
+      openedFor.current = null;
     }
     const rigs = summary.data?.rigs;
     const scope = `${dbId}:${projectId}`;

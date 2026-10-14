@@ -342,6 +342,10 @@ describe('CalibrationPage', () => {
     await waitFor(() => expect(seen.other.at(-1)?.has('rig')).toBe(false));
     // One rig: no Rig choice, and nothing hidden left choosing.
     expect(screen.queryByLabelText('Rig')).toBeNull();
+    // Back in the first database, the project opens on its rig again.
+    fireEvent.click(screen.getByRole('button', { name: 'Open Bubble' }));
+    await waitFor(() => expect(params().get('db')).toBe('demo'));
+    await waitFor(() => expect(params().get('calRig')).toBe('rig2'));
   });
 
   it('writes filters to the URL and asks the server for them', async () => {
