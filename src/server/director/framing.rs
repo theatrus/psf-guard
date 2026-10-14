@@ -5,9 +5,28 @@
 use super::*;
 use psf_guard_director_core::{
     bandpass::{default_exposure_seconds, BandpassKind, ExposureContext},
-    framing::{FramingPreview, FramingRequest},
+    framing::{FramingPreview, FramingRequest, LayoutIssue, LayoutIssueKind},
     optics::FieldOfView,
 };
+
+/// A layout issue in a few words, for warnings and refusals.
+pub(super) fn describe_issue(issue: &LayoutIssue) -> String {
+    let percent = issue
+        .percent
+        .map(|value| format!("{value:.0}%"))
+        .unwrap_or_default();
+    let pair = issue.panels.join(" and ");
+    match issue.kind {
+        LayoutIssueKind::ThinOverlap => format!("{pair} overlap by only {percent}"),
+        LayoutIssueKind::Gap => format!("{pair} leave a gap of {percent} of a panel"),
+        LayoutIssueKind::Isolated => format!("{pair} overlaps no other panel by the minimum"),
+        LayoutIssueKind::Disconnected => format!(
+            "the panels fall into {} groups that do not overlap, starting at {}",
+            issue.panels.len(),
+            issue.panels.join(", ")
+        ),
+    }
+}
 use psf_guard_director_meta::{framing::FramingDraft, profile::RigProfile, site_profile::RigSite};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,9 +73,23 @@ pub(super) async fn put_draft(
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let view = enabled(&state)?
-        .run(move |store| {
+        .with_writer(move |store| -> Result<DraftView, Error> {
             let project = store.project(id)?.ok_or(StoreError::NotFound)?;
             let expected = draft.revision;
+            // Said here with the panels' names; the store refuses it too.
+            if let Some(stored) = store.framing_draft(id)?
+                && stored.revision == expected
+            {
+                let moved = stored.locked_moves(&draft);
+                if !moved.is_empty() {
+                    return Err(Error::Refused(format!(
+                        "Locked panel{} {} would move; unlock {} first",
+                        if moved.len() == 1 { "" } else { "s" },
+                        moved.join(", "),
+                        if moved.len() == 1 { "it" } else { "them" },
+                    )));
+                }
+            }
             let saved = store.save_framing_draft(&draft, expected)?;
             Ok(DraftView {
                 project,

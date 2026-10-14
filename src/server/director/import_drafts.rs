@@ -6,7 +6,7 @@
 use super::plan::Templates;
 use super::*;
 use psf_guard_director_core::{
-    framing::{Mosaic, PanelSize, TangentPlane},
+    framing::{Layout, Mosaic, PanelSize, TangentPlane},
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{
@@ -433,13 +433,12 @@ pub(super) fn read_drafts(
         targets.truncate(1);
     }
     if missing.framing {
+        // The grid Target Scheduler's targets form, as the panels it makes.
         let (center, mosaic) = infer_layout(&targets, panel);
+        let layout = Layout::grid(mosaic);
         let extent = panel.map(|p| {
-            let keep = 1.0 - f64::from(mosaic.overlap_percent) / 100.0;
-            (
-                p.width_degrees + p.width_degrees * keep * f64::from(mosaic.columns - 1),
-                p.height_degrees + p.height_degrees * keep * f64::from(mosaic.rows - 1),
-            )
+            let (across, up) = layout.span();
+            (p.width_degrees * across, p.height_degrees * up)
         });
         let view_fov = extent
             .map(|(w, h)| (w.max(h * 4.0 / 3.0) * 1.6).clamp(0.5, 40.0))
@@ -450,7 +449,7 @@ pub(super) fn read_drafts(
             target_name: shared_name(&targets, project_name),
             center,
             position_angle_degrees: targets[0].rotation_degrees,
-            mosaic,
+            layout,
             panel_rig_id: panel.is_some().then_some(rig),
             panel,
             shown_rig_ids: vec![],

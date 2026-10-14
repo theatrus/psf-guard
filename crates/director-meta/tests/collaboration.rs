@@ -147,8 +147,8 @@ fn preview_is_read_only_and_apply_keeps_exact_panels_in_an_inactive_project_draf
     let framing = s.framing_draft(p.project_id()).unwrap().unwrap();
     assert!((framing.center.ra_degrees - 10.6847).abs() < 1e-6);
     assert_eq!(
-        framing.mosaic,
-        psf_guard_director_core::framing::Mosaic::SINGLE
+        framing.layout.as_grid(),
+        Some(psf_guard_director_core::framing::Mosaic::SINGLE)
     );
     assert!(s.collaboration_requires_admission(p.project_id()).unwrap());
     assert!(s.activation(p.project_id()).unwrap().is_none());
@@ -653,7 +653,7 @@ fn schema_twenty_two_migrates_without_changing_existing_identity_and_bad_migrati
             assert_eq!(
                 conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
                     .unwrap(),
-                28
+                29
             );
         }
     }

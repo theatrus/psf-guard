@@ -4,6 +4,7 @@
 //! the operator reviews is what Apply commits. Captures and grades are never
 //! touched; removed panels leave their targets behind.
 
+use super::framing::describe_issue;
 use super::*;
 use crate::{
     commands::sync::{sync_remote, RemoteDirection, RemoteSyncOptions},
@@ -11,10 +12,7 @@ use crate::{
     server::peers::registered_peers,
     ts_schema::new_guid,
 };
-use psf_guard_director_core::{
-    bandpass::frames_for_hours,
-    framing::{FramingRequest, Panel},
-};
+use psf_guard_director_core::{bandpass::frames_for_hours, framing::Panel};
 use psf_guard_director_meta::{
     activation::{
         ActivatedPlan, ActivatedRig, ActivatedTarget, Activation, InactiveRig, RemotePush,
@@ -472,19 +470,12 @@ async fn execute_guarded(
                 "Save a plan with at least one objective first.",
             ))?;
         // The shared framing's panels; a rig framed on its own has its own.
-        let panels = match framing.panel {
-            Some(panel) => FramingRequest {
-                center: framing.center,
-                position_angle_degrees: framing.position_angle_degrees,
-                panel,
-                mosaic: framing.mosaic,
-                overlays: vec![],
-                view: None,
+        let (panels, layout_issues) = match framing.shared_request() {
+            Some(request) => {
+                let preview = request.preview().map_err(|_| Error::Invalid)?;
+                (preview.panels, preview.issues)
             }
-            .preview()
-            .map_err(|_| Error::Invalid)?
-            .panels,
-            None => vec![],
+            None => (vec![], vec![]),
         };
         let mut by_rig: BTreeMap<Uuid, Vec<&Contribution>> = BTreeMap::new();
         // A plan saved before duplicates were refused may hold two
@@ -542,7 +533,12 @@ async fn execute_guarded(
         }
         // Every objective should have some rig on every shared panel; say
         // where not. A rig framed on its own covers its own grid.
-        let mut coverage_warnings = Vec::new();
+        // A layout short of its minimum overlap is the operator's call, not
+        // a refusal: it is said with the coverage.
+        let mut coverage_warnings: Vec<String> = layout_issues
+            .iter()
+            .map(|issue| format!("Panels: {}.", describe_issue(issue)))
+            .collect();
         let on_shared = |c: &&&Contribution| framing.rig_framing(c.rig_id).is_none();
         for objective in &plan.objectives {
             let uncovered: Vec<&str> = panels
@@ -655,17 +651,13 @@ async fn execute_guarded(
                 // A separate framing sized from the rig's own field is only
                 // laid out here; one the core refuses (too wide a mosaic)
                 // is this rig's warning, not a refused request.
-                match (FramingRequest {
-                    center: layout.center,
-                    position_angle_degrees: layout.position_angle_degrees,
-                    panel: layout.panel,
-                    mosaic: layout.mosaic,
-                    overlays: vec![],
-                    view: None,
-                })
-                .preview()
-                {
-                    Ok(preview) => preview.panels,
+                match layout.request().preview() {
+                    Ok(preview) => {
+                        warnings.extend(preview.issues.iter().map(|issue| {
+                            format!("Its separate framing: {}.", describe_issue(issue))
+                        }));
+                        preview.panels
+                    }
                     Err(error) => {
                         reports.push(RigReport {
                             rig,

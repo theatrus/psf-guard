@@ -1,5 +1,5 @@
 use psf_guard_director_core::{
-    framing::{Mosaic, PanelSize},
+    framing::{Layout, Mosaic, PanelSize},
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{framing::FramingDraft, Error, MetaStore, Uuid};
@@ -15,11 +15,11 @@ fn draft(project: Uuid) -> FramingDraft {
             dec_degrees: 41.269,
         },
         position_angle_degrees: 35.0,
-        mosaic: Mosaic {
+        layout: Layout::grid(Mosaic {
             rows: 2,
             columns: 1,
             overlap_percent: 15,
-        },
+        }),
         panel_rig_id: None,
         panel: Some(PanelSize {
             width_degrees: 2.0,
@@ -81,7 +81,7 @@ fn bad_geometry_and_survey_ids_are_refused() {
     let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
     let project = store.create_project(Uuid::new_v4(), "Andromeda").unwrap();
     let mut bad = draft(project.id);
-    bad.mosaic.rows = 0;
+    bad.layout.panels.clear();
     assert!(matches!(
         store.save_framing_draft(&bad, 0),
         Err(Error::InvalidInput)
@@ -135,11 +135,11 @@ fn rigs_framed_on_their_own_are_kept_checked_and_laid_out_over_the_shared_target
         rig_id: long,
         center: None,
         position_angle_degrees: Some(90.0),
-        mosaic: Mosaic {
+        layout: Layout::grid(Mosaic {
             rows: 1,
             columns: 3,
             overlap_percent: 10,
-        },
+        }),
         panel: None,
     }];
     let saved = store.save_framing_draft(&own, 0).unwrap();
@@ -156,7 +156,7 @@ fn rigs_framed_on_their_own_are_kept_checked_and_laid_out_over_the_shared_target
             center: own.center,
             position_angle_degrees: 35.0,
             panel: own.panel.unwrap(),
-            mosaic: own.mosaic,
+            layout: own.layout.clone(),
             own: false
         })
     );
@@ -166,11 +166,11 @@ fn rigs_framed_on_their_own_are_kept_checked_and_laid_out_over_the_shared_target
             center: own.center,
             position_angle_degrees: 90.0,
             panel: field,
-            mosaic: Mosaic {
+            layout: Layout::grid(Mosaic {
                 rows: 1,
                 columns: 3,
                 overlap_percent: 10
-            },
+            }),
             own: true
         })
     );
@@ -217,7 +217,7 @@ fn rigs_framed_on_their_own_are_kept_checked_and_laid_out_over_the_shared_target
         Err(Error::InvalidInput)
     ));
     let mut bad = saved.clone();
-    bad.rig_framings[0].mosaic.rows = 0;
+    bad.rig_framings[0].layout.panels.clear();
     assert!(matches!(
         store.save_framing_draft(&bad, 1),
         Err(Error::InvalidInput)

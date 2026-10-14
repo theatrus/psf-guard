@@ -1,5 +1,5 @@
 use psf_guard_director_core::{
-    framing::{Mosaic, PanelSize},
+    framing::{Layout, Mosaic, PanelSize},
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{
@@ -23,11 +23,11 @@ fn draft(project: Uuid, name: &str) -> FramingDraft {
             dec_degrees: 61.45,
         },
         position_angle_degrees: 15.0,
-        mosaic: Mosaic {
+        layout: Layout::grid(Mosaic {
             rows: 1,
             columns: 1,
             overlap_percent: 20,
-        },
+        }),
         panel_rig_id: None,
         panel: Some(PanelSize {
             width_degrees: 2.0,

@@ -1,7 +1,7 @@
 //! Translate reviewed nightly work into ordinary activation rows. Credentials
 //! and scientific reports stay on the coordinator, never in the TS database.
 use super::*;
-use psf_guard_director_core::framing::{FramingRequest, Mosaic, Panel, PanelSize};
+use psf_guard_director_core::framing::{FramingRequest, Layout, Mosaic, Panel, PanelSize};
 use psf_guard_director_interop::{astrocollab, collaboration::PreparedImport};
 use psf_guard_director_meta::{collaboration::Imported, plan::Contribution};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -197,7 +197,7 @@ fn panels(import: &PreparedImport) -> Result<Vec<Panel>, ()> {
                     width_degrees: f64::from(region.width_mas) / mas,
                     height_degrees: f64::from(region.height_mas) / mas,
                 },
-                mosaic: Mosaic::SINGLE,
+                layout: Layout::grid(Mosaic::SINGLE),
                 overlays: vec![],
                 view: None,
             }

@@ -309,11 +309,13 @@ async fn feasibility_owes_only_unaccepted_frames_and_times_a_rig_at_its_own_cent
                 dec_degrees: -75.0,
             }),
             position_angle_degrees: None,
-            mosaic: psf_guard_director_core::framing::Mosaic {
-                rows: 2,
-                columns: 1,
-                overlap_percent: 20,
-            },
+            layout: psf_guard_director_core::framing::Layout::grid(
+                psf_guard_director_core::framing::Mosaic {
+                    rows: 2,
+                    columns: 1,
+                    overlap_percent: 20,
+                },
+            ),
             panel: None,
         }];
         let revision = framing.revision;

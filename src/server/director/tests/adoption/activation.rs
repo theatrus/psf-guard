@@ -1,6 +1,6 @@
 use super::*;
 use psf_guard_director_core::{
-    framing::{Mosaic, PanelSize},
+    framing::{Layout, Mosaic, PanelSize},
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{
@@ -442,11 +442,11 @@ pub(super) async fn activated() -> Activated {
                         dec_degrees: 61.45,
                     },
                     position_angle_degrees: 15.0,
-                    mosaic: Mosaic {
+                    layout: Layout::grid(Mosaic {
                         rows: 2,
                         columns: 1,
                         overlap_percent: 20,
-                    },
+                    }),
                     panel_rig_id: Some(rig),
                     panel: Some(PanelSize {
                         width_degrees: 2.0,
@@ -1149,11 +1149,11 @@ async fn activation_takes_over_the_linked_projects_existing_targets_instead_of_d
             width_degrees: 2.0,
             height_degrees: 1.5,
         },
-        mosaic: Mosaic {
+        layout: Layout::grid(Mosaic {
             rows: 2,
             columns: 1,
             overlap_percent: 20,
-        },
+        }),
         overlays: vec![],
         view: None,
     }
@@ -1289,11 +1289,11 @@ async fn a_single_panel_plan_takes_over_the_projects_only_target_by_any_name() {
     {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
-        framing.mosaic = Mosaic {
+        framing.layout = Layout::grid(Mosaic {
             rows: 1,
             columns: 1,
             overlap_percent: 20,
-        };
+        });
         let revision = framing.revision;
         store.save_framing_draft(&framing, revision).unwrap();
     }
@@ -1450,11 +1450,11 @@ async fn a_rig_framed_on_its_own_gets_its_own_panels_and_angle() {
                 dec_degrees: 61.45,
             }),
             position_angle_degrees: Some(90.0),
-            mosaic: Mosaic {
+            layout: Layout::grid(Mosaic {
                 rows: 1,
                 columns: 3,
                 overlap_percent: 10,
-            },
+            }),
             panel: Some(PanelSize {
                 width_degrees: 1.0,
                 height_degrees: 0.8,
@@ -2449,11 +2449,11 @@ async fn a_target_moved_in_target_scheduler_moves_the_framing() {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
         let revision = framing.revision;
-        framing.mosaic = Mosaic {
+        framing.layout = Layout::grid(Mosaic {
             rows: 1,
             columns: 1,
             overlap_percent: 20,
-        };
+        });
         store.save_framing_draft(&framing, revision).unwrap();
     }
     activate_now(&a.f, a.project, "first").await;
@@ -2494,11 +2494,11 @@ async fn a_second_length_made_in_nina_is_turned_off_unless_taken_into_the_plan()
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
         let revision = framing.revision;
-        framing.mosaic = Mosaic {
+        framing.layout = Layout::grid(Mosaic {
             rows: 1,
             columns: 1,
             overlap_percent: 20,
-        };
+        });
         store.save_framing_draft(&framing, revision).unwrap();
     }
     activate_now(&a.f, a.project, "first").await;
@@ -3072,7 +3072,10 @@ async fn work_the_plan_no_longer_asks_for_is_turned_off() {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut framing = store.framing_draft(a.project).unwrap().unwrap();
         let revision = framing.revision;
-        framing.mosaic.rows = 1;
+        framing.layout = Layout::grid(Mosaic {
+            rows: 1,
+            ..framing.layout.as_grid().unwrap()
+        });
         store.save_framing_draft(&framing, revision).unwrap();
     }
     let data = activate_now(&a.f, a.project, "panel removed").await;
@@ -3239,7 +3242,12 @@ async fn a_grid_change_gives_a_moved_panel_with_frames_a_new_target() {
     activate_now(&a.f, a.project, "2 rows").await;
     assert_eq!(count("SELECT count(*) FROM target"), 2);
     a.db.execute("UPDATE exposureplan SET acquired=5 WHERE targetid=(SELECT Id FROM target WHERE name='IC 1805 r1c1')", []).unwrap();
-    edit_framing(&a.f, a.project, |framing| framing.mosaic.rows = 3);
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout = Layout::grid(Mosaic {
+            rows: 3,
+            ..framing.layout.as_grid().unwrap()
+        })
+    });
     let data = activate_now(&a.f, a.project, "3 rows").await;
     let details: Vec<String> = data["rigs"][0]["changes"]
         .as_array()
@@ -3281,6 +3289,113 @@ async fn a_grid_change_gives_a_moved_panel_with_frames_a_new_target() {
     );
 }
 
+/// A framed target with frames, kept locked, and panels placed beside it
+/// that form no grid: Target Scheduler gets one more target per panel in the
+/// same project, now a mosaic, and the shot target is left as it was. The
+/// Library reads the panels as one mosaic from Director's record.
+#[tokio::test]
+async fn panels_added_round_a_locked_target_become_targets_of_their_own() {
+    use psf_guard_director_core::framing::PanelPlacement;
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout = Layout::single(20);
+    });
+    activate_now(&a.f, a.project, "one panel").await;
+    let (first_guid, first_ra, first_dec): (String, f64, f64) =
+        a.db.query_row("SELECT guid, ra, dec FROM target", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
+        .unwrap();
+    assert_eq!(count("SELECT isMosaic FROM project"), 0);
+    a.db.execute("UPDATE exposureplan SET acquired=12, accepted=10", [])
+        .unwrap();
+
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout.panels[0].locked = true;
+        // East of it at the minimum overlap, and north of it.
+        framing.layout.panels.push(PanelPlacement {
+            id: "p2".into(),
+            x: -0.8,
+            y: 0.0,
+            locked: false,
+        });
+        framing.layout.panels.push(PanelPlacement {
+            id: "p3".into(),
+            x: 0.0,
+            y: 0.8,
+            locked: false,
+        });
+    });
+    let data = activate_now(&a.f, a.project, "three panels").await;
+    let targets: Vec<String> = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "target")
+        .map(|c| {
+            format!(
+                "{} {}",
+                c["action"].as_str().unwrap(),
+                c["name"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        targets,
+        vec![
+            "unchanged IC 1805",
+            "create IC 1805 p2",
+            "create IC 1805 p3"
+        ],
+        "{data}"
+    );
+    // One project, now a mosaic, with a target per panel.
+    assert_eq!(count("SELECT count(*) FROM project"), 1);
+    assert_eq!(count("SELECT isMosaic FROM project"), 1);
+    assert_eq!(count("SELECT count(*) FROM target"), 3);
+    // The shot target is where it was, with its frames.
+    let (ra, dec, acquired): (f64, f64, i64) = a
+        .db
+        .query_row(
+            "SELECT t.ra, t.dec, e.acquired FROM target t JOIN exposureplan e ON e.targetid = t.Id WHERE t.guid=?1",
+            [&first_guid],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!((ra, dec, acquired), (first_ra, first_dec, 12));
+    // The east panel is east of it by 80% of a panel width along the camera.
+    let east_ra: f64 =
+        a.db.query_row("SELECT ra FROM target WHERE name='IC 1805 p2'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(east_ra > first_ra, "east is the larger right ascension");
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM psf_guard_director_target WHERE panel_id IN ('r1c1','p2','p3')"
+        ),
+        3
+    );
+    let project_row = count("SELECT Id FROM project") as i32;
+    let mosaic = crate::server::mosaic_scope::project_mosaic(&a.db, project_row)
+        .unwrap()
+        .expect("the panels read as one mosaic");
+    assert_eq!(mosaic.panels.len(), 3);
+    assert_eq!((mosaic.rows, mosaic.columns), (2, 2));
+    // A second activation finds nothing to change.
+    let again = activate_now(&a.f, a.project, "again").await;
+    assert!(
+        again["rigs"][0]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["kind"] == "target")
+            .all(|c| c["action"] == "unchanged"),
+        "{again}"
+    );
+}
+
 /// Taking over a target puts it right for Director: J2000 coordinates and
 /// switched on, since the program serves only those. A Draft project linked
 /// to the plan goes Active on its first activation.
@@ -3288,7 +3403,12 @@ async fn a_grid_change_gives_a_moved_panel_with_frames_a_new_target() {
 async fn taking_over_a_jnow_target_in_a_draft_project_puts_both_right() {
     let a = activated().await;
     let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
-    edit_framing(&a.f, a.project, |framing| framing.mosaic.rows = 1);
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout = Layout::grid(Mosaic {
+            rows: 1,
+            ..framing.layout.as_grid().unwrap()
+        })
+    });
     let source = Uuid::new_v4();
     a.db.execute(
         "INSERT INTO project (Id, profileId, name, description, state, priority, isMosaic, flatsHandling, guid)

@@ -11,11 +11,11 @@ use super::activation::ActivationError;
 use super::import_drafts::{self, Drafts, Missing};
 use super::*;
 use psf_guard_director_core::{
-    framing::{Mosaic, PanelSize},
+    framing::{Layout, PanelSize},
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{
-    framing::FramingDraft,
+    framing::{same_places, FramingDraft},
     plan::{Contribution, Goal, Objective, PlanDraft},
 };
 use rusqlite::{OpenFlags, OptionalExtension};
@@ -490,27 +490,34 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
     }
 
     // The framing, where the project's targets moved and only this rig
-    // uses the layout.
+    // uses the layout. A grid is read back from the targets; panels placed
+    // one by one, or locked, are the plan's and stay as planned.
     let mut framing_next = None;
     if let (Some(read_framing), Some(stored)) = (read.drafts.framing.as_ref(), framing) {
         let mut layout = stored.clone();
-        let moved = |center: Option<&IcrsPosition>, angle: Option<f64>, mosaic: &Mosaic| {
+        let moved = |center: Option<&IcrsPosition>, angle: Option<f64>, panels: &Layout| {
             !center.is_some_and(|c| same_place(c, &read_framing.center))
                 || !angle.is_some_and(|a| same_angle(a, read_framing.position_angle_degrees))
-                || *mosaic != read_framing.mosaic
+                || !same_places(panels, &read_framing.layout)
         };
+        let readable = |panels: &Layout| panels.as_grid().is_some() && !panels.has_locked();
+        let kept = "Framing: its panels are placed one by one or locked, so it stays as planned";
         if let Some(own) = layout.rig_framings.iter_mut().find(|f| f.rig_id == rig) {
-            if moved(own.center.as_ref(), own.position_angle_degrees, &own.mosaic) {
-                own.center = Some(read_framing.center);
-                own.position_angle_degrees = Some(read_framing.position_angle_degrees);
-                own.mosaic = read_framing.mosaic;
-                taken.push("Framing: this rig's own, where Target Scheduler has it".into());
-                framing_next = Some(layout);
+            if moved(own.center.as_ref(), own.position_angle_degrees, &own.layout) {
+                if readable(&own.layout) {
+                    own.center = Some(read_framing.center);
+                    own.position_angle_degrees = Some(read_framing.position_angle_degrees);
+                    own.layout = read_framing.layout.clone();
+                    taken.push("Framing: this rig's own, where Target Scheduler has it".into());
+                    framing_next = Some(layout);
+                } else {
+                    left.push(kept.into());
+                }
             }
         } else if moved(
             Some(&layout.center),
             Some(layout.position_angle_degrees),
-            &layout.mosaic,
+            &layout.layout,
         ) {
             let shared = next
                 .contributions
@@ -518,10 +525,12 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
                 .any(|c| c.enabled && c.rig_id != rig && stored.rig_framing(c.rig_id).is_none());
             if shared {
                 left.push("Framing: other rigs share it, so it stays as planned".into());
+            } else if !readable(&layout.layout) {
+                left.push(kept.into());
             } else {
                 layout.center = read_framing.center;
                 layout.position_angle_degrees = read_framing.position_angle_degrees;
-                layout.mosaic = read_framing.mosaic;
+                layout.layout = read_framing.layout.clone();
                 taken.push("Framing: where Target Scheduler has it".into());
                 framing_next = Some(layout);
             }

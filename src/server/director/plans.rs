@@ -15,7 +15,7 @@ use super::*;
 use crate::catalog_identity;
 use crate::server::database_context::DatabaseContext;
 use psf_guard_director_core::{
-    framing::{FramingRequest, Mosaic, PanelSize},
+    framing::{Layout, PanelSize},
     visibility::IcrsPosition,
 };
 use psf_guard_director_meta::{catalog::SourceProject, profile::RigProfile, MAX_PLANS};
@@ -172,7 +172,8 @@ struct FramingSummary {
     center: IcrsPosition,
     position_angle_degrees: f64,
     panel: Option<PanelSize>,
-    mosaic: Mosaic,
+    /// Every panel, placed around `center`.
+    layout: Layout,
     survey_id: String,
     /// The whole mosaic along the camera axes, once a panel size is known.
     extent: Option<PanelSize>,
@@ -1125,11 +1126,7 @@ fn catalog_framing(
             center,
             position_angle_degrees: target.rotation_degrees.unwrap_or(0.0).rem_euclid(360.0),
             panel,
-            mosaic: Mosaic {
-                rows: 1,
-                columns: 1,
-                overlap_percent: 20,
-            },
+            layout: Layout::single(20),
             survey_id: "dss2_color".to_owned(),
             extent: panel,
         });
@@ -1258,18 +1255,9 @@ fn assemble(
         let links = links.remove(&project.id).unwrap_or_default();
         let framing = match store.framing_draft(project.id) {
             Ok(Some(draft)) => {
-                let preview = draft.panel.and_then(|panel| {
-                    FramingRequest {
-                        center: draft.center,
-                        position_angle_degrees: draft.position_angle_degrees,
-                        panel,
-                        mosaic: draft.mosaic,
-                        overlays: vec![],
-                        view: None,
-                    }
-                    .preview()
-                    .ok()
-                });
+                let preview = draft
+                    .shared_request()
+                    .and_then(|request| request.preview().ok());
                 Some(FramingSummary {
                     source: "draft",
                     revision: draft.revision,
@@ -1277,13 +1265,13 @@ fn assemble(
                     panels: preview
                         .as_ref()
                         .map(|p| p.panels.len() as u32)
-                        // No panel size yet; the grid still says how many.
-                        .unwrap_or(draft.mosaic.rows * draft.mosaic.columns),
+                        // No panel size yet; the layout still says how many.
+                        .unwrap_or(draft.layout.panels.len() as u32),
                     panel_rig_id: draft.panel_rig_id,
                     center: draft.center,
                     position_angle_degrees: draft.position_angle_degrees,
                     panel: draft.panel,
-                    mosaic: draft.mosaic,
+                    layout: draft.layout.clone(),
                     survey_id: draft.survey_id.clone(),
                     extent: preview.map(|p| p.extent),
                 })

@@ -5,7 +5,7 @@
 //! `PSF_GUARD_WRITE_FIXTURES=1 cargo test -p psf-guard-director-core --test framing_fixture`.
 
 use psf_guard_director_core::{
-    framing::{FramingRequest, Mosaic, Overlay, PanelSize, View},
+    framing::{FramingRequest, Layout, Mosaic, Overlay, PanelPlacement, PanelSize, View},
     visibility::IcrsPosition,
 };
 
@@ -20,11 +20,11 @@ fn request() -> FramingRequest {
             width_degrees: 2.0,
             height_degrees: 1.5,
         },
-        mosaic: Mosaic {
+        layout: Layout::grid(Mosaic {
             rows: 2,
             columns: 2,
             overlap_percent: 20,
-        },
+        }),
         overlays: vec![Overlay {
             id: "wide".into(),
             size: PanelSize {
@@ -44,20 +44,44 @@ fn request() -> FramingRequest {
     }
 }
 
-#[test]
-fn the_browser_geometry_fixture_matches_the_core() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/framing-preview.json"
-    );
-    let request = request();
+/// A framed target kept in place, with panels added around it: one east
+/// at the minimum, one north, and one dragged off its neighbour so the
+/// fixture carries a thin overlap and a lock.
+fn free_request() -> FramingRequest {
+    let place = |id: &str, x: f64, y: f64, locked: bool| PanelPlacement {
+        id: id.into(),
+        x,
+        y,
+        locked,
+    };
+    FramingRequest {
+        layout: Layout {
+            min_overlap_percent: 15,
+            panels: vec![
+                place("r1c1", 0.0, 0.0, true),
+                place("p2", -0.85, 0.0, false),
+                place("p3", 0.0, 0.85, false),
+                place("p4", -0.93, 0.85, false),
+            ],
+        },
+        ..request()
+    }
+}
+
+/// Write the fixture when asked, then hold the core to it.
+fn check(name: &str, request: FramingRequest) -> psf_guard_director_core::framing::FramingPreview {
+    let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
     let preview = request.preview().expect("a valid framing");
     let current = serde_json::json!({ "request": request, "preview": preview });
     if std::env::var_os("PSF_GUARD_WRITE_FIXTURES").is_some() {
-        std::fs::write(path, serde_json::to_string_pretty(&current).unwrap() + "\n").unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&current).unwrap() + "\n",
+        )
+        .unwrap();
     }
     let saved: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(path).expect("fixture present")).unwrap();
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture present")).unwrap();
     // Platform libm differs in the last bits of sin, cos and atan2, so the
     // numbers agree to a tolerance, the same one the browser test applies.
     let mut differences = Vec::new();
@@ -67,11 +91,26 @@ fn the_browser_geometry_fixture_matches_the_core() {
         "regenerate the fixture if this change is meant:\n{}",
         differences.join("\n")
     );
+    preview
+}
+
+#[test]
+fn the_browser_geometry_fixture_matches_the_core() {
+    let preview = check("framing-preview.json", request());
     assert_eq!(preview.panels.len(), 4);
     assert!(preview
         .panels
         .iter()
         .all(|p| p.footprint.view_corners.is_some()));
+    assert!(preview.issues.is_empty());
+}
+
+#[test]
+fn the_free_layout_fixture_matches_the_core() {
+    let preview = check("framing-free-layout.json", free_request());
+    assert_eq!(preview.panels.len(), 4);
+    assert!(preview.panels[0].locked);
+    assert_eq!(preview.issues.len(), 1, "{:?}", preview.issues);
 }
 
 /// Structural equality with numbers within 1e-9; every mismatch is named.
