@@ -16,8 +16,10 @@ import { THUMBNAIL_SIZE_MAX, THUMBNAIL_SIZE_MIN } from '../utils/thumbnailSizing
  * They live in this browser's storage. With a user signed in to a server,
  * they are that user's: kept under the user's name here and in their
  * document on the server (see useAccountPreferences), so they follow the
- * person to another browser. With no account, as in the desktop app, the
- * browser's own copy is all there is.
+ * person to another browser. The browser's own copy, from before anyone
+ * signed in, goes to the first account to sign in here and to no other.
+ * With no account, as in the desktop app, the browser's own copy is all
+ * there is.
  */
 /** How the top-bar project picker organizes its list. */
 export type ProjectPickerGrouping = 'activity' | 'database';
@@ -96,9 +98,18 @@ const DEFAULTS: Required<DisplayPreferences> = {
   sequenceThumbnailSize: DEFAULT_SEQUENCE_THUMBNAIL_SIZE,
 };
 
+/** The preferences a signed-in user's server document holds: all but the
+ *  detail view's folded panels, which stay in each browser. */
+export type AccountPreferenceKey = Exclude<keyof DisplayPreferences, 'detailSections'>;
+export const ACCOUNT_PREFERENCE_KEYS = (Object.keys(DEFAULTS) as (keyof DisplayPreferences)[])
+  .filter((key): key is AccountPreferenceKey => key !== 'detailSections');
+
 type Listener = () => void;
+/** Told which account preferences a change in this tab made. */
+type LocalChangeListener = (changed: AccountPreferenceKey[]) => void;
 
 const listeners = new Set<Listener>();
+const localChangeListeners = new Set<LocalChangeListener>();
 
 interface StoredPreferences extends Partial<Record<keyof DisplayPreferences, unknown>> {
   /** Earlier builds stored one switch for both chip types. */
@@ -166,6 +177,10 @@ function keyFor(owner: string | null): string {
   return owner === null ? STORAGE_KEY : `${STORAGE_KEY}@${encodeURIComponent(owner)}`;
 }
 
+/** Set once the first account to sign in here has claimed the browser's
+ *  own copy, so it is handed to one account at most. */
+const HANDED_OVER_KEY = `${STORAGE_KEY}.handed-over`;
+
 function readKey(key: string): StoredPreferences | null {
   try {
     const raw = window.localStorage.getItem(key);
@@ -175,11 +190,29 @@ function readKey(key: string): StoredPreferences | null {
   }
 }
 
-/** A user's copy, or, before they have one here, the browser's own: a
- *  first sign-in starts from what this browser already chose. */
+function handOverPending(): boolean {
+  try {
+    return window.localStorage.getItem(HANDED_OVER_KEY) === null && readKey(keyFor(null)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** A user's copy, or, before they have one here, the browser's own while
+ *  no account has claimed it: a first sign-in starts from what this
+ *  browser already chose. */
 function readStored(): Required<DisplayPreferences> {
-  const stored = readKey(keyFor(account)) ?? (account === null ? null : readKey(keyFor(null)));
+  const stored = readKey(keyFor(account))
+    ?? (account !== null && handOverPending() ? readKey(keyFor(null)) : null);
   return sanitizeDisplayPreferences(stored ?? {});
+}
+
+function persist(): void {
+  try {
+    window.localStorage.setItem(keyFor(account), JSON.stringify(current));
+  } catch {
+    // Keep the in-memory preference even when it cannot be persisted.
+  }
 }
 
 let current = readStored();
@@ -198,17 +231,82 @@ if (typeof window !== 'undefined') {
   });
 }
 
+/** A choice made in this tab. A signed-in user's account hears which of
+ *  their preferences it changed, to save just those. */
 export function setDisplayPreferences(next: DisplayPreferencesUpdate): void {
+  const previous = current;
   current = sanitizeDisplayPreferences({
     ...next,
     detailSections: next.detailSections ?? current.detailSections,
   });
-  try {
-    window.localStorage.setItem(keyFor(account), JSON.stringify(current));
-  } catch {
-    // Keep the in-memory preference even when it cannot be persisted.
-  }
+  persist();
   notify();
+  // By value, so a preference that holds an object counts only a real change.
+  const changed = ACCOUNT_PREFERENCE_KEYS.filter(
+    (key) => JSON.stringify(previous[key]) !== JSON.stringify(current[key]),
+  );
+  if (changed.length > 0) localChangeListeners.forEach((listener) => listener(changed));
+}
+
+/**
+ * Show the signed-in user's preferences as their server document has them:
+ * its keys, and the default for each it leaves out. The detail sections
+ * stay as this browser has them. Not a change to save back.
+ */
+export function adoptAccountPreferences(document: Record<string, unknown>): void {
+  current = sanitizeDisplayPreferences({
+    ...(document as StoredPreferences),
+    detailSections: current.detailSections,
+  });
+  persist();
+  notify();
+}
+
+/**
+ * The browser's own choices, for the first account to sign in here, and
+ * only the keys it stored. Claiming them marks them handed over, so no
+ * later account gets them: null once claimed, or when there are none.
+ */
+export function claimBrowserPreferences(): Partial<Record<AccountPreferenceKey, unknown>> | null {
+  if (!handOverPending()) return null;
+  const stored = readKey(keyFor(null)) ?? {};
+  try {
+    window.localStorage.setItem(HANDED_OVER_KEY, '1');
+  } catch {
+    // Unwritable storage cannot keep the mark; nor could it keep the copy.
+  }
+  const sanitized = sanitizeDisplayPreferences(stored);
+  // The one-switch build's chip choice reads as both chips.
+  const chosen = new Set<string>(Object.keys(stored));
+  if ('showSecondaryScore' in stored) {
+    chosen.add('showNightChip');
+    chosen.add('showAllChip');
+  }
+  const claimed: Partial<Record<AccountPreferenceKey, unknown>> = {};
+  for (const key of ACCOUNT_PREFERENCE_KEYS) {
+    if (chosen.has(key)) claimed[key] = sanitized[key];
+  }
+  return claimed;
+}
+
+/** Mark the browser's own copy claimed without handing it over, as when
+ *  the first account to sign in here already has a document. */
+export function retireBrowserPreferences(): void {
+  if (!handOverPending()) return;
+  try {
+    window.localStorage.setItem(HANDED_OVER_KEY, '1');
+  } catch {
+    // As above.
+  }
+}
+
+/** Hear the account preferences each change in this tab makes. Another
+ *  tab's change, or the server's document arriving, is not one. */
+export function subscribeLocalPreferenceChanges(listener: LocalChangeListener): () => void {
+  localChangeListeners.add(listener);
+  return () => {
+    localChangeListeners.delete(listener);
+  };
 }
 
 /** Remember that the viewer opened or folded one detail section. */
@@ -231,12 +329,6 @@ export function setPreferencesAccount(username: string | null): void {
   account = username;
   current = readStored();
   notify();
-}
-
-/** Whether this browser has a saved copy of its own preferences, which a
- *  first sign-in may hand to the account. */
-export function browserHasStoredPreferences(): boolean {
-  return readKey(keyFor(null)) !== null;
 }
 
 export function subscribeDisplayPreferences(listener: Listener): () => void {

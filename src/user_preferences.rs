@@ -9,6 +9,10 @@
 //! often, as the browser does when a person changes a view, never touches
 //! the password file.
 //!
+//! Every read-modify-write goes through [`update_file`], which holds an
+//! advisory lock on a `.lock` file beside it, so the server and a CLI
+//! `users remove` never lose each other's change.
+//!
 //! Servers without user accounts, and the desktop app, do not use it: the
 //! browser keeps those preferences in its own storage.
 
@@ -93,6 +97,26 @@ type UnknownFields = BTreeMap<String, Value>;
 pub fn sanitize_preferences(
     input: &Map<String, Value>,
 ) -> Result<(Map<String, Value>, Vec<String>)> {
+    let (kept, ignored) = sanitize(input, false)?;
+    check_document_size(&kept)?;
+    Ok((kept, ignored))
+}
+
+/// The known changes out of a PATCH, and the names of the keys it dropped.
+/// A known key set to `null` stays in the result as `null`: it resets that
+/// preference to the browser's default. Values are checked as in
+/// [`sanitize_preferences`]; the merged document's size is checked when it
+/// is applied.
+pub fn sanitize_preference_changes(
+    input: &Map<String, Value>,
+) -> Result<(Map<String, Value>, Vec<String>)> {
+    sanitize(input, true)
+}
+
+fn sanitize(
+    input: &Map<String, Value>,
+    allow_reset: bool,
+) -> Result<(Map<String, Value>, Vec<String>)> {
     let mut kept = Map::new();
     let mut ignored = Vec::new();
     for (key, value) in input {
@@ -100,28 +124,52 @@ pub fn sanitize_preferences(
             ignored.push(key.clone());
             continue;
         };
-        let valid = match kind {
-            PreferenceKind::Bool => value.is_boolean(),
-            PreferenceKind::OneOf(choices) => value
-                .as_str()
-                .is_some_and(|choice| choices.contains(&choice)),
-            PreferenceKind::Integer { min, max } => value
-                .as_i64()
-                .is_some_and(|number| (*min..=*max).contains(&number)),
-        };
+        let valid = (allow_reset && value.is_null())
+            || match kind {
+                PreferenceKind::Bool => value.is_boolean(),
+                PreferenceKind::OneOf(choices) => value
+                    .as_str()
+                    .is_some_and(|choice| choices.contains(&choice)),
+                PreferenceKind::Integer { min, max } => value
+                    .as_i64()
+                    .is_some_and(|number| (*min..=*max).contains(&number)),
+            };
         if !valid {
             bail!("'{key}' has a value this preference cannot hold: {value}");
         }
         kept.insert(key.clone(), value.clone());
     }
-    let size = serde_json::to_vec(&kept)
+    ignored.sort();
+    Ok((kept, ignored))
+}
+
+/// A document past [`MAX_DOCUMENT_BYTES`]: the request's fault, not the
+/// server's.
+#[derive(Debug)]
+pub struct DocumentTooLarge {
+    pub size: usize,
+}
+
+impl std::fmt::Display for DocumentTooLarge {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "preferences are limited to {MAX_DOCUMENT_BYTES} bytes; these are {}",
+            self.size
+        )
+    }
+}
+
+impl std::error::Error for DocumentTooLarge {}
+
+fn check_document_size(preferences: &Map<String, Value>) -> Result<()> {
+    let size = serde_json::to_vec(preferences)
         .context("measuring preferences")?
         .len();
     if size > MAX_DOCUMENT_BYTES {
-        bail!("preferences are limited to {MAX_DOCUMENT_BYTES} bytes; these are {size}");
+        return Err(DocumentTooLarge { size }.into());
     }
-    ignored.sort();
-    Ok((kept, ignored))
+    Ok(())
 }
 
 /// One user's saved preferences.
@@ -133,7 +181,7 @@ pub struct StoredPreferences {
     extra: UnknownFields,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserPreferencesRegistry {
     pub schema_version: u32,
     #[serde(default)]
@@ -241,10 +289,65 @@ impl UserPreferencesRegistry {
         Ok(&self.users[username])
     }
 
+    /// Merge changes into one user's preferences: each key given replaces
+    /// that preference, and a key set to `null` drops it, so the browser's
+    /// default applies. Keys left out are kept, so two browsers that change
+    /// different preferences never undo each other; for one key, the last
+    /// change wins.
+    pub fn patch(
+        &mut self,
+        username: &str,
+        changes: Map<String, Value>,
+        now_unix_seconds: i64,
+    ) -> Result<&StoredPreferences> {
+        validate_username(username)?;
+        let (changes, ignored) = sanitize_preference_changes(&changes)?;
+        if !ignored.is_empty() {
+            bail!("unknown preferences: {}", ignored.join(", "));
+        }
+        let (mut preferences, extra) = match self.users.get(username) {
+            Some(previous) => (previous.preferences.clone(), previous.extra.clone()),
+            None => (Map::new(), UnknownFields::new()),
+        };
+        for (key, value) in changes {
+            if value.is_null() {
+                preferences.remove(&key);
+            } else {
+                preferences.insert(key, value);
+            }
+        }
+        check_document_size(&preferences)?;
+        self.users.insert(
+            username.to_string(),
+            StoredPreferences {
+                preferences,
+                updated_unix_seconds: now_unix_seconds,
+                extra,
+            },
+        );
+        Ok(&self.users[username])
+    }
+
     /// Forget a user's preferences, as when the user is removed. Returns
     /// whether there were any.
     pub fn remove(&mut self, username: &str) -> bool {
         self.users.remove(username).is_some()
+    }
+
+    /// Forget the preferences of every user `exists` does not know, as
+    /// after a user was removed while this file could not be written.
+    /// Returns the names dropped.
+    pub fn retain_users(&mut self, exists: impl Fn(&str) -> bool) -> Vec<String> {
+        let gone: Vec<String> = self
+            .users
+            .keys()
+            .filter(|username| !exists(username))
+            .cloned()
+            .collect();
+        for username in &gone {
+            self.users.remove(username);
+        }
+        gone
     }
 
     fn validate(&self) -> Result<()> {
@@ -268,6 +371,46 @@ impl UserPreferencesRegistry {
     }
 }
 
+/// Read, change, and write back the preferences file at `path` while
+/// holding an advisory lock on `<path>.lock`, so a server and a CLI command
+/// that both change it never lose each other's write. The file is only
+/// written when `change` left it different.
+///
+/// The server also serializes its own writers with a mutex; the lock is for
+/// other processes. A process that ignores the lock still never sees a torn
+/// file, since every save is an atomic rename.
+pub fn update_file<T>(
+    path: &Path,
+    change: impl FnOnce(&mut UserPreferencesRegistry) -> Result<T>,
+) -> Result<T> {
+    let _lock = lock_file(path)?;
+    let mut registry = UserPreferencesRegistry::load(path)?;
+    let before = registry.clone();
+    let result = change(&mut registry)?;
+    if registry != before {
+        registry.save(path)?;
+    }
+    Ok(result)
+}
+
+fn lock_file(path: &Path) -> Result<std::fs::File> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".lock");
+    let lock_path = path.with_file_name(name);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("opening {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("locking {}", lock_path.display()))?;
+    // Released when the file closes.
+    Ok(file)
+}
+
 /// Drop a removed user's preferences from the file beside a database
 /// registry. A missing file has nothing to drop.
 pub fn forget_user(database_registry_path: &Path, username: &str) -> Result<bool> {
@@ -275,12 +418,21 @@ pub fn forget_user(database_registry_path: &Path, username: &str) -> Result<bool
     if !path.exists() {
         return Ok(false);
     }
-    let mut registry = UserPreferencesRegistry::load(&path)?;
-    let removed = registry.remove(username);
-    if removed {
-        registry.save(&path)?;
+    update_file(&path, |registry| Ok(registry.remove(username)))
+}
+
+/// Drop the preferences of every user `exists` does not know from the file
+/// beside a database registry, as the server does when it starts. Returns
+/// the names dropped.
+pub fn forget_unknown_users(
+    database_registry_path: &Path,
+    exists: impl Fn(&str) -> bool,
+) -> Result<Vec<String>> {
+    let path = UserPreferencesRegistry::path_for_database_registry(database_registry_path);
+    if !path.exists() {
+        return Ok(Vec::new());
     }
-    Ok(removed)
+    update_file(&path, |registry| Ok(registry.retain_users(exists)))
 }
 
 #[cfg(unix)]
@@ -484,6 +636,190 @@ mod tests {
             UserPreferencesRegistry::path_for_database_registry(Path::new("/tmp/demo.json")),
             Path::new("/tmp/demo.user-preferences.json")
         );
+    }
+
+    #[test]
+    fn a_patch_changes_only_the_keys_it_names_and_null_resets_one() {
+        let mut registry = UserPreferencesRegistry::default();
+        registry
+            .set(
+                "alice",
+                map(json!({ "imageOrder": "newest", "imageGrouping": "session", "showAllChip": false })),
+                1,
+            )
+            .unwrap();
+        let stored = registry
+            .patch(
+                "alice",
+                map(json!({ "gridThumbnailSize": 450, "imageGrouping": null })),
+                2,
+            )
+            .unwrap();
+        assert_eq!(
+            Value::Object(stored.preferences.clone()),
+            json!({ "imageOrder": "newest", "showAllChip": false, "gridThumbnailSize": 450 })
+        );
+        assert_eq!(stored.updated_unix_seconds, 2);
+
+        // A first patch starts an empty document; resetting a key nobody
+        // set is no error.
+        let stored = registry
+            .patch(
+                "bob",
+                map(json!({ "libraryDensity": "detailed", "imageOrder": null })),
+                3,
+            )
+            .unwrap();
+        assert_eq!(
+            Value::Object(stored.preferences.clone()),
+            json!({ "libraryDensity": "detailed" })
+        );
+        assert_eq!(
+            Value::Object(registry.get("alice").unwrap().preferences.clone()),
+            json!({ "imageOrder": "newest", "showAllChip": false, "gridThumbnailSize": 450 })
+        );
+    }
+
+    #[test]
+    fn a_patch_is_checked_like_a_document() {
+        let mut registry = UserPreferencesRegistry::default();
+        registry
+            .set("alice", map(json!({ "imageOrder": "newest" })), 1)
+            .unwrap();
+        for bad in [
+            json!({ "imageOrder": "sideways" }),
+            json!({ "gridThumbnailSize": 5000 }),
+            json!({ "showAllChip": "no" }),
+            json!({ "notAPreference": 1 }),
+        ] {
+            assert!(
+                registry.patch("alice", map(bad.clone()), 2).is_err(),
+                "{bad}"
+            );
+        }
+        assert!(registry.patch("../alice", map(json!({})), 2).is_err());
+        assert_eq!(registry.get("alice").unwrap().updated_unix_seconds, 1);
+
+        // Changes keep the unknown keys apart: a PATCH may carry a newer
+        // build's keys, which are named, not kept.
+        let (changes, ignored) =
+            sanitize_preference_changes(&map(json!({ "imageOrder": null, "later": 1 }))).unwrap();
+        assert_eq!(Value::Object(changes), json!({ "imageOrder": null }));
+        assert_eq!(ignored, vec!["later"]);
+        // A whole document may not reset a key with null.
+        assert!(sanitize_preferences(&map(json!({ "imageOrder": null }))).is_err());
+    }
+
+    #[test]
+    fn a_patch_keeps_fields_from_a_newer_build() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("user-preferences.json");
+        std::fs::write(
+            &path,
+            json!({
+                "schema_version": 1,
+                "users": { "alice": { "preferences": { "imageOrder": "newest" }, "updated_unix_seconds": 1, "pinned": [1] } },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        update_file(&path, |registry| {
+            registry.patch("alice", map(json!({ "showNightChip": false })), 2)?;
+            Ok(())
+        })
+        .unwrap();
+        let written: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["users"]["alice"]["pinned"], json!([1]));
+        assert_eq!(
+            written["users"]["alice"]["preferences"],
+            json!({ "imageOrder": "newest", "showNightChip": false })
+        );
+    }
+
+    #[test]
+    fn retaining_known_users_drops_the_rest() {
+        let mut registry = UserPreferencesRegistry::default();
+        for name in ["alice", "bob", "carol"] {
+            registry
+                .set(name, map(json!({ "imageOrder": "newest" })), 1)
+                .unwrap();
+        }
+        let gone = registry.retain_users(|name| name != "bob");
+        assert_eq!(gone, vec!["bob"]);
+        assert!(registry.get("bob").is_none());
+        assert!(registry.get("alice").is_some() && registry.get("carol").is_some());
+        assert!(registry.retain_users(|_| true).is_empty());
+    }
+
+    #[test]
+    fn forgetting_unknown_users_rewrites_the_file_only_when_one_goes() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry_path = directory.path().join("config.json");
+        assert!(forget_unknown_users(&registry_path, |_| false)
+            .unwrap()
+            .is_empty());
+        let path = UserPreferencesRegistry::path_for_database_registry(&registry_path);
+        let mut registry = UserPreferencesRegistry::default();
+        for name in ["alice", "bob"] {
+            registry
+                .set(name, map(json!({ "imageOrder": "newest" })), 1)
+                .unwrap();
+        }
+        registry.save(&path).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(forget_unknown_users(&registry_path, |_| true)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(
+            forget_unknown_users(&registry_path, |name| name == "alice").unwrap(),
+            vec!["bob"]
+        );
+        let loaded = UserPreferencesRegistry::load(&path).unwrap();
+        assert!(loaded.get("alice").is_some());
+        assert!(loaded.get("bob").is_none());
+    }
+
+    #[test]
+    fn writers_holding_the_file_lock_never_lose_a_change() {
+        // Each thread stands in for another process: no shared mutex, only
+        // the lock file. Every patch names a different user and key, so a
+        // lost update would show as a missing one.
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("user-preferences.json");
+        let keys = [
+            ("showNightChip", json!(false)),
+            ("showAllChip", json!(false)),
+            ("showCalibrationChip", json!(false)),
+            ("advanceOnGrade", json!(false)),
+            ("libraryDensity", json!("detailed")),
+            ("imageOrder", json!("newest")),
+        ];
+        std::thread::scope(|scope| {
+            for user in ["alice", "bob"] {
+                for (key, value) in &keys {
+                    let path = &path;
+                    scope.spawn(move || {
+                        update_file(path, |registry| {
+                            registry.patch(user, map(json!({ *key: value.clone() })), 1)?;
+                            Ok(())
+                        })
+                        .unwrap();
+                    });
+                }
+            }
+        });
+        let loaded = UserPreferencesRegistry::load(&path).unwrap();
+        for user in ["alice", "bob"] {
+            let preferences = &loaded.get(user).unwrap().preferences;
+            for (key, value) in &keys {
+                assert_eq!(preferences.get(*key), Some(value), "{user} {key}");
+            }
+        }
     }
 
     #[test]

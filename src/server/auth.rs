@@ -303,6 +303,15 @@ impl ServerAuth {
         role == AccessRole::ReadWrite || self.allow_read_only_compute
     }
 
+    /// Whether this server knows a user by that name now.
+    pub fn has_user(&self, username: &str) -> bool {
+        self.users
+            .read()
+            .unwrap()
+            .iter()
+            .any(|user| user.username == username)
+    }
+
     pub(crate) fn user_summaries(&self) -> Vec<AuthUserSummary> {
         let mut users = self
             .users
@@ -1143,6 +1152,13 @@ mod tests {
             "/db/test/wbpp/runs/current",
             false
         ));
+        // A viewer saves their own view preferences, by PATCH or by an old
+        // tab's PUT, at that exact path only.
+        for method in [Method::PATCH, Method::PUT] {
+            assert!(!requires_write(&method, "/me/preferences", false));
+            assert!(requires_write(&method, "/me/preferences/other", false));
+            assert!(requires_write(&method, "/me/preferencesx", false));
+        }
     }
 
     #[test]
