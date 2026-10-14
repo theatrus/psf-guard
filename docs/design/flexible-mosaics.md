@@ -157,10 +157,9 @@ panels of different sizes shares at least the minimum of its own side. The
 browser runs a port of the same code (`panelShape.ts`), held to fixtures the
 core writes, one of them a shot panel beside planned and turned ones.
 
-Two honest limits, the same as N.I.N.A.'s framing assistant: the tangent
+One honest limit, the same as N.I.N.A.'s framing assistant: the tangent
 plane enlarges sky away from its center, which widens the real overlap of
-outer panels a little, and a rig without a rotator cannot turn each panel
-(below). Keep the minimum at 10% or more for wide mosaics.
+outer panels a little. Keep the minimum at 10% or more for wide mosaics.
 
 ## Shot panels follow their frames
 
@@ -265,15 +264,19 @@ this change), keeps that rotation, so new frames match the old. A locked
 panel with frames keeps its target's coordinates and rotation outright: its
 target reads `unchanged`, "kept where its frames were shot".
 
-**Rigs without a rotator** cannot follow γ unattended: they shoot every panel
-at the camera's angle, so outer panels turn by −γ on the plane. See the open
-questions.
+**Every rig gets the same angles.** Planning always sets each panel's
+rotation, whatever turns the rig's camera: a rotator, a camera turned by
+hand between sessions, or a fixed one. Activation never reads the rig
+profile's rotation mode, and its preview never says how to reach an angle;
+that is execution's concern. A test activates the same framing for a
+rotator, a manual and a fixed rig and reads the same preview and the same
+angles written, to the bit.
 
 ## Turned panels
 
-A planned panel may turn on its own (`angle_offset_degrees`), for a rig with
-a rotator or one whose camera is turned by hand. Its outline turns with it,
-so overlaps are read as drawn, and activation writes PA = θ + turn + γ.
+A planned panel may turn on its own (`angle_offset_degrees`). Its outline
+turns with it, so overlaps are read as drawn, and activation writes
+PA = θ + turn + γ for every rig.
 
 - **On the sky.** The chosen unlocked panel has a turn handle past its top
   edge along its own up; dragging it turns the panel about its middle, read
@@ -291,10 +294,10 @@ so overlaps are read as drawn, and activation writes PA = θ + turn + γ.
 - **Locks.** A locked panel keeps its turn: a shot panel's angle is its
   measured angle, and a save that would turn a locked panel is refused like a
   move (`422`).
-- **Rigs.** A rig with a rotator turns unattended. For a rig with a fixed or
-  manually turned camera the turn is allowed, since people turn cameras by
-  hand: the panel editor and the activation preview say "turn the camera by
-  hand to X°" for that panel.
+- **Rigs.** Every rig gets the turned panel's angle, whatever turns its
+  camera. Planning sets the rotation; reaching it, by a rotator or by hand,
+  is execution's concern, so neither the editor nor the activation preview
+  says how.
 - **Undo.** Each turn is one step, like a move.
 
 ## Rigs framed on their own
@@ -426,8 +429,9 @@ What Target Scheduler sees does not change shape:
 - exposure plans per panel as before. Nothing is written that Target
   Scheduler cannot read, and optional columns are probed as before. The
   preview says each target's angle and what it is made of, such as "angle
-  62.6° (framing 60.0°, north here +2.6°)", "as shot, from solved frames", or
-  "turn the camera by hand to 47.2°".
+  62.6° (framing 60.0°, north here +2.6°)", "angle 10.4° (framing 0.0°,
+  turned +7.8°, north here +2.6°)" or "as shot, from solved frames". Every
+  rig gets the same angles, rotator or not.
 
 What PSF Guard keeps on its side:
 
@@ -463,8 +467,7 @@ What PSF Guard keeps on its side:
    share in green, or in the warning colour when short. The + on each side
    and corner of the chosen panel adds a panel there.
 4. **Turn a panel.** Choose it and drag its turn handle, press `[` or `]`,
-   or type a turn; the editor gives its camera angle here, and says to turn
-   the camera by hand when a rig has no rotator.
+   or type a turn; the editor gives its camera angle here.
 5. **Mistakes.** A drop or a turn short of the rule springs back and says
    why; Alt places it anyway, dashed in the warning colour and listed under
    the panel list. Undo and Redo sit beside the list.
@@ -522,24 +525,21 @@ plan) with the source on the sky, refreshed as solves land and checked by the
 server on save; schema 30; each panel's camera angle with north's lean at
 activation, read back on import, and kept for targets already shot; turned
 panels with the turn handle, `[` and `]`, snapping, spring-back and undo,
-and a hand-turn note for rigs without a rotator; the same panel tools for a
-rig framed on its own.
+with every rig given the same angles whatever turns its camera; the same
+panel tools for a rig framed on its own.
 
 Proposed, not built:
 
 - a ghost of the panel a + or a direction would add, shown on hover;
 - importing a free layout from a Target Scheduler project without
-  Director's record (it still reads only grids);
-- a warning when a rig without a rotator would need to turn outer panels by
-  more than a set lean (see the open questions).
+  Director's record (it still reads only grids).
 
 ## Open questions
 
 1. ~~**Per-panel camera angle.** A rotator rig could shoot each panel at the
    angle that suits it. Worth it, or keep one angle per framing and frame such
    a rig on its own?~~ Answered: built. Each panel is shot at the framing's
-   angle plus north's lean at its center, and may be turned on its own; a rig
-   without a rotator is told to turn the camera by hand.
+   angle plus north's lean at its center, and may be turned on its own.
 2. ~~**Mixed fields.** If the camera changes, should old locked panels keep
    their old field while new panels use the new one (a size per panel)?~~
    Answered: locked panels follow their original shots, not a new camera;
@@ -552,10 +552,12 @@ Proposed, not built:
    that keeps its target and frames and frees the place?
 5. **`isMosaic` for irregular layouts.** Keep it on for every layout of more
    than one panel (as now), or offer a switch per plan?
-6. **Rigs without a rotator and north's lean.** Such a rig shoots every panel
-   at its camera's angle, so outer panels of a wide, northern mosaic turn by
-   −γ against the plane (2.6° three degrees out at +60°) and their seams
-   narrow at one end. Activation writes the leaned angle for the person to
-   set; should it instead keep one angle for such a rig, or warn past a lean?
+6. ~~**Rigs without a rotator and north's lean.** Such a rig shoots every
+   panel at its camera's angle unless someone turns it, so outer panels of a
+   wide, northern mosaic would turn by −γ against the plane. Keep one angle
+   for such a rig, or warn past a lean?~~ Answered: planning always sets each
+   panel's rotation, and reaching it, by a rotator or by hand, belongs to
+   execution. Every rig gets the same angles, and neither the editor nor the
+   activation preview says how to reach them.
 7. **Default minimum overlap.** Grids default to 20%. Is that right for free
    layouts, and should the minimum differ between edges and corners?

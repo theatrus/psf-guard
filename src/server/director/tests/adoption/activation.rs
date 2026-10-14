@@ -3628,16 +3628,19 @@ async fn a_detach_asks_before_dropping_work_and_then_leaves_the_project_alone() 
     assert_eq!(count(&format!("SELECT count(*) FROM exposureplan e JOIN target t ON t.Id=e.targetid JOIN project p ON p.Id=t.projectid WHERE p.guid='{guid}' AND e.enabled=1")), 2);
 }
 
-/// A rig framed on its own places its panels one by one like the shared
-/// framing, one of them turned. Each panel is shot at its own angle: the
-/// framing's, plus its turn, plus north's lean at its center. A rig with no
-/// rotator is told to turn the camera by hand for the turned panel; the
+/// A rig framed on its own, with panels placed one by one, one of them
+/// turned, activated with the rig's camera on a rotator, turned by hand
+/// between sessions, or fixed. Each panel is shot at its own angle: the
+/// framing's, plus its turn, plus north's lean at its center. Planning
+/// always sets the rotation; how the rig reaches it is execution's concern,
+/// so every rig gets the same angles written and the same preview, and the
 /// angles land in the rig's own project.
-#[tokio::test]
-async fn a_rigs_own_free_panels_are_each_shot_at_their_own_angle() {
+async fn activate_own_turned_panels(
+    rotation: psf_guard_director_core::optics::Rotation,
+) -> (Vec<(String, String)>, Vec<(String, f64)>, Vec<String>) {
     use psf_guard_director_core::{
         framing::{FramingRequest, PanelPlacement},
-        optics::{Optics, Rotation},
+        optics::Optics,
     };
     use psf_guard_director_meta::{
         framing::RigFraming,
@@ -3658,7 +3661,7 @@ async fn a_rigs_own_free_panels_are_each_shot_at_their_own_angle() {
                 pixel_size_um: 3.76,
                 focal_length_mm: 250.0,
                 aperture_mm: Some(51.0),
-                rotation: Rotation::Manual { angle_degrees: 0.0 },
+                rotation,
             },
             source: Source::Manual {},
             reported_at_ms: 1,
@@ -3719,42 +3722,55 @@ async fn a_rigs_own_free_panels_are_each_shot_at_their_own_angle() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{preview}");
-    let changes = preview["data"]["rigs"][0]["changes"].as_array().unwrap();
+    let details: Vec<(String, String)> = preview["data"]["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == "target")
+        .map(|c| {
+            (
+                c["name"].as_str().unwrap().to_owned(),
+                c["detail"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
     let detail = |name: &str| {
-        changes
+        details
             .iter()
-            .find(|c| c["kind"] == "target" && c["name"] == name)
-            .unwrap_or_else(|| panic!("{name}: {preview}"))["detail"]
-            .as_str()
-            .unwrap()
-            .to_owned()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("{name}: {preview}"))
+            .1
+            .clone()
     };
-    let centered = detail("IC 1805 r1c1");
-    assert!(centered.ends_with("angle 30.0°"), "{centered}");
-    let turned = detail("IC 1805 p2");
     assert!(
-        turned.contains(&format!(
-            "angle {:.1}° (framing 30.0°, turned +12.0°, north here +",
-            angle("p2")
-        )),
-        "{turned}"
+        detail("IC 1805 r1c1").ends_with("angle 30.0°"),
+        "{details:?}"
     );
     assert!(
-        turned.ends_with(&format!("; turn the camera by hand to {:.1}°", angle("p2"))),
-        "{turned}"
+        detail("IC 1805 p2").ends_with(&format!(
+            "angle {:.1}° (framing 30.0°, turned +12.0°, north here +{:.1}°)",
+            angle("p2"),
+            lean
+        )),
+        "{details:?}"
     );
 
     activate_now(&a.f, a.project, "turned panels").await;
-    let stored = |name: &str| -> f64 {
-        a.db.query_row(
-            "SELECT rotation FROM target WHERE name = ?1",
-            [name],
-            |row| row.get(0),
-        )
-        .unwrap()
-    };
-    assert!((stored("IC 1805 r1c1") - 30.0).abs() < 1e-9);
-    assert!((stored("IC 1805 p2") - angle("p2")).abs() < 1e-9);
+    let stored: Vec<(String, f64)> = ["IC 1805 r1c1", "IC 1805 p2"]
+        .iter()
+        .map(|name| {
+            let rotation: f64 =
+                a.db.query_row(
+                    "SELECT rotation FROM target WHERE name = ?1",
+                    [name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            ((*name).to_owned(), rotation)
+        })
+        .collect();
+    assert!((stored[0].1 - 30.0).abs() < 1e-9);
+    assert!((stored[1].1 - angle("p2")).abs() < 1e-9);
 
     // Read back, Target Scheduler's targets say the framing's angle: the
     // lean is taken off again, so nothing is offered to take in.
@@ -3767,10 +3783,35 @@ async fn a_rigs_own_free_panels_are_each_shot_at_their_own_angle() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{again}");
-    assert_eq!(
-        actions(&again["data"], "target"),
-        ["unchanged", "unchanged"]
-    );
+    (details, stored, actions(&again["data"], "target"))
+}
+
+#[tokio::test]
+async fn every_rig_gets_each_panels_own_angle_whatever_turns_its_camera() {
+    use psf_guard_director_core::optics::Rotation;
+    let rotator = activate_own_turned_panels(Rotation::Rotator {}).await;
+    assert_eq!(rotator.2, ["unchanged", "unchanged"]);
+    for rotation in [
+        Rotation::Manual { angle_degrees: 0.0 },
+        Rotation::Fixed {
+            angle_degrees: 90.0,
+        },
+    ] {
+        let other = activate_own_turned_panels(rotation).await;
+        // The same preview and the same angles written, to the bit.
+        assert_eq!(other.0, rotator.0, "{rotation:?}");
+        assert_eq!(other.1, rotator.1, "{rotation:?}");
+        assert_eq!(other.2, rotator.2, "{rotation:?}");
+        // Planning never says how the camera gets there.
+        assert!(
+            other
+                .0
+                .iter()
+                .all(|(_, detail)| !detail.contains("by hand") && !detail.contains("rotator")),
+            "{:?}",
+            other.0
+        );
+    }
 }
 
 /// Targets shot before panels took north's lean were shot at the framing's

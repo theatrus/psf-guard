@@ -1347,9 +1347,9 @@ describe('Mosaic panels', () => {
     expect(saves[0].layout.panels[0]).toEqual({ id: 'r1c1', x: 0, y: 0, locked: true });
   });
 
-  it('turns the chosen panel with [ and ], refuses a locked one, and says to turn by hand without a rotator', async () => {
+  it('turns the chosen panel with [ and ], refuses a locked one, and sets its angle whatever turns the camera', async () => {
     fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: true }, { id: 'p2', x: -0.75, y: 0, locked: false }]));
-    // RedCat turns its camera by hand.
+    // RedCat turns its camera by hand; planning sets the angle all the same.
     server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ ...rigA, profile: { optics: { value: { sensor_width_px: 6248, sensor_height_px: 4176, pixel_size_um: 3.76, focal_length_mm: 250, aperture_mm: 51, rotation: { mode: 'manual', angle_degrees: 0 } } } } }, rigB]))));
     mount();
     await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
@@ -1365,9 +1365,9 @@ describe('Mosaic panels', () => {
     expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(11);
     fireEvent.keyDown(stage, { key: '[', code: 'BracketLeft' });
     expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(10);
-    // Each panel says its own camera angle; a turned one on a rig with no rotator is turned by hand.
-    expect(screen.getByTestId('framing-chosen-angle')).toHaveTextContent(/Camera angle here \d+\.\d° east of north, turned \+10\.0° from the framing/);
-    expect(screen.getByTestId('framing-hand-turn')).toHaveTextContent(/No rotator: turn the camera by hand to \d+\.\d° for this panel/);
+    // Each panel says its own camera angle, and nothing about how the rig reaches it.
+    expect(screen.getByTestId('framing-chosen-angle')).toHaveTextContent(/Camera angle here \d+\.\d° east of north, turned \+10\.0° from the framing\./);
+    expect(screen.queryByText(/by hand/)).not.toBeInTheDocument();
     fireEvent.keyDown(stage, { key: 'z', ctrlKey: true });
     expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(11);
   });

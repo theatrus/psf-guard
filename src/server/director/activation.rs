@@ -773,15 +773,6 @@ async fn execute_guarded(
                         plan: &plan,
                         panels: &rig_panels,
                         position_angle_degrees: layout.position_angle_degrees,
-                        hand_turned: profile
-                            .as_ref()
-                            .and_then(|p| p.optics.as_ref())
-                            .is_some_and(|optics| {
-                                !matches!(
-                                    optics.value.rotation,
-                                    psf_guard_director_core::optics::Rotation::Rotator {}
-                                )
-                            }),
                         contributions,
                         reactivate: previous.as_ref().is_some_and(|p| p.inactive_rigs.iter().any(|r| r.rig_id == *rig_id)),
                         rig_id: *rig_id,
@@ -1502,10 +1493,9 @@ struct Inputs<'a> {
     /// the camera angle to shoot it at.
     panels: &'a [Panel],
     /// The framing's angle, which each panel's own angle is told against.
+    /// Every rig gets each panel's own angle, rotator or not: planning sets
+    /// the rotation, and reaching it belongs to execution.
     position_angle_degrees: f64,
-    /// The rig has no rotator: a panel turned from the framing is turned by
-    /// hand, and the preview says to what.
-    hand_turned: bool,
     contributions: &'a [&'a Contribution],
     /// The last activation set this rig's project Inactive when the rig was
     /// turned off; now that it is on, the project goes Active again.
@@ -1874,7 +1864,6 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 rotation,
                 (inputs.collaboration.is_none()).then_some(panel),
                 inputs.position_angle_degrees,
-                inputs.hand_turned,
             )
         );
         let owned: Option<String> = tx
@@ -3380,9 +3369,8 @@ fn planned_angle(stored: f64, framing: f64, panel: &Panel) -> bool {
 
 /// A panel's camera angle for the activation preview, with what it is made
 /// of: the framing's angle, the panel's own turn and north's lean at its
-/// center; or as shot, for a panel measured from its frames. A rig with no
-/// rotator turns a turned panel by hand.
-fn describe_angle(rotation: f64, panel: Option<&Panel>, framing: f64, hand_turned: bool) -> String {
+/// center; or as shot, for a panel measured from its frames.
+fn describe_angle(rotation: f64, panel: Option<&Panel>, framing: f64) -> String {
     let Some(panel) = panel else {
         return format!("angle {rotation:.1}°");
     };
@@ -3411,15 +3399,11 @@ fn describe_angle(rotation: f64, panel: Option<&Panel>, framing: f64, hand_turne
     if lean.abs() >= 0.05 {
         parts.push(format!("north here {}", signed(lean)));
     }
-    let mut out = if parts.len() == 1 {
+    if parts.len() == 1 {
         format!("angle {rotation:.1}°")
     } else {
         format!("angle {rotation:.1}° ({})", parts.join(", "))
-    };
-    if hand_turned && turn.abs() >= 0.05 {
-        out.push_str(&format!("; turn the camera by hand to {rotation:.1}°"));
     }
-    out
 }
 
 fn format_ra(hours: f64) -> String {

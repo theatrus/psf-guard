@@ -1040,10 +1040,6 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   editingRef.current = editingRig;
   const editing = state?.rigFramings.find(own => own.rig_id === editingRig) ?? null;
   const rigName = (id: string) => rigList.find(entry => entry.rig.id === id)?.catalog_name ?? 'Rig';
-  // A rig with no rotator turns its camera by hand for a turned panel.
-  const rotatorless = (id: string) => { const rotation = rigList.find(entry => entry.rig.id === id)?.profile?.optics?.value.rotation; return !!rotation && rotation.mode !== 'rotator'; };
-  const handTurned = !!state && (activeRig ? rotatorless(activeRig)
-    : rigList.some(entry => !state.rigFramings.some(own => own.rig_id === entry.rig.id) && (!onToggleRig || (shootingRigIds ?? []).includes(entry.rig.id)) && rotatorless(entry.rig.id)));
   const editOwn = (patch: Partial<DirectorRigFraming>) => update(current => ({ rigFramings: current.rigFramings.map(own => own.rig_id === editingRig ? { ...own, ...patch } : own) }));
   const frameRig = (id: string) => {
     if (!id) return;
@@ -1402,7 +1398,6 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
           undo={{ can: past.length > 0, run: () => stepHistory(true) }} redo={{ can: future.length > 0, run: () => stepHistory(false) }}
           notice={panelNotice}
           shot={id => active.geometry?.panels.find(panel => panel.id === id) ?? null}
-          handTurned={handTurned}
           onTurn={(id, degrees) => turnChosen(id, degrees)}
           gridBlocked={heldIn(active.rig, active.layout) ? 'Locked panels stay where they are, so the panels are not laid out as a grid again.' : null} />
       </fieldset>}

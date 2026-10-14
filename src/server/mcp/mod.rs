@@ -1483,7 +1483,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Preview activating a plan: exactly what would be written to each rig's Target Scheduler database (projects, targets, exposure plans, templates, limits) and a `preview_digest`. Writes nothing. apply_activation takes the digest."
+        description = "Preview activating a plan: exactly what would be written to each rig's Target Scheduler database (projects, targets, exposure plans, templates, limits) and a `preview_digest`. Every target gets its panel's own rotation (the framing's angle, plus the panel's turn, plus north's lean at its center) whatever turns the rig's camera; reaching it is the rig's business. Writes nothing. apply_activation takes the digest."
     )]
     async fn preview_activation(
         &self,

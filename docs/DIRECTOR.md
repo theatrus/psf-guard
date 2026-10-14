@@ -1064,9 +1064,9 @@ instead** offers to start again.
   with `[` and `]`, or by typing a **Turn**; **Framing angle** puts it back.
   A turn settles on the framing's angle, a neighbour's, or a shot panel's
   within 2°. A turn that leaves the overlap short springs back like a drop;
-  Alt turns it anyway. A rig with a rotator turns each panel by itself; for a
-  rig whose camera is fixed or turned by hand, the editor and the activation
-  preview say "turn the camera by hand to X°" for that panel.
+  Alt turns it anyway. Planning always sets each panel's angle, whatever turns
+  the rig's camera: a rotator, a camera turned by hand, or a fixed one. How
+  the rig reaches the angle is the session's business, not the plan's.
 - **Drag a panel** with **Panel** among the sky's drag modes. It settles,
   lined up with another panel or at the minimum overlap beside one. A drop
   that leaves a thin overlap, a gap or a lone panel goes back and says why;
@@ -1269,9 +1269,8 @@ rig's database, the same rows Target Scheduler and the Director plugin read:
   panel's turn, plus north's lean at its center. A locked panel with frames
   keeps its target's place and rotation (`unchanged`, "kept where its frames
   were shot"), and a target with frames shot at the framing's angle before
-  panels took north's lean keeps that angle. The preview gives each angle and
-  what it is made of, and for a rig without a rotator says to turn the camera
-  by hand for a turned panel.
+  panels took north's lean keeps that angle. Every rig gets the same angles,
+  rotator or not. The preview gives each angle and what it is made of.
   A target the project already has (imported from Target Scheduler, or made
   by hand) is taken over rather than doubled: the one with the panel's name,
   else the one at the panel's place, else, for a single-panel framing, the

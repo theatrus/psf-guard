@@ -47,8 +47,6 @@ export interface MosaicPanelsProps {
   namePrefix?: string;
   /** A panel as the framing lays it out: its camera angle and shot geometry. */
   shot?: (id: string) => DirectorFramingPreview['panels'][number] | null;
-  /** Some rig shooting these panels has no rotator, so a turn is by hand. */
-  handTurned?: boolean;
   /** Turn a panel to so many degrees from the framing's angle. */
   onTurn?: (id: string, degrees: number) => void;
 }
@@ -155,7 +153,6 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
           {laid.measured
             ? <p className="director-muted" data-testid="framing-chosen-shot">Drawn as shot, from {shotFrom(laid.measured)}: {formatDegrees(laid.measured.size.width_degrees)} × {formatDegrees(laid.measured.size.height_degrees)} at {angle}{laid.measured.size_source !== laid.measured.source ? `; its size from ${laid.measured.size_source === 'plan' ? 'the plan' : 'frame headers'}` : ''}.</p>
             : <p className="director-muted">Camera angle here {angle} east of north{turn !== 0 ? `, turned ${signed(turn)} from the framing` : ''}.</p>}
-          {!laid.measured && turn !== 0 && props.handTurned && <p className="framing-mosaic-note" data-testid="framing-hand-turn">No rotator: turn the camera by hand to {angle} for this panel.</p>}
           {canWrite && !isLocked(chosen.id) && props.onTurn && <div className="framing-turn">
             <label>Turn<span className="framing-input"><NumberInput aria-label={`${chosen.id} turn degrees`} min={-180} max={180} step={0.1} value={Number(turn.toFixed(2))}
               onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value)) props.onTurn!(chosen.id, value); }} /><small>°</small></span></label>
