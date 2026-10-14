@@ -7,6 +7,14 @@ import {
   SINGLE_PROJECT_MODES,
 } from '../types/grouping';
 import { THUMBNAIL_SIZE_MAX, THUMBNAIL_SIZE_MIN } from '../utils/thumbnailSizing';
+import {
+  fieldsFromScoring,
+  normalizeScoring,
+  SCORING_DEFAULTS,
+  SCORING_PREFERENCE_KEYS,
+  scoringFromFields,
+  storedScoringFields,
+} from '../utils/scoring';
 
 /**
  * Card display choices shared by every surface that renders an ImageCard.
@@ -71,6 +79,15 @@ export interface DisplayPreferences {
   gridThumbnailSize?: number;
   /** Sequence's thumbnail size, in pixels. */
   sequenceThumbnailSize?: number;
+  /*
+   * The Scoring control's defaults: what each view scores with until the
+   * person changes it there. See useScoringPreferences.
+   */
+  scoringPenaltySatellite?: number;
+  scoringPenaltyPointing?: number;
+  scoringPenaltyTemporal?: number;
+  scoringHfrRejectAbove?: number | null;
+  scoringStarCountRejectBelow?: number | null;
 }
 
 /** A whole set of preferences, where leaving out the detail sections
@@ -96,6 +113,7 @@ const DEFAULTS: Required<DisplayPreferences> = {
   imageGroupingAllProjects: DEFAULT_MULTI_PROJECT_MODE as AllProjectsGrouping,
   gridThumbnailSize: DEFAULT_GRID_THUMBNAIL_SIZE,
   sequenceThumbnailSize: DEFAULT_SEQUENCE_THUMBNAIL_SIZE,
+  ...fieldsFromScoring(SCORING_DEFAULTS),
 };
 
 /** The preferences a signed-in user's server document holds: all but the
@@ -103,6 +121,10 @@ const DEFAULTS: Required<DisplayPreferences> = {
 export type AccountPreferenceKey = Exclude<keyof DisplayPreferences, 'detailSections'>;
 export const ACCOUNT_PREFERENCE_KEYS = (Object.keys(DEFAULTS) as (keyof DisplayPreferences)[])
   .filter((key): key is AccountPreferenceKey => key !== 'detailSections');
+
+/** Where the Scoring control kept its one setting before it had defaults.
+ *  It moves into the browser's own preferences on the first load. */
+export const LEGACY_SCORING_KEY = 'psf-guard.penalty-scales';
 
 type Listener = () => void;
 /** Told which account preferences a change in this tab made. */
@@ -166,6 +188,7 @@ export function sanitizeDisplayPreferences(parsed: StoredPreferences): Required<
     ),
     gridThumbnailSize: thumbnailSize(parsed.gridThumbnailSize, DEFAULTS.gridThumbnailSize),
     sequenceThumbnailSize: thumbnailSize(parsed.sequenceThumbnailSize, DEFAULTS.sequenceThumbnailSize),
+    ...fieldsFromScoring(scoringFromFields(parsed)),
   };
 }
 
@@ -184,7 +207,11 @@ const HANDED_OVER_KEY = `${STORAGE_KEY}.handed-over`;
 function readKey(key: string): StoredPreferences | null {
   try {
     const raw = window.localStorage.getItem(key);
-    return raw ? JSON.parse(raw) as StoredPreferences : null;
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    // Anything but an object, such as a stray number, is no preferences.
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as StoredPreferences
+      : null;
   } catch {
     return null;
   }
@@ -215,6 +242,43 @@ function persist(): void {
   }
 }
 
+/**
+ * Before the scoring defaults, the Scoring control kept the values it last
+ * used in one key of its own. They become this browser's own defaults,
+ * unless it already has some, and go to the first account to sign in here
+ * with the rest of the browser's choices (claimBrowserPreferences, or
+ * claimBrowserScoring for an account whose document predates them).
+ */
+export function migrateLegacyScoring(): void {
+  try {
+    const raw = window.localStorage.getItem(LEGACY_SCORING_KEY);
+    if (raw === null) return;
+    const own = readKey(keyFor(null)) ?? {};
+    const hasDefaults = Object.values(SCORING_PREFERENCE_KEYS).some((key) => key in own);
+    if (!hasDefaults) {
+      let legacy: unknown = null;
+      try {
+        legacy = JSON.parse(raw);
+      } catch {
+        // Unreadable: nothing to carry over.
+      }
+      if (legacy && typeof legacy === 'object') {
+        window.localStorage.setItem(
+          keyFor(null),
+          JSON.stringify({
+            ...own,
+            ...fieldsFromScoring(normalizeScoring(legacy as Record<string, unknown>)),
+          }),
+        );
+      }
+    }
+    window.localStorage.removeItem(LEGACY_SCORING_KEY);
+  } catch {
+    // Storage is unavailable; the built-in defaults apply.
+  }
+}
+
+migrateLegacyScoring();
 let current = readStored();
 
 function notify(): void {
@@ -285,6 +349,30 @@ export function claimBrowserPreferences(): Partial<Record<AccountPreferenceKey, 
   const claimed: Partial<Record<AccountPreferenceKey, unknown>> = {};
   for (const key of ACCOUNT_PREFERENCE_KEYS) {
     if (chosen.has(key)) claimed[key] = sanitized[key];
+  }
+  return claimed;
+}
+
+/**
+ * The browser's own scoring defaults, for the first account to sign in
+ * here whose document was saved before the scoring defaults existed: its
+ * document wins for everything it holds, and these fill the keys it lacks.
+ * Null when another account has claimed the browser's choices, when the
+ * document holds any scoring default, or when the browser has none.
+ * Claims nothing; retireBrowserPreferences does that.
+ */
+export function claimBrowserScoring(
+  document: Record<string, unknown>,
+): Partial<Record<AccountPreferenceKey, unknown>> | null {
+  if (!handOverPending()) return null;
+  const keys = Object.values(SCORING_PREFERENCE_KEYS);
+  if (keys.some((key) => key in document)) return null;
+  const stored = storedScoringFields(readKey(keyFor(null)));
+  if (Object.keys(stored).length === 0) return null;
+  const sanitized = sanitizeDisplayPreferences(stored);
+  const claimed: Partial<Record<AccountPreferenceKey, unknown>> = {};
+  for (const key of keys) {
+    if (key in stored) claimed[key] = sanitized[key];
   }
   return claimed;
 }

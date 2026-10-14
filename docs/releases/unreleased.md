@@ -285,6 +285,17 @@
 - A link that names open groups the view no longer has, such as an All
   projects link from before All projects grouped by project, opens the
   default groups instead of none.
+- Sequence's **Scoring** penalties and reject limits have defaults of
+  their own, in **Settings › Review › Sequence scoring**, with **Reset to
+  built-in defaults**. Every view starts from them. A change in the toolbar
+  now applies to that view only: the address keeps all five values, the
+  control reads **Scoring (changed)**, and its popover offers **Save as
+  default** and **Reset to default**. Images, the detail view and Stacks
+  in the same project follow the change and say so, Stacks beside
+  **Build**; another project starts from your defaults. Signed in, the
+  defaults follow you to any browser like your other view choices. The
+  values the control remembered before become your defaults. Min stars
+  now takes a whole number.
 - Frames captured since your last visit to a project from the Library carry
   a small dot before their date in Images and Sequence: the frames the
   Library's "new" badge counted, plus any captured since. They keep it until

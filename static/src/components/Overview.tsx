@@ -42,7 +42,7 @@ import {
   saveProjectSeenState,
 } from '../utils/projectRecency';
 import { formatRelativeTime } from '../utils/relativeTime';
-import { useDbProjectTarget, useUrlParams } from '../hooks/useUrlState';
+import { keepScoringInScope, useDbProjectTarget, useUrlParams } from '../hooks/useUrlState';
 import { imageDetailPath } from '../utils/imageDetailRoutes';
 import {
   groupProjectsByActivity,
@@ -189,6 +189,7 @@ export default function Overview() {
     const scope = new URLSearchParams(location.search);
     scope.set('db', project.db_id);
     scope.set('project', String(project.id));
+    keepScoringInScope(location.search, scope);
     navigate(plans.hrefFor(plan ?? `${project.db_id}:${project.id}`, scope));
   };
 

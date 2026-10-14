@@ -38,7 +38,43 @@ pub const MAX_REQUEST_BYTES: usize = 16 * 1024;
 pub enum PreferenceKind {
     Bool,
     OneOf(&'static [&'static str]),
-    Integer { min: i64, max: i64 },
+    Integer {
+        min: i64,
+        max: i64,
+    },
+    /// A number from `min` to `max` in whole multiples of `step`.
+    Number {
+        min: f64,
+        max: f64,
+        step: f64,
+    },
+    /// A cut-off that may be off: `null`, or a number above zero and no
+    /// more than `max`.
+    Limit {
+        max: f64,
+    },
+    /// A count cut-off that may be off: `null`, or a whole number from
+    /// `min` to `max`.
+    CountLimit {
+        min: i64,
+        max: i64,
+    },
+}
+
+/// The most a scoring penalty may scale its evidence's built-in hit, as
+/// `PenaltyScales` clamps it in `sequence_analysis`.
+pub const MAX_SCORING_PENALTY: f64 = 2.0;
+/// Penalties move in tenths, as the Scoring control's sliders do.
+pub const SCORING_PENALTY_STEP: f64 = 0.1;
+/// The highest Max HFR default, in pixels.
+pub const MAX_HFR_REJECT_LIMIT: f64 = 100.0;
+/// The highest Min stars default. A star count is whole.
+pub const MAX_STAR_COUNT_REJECT_LIMIT: i64 = 1_000_000;
+
+/// Within float noise of a whole multiple of `step`.
+fn on_step(value: f64, step: f64) -> bool {
+    let steps = value / step;
+    (steps - steps.round()).abs() < 1e-6
 }
 
 /// The preferences the browser keeps for a person. The names and values
@@ -82,6 +118,46 @@ pub const KNOWN_KEYS: &[(&str, PreferenceKind)] = &[
         PreferenceKind::Integer {
             min: 150,
             max: 1200,
+        },
+    ),
+    // The Scoring control's defaults: what each view's scoring starts from
+    // until the person changes it there. See `SCORING_PREFERENCE_KEYS` in
+    // `static/src/utils/scoring.ts`.
+    (
+        "scoringPenaltySatellite",
+        PreferenceKind::Number {
+            min: 0.0,
+            max: MAX_SCORING_PENALTY,
+            step: SCORING_PENALTY_STEP,
+        },
+    ),
+    (
+        "scoringPenaltyPointing",
+        PreferenceKind::Number {
+            min: 0.0,
+            max: MAX_SCORING_PENALTY,
+            step: SCORING_PENALTY_STEP,
+        },
+    ),
+    (
+        "scoringPenaltyTemporal",
+        PreferenceKind::Number {
+            min: 0.0,
+            max: MAX_SCORING_PENALTY,
+            step: SCORING_PENALTY_STEP,
+        },
+    ),
+    (
+        "scoringHfrRejectAbove",
+        PreferenceKind::Limit {
+            max: MAX_HFR_REJECT_LIMIT,
+        },
+    ),
+    (
+        "scoringStarCountRejectBelow",
+        PreferenceKind::CountLimit {
+            min: 1,
+            max: MAX_STAR_COUNT_REJECT_LIMIT,
         },
     ),
 ];
@@ -133,6 +209,21 @@ fn sanitize(
                 PreferenceKind::Integer { min, max } => value
                     .as_i64()
                     .is_some_and(|number| (*min..=*max).contains(&number)),
+                PreferenceKind::Number { min, max, step } => value.as_f64().is_some_and(|number| {
+                    (*min..=*max).contains(&number) && on_step(number - min, *step)
+                }),
+                PreferenceKind::Limit { max } => {
+                    value.is_null()
+                        || value
+                            .as_f64()
+                            .is_some_and(|number| number > 0.0 && number <= *max)
+                }
+                PreferenceKind::CountLimit { min, max } => {
+                    value.is_null()
+                        || value
+                            .as_i64()
+                            .is_some_and(|number| (*min..=*max).contains(&number))
+                }
             };
         if !valid {
             bail!("'{key}' has a value this preference cannot hold: {value}");
@@ -496,6 +587,113 @@ mod tests {
     }
 
     #[test]
+    fn a_patch_resets_or_sets_a_scoring_default() {
+        // A null resets any scoring default, a penalty included; the browser
+        // then reads it as built in, which for a limit is off.
+        let (changes, ignored) = sanitize_preference_changes(&map(json!({
+            "scoringPenaltySatellite": null,
+            "scoringHfrRejectAbove": null,
+            "scoringStarCountRejectBelow": 505,
+        })))
+        .unwrap();
+        assert!(ignored.is_empty());
+        assert_eq!(
+            Value::Object(changes),
+            json!({
+                "scoringPenaltySatellite": null,
+                "scoringHfrRejectAbove": null,
+                "scoringStarCountRejectBelow": 505,
+            })
+        );
+        for bad in [
+            json!({ "scoringPenaltyPointing": 0.25 }),
+            json!({ "scoringStarCountRejectBelow": 12.5 }),
+            json!({ "scoringHfrRejectAbove": 0 }),
+        ] {
+            assert!(
+                sanitize_preference_changes(&map(bad.clone())).is_err(),
+                "{bad}"
+            );
+        }
+
+        let mut registry = UserPreferencesRegistry::default();
+        registry
+            .set(
+                "alice",
+                map(json!({ "scoringHfrRejectAbove": 3, "scoringPenaltyTemporal": 0.5 })),
+                1,
+            )
+            .unwrap();
+        let (changes, _) =
+            sanitize_preference_changes(&map(json!({ "scoringHfrRejectAbove": null }))).unwrap();
+        registry.patch("alice", changes, 2).unwrap();
+        assert_eq!(
+            Value::Object(registry.get("alice").unwrap().preferences.clone()),
+            json!({ "scoringPenaltyTemporal": 0.5 })
+        );
+    }
+
+    #[test]
+    fn checks_the_scoring_defaults() {
+        // Penalties from 0 to 2 in tenths; Max HFR above zero up to its
+        // cap; Min stars a whole count; either limit may be off.
+        let (kept, ignored) = sanitize_preferences(&map(json!({
+            "scoringPenaltySatellite": 0,
+            "scoringPenaltyPointing": 1.5,
+            "scoringPenaltyTemporal": 0.3,
+            "scoringHfrRejectAbove": 2.55,
+            "scoringStarCountRejectBelow": null,
+            "scoringPenaltyGuiding": 1,
+        })))
+        .unwrap();
+        assert_eq!(
+            Value::Object(kept),
+            json!({
+                "scoringPenaltySatellite": 0,
+                "scoringPenaltyPointing": 1.5,
+                "scoringPenaltyTemporal": 0.3,
+                "scoringHfrRejectAbove": 2.55,
+                "scoringStarCountRejectBelow": null,
+            })
+        );
+        assert_eq!(ignored, vec!["scoringPenaltyGuiding"]);
+
+        // Each end of each range is a value it may hold.
+        let (kept, _) = sanitize_preferences(&map(json!({
+            "scoringPenaltySatellite": 2,
+            "scoringHfrRejectAbove": MAX_HFR_REJECT_LIMIT,
+            "scoringStarCountRejectBelow": 1,
+        })))
+        .unwrap();
+        assert_eq!(kept.len(), 3);
+        let (kept, _) = sanitize_preferences(&map(json!({
+            "scoringStarCountRejectBelow": MAX_STAR_COUNT_REJECT_LIMIT,
+        })))
+        .unwrap();
+        assert_eq!(kept.len(), 1);
+
+        for bad in [
+            json!({ "scoringPenaltySatellite": -0.1 }),
+            json!({ "scoringPenaltyPointing": 2.1 }),
+            json!({ "scoringPenaltyPointing": 0.25 }),
+            json!({ "scoringPenaltyPointing": 1.05 }),
+            json!({ "scoringPenaltyTemporal": "1" }),
+            json!({ "scoringPenaltyTemporal": null }),
+            json!({ "scoringPenaltySatellite": true }),
+            json!({ "scoringHfrRejectAbove": 0 }),
+            json!({ "scoringHfrRejectAbove": -2.5 }),
+            json!({ "scoringHfrRejectAbove": 100.5 }),
+            json!({ "scoringHfrRejectAbove": "off" }),
+            json!({ "scoringStarCountRejectBelow": 12.5 }),
+            json!({ "scoringStarCountRejectBelow": 0 }),
+            json!({ "scoringStarCountRejectBelow": 1_000_001 }),
+            json!({ "scoringStarCountRejectBelow": [500] }),
+        ] {
+            assert!(sanitize_preferences(&map(bad.clone())).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn every_known_key_fits_the_size_cap_at_once() {
         let mut every = Map::new();
         for (key, kind) in KNOWN_KEYS {
@@ -505,6 +703,10 @@ mod tests {
                     json!(choices.iter().max_by_key(|c| c.len()).unwrap())
                 }
                 PreferenceKind::Integer { max, .. } => json!(max),
+                PreferenceKind::Number { max, .. } => json!(max),
+                // A third prints with every digit a double has.
+                PreferenceKind::Limit { max } => json!(max / 3.0),
+                PreferenceKind::CountLimit { max, .. } => json!(max),
             };
             every.insert((*key).to_string(), value);
         }

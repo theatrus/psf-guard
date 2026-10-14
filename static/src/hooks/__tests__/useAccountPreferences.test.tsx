@@ -5,6 +5,8 @@ import { server } from '../../test/msw-server';
 import { RETRY_FIRST_MS, SAVE_DELAY_MS, retryDelay, useAccountPreferences } from '../useAccountPreferences';
 import {
   getDisplayPreferences,
+  LEGACY_SCORING_KEY,
+  migrateLegacyScoring,
   setDisplayPreferences,
   setPreferencesAccount,
 } from '../useDisplayPreferences';
@@ -324,5 +326,88 @@ describe('account preferences', () => {
     await wait(SAVE_DELAY_MS + 200);
     expect(requests).toBe(0);
     expect(window.localStorage.getItem(BROWSER_KEY)).toContain('"newest"');
+  });
+
+  it('hands the Scoring control\'s earlier setting to the first account as defaults', async () => {
+    window.localStorage.setItem(LEGACY_SCORING_KEY, JSON.stringify({
+      satellite: 0, pointing: 1, temporal: 1, hfrRejectAbove: 2.55, starCountRejectBelow: null,
+    }));
+    // What a page load does before anyone signs in.
+    migrateLegacyScoring();
+    const saves = fakeServer({}, () => 'alice');
+    renderHook(() => useAccountPreferences('alice'));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].changes).toMatchObject({
+      scoringPenaltySatellite: 0,
+      scoringPenaltyPointing: 1,
+      scoringHfrRejectAbove: 2.55,
+    });
+    expect(window.localStorage.getItem(LEGACY_SCORING_KEY)).toBeNull();
+  });
+
+  it('adds this browser\'s scoring defaults to the first account\'s document from before them', async () => {
+    window.localStorage.setItem(LEGACY_SCORING_KEY, JSON.stringify({ satellite: 0, starCountRejectBelow: 40 }));
+    migrateLegacyScoring();
+    const documents: Record<string, Document> = { alice: { imageOrder: 'newest', libraryDensity: 'detailed' } };
+    const saves = fakeServer(documents, () => 'alice');
+    renderHook(() => useAccountPreferences('alice'));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    // Only the scoring defaults are sent; the account's own choices stay.
+    expect(Object.keys(saves[0].changes).every((key) => key.startsWith('scoring'))).toBe(true);
+    expect(documents.alice).toMatchObject({
+      imageOrder: 'newest',
+      libraryDensity: 'detailed',
+      scoringPenaltySatellite: 0,
+      scoringStarCountRejectBelow: 40,
+    });
+    expect(getDisplayPreferences().scoringPenaltySatellite).toBe(0);
+    await wait(SAVE_DELAY_MS + 200);
+    expect(saves).toHaveLength(1);
+  });
+
+  it('gives the browser\'s scoring defaults to no later account', async () => {
+    window.localStorage.setItem(LEGACY_SCORING_KEY, JSON.stringify({ satellite: 0 }));
+    migrateLegacyScoring();
+    const documents: Record<string, Document> = {
+      alice: { imageOrder: 'newest' },
+      bob: { imageOrder: 'oldest' },
+    };
+    let user = 'alice';
+    const saves = fakeServer(documents, () => user);
+    const first = renderHook(() => useAccountPreferences('alice'));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    first.unmount();
+    user = 'bob';
+    renderHook(() => useAccountPreferences('bob'));
+    await waitFor(() => expect(getDisplayPreferences().imageOrder).toBe('oldest'));
+    await wait(SAVE_DELAY_MS + 200);
+    expect(saves.filter((save) => save.user === 'bob')).toHaveLength(0);
+    expect(getDisplayPreferences().scoringPenaltySatellite).toBe(1);
+  });
+
+  it('keeps an account\'s own scoring defaults over the browser\'s', async () => {
+    window.localStorage.setItem(LEGACY_SCORING_KEY, JSON.stringify({ satellite: 0 }));
+    migrateLegacyScoring();
+    const saves = fakeServer({
+      alice: { imageOrder: 'oldest', scoringPenaltyTemporal: 0, scoringStarCountRejectBelow: 505 },
+    }, () => 'alice');
+    renderHook(() => useAccountPreferences('alice'));
+    await waitFor(() => expect(getDisplayPreferences().scoringStarCountRejectBelow).toBe(505));
+    expect(getDisplayPreferences().scoringPenaltyTemporal).toBe(0);
+    expect(getDisplayPreferences().scoringPenaltySatellite).toBe(1);
+    await wait(SAVE_DELAY_MS + 200);
+    expect(saves).toHaveLength(0);
+  });
+
+  it('saves a cleared limit as a reset, which reads back as off', async () => {
+    const documents: Record<string, Document> = { alice: { scoringHfrRejectAbove: 3 } };
+    const saves = fakeServer(documents, () => 'alice');
+    renderHook(() => useAccountPreferences('alice'));
+    await waitFor(() => expect(getDisplayPreferences().scoringHfrRejectAbove).toBe(3));
+    act(() => setDisplayPreferences({ ...getDisplayPreferences(), scoringHfrRejectAbove: null }));
+    await waitFor(() => expect(saves).toHaveLength(1), { timeout: SAVE_DELAY_MS * 4 });
+    expect(saves[0].changes).toEqual({ scoringHfrRejectAbove: null });
+    expect(documents.alice).toEqual({});
+    expect(getDisplayPreferences().scoringHfrRejectAbove).toBeNull();
   });
 });

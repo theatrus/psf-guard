@@ -879,6 +879,7 @@
 
   .view-toolbar-controls .scoring-penalty-control {
     flex: none;
+    max-width: 100%;
   }
 
   .view-toolbar-controls .scoring-penalty-panel {

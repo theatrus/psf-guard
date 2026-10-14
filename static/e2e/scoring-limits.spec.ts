@@ -45,22 +45,22 @@ test('an HFR reject limit flags the soft frame, survives reload, and resets', as
   // The HFR 2.6 frame drops to the capped score and carries the limit reason.
   const capped = page.locator('.sequence-image-card.below-threshold');
   await expect(capped).toHaveCount(1, { timeout: 15_000 });
-  await expect(scoring.locator('summary')).toHaveText('Scoring (custom)');
+  await expect(scoring.locator('summary')).toHaveText('Scoring (changed)');
   await capped.getByRole('button', { name: 'Show quality reason' }).click();
   const popover = page.getByRole('dialog', { name: 'Quality reason' });
   await expect(popover).toContainText('[Auto] Max HFR');
   await expect(popover).toContainText('over limit 2.55');
   await popover.getByRole('button', { name: 'Close quality reason' }).click();
 
-  // The preference is remembered: a reload scores the same way.
+  // The view's address keeps it: a reload scores the same way.
   await page.reload();
   await expect(cards).toHaveCount(3, { timeout: 15_000 });
   await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(1);
   await page.locator('.scoring-penalty-control summary').click();
   await expect(page.getByLabel('Max HFR')).toHaveValue('2.55');
 
-  // Reset restores the calibrated behavior.
-  await page.getByRole('button', { name: 'Reset to defaults' }).click();
+  // Reset returns to the defaults, here the calibrated behavior.
+  await page.getByRole('button', { name: 'Reset to default' }).click();
   await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(0, {
     timeout: 15_000,
   });
@@ -114,5 +114,5 @@ test('a sub-1 HFR limit can be typed digit by digit, leading zero first', async 
   await hfrInput.blur();
   await expect(hfrInput).toHaveValue('0.8');
   await expect(page.locator('.sequence-image-card.below-threshold')).toHaveCount(3);
-  await expect(page.locator('.scoring-penalty-control summary')).toHaveText('Scoring (custom)');
+  await expect(page.locator('.scoring-penalty-control summary')).toHaveText('Scoring (changed)');
 });

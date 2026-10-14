@@ -279,6 +279,45 @@ async fn checks_what_it_keeps() {
 }
 
 #[tokio::test]
+async fn keeps_the_scoring_defaults() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = app(&directory, true);
+    let viewer = login(&app, "viewer").await;
+    let editor = login(&app, "editor").await;
+
+    let scoring = json!({
+        "imageOrder": "newest",
+        "scoringPenaltySatellite": 0,
+        "scoringPenaltyPointing": 1,
+        "scoringPenaltyTemporal": 1.5,
+        "scoringHfrRejectAbove": 2.55,
+        "scoringStarCountRejectBelow": null,
+    });
+    let (status, body) = put(&app, Some(&viewer), document(scoring.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["preferences"], scoring);
+    let (_, body) = get(&app, Some(&viewer)).await;
+    assert_eq!(body["data"]["preferences"], scoring);
+    // They are the viewer's alone.
+    let (_, body) = get(&app, Some(&editor)).await;
+    assert_eq!(body["data"]["preferences"], json!({}));
+
+    // A penalty or limit out of range is refused, and the saved ones stay.
+    for bad in [
+        json!({ "scoringPenaltySatellite": 3 }),
+        json!({ "scoringPenaltySatellite": 0.35 }),
+        json!({ "scoringHfrRejectAbove": 0 }),
+        json!({ "scoringStarCountRejectBelow": "500" }),
+        json!({ "scoringStarCountRejectBelow": 12.5 }),
+    ] {
+        let (status, body) = put(&app, Some(&viewer), document(bad.clone())).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}: {body}");
+    }
+    let (_, body) = get(&app, Some(&viewer)).await;
+    assert_eq!(body["data"]["preferences"], scoring);
+}
+
+#[tokio::test]
 async fn needs_a_signed_in_user() {
     let directory = tempfile::tempdir().unwrap();
     let app_with_accounts = app(&directory, true);

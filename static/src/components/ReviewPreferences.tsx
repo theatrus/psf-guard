@@ -1,16 +1,20 @@
+import { useAccess } from '../auth/access';
 import {
   setDisplayPreferences,
   useDisplayPreferences,
 } from '../hooks/useDisplayPreferences';
 import { CalibrationIcon, LayersIcon, MoonIcon } from './ScoreChipIcons';
+import ScoringDefaultsSettings from './ScoringDefaultsSettings';
 
 /**
- * Review behavior preferences. Stored in this browser and shared by the
- * grid, the Sequence view, and the detail view, so every surface behaves
- * the same way.
+ * Review behavior preferences, shared by the grid, the Sequence view, and
+ * the detail view, so every surface behaves the same way. A signed-in
+ * user's follow their account (see useAccountPreferences); otherwise this
+ * browser keeps them.
  */
 export default function ReviewPreferences() {
   const preferences = useDisplayPreferences();
+  const { status } = useAccess();
   const set = (patch: Partial<typeof preferences>) =>
     setDisplayPreferences({ ...preferences, ...patch });
 
@@ -72,6 +76,8 @@ export default function ReviewPreferences() {
         </span>
       </label>
 
+      <ScoringDefaultsSettings />
+
       <h3>Top bar</h3>
       <label className="review-preference">
         <span>
@@ -120,7 +126,9 @@ export default function ReviewPreferences() {
       </label>
 
       <p className="review-preferences-note">
-        These preferences live in this browser and apply immediately.
+        {status.username
+          ? `These preferences apply at once and are saved with your account, ${status.username}, so they follow you to any browser.`
+          : 'These preferences live in this browser and apply at once.'}
       </p>
     </div>
   );

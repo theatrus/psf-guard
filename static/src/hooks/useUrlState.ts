@@ -15,6 +15,7 @@ import {
   parseImageOrder,
   type ImageOrder,
 } from '../utils/imageOrder';
+import { SCORING_PARAM_NAMES } from '../utils/scoring';
 import {
   DEFAULT_GRID_THUMBNAIL_SIZE,
   DEFAULT_SEQUENCE_THUMBNAIL_SIZE,
@@ -60,6 +61,7 @@ export function useUrlParams() {
   
   const updateParams = useCallback((updates: Record<string, string | number | boolean | string[] | number[] | null | undefined>) => {
     const newParams = new URLSearchParams(searchParamsRef.current);
+    const scope = scopeKey(newParams);
 
     Object.entries(updates).forEach(([key, value]) => {
       if (value === null || value === undefined || value === '' || value === 'all') {
@@ -75,6 +77,8 @@ export function useUrlParams() {
       }
     });
 
+    // A view's own scoring stays with the database and project it was set in.
+    if (scopeKey(newParams) !== scope) dropScoringParams(newParams);
     searchParamsRef.current = newParams;
     setSearchParamsRef.current(newParams, { replace: true });
   }, []);
@@ -88,6 +92,29 @@ export function useUrlParams() {
     updateParams,
     searchParams
   };
+}
+
+/** The database and project a set of params names. */
+function scopeKey(params: URLSearchParams): string {
+  return `${params.get('db') ?? ''}\n${params.get('project') ?? ''}`;
+}
+
+function dropScoringParams(params: URLSearchParams): void {
+  for (const name of SCORING_PARAM_NAMES) params.delete(name);
+}
+
+/**
+ * Params for a move from `from` to the scope `to` names. A view's own
+ * scoring (see SCORING_PARAMS) belongs to the database and project it was
+ * set in, so it goes when either changes: Images, the detail view, Stacks
+ * and the project's other targets keep it, another project does not.
+ * Every way of moving to another scope that copies the params passes them
+ * through here (updateParams does so itself).
+ */
+export function keepScoringInScope(from: string | URLSearchParams, to: URLSearchParams): URLSearchParams {
+  const before = typeof from === 'string' ? new URLSearchParams(from) : from;
+  if (scopeKey(before) !== scopeKey(to)) dropScoringParams(to);
+  return to;
 }
 
 /**

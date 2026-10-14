@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useMergedProjects, useMergedTargets } from '../../hooks/useDatabases';
-import { isMergedPath, MOSAIC_PARAM, useDbProjectTarget, withoutPlanningParams } from '../../hooks/useUrlState';
+import { isMergedPath, keepScoringInScope, MOSAIC_PARAM, useDbProjectTarget, withoutPlanningParams } from '../../hooks/useUrlState';
 import { mosaicLabel, useProjectMosaics } from '../../hooks/useProjectMosaic';
 import { useCurrentPlan } from './useCurrentPlan';
 import { fittedWidth, sharedStart, shortLabel } from './targetLabels';
@@ -80,6 +80,7 @@ export default function RigTargetSelect() {
       next.set('db', db); next.set('project', String(project));
       if (typeof target === 'number') next.set('target', String(target)); else next.delete('target');
       if (target === MOSAIC) next.set(MOSAIC_PARAM, '1'); else next.delete(MOSAIC_PARAM);
+      keepScoringInScope(location.search, next);
       navigate(`/grid?${next}`);
       return;
     }

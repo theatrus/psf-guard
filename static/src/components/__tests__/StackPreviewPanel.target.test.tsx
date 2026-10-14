@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
@@ -28,7 +29,7 @@ function mount(targetId: number | null) {
     http.get('/api/db/test/stack-previews/job/:index/stretch', () => ok(null)),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  const Wrapper = ({ children }: { children: ReactNode }) => <MemoryRouter><QueryClientProvider client={client}>{children}</QueryClientProvider></MemoryRouter>;
   const images = targetId === 28
     ? [{ id: 3, target_id: 28, target_name: 'Heart Panel 2', filter_name: 'Ha', grading_status: 1 }]
     : [
