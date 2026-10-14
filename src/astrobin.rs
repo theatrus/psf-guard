@@ -515,6 +515,10 @@ pub struct AstroBinExportRequest {
     /// Count ungraded lights along with accepted ones. Rejects never count.
     pub include_pending: bool,
     pub detail: AstroBinDetail,
+    /// Leave out lights that cannot be calibrated properly, as stacks and
+    /// every other export do when the setting asks. Judging a light reads
+    /// its header, so this needs the image folders.
+    pub exclude_uncalibrated: bool,
 }
 
 /// The export: the rows, the CSV they render to, and what to tell the
@@ -538,6 +542,9 @@ pub struct AstroBinExport {
     /// f-number and calibration counts from another light, or left them
     /// blank.
     pub lights_missing_files: usize,
+    /// Lights left out because they cannot be calibrated properly, as
+    /// stacks leave them out.
+    pub uncalibrated_lights: usize,
     pub notes: Vec<String>,
 }
 
@@ -547,7 +554,9 @@ pub struct AstroBinExport {
 /// catalog's own map does not cover. `directory_tree` is needed only for
 /// full detail, where one light per night and filter is read from disk
 /// (header only) for its f-number and matched against the calibration
-/// library the way a stack build would.
+/// library the way a stack build would. It is needed too when the request
+/// leaves out lights that cannot be calibrated: each light's header is read
+/// and judged as a stack judges it.
 pub fn export(
     conn: &Connection,
     directory_tree: Option<&DirectoryTree>,
@@ -580,11 +589,9 @@ pub fn export(
         image.grading_status == GradingStatus::Accepted as i32
             || (request.include_pending && image.grading_status == GradingStatus::Pending as i32)
     };
-    let mut frames = Vec::new();
     let mut basenames: Vec<(AstroBinFrame, Option<String>)> = Vec::new();
     for (image, _, _) in rows.iter().filter(|(image, _, _)| counted(image)) {
         if let Some(frame) = AstroBinFrame::from_image(image) {
-            frames.push(frame.clone());
             basenames.push((frame, crate::utils::extract_filename(&image.metadata)));
         }
     }
@@ -594,6 +601,52 @@ pub fn export(
     let boundary = catalog_night_boundary(conn).context("reading capture times")?;
 
     let mut notes = Vec::new();
+    // A light a stack would leave out was never integrated, so it does not
+    // count toward the acquisition either.
+    let mut uncalibrated_lights = 0usize;
+    if request.exclude_uncalibrated {
+        match directory_tree {
+            Some(tree) => {
+                let judge = crate::calibration::GapJudge::load(conn, boundary)
+                    .context("reading the calibration library")?;
+                let mut kept = Vec::with_capacity(basenames.len());
+                let mut example = None;
+                for (frame, basename) in basenames {
+                    let path = basename
+                        .as_deref()
+                        .and_then(|name| tree.find_file_first(name));
+                    let gap = match path {
+                        Some(path) => {
+                            judge.gap(&crate::commands::import::headers::read_frame_meta(path))?
+                        }
+                        None => None,
+                    };
+                    match gap {
+                        Some(reason) => {
+                            uncalibrated_lights += 1;
+                            example.get_or_insert_with(|| {
+                                format!("{}: {reason}", basename.unwrap_or_default())
+                            });
+                        }
+                        None => kept.push((frame, basename)),
+                    }
+                }
+                basenames = kept;
+                if let Some(example) = example {
+                    notes.push(format!(
+                        "{uncalibrated_lights} light(s) that can't be calibrated were left out, \
+                         as stacks leave them out; for example {example}."
+                    ));
+                }
+            }
+            None => notes.push(
+                "No image folders were given, so lights that can't be calibrated could not be \
+                 left out."
+                    .to_string(),
+            ),
+        }
+    }
+    let frames: Vec<AstroBinFrame> = basenames.iter().map(|(frame, _)| frame.clone()).collect();
     let mut lights_missing_files = 0usize;
     let mut extras = NightFilterExtrasMap::new();
     if request.detail == AstroBinDetail::Full {
@@ -636,6 +689,7 @@ pub fn export(
         total_exposure_seconds,
         unmapped_filters: unmapped_filters.into_iter().collect(),
         lights_missing_files,
+        uncalibrated_lights,
         notes,
         rows,
         csv,

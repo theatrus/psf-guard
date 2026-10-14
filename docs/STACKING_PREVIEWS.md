@@ -948,7 +948,7 @@ Before handing frames to Seiza, PSF Guard excludes:
    including confirmed cloud/obstruction, off-target, tracking-loss, and
    corroborated no-solve decisions; and
 4. when **Leave out lights that can't be calibrated** is on (Settings ›
-   Calibration › Stacks and WBPP exports, off by default) and calibration is
+   Calibration › Stacks and exports, off by default) and calibration is
    on or automatic, images the library cannot calibrate properly: no
    matching flat, no bias or dark,
    or flats past the age limit,

@@ -76,6 +76,38 @@ pub struct ExportPlan {
     pub without_darks: Vec<String>,
 }
 
+impl ExportPlan {
+    /// One light left out because it cannot be calibrated, and why, for a
+    /// summary that counts them: "acc_0001.fits: No matching flat".
+    pub fn uncalibrated_example(&self) -> Option<String> {
+        self.uncalibrated
+            .first()
+            .map(|(_, name, reason)| format!("{name}: {reason}"))
+    }
+
+    /// The lights left out because they cannot be calibrated, one per line
+    /// with why, for an export that carries a note beside its frames.
+    /// `None` when none was.
+    pub fn uncalibrated_note(&self) -> Option<String> {
+        if self.uncalibrated.is_empty() {
+            return None;
+        }
+        let mut note = format!(
+            "{} light(s) that can't be calibrated were left out of this export, as stacks \
+             leave them out (Settings > Calibration > Stacks and exports > Leave out lights \
+             that can't be calibrated):\n\n",
+            self.uncalibrated.len()
+        );
+        for (id, name, reason) in &self.uncalibrated {
+            note.push_str(&format!("{name} (image {id}): {reason}\n"));
+        }
+        Some(note)
+    }
+}
+
+/// The note a zip export carries when it left lights out.
+pub const UNCALIBRATED_NOTE: &str = "LEFT-OUT-UNCALIBRATED.txt";
+
 /// How an export arranges its files under the destination root.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -212,17 +244,10 @@ pub struct ExportOptions {
     /// How the destination tree is arranged.
     pub layout: ExportLayout,
     /// Leave out lights that cannot be calibrated properly, as stacks do
-    /// when **Leave out lights that can't be calibrated** is on. Callers
-    /// pass [`exclude_uncalibrated_for`].
+    /// when **Leave out lights that can't be calibrated** is on. Every
+    /// export, in either layout, passes
+    /// [`crate::calibration::exclude_uncalibrated_enabled`].
     pub exclude_uncalibrated: bool,
-}
-
-/// Whether an export in this layout leaves out the lights stacks leave
-/// out. A WBPP export does when the setting is on, since WBPP integrates
-/// every light it is handed; the plain layout is a copy of the catalog and
-/// keeps them.
-pub fn exclude_uncalibrated_for(layout: ExportLayout) -> bool {
-    layout == ExportLayout::Wbpp && crate::calibration::exclude_uncalibrated_enabled()
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -245,6 +270,13 @@ pub struct ExportSummary {
     pub missing: usize,
     pub errors: usize,
     pub bytes: u64,
+    /// Lights left out because they cannot be calibrated properly, as
+    /// stacks leave them out ([`ExportPlan::uncalibrated`]).
+    #[serde(default)]
+    pub uncalibrated: usize,
+    /// One of them and why: "acc_0001.fits: No matching flat".
+    #[serde(default)]
+    pub uncalibrated_example: Option<String>,
 }
 
 /// Make a name safe as a single path component (target and filter names are
@@ -614,6 +646,8 @@ pub fn execute_plan_with(
     let mut summary = ExportSummary {
         planned: plan.items.len(),
         missing: plan.missing.len(),
+        uncalibrated: plan.uncalibrated.len(),
+        uncalibrated_example: plan.uncalibrated_example(),
         ..Default::default()
     };
 
@@ -1429,11 +1463,15 @@ mod tests {
             }
 
             fn plan(&self, exclude_uncalibrated: bool) -> ExportPlan {
+                self.plan_in(ExportLayout::Wbpp, exclude_uncalibrated)
+            }
+
+            fn plan_in(&self, layout: ExportLayout, exclude_uncalibrated: bool) -> ExportPlan {
                 plan_export(
                     &self.conn,
                     &[self.dir.path().to_string_lossy().into_owned()],
                     &ExportOptions {
-                        layout: ExportLayout::Wbpp,
+                        layout,
                         exclude_uncalibrated,
                         ..Default::default()
                     },
@@ -1771,13 +1809,9 @@ mod tests {
             );
         }
 
-        /// With the stacks' setting on, a light whose missing flat is
-        /// flagged stays out of the export, as it stays out of a stack. A
-        /// rig that only checks for it, or not at all, exports the light.
-        #[test]
-        fn an_export_leaves_out_the_lights_a_stack_leaves_out() {
-            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-            // The library holds flats for this camera, none at the light's angle.
+        /// A light whose missing flat is flagged: the library holds flats
+        /// for this camera, none at the light's angle.
+        fn light_without_a_flat() -> Library {
             let mut library = Library::new(&[LIGHT_AT, "ROTATANG=                100.0"]);
             library.frames(
                 "flat",
@@ -1786,20 +1820,95 @@ mod tests {
                 2,
                 &["ROTATANG=                110.0"],
             );
+            library
+        }
+
+        /// With **Leave out lights that can't be calibrated** on, every
+        /// export leaves out a light whose gap is flagged, in either layout,
+        /// as a stack does, and says how many and why. Off, or with the
+        /// check at Check only or Off, the light goes.
+        #[test]
+        fn every_export_leaves_out_the_lights_a_stack_leaves_out() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let library = light_without_a_flat();
             let rig = library.rig();
-            let light = "lights/M42_Trapezium/Ha/acc_Ha_0001.fits".to_string();
+            for (layout, light) in [
+                (
+                    ExportLayout::Standard,
+                    "M42_Trapezium/LIGHT/Ha/acc_Ha_0001.fits",
+                ),
+                (
+                    ExportLayout::Wbpp,
+                    "lights/M42_Trapezium/Ha/acc_Ha_0001.fits",
+                ),
+            ] {
+                let light = light.to_string();
 
-            // Kept unless the setting asks.
-            let plan = library.plan(false);
-            assert!(destinations(&plan).contains(&light), "{plan:?}");
-            assert!(plan.uncalibrated.is_empty());
+                // Kept unless the setting asks.
+                let plan = library.plan_in(layout, false);
+                assert!(destinations(&plan).contains(&light), "{layout:?}: {plan:?}");
+                assert!(plan.uncalibrated.is_empty(), "{layout:?}");
+                assert_eq!(plan.uncalibrated_note(), None);
 
+                let plan = library.plan_in(layout, true);
+                assert!(plan.items.is_empty(), "{layout:?}: {plan:?}");
+                assert_eq!(plan.uncalibrated.len(), 1, "{layout:?}: {plan:?}");
+                let (id, name, reason) = &plan.uncalibrated[0];
+                assert_eq!((*id, name.as_str()), (1, "acc_Ha_0001.fits"));
+                assert!(reason.starts_with("No matching flat"), "{reason}");
+                // The summary every export reports, and the note a download
+                // carries, say how many and why.
+                let dest = tempfile::tempdir().unwrap();
+                let summary =
+                    execute_plan_with(&plan, dest.path(), Placement::Copy, false, &mut |_, _| {});
+                assert_eq!(summary.uncalibrated, 1, "{layout:?}");
+                let example = summary.uncalibrated_example.unwrap();
+                assert!(
+                    example.starts_with("acc_Ha_0001.fits: No matching flat"),
+                    "{example}"
+                );
+                let note = plan.uncalibrated_note().unwrap();
+                assert!(
+                    note.starts_with("1 light(s) that can't be calibrated were left out"),
+                    "{note}"
+                );
+                assert!(
+                    note.contains("acc_Ha_0001.fits (image 1): No matching flat"),
+                    "{note}"
+                );
+
+                for mode in ["advisory", "off"] {
+                    let _rules = RulesInForce::with(
+                        &[],
+                        &[(rig.as_str(), "Test rig", &[("check_no_flat", json!(mode))])],
+                    );
+                    let plan = library.plan_in(layout, true);
+                    assert!(
+                        destinations(&plan).contains(&light),
+                        "{layout:?} {mode}: {plan:?}"
+                    );
+                    assert!(plan.uncalibrated.is_empty(), "{layout:?} {mode}: {plan:?}");
+                    // The check matters to which lights went, so it is named.
+                    assert!(
+                        plan.calibration_settings
+                            .iter()
+                            .any(|line| line.starts_with("No matching flat")
+                                && line.ends_with("(for Test rig)")),
+                        "{layout:?} {mode}: {plan:?}"
+                    );
+                    // An export that keeps such lights has no use for it.
+                    assert!(
+                        library
+                            .plan_in(layout, false)
+                            .calibration_settings
+                            .is_empty(),
+                        "{layout:?} {mode}"
+                    );
+                }
+            }
+
+            // The WBPP runner says so too.
             let plan = library.plan(true);
-            assert!(plan.items.is_empty(), "{plan:?}");
-            assert_eq!(plan.uncalibrated.len(), 1, "{plan:?}");
-            let (id, name, reason) = &plan.uncalibrated[0];
-            assert_eq!((*id, name.as_str()), (1, "acc_Ha_0001.fits"));
-            assert!(reason.starts_with("No matching flat"), "{reason}");
             let script = wbpp::shell_script(&plan, &wbpp::WbppScriptSpec::default());
             assert!(
                 script.contains("# 1 light that can't be calibrated was left out, as stacks leave"),
@@ -1809,26 +1918,82 @@ mod tests {
                 script.contains("acc_Ha_0001.fits: No matching flat"),
                 "{script}"
             );
+        }
+
+        /// The AstroBin acquisition counts only the lights a stack would
+        /// integrate when the setting is on, and says why one is missing.
+        #[test]
+        fn the_astrobin_export_leaves_out_the_lights_a_stack_leaves_out() {
+            use crate::astrobin::{AstroBinDetail, AstroBinExportRequest};
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let library = light_without_a_flat();
+            // AstroBin counts a light by its exposure, from the catalog.
+            let path = library.dir.path().join("acc_Ha_0001.fits");
+            library
+                .conn
+                .execute(
+                    "UPDATE acquiredimage SET metadata = ?1 WHERE Id = 1",
+                    [serde_json::json!({
+                        "FileName": path.display().to_string(),
+                        "ExposureDuration": 300,
+                    })
+                    .to_string()],
+                )
+                .unwrap();
+            let rig = library.rig();
+            let tree = crate::directory_tree::DirectoryTree::build(library.dir.path()).unwrap();
+            let export =
+                |exclude_uncalibrated: bool,
+                 tree: Option<&crate::directory_tree::DirectoryTree>| {
+                    crate::astrobin::export(
+                        &library.conn,
+                        tree,
+                        &std::collections::BTreeMap::new(),
+                        &AstroBinExportRequest {
+                            target_id: Some(1),
+                            detail: AstroBinDetail::Essentials,
+                            exclude_uncalibrated,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()
+                };
+
+            let kept = export(false, Some(&tree));
+            assert_eq!((kept.frames, kept.uncalibrated_lights), (1, 0));
+
+            let left_out = export(true, Some(&tree));
+            assert_eq!((left_out.frames, left_out.uncalibrated_lights), (0, 1));
+            assert!(
+                left_out.notes.iter().any(|note| note.starts_with(
+                    "1 light(s) that can't be calibrated were left out, as stacks leave them out"
+                ) && note
+                    .contains("acc_Ha_0001.fits: No matching flat")),
+                "{:?}",
+                left_out.notes
+            );
+
+            // Without the folders a light can't be judged, and the export says so.
+            let unjudged = export(true, None);
+            assert_eq!(unjudged.frames, 1);
+            assert!(
+                unjudged
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("could not be left out")),
+                "{:?}",
+                unjudged.notes
+            );
 
             for mode in ["advisory", "off"] {
                 let _rules = RulesInForce::with(
                     &[],
                     &[(rig.as_str(), "Test rig", &[("check_no_flat", json!(mode))])],
                 );
-                let plan = library.plan(true);
-                assert!(destinations(&plan).contains(&light), "{mode}: {plan:?}");
-                assert!(plan.uncalibrated.is_empty(), "{mode}: {plan:?}");
-                // The check matters to which lights went, so the runner names it.
-                assert!(
-                    plan.calibration_settings
-                        .iter()
-                        .any(|line| line.starts_with("No matching flat")
-                            && line.ends_with("(for Test rig)")),
-                    "{mode}: {plan:?}"
-                );
-                // An export that keeps such lights has no use for it.
-                assert!(
-                    library.plan(false).calibration_settings.is_empty(),
+                let export = export(true, Some(&tree));
+                assert_eq!(
+                    (export.frames, export.uncalibrated_lights),
+                    (1, 0),
                     "{mode}"
                 );
             }

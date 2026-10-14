@@ -143,8 +143,13 @@ pub fn main() -> Result<()> {
             }
 
             let detail: AstroBinDetail = detail.into();
-            // Only full detail reads frames, so only it needs the folders.
-            let tree = if detail == AstroBinDetail::Full {
+            // Count calibration frames, and judge which lights can't be
+            // calibrated, by the settings the app matches with.
+            crate::calibration::configure(reg.as_ref().and_then(|r| r.calibration.as_ref()));
+            let exclude_uncalibrated = crate::calibration::exclude_uncalibrated_enabled();
+            // Full detail reads frames, and so does leaving out the lights
+            // that can't be calibrated; only they need the folders.
+            let tree = if detail == AstroBinDetail::Full || exclude_uncalibrated {
                 let dirs = match image_dirs {
                     Some(dirs) if !dirs.is_empty() => dirs,
                     _ => reg
@@ -172,8 +177,6 @@ pub fn main() -> Result<()> {
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
             )
             .with_context(|| format!("opening database at {}", db_path.display()))?;
-            // Count calibration frames by the settings the app matches with.
-            crate::calibration::configure(reg.as_ref().and_then(|r| r.calibration.as_ref()));
             let export = crate::astrobin::export(
                 &conn,
                 tree.as_ref(),
@@ -183,6 +186,7 @@ pub fn main() -> Result<()> {
                     target_id,
                     include_pending,
                     detail,
+                    exclude_uncalibrated,
                 },
             )?;
             match &output {
@@ -303,9 +307,7 @@ pub fn main() -> Result<()> {
                 target_filter: target,
                 filter_name: filter,
                 layout: layout.into(),
-                exclude_uncalibrated: crate::commands::export::exclude_uncalibrated_for(
-                    layout.into(),
-                ),
+                exclude_uncalibrated: crate::calibration::exclude_uncalibrated_enabled(),
                 ..Default::default()
             };
             let placement = if link && placement == crate::cli::ExportPlacementArg::Copy {

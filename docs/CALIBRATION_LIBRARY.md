@@ -639,12 +639,13 @@ reason. **Reject N lights** then sets them Rejected with the reason, so
 Target Scheduler shoots them again. It refuses, and asks for a new check,
 when the list changed after it was shown.
 
-Stacks keep such lights unless **Settings › Calibration › Stacks and WBPP
-exports › Leave out lights that can't be calibrated** is on. With it on, and
-calibration on or automatic, stack previews leave them out, so they never mix
-with properly calibrated frames: the stack card counts them under **can't
-calibrate** and each frame's decision gives the reason. WBPP exports and runs
-leave the same lights out (see [Export](#export)).
+Stacks keep such lights unless **Settings › Calibration › Stacks and exports ›
+Leave out lights that can't be calibrated** is on. With it on, and calibration
+on or automatic, stack previews leave them out, so they never mix with properly
+calibrated frames: the stack card counts them under **can't calibrate** and
+each frame's decision gives the reason. Every export leaves the same lights
+out, and says how many and why: both export layouts, WBPP runs, the CLI, and
+the AstroBin acquisition export (see [Export](#export)).
 
 ### Calibration health
 
@@ -1008,12 +1009,18 @@ Matching follows the settings in force for each light's rig (see [Tune the
 checks](#tune-the-checks)); the CLI reads them from the registry. The flat
 rotation, focal length and session limits decide which flats land in a light's
 session folder, the dark settings decide which darks go and whether any do, and
-a master from other software goes only when its setting uses it. With **Leave
-out lights that can't be calibrated** on, a WBPP export, like a stack, leaves
-out the lights whose gap is flagged; a check set to **Check only** or **Off**
-lets them go. The grouped-by-target layout keeps every light. The runner
-scripts list the settings that differ from the defaults, the rigs that export
-no darks, and the lights left out. An export into a folder that already holds
+a master from other software goes only when its setting uses it.
+
+With **Leave out lights that can't be calibrated** on, every export leaves out
+the lights a stack would, in either layout and from the dialog, the server
+export directory, a download or the CLI: those whose gap is flagged. A check
+set to **Check only** or **Off** lets them go. Each export says how many it
+left out, with one and its reason: the export's summary, the CLI's output, a
+`LEFT-OUT-UNCALIBRATED.txt` note listing every one in a download, and the WBPP
+runner scripts.
+
+The runner scripts also list the settings that differ from the defaults and
+the rigs that export no darks. An export into a folder that already holds
 an earlier one keeps the earlier files, and WBPP scans each frame folder whole,
 so the runner warns when it finds frames this export did not place; remove
 them or export to an empty folder.

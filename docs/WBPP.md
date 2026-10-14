@@ -46,7 +46,8 @@ focal length and session limits decide which flats share a light's
 `SESSION_<night>` folder; dark temperature, reach and choice decide its darks;
 a rig set to do without darks gets none; and masters from other software
 follow their setting. With **Leave out lights that can't be calibrated** on,
-the lights a stack would leave out stay out of the export or run too. The
+the lights a stack would leave out stay out of the export or run, as they do
+out of every export. The
 runner scripts list the settings that differ from the defaults, the rigs that
 export no darks, and the lights left out; the run dialog shows the same. A run
 always plans afresh into a new folder. An export into a folder that already

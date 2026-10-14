@@ -955,7 +955,7 @@ async fn launch(
         target_id: req.target_id,
         filter_name: req.filter_name.clone(),
         layout: ExportLayout::Wbpp,
-        exclude_uncalibrated: crate::commands::export::exclude_uncalibrated_for(ExportLayout::Wbpp),
+        exclude_uncalibrated: crate::calibration::exclude_uncalibrated_enabled(),
         ..Default::default()
     };
     let job_ctx = ctx.clone();

@@ -1944,6 +1944,8 @@ export interface AstroBinExport {
   /** Filter names with no AstroBin id yet; their `filter` cell is blank. */
   unmapped_filters: string[];
   lights_missing_files: number;
+  /** Lights left out because they can't be calibrated; `notes` says why. */
+  uncalibrated_lights?: number;
   notes: string[];
 }
 
@@ -2142,6 +2144,10 @@ export interface ExportSummary {
   missing: number;
   errors: number;
   bytes: number;
+  /** Lights left out because they can't be calibrated, as stacks leave them out. */
+  uncalibrated?: number;
+  /** One of them and why: "acc_0001.fits: No matching flat". */
+  uncalibrated_example?: string | null;
 }
 
 /** Progress of the singleton per-DB server export job. */

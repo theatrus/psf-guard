@@ -365,7 +365,8 @@
   light's Calibration panel names the limits it was checked by, who set
   them, and what a setting kept from being flagged, and opens its rig's
   settings. The defaults are the limits used before. WBPP exports and runs,
-  and `psf-guard export`, match by the same settings; with **Leave out
-  lights that can't be calibrated** on, they leave out the lights a stack
-  would. The runner scripts list the settings in force and warn about frames
-  an earlier export left in the folder.
+  and `psf-guard export`, match by the same settings. With **Leave out
+  lights that can't be calibrated** on, every export leaves out the lights a
+  stack would, in either layout, from the CLI and in the AstroBin export,
+  and says how many and why. The WBPP runner scripts list the settings in
+  force and warn about frames an earlier export left in the folder.

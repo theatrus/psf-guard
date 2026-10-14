@@ -2149,6 +2149,37 @@ pub fn calibration_gap(
     .map(|gap| gap.reason))
 }
 
+/// [`calibration_gap`] for many lights from one read of the library, for
+/// an export that judges every light it counts.
+pub(crate) struct GapJudge {
+    snapshot: LibrarySnapshot,
+    flats: Vec<CalibrationFrame>,
+    night_boundary: i64,
+}
+
+impl GapJudge {
+    pub(crate) fn load(conn: &Connection, night_boundary: i64) -> Result<Self> {
+        let snapshot = LibrarySnapshot::load(conn)?;
+        let flats = snapshot.of_kind(CalibrationKind::Flat).cloned().collect();
+        Ok(Self {
+            snapshot,
+            flats,
+            night_boundary,
+        })
+    }
+
+    /// Why `light` cannot be calibrated properly, as a stack would judge it.
+    pub(crate) fn gap(&self, light: &FrameMeta) -> Result<Option<String>> {
+        let selected = self.snapshot.select(light);
+        Ok(calibration_gaps(light, &selected, self.night_boundary, || {
+            Ok(self.flats.as_slice())
+        })?
+        .into_iter()
+        .find(|gap| gap.mode == CheckMode::Flag)
+        .map(|gap| gap.reason))
+    }
+}
+
 /// One way a light cannot be calibrated properly, and what its rules make
 /// of it.
 #[derive(Debug, Clone, PartialEq)]
@@ -12850,7 +12881,8 @@ pub(crate) mod tests {
 
     // ---------- Tunable checks ----------
 
-    /// Put settings in force for one test and the defaults back after it.
+    /// Put settings in force for one test, on its own thread only, and the
+    /// process's back after it. Tests running beside it never see them.
     pub(crate) struct RulesInForce;
 
     /// Settings by key.
@@ -12871,7 +12903,7 @@ pub(crate) mod tests {
                     .map(|(key, value)| (key.to_string(), value.clone()))
                     .collect()
             };
-            rules::set_rule_book(RuleBook::new(
+            rules::set_test_rule_book(Some(RuleBook::new(
                 layer(global),
                 rigs.iter()
                     .map(|(uuid, name, values)| {
@@ -12884,14 +12916,14 @@ pub(crate) mod tests {
                         )
                     })
                     .collect(),
-            ));
+            )));
             Self
         }
     }
 
     impl Drop for RulesInForce {
         fn drop(&mut self) {
-            rules::set_rule_book(RuleBook::default());
+            rules::set_test_rule_book(None);
         }
     }
 

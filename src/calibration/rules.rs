@@ -1301,8 +1301,27 @@ pub fn light_rig_uuid(light: &FrameMeta) -> String {
 static BOOK: LazyLock<RwLock<Arc<RuleBook>>> =
     LazyLock::new(|| RwLock::new(Arc::new(RuleBook::default())));
 
+#[cfg(test)]
+thread_local! {
+    /// Settings one test put in force for itself, seen only on its own
+    /// thread, so the tests running beside it keep the defaults.
+    static TEST_BOOK: std::cell::RefCell<Option<Arc<RuleBook>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Put settings in force for the calling test's thread alone, or `None`
+/// to go back to the process's.
+#[cfg(test)]
+pub(crate) fn set_test_rule_book(book: Option<RuleBook>) {
+    TEST_BOOK.with(|slot| *slot.borrow_mut() = book.map(Arc::new));
+}
+
 /// The settings in force.
 pub fn rule_book() -> Arc<RuleBook> {
+    #[cfg(test)]
+    if let Some(book) = TEST_BOOK.with(|slot| slot.borrow().clone()) {
+        return book;
+    }
     Arc::clone(&BOOK.read().unwrap_or_else(|poisoned| poisoned.into_inner()))
 }
 

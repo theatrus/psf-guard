@@ -45,7 +45,7 @@ describe('CalibrationMatchingSettings', () => {
     expect(screen.getByLabelText('Dark reach')).toHaveAttribute('placeholder', '183');
     expect(screen.getByLabelText('Dark choice')).toHaveValue('complete');
     expect(screen.getByLabelText('No matching flat')).toHaveValue('flag');
-    for (const legend of ['Matching', 'Dark masters', 'Flat masters', 'Light checks', 'Stacks and WBPP exports']) {
+    for (const legend of ['Matching', 'Dark masters', 'Flat masters', 'Light checks', 'Stacks and exports']) {
       expect(screen.getByRole('group', { name: legend })).toBeInTheDocument();
     }
     expect(screen.getByText(/Nothing is rebuilt/)).toBeInTheDocument();
@@ -179,6 +179,8 @@ describe('CalibrationMatchingSettings', () => {
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
     const exclude = await screen.findByRole('checkbox', { name: /Leave out lights that can't be calibrated/ });
     expect(exclude).not.toBeChecked();
+    // One setting for stacks and every export alike.
+    expect(screen.getByText(/Stacks, WBPP runs and every export leave them out/)).toBeInTheDocument();
     fireEvent.click(exclude);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(saved).toMatchObject({ exclude_uncalibrated: true }));
