@@ -75,7 +75,10 @@ the middle across a half degree.
 
 The filters narrow the sessions and their frames: rig, type, filter,
 exposure, a temperature range, a range of nights, the grade, whether the
-frame is kept out, and frames whose file is not on disk. The session list
+frame is kept out, and frames whose file is not on disk. A frame the catalog
+records outside the database's image and calibration folders, as a catalog
+synced from another machine may, counts as not on disk: the server never
+reads it. The session list
 shows the newest night first, each session with its frames counted by grade.
 Choosing a session shows its frames as a strip of small pictures, in the
 order they were shot unless **Order** says otherwise, and the first one in

@@ -8,8 +8,11 @@
 //! reads every couple of seconds; the results are whatever WBPP wrote below
 //! the work folder, listed and downloadable when it exits.
 //!
-//! Starting a run launches a program on the server, so it sits behind the
-//! database-management gate, as does naming where PixInsight is.
+//! An editor starts, queues, cancels and publishes runs. The program and
+//! the runs folder come from the PixInsight settings, which only the
+//! database-management gate may change; a run folder outside that folder,
+//! or reading a run's files, follows the same rules (see
+//! [`start_wbpp_run`] and [`get_wbpp_run_file`]).
 
 use axum::{
     extract::{Path as AxumPath, State},
@@ -271,6 +274,47 @@ fn settings_response(settings: PixInsightSettings) -> PixInsightSettingsResponse
         ready,
         runs_dir: settings.runs_dir,
         runs_dir_free_bytes,
+    }
+}
+
+/// The folder runs go in when a request names none: the settings' runs
+/// folder, else the database's export directory, else the stack root.
+pub fn runs_folder(
+    settings_runs_dir: Option<&str>,
+    export_dir: Option<&Path>,
+    stack_root: &Path,
+) -> PathBuf {
+    if let Some(root) = settings_runs_dir
+        .map(str::trim)
+        .filter(|root| !root.is_empty())
+    {
+        return PathBuf::from(root);
+    }
+    if let Some(export_dir) = export_dir {
+        return export_dir.join("wbpp");
+    }
+    stack_root.join(crate::server::storage::WBPP_RUNS)
+}
+
+/// Whether `path` lies inside `folder`: lexically, with no `..` to climb
+/// out, and once links are resolved in the part of it that exists.
+fn within_folder(path: &Path, folder: &Path) -> bool {
+    let plain = path.is_absolute()
+        && !path
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        && path.starts_with(folder);
+    if !plain {
+        return false;
+    }
+    match dunce::canonicalize(folder) {
+        Ok(folder) => path
+            .ancestors()
+            .find(|ancestor| ancestor.exists())
+            .and_then(|ancestor| dunce::canonicalize(ancestor).ok())
+            .is_some_and(|ancestor| ancestor.starts_with(folder)),
+        // A runs folder not made yet holds no link to follow.
+        Err(_) => true,
     }
 }
 
@@ -655,11 +699,34 @@ pub async fn start_wbpp_run(
     ctx: DbContext,
     Json(req): Json<StartWbppRunRequest>,
 ) -> Result<Json<ApiResponse<WbppRunStatusResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     if req.project_id.is_none() && req.target_id.is_none() {
         return Err(AppError::BadRequest(
             "name a project_id or a target_id to stack".into(),
         ));
+    }
+    // An editor runs WBPP in the folders the settings define. A run folder
+    // of the client's choosing is a server path, which takes the
+    // database-management gate.
+    if !state.database_management_allowed()
+        && let Some(requested) = req
+            .work_root
+            .as_deref()
+            .map(str::trim)
+            .filter(|root| !root.is_empty())
+    {
+        let settings = configured(&state)?;
+        let runs = runs_folder(
+            settings.runs_dir.as_deref(),
+            ctx.export_dir.as_deref(),
+            &ctx.stack_root,
+        );
+        if !within_folder(Path::new(requested), &runs) {
+            return Err(AppError::Forbidden(format!(
+                "{requested} is outside the PixInsight runs folder ({}); choosing another \
+                 run folder needs database management",
+                runs.display()
+            )));
+        }
     }
     for param in &req.extra_params {
         if param.contains(',') || param.trim().is_empty() {
@@ -1304,7 +1371,6 @@ pub async fn dismiss_wbpp_run(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<WbppRunStatusResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     {
         let mut s = ctx.wbpp_run.write().unwrap();
         if s.progress.running {
@@ -1335,7 +1401,6 @@ pub async fn remove_queued_wbpp_run(
     ctx: DbContext,
     AxumPath((_db_id, queue_id)): AxumPath<(String, String)>,
 ) -> Result<Json<ApiResponse<WbppRunStatusResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     if state.wbpp_queue.remove(&ctx.id, &queue_id).is_none() {
         return Err(AppError::NotFoundMessage(
             "that run is no longer waiting; it may have started".into(),
@@ -1434,7 +1499,6 @@ pub async fn move_queued_wbpp_run(
     AxumPath(queue_id): AxumPath<String>,
     Json(request): Json<MoveQueuedRunRequest>,
 ) -> Result<Json<ApiResponse<WbppActivity>>, AppError> {
-    require_database_management_allowed(&state)?;
     if !state.wbpp_queue.move_to(&queue_id, request.position) {
         return Err(AppError::NotFound);
     }
@@ -1446,7 +1510,6 @@ pub async fn cancel_wbpp_run(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<WbppRunStatusResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let (running, cancel, pid) = {
         let s = ctx.0.wbpp_run.read().unwrap();
         (s.progress.running, s.cancel.clone(), s.progress.pid)
@@ -1472,7 +1535,6 @@ pub async fn publish_wbpp_run(
     ctx: DbContext,
     Json(request): Json<PublishRequest>,
 ) -> Result<Json<ApiResponse<WbppRunStatusResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
     let Some(process_dir) = ctx.process_dir.clone() else {
         return Err(AppError::BadRequest(
             "This database has no process directory to save masters to. Set one under \
@@ -1545,7 +1607,13 @@ fn file_below(work_dir: &Path, requested: &str) -> Result<PathBuf, AppError> {
         ));
     }
     let path = work_dir.join(relative);
-    if !path.is_file() {
+    // A link inside the run folder may point anywhere: the file must still
+    // be inside once links are resolved.
+    let inside = match (dunce::canonicalize(&path), dunce::canonicalize(work_dir)) {
+        (Ok(file), Ok(folder)) => file.starts_with(folder) && file.is_file(),
+        _ => false,
+    };
+    if !inside {
         return Err(AppError::NotFoundMessage(format!(
             "{requested} is not a file of this run"
         )));
@@ -1776,6 +1844,103 @@ mod tests {
         assert!(file_below(dir.path(), "../secret").is_err());
         assert!(file_below(dir.path(), "/etc/passwd").is_err());
         assert!(file_below(dir.path(), "wbpp-out/master/none.xisf").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_the_run_folder_is_not_a_file_of_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            dir.path().join("log.txt"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("out")).unwrap();
+        assert!(file_below(dir.path(), "log.txt").is_err());
+        assert!(file_below(dir.path(), "out/secret.txt").is_err());
+        // A link that stays inside is fine.
+        std::fs::write(dir.path().join("real.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real.txt"), dir.path().join("alias.txt"))
+            .unwrap();
+        assert!(file_below(dir.path(), "alias.txt").is_ok());
+    }
+
+    #[test]
+    fn a_requested_run_folder_must_stay_in_the_runs_folder() {
+        let runs = tempfile::tempdir().unwrap();
+        let inside = runs.path().join("tonight");
+        assert!(within_folder(&inside, runs.path()), "not made yet");
+        std::fs::create_dir_all(&inside).unwrap();
+        assert!(within_folder(&inside, runs.path()));
+        assert!(!within_folder(
+            &runs.path().join("..").join("x"),
+            runs.path()
+        ));
+        assert!(!within_folder(Path::new("relative/runs"), runs.path()));
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert!(!within_folder(elsewhere.path(), runs.path()));
+        #[cfg(unix)]
+        {
+            // A link inside the runs folder that leads out of it.
+            std::os::unix::fs::symlink(elsewhere.path(), runs.path().join("away")).unwrap();
+            assert!(!within_folder(&runs.path().join("away"), runs.path()));
+            assert!(!within_folder(
+                &runs.path().join("away").join("new"),
+                runs.path()
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn without_management_an_editor_runs_only_in_the_runs_folder() {
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let ctx = DbContext(state.all_databases().remove(0));
+        assert!(!state.database_management_allowed());
+        // Hold the slot, so an accepted start joins the line rather than
+        // looking for PixInsight.
+        assert!(state.wbpp_queue.try_claim());
+        let runs = runs_folder(None, ctx.export_dir.as_deref(), &ctx.stack_root);
+        let start = |work_root: Option<String>| {
+            let state = Arc::clone(&state);
+            let ctx = DbContext(ctx.0.clone());
+            async move {
+                start_wbpp_run(
+                    State(state),
+                    ctx,
+                    Json(StartWbppRunRequest {
+                        work_root,
+                        ..request(3, "IC 447")
+                    }),
+                )
+                .await
+            }
+        };
+        assert!(start(None)
+            .await
+            .unwrap()
+            .0
+            .data
+            .unwrap()
+            .queue_id
+            .is_some());
+        let tonight = runs.join("tonight").display().to_string();
+        assert!(start(Some(tonight)).await.is_ok());
+        let elsewhere = tempfile::tempdir().unwrap();
+        let refused = start(Some(elsewhere.path().display().to_string())).await;
+        assert!(
+            matches!(refused, Err(AppError::Forbidden(_))),
+            "a run folder outside the runs folder needs the gate"
+        );
+
+        // With the gate, a run folder anywhere is the operator's choice.
+        state.set_allow_database_management(true);
+        assert!(start(Some(elsewhere.path().display().to_string()))
+            .await
+            .is_ok());
     }
 
     #[test]

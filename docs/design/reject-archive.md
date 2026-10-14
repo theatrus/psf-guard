@@ -383,8 +383,8 @@ mergeable commit.
   forward.
 - **UI trigger**: not in v1, but eventually a "Move rejected files
   out-of-tree" button on each DB section in the merged Library would
-  close the workflow loop. Gated behind `--allow-database-management`
-  (same gate as the existing CRUD endpoints).
+  close the workflow loop. It needs an editor: files move only within an
+  image folder, so `--allow-database-management` does not apply.
 
 ---
 

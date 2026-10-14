@@ -168,14 +168,20 @@
   whose frames are all graded builds once more, and so do the flats and
   stacks built on it. A newly imported dark set builds twice: screened
   before grading reaches it, then without the screen once it is graded.
-- An editor no longer needs `--allow-database-management` to keep
-  calibration frames out or use them anyway, mark their validity, forget
-  them, clear generated masters, invalidate flat coverage, move targets and
-  exposures, or set a project's exposure grouping or a catalog's AstroBin
-  filter map: these edit catalog rows. The gate now guards what lets a
-  client name a server path or touch files outside the catalog; the
-  authentication guide lists it. Viewers get none of these, and the
-  Calibration page shows them no write buttons.
+- `--allow-database-management` now guards only what lets a client name a
+  server path: registering or changing databases and their folders, storage
+  folders and limits, the PixInsight program and runs folder, a WBPP run
+  folder outside that runs folder, imports from outside the image folders,
+  local exports to a chosen path, and the new-frame and calibrated-copy
+  switches. An editor no longer needs it to keep calibration frames out or
+  use them anyway, mark their validity, forget them, clear masters,
+  invalidate flat coverage, move targets and exposures, set exposure
+  grouping or the AstroBin filter map, fill in GUIDs, run WBPP, install Seiza
+  catalogs, manage and sync with peers, pair clients, or move rejects to the
+  trash and back. Viewers get none of these. Only an editor reads a WBPP
+  run's files, a link in a run folder can no longer lead outside it, and a
+  calibration frame recorded outside the database's folders shows as
+  missing instead of being read.
 - Calibration health catches up on its own. A light whose file was missing
   is judged again once a directory refresh finds it or the image folders
   change. New lights from N.I.N.A. or a CLI regrade are judged once the

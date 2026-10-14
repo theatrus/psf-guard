@@ -142,7 +142,17 @@ The editor can also, with or without the database-management gate below:
 - keep calibration frames out or use them anyway, mark their validity, forget
   them, clear generated masters, and invalidate Target Scheduler flat
   coverage;
-- set a project's exposure grouping and a catalog's AstroBin filter map;
+- set a project's exposure grouping and a catalog's AstroBin filter map, and
+  fill in missing Target Scheduler GUIDs (the catalog file is copied beside
+  itself first);
+- start, queue, cancel and publish WBPP runs in the runs folder the
+  PixInsight settings define, take a run's masters in as stacks, and read a
+  run's files;
+- install Seiza catalogs into the configured catalog folder;
+- add, check, change, or remove sync peers, sync with them, and pair or
+  unpair remote clients;
+- move rejected frames to their image folder's trash, restore them, and
+  empty the trash;
 - write server exports into the database's configured export folder, and
   apply database sync previews.
 
@@ -152,26 +162,28 @@ controls. The menu says who is signed in and holds **Sign out**.
 
 ## The database-management gate
 
-`--allow-database-management` (always on in the desktop app) guards the
-routes that let a client name a path on the server or look around its disk.
-Without it, nobody can add a server path to the registry or explore folders
-through the API. It does not guard editing rows inside a catalog: that is the
-editor's work, above. With the gate on, an editor can also:
+`--allow-database-management` (always on in the desktop app) guards what
+lets a client name a path on the server: a folder the server should read,
+write, list or run a program from. Without it, nobody can add a server path
+through the API, so a server copy cannot be pointed at the rest of its disk.
+It does not guard work inside the folders an operator already defined, nor
+editing rows inside a catalog: that is the editor's work, above. With the
+gate on, an editor can also:
 
-- register, create, or remove databases, and set their image, export,
-  process, and remote-upload folders;
+- register, create, change, or remove databases, and set their image,
+  export, process, and remote-upload folders;
 - import from a folder outside the database's image folders, and write a
   local export to a path of their choosing;
-- choose storage folders and limits, the PixInsight program and WBPP runs
-  folder, start and manage WBPP runs, and save a project's process folder;
-- install Seiza catalogs;
-- add, change, or remove sync peers and pair remote clients;
-- repair missing Target Scheduler GUIDs, which copies the catalog file
-  beside itself;
-- move rejected frames to the reject archive, restore them, or empty it;
+- choose storage folders and limits;
+- set the PixInsight program and WBPP runs folder, and give one run a folder
+  outside that runs folder;
 - change a database's new-frame scanning and calibrated-copy pairing.
 
-A viewer never gets these, gate or not.
+A viewer never gets these, gate or not. Whatever the gate, only an editor
+reads a WBPP run's files, and no route reads a calibration frame from
+outside the database's image and calibration folders: a catalog that
+records a frame elsewhere, as one synced from another machine may, shows it
+as missing.
 
 ## API tokens
 

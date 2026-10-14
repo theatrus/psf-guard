@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
@@ -231,11 +231,6 @@ export default function ActivityChip() {
   const { items, summary, finished, scanErrors, dismissScanError } = useHeaderActivity();
   const scanError = scanErrors[scanErrors.length - 1];
   const access = useAccess();
-  const { data: serverInfo } = useQuery({
-    queryKey: ['serverInfo'],
-    queryFn: apiClient.getServerInfo,
-    staleTime: 5 * 60 * 1000,
-  });
   const queryClient = useQueryClient();
   const action = useMutation({
     mutationFn: runAction,
@@ -313,12 +308,9 @@ export default function ActivityChip() {
     );
   }
 
-  // Stack builds are anyone's who can write; WBPP runs also need the
-  // server's database management, as on the run dialog.
+  // Stack builds and WBPP runs are anyone's who can write.
   const controls: RowControls = {
-    allowed: (item) =>
-      access.canWrite
-      && (item.control?.kind === 'stack' || !!serverInfo?.allow_database_management),
+    allowed: () => access.canWrite,
     run: (next) => {
       // A control was used, so the list stays open after the pointer leaves.
       setPinned(true);

@@ -90,11 +90,6 @@ export default function StacksView() {
   const queryClient = useQueryClient();
   const [wbppOpen, setWbppOpen] = useState(false);
   const access = useAccess();
-  const { data: serverInfo } = useQuery({
-    queryKey: ['serverInfo'],
-    queryFn: apiClient.getServerInfo,
-    staleTime: 5 * 60 * 1000,
-  });
 
   // The same query as Images, so moving between the two reads one cache.
   const { data: images = [], isLoading } = useQuery({
@@ -119,9 +114,10 @@ export default function StacksView() {
     [navigate, searchParams]
   );
 
-  const canManage = access.canWrite && !!serverInfo?.allow_database_management;
-  // WBPP runs write files, so they sit behind database management, as in
-  // the Library.
+  // WBPP runs go in the folders the PixInsight settings define, so an
+  // editor runs them; only choosing another folder takes database
+  // management, and the server says so.
+  const canManage = access.canWrite;
   const { status: wbppStatus } = useWbppRun(canManage ? dbId : null);
   const { data: exportSettings } = useQuery({
     queryKey: ['export-settings'],

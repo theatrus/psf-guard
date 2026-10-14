@@ -4,9 +4,10 @@
 //! sending half; this is the surface that lets someone drive the sending half
 //! from a browser instead of a terminal.
 //!
-//! The key never reaches the browser. It is written once through the
-//! management-gated CRUD route, stored in the registry, and read back only by
-//! this process when it talks to the peer.
+//! The key never reaches the browser. It is written once through the CRUD
+//! route an editor uses, stored in the registry, and read back only by this
+//! process when it talks to the peer. A peer is a network address, not a
+//! server path, so the database-management gate does not apply.
 
 use axum::{
     extract::{Path, State},
@@ -20,7 +21,7 @@ use crate::{
     db_registry::{DbRegistry, PeerEntry},
     server::{
         api::ApiResponse,
-        handlers::{require_database_management_allowed, require_registry_path, AppError},
+        handlers::{require_registry_path, AppError},
         state::AppState,
     },
 };
@@ -113,7 +114,6 @@ pub async fn add_peer(
     // Storing a credential and a URL this server will then send it to is
     // configuration, so it lives behind the same grant as the rest of the
     // registry.
-    require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let mut registry = load_registry(&state)?;
 
@@ -146,7 +146,6 @@ pub async fn update_peer(
     Path(peer_id): Path<String>,
     Json(request): Json<UpsertPeerRequest>,
 ) -> Result<Json<ApiResponse<PeerSummary>>, AppError> {
-    require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let mut registry = load_registry(&state)?;
 
@@ -177,7 +176,6 @@ pub async fn remove_peer(
     State(state): State<Arc<AppState>>,
     Path(peer_id): Path<String>,
 ) -> Result<Json<ApiResponse<bool>>, AppError> {
-    require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let mut registry = load_registry(&state)?;
     let before = registry.peers.len();

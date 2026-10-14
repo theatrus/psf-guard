@@ -37,7 +37,7 @@ them to everyone instead. See [server authentication](AUTHENTICATION.md).
 
 Settings opens on **Databases**, for catalogs and imports. **Catalogs** holds
 the Seiza data packages and **Sync** moves records between catalogs; both need
-database management, and Sync appears once you have a catalog. The other tabs
+an editor, and Sync appears once you have a catalog. The other tabs
 are **Setups**, **Stacking**, **Storage**, **Performance** and **Review**, then
 **Rigs** and **Exposure templates** for Planning, and **Users** on a server with
 accounts.

@@ -203,36 +203,21 @@ async fn put_settings(app: &Router, cookie: &str, body: &str) -> (StatusCode, Va
 }
 
 #[tokio::test]
-async fn project_grouping_takes_an_editor_and_a_folder_takes_database_management() {
-    let grouping = r#"{"split_exposure_groups":false}"#;
-    let folder = r#"{"split_exposure_groups":false,"process_folder":"m31"}"#;
-
-    // A viewer changes neither.
-    let app = app_with_management(auth_config(), true);
+async fn project_settings_take_an_editor_not_database_management() {
+    // Grouping and the remembered process folder are catalog rows; the
+    // folder is one name below the operator's process directory, cleaned
+    // when masters are saved.
+    let body = r#"{"split_exposure_groups":false,"process_folder":"m31"}"#;
+    let app = app_with_management(auth_config(), false);
     let (_, viewer, _) = login(&app, "viewer", "viewer-secret").await;
     assert_eq!(
-        put_settings(&app, &viewer, grouping).await.0,
+        put_settings(&app, &viewer, body).await.0,
         StatusCode::FORBIDDEN
     );
-
-    // Grouping is a catalog row: an editor sets it with management off. A
-    // folder is a path the client names: that takes the gate.
-    let app = app_with_management(auth_config(), false);
     let (_, editor, _) = login(&app, "editor", "editor-secret").await;
-    let (status, body) = put_settings(&app, &editor, grouping).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let (status, body) = put_settings(&app, &editor, folder).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert!(body["error"]
-        .as_str()
-        .unwrap()
-        .contains("database management is disabled"));
-
-    let app = app_with_management(auth_config(), true);
-    let (_, editor, _) = login(&app, "editor", "editor-secret").await;
-    let (status, body) = put_settings(&app, &editor, folder).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["data"]["process_folder"], "m31");
+    let (status, response) = put_settings(&app, &editor, body).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["data"]["process_folder"], "m31");
 }
 
 #[tokio::test]
@@ -768,4 +753,159 @@ async fn editor_manages_all_hashed_users_live() {
     let (status, _, body) = json(&app, remove_self).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["error"].as_str().unwrap().contains("this session"));
+}
+
+/// The whole API with accounts, as the server wires it, over a catalog with
+/// one project, with a registry file for the routes that write one.
+fn whole_api(directory: &tempfile::TempDir, allow_management: bool) -> Router {
+    let catalog = Connection::open_in_memory().unwrap();
+    psf_guard::ts_schema::apply_schema(&catalog).unwrap();
+    catalog
+        .execute(
+            "INSERT INTO project (Id, profileId, name, guid) VALUES (1, 'p', 'M42', 'pg')",
+            [],
+        )
+        .unwrap();
+    let state = Arc::new(AppState::new_for_test(catalog));
+    state.set_server_auth(Some(
+        ServerAuth::from_sources(Some(&auth_config()), &auth_registry(), 3000)
+            .unwrap()
+            .unwrap(),
+    ));
+    state.set_registry_path(Some(directory.path().join("config.json")));
+    state.set_allow_database_management(allow_management);
+    Router::new().nest("/api", psf_guard::server::api_router(state))
+}
+
+#[tokio::test]
+async fn editors_use_the_ungated_tools_without_database_management_and_viewers_cannot() {
+    // None of these take a server path from the client: WBPP runs use the
+    // PixInsight settings' folders, catalogs install into the configured
+    // folder, peers are network addresses, rejects move within an image
+    // folder, and the rest edit catalog rows.
+    let directory = tempfile::tempdir().unwrap();
+    let app = whole_api(&directory, false);
+    let (_, viewer, _) = login(&app, "viewer", "viewer-secret").await;
+    let (_, editor, _) = login(&app, "editor", "editor-secret").await;
+    let requests: Vec<(Method, &str, Option<serde_json::Value>)> = vec![
+        (Method::POST, "/api/db/test/guids/fill", None),
+        (
+            Method::POST,
+            "/api/db/test/wbpp/runs",
+            Some(serde_json::json!({ "project_id": 1 })),
+        ),
+        (
+            Method::POST,
+            "/api/peers",
+            Some(serde_json::json!({ "name": "Scope", "base_url": "http://scope.example:3000" })),
+        ),
+        (Method::POST, "/api/databases/test/pairing-token", None),
+        (
+            Method::POST,
+            "/api/db/test/rejects/removal/preview",
+            Some(serde_json::json!({})),
+        ),
+        (
+            Method::PUT,
+            "/api/db/test/astrobin/filters",
+            Some(serde_json::json!({ "entries": [] })),
+        ),
+        (
+            Method::PUT,
+            "/api/db/test/projects/1/processing-settings",
+            Some(serde_json::json!({ "split_exposure_groups": false, "process_folder": "m42" })),
+        ),
+    ];
+    for (cookie, viewer_asks) in [(&viewer, true), (&editor, false)] {
+        for (method, uri, body) in &requests {
+            let mut request = Request::builder()
+                .method(method.clone())
+                .uri(*uri)
+                .header(COOKIE, cookie.as_str());
+            let body = match body {
+                Some(body) => {
+                    request = request.header("content-type", "application/json");
+                    Body::from(body.to_string())
+                }
+                None => Body::empty(),
+            };
+            let (status, _, response) = json(&app, request.body(body).unwrap()).await;
+            if viewer_asks {
+                assert_eq!(status, StatusCode::FORBIDDEN, "viewer {uri}: {response}");
+            } else {
+                let refused = response["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("database management is disabled"));
+                assert!(
+                    status != StatusCode::FORBIDDEN && !refused,
+                    "editor {uri}: {status} {response}"
+                );
+            }
+        }
+    }
+
+    // A catalog install starts a real download, so only the viewer's
+    // refusal is checked here.
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/astrometry/catalogs/install")
+        .header(COOKIE, viewer.as_str())
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"preset":"solver_lite"}"#))
+        .unwrap();
+    assert_eq!(json(&app, request).await.0, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn paths_stay_behind_the_gate_and_run_files_take_an_editor() {
+    let directory = tempfile::tempdir().unwrap();
+    let app = whole_api(&directory, false);
+    let (_, viewer, _) = login(&app, "viewer", "viewer-secret").await;
+    let (_, editor, _) = login(&app, "editor", "editor-secret").await;
+    let send = |cookie: String, method: Method, uri: String, body: serde_json::Value| {
+        let app = app.clone();
+        async move {
+            let request = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(COOKIE, cookie)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            json(&app, request).await
+        }
+    };
+    // A WBPP run folder of the client's choosing is a server path.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let (status, _, body) = send(
+        editor.clone(),
+        Method::POST,
+        "/api/db/test/wbpp/runs".into(),
+        serde_json::json!({ "project_id": 1, "work_root": elsewhere.path() }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("outside the PixInsight runs folder"));
+    // The PixInsight settings name the program and folders: still gated.
+    let (status, _, _) = send(
+        editor.clone(),
+        Method::PUT,
+        "/api/settings/pixinsight".into(),
+        serde_json::json!({ "binary": "/usr/bin/true" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // A run's files are the operator's run folder: a viewer may not read
+    // them.
+    let (status, _, _) = send(
+        viewer,
+        Method::GET,
+        "/api/db/test/wbpp/runs/current/files/run.log".into(),
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
