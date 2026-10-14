@@ -140,6 +140,16 @@ interface GroupedImageGridProps {
   useLazyImages?: boolean;
 }
 
+/** A date filter bound as the URL keeps it: the day alone when it falls on
+ *  midnight UTC, as the date inputs give it, else the full instant, as a
+ *  link to one night's lights carries it. Both read back as the same
+ *  instant, so changing another filter keeps the night's window. */
+function urlDate(date: Date | null): string {
+  if (!date || Number.isNaN(date.getTime())) return '';
+  const instant = date.toISOString();
+  return instant.endsWith('T00:00:00.000Z') ? instant.slice(0, 10) : instant;
+}
+
 export default function GroupedImageGrid({ useLazyImages = false }: GroupedImageGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Get state from URL hooks
@@ -171,8 +181,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     updateFilters({
       status: filterOptions.status === 'all' ? 'all' : String(filterOptions.status),
       filterNames: filterOptions.filterNames,
-      dateStart: filterOptions.dateRange.start?.toISOString().split('T')[0] || '',
-      dateEnd: filterOptions.dateRange.end?.toISOString().split('T')[0] || '',
+      dateStart: urlDate(filterOptions.dateRange.start),
+      dateEnd: urlDate(filterOptions.dateRange.end),
       searchTerm: filterOptions.searchTerm,
       flags: filterOptions.flags,
       calibration: filterOptions.calibration,
@@ -186,11 +196,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
   const gridScopeKey = JSON.stringify([dbId, projectId, targetId]);
   const organizationNavigationFromRef = useRef<string | null>(null);
-  const { data: serverInfo } = useQuery({
-    queryKey: ['serverInfo'],
-    queryFn: apiClient.getServerInfo,
-    staleTime: 5 * 60 * 1000,
-  });
   const selectionAnchorIdRef = useRef<number | null>(null);
   const selectionBaseIdsRef = useRef<Set<number>>(new Set());
 
@@ -689,7 +694,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     updateFiltersRef.current = updateFilters;
   }, [filters, updateFilters]);
 
+  // Not on mount: dates a link or a reload brought, such as one night's
+  // window from a coverage report, belong to this scope.
+  const datesScope = useRef(`${projectId}:${targetId}`);
   useEffect(() => {
+    const scope = `${projectId}:${targetId}`;
+    if (datesScope.current === scope) return;
+    datesScope.current = scope;
     // Only clear dates if they exist, to avoid infinite loops
     if (filtersRef.current.dateRange.start || filtersRef.current.dateRange.end) {
       updateFiltersRef.current({
@@ -938,7 +949,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 key={`${dbId}:${projectId}`}
                 dbId={dbId}
                 projectId={projectId}
-                canManage={grading.canWrite && !!serverInfo?.allow_database_management}
+                canManage={grading.canWrite}
               />}
             </>
           )}
@@ -989,7 +1000,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               />
             </>
           )}
-          menu={grading.canWrite && serverInfo?.allow_database_management ? (
+          menu={grading.canWrite ? (
             <button
               type="button"
               className="toolbar-menu-item organization-action"

@@ -2118,6 +2118,18 @@ export interface SchedulerSyncGradeCounts {
   transitions: Record<string, number>;
 }
 
+/** PSF Guard's calibration library as a full pull carries it. */
+export interface SchedulerSyncCalibrationCounts {
+  frames: SchedulerSyncTableCounts;
+  grades: SchedulerSyncTableCounts;
+  /** Frames the pull sets to Keep out. */
+  kept_out: number;
+  /** Frames the pull sets to Use anyway. */
+  used_anyway: number;
+  /** Frames whose choice the pull clears, leaving their grade to decide. */
+  cleared: number;
+}
+
 export interface SchedulerSyncResponse {
   kind: SchedulerSyncKind;
   dry_run: boolean;
@@ -2140,6 +2152,8 @@ export interface SchedulerSyncResponse {
   total_updated: number;
   /** Per-entity change lines, capped server-side; absent on old previews. */
   changes?: string[];
+  /** Present only for a full pull; absent on old previews. */
+  calibration?: SchedulerSyncCalibrationCounts | null;
 }
 
 export interface SchedulerSyncPreviewResponse {
@@ -2708,6 +2722,8 @@ export interface ProjectCalibrationReport {
   /** The project's rejected lights, counted whether or not the report includes them. */
   rejected_lights: number;
   rejected_included: boolean;
+  /** Where this catalog's nights split, in seconds after 00:00 UTC. */
+  night_boundary_seconds: number;
 }
 
 export interface CalibrationKindSummary {
@@ -2761,6 +2777,8 @@ export interface ProjectCalibrationGaps {
   checked: number;
   missing_files: number;
   digest: string;
+  /** Where this catalog's nights split, in seconds after 00:00 UTC. */
+  night_boundary_seconds: number;
 }
 
 export interface CalibrationFlatNearMiss {

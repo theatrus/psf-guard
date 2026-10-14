@@ -301,11 +301,10 @@ describe('ActivityChip', () => {
     await waitFor(() => expect(calls).toContain('cancel R'));
   });
 
-  it('shows WBPP runs, and leaves their controls to a server that manages databases', async () => {
+  it('shows WBPP runs, and gives their controls to an editor without database management', async () => {
     mockServer({});
-    let management = false;
     server.use(
-      http.get('/api/info', () => ok({ version: 'test', allow_database_management: management })),
+      http.get('/api/info', () => ok({ version: 'test', allow_database_management: false })),
       http.get('/api/wbpp/activity', () => ok({
         running: [{
           db_id: 'askar', db_name: 'Askar', scope: 'project Bubble', stage: 'running',
@@ -314,18 +313,13 @@ describe('ActivityChip', () => {
         queued: [],
       }))
     );
-    const view = renderChip();
+    renderChip();
     await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(list).toHaveTextContent('Askar · project Bubble');
     expect(list).toHaveTextContent('Running in PixInsight · Calibration · 2 steps done');
-    expect(within(list).queryByRole('button', { name: /Stop WBPP/ })).toBeNull();
-
-    view.unmount();
-    management = true;
-    renderChip();
-    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
-    expect(await screen.findByRole('button', { name: 'Stop WBPP: Askar · project Bubble' })).toBeInTheDocument();
+    // A run uses the folders the PixInsight settings define: an editor's.
+    expect(await within(list).findByRole('button', { name: 'Stop WBPP: Askar · project Bubble' })).toBeInTheDocument();
   });
 
   it('neither lists nor counts an automatic refresh still settling', async () => {

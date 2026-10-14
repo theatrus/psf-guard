@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 /// How often a stop that is still waiting says what it waits for.
 const REPORT_EVERY: Duration = Duration::from_secs(5);
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Shutdown {
     token: CancellationToken,
     /// Work a stop waits for, by a number of its own, with what it is.

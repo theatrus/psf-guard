@@ -1,6 +1,9 @@
 //! Calibration health over HTTP: the Library's list and a project's detail
 //! come from the background pass's kept results only, a result whose key no
-//! longer matches the catalog is not shown, and the next pass replaces it.
+//! longer matches the catalog is not shown, and a view that finds one asks
+//! for a pass, though not more often than every couple of minutes. A pass judges only what changed, reads only the headers of
+//! lights whose file changed, and a directory refresh that finds a light's
+//! file again judges its project again.
 
 use std::io::Write as _;
 use std::sync::Arc;
@@ -192,16 +195,46 @@ async fn wait_for_project(app: &Router) -> Value {
     }
 }
 
+/// Wait until no pass runs over the catalog.
+async fn wait_for_quiet(server: &Server) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, body) = call(&server.app, LIST).await;
+        if body["data"]["running"] == false {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the pass never ended");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Project 1's detail once a pass has judged it as `ready` wants.
+async fn wait_for_detail(app: &Router, ready: impl Fn(&Value) -> bool) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, body) = call(app, DETAIL).await;
+        let health = &body["data"]["health"];
+        if !health.is_null() && ready(health) {
+            return health.clone();
+        }
+        assert!(Instant::now() < deadline, "no such result: {body}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn health_is_shown_only_once_worked_out_and_while_it_still_holds() {
     let server = server();
-    // Nothing is worked out on a request.
+    // Nothing is worked out on a request: the view asks for a pass, which
+    // waits here while interactive work runs.
+    let busy = server.state.begin_interactive_job();
     let (_, body) = call(&server.app, LIST).await;
     assert_eq!(body["data"]["projects"], json!([]));
     let (_, body) = call(&server.app, DETAIL).await;
     assert!(body["data"]["health"].is_null());
+    assert_eq!(body["data"]["running"], true, "the view asked for a pass");
+    drop(busy);
 
-    calibration_health::request(&server.state, &server.database);
     let project = wait_for_project(&server.app).await;
     assert_eq!(project["level"], "poor");
     assert_eq!(project["poor_lights"], 2);
@@ -230,23 +263,16 @@ async fn health_is_shown_only_once_worked_out_and_while_it_still_holds() {
     assert_eq!(body["data"]["lights"], json!([]));
 
     // A pass with nothing changed judges nothing again.
+    wait_for_quiet(&server).await;
+    let work = calibration_health::work_done(&server.database);
+    assert_eq!((work.projects, work.headers_read), (1, 2));
     calibration_health::request(&server.state, &server.database);
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        let (_, body) = call(&server.app, LIST).await;
-        if body["data"]["running"] == false {
-            assert_eq!(
-                body["data"]["projects"][0]["computed_at"],
-                project["computed_at"]
-            );
-            break;
-        }
-        assert!(Instant::now() < deadline, "the pass never ended");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    wait_for_quiet(&server).await;
+    assert_eq!(calibration_health::work_done(&server.database), work);
 
-    // A light rejected since: the kept result no longer holds, so it is
-    // not shown until the next pass.
+    // A light rejected since, as the CLI does it: the kept result no longer
+    // holds, so it is not shown until the next pass replaces it. The view
+    // asked for a pass a moment ago, so it does not ask again so soon.
     let connection = Connection::open(&server.database).unwrap();
     connection
         .execute(
@@ -257,16 +283,51 @@ async fn health_is_shown_only_once_worked_out_and_while_it_still_holds() {
     drop(connection);
     let (_, body) = call(&server.app, LIST).await;
     assert_eq!(body["data"]["projects"], json!([]));
+    assert_eq!(body["data"]["running"], false, "views ask at most so often");
+    // A reject in the app asks for a pass itself.
+    let busy = server.state.begin_interactive_job();
+    calibration_health::request(&server.state, &server.database);
     // The marks keep the last result, and say it is stale, so the grid
     // does not lose them while the next pass runs.
     let (_, body) = call(&server.app, LIGHTS).await;
     assert_eq!(body["data"]["lights"], marked);
     assert_eq!(body["data"]["stale_projects"], json!([1]));
-    calibration_health::request(&server.state, &server.database);
+    drop(busy);
     let project = wait_for_project(&server.app).await;
     assert_eq!(project["poor_lights"], 1);
     let (_, body) = call(&server.app, LIGHTS).await;
     assert_eq!(body["data"]["lights"][0]["image_id"], 1);
     assert_eq!(body["data"]["lights"].as_array().unwrap().len(), 1);
     assert_eq!(body["data"]["stale_projects"], json!([]));
+    // The light still judged kept its header: nothing was read again.
+    wait_for_quiet(&server).await;
+    let after = calibration_health::work_done(&server.database);
+    assert_eq!(after.projects, work.projects + 1);
+    assert_eq!(after.headers_read, work.headers_read);
+}
+
+#[tokio::test]
+async fn a_light_found_again_is_judged_again() {
+    let server = server();
+    let context = server.state.databases.read().unwrap()["rig"].clone();
+    calibration_health::request(&server.state, &server.database);
+    let health = wait_for_detail(&server.app, |health| health["checked"] == 2).await;
+    assert_eq!(health["missing_files"], 0);
+
+    // The share drops one light, and a directory refresh notices: the
+    // catalog is unchanged, but the project is judged again.
+    let images = server._dir.path().join("images");
+    let aside = server._dir.path().join("M42_Ha_001.fits");
+    std::fs::rename(images.join("M42_Ha_001.fits"), &aside).unwrap();
+    context.clear_directory_tree_cache();
+    context.get_directory_tree().unwrap();
+    let health = wait_for_detail(&server.app, |health| health["missing_files"] == 1).await;
+    assert_eq!(health["checked"], 1);
+
+    // It comes back: the next refresh finds it, and nothing is missing.
+    std::fs::rename(&aside, images.join("M42_Ha_001.fits")).unwrap();
+    context.clear_directory_tree_cache();
+    context.get_directory_tree().unwrap();
+    let health = wait_for_detail(&server.app, |health| health["missing_files"] == 0).await;
+    assert_eq!(health["checked"], 2);
 }

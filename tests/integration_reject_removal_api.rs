@@ -232,7 +232,9 @@ async fn rejects_are_previewed_removed_listed_and_restored_over_http() {
 }
 
 #[tokio::test]
-async fn removal_needs_database_management() {
+async fn removal_needs_no_database_management() {
+    // Rejected frames move only between an image folder and its own trash:
+    // an editor's work, with the gate off. Each route reaches its handler.
     let s = server();
     s.state.set_allow_database_management(false);
     for (method, uri, body) in [
@@ -252,6 +254,6 @@ async fn removal_needs_database_management() {
         ("POST", "/api/db/rig/rejects/removed/purge", json!({})),
     ] {
         let (status, body) = call(&s.app, method, uri, body).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {body}");
+        assert_ne!(status, StatusCode::FORBIDDEN, "{uri}: {body}");
     }
 }

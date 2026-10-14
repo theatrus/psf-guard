@@ -7,8 +7,10 @@
 //! filter and rotator angle, for darks and dark-flats the exposure and
 //! sensor temperature, for bias the exposure. A temperature or an angle
 //! drifts, so frames join a session while each sits within a small step of
-//! the next. Its id is a digest of those settings, so it stays the same
-//! while frames are graded or filtered out, and a link to it keeps working.
+//! the next. Its id is a digest of those settings and its middle
+//! temperature or angle rounded to a whole degree, so it stays the same
+//! while frames are graded, filtered out, or join at either end, and a link
+//! to it keeps working.
 
 use super::quality::{self, StoredMeasurement};
 use super::{
@@ -281,7 +283,11 @@ fn assign_sessions(rows: Vec<CalibrationFrameSummary>, boundary: i64) -> Vec<Bro
         .map(|(frame, night)| session_base(frame, night.as_deref()))
         .collect();
     // Within each base, frames sorted by their drift; a gap wider than the
-    // step starts another session, named by where it starts.
+    // step starts another session. A session is named by its middle value
+    // rounded to a whole degree, not by where it starts, so a colder or
+    // warmer frame joining at either end keeps its id (and open links).
+    // Two sessions sit more than a step (at least one degree) apart, so
+    // their rounded middles never agree.
     let mut groups: HashMap<&str, Vec<(f64, f64, usize)>> = HashMap::new();
     for (index, frame) in rows.iter().enumerate() {
         if let Some((value, step)) = drift(frame) {
@@ -294,15 +300,26 @@ fn assign_sessions(rows: Vec<CalibrationFrameSummary>, boundary: i64) -> Vec<Bro
     let mut tags: Vec<String> = vec![String::new(); rows.len()];
     for members in groups.values_mut() {
         members.sort_by(|left, right| left.0.total_cmp(&right.0));
-        let mut start = f64::NAN;
+        let mut runs: Vec<Vec<(f64, usize)>> = Vec::new();
         let mut previous = f64::NAN;
         for &(value, step, index) in members.iter() {
             let joins = previous.is_finite() && value - previous <= step;
             if !joins {
-                start = value;
+                runs.push(Vec::new());
             }
             previous = value;
-            tags[index] = format!("{:.1}", start);
+            if let Some(run) = runs.last_mut() {
+                run.push((value, index));
+            }
+        }
+        for run in runs {
+            // Half up, so a value one degree higher always rounds one
+            // higher.
+            let middle = run[(run.len() - 1) / 2].0;
+            let tag = ((middle + 0.5).floor() as i64).to_string();
+            for (_, index) in run {
+                tags[index] = tag.clone();
+            }
         }
     }
     rows.into_iter()
@@ -1097,6 +1114,27 @@ mod tests {
         let both = sessions(vec![first, second]);
         assert_eq!(alone[0], both[0]);
         assert_eq!(both[0], both[1]);
+    }
+
+    #[test]
+    fn a_session_keeps_its_id_as_colder_frames_join() {
+        let at = |temp: f64| CalibrationFrameSummary {
+            camera_temp: Some(temp),
+            ..summary(CalibrationKind::Dark)
+        };
+        let set = sessions(vec![at(-10.0), at(-9.9), at(-9.8)]);
+        assert!(set.iter().all(|id| *id == set[0]), "{set:?}");
+        // A colder dark lowers where the set starts; an open link to the
+        // set still finds it.
+        let joined = sessions(vec![at(-10.0), at(-9.9), at(-9.8), at(-10.6)]);
+        assert!(joined.iter().all(|id| *id == set[0]), "{joined:?}");
+        let alone = sessions(vec![at(-10.0)]);
+        let colder = sessions(vec![at(-10.0), at(-10.4)]);
+        assert_eq!(alone[0], colder[0]);
+        assert_eq!(colder[0], colder[1]);
+        // Two sets just over a step apart keep apart ids.
+        let apart = sessions(vec![at(-10.0), at(-8.4)]);
+        assert_ne!(apart[0], apart[1]);
     }
 
     #[test]

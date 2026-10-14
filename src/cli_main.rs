@@ -405,7 +405,7 @@ pub fn main() -> Result<()> {
                 ..ScanRules::default()
             }
             .normalized();
-            rules.validate()?;
+            rules.validate(&dirs)?;
             let collected = collect_image_files(&dirs, &rules.path_filter(&dirs)?)?;
             let files = collected.files;
             println!("Found {} FITS file(s); reading headers...", files.len());
@@ -514,10 +514,10 @@ pub fn main() -> Result<()> {
                 .unwrap_or_default();
             rules.exclude.extend(exclude);
             let rules = rules.normalized();
-            rules.validate()?;
             let roots: Vec<PathBuf> = entry
                 .map(|entry| entry.image_dirs.iter().map(PathBuf::from).collect())
                 .unwrap_or_default();
+            rules.validate(&roots)?;
 
             let dirs: Vec<PathBuf> = directories.iter().map(PathBuf::from).collect();
             let collected = collect_image_files(&dirs, &rules.path_filter(&roots)?)?;
@@ -1439,6 +1439,12 @@ pub fn main() -> Result<()> {
                 tc("calibration rigs", &summary.calibration_rigs);
                 tc("rig bindings", &summary.calibration_rig_bindings);
                 tc("calibration FITS", &summary.calibration_frames);
+                tc("calibration grades", &summary.calibration_grades);
+                if let Some(line) =
+                    crate::commands::sync::calibration_choice_line(&summary.calibration_choices)
+                {
+                    println!("    {line}");
+                }
                 tc("calibrated copies", &summary.frame_derivatives);
 
                 // Human-readable byte size.
@@ -1671,6 +1677,7 @@ pub fn main() -> Result<()> {
                     preview_color_default,
                     keep_failed_uploads: app_config.server.keep_failed_uploads(),
                     astrometry_config,
+                    shutdown: None,
                 })
                 .await
             })?;

@@ -6,7 +6,7 @@ import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
 import type { CalibrationExternalMaster, CalibrationHealthFinding, CalibrationHealthLevel, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
 import Dialog from './Dialog';
-import { calibrationGridHref, calibrationPageHref } from './calibration/calibrationLinks';
+import { calibrationGridHref, calibrationPageHref, nightDates, type NightDates } from './calibration/calibrationLinks';
 import './CalibrationReportDialog.css';
 
 interface Props {
@@ -63,14 +63,16 @@ const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.sta
 const lights = (count: number) => `${count.toLocaleString()} light${count === 1 ? '' : 's'}`;
 
 /** Open the Images grid on the lights a calibration level or finding code
- *  covers, in the given filters or all of them. */
-type ShowLights = (calib: string, filterNames: string[]) => void;
+ *  covers, in the given filters or all of them, and in one night or all of
+ *  them. */
+type ShowLights = (calib: string, filterNames: string[], night?: NightDates) => void;
 
 /** The text of a finding as a link to its lights in the Images grid. */
-function LightsLink({ onShow, calib, filterNames, children }: {
+function LightsLink({ onShow, calib, filterNames, night, children }: {
   onShow: ShowLights;
   calib: string;
   filterNames: string[];
+  night?: NightDates;
   children: ReactNode;
 }) {
   return (
@@ -78,7 +80,7 @@ function LightsLink({ onShow, calib, filterNames, children }: {
       type="button"
       className="calibration-report-link"
       title="Show these lights in Images"
-      onClick={() => onShow(calib, filterNames)}
+      onClick={() => onShow(calib, filterNames, night)}
     >
       {children}
     </button>
@@ -116,9 +118,9 @@ function UncalibratedLights({ dbId, projectId, onShow }: { dbId: string; project
   });
   const gaps = check.data;
   const counted = gaps
-    ? Object.entries(gaps.lights.reduce<Record<string, { filter: string; count: number }>>((counts, light) => {
+    ? Object.entries(gaps.lights.reduce<Record<string, { night: string; filter: string; count: number }>>((counts, light) => {
       const key = `${light.night} · ${light.filter || '—'} · ${light.reason}`;
-      counts[key] = { filter: light.filter, count: (counts[key]?.count ?? 0) + 1 };
+      counts[key] = { night: light.night, filter: light.filter, count: (counts[key]?.count ?? 0) + 1 };
       return counts;
     }, {}))
     : [];
@@ -146,9 +148,9 @@ function UncalibratedLights({ dbId, projectId, onShow }: { dbId: string; project
           </p>
           {counted.length > 0 && (
             <ul className="calibration-report-gap-list">
-              {counted.map(([key, { filter, count }]) => (
+              {counted.map(([key, { night, filter, count }]) => (
                 <li key={key}>
-                  <LightsLink onShow={onShow} calib="cannot_calibrate" filterNames={filter ? [filter] : []}>
+                  <LightsLink onShow={onShow} calib="cannot_calibrate" filterNames={filter ? [filter] : []} night={gaps && nightDates(night, gaps.night_boundary_seconds)}>
                     {key}: {count}
                   </LightsLink>
                 </li>
@@ -259,9 +261,9 @@ export default function CalibrationReportDialog({
     onClose();
     navigate(calibrationPageHref(location.search, dbId, projectId));
   };
-  const showLights: ShowLights = (calib, filterNames) => {
+  const showLights: ShowLights = (calib, filterNames, night) => {
     onClose();
-    navigate(calibrationGridHref(location.search, dbId, projectId, calib, filterNames));
+    navigate(calibrationGridHref(location.search, dbId, projectId, calib, filterNames, night));
   };
 
   return (
@@ -348,7 +350,7 @@ export default function CalibrationReportDialog({
                       <tr key={`${night.night}:${filter.filter}:gap`} className="calibration-report-masters">
                         <td />
                         <td colSpan={5} className="missing">
-                          <LightsLink onShow={showLights} calib="cannot_calibrate" filterNames={filter.filter ? [filter.filter] : []}>
+                          <LightsLink onShow={showLights} calib="cannot_calibrate" filterNames={filter.filter ? [filter.filter] : []} night={nightDates(night.night, report.data.night_boundary_seconds)}>
                             {filter.filter}: can't be calibrated · {filter.cannot_calibrate}
                           </LightsLink>
                         </td>

@@ -775,3 +775,39 @@ async fn masters_are_listed_with_their_sources_and_users() {
     .await;
     assert_eq!(status.json()["data"]["statuses"][0]["state"], "error");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_frame_recorded_outside_the_databases_folders_reads_as_missing() {
+    // A catalog synced from another machine can record any path. The file
+    // exists, but outside this database's image and calibration folders,
+    // so no route opens it or says it is there.
+    let server = server();
+    let frames =
+        get_json(&server.app, &format!("{BASE}/frames?per_page=500")).await["frames"].clone();
+    let bias = uuid_of(&frames, "bias-0.fits");
+    let outside = tempfile::tempdir().unwrap();
+    let moved = outside.path().join("bias-0.fits");
+    std::fs::copy(server.root.join("frames").join("bias-0.fits"), &moved).unwrap();
+    let connection = Connection::open(&server.database).unwrap();
+    connection
+        .execute(
+            "UPDATE psf_guard_calibration_frame SET source_path = ?1 WHERE frame_uuid = ?2",
+            rusqlite::params![moved.display().to_string(), bias],
+        )
+        .unwrap();
+    drop(connection);
+
+    let detail = get_json(&server.app, &format!("{BASE}/frames/{bias}")).await;
+    assert_eq!(detail["source_exists"], false);
+    let picture = call(
+        &server.app,
+        "GET",
+        &format!("{BASE}/frames/{bias}/preview"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(picture.status, StatusCode::NOT_FOUND);
+    let missing = get_json(&server.app, &format!("{BASE}/frames?missing=true")).await;
+    assert_eq!(missing["total"], 1);
+    assert_eq!(missing["frames"][0]["frame_uuid"], bias.as_str());
+}

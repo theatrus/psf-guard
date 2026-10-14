@@ -68,11 +68,17 @@ temperature, and for bias the exposure. A temperature or an angle drifts
 while a set is shot, so a frame joins a session while it sits within 1.5 °C
 (darks) or 1° (flats) of the next; bias is not split by temperature, since
 a bias set is often shot while the sensor cools. Nights split as in
-[Validity boundaries](#validity-boundaries).
+[Validity boundaries](#validity-boundaries). A session's address carries
+its middle temperature or angle rounded to a whole degree, so a link to it
+keeps working when a colder or warmer frame joins it, unless that frame moves
+the middle across a half degree.
 
 The filters narrow the sessions and their frames: rig, type, filter,
 exposure, a temperature range, a range of nights, the grade, whether the
-frame is kept out, and frames whose file is not on disk. The session list
+frame is kept out, and frames whose file is not on disk. A frame the catalog
+records outside the database's image and calibration folders, as a catalog
+synced from another machine may, counts as not on disk: the server never
+reads it. The session list
 shows the newest night first, each session with its frames counted by grade.
 Choosing a session shows its frames as a strip of small pictures, in the
 order they were shot unless **Order** says otherwise, and the first one in
@@ -121,7 +127,7 @@ its level, clipped share, noise and spots; for a bias or dark its level,
 spread, noise, row and column banding and hot pixels. Below them are the
 limits the frame crossed, each with its value and the limit.
 
-With database management enabled, the panel can keep the frame out of
+With an editor account, the panel can keep the frame out of
 masters and exports, use a poor one anyway, or clear that choice (see
 [Choosing for yourself](#choosing-for-yourself)), mark which lights it
 serves (see [Validity boundaries](#validity-boundaries)), and forget it. The
@@ -142,7 +148,7 @@ check set aside, one from other software, and one whose file is gone.
 **View** opens the master in the same inspector a stack's **Masters** button
 opens (see [Inspect calibration masters](STACKING_PREVIEWS.md#inspect-calibration-masters)),
 with display stretch, zoom and an unchanged FITS download, but no stack
-needed. With database management enabled, **Clear generated masters**
+needed. With an editor account, **Clear generated masters**
 removes them all while keeping every raw frame and catalog record. It waits
 for any active stack preview; stacks build masters again when they need
 them.
@@ -156,7 +162,7 @@ The NINA plugin sends Target Scheduler's `flathistory` coverage records during
 grade pulls and applied reconciles. Open the database's
 [Calibration page](#browse-the-library) and choose **Scheduler flats**. Filter by target,
 source, filter, or status, then select the suspect coverage records and choose
-**Invalidate coverage** with a reason. This requires database management access.
+**Invalidate coverage** with a reason. This takes an editor account.
 
 The next plugin grade pull or applied reconcile removes those exact, unchanged
 history rows from the source scheduler database and reports the result here.
@@ -320,8 +326,8 @@ side, is recorded and left ungraded. An ungraded frame stays in use.
 
 The calibration page shows each graded frame's grade and main reason, such
 as **Poor · stray light** or **Suspect · noise**, with the numbers behind
-it, and each session counts its frames by grade and those kept out. With
-database management enabled, each frame offers:
+it, and each session counts its frames by grade and those kept out. With an
+editor account, each frame offers:
 
 - **Keep out**: leave the frame out of masters and exports whatever its
   grade, as rejecting does for a light. It is offered for every frame,
@@ -368,8 +374,12 @@ is still caught by a clean set from another night. A lone frame with
 nothing to compare against stays in use. The frame panel gives each measured
 dark's and dark-flat's level and spread in ADU beside its session's. The
 verdict also goes into the frame's `stray_light`
-column, which older PSF Guard builds read. Master building applies the same
-rule to its own inputs, which catches a dark the job has not reached yet.
+column, which older PSF Guard builds read. While some dark in a master's set
+has no grade yet, master building applies the same rule to its own inputs,
+which catches a dark the job has not reached yet. Once every dark in the set
+is graded or chosen, it leaves the grades to decide, so **Use anyway** puts a
+dark back into its master. A master's record lists only the frames it
+combined.
 
 ## Upgrades and backups
 
@@ -692,14 +702,26 @@ Reading every light takes time, so this runs in the background, never on a
 request: after each grading pass (which follows the server start, imports,
 syncs, forgets and remote uploads), when a light's grade changes, and when a
 frame is kept out or used anyway, a validity mark changes, or the
-calibration settings change. It uses the background worker share and waits
-while interactive work runs. The results are kept below the database's cache
-folder, each filed under a key of the library and its grades, the project's
-lights, the calibration settings and the rules, so a project is read again
-only when one of those changed. Accepting a light, or setting it back to
-pending, changes no key; rejecting one does. Until a project is read again,
-a result that no longer holds shows no pill. The image views keep showing its
-marks, so rejecting lights does not clear the rest until the pass ends.
+calibration settings change. A directory refresh and a change of image
+folders start one too, since a light's file may have turned up or moved.
+When the Library or an image view finds a result that no longer holds, as
+after N.I.N.A. writes new lights or the CLI regrades some, it asks for one:
+at most every two minutes per database, not while grading runs (grading asks
+for one when it ends), and not for fifteen minutes after a pass failed.
+It uses the background worker share and waits while interactive work runs;
+a server that stops ends it between lights.
+
+The results are kept below the database's cache folder, each filed under a
+key of the library and its grades, the project's lights, the calibration
+settings and the rules, and beside it where the project's lights were found
+in the image folders. A project is read again only when one of those
+changed, and then only the lights whose file changed are read: each light's
+header is kept, with its file's size and modification time, from the last
+read. Accepting a light, or setting it back to pending, changes no key;
+rejecting one does. Until a project is read again, a result that no longer
+holds shows no pill. The image views keep showing its marks, so rejecting
+lights does not clear the rest until the pass ends; Sequence holds back
+**Poor calibration** in **Select** until then.
 
 ## Stack previews
 
@@ -961,7 +983,10 @@ Scheduler and N.I.N.A. keep working exactly as before, and simply run faster.
 **Merge catalogs** and `sync pull` copy rigs, profile bindings, raw
 calibration-frame records, and their grades. A choice to keep a frame out or
 use it anyway travels too; when both catalogs hold one, the later choice
-wins. They do not copy generated master rows or cached FITS files because
+wins. The preview counts the choices a transfer brings, since each changes
+what the destination's masters are built from. When both machines cataloged
+the same file under different IDs, the destination's choice stays with the
+file. They do not copy generated master rows or cached FITS files because
 those paths belong to the source machine. The destination
 resolves a stale raw path by basename in its configured image folders, then
 builds its own master.

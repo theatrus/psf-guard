@@ -31,7 +31,7 @@ export default function ProjectExposureGrouping({ dbId, projectId, canManage }: 
   const error = save.error ?? settings.error;
   return (
     <div className="project-exposure-grouping" aria-busy={settings.isPending || save.isPending}>
-      <label title={canManage ? 'Project processing setting' : 'Database management access required'}>
+      <label title={canManage ? 'Project processing setting' : 'Your account can view this, not change it'}>
         <input
           type="checkbox"
           checked={settings.data?.split_exposure_groups ?? true}

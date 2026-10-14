@@ -99,8 +99,8 @@ read, below `/api`, as you.
 | `grade_images` | Set `accepted`, `rejected` or `pending` with a reason; returns the grades it replaced | yes |
 | `start_quality_backfill` | Start the background quality scan | yes |
 | `start_import` | Scan the configured folders for new lights and calibration frames | yes |
-| `start_wbpp_run` | Run PixInsight WBPP on a project's or target's accepted lights | yes, plus management |
-| `cancel_wbpp_run` | Stop the running WBPP run | yes, plus management |
+| `start_wbpp_run` | Run PixInsight WBPP on a project's or target's accepted lights | yes |
+| `cancel_wbpp_run` | Stop the running WBPP run | yes |
 | `get_project_scheduler` | A project's Target Scheduler settings, targets and exposure plans | |
 | `get_calibration_library` | Calibration totals: frames and masters, and per rig the count of each kind and the oldest and newest capture | |
 | `get_activity` | Stack builds and WBPP runs across databases, running and queued | |
@@ -129,8 +129,8 @@ read, below `/api`, as you.
 | `start_stack`, `cancel_stack` | Build stack previews for a project, target or filter; stop one | yes |
 | `update_project`, `update_target` | Change scheduler settings; send only the fields to change | yes |
 | `update_exposure_plan`, `create_exposure_plan` | Change or add an exposure plan | yes |
-| `preview_reject_removal` | The rejects removal would take out, with a `digest` | yes, plus management |
-| `apply_reject_removal`, `restore_removed_rejects` | Remove those rejects to the trash with the digest; bring a batch back | yes, plus management |
+| `preview_reject_removal` | The rejects removal would take out, with a `digest` | yes |
+| `apply_reject_removal`, `restore_removed_rejects` | Remove those rejects to the trash with the digest; bring a batch back | yes |
 | `preview_sync`, `apply_sync` | Preview a pull or push between two open databases; apply it | yes |
 | `set_calibration_validity` | Mark calibration frames for later or earlier lights, or clear the mark | yes |
 | `solve_astrometry`, `predict_satellites` | Plate-solve a light; predict satellite crossings and check them in the pixels | yes |

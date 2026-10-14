@@ -190,6 +190,13 @@ describe('SchedulerSyncControls', () => {
               imagedata_bytes: 500,
               total_inserted: 10,
               total_updated: 0,
+              calibration: {
+                frames: counts,
+                grades: { ...counts, updated: 2 },
+                kept_out: 1,
+                used_anyway: 1,
+                cleared: 0,
+              },
             },
           },
           error: null,
@@ -204,6 +211,13 @@ describe('SchedulerSyncControls', () => {
     });
     await user.click(screen.getByRole('button', { name: 'Preview changes' }));
     expect(await screen.findByText(/10 rows will be added/)).toBeInTheDocument();
+    // A Keep out or Use anyway from the source changes the destination's
+    // masters at Apply, so the preview says so.
+    expect(
+      screen.getByText(
+        'Calibration choices: 1 kept out, 1 used anyway. Masters built from these frames change.'
+      )
+    ).toBeInTheDocument();
     expect(body).toMatchObject({
       peer_db_id: 'local',
       kind: 'pull',

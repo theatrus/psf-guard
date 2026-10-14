@@ -118,6 +118,10 @@ export default function TauriSettings({
   // gate is enforced server-side; we mirror it here to hide UI that would
   // just 403.
   const managementAllowed = isTauri || (serverInfo?.allow_database_management ?? false);
+  // What edits a catalog, installs catalogs, syncs, imports from the image
+  // folders or moves rejects needs only an editor: the gate guards server
+  // paths a client names.
+  const canEdit = access.canWrite;
   const [registry, setRegistry] = useState<DbRegistry | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
@@ -882,14 +886,14 @@ export default function TauriSettings({
   const databases = registry?.databases ?? [];
   const hasDatabases = databases.length > 0;
 
-  // Catalogs are management-gated, and sync has nothing to talk about until a
-  // catalog exists — the same conditions that used to hide those sections.
+  // Installing catalogs and syncing take an editor; sync has nothing to
+  // talk about until a catalog exists.
   const visibleTabs: Array<{ id: SettingsTab; label: string }> = [
     { id: 'databases', label: 'Databases' },
-    ...(managementAllowed
+    ...(canEdit
       ? ([{ id: 'catalogs', label: 'Catalogs' }] as const)
       : []),
-    ...(managementAllowed && hasDatabases
+    ...(canEdit && hasDatabases
       ? ([{ id: 'sync', label: 'Sync' }] as const)
       : []),
     // Setups are global display parameters, not filesystem paths, so the tab
@@ -1818,22 +1822,22 @@ export default function TauriSettings({
                       <AstroBinFilterSummary
                         dbId={entry.id}
                         dbName={entry.name}
-                        canManage={managementAllowed}
+                        canManage={canEdit}
                       />
-                      <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={managementAllowed} />
+                      <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
                       <QualityBackfillControls dbId={entry.id} canManage={managementAllowed} />
                       <CalibratedCopiesControls dbId={entry.id} canManage={managementAllowed} />
                       <AutoImportSummary
                         dbId={entry.id}
                         settings={entry.autoimport}
                         onReview={
-                          managementAllowed
+                          canEdit
                             ? (folders) => handleImport(entry, folders)
                             : undefined
                         }
                       />
                     </div>
-                    {managementAllowed && (
+                    {canEdit && (
                       <div className="db-row-actions">
                         <button
                           className="browse-button"
@@ -1843,25 +1847,30 @@ export default function TauriSettings({
                         >
                           {importRunning && importDbId === entry.id ? 'Importing…' : 'Import'}
                         </button>
-                        <PurgeRejectsButton dbId={entry.id} dbName={entry.name} canManage={managementAllowed} disabled={isApplying} />
-                        <button
-                          className="browse-button"
-                          onClick={() => startEdit(entry)}
-                          disabled={isApplying}
-                          aria-label={`Edit ${entry.name}`}
-                          aria-expanded={isEditing}
-                          aria-controls={isEditing ? editorId : undefined}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="remove-button"
-                          onClick={() => handleRemove(entry)}
-                          disabled={isApplying}
-                          title="Remove this database"
-                        >
-                          Remove
-                        </button>
+                        <PurgeRejectsButton dbId={entry.id} dbName={entry.name} canManage={canEdit} disabled={isApplying} />
+                        {/* Editing a database names its folders: the gate. */}
+                        {managementAllowed && (
+                          <>
+                            <button
+                              className="browse-button"
+                              onClick={() => startEdit(entry)}
+                              disabled={isApplying}
+                              aria-label={`Edit ${entry.name}`}
+                              aria-expanded={isEditing}
+                              aria-controls={isEditing ? editorId : undefined}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="remove-button"
+                              onClick={() => handleRemove(entry)}
+                              disabled={isApplying}
+                              title="Remove this database"
+                            >
+                              Remove
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>

@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../../api/client';
+import { useAccess } from '../../auth/access';
 import type { CalibrationSession } from '../../api/types';
 import { useDbProjectTarget } from '../../hooks/useUrlState';
 import { useAllDatabases, useMergedProjects } from '../../hooks/useDatabases';
-import { isTauriApp } from '../../utils/tauri';
 import SchedulerFlatHistory from '../SchedulerFlatHistory';
 import PillSelect from '../toolbar/PillSelect';
 import CalibrationFilters from './CalibrationFilters';
@@ -37,22 +37,55 @@ const TABS: { value: CalibrationTab; label: string }[] = [
  * and the masters built from them. Everything chosen lives in the URL.
  */
 export default function CalibrationPage() {
-  const { dbId } = useDbProjectTarget();
+  const { dbId, projectId } = useDbProjectTarget();
   const { data: databases } = useAllDatabases();
   const state = useCalibrationUrlState();
-  const { setDatabase, resetSelection } = state;
+  const { setDatabase, resetForDatabase, filters, setFilters } = state;
 
   // A page opened without a database takes the first one.
   useEffect(() => {
     if (!dbId && databases && databases.length > 0) setDatabase(databases[0].id);
   }, [databases, dbId, setDatabase]);
-  // Another database chosen in the header: what was chosen in this one
-  // means nothing there.
+
+  // A project in scope opens on its rig: the one whose frames came from the
+  // project's N.I.N.A. profile, when exactly one did, and only when the
+  // library holds more than one rig: with one, the page shows no Rig choice.
+  // A rig chosen this way gives way to the next project's; one a person
+  // chose stays, so choosing All sticks.
+  const summary = useQuery({
+    queryKey: ['db', dbId, 'calibrations'],
+    queryFn: () => apiClient.getCalibrationLibrary(dbId!),
+    enabled: !!dbId,
+  });
+  const { data: projects } = useMergedProjects();
+  const profile = projects.find((project) => project.db_id === dbId && project.id === projectId)?.profile_id;
   const shownDb = useRef(dbId);
+  const openedFor = useRef<string | null>(null);
+  const defaultRig = useRef<string | null>(null);
   useEffect(() => {
-    if (shownDb.current !== null && shownDb.current !== dbId) resetSelection();
-    shownDb.current = dbId;
-  }, [dbId, resetSelection]);
+    let rig = filters.rig;
+    if (shownDb.current !== dbId) {
+      // Another database chosen in the header: what was chosen in this one
+      // means nothing there. Its rig may stay in the URL a moment longer,
+      // so it counts as no one's choice.
+      if (shownDb.current !== null) {
+        resetForDatabase();
+        defaultRig.current = rig ?? null;
+        rig = undefined;
+      }
+      shownDb.current = dbId;
+      // Back in a database, a project opens on its rig again.
+      openedFor.current = null;
+    }
+    const rigs = summary.data?.rigs;
+    const scope = `${dbId}:${projectId}`;
+    if (!dbId || !profile || !rigs || rigs.length < 2 || openedFor.current === scope) return;
+    openedFor.current = scope;
+    if (rig && rig !== defaultRig.current) return;
+    const own = rigs.filter((entry) => entry.profile_ids?.includes(profile));
+    defaultRig.current = own.length === 1 ? own[0].rig_uuid : ALL_RIGS;
+    setFilters({ rig: defaultRig.current });
+  }, [dbId, filters.rig, profile, projectId, resetForDatabase, setFilters, summary.data]);
 
   const database = databases?.find((entry) => entry.id === dbId);
   // The header's project picker chooses the database, as for every view.
@@ -90,36 +123,16 @@ function CalibrationLibrary({
   dbName: string;
   state: ReturnType<typeof useCalibrationUrlState>;
 }) {
-  const { data: serverInfo } = useQuery({
-    queryKey: ['serverInfo'],
-    queryFn: apiClient.getServerInfo,
-    staleTime: 5 * 60 * 1000,
-  });
-  const canManage = isTauriApp() || (serverInfo?.allow_database_management ?? false);
+  // Keep out, validity marks, Forget and Clear masters edit catalog rows:
+  // an editor's work, like grading. The database-management gate guards
+  // paths a client names, which nothing here does.
+  const access = useAccess();
+  const canManage = access.canWrite;
   const actions = useCalibrationActions(dbId);
   const summary = useQuery({
     queryKey: ['db', dbId, 'calibrations'],
     queryFn: () => apiClient.getCalibrationLibrary(dbId),
   });
-
-  // A project in scope opens on its rig: the one whose frames came from the
-  // project's N.I.N.A. profile, when exactly one did. Only while no rig is
-  // in the URL, once per project, so choosing All sticks, and only when the
-  // library holds more than one rig: with one, the page shows no Rig choice.
-  const { projectId } = useDbProjectTarget();
-  const { data: projects } = useMergedProjects();
-  const profile = projects.find((project) => project.db_id === dbId && project.id === projectId)?.profile_id;
-  const { filters, setFilters } = state;
-  const openedFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!profile || !summary.data || summary.data.rigs.length < 2) return;
-    const scope = `${dbId}:${projectId}`;
-    if (openedFor.current === scope) return;
-    openedFor.current = scope;
-    if (filters.rig) return;
-    const own = summary.data.rigs.filter((rig) => rig.profile_ids?.includes(profile));
-    setFilters({ rig: own.length === 1 ? own[0].rig_uuid : ALL_RIGS });
-  }, [dbId, filters.rig, profile, projectId, setFilters, summary.data]);
 
   if (state.tab === 'scheduler') {
     return <SchedulerFlatHistory dbId={dbId} canManage={canManage} />;
@@ -133,7 +146,7 @@ function CalibrationLibrary({
   return (
     <>
       {!canManage && (
-        <p className="calibration-notice">This server is read-only: frames can be viewed, not changed.</p>
+        <p className="calibration-notice">Your account can view frames, not change them.</p>
       )}
       {summary.data && summary.data.frame_count === 0 ? (
         <p className="calibration-empty">
@@ -213,6 +226,10 @@ function CalibrationFrames({
   const frameIndex = frames.findIndex((frame) => frame.frame_uuid === frameUuid);
   const current = detail.data && detail.data.frame_uuid === frameUuid ? detail.data : undefined;
   const shownDetail = frameUuid ? detail.data : undefined;
+  // Whether the frame can be set against its session. While the next
+  // frame's detail loads, the last one of the same session answers, so
+  // stepping through a session in compare mode stays in it.
+  const compare = (current ?? (shownDetail?.session === sessionId ? shownDetail : undefined))?.compare ?? false;
   const sessionIndex = sessionList.findIndex((entry) => entry.id === sessionId);
 
   const hotkeys = { enabled: !state.master, preventDefault: true };
@@ -229,8 +246,8 @@ function CalibrationFrames({
     if (sessionIndex >= 0 && sessionIndex < sessionList.length - 1) selectSession(sessionList[sessionIndex + 1].id);
   }, hotkeys, [selectSession, sessionIndex, sessionList]);
   useHotkeys('c', () => {
-    if (current?.compare) state.setView(state.view === 'session' ? 'frame' : 'session');
-  }, { enabled: !state.master }, [current?.compare, state.setView, state.view]);
+    if (compare) state.setView(state.view === 'session' ? 'frame' : 'session');
+  }, { enabled: !state.master }, [compare, state.setView, state.view]);
 
   // Keep the chosen session in sight in its list as the keys move it.
   const listRef = useRef<HTMLDivElement>(null);
@@ -335,7 +352,7 @@ function CalibrationFrames({
                 view={state.view}
                 stretch={state.stretch}
                 full={state.full}
-                canCompare={current?.compare ?? false}
+                canCompare={compare}
                 spots={spots}
                 onView={state.setView}
                 onStretch={state.setStretch}
@@ -354,7 +371,7 @@ function CalibrationFrames({
           )}
           {frameIndex >= 0 && frames.length > 1 && (
             <p className="calibration-muted calibration-hint">
-              Frame {frameIndex + 1} of {frames.length} · ← → frames · ↑ ↓ sessions{current?.compare ? ' · C compare' : ''}
+              Frame {frameIndex + 1} of {frames.length} · ← → frames · ↑ ↓ sessions{compare ? ' · C compare' : ''}
             </p>
           )}
         </div>

@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use super::api::ApiResponse;
 use super::database_context::{open_scheduler_connection, open_scheduler_connection_with_flags};
 use super::extract::DbContext;
-use super::handlers::{require_database_management_allowed, AppError};
+use super::handlers::AppError;
 use super::state::AppState;
 
 const MAX_IMAGES: usize = 50_000;
@@ -90,10 +90,8 @@ pub struct OrganizationTarget {
 }
 
 pub async fn destinations(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<OrganizationDestinations>>, AppError> {
-    require_database_management_allowed(&state)?;
     let path = ctx.database_path.clone();
     let choices = tokio::task::spawn_blocking(move || {
         let mut conn = open_scheduler_connection_with_flags(
@@ -142,11 +140,9 @@ fn destination_choices(conn: &Connection) -> Result<OrganizationDestinations, Ap
 }
 
 pub async fn preview(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(operation): Json<OrganizationOperation>,
 ) -> Result<Json<ApiResponse<OrganizationPreview>>, AppError> {
-    require_database_management_allowed(&state)?;
     let path = ctx.database_path.clone();
     let preview = tokio::task::spawn_blocking(move || {
         let mut conn = open_scheduler_connection_with_flags(
@@ -169,7 +165,6 @@ pub async fn apply(
     ctx: DbContext,
     Json(request): Json<OrganizationApplyRequest>,
 ) -> Result<Json<ApiResponse<OrganizationResult>>, AppError> {
-    require_database_management_allowed(&state)?;
     let context = ctx.0.clone();
     let result = tokio::task::spawn_blocking(move || {
         let _organization_guard = context.organization_mutex.lock().map_err(AppError::db)?;

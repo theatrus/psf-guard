@@ -868,6 +868,11 @@ fn is_public_auth_path(path: &str) -> bool {
 }
 
 fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
+    // A WBPP run's files sit in the operator's run folder, not the catalog:
+    // reading them is an editor's, as starting the run is.
+    if path.contains("/wbpp/runs/current/files/") && *method != Method::OPTIONS {
+        return true;
+    }
     if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
         return false;
     }
@@ -1121,6 +1126,17 @@ mod tests {
             &Method::POST,
             "/db/test/projects/2/stack-previews/wbpp/import",
             true,
+        ));
+        // A WBPP run's files come from the operator's run folder.
+        assert!(requires_write(
+            &Method::GET,
+            "/db/test/wbpp/runs/current/files/logs/run.log",
+            true,
+        ));
+        assert!(!requires_write(
+            &Method::GET,
+            "/db/test/wbpp/runs/current",
+            false
         ));
     }
 

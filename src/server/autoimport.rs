@@ -6,6 +6,8 @@
 //! `only_new` set, so files the catalog already holds cost a directory walk
 //! and one query rather than a header read each, and the matching rules,
 //! preview shapes and job progress are the ones the Import button uses.
+//! Lights the light filters left out are remembered by file size and age,
+//! so an unchanged one is not read again either.
 //!
 //! One scheduler loop serves every database, re-reading the open set each
 //! tick, so a database added or edited while the server runs joins without
@@ -13,14 +15,16 @@
 //! database's import lock, or while the user has an interactive job running;
 //! it waits for the next tick.
 
+use crate::commands::import::scan_rules::{LeftOutReason, LightFilter};
 use crate::commands::import::ImportOptions;
 use crate::db_registry::AutoImportSettings;
 use crate::server::database_context::DatabaseContext;
 use crate::server::state::AppState;
 use serde::Serialize;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 /// How often the scheduler looks for due runs.
 pub const TICK: Duration = Duration::from_secs(30);
@@ -136,6 +140,85 @@ impl AutoImportScheduler {
             last_started_at: record.and_then(|record| record.last_started_unix),
             next_run_at,
             progress: (progress.trigger == "automatic").then_some(progress),
+        }
+    }
+}
+
+/// A file's size and modification time, to tell when it changed.
+type Stamp = (u64, Option<SystemTime>);
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()))
+}
+
+/// Lights the light filters left out of runs that import only new files,
+/// for one catalog, under the filters that left them out.
+#[derive(Default)]
+struct LeftOutFiles {
+    filter: LightFilter,
+    files: HashMap<PathBuf, (Stamp, LeftOutReason)>,
+}
+
+/// By catalog path. A light the filters leave out stays out of the catalog,
+/// so every run would read its header again; an unchanged file is skipped
+/// the way a file the catalog holds is.
+static LEFT_OUT: LazyLock<Mutex<HashMap<String, LeftOutFiles>>> = LazyLock::new(Default::default);
+
+/// Take from `files` the lights an earlier run left out under the same
+/// light filters whose file has not changed since, and return them with
+/// their reasons. Files under `dirs` that the walk no longer found are
+/// forgotten.
+pub(crate) fn take_left_out(
+    database_path: &str,
+    filter: &LightFilter,
+    dirs: &[PathBuf],
+    files: &mut Vec<PathBuf>,
+) -> Vec<(PathBuf, LeftOutReason)> {
+    let mut all = LEFT_OUT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(known) = all.get_mut(database_path) else {
+        return Vec::new();
+    };
+    if known.filter != *filter {
+        // Other filters may keep these frames.
+        known.files.clear();
+        known.filter = *filter;
+        return Vec::new();
+    }
+    let walked: HashSet<&PathBuf> = files.iter().collect();
+    known
+        .files
+        .retain(|path, _| walked.contains(path) || !dirs.iter().any(|dir| path.starts_with(dir)));
+    let mut taken = Vec::new();
+    files.retain(|path| match known.files.get(path) {
+        Some((then, reason)) if stamp(path).as_ref() == Some(then) => {
+            taken.push((path.clone(), *reason));
+            false
+        }
+        _ => true,
+    });
+    taken
+}
+
+/// Remember the lights a run left out under `filter`.
+pub(crate) fn remember_left_out(
+    database_path: &str,
+    filter: &LightFilter,
+    left_out: &[(PathBuf, LeftOutReason)],
+) {
+    let mut all = LEFT_OUT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let known = all.entry(database_path.to_string()).or_default();
+    if known.filter != *filter {
+        known.files.clear();
+        known.filter = *filter;
+    }
+    for (path, reason) in left_out {
+        if let Some(stamp) = stamp(path) {
+            known.files.insert(path.clone(), (stamp, *reason));
         }
     }
 }

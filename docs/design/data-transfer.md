@@ -381,8 +381,8 @@ record, never a pending or acknowledged decision. Missing snapshot rows have
 no meaning: a chunk or target-scoped snapshot is not a deletion request.
 
 `GET /api/db/{id}/flat-history` supports `limit`, `offset`, `state`, and literal
-substring `q` filters. It performs no schema writes. The editor- and
-database-management-gated `POST /api/db/{id}/flat-history/invalidate` accepts
+substring `q` filters. It performs no schema writes. The editor-only
+`POST /api/db/{id}/flat-history/invalidate` accepts
 explicit `record_ids` and a nonempty `reason`, atomically marking recorded
 coverage pending. This is a reviewed coverage operation, not image grading.
 

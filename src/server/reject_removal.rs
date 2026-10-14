@@ -1,6 +1,8 @@
 //! The HTTP side of reject removal (docs/design/reject-removal.md): preview
 //! and apply a removal, list removals, restore them, and empty the trash.
-//! Every route needs the server's database-management permission.
+//! Every route that changes anything needs an editor. Files move only
+//! between an image folder and its own trash, so the database-management
+//! gate, which guards client-named paths, does not apply.
 
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -18,7 +20,7 @@ use crate::server::{
     api::ApiResponse,
     database_context::{open_scheduler_connection, DatabaseContext},
     extract::DbContext,
-    handlers::{require_database_management_allowed, AppError},
+    handlers::AppError,
     state::AppState,
 };
 
@@ -91,7 +93,6 @@ pub async fn preview(
     ctx: DbContext,
     Json(request): Json<PreviewRequest>,
 ) -> Result<Json<ApiResponse<RemovalPlan>>, AppError> {
-    require_database_management_allowed(&state)?;
     let protected = protected(&state).await?;
     let context = ctx.0.clone();
     let plan = tokio::task::spawn_blocking(move || {
@@ -122,7 +123,6 @@ pub async fn apply(
     ctx: DbContext,
     Json(request): Json<ApplyRequest>,
 ) -> Result<Json<ApiResponse<ApplyReport>>, AppError> {
-    require_database_management_allowed(&state)?;
     let protected = protected(&state).await?;
     let context = ctx.0.clone();
     let report = tokio::task::spawn_blocking(move || {
@@ -191,11 +191,9 @@ fn after_change(context: &DatabaseContext, conn: &rusqlite::Connection, frames: 
 
 /// Every removal batch, and the frames of one when asked.
 pub async fn removed(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Query(query): Query<RemovedQuery>,
 ) -> Result<Json<ApiResponse<RemovedView>>, AppError> {
-    require_database_management_allowed(&state)?;
     let path = ctx.database_path.clone();
     let view = tokio::task::spawn_blocking(move || {
         let conn = open_scheduler_connection(&path).map_err(AppError::db)?;
@@ -217,7 +215,6 @@ pub async fn restore(
     ctx: DbContext,
     Json(selection): Json<RestoreSelection>,
 ) -> Result<Json<ApiResponse<RestoreReport>>, AppError> {
-    require_database_management_allowed(&state)?;
     if selection.batch_id.is_none() && selection.guids.is_empty() {
         return Err(AppError::BadRequest(
             "Choose a batch or frames to restore.".into(),
@@ -256,11 +253,7 @@ pub async fn restore(
 }
 
 /// Delete the files of removals past their retention.
-pub async fn empty_trash(
-    State(state): State<Arc<AppState>>,
-    ctx: DbContext,
-) -> Result<Json<ApiResponse<TrashReport>>, AppError> {
-    require_database_management_allowed(&state)?;
+pub async fn empty_trash(ctx: DbContext) -> Result<Json<ApiResponse<TrashReport>>, AppError> {
     let path = ctx.database_path.clone();
     let report = tokio::task::spawn_blocking(move || {
         let conn = open_scheduler_connection(&path).map_err(AppError::db)?;
@@ -281,11 +274,9 @@ pub struct PurgeRequest {
 
 /// Forget the saved rows of removals whose files are gone; markers stay.
 pub async fn purge(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     request: Option<Json<PurgeRequest>>,
 ) -> Result<Json<ApiResponse<PurgeReport>>, AppError> {
-    require_database_management_allowed(&state)?;
     let request = request.map(|Json(request)| request).unwrap_or_default();
     let path = ctx.database_path.clone();
     let report = tokio::task::spawn_blocking(move || {

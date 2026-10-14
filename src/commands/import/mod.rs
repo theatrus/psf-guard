@@ -29,7 +29,7 @@ use grouping::{build_plan, ImportPlan, TemplateKey, DEFAULT_TIME_GAP_DAYS};
 use headers::FrameMeta;
 use rayon::prelude::*;
 use rusqlite::{params, Connection, TransactionBehavior};
-use scan_rules::{LeftOutReason, LightFilter, PathFilter, ScanRuleReport};
+use scan_rules::{LeftOutReason, LightFilter, PathFilter, ScanRuleReport, WalkRootSkip};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -288,6 +288,10 @@ pub struct ImportOutcome {
     /// Those frames by reason.
     #[serde(default)]
     pub left_out: Vec<LeftOutSummary>,
+    /// Each of those files, so a run that imports only new files can skip
+    /// it next time while it stays unchanged.
+    #[serde(skip)]
+    pub left_out_files: Vec<(PathBuf, LeftOutReason)>,
     /// What the run did with lights that match no existing target.
     #[serde(default)]
     pub new_targets: NewTargets,
@@ -332,6 +336,35 @@ pub struct ImportOutcome {
 /// The key a rig is told apart by when the catalog learns it.
 fn rig_key(frame: &FrameMeta) -> String {
     crate::calibration::rig_label(frame).to_ascii_lowercase()
+}
+
+/// Count lights an earlier run's filters left out, which this run skipped
+/// unread, as if it had read them again.
+pub fn count_left_out(outcome: &mut ImportOutcome, files: &[(PathBuf, LeftOutReason)]) {
+    if files.is_empty() {
+        return;
+    }
+    let mut left_out: std::collections::BTreeMap<LeftOutReason, (usize, String)> = outcome
+        .left_out
+        .drain(..)
+        .map(|summary| (summary.reason, (summary.frames, summary.example)))
+        .collect();
+    for (path, reason) in files {
+        let entry = left_out
+            .entry(*reason)
+            .or_insert_with(|| (0, path.display().to_string()));
+        entry.0 += 1;
+    }
+    outcome.scanned += files.len();
+    outcome.skipped_by_filter += files.len();
+    outcome.left_out = left_out
+        .into_iter()
+        .map(|(reason, (frames, example))| LeftOutSummary {
+            reason,
+            frames,
+            example,
+        })
+        .collect();
 }
 
 /// Count a light the filters left out, keeping its first file as the
@@ -421,6 +454,18 @@ pub fn collect_image_files(dirs: &[PathBuf], filter: &PathFilter) -> Result<Coll
                 "Path does not exist or is not accessible: {}",
                 dir.display()
             );
+        }
+        // A walk that starts inside a skipped folder reads none of it.
+        match filter.skips_walk_root(dir) {
+            Some(WalkRootSkip::Excluded) => {
+                collected.skipped.folders_skipped += 1;
+                continue;
+            }
+            Some(WalkRootSkip::Ignored) => {
+                collected.skipped.ignored_folders += 1;
+                continue;
+            }
+            None => {}
         }
         let mut stack = vec![dir.clone()];
         while let Some(d) = stack.pop() {
@@ -561,6 +606,7 @@ pub fn import_frames(
             outcome.skipped_existing += 1;
         } else if let Some(reason) = options.light_filter.refuses(&frame) {
             note_left_out(&mut left_out, reason, &frame);
+            outcome.left_out_files.push((frame.path.clone(), reason));
         } else if from_other_rig(&frame, &known_rigs) {
             outcome.skipped_other_rig += 1;
             let entry = strangers
@@ -616,6 +662,7 @@ pub fn import_frames(
             let frame = derivatives[index].clone();
             if let Some(reason) = options.light_filter.refuses(&frame) {
                 note_left_out(&mut left_out, reason, &frame);
+                outcome.left_out_files.push((frame.path.clone(), reason));
                 continue;
             }
             if from_other_rig(&frame, &known_rigs) {
@@ -671,6 +718,7 @@ pub fn import_frames(
     // ground-zero grouping below. This is what keeps a re-import against a
     // real scheduler database from duplicating its structure.
     let mut fresh: Vec<FrameMeta> = Vec::new();
+    let mut templates = TemplateChooser::default();
     if options.attach_existing {
         let existing_targets = load_existing_targets(&tx)?;
         let mut attach: HashMap<usize, Vec<FrameMeta>> = HashMap::new();
@@ -698,8 +746,14 @@ pub fn import_frames(
             // that exist, leaves their counts alone, and holds frames that
             // would need a new template or plan.
             let images_only = !creates_targets && !target.project_imported;
-            let attached =
-                attach_frames_to_target(&tx, target, &frames, images_only, &mut outcome)?;
+            let attached = attach_frames_to_target(
+                &tx,
+                target,
+                &frames,
+                images_only,
+                &mut templates,
+                &mut outcome,
+            )?;
             if !creates_targets {
                 let held: HashSet<&PathBuf> = attached
                     .unplanned
@@ -784,7 +838,7 @@ pub fn import_frames(
     for frame in &accepted_rigs {
         crate::calibration::note_light_rig(&tx, calibration_profile, frame)?;
     }
-    let template_ids = ensure_templates(&tx, &plan, &profile_id, &mut outcome)?;
+    let default_exposures = default_exposures(&plan);
 
     for project in &plan.projects {
         let project_id = insert_project(&tx, project, &profile_id)?;
@@ -800,19 +854,47 @@ pub fn import_frames(
             outcome.targets_created += 1;
             outcome.created_target_ids.push(target_id as i32);
 
+            // One plan per template and length: two groups of lights that
+            // land on one template, as two gains on a template left at the
+            // camera's default, share the first one's plan.
+            let mut plans: HashMap<(i64, i64), i64> = HashMap::new();
             for exposure in &target.exposures {
-                let template_id = *template_ids
-                    .get(&exposure.template)
-                    .expect("template inserted for every plan key");
-                let plan_id = insert_exposure_plan(
+                let template_id = templates.for_new_plan(
                     &tx,
-                    &profile_id,
+                    &exposure.template,
                     exposure.exposure_s,
-                    exposure.frames.len(),
-                    target_id,
-                    template_id,
+                    &profile_id,
+                    default_exposures
+                        .get(&exposure.template)
+                        .copied()
+                        .unwrap_or(60.0),
+                    &mut outcome,
                 )?;
-                outcome.plans_created += 1;
+                let length = (exposure.exposure_s * 1000.0).round() as i64;
+                let plan_id = match plans.get(&(template_id, length)) {
+                    Some(&plan_id) => {
+                        tx.execute(
+                            "UPDATE exposureplan SET desired = desired + ?1,
+                                                     acquired = acquired + ?1
+                             WHERE Id = ?2",
+                            params![exposure.frames.len() as i64, plan_id],
+                        )?;
+                        plan_id
+                    }
+                    None => {
+                        let plan_id = insert_exposure_plan(
+                            &tx,
+                            &profile_id,
+                            exposure.exposure_s,
+                            exposure.frames.len(),
+                            target_id,
+                            template_id,
+                        )?;
+                        outcome.plans_created += 1;
+                        plans.insert((template_id, length), plan_id);
+                        plan_id
+                    }
+                };
 
                 for &frame_idx in &exposure.frames {
                     insert_acquired_image(
@@ -1090,6 +1172,7 @@ fn attach_frames_to_target(
     target: &ExistingTarget,
     frames: &[FrameMeta],
     images_only: bool,
+    templates: &mut TemplateChooser,
     outcome: &mut ImportOutcome,
 ) -> Result<Attached> {
     use rusqlite::OptionalExtension;
@@ -1111,25 +1194,17 @@ fn attach_frames_to_target(
         let exposure_s = exp_ms as f64 / 1000.0;
         // Only an existing template can have a plan; an attach that may
         // not change scheduling never creates one.
-        let template_id = if images_only {
-            find_template(conn, &key, &target.profile_id)?
-        } else {
-            Some(find_or_create_template(
-                conn,
-                &key,
-                &target.profile_id,
-                exposure_s,
-                outcome,
-            )?)
-        };
+        let fitting = find_templates(conn, &key, &target.profile_id)?;
 
         // Reuse the target's own plan for this template + exposure length.
         // A plan whose exposure is NULL or below 0 runs at its template's
         // default, as Target Scheduler reads it; one with its own length
         // wins when both fit. A frame of unknown length takes a plan left
-        // at the default.
-        let existing_plan: Option<i64> = match template_id {
-            Some(template_id) => conn
+        // at the default. A plan on the best-fitting template wins; one on
+        // a template left at the camera's defaults still takes the frame.
+        let mut existing_plan: Option<i64> = None;
+        for &template_id in &fitting {
+            existing_plan = conn
                 .query_row(
                     "SELECT e.Id FROM exposureplan e
                      LEFT JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
@@ -1148,29 +1223,40 @@ fn attach_frames_to_target(
                     ],
                     |row| row.get(0),
                 )
-                .optional()?,
-            None => None,
-        };
-        let plan_id = match (existing_plan, template_id) {
+                .optional()?;
+            if existing_plan.is_some() {
+                break;
+            }
+        }
+        let plan_id = match existing_plan {
             // The image rows go in; the plan's counts stay as the
             // scheduler left them.
-            (Some(id), _) if images_only => id,
-            (Some(id), _) => {
+            Some(id) if images_only => id,
+            Some(id) => {
                 conn.execute(
                     "UPDATE exposureplan SET acquired = IFNULL(acquired, 0) + ?1 WHERE Id = ?2",
                     params![group.len() as i64, id],
                 )?;
+                outcome.templates_reused += 1;
                 attached.plans_raised += 1;
                 outcome.plans_raised += 1;
                 id
             }
-            (None, _) if images_only => {
+            None if images_only => {
                 attached
                     .unplanned
                     .push((key, exp_ms, group.into_iter().cloned().collect()));
                 continue;
             }
-            (None, Some(template_id)) => {
+            None => {
+                let template_id = templates.for_new_plan(
+                    conn,
+                    &key,
+                    exposure_s,
+                    &target.profile_id,
+                    exposure_s,
+                    outcome,
+                )?;
                 let id = insert_exposure_plan(
                     conn,
                     &target.profile_id,
@@ -1183,7 +1269,6 @@ fn attach_frames_to_target(
                 outcome.plans_created += 1;
                 id
             }
-            (None, None) => unreachable!("a template is always found or created here"),
         };
 
         for frame in group {
@@ -1369,19 +1454,12 @@ pub(crate) const DEFAULT_RULE_WEIGHTS: &[(&str, f64)] = &[
     ("Target Switch Penalty", 67.0),
 ];
 
-/// Find-or-create the exposure template for every plan key. Templates are
-/// per-profile in TS, so re-imports reuse rows from earlier runs.
-fn ensure_templates(
-    conn: &Connection,
-    plan: &ImportPlan,
-    profile_id: &str,
-    outcome: &mut ImportOutcome,
-) -> Result<HashMap<TemplateKey, i64>> {
-    // Most-frequent exposure per template (by frame count) seeds
-    // `defaultexposure`; TS's constructor default of 60 covers the rest.
-    // Exposures of a second or more come first: a few short frames (flats
-    // or test frames taken as lights) must not set a light template's
-    // default.
+/// The default exposure a template made for each plan key gets: its most
+/// frequent exposure by frame count, else Target Scheduler's constructor
+/// default of 60. Exposures of a second or more come first: a few short
+/// frames (flats or test frames taken as lights) must not set a light
+/// template's default.
+fn default_exposures(plan: &ImportPlan) -> HashMap<TemplateKey, f64> {
     let mut frames_per_exposure: HashMap<(TemplateKey, i64), usize> = HashMap::new();
     for project in &plan.projects {
         for target in &project.targets {
@@ -1395,33 +1473,174 @@ fn ensure_templates(
             }
         }
     }
-    let mut ids = HashMap::new();
-    for key in plan.template_keys() {
-        let default_exposure = frames_per_exposure
-            .iter()
-            .filter(|((k, _), _)| *k == key)
-            .max_by_key(|((_, exp_ms), count)| (*exp_ms >= 1000, **count, *exp_ms))
-            .map(|((_, exp_ms), _)| *exp_ms as f64 / 1000.0)
-            .filter(|e| *e > 0.0)
-            .unwrap_or(60.0);
-        let id = find_or_create_template(conn, &key, profile_id, default_exposure, outcome)?;
-        ids.insert(key, id);
-    }
-    Ok(ids)
+    plan.template_keys()
+        .into_iter()
+        .map(|key| {
+            let default_exposure = frames_per_exposure
+                .iter()
+                .filter(|((k, _), _)| *k == key)
+                .max_by_key(|((_, exp_ms), count)| (*exp_ms >= 1000, **count, *exp_ms))
+                .map(|((_, exp_ms), _)| *exp_ms as f64 / 1000.0)
+                .filter(|e| *e > 0.0)
+                .unwrap_or(60.0);
+            (key, default_exposure)
+        })
+        .collect()
 }
 
-/// Reuse the profile's template matching this key, or insert one with the
-/// plugin's constructor defaults. Shared by the ground-zero and the
-/// attach-to-existing paths.
-/// The profile's exposure template for `key`, without creating one.
-fn find_template(conn: &Connection, key: &TemplateKey, profile_id: &str) -> Result<Option<i64>> {
+/// Chooses the template each new plan of one import goes on, once per
+/// profile, settings and exposure length:
+///
+/// 1. a template of the same filter and binning whose default exposure is
+///    the lights' length, with gain, offset and readout mode each equal to
+///    the lights' or left at the camera's default (-1), exact first;
+/// 2. else the template for exactly the lights' settings, made with
+///    `default_exposure` when there is none.
+///
+/// Templates are per profile in Target Scheduler, so a re-import reuses
+/// rows from earlier runs. A person can move a plan to another template
+/// later, and a sync carries that.
+#[derive(Default)]
+struct TemplateChooser {
+    chosen: HashMap<(String, TemplateKey, i64), i64>,
+    /// The exact template of each profile and key this import has used.
+    exact: HashMap<(String, TemplateKey), i64>,
+}
+
+impl TemplateChooser {
+    fn for_new_plan(
+        &mut self,
+        conn: &Connection,
+        key: &TemplateKey,
+        exposure_s: f64,
+        profile_id: &str,
+        default_exposure: f64,
+        outcome: &mut ImportOutcome,
+    ) -> Result<i64> {
+        let length = (exposure_s * 1000.0).round() as i64;
+        let chosen = (profile_id.to_string(), key.clone(), length);
+        if let Some(&id) = self.chosen.get(&chosen) {
+            return Ok(id);
+        }
+        let exact = (profile_id.to_string(), key.clone());
+        let id = match same_length_template(conn, key, exposure_s, profile_id)? {
+            Some(id) => {
+                // A template this import made is not one it reused.
+                if !self.exact.values().any(|&made| made == id) {
+                    outcome.templates_reused += 1;
+                }
+                id
+            }
+            None => match self.exact.get(&exact) {
+                Some(&id) => id,
+                None => find_or_create_template(conn, key, profile_id, default_exposure, outcome)?,
+            },
+        };
+        if !self.exact.contains_key(&exact) && is_exact_template(conn, id, key)? {
+            self.exact.insert(exact, id);
+        }
+        self.chosen.insert(chosen, id);
+        Ok(id)
+    }
+}
+
+/// The profile's template of the same filter and binning whose default
+/// exposure is `exposure_s`, with gain, offset and readout mode each equal
+/// to the key's or left at the camera's default (-1 or NULL), exact first.
+fn same_length_template(
+    conn: &Connection,
+    key: &TemplateKey,
+    exposure_s: f64,
+    profile_id: &str,
+) -> Result<Option<i64>> {
     use rusqlite::OptionalExtension;
+    if exposure_s <= 0.0 {
+        return Ok(None);
+    }
     Ok(conn
         .query_row(
             "SELECT Id FROM exposuretemplate
              WHERE profileId = ?1 AND filtername = ?2
+               AND IFNULL(gain, -1) IN (?3, -1) AND IFNULL(offset, -1) IN (?4, -1)
+               AND IFNULL(bin, 1) = ?5 AND IFNULL(readoutmode, -1) IN (?6, -1)
+               AND ABS(defaultexposure - ?7) < 0.001
+             ORDER BY IFNULL(gain, -1) = ?3 DESC, IFNULL(offset, -1) = ?4 DESC,
+                      IFNULL(readoutmode, -1) = ?6 DESC, Id
+             LIMIT 1",
+            params![
+                profile_id,
+                key.filter,
+                key.gain,
+                key.offset,
+                key.binning,
+                key.readout,
+                exposure_s
+            ],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Whether the template has exactly the key's gain, offset and readout mode.
+fn is_exact_template(conn: &Connection, id: i64, key: &TemplateKey) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT IFNULL(gain, -1) = ?2 AND IFNULL(offset, -1) = ?3
+                AND IFNULL(readoutmode, -1) = ?4
+         FROM exposuretemplate WHERE Id = ?1",
+        params![id, key.gain, key.offset, key.readout],
+        |row| row.get(0),
+    )?)
+}
+
+/// The profile's exposure templates whose plans can take frames of `key`,
+/// best first, without creating one. A template left at -1 (or NULL) for
+/// gain, offset or readout mode runs at the camera's default, as Target
+/// Scheduler reads it, so its plans take a frame with any value there; one
+/// that agrees exactly comes first. Only finding a plan uses this; a new
+/// plan's template comes from [`TemplateChooser`].
+fn find_templates(conn: &Connection, key: &TemplateKey, profile_id: &str) -> Result<Vec<i64>> {
+    let mut statement = conn.prepare(
+        "SELECT Id FROM exposuretemplate
+         WHERE profileId = ?1 AND filtername = ?2
+           AND IFNULL(gain, -1) IN (?3, -1) AND IFNULL(offset, -1) IN (?4, -1)
+           AND IFNULL(bin, 1) = ?5 AND IFNULL(readoutmode, -1) IN (?6, -1)
+         ORDER BY IFNULL(gain, -1) = ?3 DESC, IFNULL(offset, -1) = ?4 DESC,
+                  IFNULL(readoutmode, -1) = ?6 DESC, Id",
+    )?;
+    let ids = statement
+        .query_map(
+            params![
+                profile_id,
+                key.filter,
+                key.gain,
+                key.offset,
+                key.binning,
+                key.readout
+            ],
+            |row| row.get(0),
+        )?
+        .collect::<rusqlite::Result<Vec<i64>>>()?;
+    Ok(ids)
+}
+
+/// Reuse the profile's template for exactly this key, or insert one with
+/// the plugin's constructor defaults, named and pinned to the frames' own
+/// gain, offset and readout mode.
+fn find_or_create_template(
+    conn: &Connection,
+    key: &TemplateKey,
+    profile_id: &str,
+    default_exposure: f64,
+    outcome: &mut ImportOutcome,
+) -> Result<i64> {
+    use rusqlite::OptionalExtension;
+    let exact: Option<i64> = conn
+        .query_row(
+            "SELECT Id FROM exposuretemplate
+             WHERE profileId = ?1 AND filtername = ?2
                AND IFNULL(gain, -1) = ?3 AND IFNULL(offset, -1) = ?4
-               AND IFNULL(bin, 1) = ?5 AND IFNULL(readoutmode, -1) = ?6",
+               AND IFNULL(bin, 1) = ?5 AND IFNULL(readoutmode, -1) = ?6
+             ORDER BY Id",
             params![
                 profile_id,
                 key.filter,
@@ -1432,21 +1651,21 @@ fn find_template(conn: &Connection, key: &TemplateKey, profile_id: &str) -> Resu
             ],
             |row| row.get(0),
         )
-        .optional()?)
+        .optional()?;
+    if let Some(id) = exact {
+        outcome.templates_reused += 1;
+        return Ok(id);
+    }
+    create_template(conn, key, profile_id, default_exposure, outcome)
 }
 
-fn find_or_create_template(
+fn create_template(
     conn: &Connection,
     key: &TemplateKey,
     profile_id: &str,
     default_exposure: f64,
     outcome: &mut ImportOutcome,
 ) -> Result<i64> {
-    if let Some(id) = find_template(conn, key, profile_id)? {
-        outcome.templates_reused += 1;
-        return Ok(id);
-    }
-
     conn.execute(
         "INSERT INTO exposuretemplate (
             profileId, name, filtername, gain, offset, bin, readoutmode,
@@ -3104,6 +3323,23 @@ mod tests {
         assert!(!plain
             .iter()
             .any(|path| path.starts_with(root.join("PierCam"))));
+
+        // A walk that starts inside either folder, as a Review of held
+        // frames does, reads nothing from it.
+        let inside = [
+            root.join("Hocus Focus").join("AutoFocus_1"),
+            root.join("PierCam").join("2026-10-01"),
+        ];
+        let collected = collect_image_files(&inside, &filter).unwrap();
+        assert!(collected.files.is_empty(), "{:?}", collected.files);
+        assert_eq!(
+            collected.skipped,
+            ScanRuleReport {
+                files_skipped: 0,
+                folders_skipped: 1,
+                ignored_folders: 1,
+            }
+        );
     }
 
     #[test]
@@ -3385,5 +3621,267 @@ mod tests {
         let after = plan_rows(&conn);
         assert_eq!(after[0], before[0], "the default plan is left alone");
         assert_eq!(after[1].2, before[1].2 + 1, "the explicit plan takes it");
+    }
+
+    /// M31's L 300 s plan made by Target Scheduler on a template left at
+    /// the camera's default gain and offset (-1).
+    fn catalog_with_m31_camera_default_plan() -> Connection {
+        let conn = catalog_with_m31_plan(true);
+        conn.execute("UPDATE exposuretemplate SET gain = -1, offset = -1", [])
+            .unwrap();
+        conn
+    }
+
+    #[test]
+    fn a_template_left_at_the_camera_default_takes_a_light_with_gain_and_offset() {
+        // Ask first: the GAIN=100 OFFSET=30 light is an image row on the
+        // plan, not a frame held for having no plan.
+        let mut conn = catalog_with_m31_camera_default_plan();
+        let before = scheduling_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            vec![light("M31", "L", 2_000)],
+            &ImportOptions {
+                new_targets: NewTargets::Ask,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((outcome.attached, outcome.skipped_unplanned), (1, 0));
+        assert_eq!(
+            scheduling_rows(&conn),
+            (before.0, before.1, before.2, before.3 + 1)
+        );
+
+        // Create: the same light raises that plan; no twin template or
+        // plan appears in a project PSF Guard did not make.
+        let mut conn = catalog_with_m31_camera_default_plan();
+        let before = scheduling_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            vec![light("M31", "L", 2_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (outcome.templates_created, outcome.templates_reused),
+            (0, 1)
+        );
+        assert_eq!((outcome.plans_created, outcome.plans_raised), (0, 1));
+        assert_eq!(
+            scheduling_rows(&conn),
+            (before.0, before.1, before.2 + 1, before.3 + 1)
+        );
+    }
+
+    /// M42 L lights at `gain`, shot `ts` seconds in, far from M31.
+    fn m42(ts: i64, gain: i64, exposure_s: f64) -> FrameMeta {
+        FrameMeta {
+            gain: Some(gain),
+            exposure_s: Some(exposure_s),
+            ra_deg: Some(83.82),
+            dec_deg: Some(-5.39),
+            ..light("M42", "L", ts)
+        }
+    }
+
+    /// M42's plans: template gain, offset and default exposure, the plan's
+    /// own exposure and acquired count, and the template's id.
+    fn m42_plans(conn: &Connection) -> Vec<(i64, i64, f64, f64, i64, i64)> {
+        conn.prepare(
+            "SELECT IFNULL(t.gain, -1), IFNULL(t.offset, -1), t.defaultexposure, e.exposure,
+                    e.acquired, t.Id
+             FROM exposureplan e
+             JOIN exposuretemplate t ON t.Id = e.exposureTemplateId
+             JOIN target g ON g.Id = e.targetid
+             WHERE g.name = 'M42'
+             ORDER BY t.gain, e.Id",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    fn camera_default_template(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT Id FROM exposuretemplate WHERE gain = -1 AND offset = -1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_plan_takes_a_camera_default_template_of_the_same_length() {
+        // A profile whose L template runs at the camera's default gain and
+        // offset, 300 s by default. New 300 s lights at gain 100 get their
+        // plan on it; no template is added.
+        let mut conn = catalog_with_m31_camera_default_plan();
+        let template = camera_default_template(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            vec![m42(5_000, 100, 300.0)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!((outcome.templates_created, outcome.plans_created), (0, 1));
+        let plans = m42_plans(&conn);
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].5, template);
+        assert_eq!(plans[0].4, 1);
+    }
+
+    #[test]
+    fn a_new_plan_of_another_length_gets_a_template_pinned_to_the_lights() {
+        // The same template, but 180 s lights: no template of that length,
+        // so one is made with the lights' own gain and offset.
+        let mut conn = catalog_with_m31_camera_default_plan();
+        let outcome = import_frames(
+            &mut conn,
+            vec![m42(5_000, 100, 180.0)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!((outcome.templates_created, outcome.plans_created), (1, 1));
+        let plans = m42_plans(&conn);
+        assert_eq!(plans.len(), 1);
+        assert_eq!((plans[0].0, plans[0].1, plans[0].2), (100, 30, 180.0));
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM exposuretemplate WHERE Id = ?1",
+                [plans[0].5],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "L G100 O30 1x1");
+    }
+
+    #[test]
+    fn lights_attach_to_a_plan_of_their_length_on_a_camera_default_template() {
+        // M31's plan runs 180 s on the camera-default template, whose own
+        // default is 300 s: 180 s lights join that plan.
+        let mut conn = catalog_with_m31_camera_default_plan();
+        conn.execute("UPDATE exposureplan SET exposure = 180", [])
+            .unwrap();
+        let before = scheduling_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            vec![FrameMeta {
+                exposure_s: Some(180.0),
+                ..light("M31", "L", 6_000)
+            }],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!((outcome.templates_created, outcome.plans_created), (0, 0));
+        assert_eq!(outcome.plans_raised, 1);
+        assert_eq!(
+            scheduling_rows(&conn),
+            (before.0, before.1, before.2 + 1, before.3 + 1)
+        );
+    }
+
+    #[test]
+    fn two_gains_share_one_plan_on_a_camera_default_template_or_get_their_own() {
+        // Gains 100 and 0 at 300 s, beside a camera-default 300 s template:
+        // one plan on it holds both, with no twin.
+        let night = || {
+            vec![
+                m42(5_000, 100, 300.0),
+                m42(5_300, 0, 300.0),
+                m42(5_600, 0, 300.0),
+            ]
+        };
+        let mut conn = catalog_with_m31_camera_default_plan();
+        let template = camera_default_template(&conn);
+        let outcome = import_frames(&mut conn, night(), &ImportOptions::default()).unwrap();
+        assert_eq!((outcome.templates_created, outcome.plans_created), (0, 1));
+        let plans = m42_plans(&conn);
+        assert_eq!(plans.len(), 1, "{plans:?}");
+        assert_eq!((plans[0].5, plans[0].4), (template, 3));
+        let twins: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM (
+                     SELECT 1 FROM exposureplan
+                     GROUP BY targetid, exposureTemplateId, exposure
+                     HAVING COUNT(*) > 1)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(twins, 0);
+
+        // With no template at all, each gain gets a template pinned to it
+        // and a plan of its own.
+        let mut conn = fresh_conn();
+        let outcome = import_frames(&mut conn, night(), &ImportOptions::default()).unwrap();
+        assert_eq!((outcome.templates_created, outcome.plans_created), (2, 2));
+        let plans = m42_plans(&conn);
+        assert_eq!(
+            plans
+                .iter()
+                .map(|plan| (plan.0, plan.1, plan.4))
+                .collect::<Vec<_>>(),
+            [(0, 30, 2), (100, 30, 1)]
+        );
+    }
+
+    #[test]
+    fn an_exact_template_wins_over_one_left_at_the_camera_default() {
+        let mut conn = catalog_with_m31_camera_default_plan();
+        // An exact L G100 O30 template with its own 300 s plan, added after
+        // the camera-default one.
+        conn.execute_batch(
+            "INSERT INTO exposuretemplate (profileId, name, filtername, gain, offset, bin,
+                                           readoutmode, defaultexposure, guid)
+             SELECT profileId, 'L G100 O30 1x1', 'L', 100, 30, 1, -1, 300, 'exact-template'
+             FROM exposuretemplate LIMIT 1;
+             INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted,
+                                       targetid, exposureTemplateId, enabled, guid)
+             SELECT profileId, 300, 5, 0, 0, targetid,
+                    (SELECT Id FROM exposuretemplate WHERE guid = 'exact-template'), 1,
+                    'exact-plan'
+             FROM exposureplan LIMIT 1;",
+        )
+        .unwrap();
+        let before = plan_rows(&conn);
+        let outcome = import_frames(
+            &mut conn,
+            vec![light("M31", "L", 2_000)],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!((outcome.plans_created, outcome.plans_raised), (0, 1));
+        let after = plan_rows(&conn);
+        assert_eq!(after[0], before[0], "the camera-default plan is left alone");
+        assert_eq!(
+            after[1].2,
+            before[1].2 + 1,
+            "the exact template's plan takes it"
+        );
+
+        // A light at another gain still fits only the camera-default one.
+        let outcome = import_frames(
+            &mut conn,
+            vec![FrameMeta {
+                gain: Some(0),
+                ..light("M31", "L", 3_000)
+            }],
+            &ImportOptions::default(),
+        )
+        .unwrap();
+        assert_eq!((outcome.plans_created, outcome.plans_raised), (0, 1));
+        assert_eq!(plan_rows(&conn)[0].2, before[0].2 + 1);
     }
 }

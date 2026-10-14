@@ -14,7 +14,8 @@
 use super::{
     catalog_night_boundary, exposure_matches, frame_select, night_of, row_to_frame,
     schema_supports_current_reads, signature_sensor_consistent, signature_sensor_matches,
-    temperature_matches, tolerances, CalibrationFrame, CalibrationKind, CalibrationSyncCounts,
+    temperature_matches, tolerances, CalibrationChoiceCounts, CalibrationFrame, CalibrationKind,
+    CalibrationSyncCounts,
 };
 use anyhow::{Context, Result};
 use rusqlite::types::Value;
@@ -153,6 +154,39 @@ pub(super) fn kept_out_reason(
             None => stray_light,
         },
     }
+}
+
+/// Whether every frame carries a person's choice or a grade this build made
+/// from its current file. Such a set needs no screen of its own: the grades
+/// already keep the poor frames out, and a choice must stand.
+pub(super) fn all_judged(conn: &Connection, frames: &[CalibrationFrame]) -> Result<bool> {
+    if !table_exists(conn) {
+        return Ok(false);
+    }
+    let mut statement = conn.prepare(
+        "SELECT 1 FROM psf_guard_calibration_frame_quality
+         WHERE frame_uuid = ?1
+           AND (override_choice IS NOT NULL
+                OR (grade IS NOT NULL AND algorithm_version = ?2
+                    AND source_fingerprint IS ?3))",
+    )?;
+    for frame in frames {
+        let judged = statement
+            .query_row(
+                params![
+                    frame.frame_uuid,
+                    FRAME_QUALITY_ALGORITHM_VERSION,
+                    frame.source_fingerprint
+                ],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !judged {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// What was measured on one frame, as stored.
@@ -836,10 +870,11 @@ pub(super) fn forget(conn: &Transaction<'_>, frame_uuids: &[String]) -> Result<(
 pub(super) fn sync_quality(
     source: &Connection,
     destination: &Transaction<'_>,
-) -> Result<CalibrationSyncCounts> {
+) -> Result<(CalibrationSyncCounts, CalibrationChoiceCounts)> {
     let mut counts = CalibrationSyncCounts::default();
+    let mut choices = CalibrationChoiceCounts::default();
     if !table_exists(source) {
-        return Ok(counts);
+        return Ok((counts, choices));
     }
     const MEASUREMENT: [&str; 6] = [
         "source_fingerprint",
@@ -916,6 +951,11 @@ pub(super) fn sync_quality(
                 rusqlite::params_from_iter(values.iter()),
             )?;
             counts.inserted += 1;
+            count_choice(
+                &mut choices,
+                &Value::Null,
+                &values[position("override_choice")],
+            );
             continue;
         };
         let mut merged = existing.clone();
@@ -934,6 +974,8 @@ pub(super) fn sync_quality(
             counts.unchanged += 1;
             continue;
         }
+        let choice = position("override_choice");
+        count_choice(&mut choices, &existing[choice], &merged[choice]);
         let assignments = columns[1..]
             .iter()
             .enumerate()
@@ -949,7 +991,70 @@ pub(super) fn sync_quality(
         )?;
         counts.updated += 1;
     }
-    Ok(counts)
+    Ok((counts, choices))
+}
+
+/// Count one frame's choice going from `before` to `after`.
+fn count_choice(choices: &mut CalibrationChoiceCounts, before: &Value, after: &Value) {
+    let read = |value: &Value| match value {
+        Value::Text(text) => QualityOverride::from_db(Some(text)),
+        _ => None,
+    };
+    let (before, after) = (read(before), read(after));
+    if before == after {
+        return;
+    }
+    match after {
+        Some(QualityOverride::Exclude) => choices.kept_out += 1,
+        Some(QualityOverride::Use) => choices.used_anyway += 1,
+        None => choices.cleared += 1,
+    }
+}
+
+/// Before a sync replaces the destination's frame at `source_path` with an
+/// incoming frame of another UUID, give the incoming frame the old frame's
+/// choice, and drop the old frame's grade row. A rescan on the other machine
+/// gave the same file a new UUID; the person's Keep out or Use anyway is
+/// about the file, and grading would otherwise clear it as an orphan. A
+/// choice the person cleared goes too, with when they cleared it, so an
+/// older choice from the source does not come back. A newer choice carried
+/// by the incoming frame still wins when its own grade row syncs.
+pub(super) fn carry_choice(
+    destination: &Transaction<'_>,
+    source_path: &Value,
+    frame_uuid: &str,
+) -> Result<()> {
+    if !table_exists(destination) {
+        return Ok(());
+    }
+    destination.execute(
+        &format!(
+            "INSERT INTO {QUALITY_TABLE} (frame_uuid, override_choice, override_at, updated_at)
+             SELECT ?2, q.override_choice, q.override_at, ?3
+             FROM psf_guard_calibration_frame f
+             JOIN {QUALITY_TABLE} q ON q.frame_uuid = f.frame_uuid
+             WHERE f.source_path = ?1 AND f.frame_uuid <> ?2
+               AND q.override_at IS NOT NULL
+             ORDER BY q.override_at DESC
+             LIMIT 1
+             ON CONFLICT(frame_uuid) DO UPDATE SET
+                override_choice = excluded.override_choice,
+                override_at = excluded.override_at,
+                updated_at = excluded.updated_at
+             WHERE IFNULL(excluded.override_at, 0)
+                   > IFNULL({QUALITY_TABLE}.override_at, 0)"
+        ),
+        params![source_path, frame_uuid, chrono::Utc::now().timestamp()],
+    )?;
+    destination.execute(
+        &format!(
+            "DELETE FROM {QUALITY_TABLE} WHERE frame_uuid IN (
+                SELECT frame_uuid FROM psf_guard_calibration_frame
+                WHERE source_path = ?1 AND frame_uuid <> ?2)"
+        ),
+        params![source_path, frame_uuid],
+    )?;
+    Ok(())
 }
 
 /// How a frame came out, for the library listing.
@@ -1637,13 +1742,24 @@ pub(super) mod tests {
         .unwrap();
 
         let mut destination = Connection::open(temp.path().join("copy.sqlite")).unwrap();
-        let sync = |destination: &mut Connection| {
+        let sync_choices = |destination: &mut Connection| {
             let tx = destination.transaction().unwrap();
             let outcome = sync_library(&source, &tx).unwrap();
             tx.commit().unwrap();
-            outcome.quality
+            (outcome.quality, outcome.choices)
         };
-        assert_eq!(sync(&mut destination).inserted, 7);
+        let sync = |destination: &mut Connection| sync_choices(destination).0;
+        // The first sync says it brings a Keep out, which changes the
+        // copy's masters.
+        let (counts, choices) = sync_choices(&mut destination);
+        assert_eq!(counts.inserted, 7);
+        assert_eq!(
+            choices,
+            CalibrationChoiceCounts {
+                kept_out: 1,
+                ..Default::default()
+            }
+        );
         let selected = select_for_light(&destination, &light).unwrap();
         assert_eq!(named(&selected.kept_out), ["dark-0.fits", "dark-3.fits"]);
         assert!(pending_measurements(&destination).unwrap().is_empty());
@@ -1674,11 +1790,116 @@ pub(super) mod tests {
                 ],
             )
             .unwrap();
-        assert_eq!(sync(&mut destination).updated, 1);
+        let (counts, choices) = sync_choices(&mut destination);
+        assert_eq!(counts.updated, 1);
+        assert_eq!(
+            choices,
+            CalibrationChoiceCounts {
+                used_anyway: 1,
+                ..Default::default()
+            }
+        );
         assert!(select_for_light(&destination, &light)
             .unwrap()
             .kept_out
             .is_empty());
+    }
+
+    #[test]
+    fn sync_keeps_a_choice_on_a_file_the_source_cataloged_under_another_uuid() {
+        // Both machines scanned the same folder, so each gave the files its
+        // own UUIDs. The copy kept one dark out by hand; the source never
+        // touched it.
+        let temp = tempfile::tempdir().unwrap();
+        let (source, light) = dark_library(temp.path());
+        measure_and_grade(&source).unwrap();
+        let frames: Vec<FrameMeta> = ["dark-0", "dark-1", "dark-2", "dark-3"]
+            .into_iter()
+            .chain(["bias-0", "bias-1", "bias-2"])
+            .map(|name| read_frame_meta(&temp.path().join(format!("{name}.fits"))))
+            .collect();
+        let mut destination = catalog(&temp.path().join("copy.sqlite"), &frames);
+        measure_and_grade(&destination).unwrap();
+        let local = uuid_of(&destination, "dark-0.fits");
+        assert_ne!(local, uuid_of(&source, "dark-0.fits"));
+        set_overrides(
+            &destination,
+            std::slice::from_ref(&local),
+            Some(QualityOverride::Exclude),
+        )
+        .unwrap();
+
+        let tx = destination.transaction().unwrap();
+        let outcome = sync_library(&source, &tx).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            outcome.choices,
+            CalibrationChoiceCounts::default(),
+            "the copy's own choice is not news"
+        );
+        assert_eq!(
+            uuid_of(&destination, "dark-0.fits"),
+            uuid_of(&source, "dark-0.fits"),
+            "the file takes the source's UUID"
+        );
+        let selected = select_for_light(&destination, &light).unwrap();
+        assert_eq!(named(&selected.kept_out), ["dark-0.fits", "dark-3.fits"]);
+        // Grading clears rows of frames the library no longer holds; the
+        // choice moved with the file, so it stays.
+        grade_library(&destination).unwrap();
+        let selected = select_for_light(&destination, &light).unwrap();
+        assert_eq!(named(&selected.kept_out), ["dark-0.fits", "dark-3.fits"]);
+        let orphans: i64 = destination
+            .query_row(
+                "SELECT COUNT(*) FROM psf_guard_calibration_frame_quality
+                 WHERE frame_uuid NOT IN (SELECT frame_uuid FROM psf_guard_calibration_frame)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0);
+    }
+
+    #[test]
+    fn sync_keeps_a_newer_cleared_choice_on_a_file_cataloged_under_another_uuid() {
+        // The source kept dark-1 out; the copy, under its own UUIDs, kept it
+        // out too and later cleared that. The later clear stands.
+        let temp = tempfile::tempdir().unwrap();
+        let (source, light) = dark_library(temp.path());
+        measure_and_grade(&source).unwrap();
+        let frames: Vec<FrameMeta> = ["dark-0", "dark-1", "dark-2", "dark-3"]
+            .into_iter()
+            .chain(["bias-0", "bias-1", "bias-2"])
+            .map(|name| read_frame_meta(&temp.path().join(format!("{name}.fits"))))
+            .collect();
+        let mut destination = catalog(&temp.path().join("copy.sqlite"), &frames);
+        measure_and_grade(&destination).unwrap();
+        let theirs = uuid_of(&source, "dark-1.fits");
+        let ours = uuid_of(&destination, "dark-1.fits");
+        set_overrides(
+            &source,
+            std::slice::from_ref(&theirs),
+            Some(QualityOverride::Exclude),
+        )
+        .unwrap();
+        set_overrides(&destination, std::slice::from_ref(&ours), None).unwrap();
+        let at = |conn: &Connection, uuid: &str, when: i64| {
+            conn.execute(
+                "UPDATE psf_guard_calibration_frame_quality SET override_at = ?1
+                 WHERE frame_uuid = ?2",
+                params![when, uuid],
+            )
+            .unwrap();
+        };
+        at(&source, &theirs, 1_000);
+        at(&destination, &ours, 2_000);
+
+        let tx = destination.transaction().unwrap();
+        sync_library(&source, &tx).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(uuid_of(&destination, "dark-1.fits"), theirs);
+        let selected = select_for_light(&destination, &light).unwrap();
+        assert_eq!(named(&selected.kept_out), ["dark-3.fits"]);
     }
 
     #[test]

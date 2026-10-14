@@ -46,7 +46,7 @@ export default function MissingGuidRepair({ dbId, dbName, canManage }: { dbId: s
           Close N.I.N.A. on that rig before filling.
         </p>
       : <p>
-          {canManage ? 'This server cannot write the file. ' : 'Start the server with database management to fill them in, or '}
+          {canManage ? 'This server cannot write the file. ' : 'An editor can fill them in, or '}
           Run <code>psf-guard -d &lt;file&gt; fill-guids</code> where the file is writable.
         </p>}
     {fill.isError && <p className="settings-error" role="alert">{fill.error instanceof Error ? fill.error.message : 'The fill failed.'}</p>}

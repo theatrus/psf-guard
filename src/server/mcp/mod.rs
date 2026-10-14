@@ -1214,7 +1214,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Run PixInsight WBPP on a project's or target's accepted lights with the server's default WBPP settings. Needs write access and a server started with database management. Follow it with get_jobs."
+        description = "Run PixInsight WBPP on a project's or target's accepted lights with the server's default WBPP settings. Needs write access. Follow it with get_jobs."
     )]
     async fn start_wbpp_run(
         &self,
@@ -1722,7 +1722,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Preview removing rejects: the frames rejected at least min_age_days ago that would leave the catalog (their files to a trash folder, restorable), the ones that stay and why, and a `digest`. Writes nothing. Needs database management, as in the app."
+        description = "Preview removing rejects: the frames rejected at least min_age_days ago that would leave the catalog (their files to a trash folder, restorable), the ones that stay and why, and a `digest`. Writes nothing. Needs write access, as in the app."
     )]
     async fn preview_reject_removal(
         &self,
@@ -1740,7 +1740,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Remove the rejects preview_reject_removal listed: out of the catalog, files into the trash folder, restorable until the trash is emptied. Needs the preview's `digest`; refuses if the rejects changed since. Needs write access and database management."
+        description = "Remove the rejects preview_reject_removal listed: out of the catalog, files into the trash folder, restorable until the trash is emptied. Needs the preview's `digest`; refuses if the rejects changed since. Needs write access."
     )]
     async fn apply_reject_removal(
         &self,

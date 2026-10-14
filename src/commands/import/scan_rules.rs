@@ -76,13 +76,24 @@ impl ScanRules {
         }
     }
 
-    /// Check every pattern and the exposure. The error says which pattern
-    /// is wrong and why.
-    pub fn validate(&self) -> Result<()> {
+    /// Check every pattern and the exposure against `roots`, the database's
+    /// image folders. The error says which pattern is wrong and why.
+    pub fn validate(&self, roots: &[PathBuf]) -> Result<()> {
         if let Some(seconds) = self.min_exposure_seconds
             && !(seconds.is_finite() && seconds >= 0.0)
         {
             bail!("the shortest exposure must be a number of seconds, 0 or more");
+        }
+        for (list, patterns) in [("exclude", &self.exclude), ("include", &self.include)] {
+            for raw in patterns {
+                if let Some(relative) = full_path_pattern(raw, roots) {
+                    bail!(
+                        "{list} pattern \"{}\" is a full path, and patterns read from the \
+                         image folder that holds the files; write it as \"{relative}\"",
+                        raw.trim()
+                    );
+                }
+            }
         }
         self.path_filter(&[]).map(|_| ())
     }
@@ -163,6 +174,57 @@ fn normalize_pattern(raw: &str) -> Option<String> {
     }
 }
 
+/// A pattern written as a full path, which can never match since patterns
+/// read from the image folder: one with a drive letter or a `\\server`
+/// share, or a leading `/` followed by the first folder of an image
+/// folder's own path, as in `/data/Images/Hocus Focus`. Returns the pattern
+/// as it should be written: the part below the image folder when the
+/// pattern starts with one, else its last folder name.
+fn full_path_pattern(raw: &str, roots: &[PathBuf]) -> Option<String> {
+    let pattern = raw.trim().replace('\\', "/");
+    let bytes = pattern.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let share = pattern.starts_with("//");
+    let parts: Vec<&str> = pattern.split('/').filter(|part| !part.is_empty()).collect();
+    let root_parts = |root: &PathBuf| -> Vec<String> {
+        root.components()
+            .filter_map(|part| match part {
+                std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect()
+    };
+    let under_root = !drive
+        && !share
+        && pattern.starts_with('/')
+        && parts.first().is_some_and(|first| {
+            roots.iter().any(|root| {
+                root_parts(root)
+                    .first()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(first))
+            })
+        });
+    if !(drive || share || under_root) {
+        return None;
+    }
+    // Drop the drive letter, then any image folder the pattern starts with.
+    let parts: Vec<&str> = if drive { parts[1..].to_vec() } else { parts };
+    let below = roots
+        .iter()
+        .map(root_parts)
+        .filter(|root| {
+            !root.is_empty()
+                && root.len() < parts.len()
+                && root
+                    .iter()
+                    .zip(&parts)
+                    .all(|(root, part)| root.eq_ignore_ascii_case(part))
+        })
+        .max_by_key(Vec::len)
+        .map(|root| format!("/{}", parts[root.len()..].join("/")));
+    Some(below.unwrap_or_else(|| parts.last().copied().unwrap_or_default().to_string()))
+}
+
 fn compile(list: &str, raw: &str, pattern: &str) -> Result<globset::Glob> {
     GlobBuilder::new(pattern)
         .case_insensitive(true)
@@ -207,6 +269,37 @@ impl PathFilter {
             .join("/")
     }
 
+    /// Why a walk that starts below an image folder is skipped whole: a
+    /// folder from the walk's own folder up to the image folder matches an
+    /// exclude pattern, or one above the walk's folder holds a
+    /// `.psfguardignore` file. The walk checks only the folders it enters
+    /// (and its own folder's ignore file), so a walk started inside
+    /// `Hocus Focus` would otherwise read it all. A walk from an image
+    /// folder, or from a folder no image folder holds, has nothing above it
+    /// to check.
+    pub fn skips_walk_root(&self, dir: &Path) -> Option<WalkRootSkip> {
+        let root = self
+            .roots
+            .iter()
+            .filter(|root| dir.starts_with(root) && dir != root.as_path())
+            .max_by_key(|root| root.components().count())?;
+        let below_root = || {
+            dir.ancestors()
+                .take_while(move |folder| folder.starts_with(root) && *folder != root.as_path())
+        };
+        if below_root().any(|folder| self.skips_folder(folder, root)) {
+            return Some(WalkRootSkip::Excluded);
+        }
+        if below_root()
+            .skip(1)
+            .chain(std::iter::once(root.as_path()))
+            .any(|folder| folder.join(IGNORE_FILE).is_file())
+        {
+            return Some(WalkRootSkip::Ignored);
+        }
+        None
+    }
+
     /// Whether an exclude pattern skips this folder and everything below.
     pub fn skips_folder(&self, folder: &Path, walk_root: &Path) -> bool {
         let Some(patterns) = &self.exclude_folders else {
@@ -239,6 +332,15 @@ impl PathFilter {
             .any(|path| patterns.is_match(path))
         })
     }
+}
+
+/// Why a walk is skipped before it starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalkRootSkip {
+    /// A folder on the way down matches an exclude pattern.
+    Excluded,
+    /// A folder above holds a `.psfguardignore` file.
+    Ignored,
 }
 
 /// What the scan rules left out of a walk, unread.
@@ -411,11 +513,91 @@ mod tests {
 
     #[test]
     fn a_bad_pattern_says_which_and_why() {
-        let error = rules(&["**/ok/**", "[abc"], &[]).validate().unwrap_err();
+        let error = rules(&["**/ok/**", "[abc"], &[]).validate(&[]).unwrap_err();
         let text = error.to_string();
         assert!(text.contains("exclude pattern \"[abc\""), "{text}");
-        let error = rules(&[], &["{a,b"]).validate().unwrap_err();
+        let error = rules(&[], &["{a,b"]).validate(&[]).unwrap_err();
         assert!(error.to_string().contains("include pattern \"{a,b\""));
+    }
+
+    #[test]
+    fn a_full_path_is_refused_with_the_pattern_it_should_be() {
+        let roots = [root()];
+        let refused = |exclude: &[&str], include: &[&str]| {
+            rules(exclude, include)
+                .validate(&roots)
+                .unwrap_err()
+                .to_string()
+        };
+        let text = refused(&["/data/Images/Hocus Focus"], &[]);
+        assert!(
+            text.contains("exclude pattern \"/data/Images/Hocus Focus\" is a full path"),
+            "{text}"
+        );
+        assert!(text.contains("write it as \"/Hocus Focus\""), "{text}");
+        // Another folder on the same disk can never be under the image
+        // folder either.
+        let text = refused(&["/data/Other/PierCam"], &[]);
+        assert!(text.contains("write it as \"PierCam\""), "{text}");
+        let text = refused(&[], &["C:\\Images\\M31\\LIGHT"]);
+        assert!(text.contains("include pattern \"C:\\Images"), "{text}");
+        assert!(text.contains("write it as \"LIGHT\""), "{text}");
+        let text = refused(&["\\\\nas\\astro\\Hocus Focus"], &[]);
+        assert!(text.contains("is a full path"), "{text}");
+        // A leading `/` that ties a pattern to the image folder stays.
+        rules(&["/FLAT", "/M31/Test", "Hocus Focus"], &["LIGHT"])
+            .validate(&roots)
+            .unwrap();
+    }
+
+    #[test]
+    fn a_walk_that_starts_inside_a_skipped_folder_reads_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Images");
+        let attempt = root
+            .join("Hocus Focus")
+            .join("AutoFocus_1")
+            .join("attempt01");
+        let lights = root.join("M31").join("LIGHT");
+        std::fs::create_dir_all(&attempt).unwrap();
+        std::fs::create_dir_all(&lights).unwrap();
+        let filter = rules(&["Hocus Focus"], &[])
+            .path_filter(std::slice::from_ref(&root))
+            .unwrap();
+        assert_eq!(
+            filter.skips_walk_root(&attempt),
+            Some(WalkRootSkip::Excluded)
+        );
+        assert_eq!(
+            filter.skips_walk_root(&root.join("Hocus Focus")),
+            Some(WalkRootSkip::Excluded)
+        );
+        assert_eq!(filter.skips_walk_root(&lights), None);
+        assert_eq!(
+            filter.skips_walk_root(&root),
+            None,
+            "the image folder itself"
+        );
+
+        // An ignore file in a folder above, with no rules at all.
+        let filter = ScanRules::default()
+            .path_filter(std::slice::from_ref(&root))
+            .unwrap();
+        assert_eq!(filter.skips_walk_root(&attempt), None);
+        std::fs::write(root.join("Hocus Focus").join(IGNORE_FILE), "").unwrap();
+        assert_eq!(
+            filter.skips_walk_root(&attempt),
+            Some(WalkRootSkip::Ignored)
+        );
+        assert_eq!(filter.skips_walk_root(&lights), None);
+        // One in the image folder itself covers every walk below it.
+        std::fs::write(root.join(IGNORE_FILE), "").unwrap();
+        assert_eq!(filter.skips_walk_root(&lights), Some(WalkRootSkip::Ignored));
+        // A walk from a folder no image folder holds checks nothing above.
+        let elsewhere = ScanRules::default()
+            .path_filter(std::slice::from_ref(&lights))
+            .unwrap();
+        assert_eq!(elsewhere.skips_walk_root(&lights), None);
     }
 
     #[test]
@@ -433,7 +615,7 @@ mod tests {
             min_exposure_seconds: Some(-1.0),
             ..ScanRules::default()
         }
-        .validate()
+        .validate(&[])
         .unwrap_err();
         assert!(error.to_string().contains("shortest exposure"));
     }

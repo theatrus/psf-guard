@@ -63,8 +63,9 @@ PixInsight needs a display, and that gives it a virtual one.
 ![The WBPP run dialog with settings, progress and results](wbpp-run.png)
 
 **Stack in WBPP**, on a project card of the Library or beside **Build stacks**
-in the project's **Stacks** view, runs WBPP on the server. It needs the database-management grant, because it starts a
-program on the server, and a PixInsight install the server can reach.
+in the project's **Stacks** view, runs WBPP on the server. It needs an editor and a PixInsight install the server
+can reach. The program and the runs folder come from the PixInsight settings, which need the database-management
+grant; without the grant a run may use a folder inside the runs folder only, and only an editor reads a run's files.
 
 1. Tell PSF Guard where PixInsight is, once, under **Settings → Setups →
    PixInsight**. Leave the path empty to look in the standard places

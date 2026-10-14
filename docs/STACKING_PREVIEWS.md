@@ -324,8 +324,8 @@ progress instead of an idle panel.
 
 **Stack in WBPP**, beside **Build stacks**, runs PixInsight's WBPP on the
 server for the project, or for the target chosen in the header; it opens the
-same run dialog as the Library's project cards, needs the same
-database-management grant, and shows the run's state while one is queued,
+same run dialog as the Library's project cards, needs an editor, and
+shows the run's state while one is queued,
 running or finished. With a target chosen it shows only that target's run.
 For a project with several targets it asks for a target first: WBPP stacks
 a project's targets together, so their masters could not come back as stacks.
@@ -336,8 +336,8 @@ with a preview and its FITS, and the **Combine channel stacks** section offers
 it as a channel source marked *WBPP*: choose, for example, L, R, G and B from
 WBPP and PSF Guard composes the color preview, with the same background,
 stretch and processing as for its own stacks. When that fails the section
-says why, and **Take in the last run** appears to try again. It reads only that run's folder, and it needs database
-management, like starting a run.
+says why, and **Take in the last run** appears to try again. It reads only that run's folder, and it needs an
+editor, like starting a run.
 
 - One master per filter and exposure is taken: without drizzle first, since
   drizzle changes the scale and color composition aligns channels of one
@@ -1518,7 +1518,8 @@ PUT  /api/settings/stacking
 ```
 
 Project processing settings use `{ "split_exposure_groups": false }`. Writes
-require editor access and the database-management gate. The stacking settings
+require editor access. `process_folder` is one name below the database's
+process directory, cleaned when masters are saved. The stacking settings
 carry `automatic_previews`, `arrival_delay_minutes`, `grade_delay_minutes`,
 `build_new_channels`, and `new_channel_window_days` (0 for any age, up to
 3650), with `default_new_channel_window_days` in the response; a PUT may omit

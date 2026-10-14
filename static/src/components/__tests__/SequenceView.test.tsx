@@ -792,6 +792,30 @@ describe('SequenceView: interactions', () => {
     await waitFor(() => expect(screen.getByText('2 selected')).toBeInTheDocument());
   });
 
+  it('holds the Poor calibration choice while the project\'s marks are stale', async () => {
+    setupDefaultHandlers();
+    server.use(
+      http.get('/api/db/:dbId/calibration-health/lights', () => HttpResponse.json({ success: true, error: null, status: 'ready', data: {
+        lights: [
+          { image_id: 2, level: 'poor', codes: ['cannot_calibrate'] },
+          { image_id: 4, level: 'poor', codes: ['thin_dark'] },
+        ],
+        stale_projects: [1],
+        running: false,
+      } })),
+    );
+
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    // The marks still show; the rule that leads to a reject waits.
+    await waitFor(() => expect(screen.getAllByTestId('calibration-chip')).toHaveLength(2));
+    const option = screen.getByRole('option', { name: 'Poor calibration (updating)' });
+    expect(option).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Select frames'), { target: { value: 'poor-calibration' } });
+    expect(screen.queryByText(/[1-9] selected/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Review rejection')).not.toBeInTheDocument();
+  });
+
   it('uses a selection preset as the base for the next Shift-click range', async () => {
     setupDefaultHandlers();
     const user = userEvent.setup();

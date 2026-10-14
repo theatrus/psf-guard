@@ -113,6 +113,10 @@ pub struct ServerConfig {
     pub keep_failed_uploads: bool,
     /// Process-global Seiza catalog configuration from the shared registry.
     pub astrometry_config: Option<crate::astrometry::AstrometryConfig>,
+    /// The server's stop, when the caller wants to see what a stop waits
+    /// for: the desktop app does, to say why a restart is taking long.
+    /// `None` makes a new one.
+    pub shutdown: Option<Arc<shutdown::Shutdown>>,
 }
 
 pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> {
@@ -862,6 +866,9 @@ async fn run_server_internal(
     ) {
         Ok(mut state) => {
             state.director = director;
+            if let Some(shutdown) = &config.shutdown {
+                state.shutdown = Arc::clone(shutdown);
+            }
             tracing::info!("✅ Application state initialized successfully");
             state.set_registry_path(config.registry_path.clone());
             state.set_allow_database_management(config.allow_database_management);

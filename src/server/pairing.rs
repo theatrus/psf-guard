@@ -19,7 +19,7 @@ use std::{
 
 use crate::server::{
     api::ApiResponse,
-    handlers::{require_database_management_allowed, require_registry_path, AppError},
+    handlers::{require_registry_path, AppError},
     remote_audit::{AuditAction, AuditOutcome, AuditRecord},
     state::AppState,
 };
@@ -127,7 +127,6 @@ pub async fn issue_pairing_token_route(
     State(state): State<Arc<AppState>>,
     Path(db_id): Path<String>,
 ) -> Result<Json<ApiResponse<PairingCode>>, AppError> {
-    require_database_management_allowed(&state)?;
     require_registry_path(&state)?;
     if !state.databases.read().unwrap().contains_key(&db_id) {
         return Err(AppError::NotFound);
@@ -163,7 +162,7 @@ pub struct PairResult {
 }
 
 /// `POST /api/sync/v1/pair` — client-side exchange. The pairing code is the
-/// entire authorization: it was minted behind the management gate and dies
+/// entire authorization: an editor minted it on this server, and it dies
 /// on first use. Each pairing mints its own credential — other paired
 /// clients keep working, and the operator revokes them one by one.
 pub async fn pair_route(
@@ -254,7 +253,7 @@ pub async fn pair_route(
 }
 
 /// `DELETE /api/databases/{db_id}/clients/{client_uuid}` — revoke one
-/// paired client. Management gated: same trust as issuing a code. Other
+/// paired client. An editor's, as issuing a code is. Other
 /// clients and the legacy manual key keep working.
 pub async fn revoke_client_route(
     State(state): State<Arc<AppState>>,
@@ -263,7 +262,6 @@ pub async fn revoke_client_route(
     use crate::db_registry::DbRegistry;
     use crate::server::database_context::DatabaseContext;
 
-    require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let _registry_guard = state.registry_write.lock().await;
     let mut registry = DbRegistry::load_or_init(&registry_path)

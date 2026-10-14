@@ -96,9 +96,38 @@ fn joined(error: tokio::task::JoinError) -> AppError {
     AppError::InternalError(format!("calibration browser task failed: {error}"))
 }
 
+/// The folders a recorded frame is read from: the database's image folders
+/// and its calibration folder. A catalog synced from another machine can
+/// record any path; a frame outside these folders reads as a missing file,
+/// so no request opens or reports on a path elsewhere.
+pub(crate) struct ReadableRoots(Vec<PathBuf>);
+
+impl ReadableRoots {
+    pub(crate) fn of(ctx: &DatabaseContext) -> Self {
+        Self(
+            ctx.image_dir_paths
+                .iter()
+                .chain(std::iter::once(&ctx.calibration_root))
+                .filter_map(|root| dunce::canonicalize(root).ok())
+                .collect(),
+        )
+    }
+
+    /// Whether `path` is a file inside one of the folders once links are
+    /// resolved.
+    pub(crate) fn holds(&self, path: &std::path::Path) -> bool {
+        dunce::canonicalize(path).is_ok_and(|resolved| {
+            resolved.is_file() && self.0.iter().any(|root| resolved.starts_with(root))
+        })
+    }
+}
+
 /// The frames among `rows` whose file is not on disk.
-fn missing_files<'a>(rows: impl Iterator<Item = &'a BrowsedFrame>) -> HashSet<String> {
-    rows.filter(|row| !std::path::Path::new(&row.frame.source_path).is_file())
+fn missing_files<'a>(
+    rows: impl Iterator<Item = &'a BrowsedFrame>,
+    roots: &ReadableRoots,
+) -> HashSet<String> {
+    rows.filter(|row| !roots.holds(std::path::Path::new(&row.frame.source_path)))
         .map(|row| row.frame.frame_uuid.clone())
         .collect()
 }
@@ -111,12 +140,13 @@ pub async fn list_frames(
 ) -> Result<Json<ApiResponse<FramePage>>, AppError> {
     // Read under the shared connection; files are checked after it is free.
     let library = read_library(&ctx)?;
+    let roots = ReadableRoots::of(&ctx);
     let page = tokio::task::spawn_blocking(move || {
         let filter = query.filter();
         let missing = query
             .missing
             .unwrap_or(false)
-            .then(|| missing_files(library.kept(&filter)));
+            .then(|| missing_files(library.kept(&filter), &roots));
         let mut page = library.frames_page(
             &filter,
             |row| {
@@ -129,7 +159,7 @@ pub async fn list_frames(
             query.per_page,
         );
         for row in &mut page.frames {
-            row.frame.source_exists = std::path::Path::new(&row.frame.source_path).is_file();
+            row.frame.source_exists = roots.holds(std::path::Path::new(&row.frame.source_path));
         }
         page
     })
@@ -146,12 +176,13 @@ pub async fn list_sessions(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ApiResponse<SessionPage>>, AppError> {
     let library = read_library(&ctx)?;
+    let roots = ReadableRoots::of(&ctx);
     let page = tokio::task::spawn_blocking(move || {
         let filter = query.filter();
         let missing = query
             .missing
             .unwrap_or(false)
-            .then(|| missing_files(library.kept(&filter)));
+            .then(|| missing_files(library.kept(&filter), &roots));
         library.sessions_page(
             &filter,
             |row| {
@@ -180,10 +211,11 @@ pub async fn get_frame(
         browse::frame_detail(&conn, &frame_uuid).map_err(AppError::db)?
     }
     .ok_or(AppError::NotFound)?;
+    let roots = ReadableRoots::of(&ctx);
     let detail = tokio::task::spawn_blocking(move || {
         let mut detail = detail;
         detail.frame.frame.source_exists =
-            std::path::Path::new(&detail.frame.frame.source_path).is_file();
+            roots.holds(std::path::Path::new(&detail.frame.frame.source_path));
         detail
     })
     .await
@@ -279,11 +311,27 @@ fn frame_job(
     drawn: &FrameToDraw,
     picture: FramePicture,
 ) -> Result<GenJob, AppError> {
+    let roots = ReadableRoots::of(ctx);
     let source = PathBuf::from(&drawn.frame.source_path);
-    if !source.is_file() {
+    if !roots.holds(&source) {
         return Err(AppError::NotFoundMessage(
             "The frame's file is not on disk".into(),
         ));
+    }
+    let members = drawn.session.as_ref().map(|members| {
+        members
+            .iter()
+            .filter(|member| roots.holds(member))
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    if members
+        .as_ref()
+        .is_some_and(|members| members.len() < MIN_COMPARE_FLATS)
+    {
+        return Err(AppError::BadRequest(format!(
+            "A flat needs {MIN_COMPARE_FLATS} flats in its session to be compared"
+        )));
     }
     let folder = ctx
         .cache()
@@ -291,7 +339,7 @@ fn frame_job(
         .map_err(|error| {
             AppError::InternalError(format!("Could not create the preview folder: {error}"))
         })?;
-    let session = drawn.session.as_ref().map(|members| {
+    let session = members.as_ref().map(|members| {
         let mut parts: Vec<String> = members
             .iter()
             .map(|member| crate::server::stack_preview::source_fingerprint(member))

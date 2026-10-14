@@ -152,7 +152,8 @@ export default function Overview() {
       name: project.display_name,
     });
   const { canWrite } = useAccess();
-  const organizeAllowed = canWrite && (serverInfo?.allow_database_management ?? false);
+  // Moving targets and exposures edits catalog rows: an editor's work.
+  const organizeAllowed = canWrite;
   // A project's Target Scheduler state, written straight into its database.
   const [stateNotice, setStateNotice] = useState('');
   const [pendingStates, setPendingStates] = useState<Record<string, number>>({});

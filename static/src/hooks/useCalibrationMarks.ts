@@ -4,6 +4,7 @@ import { apiClient } from '../api/client';
 import type { CalibrationLightMark } from '../api/types';
 
 const EMPTY = new Map<number, CalibrationLightMark>();
+const NO_PROJECTS = new Set<number>();
 
 /**
  * Which lights the calibration library serves poorly, by image id, from
@@ -29,8 +30,15 @@ export function useCalibrationMarks(dbId: string | null, projectId: number | nul
     () => (query.data ? new Map(query.data.lights.map((mark) => [mark.image_id, mark])) : EMPTY),
     [query.data],
   );
+  const staleProjects = useMemo(
+    () => (query.data ? new Set(query.data.stale_projects) : NO_PROJECTS),
+    [query.data],
+  );
   return {
     marks,
+    /** Projects whose marks came before a change, until a pass replaces
+     *  them. Fine to show; not to act on. */
+    staleProjects,
     isLoading: enabled && query.isLoading,
     error: query.error,
     /** A pass is working results out, or one is due. */

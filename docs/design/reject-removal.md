@@ -10,8 +10,9 @@ button beside **Import**.
 In **Settings › Databases**, each database has **Purge Rejects** beside
 **Import**. It opens a dialog: a number of days, **Preview**, then **Remove**
 with how long to keep the files in the trash. Removed batches are listed with **Restore**; **Empty trash** appears
-once a batch is past its retention, and **Purge** once its files are gone. These need the server's
-database-management permission.
+once a batch is past its retention, and **Purge** once its files are gone. These need an editor;
+files move only between an image folder and its own trash, so the database-management gate does
+not apply.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
@@ -80,7 +81,7 @@ days removes them at once.
 
 Removal is a preview and an Apply, like organization changes. Apply carries
 the preview's digest and refuses with 409 when the candidates changed. It
-needs the server's database-management permission.
+needs an editor.
 
 A frame qualifies when it is rejected, has a GUID, was dated at least N
 days ago, and lies in the chosen scope (database, project or target). The

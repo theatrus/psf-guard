@@ -10,7 +10,11 @@ use std::path::{Path, PathBuf};
 /// Everything import needs to know about one FITS file, straight from its
 /// headers. All fields except `path` are optional: frames with missing
 /// headers still import, they just group more coarsely.
-#[derive(Debug, Clone, Default)]
+///
+/// Calibration health keeps it between passes, so a light's header is read
+/// again only when its file changes.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct FrameMeta {
     pub path: PathBuf,
     /// False when the FITS header could not be parsed at all; such frames are

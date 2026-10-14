@@ -2123,12 +2123,10 @@ pub struct ImportWbppStacksRequest {
 /// Guard is taken in on its own; this covers one that finished before this
 /// feature or whose import failed. Only the run's own folder is read.
 pub async fn import_wbpp_stacks(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(request): Json<ImportWbppStacksRequest>,
 ) -> Result<Json<ApiResponse<wbpp_stacks::WbppImport>>, AppError> {
-    crate::server::handlers::require_database_management_allowed(&state)?;
     let (output_dir, last_target) = {
         let store = ctx.wbpp_run.read().unwrap();
         if store.progress.output_dir.is_empty() {

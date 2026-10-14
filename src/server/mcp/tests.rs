@@ -166,7 +166,7 @@ fn catalog_state(dir: &tempfile::TempDir, management: bool) -> Arc<AppState> {
 }
 
 #[tokio::test]
-async fn an_agent_edits_the_scheduler_and_meets_the_management_gate() {
+async fn an_agent_edits_the_scheduler_and_previews_reject_removal() {
     let dir = tempfile::tempdir().unwrap();
     let state = catalog_state(&dir, false);
     let app = app(&state);
@@ -226,13 +226,14 @@ async fn an_agent_edits_the_scheduler_and_meets_the_management_gate() {
     .unwrap_err()
     .contains("changed since the check"));
 
-    // Removing rejects needs database management, as in the app.
-    let refused = tool(
+    // Rejects move only within an image folder: an editor's, with
+    // database management off, as in the app.
+    let preview = tool(
         &app,
         "preview_reject_removal",
         json!({ "database": db, "min_age_days": 7 }),
     )
     .await
-    .unwrap_err();
-    assert!(refused.to_lowercase().contains("management"), "{refused}");
+    .unwrap();
+    assert_eq!(preview["frames"], json!([]), "{preview}");
 }

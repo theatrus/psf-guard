@@ -114,10 +114,13 @@ pub async fn get_calibration_library_details(
         let conn = conn.lock().map_err(AppError::db)?;
         crate::calibration::library_details(&conn).map_err(AppError::db)?
     };
+    // A frame outside the database's folders reads as missing; see
+    // `ReadableRoots`.
+    let roots = crate::server::calibration_browser::ReadableRoots::of(&ctx);
     let details = tokio::task::spawn_blocking(move || {
         let mut details = details;
         for frame in &mut details.frames {
-            frame.source_exists = std::path::Path::new(&frame.source_path).is_file();
+            frame.source_exists = roots.holds(std::path::Path::new(&frame.source_path));
         }
         details
     })
@@ -326,14 +329,13 @@ pub async fn get_astrometry_catalog_install(
 }
 
 /// Download and install one hosted Seiza catalog package. The destination is
-/// the server's own configured catalog directory, so this leaks no path — but
-/// it does let a caller start a multi-gigabyte download, so it keeps the
-/// management gate. The work continues after the request returns.
+/// the server's own configured catalog directory, so it takes no path from
+/// the client and an editor may start it. The work continues after the
+/// request returns.
 pub async fn start_astrometry_catalog_install(
     State(state): State<Arc<AppState>>,
     Json(request): Json<crate::server::catalog_install::CatalogInstallRequest>,
 ) -> Result<Json<ApiResponse<crate::server::catalog_install::CatalogInstallStatus>>, AppError> {
-    require_database_management_allowed(&state)?;
     let output_dir = state.astrometry.catalog_install_dir();
     let guard = state.begin_interactive_job();
     let status = state
@@ -591,8 +593,8 @@ pub(super) fn require_database_management_allowed(state: &AppState) -> Result<()
     } else {
         Err(AppError::Forbidden(
             "database management is disabled on this server. Restart the server \
-            with --allow-database-management to register, create, import, or \
-            export databases or reorganize targets and exposures."
+            with --allow-database-management to register or change databases, \
+            or to name server folders for imports, exports, storage or PixInsight."
                 .into(),
         ))
     }
@@ -1016,6 +1018,13 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                     .imagedata_synced
                                     .then(|| (&summary.imagedata).into()),
                                 grades: None,
+                                calibration: Some(SchedulerSyncCalibrationCounts {
+                                    frames: (&summary.calibration_frames).into(),
+                                    grades: (&summary.calibration_grades).into(),
+                                    kept_out: summary.calibration_choices.kept_out,
+                                    used_anyway: summary.calibration_choices.used_anyway,
+                                    cleared: summary.calibration_choices.cleared,
+                                }),
                                 grade_filled: summary.grade_filled,
                                 grade_preserved: summary.grade_preserved,
                                 adopted: summary.adopted,
@@ -1049,6 +1058,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                 acquiredimage: None,
                                 imagedata: None,
                                 grades: None,
+                                calibration: None,
                                 grade_filled: 0,
                                 grade_preserved: 0,
                                 adopted: 0,
@@ -1095,6 +1105,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                     duplicate_guids: summary.duplicate_guids,
                                     transitions: summary.transitions,
                                 }),
+                                calibration: None,
                                 grade_filled: 0,
                                 grade_preserved: 0,
                                 adopted: 0,
@@ -1657,9 +1668,6 @@ pub async fn update_database_route(
     }
     if let Some(scan_rules) = req.scan_rules.as_ref() {
         let scan_rules = scan_rules.normalized();
-        scan_rules
-            .validate()
-            .map_err(|error| AppError::BadRequest(error.to_string()))?;
         let entry = reg
             .databases
             .iter_mut()
@@ -1667,6 +1675,10 @@ pub async fn update_database_route(
             .ok_or(AppError::InternalError(
                 "registry update lost the entry".into(),
             ))?;
+        let roots: Vec<PathBuf> = entry.image_dirs.iter().map(PathBuf::from).collect();
+        scan_rules
+            .validate(&roots)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
         // Rules that change nothing are stored as none.
         entry.scan_rules = (scan_rules != Default::default()).then_some(scan_rules);
     }
@@ -1712,6 +1724,10 @@ pub async fn update_database_route(
     }
 
     let _ = new_ctx.ensure_cache_available();
+    // Lights may be found elsewhere, or found at last.
+    if previous_entry.image_dirs != entry.image_dirs {
+        crate::server::calibration_health::request(&state, &new_ctx.database_path);
+    }
 
     Ok(Json(ApiResponse::success(summary_of(&new_ctx))))
 }
@@ -2868,18 +2884,16 @@ fn guid_error(error: anyhow::Error) -> AppError {
 /// `GET /api/db/{db_id}/guids` — rows Target Scheduler's migration left
 /// without a GUID (see `ts_guids`). Read only.
 pub async fn missing_guids_route(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<GuidReport>>, AppError> {
     let path = std::path::PathBuf::from(&ctx.database_path);
-    let management = state.database_management_allowed();
     let report = tokio::task::spawn_blocking(move || -> anyhow::Result<GuidReport> {
         let conn = crate::ts_guids::open_existing(&path, false)?;
         let tables = crate::ts_guids::missing_guids(&conn)?;
         Ok(GuidReport {
             missing: crate::ts_guids::total_missing(&tables),
             tables,
-            writable: management && crate::ts_guids::is_writable(&path),
+            writable: crate::ts_guids::is_writable(&path),
         })
     })
     .await
@@ -2889,15 +2903,13 @@ pub async fn missing_guids_route(
 }
 
 /// `POST /api/db/{db_id}/guids/fill` — copy the database beside itself, then
-/// give every row without a GUID a new one. Behind the database-management
-/// gate: it writes the rig's Target Scheduler file. Runs off the request
+/// give every row without a GUID a new one. An editor's repair of catalog
+/// rows; the copy goes beside the configured file. Runs off the request
 /// path on its own connections, so the shared one stays free for the
 /// minutes a large copy over the network can take.
 pub async fn fill_guids_route(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<GuidFillReport>>, AppError> {
-    require_database_management_allowed(&state)?;
     let path = std::path::PathBuf::from(&ctx.database_path);
     let outcome = tokio::task::spawn_blocking(move || crate::ts_guids::fill_database(&path))
         .await
@@ -3485,6 +3497,9 @@ fn run_import_blocking(
     let scan_rule_report = collected.skipped;
     let mut files = collected.files;
     let mut prefiltered = 0usize;
+    let light_filter = ctx.scan_rules.light_filter();
+    // Lights the filters left out of an earlier run, unchanged since.
+    let mut left_out = Vec::new();
     if options.only_new && !files.is_empty() {
         let conn = open_scheduler_connection_with_flags(
             &ctx.database_path,
@@ -3494,18 +3509,26 @@ fn run_import_blocking(
         let known = imp::known_files(&conn, &files)?;
         prefiltered = known.len();
         files.retain(|path| !known.contains(path));
+        left_out = crate::server::autoimport::take_left_out(
+            &ctx.database_path,
+            &light_filter,
+            dirs,
+            &mut files,
+        );
         job::set_prefiltered(&ctx.import_job, prefiltered);
         if files.is_empty() {
             // Nothing new: no header reads, no transaction, no migration.
             job::set_scan_totals(&ctx.import_job, 0, 0);
-            return Ok(imp::ImportOutcome {
+            let mut outcome = imp::ImportOutcome {
                 scanned: prefiltered,
                 skipped_existing: prefiltered,
                 dry_run: options.dry_run,
                 scan_rules: scan_rule_report,
                 new_targets: options.new_targets,
                 ..Default::default()
-            });
+            };
+            imp::count_left_out(&mut outcome, &left_out);
+            return Ok(outcome);
         }
     }
     job::set_scan_totals(&ctx.import_job, files.len(), 0);
@@ -3538,12 +3561,20 @@ fn run_import_blocking(
     options.pair_derivatives &= ctx
         .pair_calibrated_copies
         .load(std::sync::atomic::Ordering::Relaxed);
-    options.light_filter = ctx.scan_rules.light_filter();
+    options.light_filter = light_filter;
     options.match_by_position = ctx.scan_rules.match_by_position;
     let mut outcome = imp::import_frames(&mut conn, frames, &options)?;
+    if options.only_new {
+        crate::server::autoimport::remember_left_out(
+            &ctx.database_path,
+            &light_filter,
+            &outcome.left_out_files,
+        );
+    }
     outcome.scanned += prefiltered;
     outcome.skipped_existing += prefiltered;
     outcome.scan_rules = scan_rule_report;
+    imp::count_left_out(&mut outcome, &left_out);
     Ok(outcome)
 }
 

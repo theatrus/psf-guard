@@ -282,7 +282,9 @@ async fn each_pairing_mints_its_own_credential_and_revokes_alone() {
 }
 
 #[tokio::test]
-async fn issuing_requires_database_management() {
+async fn issuing_needs_no_database_management() {
+    // A pairing code grants a network client access to a catalog, not a
+    // server path: an editor issues it with the gate off.
     let (state, router, _registry_path, _directory) = harness();
     state.set_allow_database_management(false);
     let (status, _) = call(
@@ -293,5 +295,5 @@ async fn issuing_requires_database_management() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::OK);
 }

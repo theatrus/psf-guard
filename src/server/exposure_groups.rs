@@ -3,19 +3,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use axum::{
-    extract::{Path, State},
-    Json,
-};
+use axum::{extract::Path, Json};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
-use super::{
-    api::ApiResponse,
-    extract::DbContext,
-    handlers::{require_database_management_allowed, AppError},
-    state::AppState,
-};
+use super::{api::ApiResponse, extract::DbContext, handlers::AppError};
 
 const SETTINGS_TABLE: &str = "psf_guard_project_processing";
 const EXPOSURE_SPLIT_RATIO: f64 = 2.0;
@@ -427,12 +419,10 @@ pub async fn get_project_settings(
 }
 
 pub async fn update_project_settings(
-    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db, project_id)): Path<(String, i32)>,
     Json(settings): Json<ProjectProcessingSettings>,
 ) -> Result<Json<ApiResponse<ProjectProcessingSettings>>, AppError> {
-    require_database_management_allowed(&state)?;
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
     // A body that names only the grouping keeps the remembered folder.

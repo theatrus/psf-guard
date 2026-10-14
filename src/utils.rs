@@ -22,13 +22,15 @@ pub fn filter_names_match(left: &str, right: &str) -> bool {
 
 pub fn extract_filename(metadata: &str) -> Option<String> {
     let json: serde_json::Value = serde_json::from_str(metadata).ok()?;
-    json.get("FileName").and_then(|f| f.as_str()).map(|path| {
-        // Extract just the filename from the full path
-        path.split(&['\\', '/'][..])
-            .next_back()
-            .unwrap_or(path)
-            .to_string()
-    })
+    json.get("FileName")
+        .and_then(|f| f.as_str())
+        .map(|path| file_name_of(path).to_string())
+}
+
+/// The last component of a path written on any system: N.I.N.A. records
+/// Windows paths, which the server may read on Linux.
+pub fn file_name_of(path: &str) -> &str {
+    path.split(&['\\', '/'][..]).next_back().unwrap_or(path)
 }
 
 #[cfg(test)]
