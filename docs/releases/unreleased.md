@@ -252,3 +252,7 @@
 - Moving between images with the arrow keys keeps the detail's sidebar on the
   panel you were reading. In Safari and the macOS app it used to jump up to
   the panels above whenever the next image's sky context was loading.
+- On a phone, an image's detail view sizes the image to the frame's shape:
+  a landscape frame spans the width with no black band above and below,
+  which leaves about 130 px more of the screen for the panels. A portrait
+  frame stops at 60% of the height.

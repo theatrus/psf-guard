@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -56,6 +56,16 @@ interface ImageDetailViewProps {
   };
 }
 
+/** The frame's size in pixels from its header, when the catalog has it. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function headerDimensions(metadata: Record<string, any> | undefined) {
+  const width = metadata?.ImageWidth || metadata?.NAXIS1 || metadata?.ImageSize?.[0];
+  const height = metadata?.ImageHeight || metadata?.NAXIS2 || metadata?.ImageSize?.[1];
+  return typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0
+    ? { width, height }
+    : null;
+}
+
 export default function ImageDetailView({
   dbId,
   imageId,
@@ -102,6 +112,12 @@ export default function ImageDetailView({
     width: number;
     height: number;
   } | null>(null);
+  // On a phone the image area takes the frame's shape: `.detail-image` in
+  // App.css reads --detail-frame-aspect. It comes from the bitmap the zoom is
+  // calibrated against, else the frame's header, else the last frame shown,
+  // so the area keeps its size from one frame to the next.
+  const detailImageRef = useRef<HTMLDivElement>(null);
+  const [bitmapAspect, setBitmapAspect] = useState<{ imageId: number; aspect: number } | null>(null);
 
   // The sidebar's panels fold away, and stay as the viewer left them from
   // image to image. Calibration keeps its own rule (see CalibrationPanel).
@@ -375,16 +391,9 @@ export default function ImageDetailView({
 
   // Load original dimensions from metadata if available
   useEffect(() => {
-    // Try different possible field names for image dimensions
-    const width = image?.metadata?.ImageWidth || 
-                  image?.metadata?.NAXIS1 || 
-                  image?.metadata?.ImageSize?.[0];
-    const height = image?.metadata?.ImageHeight || 
-                   image?.metadata?.NAXIS2 || 
-                   image?.metadata?.ImageSize?.[1];
-    
-    if (width && height && typeof width === 'number' && typeof height === 'number') {
-      zoom.setImageDimensions(width, height, true);
+    const dimensions = headerDimensions(image?.metadata);
+    if (dimensions) {
+      zoom.setImageDimensions(dimensions.width, dimensions.height, true);
     }
   }, [image, zoom]);
   
@@ -474,6 +483,12 @@ export default function ImageDetailView({
 
     setDisplayedBitmapDimensions({ width, height });
 
+    // Give the phone's image area this frame's shape before the fit below
+    // measures it; the state keeps the next render in step.
+    const aspect = width / height;
+    detailImageRef.current?.style.setProperty('--detail-frame-aspect', String(aspect));
+    setBitmapAspect({ imageId, aspect });
+
     zoom.setImageDimensions(width, height, useOriginalImage);
 
     const switching = imageStateRef.current === 'switching-to-original';
@@ -546,6 +561,13 @@ export default function ImageDetailView({
   const hideMainImage =
     !showPsf && (!visibleMainSrcIsCurrent || !currentMainSrcIsLoaded);
 
+  const header = image.id === imageId ? headerDimensions(image.metadata) : null;
+  const frameAspect =
+    (bitmapAspect?.imageId === imageId ? bitmapAspect.aspect : null)
+    ?? (header ? header.width / header.height : null)
+    ?? bitmapAspect?.aspect
+    ?? null;
+
   return (
     <div className="image-detail-overlay" onClick={onClose}>
       <div className="image-detail" onClick={e => e.stopPropagation()}>
@@ -560,7 +582,11 @@ export default function ImageDetailView({
         </div>
 
         <div className="detail-content">
-          <div className="detail-image">
+          <div
+            className="detail-image"
+            ref={detailImageRef}
+            style={frameAspect ? { '--detail-frame-aspect': String(frameAspect) } as CSSProperties : undefined}
+          >
             <div 
               className={`image-container zoom-container ${hasOverflow ? 'has-overflow' : ''}`}
               ref={zoom.containerRef}
