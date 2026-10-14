@@ -49,7 +49,9 @@ npm run lint
 npx vitest run
 npm run build
 
-# Browser end-to-end tests; requires a built psf-guard binary
+# Browser end-to-end tests; requires a built psf-guard binary. Scroll specs
+# also run in WebKit (Safari's engine and the macOS app's WebView).
+npx playwright install chromium webkit
 npx playwright test
 
 # Run the server or desktop app
@@ -195,7 +197,9 @@ Current behavior: [importing](docs/IMPORTING.md) and
 - Keep project and database scope in URL state so reload, navigation, and
   shared links restore the same view.
 - Preserve scroll position while previews load, cache status changes, or data
-  refreshes.
+  refreshes. Safari and the macOS app run WebKit, which has no CSS scroll
+  anchoring, so keep the place in code and cover it in
+  `static/e2e/detail-scroll.spec.ts`, which also runs in WebKit.
 - Grid and Sequence share arrow-key navigation and Space selection.
 - Image zoom state is calibrated against the bitmap dimensions recorded by the
   zoom hook. Report every loaded bitmap before constraining pan or scale.

@@ -1700,10 +1700,17 @@
     flex-direction: column;
   }
 
+  /* The frame's own shape: the full width, and as tall as the frame is at
+     the width the zoom fits it to. Across, the 0.5rem padding and the
+     zoom's 10px fit margin a side leave 100vw - 36px for the frame; down,
+     the content height adds the same 20px of fit margin, so the frame has
+     the same border above and below as at the sides.
+     --detail-frame-aspect comes from ImageDetailView. A portrait frame
+     stops at 60% of the height, leaving room for the panels; a very wide
+     one keeps room for the loading message. */
   .detail-image {
     flex: none;
-    height: 46vh;
-    min-height: 220px;
+    height: clamp(160px, calc((100vw - 36px) / var(--detail-frame-aspect, 1.5) + 20px), 60vh);
     padding: 0.5rem;
   }
 

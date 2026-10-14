@@ -93,6 +93,15 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    // Safari's engine, which the macOS app's WebView and every iPhone
+    // browser share. It has no CSS scroll anchoring and lays out phones its
+    // own way, so the detail's scroll and phone specs run here too; the rest
+    // stay Chromium-only to keep the run short.
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
+      testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts'],
+    },
   ],
 
   webServer: [

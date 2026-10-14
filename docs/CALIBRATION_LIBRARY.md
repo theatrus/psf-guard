@@ -692,6 +692,16 @@ every kind** opens them all. The choice is kept in the address
 (`calibFocus`), so it stays chosen from image to image and in a shared
 link. Opened from the chip, or from Images filtered by a finding, the
 panel comes into view with that finding chosen.
+
+The panel folds like the others beside the image. It opens on its own for
+a light the background check marked Poor or Check, and stays folded for one
+with no finding, with "no findings" on its title line; the mark decides this,
+so a folded panel asks the server for nothing until you open it. Opening or
+folding it by hand makes that the rule for every light, kept in this browser.
+Coming from the chip or from Images filtered by calibration opens it either
+way; folding it then keeps it folded until you follow another chip or
+filter.
+
 Images has a **Calibration** filter: **Poor**, **Check**, or both. Sequence
 adds **Poor calibration** to **Select**, so the lights can go straight to
 **Review rejection**. In the Calibration report, each Quality finding, each

@@ -5,42 +5,60 @@ import {
   activeQualityRegionSignals,
   qualityRegionSignalCount,
 } from '../utils/qualityRegionOverlay';
+import DetailSection from './DetailSection';
 
 interface QualityAnalysisSummaryProps {
   quality?: ImageQualityResult | null;
   statusMessage?: string;
+  /** A few words for `statusMessage` on a folded panel's heading. */
+  statusSummary?: string;
   overlayVisible?: boolean;
   onToggleOverlay?: () => void;
+  /** Folded, the heading says only the score and the review reason. */
+  open?: boolean;
+  onToggleOpen?: () => void;
 }
 
 export default function QualityAnalysisSummary({
   quality,
   statusMessage,
+  statusSummary,
   overlayVisible = false,
   onToggleOverlay,
+  open = true,
+  onToggleOpen,
 }: QualityAnalysisSummaryProps) {
+  const section = {
+    title: 'Quality analysis',
+    className: 'detail-quality-analysis',
+    open,
+    onToggle: onToggleOpen,
+  };
+
   if (!quality) {
     if (!statusMessage) return null;
     return (
-      <div className="info-section detail-quality-analysis">
-        <h3>Quality analysis</h3>
+      <DetailSection {...section} summary={statusSummary}>
         <p className="detail-quality-status">{statusMessage}</p>
-      </div>
+      </DetailSection>
     );
   }
 
   const regionOverlay = quality.spatial_overlay;
   const regionCount = regionOverlay ? qualityRegionSignalCount(regionOverlay) : 0;
   const regionSignals = regionOverlay ? activeQualityRegionSignals(regionOverlay) : [];
+  const score = `${Math.round(quality.quality_score * 100)}%`;
 
   return (
-    <div className="info-section detail-quality-analysis">
-      <h3>Quality analysis</h3>
+    <DetailSection
+      {...section}
+      summary={quality.regrade_reason ? `${score} · ${quality.regrade_reason}` : score}
+    >
       <div
         className="detail-quality-summary"
         title={qualityScoreDescription(quality, 'capture_sequence')}
       >
-        <strong>{Math.round(quality.quality_score * 100)}%</strong>
+        <strong>{score}</strong>
         <span>{qualityScoreBasis(quality)}</span>
       </div>
       {quality.regrade_reason || quality.details ? (
@@ -79,6 +97,6 @@ export default function QualityAnalysisSummary({
           </p>
         </div>
       )}
-    </div>
+    </DetailSection>
   );
 }

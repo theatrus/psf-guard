@@ -98,3 +98,31 @@ export async function openSettings(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Menu', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Settings' }).click();
 }
+
+/** An 8×6 grey PNG, for specs that need a view laid out but not its pixels. */
+const STUB_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAD0lEQVR4nGPQwAEYBlICAJhwFoEbNrITAAAAAElFTkSuQmCC',
+  'base64',
+);
+
+/**
+ * Answer a page's preview, annotated-image and star requests without the
+ * server. A spec about layout or scrolling then leaves no generation work in
+ * the shared preview queue, and the image-detail specs after it, which time
+ * the real queue, get it to themselves.
+ */
+export async function stubPixelWork(page: Page): Promise<void> {
+  await page.route(/\/images\/\d+\/(preview|annotated)/, (route) =>
+    route.fulfill({ status: 200, contentType: 'image/png', body: STUB_PNG }),
+  );
+  await page.route(/\/images\/\d+\/stars/, (route) =>
+    route.fulfill({
+      json: {
+        success: true,
+        error: null,
+        status: 'ready',
+        data: { detected_stars: 0, average_hfr: 0, average_fwhm: 0, width: 8, height: 6, stars: [] },
+      },
+    }),
+  );
+}

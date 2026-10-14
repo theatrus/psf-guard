@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../api/client';
@@ -19,12 +19,15 @@ import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import QualityAnalysisSummary from './QualityAnalysisSummary';
 import QualityRegionOverlay from './QualityRegionOverlay';
 import CalibrationPanel from './CalibrationPanel';
+import DetailSection from './DetailSection';
 import {
   colorPreviewEnabled,
   setColorPreview,
   useColorPreview,
 } from '../hooks/useColorPreview';
 import { setSkyOverlay, useSkyOverlay } from '../hooks/useSkyOverlay';
+import { useDetailSection } from '../hooks/useDetailSections';
+import { useSidebarScrollAnchor } from '../hooks/useSidebarScrollAnchor';
 import { useAccess } from '../auth/access';
 
 interface ImageDetailViewProps {
@@ -51,6 +54,16 @@ interface ImageDetailViewProps {
     getLastAction: () => any; // eslint-disable-line @typescript-eslint/no-explicit-any
     getNextRedoAction: () => any; // eslint-disable-line @typescript-eslint/no-explicit-any
   };
+}
+
+/** The frame's size in pixels from its header, when the catalog has it. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function headerDimensions(metadata: Record<string, any> | undefined) {
+  const width = metadata?.ImageWidth || metadata?.NAXIS1 || metadata?.ImageSize?.[0];
+  const height = metadata?.ImageHeight || metadata?.NAXIS2 || metadata?.ImageSize?.[1];
+  return typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0
+    ? { width, height }
+    : null;
 }
 
 export default function ImageDetailView({
@@ -99,6 +112,22 @@ export default function ImageDetailView({
     width: number;
     height: number;
   } | null>(null);
+  // On a phone the image area takes the frame's shape: `.detail-image` in
+  // App.css reads --detail-frame-aspect. It comes from the bitmap the zoom is
+  // calibrated against, else the frame's header, else the last frame shown,
+  // so the area keeps its size from one frame to the next.
+  const detailImageRef = useRef<HTMLDivElement>(null);
+  const [bitmapAspect, setBitmapAspect] = useState<{ imageId: number; aspect: number } | null>(null);
+
+  // The sidebar's panels fold away, and stay as the viewer left them from
+  // image to image. Calibration keeps its own rule (see CalibrationPanel).
+  // A folded panel's data still loads where the image overlays need it.
+  const infoSection = useDetailSection('info');
+  const qualitySection = useDetailSection('quality');
+  const skySection = useDetailSection('sky');
+  const satelliteSection = useDetailSection('satellites');
+  const [sidebar, setSidebar] = useState<HTMLDivElement | null>(null);
+  useSidebarScrollAnchor(sidebar);
 
   // Fetch image details
   const { data: image, isLoading } = useQuery({
@@ -221,6 +250,11 @@ export default function ImageDetailView({
         : quality
           ? undefined
           : 'No sequence score is available for this image.';
+  const qualityStatusSummary = qualityScope.isLoading
+      ? 'loading…'
+      : qualityScope.error
+        ? 'unavailable'
+        : 'no score';
 
   const {
     data: astrometry,
@@ -357,16 +391,9 @@ export default function ImageDetailView({
 
   // Load original dimensions from metadata if available
   useEffect(() => {
-    // Try different possible field names for image dimensions
-    const width = image?.metadata?.ImageWidth || 
-                  image?.metadata?.NAXIS1 || 
-                  image?.metadata?.ImageSize?.[0];
-    const height = image?.metadata?.ImageHeight || 
-                   image?.metadata?.NAXIS2 || 
-                   image?.metadata?.ImageSize?.[1];
-    
-    if (width && height && typeof width === 'number' && typeof height === 'number') {
-      zoom.setImageDimensions(width, height, true);
+    const dimensions = headerDimensions(image?.metadata);
+    if (dimensions) {
+      zoom.setImageDimensions(dimensions.width, dimensions.height, true);
     }
   }, [image, zoom]);
   
@@ -456,6 +483,12 @@ export default function ImageDetailView({
 
     setDisplayedBitmapDimensions({ width, height });
 
+    // Give the phone's image area this frame's shape before the fit below
+    // measures it; the state keeps the next render in step.
+    const aspect = width / height;
+    detailImageRef.current?.style.setProperty('--detail-frame-aspect', String(aspect));
+    setBitmapAspect({ imageId, aspect });
+
     zoom.setImageDimensions(width, height, useOriginalImage);
 
     const switching = imageStateRef.current === 'switching-to-original';
@@ -504,11 +537,36 @@ export default function ImageDetailView({
     return new Date(timestamp * 1000).toLocaleString();
   };
 
+  // A folded Image Information panel: why the light was rejected, when it
+  // was taken, for how long, and its stars and background.
+  const metadata = image.metadata ?? {};
+  const exposure = metadata.Exposure ?? metadata.ExposureDuration;
+  const infoSummary = [
+    image.reject_reason ? `rejected: ${image.reject_reason}` : null,
+    image.acquired_date
+      ? new Date(image.acquired_date * 1000).toLocaleString(undefined, {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        })
+      : null,
+    exposure !== undefined && exposure !== null ? `${exposure}s` : null,
+    typeof metadata.HFR === 'number' ? `HFR ${metadata.HFR.toFixed(2)}` : null,
+    typeof metadata.DetectedStars === 'number' ? `${metadata.DetectedStars} stars` : null,
+    typeof metadata.Mean === 'number' ? `mean ${metadata.Mean.toFixed(0)}` : null,
+  ].filter(Boolean).join(' · ');
+
   // Hide until the visible src has actually loaded AND still belongs to this
   // image/size — never show a stale or errored <img> (e.g. one whose original
   // request 202'd while its regenerated copy loads under a `v=` buster).
   const hideMainImage =
     !showPsf && (!visibleMainSrcIsCurrent || !currentMainSrcIsLoaded);
+
+  const header = image.id === imageId ? headerDimensions(image.metadata) : null;
+  const frameAspect =
+    (bitmapAspect?.imageId === imageId ? bitmapAspect.aspect : null)
+    ?? (header ? header.width / header.height : null)
+    ?? bitmapAspect?.aspect
+    ?? null;
 
   return (
     <div className="image-detail-overlay" onClick={onClose}>
@@ -524,7 +582,11 @@ export default function ImageDetailView({
         </div>
 
         <div className="detail-content">
-          <div className="detail-image">
+          <div
+            className="detail-image"
+            ref={detailImageRef}
+            style={frameAspect ? { '--detail-frame-aspect': String(frameAspect) } as CSSProperties : undefined}
+          >
             <div 
               className={`image-container zoom-container ${hasOverflow ? 'has-overflow' : ''}`}
               ref={zoom.containerRef}
@@ -726,10 +788,14 @@ export default function ImageDetailView({
             </div>
           </div>
 
-          <div className="detail-info">
-            <div className="info-section">
-              <h3>Image Information</h3>
-              
+          <div className="detail-info" ref={setSidebar}>
+            <DetailSection
+              title="Image Information"
+              summary={infoSummary}
+              open={infoSection.open}
+              onToggle={infoSection.toggle}
+              data-testid="image-info-panel"
+            >
               {/* Date on its own row */}
               <div className="date-row">
                 <span className="date-label">Date:</span>
@@ -830,7 +896,7 @@ export default function ImageDetailView({
                   <p>{image.reject_reason}</p>
                 </div>
               )}
-            </div>
+            </DetailSection>
 
             {viewCopies.length > 0 && (
               <div className="detail-copy-switch" role="group" aria-label="File shown">
@@ -867,6 +933,9 @@ export default function ImageDetailView({
             <QualityAnalysisSummary
               quality={quality}
               statusMessage={qualityStatus}
+              statusSummary={qualityStatusSummary}
+              open={qualitySection.open}
+              onToggleOpen={qualitySection.toggle}
               overlayVisible={showQualityRegions && !!quality?.spatial_overlay}
               onToggleOverlay={quality?.spatial_overlay ? () => {
                 setShowQualityRegions((visible) => !visible);
@@ -886,6 +955,8 @@ export default function ImageDetailView({
                 : undefined}
               isSolving={solveMatchesCurrent && solveAstrometry.isPending}
               canSolve={canCompute}
+              open={skySection.open}
+              onToggleOpen={skySection.toggle}
               overlayVisible={showAstrometry && !!astrometry?.solution}
               onToggleOverlay={toggleSkyOverlay}
               onSolve={() => solveAstrometry.mutate({ dbId, imageId })}
@@ -900,6 +971,8 @@ export default function ImageDetailView({
                 : undefined}
               isPredicting={satellitePredictionMatchesCurrent && predictSatellites.isPending}
               canPredict={canCompute}
+              open={satelliteSection.open}
+              onToggleOpen={satelliteSection.toggle}
               overlayVisible={showSatellites && !!satelliteStatus?.analysis}
               onToggleOverlay={() => {
                 setShowSatellites((visible) => !visible);

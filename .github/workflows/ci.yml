@@ -153,10 +153,10 @@ jobs:
         path: ~/.cache/ms-playwright
         key: ${{ runner.os }}-playwright-${{ hashFiles('static/package-lock.json') }}
 
-    - name: Install Playwright Chromium
+    - name: Install Playwright Chromium and WebKit
       run: |
         cd static
-        npx playwright install --with-deps chromium
+        npx playwright install --with-deps chromium webkit
 
     - name: Cache FITS fixtures
       # ~470 MB across four files; reuse between runs when the manifest

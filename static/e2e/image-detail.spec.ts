@@ -3,6 +3,7 @@ import {
   fixtureImageDir,
   registerFixtureDb,
   resetDatabases,
+  stubPixelWork,
   waitForCacheReady,
 } from './helpers';
 
@@ -202,6 +203,52 @@ test('detail view loads the large preview and renders pixels', async ({
   }));
   expect(dims.natW).toBeGreaterThan(500);
   expect(dims.natH).toBeGreaterThan(500);
+});
+
+test('detail panels fold and stay folded from image to image and across a reload', async ({ page }) => {
+  // About the sidebar, not the pixels: keep the preview queue free for the
+  // timed preview tests below.
+  await stubPixelWork(page);
+  const calibrationAsked: string[] = [];
+  page.on('request', (request) => {
+    if (/\/images\/\d+\/calibration/.test(request.url())) calibrationAsked.push(request.url());
+  });
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const info = page.getByRole('button', { name: /^Image Information/ });
+  const sky = page.getByRole('button', { name: /^Sky context/ });
+  const calibration = page.getByTestId('calibration-panel').getByRole('button', { name: /^Calibration/ });
+  await expect(sky).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 });
+  await expect(info).toHaveAttribute('aria-expanded', 'true');
+
+  await info.click();
+  await sky.click();
+  // Calibration starts open or folded by the light's marks; a click makes it
+  // the viewer's choice either way.
+  await calibration.click();
+  if ((await calibration.getAttribute('aria-expanded')) === 'true') await calibration.click();
+  await expect(info).toHaveAttribute('aria-expanded', 'false');
+  await expect(sky).toHaveAttribute('aria-expanded', 'false');
+  await expect(calibration).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByTestId('image-file-location')).toHaveCount(0);
+  // Folded, the heading still says something.
+  await expect(sky).toHaveAccessibleName(/^Sky context .+/);
+
+  await page.keyboard.press('ArrowRight');
+  await expect(page).toHaveURL(/\/detail\/2/);
+  await expect(info).toHaveAttribute('aria-expanded', 'false');
+  await expect(sky).toHaveAttribute('aria-expanded', 'false');
+  await expect(calibration).toHaveAttribute('aria-expanded', 'false');
+
+  await page.reload();
+  await expect(sky).toHaveAttribute('aria-expanded', 'false', { timeout: 15_000 });
+  await expect(calibration).toHaveAttribute('aria-expanded', 'false');
+  // A folded Calibration panel asks for nothing about the lights it passes.
+  expect(calibrationAsked.filter((url) => url.includes('/images/2/calibration'))).toEqual([]);
+
+  await sky.click();
+  await expect(sky).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('astrometry-panel').getByRole('button').nth(1)).toBeVisible();
 });
 
 test('detail view reveals the resolved file path on demand', async ({ page }) => {

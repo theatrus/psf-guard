@@ -10,6 +10,14 @@ export type ProjectPickerGrouping = 'activity' | 'database';
 /** How the Library lists projects on load: one row of pills each, or the full card. */
 export type LibraryDensity = 'compact' | 'detailed';
 
+/** The image detail's sidebar sections that fold. */
+export const DETAIL_SECTIONS = ['info', 'quality', 'calibration', 'sky', 'satellites'] as const;
+export type DetailSectionId = (typeof DETAIL_SECTIONS)[number];
+/** A section the viewer opened or folded by hand. */
+export type DetailSectionChoice = 'open' | 'closed';
+/** The sections the viewer chose for; one left out follows its default. */
+export type DetailSectionChoices = Partial<Record<DetailSectionId, DetailSectionChoice>>;
+
 export interface DisplayPreferences {
   /** Show the smaller "night <score>" chip — the per-session basis shown
    * when the main badge is the all-sessions score. */
@@ -27,7 +35,16 @@ export interface DisplayPreferences {
   projectPickerGrouping: ProjectPickerGrouping;
   /** Whether Library projects open as compact rows or full cards. */
   libraryDensity: LibraryDensity;
+  /** The image detail's sidebar sections the viewer opened or folded. */
+  detailSections: DetailSectionChoices;
 }
+
+/** A whole set of preferences, where leaving out the detail sections
+ *  keeps them as they are: a caller that changes a chip does not reset
+ *  which sections are open. */
+export type DisplayPreferencesUpdate = Omit<DisplayPreferences, 'detailSections'> & {
+  detailSections?: DetailSectionChoices;
+};
 
 const STORAGE_KEY = 'psf-guard.display-preferences';
 const DEFAULTS: DisplayPreferences = {
@@ -37,6 +54,7 @@ const DEFAULTS: DisplayPreferences = {
   advanceOnGrade: true,
   projectPickerGrouping: 'activity',
   libraryDensity: 'compact',
+  detailSections: {},
 };
 
 type Listener = () => void;
@@ -46,6 +64,17 @@ const listeners = new Set<Listener>();
 interface StoredPreferences extends Partial<DisplayPreferences> {
   /** Earlier builds stored one switch for both chip types. */
   showSecondaryScore?: boolean;
+}
+
+function sanitizeSections(value: unknown): DetailSectionChoices {
+  if (!value || typeof value !== 'object') return {};
+  const stored = value as Record<string, unknown>;
+  const choices: DetailSectionChoices = {};
+  for (const id of DETAIL_SECTIONS) {
+    const choice = stored[id];
+    if (choice === 'open' || choice === 'closed') choices[id] = choice;
+  }
+  return choices;
 }
 
 function sanitize(parsed: StoredPreferences): DisplayPreferences {
@@ -73,6 +102,7 @@ function sanitize(parsed: StoredPreferences): DisplayPreferences {
     projectPickerGrouping:
       parsed.projectPickerGrouping === 'database' ? 'database' : DEFAULTS.projectPickerGrouping,
     libraryDensity: parsed.libraryDensity === 'detailed' ? 'detailed' : DEFAULTS.libraryDensity,
+    detailSections: sanitizeSections(parsed.detailSections),
   };
 }
 
@@ -98,14 +128,19 @@ if (typeof window !== 'undefined') {
   });
 }
 
-export function setDisplayPreferences(next: DisplayPreferences): void {
-  current = sanitize(next);
+export function setDisplayPreferences(next: DisplayPreferencesUpdate): void {
+  current = sanitize({ ...next, detailSections: next.detailSections ?? current.detailSections });
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
   } catch {
     // Keep the in-memory preference even when it cannot be persisted.
   }
   listeners.forEach((listener) => listener());
+}
+
+/** Remember that the viewer opened or folded one detail section. */
+export function setDetailSection(id: DetailSectionId, choice: DetailSectionChoice): void {
+  setDisplayPreferences({ ...current, detailSections: { ...current.detailSections, [id]: choice } });
 }
 
 function subscribe(listener: Listener): () => void {

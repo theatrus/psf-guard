@@ -1,5 +1,6 @@
 import type { AstrometryAnalysis, CatalogHit } from '../api/types';
 import { fieldRotation } from '../utils/fieldRotation';
+import DetailSection from './DetailSection';
 
 interface AstrometryPanelProps {
   analysis?: AstrometryAnalysis;
@@ -11,6 +12,9 @@ interface AstrometryPanelProps {
   overlayVisible: boolean;
   onToggleOverlay: () => void;
   onSolve: () => void;
+  /** Folded, the heading says only whether and where the field solved. */
+  open?: boolean;
+  onToggleOpen?: () => void;
 }
 
 function formatRa(raDeg: number): string {
@@ -45,6 +49,21 @@ function objectSubtitle(hit: CatalogHit): string {
   return details.join(' · ');
 }
 
+/** A folded panel's line: whether the pixels solved, where the target fell
+ *  and how many objects the overlay marks. The badge beside it says how the
+ *  field was found; a header WCS is not a solve. */
+function skySummary(analysis: AstrometryAnalysis): string {
+  const solution = analysis.solution;
+  if (!solution) return analysis.status === 'failed' ? 'solve failed' : 'not solved';
+  const parts = analysis.mode === 'embedded_wcs' ? [] : ['solved'];
+  if (analysis.pointing) {
+    parts.push(analysis.pointing.target_in_frame ? 'target in frame' : 'target outside frame');
+  }
+  const objects = solution.objects?.length ?? 0;
+  parts.push(`${objects} object${objects === 1 ? '' : 's'}`);
+  return parts.join(' · ');
+}
+
 export default function AstrometryPanel({
   analysis,
   isLoading,
@@ -55,24 +74,29 @@ export default function AstrometryPanel({
   overlayVisible,
   onToggleOverlay,
   onSolve,
+  open = true,
+  onToggleOpen,
 }: AstrometryPanelProps) {
+  const section = {
+    title: 'Sky context',
+    className: 'astrometry-section',
+    headingClassName: 'astrometry-heading-row',
+    'data-testid': 'astrometry-panel',
+    open,
+    onToggle: onToggleOpen,
+  };
+
   if (isLoading) {
     return (
-      <section className="info-section astrometry-section" data-testid="astrometry-panel">
-        <div className="astrometry-heading-row">
-          <h3>Sky context</h3>
-          <span className="astrometry-badge">Reading headers…</span>
-        </div>
-      </section>
+      <DetailSection {...section} badge={<span className="astrometry-badge">Reading headers…</span>} />
     );
   }
 
   if (error || !analysis) {
     return (
-      <section className="info-section astrometry-section" data-testid="astrometry-panel">
-        <h3>Sky context</h3>
+      <DetailSection {...section} summary="unavailable">
         <p className="astrometry-message">{error || 'Astrometry information is unavailable.'}</p>
-      </section>
+      </DetailSection>
     );
   }
 
@@ -99,12 +123,11 @@ export default function AstrometryPanel({
   const shownHits = analysis.catalog_hits.slice(0, 6);
 
   return (
-    <section className="info-section astrometry-section" data-testid="astrometry-panel">
-      <div className="astrometry-heading-row">
-        <h3>Sky context</h3>
-        <span className={`astrometry-badge astrometry-badge-${analysis.status}`}>{badge}</span>
-      </div>
-
+    <DetailSection
+      {...section}
+      badge={<span className={`astrometry-badge astrometry-badge-${analysis.status}`}>{badge}</span>}
+      summary={isSolving ? 'solving…' : solveError ? 'solve failed' : skySummary(analysis)}
+    >
       {solution && (
         <button
           type="button"
@@ -203,6 +226,6 @@ export default function AstrometryPanel({
           {solveError || analysis.error}
         </p>
       )}
-    </section>
+    </DetailSection>
   );
 }

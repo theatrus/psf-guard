@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import {
+  setDetailSection,
   setDisplayPreferences,
   useDisplayPreferences,
 } from '../useDisplayPreferences';
@@ -14,6 +15,7 @@ describe('display preferences', () => {
       advanceOnGrade: true,
       projectPickerGrouping: 'activity',
       libraryDensity: 'compact',
+      detailSections: {},
     });
   });
 
@@ -25,7 +27,34 @@ describe('display preferences', () => {
       advanceOnGrade: true,
       projectPickerGrouping: 'activity',
       libraryDensity: 'compact',
+      detailSections: {},
     });
+  });
+
+  it('remembers each detail section the viewer opened or folded', () => {
+    const { result } = renderHook(() => useDisplayPreferences());
+    act(() => setDetailSection('calibration', 'open'));
+    act(() => setDetailSection('sky', 'closed'));
+    expect(result.current.detailSections).toEqual({ calibration: 'open', sky: 'closed' });
+    expect(
+      JSON.parse(window.localStorage.getItem('psf-guard.display-preferences')!).detailSections,
+    ).toEqual({ calibration: 'open', sky: 'closed' });
+
+    // A caller that changes a chip, and does not name the sections, keeps them.
+    act(() => setDisplayPreferences({ ...result.current, showNightChip: false, detailSections: undefined }));
+    expect(result.current.detailSections).toEqual({ calibration: 'open', sky: 'closed' });
+  });
+
+  it('drops stored section choices it does not know', () => {
+    window.localStorage.setItem(
+      'psf-guard.display-preferences',
+      JSON.stringify({ detailSections: { calibration: 'closed', sky: 'sideways', stacks: 'open' } }),
+    );
+    window.dispatchEvent(
+      new StorageEvent('storage', { key: 'psf-guard.display-preferences' }),
+    );
+    const { result } = renderHook(() => useDisplayPreferences());
+    expect(result.current.detailSections).toEqual({ calibration: 'closed' });
   });
 
   it('toggles each chip type independently', () => {
@@ -79,6 +108,7 @@ describe('display preferences', () => {
       advanceOnGrade: false,
       projectPickerGrouping: 'database',
       libraryDensity: 'compact',
+      detailSections: {},
     });
   });
 
