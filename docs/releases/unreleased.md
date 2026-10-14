@@ -161,3 +161,41 @@
   sequence tabs in Sequence, **Starless** and **Stars** on a stack preview,
   the start years under the Sky timeline, the plan whose workspace is open
   in the project picker, and the project you came from in the Library.
+- **Use anyway** now puts a dark graded for stray light back into its
+  master. Master building screens darks for stray light itself only while
+  some dark in the set has no grade yet, and a master's record lists only
+  the frames it combined.
+- Forgetting calibration frames, marking their validity, **Keep out**,
+  **Use anyway** and **Clear generated masters** now need database
+  management, as the guide said, and the Calibration page offers them only
+  to accounts that can write.
+- Calibration health catches up on its own. A light whose file was missing
+  is judged again once a directory refresh finds it or the image folders
+  change, and new lights from N.I.N.A. or a CLI regrade are judged the next
+  time the Library or an image view looks. Judging a project again reads
+  only the lights whose file changed, and a server that stops ends the work
+  between lights.
+- Sequence holds back **Poor calibration** in **Select**, marked
+  *(updating)*, until the calibration check has caught up with recent
+  changes.
+- A night's "can't be calibrated" link in the coverage report opens only
+  that night's lights.
+- On the Calibration page, stepping through flats in compare mode stays in
+  the comparison instead of flashing back to the plain frame and losing the
+  zoom. Changing database clears the last database's rig and filters, and
+  each project opens on its own rig unless you chose one by hand.
+- A link to a calibration session keeps working when a colder or warmer
+  frame joins the session.
+- Import attaches a light to an exposure template left at the camera's
+  default gain, offset or readout mode (-1), instead of holding it as
+  having no exposure plan or adding a second template and plan.
+- The transfer preview counts the **Keep out** and **Use anyway** choices a
+  pull brings, since they change the destination's masters, and a choice
+  made on the destination stays with a file the source cataloged under
+  another ID.
+- Scan rules also hold when an import starts inside an excluded or ignored
+  folder, as **Review** does. A full path saved as a pattern is refused with
+  the pattern to write instead, and automatic import no longer rereads
+  lights its filters left out while their files are unchanged.
+- Restarting the server from the desktop app's Settings waits for the old
+  server to finish its work, so the job queue it saves is not lost.
