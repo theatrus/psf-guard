@@ -79,6 +79,13 @@ Write attribute selectors with single quotes, as in `[aria-pressed='true']`.
 `src/components/toolbar/toolbar.css` shows the pattern: its states come from
 one section and it writes no colour of its own.
 
+`src/__tests__/themeTokens.test.ts` holds this in place. It fails on a colour
+literal outside a token definition, a colour in a component's source, a
+class that only says a state, or a double-quoted attribute selector. The few
+kept on purpose are listed in `src/__tests__/themeTokens.allowlist.ts`, which
+may only shrink; regenerate it after removing one with
+`UPDATE_THEME_ALLOWLIST=1 npx vitest run src/__tests__/themeTokens.test.ts`.
+
 ## Features
 
 - **Catalog overview** across every configured database. It keeps the scope of
