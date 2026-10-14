@@ -1677,6 +1677,7 @@ pub fn main() -> Result<()> {
                     preview_color_default,
                     keep_failed_uploads: app_config.server.keep_failed_uploads(),
                     astrometry_config,
+                    shutdown: None,
                 })
                 .await
             })?;

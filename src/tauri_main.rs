@@ -1,8 +1,10 @@
 use crate::cli::PregenerationConfig;
 use crate::db_registry::{DbEntry, DbRegistry};
+use crate::server::shutdown::Shutdown;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::oneshot;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
@@ -24,14 +26,23 @@ struct ServerState {
     /// The running server, which ends once its work has drained and it has
     /// written the job journal for the last time.
     server_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// The running server's stop, which says what it still waits for.
+    server_stop: Arc<Mutex<Option<Arc<Shutdown>>>>,
 }
 
+/// How long a restart waits for the old server's work. Past this, a job is
+/// most likely stuck, as on a share that stopped answering.
+const RESTART_WAIT: Duration = Duration::from_secs(120);
+
 impl ServerState {
-    /// Stop the running server and wait until it has ended. A stop lets
-    /// work in hand reach a safe point, then writes the job journal; the
-    /// next server reads that file when it starts and writes it from then
-    /// on, so it must not start before the last write.
-    async fn stop_server(&self) {
+    /// Stop the running server and wait, up to `wait`, until it has ended.
+    /// A stop lets work in hand reach a safe point, then writes the job
+    /// journal; the next server reads that file when it starts and writes
+    /// it from then on, so it must not start before the last write. When
+    /// the wait runs out, the error says what the old server still waits
+    /// for, and the server is left to finish: the next restart waits for it
+    /// again, and restarting the app ends it.
+    async fn stop_server(&self, wait: Duration) -> Result<(), String> {
         let shutdown = self.server_shutdown.lock().unwrap().take();
         if let Some(shutdown_tx) = shutdown
             && shutdown_tx.send(()).is_err()
@@ -39,10 +50,37 @@ impl ServerState {
             tracing::warn!("Failed to send shutdown signal");
         }
         let task = self.server_task.lock().unwrap().take();
-        if let Some(task) = task {
-            tracing::info!("🛑 Waiting for the server to finish its work before restarting");
-            if let Err(error) = task.await {
+        let Some(mut task) = task else {
+            return Ok(());
+        };
+        tracing::info!("🛑 Waiting for the server to finish its work before restarting");
+        match tokio::time::timeout(wait, &mut task).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
                 tracing::warn!("The server ended badly: {error}");
+                Ok(())
+            }
+            Err(_) => {
+                let waiting = self
+                    .server_stop
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|stop| stop.running())
+                    .unwrap_or_default();
+                *self.server_task.lock().unwrap() = Some(task);
+                let message = format!(
+                    "The server is still finishing its work after {} s{}; restart the app \
+                     to end it",
+                    wait.as_secs(),
+                    if waiting.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", waiting.join("; "))
+                    }
+                );
+                tracing::warn!("{message}");
+                Err(message)
             }
         }
     }
@@ -79,6 +117,8 @@ pub fn main() {
     let server_astrometry = initial_registry.astrometry.clone();
     let server_config_for_task = server_config.clone();
     let registry_path_for_task = registry_path.clone();
+    let server_stop = Shutdown::new();
+    let stop_for_task = Arc::clone(&server_stop);
     let server_task = rt.spawn(async move {
         if let Err(e) = start_server_for_tauri(
             server_port,
@@ -87,6 +127,7 @@ pub fn main() {
             server_config_for_task,
             registry_path_for_task,
             shutdown_rx,
+            stop_for_task,
         )
         .await
         {
@@ -103,6 +144,7 @@ pub fn main() {
             registry_path: Arc::new(Mutex::new(registry_path)),
             server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
             server_task: Arc::new(Mutex::new(Some(server_task))),
+            server_stop: Arc::new(Mutex::new(Some(server_stop))),
         })
         .manage(server_config)
         .invoke_handler(tauri::generate_handler![
@@ -339,6 +381,7 @@ async fn start_server_for_tauri(
     server_config: TauriServerConfig,
     registry_path: PathBuf,
     shutdown_rx: oneshot::Receiver<()>,
+    stop: Arc<Shutdown>,
 ) -> anyhow::Result<()> {
     // No config file: Settings choose every folder, and the cache defaults
     // to the platform cache folder.
@@ -390,6 +433,7 @@ async fn start_server_for_tauri(
         preview_color_default: true,
         keep_failed_uploads: false,
         astrometry_config,
+        shutdown: Some(stop),
     };
 
     crate::server::run_server_with_shutdown(server_config, shutdown_rx).await
@@ -521,8 +565,9 @@ async fn restart_server(
     let (databases, astrometry_config) = (registry.databases, registry.astrometry);
 
     // The old server's last journal write would otherwise replace the new
-    // server's queue.
-    state.stop_server().await;
+    // server's queue. Should it not finish in time, the error goes back to
+    // Settings, which restarts the whole app instead.
+    state.stop_server(RESTART_WAIT).await?;
 
     let server_port = find_free_port().map_err(|e| format!("Could not find free port: {}", e))?;
     let server_url = format!("http://localhost:{}", server_port);
@@ -540,6 +585,8 @@ async fn restart_server(
     tracing::info!("🚀 Starting new server on {}", server_url);
 
     let base_clone = base.inner().clone();
+    let stop = Shutdown::new();
+    *state.server_stop.lock().unwrap() = Some(Arc::clone(&stop));
     let task = tokio::spawn(async move {
         if let Err(e) = start_server_for_tauri(
             server_port,
@@ -548,6 +595,7 @@ async fn restart_server(
             base_clone,
             registry_path,
             shutdown_rx,
+            stop,
         )
         .await
         {
@@ -614,7 +662,7 @@ mod tests {
         let written = Arc::clone(&journal_written);
         let task = tokio::spawn(async move {
             shutdown_rx.await.ok();
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
             written.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         let state = ServerState {
@@ -622,8 +670,9 @@ mod tests {
             registry_path: Arc::new(Mutex::new(PathBuf::new())),
             server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
             server_task: Arc::new(Mutex::new(Some(task))),
+            server_stop: Arc::new(Mutex::new(Some(Shutdown::new()))),
         };
-        state.stop_server().await;
+        state.stop_server(RESTART_WAIT).await.unwrap();
         assert!(
             journal_written.load(std::sync::atomic::Ordering::SeqCst),
             "the next server starts only after the old one's last write"
@@ -631,7 +680,38 @@ mod tests {
         assert!(state.server_shutdown.lock().unwrap().is_none());
         assert!(state.server_task.lock().unwrap().is_none());
         // Nothing left to stop: returns at once.
-        state.stop_server().await;
+        state.stop_server(RESTART_WAIT).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_restart_gives_up_on_a_stuck_server_and_says_what_it_waits_for() {
+        // A job stuck in a read from a share that stopped answering: the
+        // server never ends.
+        let stop = Shutdown::new();
+        let stuck = stop.hold("stack build (rig)");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            shutdown_rx.await.ok();
+            std::future::pending::<()>().await;
+        });
+        let state = ServerState {
+            url: Arc::new(Mutex::new(String::new())),
+            registry_path: Arc::new(Mutex::new(PathBuf::new())),
+            server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
+            server_task: Arc::new(Mutex::new(Some(task))),
+            server_stop: Arc::new(Mutex::new(Some(stop))),
+        };
+        let error = state
+            .stop_server(Duration::from_millis(100))
+            .await
+            .unwrap_err();
+        assert!(error.contains("still finishing"), "{error}");
+        assert!(error.contains("stack build (rig)"), "{error}");
+        assert!(
+            state.server_task.lock().unwrap().is_some(),
+            "the next restart waits for it again"
+        );
+        drop(stuck);
     }
 
     #[test]
