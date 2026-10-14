@@ -164,31 +164,40 @@
 - **Use anyway** now puts a dark graded for stray light back into its
   master. Master building screens darks for stray light itself only while
   some dark in the set has no grade yet, and a master's record lists only
-  the frames it combined.
+  the frames it combined. After the upgrade, each dark and dark-flat master
+  whose frames are all graded builds once more, and so do the flats and
+  stacks built on it. A newly imported dark set builds twice: screened
+  before grading reaches it, then without the screen once it is graded.
 - Forgetting calibration frames, marking their validity, **Keep out**,
   **Use anyway** and **Clear generated masters** now need database
   management, as the guide said, and the Calibration page offers them only
   to accounts that can write.
 - Calibration health catches up on its own. A light whose file was missing
   is judged again once a directory refresh finds it or the image folders
-  change, and new lights from N.I.N.A. or a CLI regrade are judged the next
-  time the Library or an image view looks. Judging a project again reads
-  only the lights whose file changed, and a server that stops ends the work
-  between lights.
+  change. New lights from N.I.N.A. or a CLI regrade are judged once the
+  Library or an image view looks, within a couple of minutes and after any
+  grading pass. Judging a project again reads only the lights whose file
+  changed, and a server that stops ends the work between lights. The first
+  pass after the upgrade judges every project and reads every light's
+  header once.
 - Sequence holds back **Poor calibration** in **Select**, marked
   *(updating)*, until the calibration check has caught up with recent
   changes.
 - A night's "can't be calibrated" link in the coverage report opens only
-  that night's lights.
+  that night's lights, and Images keeps that night when you change another
+  filter.
 - On the Calibration page, stepping through flats in compare mode stays in
   the comparison instead of flashing back to the plain frame and losing the
   zoom. Changing database clears the last database's rig and filters, and
   each project opens on its own rig unless you chose one by hand.
-- A link to a calibration session keeps working when a colder or warmer
-  frame joins the session.
-- Import attaches a light to an exposure template left at the camera's
-  default gain, offset or readout mode (-1), instead of holding it as
-  having no exposure plan or adding a second template and plan.
+- A calibration session's address no longer changes when a colder or
+  warmer frame joins the session. Every dark and flat session gets a new
+  address once with this version, so a link saved before it opens the first
+  session instead.
+- Import attaches a light to an exposure plan whose template is left at the
+  camera's default gain, offset or readout mode (-1), instead of holding it
+  as having no exposure plan or adding a second template and plan. A plan
+  import adds still goes on a template with the lights' own settings.
 - The transfer preview counts the **Keep out** and **Use anyway** choices a
   pull brings, since they change the destination's masters, and a choice
   made on the destination stays with a file the source cataloged under
@@ -198,4 +207,6 @@
   the pattern to write instead, and automatic import no longer rereads
   lights its filters left out while their files are unchanged.
 - Restarting the server from the desktop app's Settings waits for the old
-  server to finish its work, so the job queue it saves is not lost.
+  server to finish its work, so the job queue it saves is not lost. If that
+  work is still running after two minutes, the log lists it and the whole
+  app restarts instead.

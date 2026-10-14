@@ -68,8 +68,10 @@ temperature, and for bias the exposure. A temperature or an angle drifts
 while a set is shot, so a frame joins a session while it sits within 1.5 °C
 (darks) or 1° (flats) of the next; bias is not split by temperature, since
 a bias set is often shot while the sensor cools. Nights split as in
-[Validity boundaries](#validity-boundaries). A link to a session keeps
-working when a colder or warmer frame joins it.
+[Validity boundaries](#validity-boundaries). A session's address carries
+its middle temperature or angle rounded to a whole degree, so a link to it
+keeps working when a colder or warmer frame joins it, unless that frame moves
+the middle across a half degree.
 
 The filters narrow the sessions and their frames: rig, type, filter,
 exposure, a temperature range, a range of nights, the grade, whether the
@@ -700,7 +702,9 @@ frame is kept out or used anyway, a validity mark changes, or the
 calibration settings change. A directory refresh and a change of image
 folders start one too, since a light's file may have turned up or moved.
 When the Library or an image view finds a result that no longer holds, as
-after N.I.N.A. writes new lights or the CLI regrades some, it asks for one.
+after N.I.N.A. writes new lights or the CLI regrades some, it asks for one:
+at most every two minutes per database, not while grading runs (grading asks
+for one when it ends), and not for fifteen minutes after a pass failed.
 It uses the background worker share and waits while interactive work runs;
 a server that stops ends it between lights.
 
