@@ -265,21 +265,22 @@ describe('ActivityChip', () => {
 
   it('moves a waiting build, removes one, and stops a running one after asking', async () => {
     const calls: string[] = [];
-    mockServer({
-      stacks: () => [
-        stack('R', 'running', 1, 4),
-        stack('B', 'queued', 0, 0, 0),
-        stack('G', 'queued', 0, 0, 1),
-      ],
-    });
+    let active = [
+      stack('R', 'running', 1, 4),
+      stack('B', 'queued', 0, 0, 0),
+      stack('G', 'queued', 0, 0, 1),
+    ];
+    mockServer({ stacks: () => active });
     server.use(
       http.post('/api/stack-activity/:jobId/move', async ({ params, request }) => {
         calls.push(`move ${params.jobId} ${JSON.stringify(await request.json())}`);
-        return ok({ schema_version: 1, active: [] });
+        active = [stack('R', 'running', 1, 4), stack('G', 'queued', 0, 0, 0), stack('B', 'queued', 0, 0, 1)];
+        return ok({ schema_version: 1, active });
       }),
       http.post('/api/stack-activity/:jobId/cancel', ({ params }) => {
         calls.push(`cancel ${params.jobId}`);
-        return ok({ schema_version: 1, active: [] });
+        active = active.filter((entry) => entry.job_id !== params.jobId);
+        return ok({ schema_version: 1, active });
       })
     );
     renderChip();
@@ -292,6 +293,7 @@ describe('ActivityChip', () => {
     await userEvent.click(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · G earlier' }));
     await waitFor(() => expect(calls).toEqual(['move G {"position":0}']));
 
+    await waitFor(() => expect(within(list).getByRole('button', { name: 'Remove Stacking: Alpha M44 · B from the line' })).toBeEnabled());
     await userEvent.click(within(list).getByRole('button', { name: 'Remove Stacking: Alpha M44 · B from the line' }));
     await waitFor(() => expect(calls).toContain('cancel B'));
 

@@ -15,6 +15,44 @@ use serde_json::Value;
 use tempfile::tempdir;
 use tower::ServiceExt;
 
+fn locked_version(name: &str) -> String {
+    let lock = include_str!("../Cargo.lock")
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    lock["package"]
+        .as_array_of_tables()
+        .unwrap()
+        .iter()
+        .find(|package| package["name"].as_str() == Some(name))
+        .unwrap()["version"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn cache_versions_follow_the_resolved_seiza_crates() {
+    for (name, version) in [
+        ("seiza", psf_guard::astrometry::SEIZA_VERSION),
+        ("seiza-fits", psf_guard::astrometry::SEIZA_FITS_VERSION),
+        (
+            "seiza-satellites",
+            psf_guard::satellites::SEIZA_SATELLITES_VERSION,
+        ),
+        (
+            "seiza-stacking",
+            psf_guard::server::stack_preview::SEIZA_STACKING_VERSION,
+        ),
+        ("seiza-stretch", env!("PSF_GUARD_SEIZA_STRETCH_VERSION")),
+        (
+            "seiza-background",
+            env!("PSF_GUARD_SEIZA_BACKGROUND_VERSION"),
+        ),
+    ] {
+        assert_eq!(version, locked_version(name), "{name} cache provenance");
+    }
+}
+
 fn build_app(state: Arc<AppState>) -> Router {
     Router::new()
         .route(
@@ -100,8 +138,11 @@ async fn capabilities_and_validation_report_a_partial_data_directory() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["data"]["seiza_version"], "0.12.2");
-    assert_eq!(body["data"]["seiza_fits_version"], "0.2.1");
+    assert_eq!(body["data"]["seiza_version"], locked_version("seiza"));
+    assert_eq!(
+        body["data"]["seiza_fits_version"],
+        locked_version("seiza-fits")
+    );
     assert_eq!(
         body["data"]["resources"]["objects"]["status"],
         serde_json::to_value(AstrometryResourceStatus::Available).unwrap()

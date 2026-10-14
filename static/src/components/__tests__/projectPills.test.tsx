@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { CalibrationPill, DatesPill, ProgressPill, ROW_COLUMNS, RowCells, StatePill } from '../projectPills';
+import { CalibrationPill, DatesPill, ProgressPill, RowCells, StatePill } from '../projectPills';
+import { ROW_COLUMNS } from '../projectRowColumns';
 
 describe('project pills', () => {
   it('reads Done once the goal is met, a percent before, and a count without a goal', () => {

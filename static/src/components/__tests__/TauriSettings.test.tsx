@@ -462,7 +462,7 @@ describe('TauriSettings import state', () => {
         'Remote receive: /images/remote (match catalog, 18 samples)'
       )
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit Remote catalog' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Remote catalog' }));
     expect(
       screen.getByRole('checkbox', { name: 'Accept remote image uploads' })
     ).toBeChecked();

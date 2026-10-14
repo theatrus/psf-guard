@@ -145,7 +145,7 @@ fn unpack(zip_path: &Path, root: &Path) -> Result<PathBuf> {
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let Some(relative) = entry.enclosed_name() else {
-            bail!("zip entry '{}' would leave the folder", entry.name());
+            bail!("zip entry '{}' would leave the folder", entry.name()?);
         };
         let target = root.join(&relative);
         if entry.is_dir() {

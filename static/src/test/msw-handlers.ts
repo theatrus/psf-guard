@@ -28,7 +28,7 @@ const emptyList = {
 // without registering its own mock. Path-nested under `/api/db/:dbId/...`
 // to match production routing. Per-test
 // `server.use(...)` overrides win for whatever the spec cares about; these
-// fill in the gaps so MSW's `onUnhandledRequest: 'error'` doesn't trip
+// fill in the gaps so MSW's `onUnhandledFrame: 'error'` doesn't trip
 // every time a side-effect query fires.
 const idleSpatialScan = {
   success: true,

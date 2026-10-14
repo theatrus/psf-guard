@@ -8,7 +8,7 @@ import { server } from '../../test/msw-server';
 import Overview from '../Overview';
 import { ago, percentDone, projectFamilies, stateLabel } from '../libraryFamilies';
 import { setDisplayPreferences, useDisplayPreferences } from '../../hooks/useDisplayPreferences';
-import { ROW_COLUMNS } from '../projectPills';
+import { ROW_COLUMNS } from '../projectRowColumns';
 
 function ok(data: unknown) {
   return HttpResponse.json({ success: true, data, error: null, status: 'ready' });

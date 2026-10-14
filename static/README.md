@@ -7,7 +7,7 @@ and `psf-guard server` serves the same files to a browser.
 
 ### Prerequisites
 
-- Node.js 18+ and npm
+- Node.js 24.15+ (24.x LTS, as in CI) and npm
 - The PSF Guard backend server running
 
 ### Setup

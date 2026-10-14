@@ -11,7 +11,7 @@ describe('Test infrastructure', () => {
   });
 
   it('MSW server is running (setup.ts loaded)', async () => {
-    // If MSW setup failed, this would throw due to onUnhandledRequest: 'error'.
+    // If MSW setup failed, this would throw due to onUnhandledFrame: 'error'.
     // Use the top-level /api/databases endpoint — no DB slug required.
     const response = await fetch('/api/databases');
     expect(response.ok).toBe(true);

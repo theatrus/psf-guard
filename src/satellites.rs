@@ -26,9 +26,9 @@ use crate::astrometry::{
 use crate::astrometry_headers::FitsAstrometryHeaders;
 use crate::FitsImage;
 
-/// Stamped on every persisted prediction. Raise it when an upgrade moves
-/// predicted tracks, so the next quality scan recomputes them.
-pub const SEIZA_SATELLITES_VERSION: &str = "0.12.0";
+/// Stamped on every persisted prediction. Following the resolved crate version
+/// lets the next quality scan recompute predictions after an upgrade.
+pub const SEIZA_SATELLITES_VERSION: &str = env!("PSF_GUARD_SEIZA_SATELLITES_VERSION");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

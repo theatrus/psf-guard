@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    emit_seiza_versions();
+
     // Run tauri-build when building with Tauri feature enabled
     if env::var("CARGO_FEATURE_TAURI").is_ok() {
         tauri_build::build()
@@ -10,6 +12,39 @@ fn main() {
 
     // Build and embed the React app
     build_react_app();
+}
+
+// Cache provenance must follow the resolved crates, including patch releases
+// selected by cargo update without a manifest change.
+fn emit_seiza_versions() {
+    println!("cargo:rerun-if-changed=Cargo.lock");
+    let lock_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("Cargo.lock");
+    let lock = std::fs::read_to_string(lock_path)
+        .expect("read Cargo.lock")
+        .parse::<toml_edit::DocumentMut>()
+        .expect("parse Cargo.lock");
+    let packages = lock["package"]
+        .as_array_of_tables()
+        .expect("locked packages");
+    for name in [
+        "seiza",
+        "seiza-fits",
+        "seiza-satellites",
+        "seiza-stretch",
+        "seiza-background",
+    ] {
+        let mut matches = packages
+            .iter()
+            .filter(|package| package["name"].as_str() == Some(name));
+        let package = matches.next().expect("locked Seiza dependency");
+        assert!(
+            matches.next().is_none(),
+            "ambiguous locked version of {name}"
+        );
+        let version = package["version"].as_str().expect("locked version");
+        let key = name.replace('-', "_").to_ascii_uppercase();
+        println!("cargo:rustc-env=PSF_GUARD_{key}_VERSION={version}");
+    }
 }
 
 fn build_react_app() {

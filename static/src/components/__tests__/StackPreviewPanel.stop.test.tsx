@@ -290,8 +290,9 @@ describe('StackPreviewPanel stop', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
 
-    const stop = await screen.findByRole('button', { name: 'Stop' });
-    await userEvent.click(stop);
+    await screen.findByRole('button', { name: 'Stop' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Build stacks' })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
 
     await waitFor(() => expect(cancelled).toBe(true));
     expect(await screen.findByText('Stack stopped')).toBeInTheDocument();

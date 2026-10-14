@@ -410,7 +410,8 @@ cargo build --release
 ./target/release/psf-guard server catalog.sqlite /path/to/images/
 ```
 
-The build needs Rust and Node.js/npm; it embeds the React frontend. Image
+The build needs Rust 1.90 or newer and Node.js 24.15+ with npm; repository
+checkouts use the pinned Rust toolchain. It embeds the React frontend. Image
 processing uses the pure-Rust
 [`seiza-imgproc`](https://github.com/theatrus/seiza) crate, so no native
 computer-vision libraries are required.

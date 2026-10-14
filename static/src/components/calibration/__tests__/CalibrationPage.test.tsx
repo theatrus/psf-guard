@@ -335,12 +335,20 @@ describe('CalibrationPage', () => {
 
   it("drops the last database's rig where the new one has a single rig", async () => {
     const seen = serveTwoDatabases(['o1']);
+    const sessions = vi.spyOn(apiClient, 'getCalibrationSessions');
     renderPage('/calibration?db=demo&project=7');
     await waitFor(() => expect(params().get('calRig')).toBe('rig2'));
     fireEvent.click(screen.getByRole('button', { name: 'Open Iris' }));
     await waitFor(() => expect(params().get('db')).toBe('other'));
     await waitFor(() => expect(params().get('calRig')).toBeNull());
-    await waitFor(() => expect(seen.other.at(-1)?.has('rig')).toBe(false));
+    // Requests can reach MSW out of order. Check the latest query at its
+    // call site, and that the unfiltered request reached the server.
+    await waitFor(() => {
+      const calls = sessions.mock.calls.filter(([dbId]) => dbId === 'other');
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.at(-1)?.[1]?.rig).toBeUndefined();
+      expect(seen.other.some((request) => !request.has('rig'))).toBe(true);
+    });
     // One rig: no Rig choice, and nothing hidden left choosing.
     expect(screen.queryByLabelText('Rig')).toBeNull();
     // Back in the first database, the project opens on its rig again.

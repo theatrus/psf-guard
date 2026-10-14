@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { act, render, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import { RETRY_FIRST_MS, SAVE_DELAY_MS, retryDelay, useAccountPreferences } from '../useAccountPreferences';
@@ -69,6 +69,9 @@ describe('account preferences', () => {
     window.localStorage.clear();
   });
   afterEach(() => {
+    // Unsubscribe before resetting the store; teardown must not queue a save
+    // that can reach the next test's MSW handlers.
+    cleanup();
     setPreferencesAccount(null);
     window.localStorage.clear();
   });

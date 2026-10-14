@@ -853,6 +853,11 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await expect(curveHeading).toBeVisible();
   await expect(curveSection.locator('.stack-snr-verdict')).toBeVisible();
 
+  // The native details toggle dispatches after its open attribute changes.
+  // Let the preference handler finish before navigating away.
+  await expect.poll(() => page.evaluate(() =>
+    localStorage.getItem('psf-guard.stack-snr-curve')
+  )).toBe('off');
   await page.reload();
   await expect(page.locator('.stack-preview-card')).toHaveCount(1);
   await expect(page.locator('.stack-preview-panel .stack-snr')).not.toHaveAttribute('open', '');

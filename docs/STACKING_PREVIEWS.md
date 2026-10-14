@@ -1542,7 +1542,9 @@ The content-addressed job ID includes the database/project, exact ordered
 inputs and grouping, grades, quality scores and regrade reasons, source path
 fingerprints, matched calibration fingerprints, an explicit PSF Guard
 cache-policy version, Seiza stacking revision, processing parameters, and
-preview format. Restoration and prepared
+preview format. Seiza solver, FITS, satellite, stretch, and background versions
+come from the resolved Cargo lockfile at build time, so dependency updates also
+refresh their cache provenance. Restoration and prepared
 color-input caches use narrower keys so display-only edits can reuse earlier
 linear work. Repeating an unchanged request loads the persistent result. A
 rebuild bypasses that lookup and atomically replaces the PNG, FITS, and

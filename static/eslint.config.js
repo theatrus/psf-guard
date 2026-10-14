@@ -12,7 +12,15 @@ export default tseslint.config([
     extends: [
       js.configs.recommended,
       tseslint.configs.recommended,
-      reactHooks.configs['recommended-latest'],
+      // Keep the core Hooks checks. React Compiler rules are a separate
+      // adoption; this app does not enable the compiler.
+      {
+        plugins: { 'react-hooks': reactHooks },
+        rules: {
+          'react-hooks/rules-of-hooks': 'error',
+          'react-hooks/exhaustive-deps': 'warn',
+        },
+      },
       reactRefresh.configs.vite,
     ],
     languageOptions: {
