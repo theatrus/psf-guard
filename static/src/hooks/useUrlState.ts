@@ -3,6 +3,12 @@ import { useCallback, useMemo, useRef } from 'react';
 import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE } from '../types/grouping';
 import { parseStatusFilter } from '../utils/statusFilter';
 import { listFilterOf } from '../utils/listFilter';
+import {
+  DEFAULT_SCORE_CUTOFF,
+  parseScoreCutoff,
+  parseSelectionRule,
+  type SelectionRuleId,
+} from '../utils/sequenceSelectionRules';
 
 /**
  * Hook for managing URL search parameters as state
@@ -359,4 +365,34 @@ export function useGridState(defaultImageSize = 300) {
     setCurrentImageId,
     setCurrentImageSelection,
   };
+}
+
+/**
+ * The Sequence view's score cutoff (`cutoff`) and its selection rule
+ * (`selectRule`), kept in the URL so a reload, a trip to Detail and back,
+ * or a shared link opens with the same rule still selecting. The default
+ * cutoff and no rule leave the URL clean.
+ */
+export function useSequenceSelectionRule() {
+  const { getParam, updateParams } = useUrlParams();
+  const cutoff = parseScoreCutoff(getParam('cutoff'));
+  const rule = parseSelectionRule(getParam('selectRule'));
+
+  const setCutoff = useCallback((value: number) => {
+    const rounded = Math.round(value * 100) / 100;
+    updateParams({ cutoff: rounded === DEFAULT_SCORE_CUTOFF ? null : rounded.toFixed(2) });
+  }, [updateParams]);
+
+  /** Turn a rule on or off, and with `selection` set the selected images
+   *  in the same write. Each URL hook writes from the params it last saw,
+   *  so a rule and a selection written by two hooks in one turn would lose
+   *  the first write. */
+  const setRule = useCallback((next: SelectionRuleId | null, selection?: ReadonlySet<number>) => {
+    updateParams({
+      selectRule: next,
+      ...(selection ? { selected: Array.from(selection) } : {}),
+    });
+  }, [updateParams]);
+
+  return { cutoff, rule, setCutoff, setRule };
 }

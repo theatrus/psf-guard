@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CalibrationFacets, CalibrationRigSummary } from '../../api/types';
+import ViewToolbar from '../toolbar/ViewToolbar';
 import { KIND_LABELS } from './calibrationLabels';
 import { ALL_RIGS, type CalibrationFilterState } from './useCalibrationUrlState';
 
@@ -25,8 +26,8 @@ function NumberField({ label, value, onCommit }: { label: string; value: number 
     }
   };
   return (
-    <label>
-      {label}
+    <label className="toolbar-field">
+      <span className="toolbar-caption">{label}</span>
       <input
         type="number"
         inputMode="decimal"
@@ -44,26 +45,25 @@ function NumberField({ label, value, onCommit }: { label: string; value: number 
 
 const exposureLabel = (seconds: number) => `${Number(seconds.toFixed(2))}s`;
 
-/** What the session list and the strip keep. */
+/** What the session list and the strip keep, in the shared toolbar: shown
+ *  on a wide screen, folded behind its Filters button on a phone. */
 export default function CalibrationFilters({ filters, facets, rigs, onChange, onClear }: CalibrationFiltersProps) {
-  // Open on a wide screen; folded on a phone, where they would fill it.
-  const [open, setOpen] = useState(() => !window.matchMedia?.('(max-width: 700px)').matches);
   const active = Object.entries(filters)
     .filter(([key, value]) => key !== 'sort' && value !== undefined && !(key === 'rig' && value === ALL_RIGS))
     .length;
   const fields = (
-    <div className="calibration-filter-fields">
+    <>
       {rigs.length > 1 && (
-        <label>
-          Rig
+        <label className="toolbar-field">
+          <span className="toolbar-caption">Rig</span>
           <select value={filters.rig ?? ALL_RIGS} onChange={(event) => onChange({ rig: event.target.value })}>
             <option value={ALL_RIGS}>All</option>
             {rigs.map((rig) => <option key={rig.rig_uuid} value={rig.rig_uuid}>{rig.name}</option>)}
           </select>
         </label>
       )}
-      <label>
-        Type
+      <label className="toolbar-field">
+        <span className="toolbar-caption">Type</span>
         <select
           value={filters.kind ?? ''}
           onChange={(event) => onChange({ kind: (event.target.value || undefined) as CalibrationFilterState['kind'] })}
@@ -74,8 +74,8 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
           ))}
         </select>
       </label>
-      <label>
-        Filter
+      <label className="toolbar-field">
+        <span className="toolbar-caption">Filter</span>
         <select value={filters.filter ?? ''} onChange={(event) => onChange({ filter: event.target.value || undefined })}>
           <option value="">All</option>
           {(facets?.filters ?? []).map((name) => <option key={name} value={name}>{name}</option>)}
@@ -84,8 +84,8 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
           )}
         </select>
       </label>
-      <label>
-        Exposure
+      <label className="toolbar-field">
+        <span className="toolbar-caption">Exposure</span>
         <select
           value={filters.exposure === undefined ? '' : String(filters.exposure)}
           onChange={(event) => onChange({ exposure: event.target.value === '' ? undefined : Number(event.target.value) })}
@@ -101,8 +101,8 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
       </label>
       <NumberField label="From °C" value={filters.tempMin} onCommit={(tempMin) => onChange({ tempMin })} />
       <NumberField label="To °C" value={filters.tempMax} onCommit={(tempMax) => onChange({ tempMax })} />
-      <label>
-        From night
+      <label className="toolbar-field">
+        <span className="toolbar-caption">From night</span>
         <input
           type="date"
           value={filters.from ?? ''}
@@ -111,8 +111,8 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
           onChange={(event) => onChange({ from: event.target.value || undefined })}
         />
       </label>
-      <label>
-        To night
+      <label className="toolbar-field">
+        <span className="toolbar-caption">To night</span>
         <input
           type="date"
           value={filters.to ?? ''}
@@ -121,8 +121,8 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
           onChange={(event) => onChange({ to: event.target.value || undefined })}
         />
       </label>
-      <label>
-        Grade
+      <label className="toolbar-field">
+        <span className="toolbar-caption">Grade</span>
         <select
           value={filters.grade ?? ''}
           onChange={(event) => onChange({ grade: (event.target.value || undefined) as CalibrationFilterState['grade'] })}
@@ -134,8 +134,8 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
           <option value="ungraded">Not graded</option>
         </select>
       </label>
-      <label>
-        Use
+      <label className="toolbar-field">
+        <span className="toolbar-caption">Use</span>
         <select
           value={filters.keptOut === undefined ? '' : String(filters.keptOut)}
           onChange={(event) => onChange({ keptOut: event.target.value === '' ? undefined : event.target.value === 'true' })}
@@ -145,7 +145,7 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
           <option value="false">In use</option>
         </select>
       </label>
-      <label className="calibration-check">
+      <label className="toolbar-check">
         <input
           type="checkbox"
           checked={filters.missing ?? false}
@@ -153,21 +153,15 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
         />
         Missing files
       </label>
-      {active > 0 && (
-        <button type="button" className="calibration-button" onClick={onClear}>
-          Clear
-        </button>
-      )}
-    </div>
+    </>
   );
   return (
-    <details
+    <ViewToolbar
+      label="Calibration filters"
       className="calibration-filters"
-      open={open}
-      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
-    >
-      <summary>Filters{active > 0 ? ` (${active})` : ''}</summary>
-      {fields}
-    </details>
+      filters={fields}
+      activeFilters={active}
+      onClearFilters={onClear}
+    />
   );
 }

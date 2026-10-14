@@ -109,3 +109,15 @@
   after the restart, and imports and calibration grading stop at a commit.
   The log says what the stop is still waiting for. A stack build stopped this
   way no longer counts toward the two restarts that drop a build.
+- Images, Sequence and the Calibration page share one toolbar: filters in a
+  row of labelled fields, Status and the other filters as one kind of
+  multi-select, and the same buttons everywhere. On a phone the filters fold
+  behind a **Filters** button that counts the ones in use. Selecting images
+  turns the toolbar's last row into a bar with the count and the actions:
+  **Accept**, **Reject**, **Pending** and **Stack selected** on Images,
+  **Review rejection** on Sequence.
+- In Sequence, **Select frames** says what each rule selects and how many
+  frames, and a chosen rule stays on: moving the score cutoff or rescoring
+  selects again, frames you clicked by hand stay as you left them, and the
+  address keeps the rule. **Stop rule** keeps the frames; **Clear** drops
+  them.

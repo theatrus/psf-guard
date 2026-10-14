@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
 
 // The Images tab's Status filter against the real server. Project Alpha's
@@ -17,14 +17,22 @@ test.beforeEach(async ({ request }) => {
   await waitForCacheReady(request, dbId);
 });
 
+// The Status list opens from its toolbar button and stays open while its
+// boxes are ticked.
+async function openStatus(page: Page) {
+  const button = page.getByRole('button', { name: /^Status:/ });
+  if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
+}
+
 test('the Status boxes keep any mix of grades and say so in the summary', async ({ page }) => {
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
   const cards = page.locator('.image-card');
   await expect(cards).toHaveCount(3, { timeout: 15_000 });
-  const box = (name: string) => page.getByRole('checkbox', { name });
+  const box = (name: string) => page.getByRole('checkbox', { name, exact: true });
   // The boxes follow the address, which changes a moment after the click,
   // so each click waits for the box rather than check() reading it at once.
   const set = async (name: string, on: boolean) => {
+    await openStatus(page);
     await box(name).click();
     await expect(box(name)).toBeChecked({ checked: on });
   };
@@ -59,8 +67,9 @@ test('the Status boxes keep any mix of grades and say so in the summary', async 
   await expect(page).not.toHaveURL(/status=/);
 
   await set('Rejected', false);
-  await page.getByRole('button', { name: 'Reset' }).click();
+  await page.getByRole('button', { name: 'Clear filters' }).click();
   await expect(cards).toHaveCount(3);
+  await openStatus(page);
   await expect(box('Rejected')).toBeChecked();
 });
 
@@ -69,6 +78,7 @@ test('a link saved with the old numeric status still filters', async ({ page }) 
   // carry ?status=1. They must keep meaning Accepted.
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&status=1`);
   await expect(page.locator('.image-card')).toHaveCount(1, { timeout: 15_000 });
+  await openStatus(page);
   await expect(page.getByRole('checkbox', { name: 'Accepted' })).toBeChecked();
   await expect(page.getByRole('checkbox', { name: 'Pending' })).not.toBeChecked();
 });

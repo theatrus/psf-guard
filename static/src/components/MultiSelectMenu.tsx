@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
 import { listFilterLabel } from '../utils/listFilter';
+import ToolbarPopover from './toolbar/ToolbarPopover';
 
 interface MultiSelectMenuProps {
   id: string;
-  /** The caption beside the button, such as "Filter:". */
+  /** The caption over the button, such as "Filter". */
   label: string;
   options: ReadonlyArray<{ value: string; label: string }>;
   /** The values kept; none keeps them all. */
@@ -11,13 +11,15 @@ interface MultiSelectMenuProps {
   onChange: (values: string[]) => void;
   /** Ticking every option is the same as All, so the choice clears. */
   everyIsAll?: boolean;
+  /** With nothing chosen every box shows ticked, and unticking one keeps
+   *  the rest: Status reads "show these grades" rather than "keep only". */
+  tickAllWhenEmpty?: boolean;
   title?: string;
 }
 
 /**
- * A filter that keeps any of several values: a button that says what is
- * kept and opens a list of boxes, with All at the top to clear them. The
- * list closes on a click outside it or on Escape.
+ * The one multi-select of the toolbars: a button that says what is kept
+ * and opens a list of boxes, with All at the top to clear them.
  */
 export default function MultiSelectMenu({
   id,
@@ -26,33 +28,14 @@ export default function MultiSelectMenu({
   chosen,
   onChange,
   everyIsAll = false,
+  tickAllWhenEmpty = false,
   title,
 }: MultiSelectMenuProps) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  const button = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.stopPropagation();
-      setOpen(false);
-      button.current?.focus();
-    };
-    document.addEventListener('pointerdown', outside);
-    document.addEventListener('keydown', escape, true);
-    return () => {
-      document.removeEventListener('pointerdown', outside);
-      document.removeEventListener('keydown', escape, true);
-    };
-  }, [open]);
-
+  const caption = label.replace(/:$/, '');
   const labelOf = (value: string) => options.find((option) => option.value === value)?.label ?? value;
+  const ticked = chosen.length === 0 && tickAllWhenEmpty ? options.map((option) => option.value) : chosen;
   const toggle = (value: string) => {
-    const kept = chosen.includes(value) ? chosen.filter((entry) => entry !== value) : [...chosen, value];
+    const kept = ticked.includes(value) ? ticked.filter((entry) => entry !== value) : [...ticked, value];
     // In the list's own order, so the button and the URL read the same way
     // whatever order the boxes were ticked in.
     const ordered = [
@@ -64,36 +47,23 @@ export default function MultiSelectMenu({
   };
 
   return (
-    <div className="filter-input-group multi-select" ref={root}>
-      <span id={`${id}-label`}>{label}</span>
-      <button
-        ref={button}
-        type="button"
-        id={id}
-        className="multi-select-button"
-        aria-haspopup="true"
-        aria-expanded={open}
-        aria-labelledby={`${id}-label ${id}`}
-        title={chosen.length > 0 ? chosen.map(labelOf).join(', ') : title}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className="multi-select-value">{listFilterLabel(chosen, labelOf)}</span>
-        <span aria-hidden="true">▾</span>
-      </button>
-      {open && (
-        <div className="multi-select-menu" role="group" aria-label={label.replace(/:$/, '')}>
-          <label className="multi-select-choice">
-            <input type="checkbox" checked={chosen.length === 0} onChange={() => onChange([])} />
-            All
-          </label>
-          {options.map((option) => (
-            <label key={option.value} className="multi-select-choice">
-              <input type="checkbox" checked={chosen.includes(option.value)} onChange={() => toggle(option.value)} />
-              {option.label}
-            </label>
-          ))}
-        </div>
-      )}
-    </div>
+    <ToolbarPopover
+      id={id}
+      label={caption}
+      value={listFilterLabel(chosen, labelOf)}
+      active={chosen.length > 0}
+      title={chosen.length > 0 ? chosen.map(labelOf).join(', ') : title}
+    >
+      <label className="multi-select-choice">
+        <input type="checkbox" checked={chosen.length === 0} onChange={() => onChange([])} />
+        All
+      </label>
+      {options.map((option) => (
+        <label key={option.value} className="multi-select-choice">
+          <input type="checkbox" checked={ticked.includes(option.value)} onChange={() => toggle(option.value)} />
+          {option.label}
+        </label>
+      ))}
+    </ToolbarPopover>
   );
 }

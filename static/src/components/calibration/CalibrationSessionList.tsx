@@ -58,11 +58,11 @@ export default function CalibrationSessionList({
       </ul>
       {total > perPage && (
         <div className="calibration-pager">
-          <button type="button" className="calibration-button" disabled={page === 0} onClick={() => onPage(page - 1)}>
+          <button type="button" className="tool-button" disabled={page === 0} onClick={() => onPage(page - 1)}>
             Newer
           </button>
           <span>{first}–{last} of {total}</span>
-          <button type="button" className="calibration-button" disabled={last >= total} onClick={() => onPage(page + 1)}>
+          <button type="button" className="tool-button" disabled={last >= total} onClick={() => onPage(page + 1)}>
             Older
           </button>
         </div>

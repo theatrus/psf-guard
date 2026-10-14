@@ -567,7 +567,7 @@ describe('SequenceView: interactions', () => {
     );
 
     await screen.findAllByText('82');
-    const size = screen.getByLabelText('Size:');
+    const size = screen.getByLabelText('Size');
     expect(size).toHaveValue('150');
 
     fireEvent.change(size, { target: { value: '500' } });
@@ -655,19 +655,19 @@ describe('SequenceView: interactions', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Select:')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select frames')).toBeInTheDocument();
     });
 
     // Default threshold is 0.50. With the normal fixture, images below 0.50 would be none.
     // Instead, test with the default threshold -- just click the button and verify behavior.
     // The default threshold of 0.50 won't select any normal fixture images (all are >= 0.70),
     // so let's use fireEvent to set the threshold to 0.80.
-    const slider = screen.getByLabelText('Score threshold:');
+    const slider = screen.getByLabelText('Score cutoff');
     // fireEvent is more reliable for range inputs than userEvent
     const { fireEvent } = await import('@testing-library/react');
     fireEvent.change(slider, { target: { value: '0.80' } });
 
-    await user.selectOptions(screen.getByLabelText('Select:'), 'threshold');
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
 
     // Images with quality_score < 0.80: IDs 3 (0.75), 5 (0.70), 7 (0.77), 10 (0.72)
     // After selecting, the review action should appear with the selected count.
@@ -695,7 +695,7 @@ describe('SequenceView: interactions', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => expect(screen.getAllByTestId('calibration-chip')).toHaveLength(3));
-    await user.selectOptions(screen.getByLabelText('Select:'), 'poor-calibration');
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'poor-calibration');
     await waitFor(() => expect(screen.getByText('2 selected')).toBeInTheDocument());
   });
 
@@ -712,8 +712,8 @@ describe('SequenceView: interactions', () => {
     fireEvent.click(cards[0]);
     fireEvent.click(cards[8]);
 
-    fireEvent.change(screen.getByLabelText('Score threshold:'), { target: { value: '0.80' } });
-    await user.selectOptions(screen.getByLabelText('Select:'), 'threshold');
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '0.80' } });
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
     await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
 
     fireEvent.click(cards[9], { shiftKey: true });
@@ -755,10 +755,10 @@ describe('SequenceView: interactions', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Select:')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select frames')).toBeInTheDocument();
     });
 
-    await user.selectOptions(screen.getByLabelText('Select:'), 'clouded');
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'clouded');
 
     // The cloud fixture has 2 consecutive cloud images (IDs 104, 105)
     // selectCloudedSequence selects runs of >= 2 bad images
@@ -796,23 +796,145 @@ describe('SequenceView: interactions', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Select:')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select frames')).toBeInTheDocument();
     });
 
     // Select clouded images first
-    await user.selectOptions(screen.getByLabelText('Select:'), 'clouded');
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'clouded');
 
     await waitFor(() => {
       expect(screen.getByText('Review rejection')).toBeInTheDocument();
     });
 
     // Click Clear
-    await user.click(screen.getByText('Clear'));
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
 
     // Reject button should disappear after clearing
     await waitFor(() => {
       expect(screen.queryByText('Review rejection')).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('SequenceView: selection rules', () => {
+  // Normal fixture scores, in card order: 0.82 0.88 0.75 0.91 0.70 0.85
+  // 0.77 0.90 0.83 0.72.
+  function renderWithLocation(route = '/sequence?db=test&project=1&target=1') {
+    const location = { search: '' };
+    function LocationProbe() {
+      location.search = useLocation().search;
+      return null;
+    }
+    const Wrapper = createWrapper(route);
+    render(
+      <Wrapper>
+        <SequenceView />
+        <LocationProbe />
+      </Wrapper>
+    );
+    return () => new URLSearchParams(location.search);
+  }
+
+  async function cards() {
+    await waitFor(() => {
+      expect(document.querySelectorAll('.sequence-image-card')).toHaveLength(10);
+    });
+    return document.querySelectorAll('.sequence-image-card');
+  }
+
+  it('keeps the rule on and selects again when the cutoff moves', async () => {
+    setupDefaultHandlers();
+    const user = userEvent.setup();
+    const params = renderWithLocation();
+    await cards();
+
+    const cutoff = screen.getByLabelText('Score cutoff');
+    fireEvent.change(cutoff, { target: { value: '0.80' } });
+    expect(screen.getByRole('option', { name: 'Below the cutoff (4)' })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+    await waitFor(() => expect(params().get('selectRule')).toBe('below-cutoff'));
+    expect(params().get('cutoff')).toBe('0.80');
+    expect(screen.getByLabelText('Select frames')).toHaveValue('below-cutoff');
+    expect(screen.getByRole('button', { name: 'Stop rule' })).toBeInTheDocument();
+    expect(document.querySelector('.sequence-selection-bar')).toHaveTextContent('Rule: Below the cutoff');
+
+    // No reselecting: the rule answers again for each cutoff.
+    fireEvent.change(cutoff, { target: { value: '0.75' } });
+    await waitFor(() => expect(screen.getByText('2 selected')).toBeInTheDocument());
+    fireEvent.change(cutoff, { target: { value: '0.85' } });
+    await waitFor(() => expect(screen.getByText('6 selected')).toBeInTheDocument());
+    expect(params().get('selectRule')).toBe('below-cutoff');
+  });
+
+  it('keeps frames clicked by hand when the cutoff moves', async () => {
+    setupDefaultHandlers();
+    const user = userEvent.setup();
+    renderWithLocation();
+    const strip = await cards();
+
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '0.80' } });
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+
+    // Out by hand: 0.70. In by hand: 0.82.
+    fireEvent.click(strip[4]);
+    fireEvent.click(strip[0]);
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+    expect(document.querySelector('.sequence-selection-bar')).toHaveTextContent('2 changed by hand');
+
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '0.85' } });
+    // The rule adds 0.83; 0.70 stays out and 0.82 stays in.
+    await waitFor(() => expect(screen.getByText('5 selected')).toBeInTheDocument());
+    expect(strip[0]).toHaveClass('selected');
+    expect(strip[4]).not.toHaveClass('selected');
+    expect(strip[8]).toHaveClass('selected');
+    expect(screen.getByLabelText('Select frames')).toHaveValue('below-cutoff');
+  });
+
+  it('stops the rule but keeps its frames, and Clear empties both', async () => {
+    setupDefaultHandlers();
+    const user = userEvent.setup();
+    const params = renderWithLocation();
+    await cards();
+
+    const cutoff = screen.getByLabelText('Score cutoff');
+    fireEvent.change(cutoff, { target: { value: '0.80' } });
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Stop rule' }));
+    await waitFor(() => expect(params().get('selectRule')).toBeNull());
+    expect(screen.getByLabelText('Select frames')).toHaveValue('');
+    fireEvent.change(cutoff, { target: { value: '0.90' } });
+    await waitFor(() => expect(params().get('cutoff')).toBe('0.90'));
+    expect(screen.getByText('4 selected')).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
+    await waitFor(() => expect(screen.getByText('8 selected')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(params().get('selectRule')).toBeNull());
+    expect(params().get('selected')).toBeNull();
+    expect(screen.getByText('0 selected')).toBeInTheDocument();
+  });
+
+  it('opens with the rule the URL holds, and keeps a selection it carries', async () => {
+    setupDefaultHandlers();
+    renderWithLocation('/sequence?db=test&project=1&target=1&cutoff=0.80&selectRule=below-cutoff');
+    await cards();
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+    expect(screen.getByLabelText('Score cutoff')).toHaveValue('0.8');
+    expect(screen.getByLabelText('Select frames')).toHaveValue('below-cutoff');
+  });
+
+  it('keeps the clicks a reloaded URL carries', async () => {
+    setupDefaultHandlers();
+    renderWithLocation('/sequence?db=test&project=1&target=1&cutoff=0.80&selectRule=below-cutoff&selected=1,3,7,10');
+    const strip = await cards();
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+    expect(strip[0]).toHaveClass('selected');
+    expect(strip[4]).not.toHaveClass('selected');
+    expect(document.querySelector('.sequence-selection-bar')).toHaveTextContent('2 changed by hand');
   });
 });
 
@@ -889,7 +1011,7 @@ describe('SequenceView: multi-session', () => {
     expect(screen.getByText('Stack comparison · matching capture settings across all sessions')).toBeInTheDocument();
     expect(document.querySelector('[data-card-image-id="201"] .quality-badge')).toHaveTextContent('42');
 
-    await user.selectOptions(screen.getByLabelText('Select:'), 'threshold');
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
     await user.click(screen.getByRole('button', { name: 'Review rejection' }));
     expect(screen.getByRole('dialog')).toHaveTextContent('Image 201 · score 0.42');
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -1109,11 +1231,11 @@ describe('SequenceView: batch operations', () => {
     render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Select:')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select frames')).toBeInTheDocument();
     });
 
     // Select clouded images
-    await user.selectOptions(screen.getByLabelText('Select:'), 'clouded');
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'clouded');
 
     await waitFor(() => {
       expect(screen.getByText('2 selected')).toBeInTheDocument();

@@ -1,0 +1,734 @@
+/*
+ * The toolbar Images, Sequence and Calibration share: one layout, one field
+ * style, one set of buttons. ViewToolbar.tsx explains the layout; the
+ * pieces here are also used on their own, such as the buttons in the
+ * calibration frame panel.
+ */
+
+/* Wide screen: filters on the first row, view settings and tools on the
+   second, the summary and the selection on the last. A row whose slot is
+   empty is never drawn, so no gap is left for it. */
+.view-toolbar {
+  --toolbar-control-height: 30px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.55rem 1rem;
+  min-width: 0;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.view-toolbar.sticky {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+}
+
+.view-toolbar .view-toolbar-toggle {
+  display: none;
+}
+
+.view-toolbar-panel {
+  display: contents;
+}
+
+.view-toolbar-filters,
+.view-toolbar-view,
+.view-toolbar-tools,
+.view-toolbar-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 0.7rem;
+  min-width: 0;
+}
+
+.view-toolbar-filters {
+  grid-column: 1 / -1;
+}
+
+/* With no view settings, the tools share the filters' row. */
+.view-toolbar:not(.has-view) .view-toolbar-filters {
+  grid-column: 1;
+}
+
+.view-toolbar-view {
+  grid-column: 1;
+  gap: 0.5rem 1.1rem;
+}
+
+.view-toolbar-tools {
+  grid-column: 2;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.view-toolbar-clear {
+  align-self: flex-end;
+}
+
+/* The last row: what is shown on the left, what is selected on the right.
+   It keeps one height whether or not anything is selected, so the page
+   under a sticky toolbar never jumps. */
+.view-toolbar-status {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  min-width: 0;
+  min-height: var(--toolbar-control-height);
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border-primary);
+}
+
+.view-toolbar-summary {
+  flex: 1 1 auto;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.view-toolbar-summary:has(.toolbar-field) {
+  align-items: flex-end;
+}
+
+.view-toolbar-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: var(--color-bg-primary);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Fields: a small caption over its control, as on the calibration page. */
+.toolbar-field {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.toolbar-caption {
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.view-toolbar select,
+.view-toolbar input[type='text'],
+.view-toolbar input[type='number'],
+.view-toolbar input[type='date'],
+.toolbar-field select,
+.toolbar-field input[type='text'],
+.toolbar-field input[type='number'],
+.toolbar-field input[type='date'] {
+  box-sizing: border-box;
+  height: var(--toolbar-control-height);
+  max-width: 11rem;
+  padding: 0 0.55rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: normal;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.toolbar-field input[type='number'] {
+  width: 5rem;
+}
+
+.toolbar-field input[type='text'] {
+  width: 11rem;
+}
+
+.toolbar-field select:hover,
+.toolbar-field input:hover {
+  border-color: var(--color-border-tertiary);
+}
+
+.toolbar-field select:focus-visible,
+.toolbar-field input:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
+}
+
+/* A box with its words beside it, as tall as the other controls. */
+.toolbar-check,
+.view-toolbar .project-exposure-grouping,
+.view-toolbar .secondary-score-toggle {
+  min-height: var(--toolbar-control-height);
+}
+
+.toolbar-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.toolbar-check input {
+  margin: 0;
+}
+
+/* A slider with its value after it. */
+.toolbar-range {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: var(--toolbar-control-height);
+}
+
+.toolbar-range input[type='range'] {
+  width: 8rem;
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+
+.toolbar-range output {
+  min-width: 2.6rem;
+  color: var(--color-primary);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.view-toolbar .size-control.compact {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 3px 0.5rem;
+}
+
+.view-toolbar .size-control.compact label {
+  grid-column: 1 / -1;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.view-toolbar .size-control.compact input[type='range'] {
+  width: 8rem;
+  height: var(--toolbar-control-height);
+  background: transparent;
+}
+
+.view-toolbar .size-control.compact input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 3px;
+  background: var(--color-bg-tertiary);
+}
+
+.view-toolbar .size-control.compact input[type='range']::-webkit-slider-thumb {
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+}
+
+.view-toolbar .size-control.compact .size-value {
+  min-width: 2.6rem;
+  font-size: 0.78rem;
+}
+
+/* Buttons: one shape for every action in a toolbar or panel. */
+.tool-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  box-sizing: border-box;
+  height: var(--toolbar-control-height, 30px);
+  padding: 0 0.7rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  /* Colours fade; sizes never animate, so a bar does not wobble. */
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+}
+
+.tool-button:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+.tool-button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.tool-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.tool-button[aria-pressed='true'],
+.tool-button[aria-expanded='true'] {
+  border-color: var(--color-primary);
+  background: var(--color-primary-alpha-20);
+}
+
+.tool-button-accept {
+  border-color: var(--color-success);
+  background: var(--color-success);
+  color: #fff;
+}
+
+.tool-button-accept:hover:not(:disabled) {
+  border-color: var(--color-success-hover);
+  background: var(--color-success-hover);
+}
+
+.tool-button-reject {
+  border-color: var(--color-error);
+  background: var(--color-error);
+  color: #fff;
+}
+
+.tool-button-reject:hover:not(:disabled) {
+  border-color: var(--color-error-dark);
+  background: var(--color-error-dark);
+}
+
+.tool-button-danger {
+  border-color: var(--color-border-error);
+  background: transparent;
+  color: var(--color-error);
+}
+
+.tool-button-danger:hover:not(:disabled) {
+  border-color: var(--color-error);
+}
+
+.tool-button-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.tool-button-quiet:hover:not(:disabled) {
+  border-color: var(--color-border-secondary);
+  color: var(--color-text-primary);
+}
+
+.tool-button-label {
+  white-space: nowrap;
+}
+
+/* Choices that sit side by side, one of them on. */
+.tool-segmented {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+}
+
+.tool-segmented button {
+  height: calc(var(--toolbar-control-height, 30px) - 2px);
+  padding: 0 0.6rem;
+  border: 0;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.tool-segmented button + button {
+  border-left: 1px solid var(--color-border-secondary);
+}
+
+.tool-segmented button[aria-pressed='true'] {
+  background: var(--color-primary-alpha-20);
+  color: var(--color-text-primary);
+}
+
+.tool-segmented button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* Undo and redo, as icon buttons of the same shape. */
+.view-toolbar .undo-redo-toolbar.compact {
+  gap: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.view-toolbar .undo-redo-buttons {
+  gap: 0.4rem;
+}
+
+.view-toolbar .undo-redo-toolbar.compact .undo-button,
+.view-toolbar .undo-redo-toolbar.compact .redo-button {
+  box-sizing: border-box;
+  justify-content: center;
+  width: var(--toolbar-control-height);
+  min-width: var(--toolbar-control-height);
+  height: var(--toolbar-control-height);
+  padding: 0;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
+  font-size: 0.82rem;
+  transform: none;
+}
+
+.view-toolbar .undo-button .button-text,
+.view-toolbar .redo-button .button-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.view-toolbar .undo-button .stack-count,
+.view-toolbar .redo-button .stack-count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  margin: 0;
+}
+
+.view-toolbar .scoring-penalty-control summary {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  height: var(--toolbar-control-height);
+  padding: 0 0.7rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
+/* A field that opens a list: the multi-selects and the date range. The
+   button keeps one width whatever is chosen; a long choice is cut short
+   and shown whole on hover. */
+.multi-select {
+  position: relative;
+}
+
+.multi-select-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  box-sizing: border-box;
+  width: 8.75rem;
+  height: var(--toolbar-control-height, 30px);
+  padding: 0 0.5rem 0 0.6rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-input);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.multi-select-button:hover {
+  border-color: var(--color-border-tertiary);
+}
+
+.multi-select-button:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-alpha-20);
+}
+
+/* A field narrowing the view stands out from one that keeps everything. */
+.multi-select-button.is-set {
+  border-color: var(--color-primary-alpha-70);
+  background: var(--color-primary-alpha-10);
+}
+
+.multi-select-button svg {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.multi-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  gap: 0.3rem;
+  min-width: 11rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 35%);
+}
+
+.multi-select-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 1.6rem;
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.multi-select-choice input {
+  margin: 0;
+}
+
+.toolbar-date-range {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.15rem 0;
+}
+
+.toolbar-date-range .tool-button {
+  justify-self: start;
+}
+
+/* The selection: a resting line that says how to select, and once
+   something is, a count and the actions for it. */
+.selection-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem 0.6rem;
+  min-width: 0;
+  min-height: var(--toolbar-control-height, 30px);
+  /* The same box at rest as when active, so it never changes height. */
+  padding: 0.2rem 0.25rem 0.2rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.selection-action-bar.active {
+  border-color: var(--color-primary-alpha-50);
+  background: var(--color-primary-alpha-10);
+  color: var(--color-text-primary);
+}
+
+.selection-count {
+  white-space: nowrap;
+}
+
+.selection-action-bar.active .selection-count {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.selection-note {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.selection-actions-divider {
+  width: 1px;
+  height: 1.2rem;
+  margin: 0 0.15rem;
+  background: var(--color-border-secondary);
+}
+
+/* Narrow screen: one Filters button opens the filters and the view
+   settings; the tools stay beside it, and the summary and the selection
+   below. */
+@media (max-width: 760px) {
+  .view-toolbar {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.45rem 0.6rem;
+    padding: 0.5rem 0.6rem;
+  }
+
+  .view-toolbar .view-toolbar-toggle {
+    display: inline-flex;
+    grid-row: 1;
+    grid-column: 1;
+    align-self: start;
+  }
+
+  .view-toolbar-tools {
+    grid-row: 1;
+    grid-column: 2;
+    align-self: start;
+  }
+
+  .view-toolbar-panel {
+    display: none;
+    grid-row: 2;
+    grid-column: 1 / -1;
+    gap: 0.75rem;
+    max-height: 65vh;
+    overflow-y: auto;
+    padding: 0.6rem 0 0.2rem;
+    border-top: 1px solid var(--color-border-primary);
+  }
+
+  .view-toolbar.is-open .view-toolbar-panel {
+    display: grid;
+  }
+
+  .view-toolbar-filters,
+  .view-toolbar-view {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: end;
+    gap: 0.55rem 0.6rem;
+  }
+
+  .view-toolbar:not(.has-view) .view-toolbar-filters {
+    grid-column: auto;
+  }
+
+  .view-toolbar-panel .multi-select-button,
+  .view-toolbar-panel select,
+  .view-toolbar-panel input[type='text'],
+  .view-toolbar-panel input[type='number'],
+  .view-toolbar-panel input[type='date'] {
+    width: 100%;
+    max-width: none;
+  }
+
+  .view-toolbar-panel .toolbar-range input[type='range'],
+  .view-toolbar-panel .size-control.compact input[type='range'] {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .view-toolbar-panel .size-control.compact {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  /* Lists open in place inside the panel instead of over it. */
+  .view-toolbar-panel .multi-select-menu,
+  .view-toolbar-panel .scoring-penalty-panel {
+    position: static;
+    margin-top: 4px;
+    box-shadow: none;
+  }
+
+  /* A box with a long name takes the panel's width. */
+  .view-toolbar-panel .project-exposure-grouping {
+    grid-column: 1 / -1;
+  }
+
+  .view-toolbar-clear {
+    justify-self: start;
+  }
+
+  .view-toolbar-status {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.45rem;
+    padding-top: 0.45rem;
+  }
+
+  .selection-action-bar {
+    justify-content: flex-start;
+  }
+
+  /* No modifier keys on a touch screen: the count says enough. */
+  .selection-hint {
+    display: none;
+  }
+
+  /* Fields in the last row take its width, one to a line. */
+  .view-toolbar-summary:has(.toolbar-field) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.45rem;
+  }
+
+  .view-toolbar-summary .toolbar-range input[type='range'] {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
+  /* The action names give way to their icons; the buttons keep the names
+     for a screen reader. */
+  .selection-actions .tool-button:has(svg) .tool-button-label,
+  .view-toolbar-status .tool-button-quiet:has(svg) > .tool-button-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .selection-actions .tool-button:has(svg),
+  .view-toolbar-status .tool-button-quiet:has(svg):has(> .tool-button-label) {
+    width: 2.25rem;
+    padding: 0;
+  }
+
+  .selection-note {
+    display: none;
+  }
+}

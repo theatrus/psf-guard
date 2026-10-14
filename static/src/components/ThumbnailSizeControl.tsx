@@ -30,7 +30,7 @@ export default function ThumbnailSizeControl({
 }: ThumbnailSizeControlProps) {
   return (
     <div className="size-control compact">
-      <label htmlFor={id}>{label}:</label>
+      <label htmlFor={id}>{label}</label>
       <input
         id={id}
         type="range"

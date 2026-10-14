@@ -375,7 +375,7 @@ test('focused grid controls keep arrow and Space keystrokes', async ({ page }) =
   await expect(wrappers).toHaveCount(3, { timeout: 15_000 });
   await expect(wrappers.nth(0)).toHaveClass(/current-selection/);
 
-  const search = page.getByLabel('Search:');
+  const search = page.getByLabel('Search', { exact: true });
   await search.focus();
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('Space');
@@ -400,7 +400,7 @@ test('image-ID cursor and selection survive regrouping and reload', async ({ pag
   await page.keyboard.press('Space');
   await expect(page.locator('.image-card-wrapper.multi-selected')).toHaveCount(2);
 
-  await page.locator('.grouping-control select').selectOption('session');
+  await page.getByLabel('Group', { exact: true }).selectOption('session');
   const current = page.locator(`[data-image-id="${secondId}"]`);
   await expect(current).toHaveClass(/current-selection/);
   await expect(page.locator(`[data-image-id="${firstId}"]`)).toHaveClass(/multi-selected/);
@@ -738,7 +738,7 @@ test('Grid starts target quality analysis and keeps progress in the global heade
   const analyzeQuality = page.getByRole('button', { name: 'Analyze Quality' });
   await expect(analyzeQuality).toHaveCSS('white-space', 'nowrap');
   const buttonFitsToolbar = await analyzeQuality.evaluate((button) => {
-    const toolbar = button.closest('.toolbar-section');
+    const toolbar = button.closest('.view-toolbar-tools');
     if (!toolbar) return false;
     const buttonBounds = button.getBoundingClientRect();
     const toolbarBounds = toolbar.getBoundingClientRect();
@@ -909,7 +909,7 @@ test('sequence thumbnail size can be changed and survives reload', async ({ page
 
   const cards = page.locator('.sequence-image-card');
   await expect(cards).toHaveCount(3, { timeout: 15_000 });
-  const size = page.getByLabel('Size:');
+  const size = page.getByLabel('Size', { exact: true });
   await expect(size).toHaveValue('150');
 
   await size.fill('500');
@@ -923,7 +923,7 @@ test('sequence thumbnail size can be changed and survives reload', async ({ page
   await expect(page.getByText('500px')).toBeVisible();
 
   await page.reload();
-  await expect(page.getByLabel('Size:')).toHaveValue('500');
+  await expect(page.getByLabel('Size', { exact: true })).toHaveValue('500');
   await expect(page.locator('.sequence-strip')).toHaveAttribute(
     'style',
     /grid-template-columns: repeat\(auto-fill, minmax\(min\(500px, 100%\), 1fr\)\)/
@@ -931,16 +931,18 @@ test('sequence thumbnail size can be changed and survives reload', async ({ page
 
   await page.getByRole('button', { name: 'Images', exact: true }).click();
   await expect(page.locator('.image-card')).toHaveCount(3);
-  const gridSize = page.getByLabel('Size:');
+  const gridSize = page.getByLabel('Size', { exact: true });
   await expect(gridSize).toHaveValue('500');
   await gridSize.fill('300');
   await expect(page).toHaveURL(/size=300/);
 
   await page.getByRole('button', { name: 'Sequence', exact: true }).click();
-  await expect(page.getByLabel('Size:')).toHaveValue('300');
+  await expect(page.getByLabel('Size', { exact: true })).toHaveValue('300');
 
   await page.setViewportSize({ width: 760, height: 720 });
-  await page.getByLabel('Size:').fill('1200');
+  // At this width the view settings fold behind the Filters button.
+  await page.getByRole('button', { name: /^Filters/ }).click();
+  await page.getByLabel('Size', { exact: true }).fill('1200');
   await expect(page).toHaveURL(/size=1200/);
   await expect(page.locator('.sequence-strip')).toHaveAttribute(
     'style',
@@ -988,7 +990,7 @@ test('sequence thumbnail resizing keeps the active image visible', async ({ page
   const current = page.locator('.sequence-image-card.current-selection');
   await expect(current).toBeInViewport();
 
-  await page.getByLabel('Size:').fill('500');
+  await page.getByLabel('Size', { exact: true }).fill('500');
 
   await expect(page).toHaveURL(/size=500/);
   await expect(current).toBeInViewport();

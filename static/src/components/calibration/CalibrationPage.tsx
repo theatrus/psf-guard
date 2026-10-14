@@ -291,8 +291,8 @@ function CalibrationFrames({
                   </p>
                 )}
               </div>
-              <label className="calibration-sort">
-                Order
+              <label className="toolbar-field">
+                <span className="toolbar-caption">Order</span>
                 <select value={filters.sort ?? 'oldest'}
                   onChange={(event) => state.setFilters({ sort: event.target.value === 'oldest' ? undefined : event.target.value as typeof filters.sort })}>
                   <option value="oldest">As shot</option>
@@ -303,7 +303,7 @@ function CalibrationFrames({
               </label>
               {canManage && frames.length > 0 && (
                 <div className="calibration-session-actions">
-                  <div className="calibration-segmented" role="group" aria-label="Session serves lights">
+                  <div className="tool-segmented" role="group" aria-label="Session serves lights">
                     <button type="button" disabled={actions.pending} title="Every frame serves only lights shot before it"
                       onClick={() => markSession('backward')}>◂ Before only</button>
                     <button type="button" disabled={actions.pending} title="Every frame serves lights on either side"
@@ -311,7 +311,7 @@ function CalibrationFrames({
                     <button type="button" disabled={actions.pending} title="Every frame serves only lights shot after it"
                       onClick={() => markSession('forward')}>After only ▸</button>
                   </div>
-                  <button type="button" className="calibration-button calibration-button-danger"
+                  <button type="button" className="tool-button tool-button-danger"
                     disabled={actions.pending} onClick={forgetSession}>
                     Forget session
                   </button>
