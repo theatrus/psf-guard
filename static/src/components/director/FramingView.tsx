@@ -756,17 +756,14 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const pointerOffset = fromStage(point[0], point[1], state.viewFov, stageSize);
     if (drag.current.kind === 'panel' && drag.current.panel && state.panel) {
       // The panel follows the hand, and settles on a place lined up with
-      // another panel or at the minimum overlap beside one when near it.
-      // Alt places it freely.
+      // another panel or at the minimum overlap beside one when near it,
+      // so a straight drag does not drift off its row by a hair. Alt only
+      // keeps a drop short of the rule; arrow keys place it finer.
       const { id, before } = drag.current.panel;
       const at = stageToCamera(point, view);
       if (!at) return;
-      let x = at[0] - drag.current.grab[0];
-      let y = at[1] - drag.current.grab[1];
-      if (!event.altKey) {
-        const tolerance = (SNAP_PX * pixelScale(state.viewFov, stageSize) * stageScale()) / Math.min(state.panel.width_degrees, state.panel.height_degrees);
-        ({ x, y } = snapPlacement(before, id, x, y, tolerance));
-      }
+      const tolerance = (SNAP_PX * pixelScale(state.viewFov, stageSize) * stageScale()) / Math.min(state.panel.width_degrees, state.panel.height_degrees);
+      const { x, y } = snapPlacement(before, id, at[0] - drag.current.grab[0], at[1] - drag.current.grab[1], tolerance);
       if (Math.hypot(event.clientX - drag.current.x, event.clientY - drag.current.y) > 2) drag.current.panel.moved = true;
       if (drag.current.panel.moved) update(current => ({ layout: movePanel(current.layout, id, x, y) }));
       return;
@@ -1083,7 +1080,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <div className="framing-stage-tools" onPointerDown={event => event.stopPropagation()}>
           <div className="framing-seg" role="group" aria-label="A drag moves">
             <button type="button" aria-pressed={dragMode === 'rectangle'} aria-label="Drag moves the rectangle" title="A drag moves the rectangle over a still sky. Drag its handle to turn the camera; drag the sky to look around." onClick={() => chooseDragMode('rectangle')}><SquareDashedMousePointer size={15} /><span>Rectangle</span></button>
-            <button type="button" aria-pressed={dragMode === 'panel'} aria-label="Drag moves one panel" title="A drag moves one mosaic panel; the others and locked panels stay. It settles at the minimum overlap beside a panel; hold Alt to place it freely." onClick={() => chooseDragMode('panel')}><Move size={15} /><span>Panel</span></button>
+            <button type="button" aria-pressed={dragMode === 'panel'} aria-label="Drag moves one panel" title="A drag moves one mosaic panel; the others and locked panels stay. It settles lined up with a panel or at the minimum overlap beside one; hold Alt to keep a drop short of the rule." onClick={() => chooseDragMode('panel')}><Move size={15} /><span>Panel</span></button>
             <button type="button" aria-pressed={dragMode === 'sky'} aria-label="Drag moves the sky" title="A drag moves the sky under a pinned rectangle, and the target with it. Drag the handle to turn the camera; Shift-drag to look around without moving the target." onClick={() => chooseDragMode('sky')}><Globe size={15} /><span>Sky</span></button>
           </div>
           <div className="framing-seg framing-seg-icons" role="group" aria-label="Sky layers">

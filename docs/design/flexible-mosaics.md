@@ -189,7 +189,10 @@ of its size that has frames gets a new target.
   minimum overlap beside one. While dragging, the panel's shared strips are
   shaded with their share. A drop that leaves a thin overlap, a gap or a lone
   panel the layout did not have springs back with the reason; holding Alt
-  (Option) places it anyway, flagged.
+  (Option) places it anyway, flagged. Settling stays on with Alt: a drag
+  across the screen bends a hair off the camera's axes, so a free drop would
+  land a fraction of a percent short of its neighbour; the arrow keys place
+  a panel finer.
 - **Keyboard.** With a panel chosen and the sky focused: arrow keys nudge it
   1% of a panel along the camera axis nearest the arrow's way on screen
   (Shift: 10%), `L` locks or unlocks it, Delete removes it, Escape lets go,
