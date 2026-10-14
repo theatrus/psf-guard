@@ -115,8 +115,10 @@ The grouping rules stay conservative:
 - Filter, gain, offset, binning, and numeric readout mode define a shared
   exposure template. The most common exposure length for that template becomes
   its default. A template left at -1 for gain, offset, or readout mode runs at
-  the camera's default, so it takes a frame with any value there; a template
-  that matches exactly comes first.
+  the camera's default, so a plan on it takes a frame with any value there; a
+  plan on a template that matches exactly comes first. A new plan always goes
+  on the exact template, made if needed, so Target Scheduler shoots at the
+  frames' own settings.
 - Each distinct template and exposure length becomes an exposure plan. The
   imported frame count seeds its desired and acquired counts.
 
