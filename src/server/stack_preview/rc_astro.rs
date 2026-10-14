@@ -547,6 +547,12 @@ fn persist_prefix(
 /// reruns only from that step. The final prefix's FITS files are what the
 /// download handlers serve; the returned images feed the stretch renders
 /// directly.
+///
+/// `cancel` kills the tool in hand when it fires: the child is killed and
+/// reaped and its exchange folder removed. `before_step` is read before each
+/// tool starts; an error ends the chain there, keeping the steps already
+/// cached.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_rc_astro(
     stack_root: &FsPath,
     chain_ids: &[String],
@@ -555,6 +561,8 @@ pub(super) fn apply_rc_astro(
     image: &LinearImage,
     reference_headers: &[(String, seiza_fits::HeaderValue)],
     on_progress: &mut dyn FnMut(&str, f32),
+    cancel: Option<&seiza_stacking::CancelSignal>,
+    before_step: &mut dyn FnMut() -> Result<(), String>,
 ) -> Result<RcAstroOutcome, String> {
     apply_rc_astro_with_runner(
         stack_root,
@@ -564,10 +572,11 @@ pub(super) fn apply_rc_astro(
         image,
         reference_headers,
         on_progress,
+        before_step,
         &mut |schema, request, input, headers, progress| {
             cli()
                 .ok_or_else(|| "rc-astro is not installed on this server".to_string())?
-                .process_image(schema, request, input, headers, None, progress)
+                .process_image(schema, request, input, headers, cancel, progress)
                 .map_err(|error| error.to_string())
         },
     )
@@ -582,6 +591,7 @@ fn apply_rc_astro_with_runner(
     image: &LinearImage,
     reference_headers: &[(String, seiza_fits::HeaderValue)],
     on_progress: &mut dyn FnMut(&str, f32),
+    before_step: &mut dyn FnMut() -> Result<(), String>,
     run: &mut impl FnMut(
         &ExternalToolSchema,
         &ExternalToolRequest,
@@ -639,6 +649,9 @@ fn apply_rc_astro_with_runner(
 
     let total_steps = ordered.len().max(1);
     for (index, step) in ordered.iter().enumerate().skip(resume_at) {
+        // Each finished step is already persisted below, so stopping here
+        // keeps it for the next apply.
+        before_step()?;
         let (_, schema) = schemas
             .iter()
             .find(|(tool, _)| tool == &step.tool)
@@ -870,6 +883,7 @@ mod tests {
             &source,
             &[],
             &mut |_, _| {},
+            &mut || Ok(()),
             &mut runner,
         )
         .unwrap();
@@ -881,6 +895,7 @@ mod tests {
             &source,
             &[],
             &mut |_, _| {},
+            &mut || Ok(()),
             &mut runner,
         )
         .unwrap();
@@ -1149,53 +1164,13 @@ mod tests {
         assert_eq!(ordered, vec!["bxt", "nxt", "sxt"]);
     }
 
-    /// A stand-in rc-astro: copies input to output, writes a stars sidecar
-    /// when asked, and counts its invocations so the cache test can prove a
-    /// second apply never spawned it.
-    #[cfg(unix)]
-    fn fake_rc_astro(directory: &std::path::Path) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let path = directory.join("rc-astro");
-        let script = format!(
-            r#"#!/bin/sh
-echo run >> "{count}"
-out=""
-input=""
-stars=0
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -o) out="$2"; shift 2 ;;
-    --stars) stars=1; shift ;;
-    --host|--depth|--device) shift 2 ;;
-    --*|sxt|bxt|nxt) shift ;;
-    *) input="$1"; shift ;;
-  esac
-done
-cp "$input" "$out"
-echo '{{"event":"progress","done":100.0}}'
-echo '{{"event":"status","phase":"complete","output":"'"$out"'"}}'
-if [ "$stars" = 1 ]; then
-  sidecar="${{out%.fits}}-stars.fits"
-  cp "$input" "$sidecar"
-  echo '{{"event":"status","phase":"complete","output":"'"$sidecar"'"}}'
-fi
-"#,
-            count = directory.join("invocations").display()
-        );
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-
     #[cfg(unix)]
     #[test]
     fn a_chain_runs_once_and_the_cache_serves_the_second_apply() {
-        let tool_dir = tempfile::tempdir().unwrap();
         let cache = tempfile::tempdir().unwrap();
-        let executable = fake_rc_astro(tool_dir.path());
-        // Point the module at the stand-in for this test. Env mutation is
+        // Points the module at the stand-in for this test. Env mutation is
         // process-wide, so keep the whole flow inside one test.
-        unsafe { std::env::set_var("PSF_GUARD_RC_ASTRO", &executable) };
+        let tool = super::test_tool::install(false);
 
         let config = RcAstroProcessing {
             steps: vec![RcAstroStep {
@@ -1227,6 +1202,8 @@ fi
             &image,
             &[],
             &mut |stage, fraction| reported.push((stage.to_string(), fraction)),
+            None,
+            &mut || Ok(()),
         )
         .unwrap();
         assert!(first.result.has_stars);
@@ -1251,12 +1228,13 @@ fi
             &image,
             &[],
             &mut |_, _| {},
+            None,
+            &mut || Ok(()),
         )
         .unwrap();
         assert!(second.result.has_stars);
 
-        let invocations =
-            std::fs::read_to_string(tool_dir.path().join("invocations")).unwrap_or_default();
+        let invocations = tool.invocations_log();
         assert_eq!(
             invocations.lines().count(),
             1,
@@ -1287,6 +1265,8 @@ fi
             &image,
             &[],
             &mut |_, _| {},
+            None,
+            &mut || Ok(()),
         )
         .unwrap();
         let mut reported: Vec<(String, f32)> = Vec::new();
@@ -1298,6 +1278,8 @@ fi
             &image,
             &[],
             &mut |stage, fraction| reported.push((stage.to_string(), fraction)),
+            None,
+            &mut || Ok(()),
         )
         .unwrap();
         assert_eq!(extended.result.steps.len(), 2);
@@ -1308,8 +1290,7 @@ fi
             Some("RC-Astro nxt")
         );
         assert_eq!(reported.first().map(|(_, fraction)| *fraction), Some(0.5));
-        let invocations =
-            std::fs::read_to_string(tool_dir.path().join("invocations")).unwrap_or_default();
+        let invocations = tool.invocations_log();
         assert_eq!(
             invocations.lines().count(),
             3,
@@ -1330,6 +1311,8 @@ fi
             &image,
             &[],
             &mut |_, _| {},
+            None,
+            &mut || Ok(()),
         )
         .unwrap();
         let bxt_alone = apply_rc_astro(
@@ -1340,6 +1323,8 @@ fi
             &image,
             &[],
             &mut |_, _| {},
+            None,
+            &mut || Ok(()),
         )
         .unwrap();
         assert_eq!(bxt_alone.result.steps.len(), 1);
@@ -1364,6 +1349,8 @@ fi
             &image,
             &[],
             &mut |_, _| {},
+            None,
+            &mut || Ok(()),
         )
         .unwrap();
         let prefix_age = std::fs::metadata(&bxt_manifest)
@@ -1377,15 +1364,137 @@ fi
             "a full-chain cache hit must refresh the intermediate prefix \
              manifests, or the sweep strands the chain's resume points"
         );
-        unsafe { std::env::remove_var("PSF_GUARD_RC_ASTRO") };
 
-        let invocations =
-            std::fs::read_to_string(tool_dir.path().join("invocations")).unwrap_or_default();
+        let invocations = tool.invocations_log();
         assert_eq!(
             invocations.lines().count(),
             5,
             "the fresh [bxt, nxt] run adds two invocations; the [bxt] \
              replay and the full-chain replay must both be cache hits"
         );
+    }
+}
+
+/// A stand-in `rc-astro` for tests. The executable is named by a
+/// process-wide environment variable, so one test at a time holds it.
+#[cfg(all(test, unix))]
+pub(super) mod test_tool {
+    use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard};
+
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    /// The installed stand-in. Dropping it takes the variable away again.
+    pub(crate) struct FakeTool {
+        dir: tempfile::TempDir,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl FakeTool {
+        /// Let a held run finish.
+        pub fn release(&self) {
+            std::fs::write(self.dir.path().join("release"), b"").unwrap();
+        }
+
+        /// One line per run the tool started.
+        pub fn invocations_log(&self) -> String {
+            std::fs::read_to_string(self.dir.path().join("invocations")).unwrap_or_default()
+        }
+
+        pub fn invocations(&self) -> usize {
+            self.invocations_log().lines().count()
+        }
+
+        /// The process of the run in hand, once it has started.
+        pub fn pid(&self) -> Option<u32> {
+            std::fs::read_to_string(self.dir.path().join("pid"))
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        }
+
+        /// The exchange folder the run in hand reads its input from.
+        pub fn workdir(&self) -> Option<PathBuf> {
+            let text = std::fs::read_to_string(self.dir.path().join("workdir")).ok()?;
+            Some(PathBuf::from(text.trim()))
+        }
+    }
+
+    impl Drop for FakeTool {
+        fn drop(&mut self) {
+            // A failed test must not leave a held run waiting out the
+            // silence timeout before the runtime can shut down.
+            let _ = std::fs::write(self.dir.path().join("release"), b"");
+            // SAFETY: the lock this guard holds keeps every test that reads
+            // or writes the variable out while it changes.
+            unsafe { std::env::remove_var("PSF_GUARD_RC_ASTRO") };
+        }
+    }
+
+    /// Install a stand-in that answers `rc-astro <tool> --json` with a
+    /// licensed schema and, on a run, copies its input to its output, writes
+    /// a stars sidecar when asked, and counts its runs. A `hold`ing tool
+    /// reports half done, then waits for [`FakeTool::release`] before it
+    /// writes anything, so a test can watch a run in progress or stop it.
+    pub(crate) fn install(hold: bool) -> FakeTool {
+        use std::os::unix::fs::PermissionsExt;
+        let lock = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rc-astro");
+        let state = dir.path().display();
+        let hold = if hold {
+            format!(
+                r#"echo '{{"event":"progress","done":50.0}}'
+while [ ! -f "{state}/release" ] && [ -d "{state}" ]; do sleep 0.05; done
+"#
+            )
+        } else {
+            String::new()
+        };
+        let script = format!(
+            r#"#!/bin/sh
+if [ "$2" = "--json" ]; then
+  case "$1" in
+    bxt) name="BlurXTerminator" ;;
+    nxt) name="NoiseXTerminator" ;;
+    sxt) name="StarXTerminator" ;;
+    *) name="$1" ;;
+  esac
+  echo '{{"schemaVersion":6,"cliVersion":"9.9.9-test","key":"'"$1"'","name":"RC-Astro '"$name"'","mlVersion":4,"parameters":[]}}'
+  exit 0
+fi
+echo run >> "{state}/invocations"
+out=""
+input=""
+stars=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    --stars) stars=1; shift ;;
+    --host|--depth|--device) shift 2 ;;
+    --*|sxt|bxt|nxt) shift ;;
+    *) input="$1"; shift ;;
+  esac
+done
+# Renamed into place, so a reader never sees a half-written file.
+echo $$ > "{state}/pid.tmp" && mv "{state}/pid.tmp" "{state}/pid"
+dirname "$input" > "{state}/workdir.tmp" && mv "{state}/workdir.tmp" "{state}/workdir"
+{hold}cp "$input" "$out"
+echo '{{"event":"progress","done":100.0}}'
+echo '{{"event":"status","phase":"complete","output":"'"$out"'"}}'
+if [ "$stars" = 1 ]; then
+  sidecar="${{out%.fits}}-stars.fits"
+  cp "$input" "$sidecar"
+  echo '{{"event":"status","phase":"complete","output":"'"$sidecar"'"}}'
+fi
+"#
+        );
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: as in `Drop`, the lock serializes every test that touches
+        // the variable.
+        unsafe { std::env::set_var("PSF_GUARD_RC_ASTRO", &path) };
+        FakeTool { dir, _lock: lock }
     }
 }

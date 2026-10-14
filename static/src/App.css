@@ -4588,6 +4588,15 @@
   opacity: 0.45;
 }
 
+/* A run in flight says what it waits for or how far it has got; that text
+   is read, so it does not fade like a plain disabled button. */
+.stack-stretch-actions button[aria-busy='true']:disabled {
+  cursor: progress;
+  opacity: 1;
+  color: var(--color-text-secondary);
+  text-align: left;
+}
+
 .stack-color-phase-details,
 .stack-color-processing {
   border-bottom: 1px solid var(--color-bg-tertiary);

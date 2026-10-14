@@ -963,6 +963,124 @@ test('keeps a running stack visible in the header and re-attaches the panel', as
   await expect(queue).toContainText('Stacking');
 });
 
+test('says what a processing run waits for, then its progress, and lists it in the header', async ({
+  page,
+}, testInfo) => {
+  // No rc-astro is installed here, so the run's waiting and running answers
+  // are served from stubs; the last poll goes to the server, which renders
+  // the stretch for real. The server side of the queue is covered by the
+  // `StackPreviewManager` processing-run unit tests.
+  test.setTimeout(90_000);
+  seedSyntheticColorStacks(dbId, 2, true);
+  const redJob = (2).toString(16).padStart(64, '0');
+  const runId = 'c'.repeat(64);
+  let phase: 'idle' | 'queued' | 'running' | 'done' = 'idle';
+  const build = {
+    kind: 'mono', job_id: 'a'.repeat(64), database_id: dbId, project_id: 1, target_id: 1,
+    state: 'running', label: 'Alpha M44 · B', detail: 'Registering frames',
+    processed_units: 2, total_units: 3, created_unix_seconds: 1_760_000_000,
+    progress_label: '2/3 frames',
+  };
+  const run = (running: boolean) => ({
+    kind: 'processing', job_id: runId, database_id: dbId, project_id: 2, target_id: 2,
+    state: running ? 'running' : 'queued', label: 'Beta Field · R',
+    detail: running ? 'BlurXTerminator' : 'Waiting for the stack build of Alpha M44 · B to finish',
+    processed_units: running ? 420 : 0, total_units: running ? 1000 : 0,
+    created_unix_seconds: 1_760_000_100, queue_position: running ? null : 0,
+    progress_label: running ? 'BlurXTerminator · 42%' : undefined,
+    processing: {
+      operation: 'BlurXTerminator', channel: 'R', stoppable: true,
+      ...(running
+        ? { stage: 'BlurXTerminator', fraction: 0.42, started_unix_seconds: 1_760_000_200 }
+        : { waiting_for: 'the stack build of Alpha M44 · B' }),
+    },
+  });
+  await page.route('**/api/stack-activity', (route) => route.fulfill({
+    json: {
+      success: true,
+      data: {
+        schema_version: 1,
+        active: phase === 'queued' ? [build, run(false)] : phase === 'running' ? [run(true)] : [],
+      },
+      error: null,
+    },
+  }));
+  const posts: Array<string | null> = [];
+  await page.route(`**/stack-previews/${redJob}/0/stretch*`, async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const url = new URL(route.request().url());
+    posts.push(url.searchParams.get('poll'));
+    if (phase === 'queued') {
+      return route.fulfill({ status: 202, json: { success: true, error: null, data: {
+        pending: true, queued: true, queue_position: 0,
+        stage: 'Waiting for the stack build of Alpha M44 · B to finish',
+        waiting_for: 'the stack build of Alpha M44 · B',
+      } } });
+    }
+    if (phase === 'running') {
+      return route.fulfill({ status: 202, json: { success: true, error: null, data: {
+        pending: true, queued: false, stage: 'RC-Astro BlurXTerminator', fraction: 0.42,
+      } } });
+    }
+    // The run is done: the server renders and answers with the result.
+    url.searchParams.delete('poll');
+    return route.continue({ url: url.toString() });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2&target=2`);
+  const card = page.locator('.stack-preview-card').filter({
+    has: page.locator('.stack-preview-channel', { hasText: /^R$/ }),
+  });
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  const controls = card.locator('.stack-stretch-controls');
+  await controls.locator('summary').click();
+  const apply = controls.locator('.stack-stretch-actions button').first();
+  await expect(apply).toHaveText('Apply processing');
+  await expect(apply).toBeEnabled();
+
+  phase = 'queued';
+  await apply.click();
+  await expect(apply).toHaveText('Waiting for the stack build of Alpha M44 · B to finish');
+  await expect(apply).toBeDisabled();
+  await expect(apply).toHaveAttribute('aria-busy', 'true');
+  await controls.locator('.stack-stretch-actions').scrollIntoViewIfNeeded();
+  await card.screenshot({ path: testInfo.outputPath('processing-queued.png') });
+
+  // The header lists the run behind the build it waits for.
+  const activity = page.getByRole('button', { name: /Background jobs/ });
+  const queue = page.getByRole('region', { name: 'Background jobs' });
+  await expect(activity).toContainText('2 jobs');
+  await activity.click();
+  const rows = queue.getByRole('listitem');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('Stacking');
+  await expect(rows.nth(0)).toContainText('Alpha M44 · B');
+  await expect(rows.nth(1)).toContainText('BlurXTerminator');
+  await expect(rows.nth(1)).toContainText('Beta Field · R');
+  await expect(rows.nth(1)).toContainText('queued · 1');
+  await expect(rows.nth(1)).toContainText('Waiting for the stack build of Alpha M44 · B');
+  await expect(queue.getByRole('link', { name: 'Go to BlurXTerminator: Beta Field · R' }))
+    .toHaveAttribute('href', `#/stacks?db=${encodeURIComponent(dbId)}&project=2&target=2`);
+  await queue.screenshot({ path: testInfo.outputPath('processing-header-queue.png') });
+  await page.keyboard.press('Escape');
+
+  phase = 'running';
+  await expect(apply).toHaveText('Applying… 42% · BlurXTerminator', { timeout: 15_000 });
+  await expect(activity).toContainText('42%');
+  await card.screenshot({ path: testInfo.outputPath('processing-running.png') });
+
+  phase = 'done';
+  await expect(apply).toHaveText('Apply processing', { timeout: 15_000 });
+  await expect(apply).toBeEnabled();
+  await expect(controls.locator('summary')).toContainText('applied');
+  await expect(card.locator('.stack-preview-image img')).toHaveAttribute(
+    'src', /\/stack-previews\/stretch\/[a-f0-9]{64}\/preview$/
+  );
+  expect(posts[0]).toBeNull();
+  expect(posts.slice(1).every((poll) => poll === 'true')).toBe(true);
+});
+
 test('composes cached channel stacks into RGB, LRGB, and selectable narrowband previews', async ({
   page,
 }) => {

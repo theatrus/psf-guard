@@ -293,3 +293,11 @@
   text boxes are dark with light text everywhere, such as Settings and the
   Sequence **Scoring** limits, even when the computer is set to light mode.
   Their arrows, date pickers, checkboxes and sliders follow the theme too.
+- **Apply processing** in Stacks no longer sits on a bare "Applying…" while
+  another stack job holds the worker. It says what it waits for, such as
+  "Waiting for the stack build of M44 · Ha to finish", then the step and how
+  far it has got. Stretch, deconvolution and RC-Astro runs wait in the same
+  line as builds and appear in the header's background jobs, where they can
+  be moved, taken out of the line, or, for an RC-Astro run, stopped; a row
+  opens the target's stacks. A server stop lets the RC-Astro tool in hand
+  finish instead of killing it.

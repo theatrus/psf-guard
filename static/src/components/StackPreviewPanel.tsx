@@ -1229,10 +1229,25 @@ export default function StackPreviewPanel({
                         channels={artifact.group.output_channels === 3 ? 3 : 1}
                         disabled={!canCompute || running || processingQuery?.isPending || !!processingQuery?.error}
                         applied={appliedStretch}
-                        apply={(request, onProgress, signal) => apiClient.applyStackStretch(
-                          dbId, artifact.jobId, artifact.group.index, request,
-                          { onProgress, signal, revision: artifact.artifactRevision }
-                        )}
+                        apply={(request, onProgress, signal) => {
+                          let listed = false;
+                          return apiClient.applyStackStretch(
+                            dbId, artifact.jobId, artifact.group.index, request,
+                            {
+                              onProgress: (progress) => {
+                                // From its first 202 the run is in the
+                                // header's queue; show it there at once.
+                                if (!listed) {
+                                  listed = true;
+                                  queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
+                                }
+                                onProgress?.(progress);
+                              },
+                              signal,
+                              revision: artifact.artifactRevision,
+                            }
+                          );
+                        }}
                         onApplied={async (preview) => {
                           const queryKey = appliedProcessingQueryKey(dbId, projectId, artifact);
                           await queryClient.cancelQueries({ queryKey });

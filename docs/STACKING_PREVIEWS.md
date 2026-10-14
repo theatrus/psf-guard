@@ -286,8 +286,8 @@ unreadable — go at once, and an orphaned half of an interrupted save after a
 day.
 
 A build belongs to the server, not to the page that started it. The header's
-background jobs chip counts it for as long as any mono or color build is
-queued or running, in every view and in every database. The chip shows only
+background jobs chip counts it for as long as any mono or color build, or
+processing run, is queued or running, in every view and in every database. The chip shows only
 the overall progress and the number of jobs. Hover, focus or click it to open
 the queue: each build shows its target and channel and how far it has got, and
 waiting builds say `queued` with their place in line. Catalog refreshes,
@@ -304,7 +304,10 @@ sitting at 100%. While that pass runs the build's line reads, for example,
 Builds wait in a line of their own, and the line, not the order they were
 asked for, decides what runs next. In the queue, **↑** and **↓** move a
 waiting build, **×** takes it out of the line, and **Stop** ends the running
-build after asking once. Mono and color builds share the line. A running color
+build after asking once. Mono and color builds share the line, and so do
+stretch, deconvolution and RC-Astro processing runs (see
+[Processing runs wait in the build line](#processing-runs-wait-in-the-build-line)).
+A running color
 composition has no **Stop**: it only checks for one before it starts, and
 finishes within minutes. An automatic refresh still settling after new
 frames, a sync or grade changes is not listed or counted: nothing runs yet. It
@@ -313,7 +316,11 @@ write access. `POST /api/stack-activity/{job_id}/move` with
 `{"position": n}` (0 is next) and `POST /api/stack-activity/{job_id}/cancel`
 do the same from scripts; `GET /api/stack-activity` lists builds running first,
 then the line in order, each waiting one with its `queue_position`, and the
-settling automatic refreshes under `scheduled`.
+settling automatic refreshes under `scheduled`. A processing run is an entry
+of `kind` `processing` whose `job_id` is its stretch id; its `processing`
+object carries `operation`, `channel`, `stoppable`, and, while it waits,
+`waiting_for`, or, once it runs, `stage`, `fraction` and
+`started_unix_seconds`.
 `POST /api/stack-activity/scheduled/run-now` starts one within seconds and
 `/scheduled/skip` drops it until the next change; both take
 `{"database_id": …, "project_id": …}`. Reopening **Stacks** re-attaches the stack panels to the
@@ -1099,17 +1106,18 @@ afterward. Find the CLI on `PATH`, or set its path in the `PSF_GUARD_RC_ASTRO`
 environment variable for service units with a minimal `PATH`.
 `GET /api/tools/rc-astro` reports the probe the UI uses.
 
-A chain takes minutes on CPU, so an apply that includes RC-Astro tools runs
-detached: the request answers `202 Accepted` and the client re-sends the
-same request until the result is ready — no reverse-proxy timeout can kill
-the run, and identical concurrent requests join the same computation
-instead of duplicating it. Each poll answer carries the run's live
-progress — which tool is running and the chain's overall fraction — and
-the **Apply processing** button shows it. A run that stays completely silent for ten
-minutes is killed (a first run downloads ML models; run
-`rc-astro download-models` once ahead of time). Unused chain results are swept
-after two weeks. A selected view or current color preview keeps the RC-Astro
-artifacts it still needs.
+A chain takes minutes on CPU. Every **Apply processing** — a stretch,
+deconvolution or RC-Astro chain — runs on the server as a *processing run*,
+detached from the request that started it. The request waits up to five
+seconds for the result, so a plain stretch usually answers at once; past that,
+or when the run has to wait for the stack worker, it answers `202 Accepted`
+and the client re-sends the same request until the result is ready. No
+reverse-proxy timeout can kill the run, and identical concurrent requests
+join the same computation instead of duplicating it. A run that stays
+completely silent for ten minutes is killed (a first run downloads ML models;
+run `rc-astro download-models` once ahead of time). Unused chain results are
+swept after two weeks. A selected view or current color preview keeps the
+RC-Astro artifacts it still needs.
 
 The controls expose Seiza's identity, explicit linear, asinh,
 percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
@@ -1132,6 +1140,37 @@ that selection across reloads. Rebuilding the source stack starts a new
 selection; it never silently applies the old result to changed pixels.
 
 ![Opt-in Seiza deconvolution and display stretch controls applied to a real M44 stack preview](stack-preview-stretch.png)
+
+### Processing runs wait in the build line
+
+A processing run needs the same single stack worker as builds and color
+compositions, so it joins the same line at the back, as a build does. While
+it waits, **Apply processing** says what holds the worker — `Waiting for the
+stack build of M44 · Ha to finish`, `Waiting for the color composition of M44
+· RGB to finish`, or `Waiting for BlurXTerminator on M44 · G to finish` — and
+how many runs are ahead of it. Once it runs, the button shows the step under
+way and, while an RC-Astro tool works, the chain's share done:
+`Applying… 42% · BlurXTerminator`. The server log says when a run queues,
+when it starts and how long it waited, and when it finishes.
+
+The header's background jobs chip counts processing runs and lists them
+beside builds: what the run does (`BlurXTerminator`, `Deconvolution`,
+`Stretch`, or a chain's steps joined with `+`), the target and channel, and
+whether it is queued, with its place in line, or running, with its share
+done. Its target and channel link to that target's **Stacks**. Because the
+run waits in the builds' line, **↑** and **↓** move it and **×** takes it out
+of the line. **Stop** ends a running RC-Astro run: the tool is killed, its
+exchange folder is removed, the steps already finished stay cached, and the
+button says `Processing was stopped`. A running stretch or deconvolution has
+no **Stop**; it finishes in moments. A build you start still waits behind
+processing runs asked for earlier unless you move it; automatic refreshes
+stop for processing runs as they do for builds you start.
+
+A server stop lets the RC-Astro tool in hand finish and write its result,
+then starts no further step, and the stop waits for it. A run still waiting
+leaves the line. Processing runs are not written to the job journal, so a
+restart does not bring them back: apply the processing again, and the steps
+that finished come from the cache.
 
 ## Named processing setups
 
@@ -1560,7 +1599,14 @@ The stretch GET returns the selected cached preview or `null`. DELETE clears
 the selection and returns `204`. Send the displayed artifact revision as `v`
 on GET, POST, and DELETE; a changed revision returns `409`. An initial POST
 selects the requested processing. After `202`, repeat with `poll=true` to read
-progress without changing the selection or starting a new job. Cached
+progress without changing the selection or starting a new job. A `202` body
+is `{ "pending": true, "queued": true, "stage": "Waiting for the stack build
+of M44 · Ha to finish", "waiting_for": "the stack build of M44 · Ha",
+"queue_position": 0 }` while the run waits for the stack worker, and
+`{ "pending": true, "queued": false, "stage": "RC-Astro BlurXTerminator",
+"fraction": 0.42 }` once it runs; `fraction` is absent while waiting and for
+steps that cannot say. A run a person stopped answers `400` with
+`Processing was stopped` on the next poll. Cached
 responses include `request`, the full stretch/deconvolution/RC-Astro settings
 needed to restore the editor.
 

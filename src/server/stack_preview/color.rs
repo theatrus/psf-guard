@@ -2421,6 +2421,10 @@ fn compose_color(
                                     None,
                                 );
                             },
+                            // A running composition finishes; a server stop
+                            // waits for it, as for the rest of the job.
+                            None,
+                            &mut || Ok(()),
                         )?;
                         let id = chain
                             .last()

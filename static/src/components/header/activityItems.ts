@@ -18,7 +18,7 @@ export type ActivityQueue = 'stack' | 'wbpp';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'stack' | 'wbpp';
+  kind: 'refresh' | 'quality' | 'stack' | 'processing' | 'wbpp';
   /** What is happening: "Stacking", "Analyzing quality". */
   title: string;
   /** What it happens to: a database, or a target and channel. */
@@ -166,7 +166,52 @@ function qualityItem(db: DatabaseActivity, projectOf: ProjectOf): ActivityItem |
   return null;
 }
 
+/** A stretch, deconvolution or RC-Astro run on a finished stack. It waits in
+ *  the same line as builds, so it moves and leaves the line the same way. */
+function processingItem(entry: StackActivityEntry): ActivityItem {
+  const queued = entry.state === 'queued';
+  const processing = entry.processing;
+  const fractionDone = processing?.fraction;
+  // The title already names the operation; the line under it says what the
+  // run waits for, or the step under way when the title does not, and when
+  // it started, since a tool can take many minutes.
+  const started = processing?.started_unix_seconds
+    ? `started ${new Date(processing.started_unix_seconds * 1000).toLocaleTimeString([], {
+      hour: '2-digit', minute: '2-digit',
+    })}`
+    : '';
+  const step = processing?.stage && processing.stage !== processing.operation ? processing.stage : '';
+  const detail = queued
+    ? processing?.waiting_for ? `Waiting for ${processing.waiting_for}` : entry.detail
+    : [step, started].filter(Boolean).join(' · ') || entry.detail;
+  return {
+    queue: 'stack',
+    position: queued ? entry.queue_position ?? undefined : undefined,
+    control: { kind: 'stack', jobId: entry.job_id },
+    key: `stack:${entry.job_id}`,
+    kind: 'processing',
+    // A running stretch or deconvolution finishes in moments; an RC-Astro
+    // tool can be stopped.
+    stoppable: queued || !!processing?.stoppable,
+    title: processing?.operation ?? 'Processing',
+    scope: entry.label,
+    detail,
+    queued,
+    percent: !queued && fractionDone != null ? Math.min(fractionDone * 100, 100) : null,
+    hint: processing?.waiting_for
+      ? `${processing.operation} on ${entry.label}, waiting for ${processing.waiting_for}`
+      : entry.detail,
+    // The channel's card is on its target's stacks.
+    href: viewPath('stacks', {
+      db: entry.database_id,
+      project: entry.project_id,
+      target: entry.target_id,
+    }),
+  };
+}
+
 function stackItem(entry: StackActivityEntry): ActivityItem {
+  if (entry.kind === 'processing') return processingItem(entry);
   const unit = entry.kind === 'mono' ? 'frames' : 'steps';
   const queued = entry.state === 'queued';
   return {

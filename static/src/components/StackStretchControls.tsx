@@ -11,6 +11,7 @@ import { rcAstroProblem, useRcAstroCapabilities } from './rcAstroSchema';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import { builtinViewSetups } from './processingSetups';
 import { validateDeconvolution } from './stackDeconvolution';
+import { applyingLabel } from './stackProcessingLabel';
 import {
   defaultStretchRequest,
   stretchModelLabels,
@@ -202,16 +203,13 @@ export default function StackStretchControls({
         )}
         {error && <div className="stack-stretch-error" role="alert">{error}</div>}
         <div className="stack-stretch-actions">
-          <button type="button" disabled={disabled || pending} onClick={submit}>
-            {pending && !reverting
-              ? pendingProgress?.fraction !== undefined
-                ? `Applying… ${Math.round(pendingProgress.fraction * 100)}%${
-                    pendingProgress.stage
-                      ? ` · ${pendingProgress.stage.replace('RC-Astro ', '')}`
-                      : ''
-                  }`
-                : 'Applying…'
-              : 'Apply processing'}
+          <button
+            type="button"
+            disabled={disabled || pending}
+            onClick={submit}
+            aria-busy={pending && !reverting}
+          >
+            {pending && !reverting ? applyingLabel(pendingProgress) : 'Apply processing'}
           </button>
           <button type="button" disabled={disabled || pending || !applied} onClick={revert}>
             {reverting ? 'Reverting...' : 'Revert processing'}

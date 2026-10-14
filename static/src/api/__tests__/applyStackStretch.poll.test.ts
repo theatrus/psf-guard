@@ -84,6 +84,43 @@ describe('applyStackStretch polling', () => {
     expect(preview.stretch_id).toBe('b'.repeat(64));
   });
 
+  it('reports a queued run, which has a stage but no fraction, before it runs', async () => {
+    let calls = 0;
+    server.use(
+      http.post(`/api/db/test/stack-previews/${jobId}/0/stretch`, () => {
+        calls += 1;
+        if (calls === 1) {
+          return HttpResponse.json({
+            success: true,
+            data: {
+              pending: true, queued: true, queue_position: 0,
+              stage: 'Waiting for the stack build of M44 · Ha to finish',
+              waiting_for: 'the stack build of M44 · Ha',
+            },
+            error: null,
+          }, { status: 202 });
+        }
+        if (calls === 2) {
+          return HttpResponse.json({
+            success: true,
+            data: { pending: true, queued: false, stage: 'RC-Astro BlurXTerminator', fraction: 0.5 },
+            error: null,
+          }, { status: 202 });
+        }
+        return HttpResponse.json(ready);
+      })
+    );
+    const seen: StackStretchPendingProgress[] = [];
+    await apiClient.applyStackStretch('test', jobId, 0,
+      { model: { type: 'identity' }, color_strategy: 'linked' },
+      { onProgress: (progress) => seen.push(progress), pollIntervalMs: 5 });
+    expect(seen).toEqual([
+      expect.objectContaining({ queued: true, waiting_for: 'the stack build of M44 · Ha' }),
+      expect.objectContaining({ queued: false, fraction: 0.5 }),
+    ]);
+    expect(seen[0].fraction).toBeUndefined();
+  });
+
   it('surfaces a failed poll as an error', async () => {
     server.use(
       http.post(`/api/db/test/stack-previews/${jobId}/0/stretch`, () =>
