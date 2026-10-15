@@ -10,12 +10,8 @@ import {
   useImageOrder,
 } from './useUrlState';
 import type { Image } from '../api/types';
-import {
-  groupGridImages,
-  groupImagesByPanel,
-  imageGroupKey,
-  resolveExpandedGroups,
-} from '../utils/imageGrouping';
+import { imageGroupKey, resolveExpandedGroups } from '../utils/imageGrouping';
+import { useGridGroups } from './useGridGroups';
 import { useProjectMosaic } from './useProjectMosaic';
 import {
   imageDetailClosePath,
@@ -129,12 +125,13 @@ export function useImageNavigation(currentImageId?: number) {
     calibration.marks,
   ]);
 
-  // The grid's own groups, in the order it shows them.
+  // The grid's own groups, in the order it shows them, by the same helper
+  // and the same night boundary. Until a date grouping's boundary is in,
+  // there is nothing to walk rather than a walk the grid does not show.
+  const { groupsIn, ready: groupsReady } = useGridGroups(dbId, filteredImages, groupingMode, mosaic);
   const imageGroups = useMemo(
-    () => mosaic
-      ? groupImagesByPanel(filteredImages, mosaic, images => groupGridImages(images, groupingMode, order))
-      : groupGridImages(filteredImages, groupingMode, order),
-    [filteredImages, groupingMode, mosaic, order],
+    () => groupsReady ? groupsIn(order) : [],
+    [groupsIn, groupsReady, order],
   );
 
   const visibleExpandedGroups = useMemo(

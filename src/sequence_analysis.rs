@@ -772,9 +772,10 @@ pub struct ImageMetrics {
     #[serde(default)]
     pub capture_profile: Option<String>,
     /// The rig the frame was captured with: its Target Scheduler profile
-    /// (see [`add_instrument_to_capture_profile`]). Each instrument forms its
-    /// own sessions, so two rigs merged into one catalog, shooting the same
-    /// target on the same night, are never scored against each other.
+    /// ([`instrument_of`]). Where a target and filter hold two or more, each
+    /// forms its own sessions, so two rigs merged into one catalog, shooting
+    /// the same target on the same night, are never scored against each
+    /// other ([`settle_instruments`]).
     #[serde(default)]
     pub instrument: Option<String>,
     /// Stars and HFR the sequence scores: the capture software's until
@@ -1445,7 +1446,7 @@ impl SequenceAnalyzer {
         target_name: &str,
         filter_name: &str,
     ) -> Vec<ScoredSequence> {
-        let images = choose_star_source(images);
+        let images = choose_star_source(&settle_instruments(images));
         let context = TargetContext::from_images(&images, self.config.rotation_skew_tolerance_deg);
         self.analyze_in_context(&images, &context, target_id, target_name, filter_name)
     }
@@ -1484,7 +1485,7 @@ impl SequenceAnalyzer {
     ) -> (Vec<ScoredSequence>, Option<TargetFilterRollup>) {
         // Once for the whole target and filter, so the sessions and the
         // rollup compare the same kind of count.
-        let images = &choose_star_source(images);
+        let images = &choose_star_source(&settle_instruments(images));
         let context = TargetContext::from_images(images, self.config.rotation_skew_tolerance_deg);
         let sequences =
             self.analyze_in_context(images, &context, target_id, target_name, filter_name);
@@ -3568,8 +3569,9 @@ fn split_by_pixel_domain(images: &[ImageMetrics]) -> Vec<Vec<ImageMetrics>> {
 }
 
 /// One set of frames per instrument, so two rigs' frames interleaved in time
-/// form two runs of sessions rather than one frame each. A catalog with one
-/// profile, or none, is one set.
+/// form two runs of sessions rather than one frame each. Instruments are
+/// settled first ([`settle_instruments`]): a set with one profile, or none,
+/// is one set.
 fn split_by_instrument(images: &[ImageMetrics]) -> Vec<Vec<ImageMetrics>> {
     let mut sets: Vec<(Option<String>, Vec<ImageMetrics>)> = Vec::new();
     for image in images {
@@ -4055,38 +4057,68 @@ fn capture_profile_from_metadata(metadata: &serde_json::Value) -> Option<String>
 }
 
 /// The instrument a light was captured with, as a catalog row records it:
-/// its Target Scheduler profile, the N.I.N.A. equipment profile. Empty when
-/// the row names none.
-fn instrument_text(profile_id: Option<&str>) -> Option<&str> {
-    profile_id.map(str::trim).filter(|id| !id.is_empty())
+/// its Target Scheduler profile, the N.I.N.A. equipment profile, trimmed and
+/// lower-cased. `None` when the row names none.
+pub fn instrument_of(profile_id: Option<&str>) -> Option<String> {
+    profile_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_ascii_lowercase)
 }
 
-/// Add the instrument to a light's capture profile, so frames from two rigs
-/// that share exposure, gain and the rest still fall into separate sequences.
-/// A Sync "Merge catalog" puts two rigs' frames in one database, and each row
-/// keeps its own profile.
+/// Whether a set of frames holds two or more instruments, the only case in
+/// which they are compared apart. Target Scheduler added `profileId` as a
+/// nullable column with no backfill, so one rig's long project mixes rows
+/// with no profile and rows with one; with a single profile in the set,
+/// those rows still belong to it.
+pub fn instruments_differ<'a>(instruments: impl IntoIterator<Item = Option<&'a str>>) -> bool {
+    let mut first: Option<&str> = None;
+    for instrument in instruments.into_iter().flatten() {
+        match first {
+            None => first = Some(instrument),
+            Some(seen) if seen != instrument => return true,
+            Some(_) => {}
+        }
+    }
+    false
+}
+
+/// The frames of one target and filter as the analyzer compares them. When
+/// they hold two or more instruments, each frame's instrument joins its
+/// capture profile, so two rigs merged into one catalog by Sync, at the same
+/// exposure, gain and binning, fall into separate sessions and rollup
+/// groups. Otherwise every instrument is cleared and the set scores exactly
+/// as it would without them. A frame with no instrument in a set of several
+/// stays apart from all of them: nothing says which rig took it.
 ///
 /// The profile id stands in for the camera and telescope the calibration
 /// library tells rigs apart by: catalog rows do not record those, and reading
-/// every light's header would be too slow for scoring. A row without a profile
-/// id, or a frame without a capture profile, keeps today's profile, so a
-/// catalog with one profile scores exactly as before.
-pub fn add_instrument_to_capture_profile(metrics: &mut ImageMetrics, profile_id: Option<&str>) {
-    let Some(instrument) = instrument_text(profile_id).map(str::to_ascii_lowercase) else {
-        return;
-    };
-    if let Some(profile) = metrics.capture_profile.as_mut() {
-        profile.push_str("|instrument=");
-        profile.push_str(&instrument);
-    }
-    metrics.instrument = Some(instrument);
+/// every light's header would be too slow for scoring.
+fn settle_instruments(images: &[ImageMetrics]) -> Vec<ImageMetrics> {
+    let differ = instruments_differ(images.iter().map(|image| image.instrument.as_deref()));
+    images
+        .iter()
+        .cloned()
+        .map(|mut image| {
+            if !differ {
+                image.instrument = None;
+            } else if let (Some(profile), Some(instrument)) =
+                (image.capture_profile.as_mut(), image.instrument.as_deref())
+            {
+                profile.push_str("|instrument=");
+                profile.push_str(instrument);
+            }
+            image
+        })
+        .collect()
 }
 
-/// [`extract_metrics_from_metadata`] for a catalog row, with its instrument
-/// in the capture profile ([`add_instrument_to_capture_profile`]).
+/// [`extract_metrics_from_metadata`] for a catalog row, with the instrument
+/// it was captured with ([`instrument_of`]). The analyzer compares
+/// instruments apart only where a set holds several ([`settle_instruments`]).
 pub fn extract_light_metrics(image: &crate::models::AcquiredImage) -> ImageMetrics {
     let mut metrics = extract_metrics_from_metadata(image.id, &image.metadata, image.acquired_date);
-    add_instrument_to_capture_profile(&mut metrics, image.profile_id.as_deref());
+    metrics.instrument = instrument_of(image.profile_id.as_deref());
     metrics
 }
 
@@ -6595,7 +6627,8 @@ mod tests {
         let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
         let rows = two_rigs();
         let merged: Vec<ImageMetrics> = rows.iter().map(extract_light_metrics).collect();
-        assert_ne!(merged[0].capture_profile, merged[1].capture_profile);
+        let settled = settle_instruments(&merged);
+        assert_ne!(settled[0].capture_profile, settled[1].capture_profile);
 
         let (sequences, _) = analyzer.analyze_with_target_filter_rollup(&merged, 1, "M42", "Ha");
         // One session per rig, not one frame each as the rigs alternate.
@@ -6677,11 +6710,53 @@ mod tests {
             assert_eq!(light.capture_profile, plain.capture_profile, "{profile:?}");
             assert_eq!(light.instrument, None, "{profile:?}");
         }
-        // A frame with no capture settings gains no profile from its rig.
+        // A frame with no capture settings gains no profile from its rig,
+        // even among two rigs.
         let mut bare = extract_metrics_from_metadata(1, "{}", Some(1_000));
-        add_instrument_to_capture_profile(&mut bare, Some("askar"));
-        assert_eq!(bare.capture_profile, None);
-        assert_eq!(bare.instrument.as_deref(), Some("askar"));
+        bare.instrument = Some("askar".into());
+        let mut other = bare.clone();
+        other.instrument = Some("esprit".into());
+        let settled = settle_instruments(&[bare, other]);
+        assert_eq!(settled[0].capture_profile, None);
+        assert_eq!(settled[0].instrument.as_deref(), Some("askar"));
+    }
+
+    #[test]
+    fn rows_without_a_profile_score_with_the_catalogs_only_profile() {
+        // Target Scheduler added profileId without a backfill, so one rig's
+        // project holds a night of rows with none and three nights with its
+        // profile. They are one rig and score as they always did.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let rows: Vec<_> = (0..48)
+            .map(|i| {
+                let night = i / 12;
+                let at = 1_000_000 + i64::from(night) * 86_400 + i64::from(i % 12) * 300;
+                if night == 0 {
+                    light_row(i, at, 900, 2.6, None)
+                } else {
+                    light_row(i, at, 900, 2.0, Some("Askar"))
+                }
+            })
+            .collect();
+        let before: Vec<ImageMetrics> = rows
+            .iter()
+            .map(|row| extract_metrics_from_metadata(row.id, &row.metadata, row.acquired_date))
+            .collect();
+        let after: Vec<ImageMetrics> = rows.iter().map(extract_light_metrics).collect();
+
+        let (old_sessions, old_rollup) =
+            analyzer.analyze_with_target_filter_rollup(&before, 1, "M42", "Ha");
+        let (new_sessions, new_rollup) =
+            analyzer.analyze_with_target_filter_rollup(&after, 1, "M42", "Ha");
+        assert_eq!(new_sessions.len(), old_sessions.len());
+        assert_eq!(scores(&new_sessions), scores(&old_sessions));
+        let old_rollup = scores(&[old_rollup.expect("four nights support a rollup").sequence]);
+        let new_rollup = scores(&[new_rollup.expect("four nights support a rollup").sequence]);
+        assert_eq!(new_rollup.len(), 48, "every night is in the rollup");
+        assert_eq!(new_rollup, old_rollup);
+        // The soft first night scores as it did, against the three sharp ones.
+        let first_night = new_rollup.iter().find(|(id, _)| *id == 0).unwrap().1;
+        assert!((first_night - 0.545).abs() < 0.0005, "{first_night}");
     }
 
     #[test]

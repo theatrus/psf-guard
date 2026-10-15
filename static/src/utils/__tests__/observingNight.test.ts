@@ -81,15 +81,52 @@ describe('date groups are observing nights', () => {
       image(1, local(-4, 12, 19, 30)),
       image(2, local(-4, 13, 1, 30)),
       image(3, local(-4, 13, 19, 30)),
+      image(4, local(-4, 14, 1, 30)),
     ];
     const nights = groupGridImages(frames, 'date', 'oldest', scope);
-    expect(ids(nights)).toEqual([[3], [1, 2]]);
-    // "2026-10-12" (UTC) held frame 1 only: its night opens.
-    expect([...resolveExpandedGroups(nights, 'date', new Set(['2026-10-12']))]).toEqual(['2026-10-12']);
-    // "2026-10-13" (UTC) held frames 2 and 3: both their nights open.
-    expect([...resolveExpandedGroups(nights, 'date', new Set(['2026-10-13']))])
-      .toEqual(['2026-10-13', '2026-10-12']);
+    expect(ids(nights)).toEqual([[3, 4], [1, 2]]);
+    // "2026-10-14" (UTC) held frame 4 only, and is no night's key today:
+    // the night holding it opens.
+    expect([...resolveExpandedGroups(nights, 'date', new Set(['2026-10-14']))]).toEqual(['2026-10-13']);
+    // A UTC date spelled like a night's key names that night alone.
+    expect([...resolveExpandedGroups(nights, 'date', new Set(['2026-10-13']))]).toEqual(['2026-10-13']);
     const both = groupGridImages(frames, 'both', 'oldest', scope);
-    expect([...resolveExpandedGroups(both, 'both', new Set(['HA - 2026-10-12']))]).toEqual(['HA - 2026-10-12']);
+    expect([...resolveExpandedGroups(both, 'both', new Set(['HA - 2026-10-14']))]).toEqual(['HA - 2026-10-13']);
+  });
+
+  describe('folding a night west of Greenwich, where its small hours fall on the next night\'s date', () => {
+    // UTC-7: every frame of the night of the 11th is on the 12th in UTC,
+    // which is the next night's key.
+    const scope = { nightBoundarySeconds: boundaries[-7] };
+    const short = { key: 'short', label: '30 s', min_seconds: 30, max_seconds: 30 };
+    const frames = [
+      image(1, local(-7, 11, 23, 30)),
+      image(2, local(-7, 12, 1, 30)),
+      image(3, local(-7, 12, 23, 30)),
+      image(4, local(-7, 13, 1, 30)),
+    ];
+
+    it('keeps the older night folded in Date', () => {
+      const nights = groupGridImages(frames, 'date', 'oldest', scope);
+      expect(nights.map(imageGroupKey)).toEqual(['2026-10-12', '2026-10-11']);
+      expect(nights[1].aliases ?? []).not.toContain('2026-10-12');
+      // The link the fold writes: only the 12th open.
+      expect([...resolveExpandedGroups(nights, 'date', new Set(['2026-10-12']))]).toEqual(['2026-10-12']);
+      expect([...resolveExpandedGroups(nights, 'date', new Set(['2026-10-11']))]).toEqual(['2026-10-11']);
+    });
+
+    it('keeps the older night folded in Filter + Date', () => {
+      const nights = groupGridImages(frames, 'both', 'oldest', scope);
+      expect(nights.map(imageGroupKey)).toEqual(['HA - 2026-10-11', 'HA - 2026-10-12']);
+      expect([...resolveExpandedGroups(nights, 'both', new Set(['HA - 2026-10-12']))]).toEqual(['HA - 2026-10-12']);
+    });
+
+    it('keeps the older night folded in Filter + Date split by exposure', () => {
+      const split = groupGridImages(frames.map((frame) => ({ ...frame, exposure_group: short })), 'both', 'oldest', scope);
+      expect(split).toHaveLength(2);
+      const newer = imageGroupKey(split[1]);
+      expect(newer).toContain('HA - 2026-10-12');
+      expect([...resolveExpandedGroups(split, 'both', new Set([newer]))]).toEqual([newer]);
+    });
   });
 });

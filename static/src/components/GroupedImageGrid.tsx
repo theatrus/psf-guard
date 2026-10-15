@@ -36,8 +36,6 @@ import {
   getNextMultiProjectMode 
 } from '../types/grouping';
 import {
-  groupGridImages,
-  groupImagesByPanel,
   imageGroupKey,
   NO_EXPANDED_GROUPS,
   resolveExpandedGroups,
@@ -49,7 +47,7 @@ import {
 } from '../utils/gridNavigation';
 import { thumbnailCardHeightEstimate, thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
-import { useNightBoundary } from '../hooks/useNightBoundary';
+import { useGridGroups } from '../hooks/useGridGroups';
 import { mosaicLabel, useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
@@ -152,14 +150,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: true,
   });
-  // Date groups are observing nights, split where this catalog's nights
-  // split. They wait for the boundary rather than open on UTC dates and move.
-  const nightBoundary = useNightBoundary(
-    dbId,
-    groupingMode === 'both' || groupingMode.includes('date'),
-  );
-  const isLoading = imagesLoading || !nightBoundary.ready;
-  useStableScrollAnchor(containerRef, !isLoading);
 
   const imagesToMove = allImages.filter(image => selectedImages.has(image.id));
   const canMoveImages = imagesToMove.length > 0
@@ -307,17 +297,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const isMultiProjectMode = projectId === null;
 
   
-  // Group images based on selected mode, under their panels in a mosaic.
-  const nightBoundarySeconds = nightBoundary.boundarySeconds;
-  const groupsIn = useCallback(
-    (inOrder: ImageOrder) => {
-      const scope = { nightBoundarySeconds };
-      return mosaic
-        ? groupImagesByPanel(filteredImages, mosaic, images => groupGridImages(images, groupingMode, inOrder, scope))
-        : groupGridImages(filteredImages, groupingMode, inOrder, scope);
-    },
-    [filteredImages, groupingMode, mosaic, nightBoundarySeconds],
-  );
+  // Group images based on selected mode, under their panels in a mosaic,
+  // exactly as the detail view's next and previous walk them. Date groups
+  // are observing nights, split where this catalog's nights split; they
+  // wait for the boundary rather than open on UTC dates and move.
+  const { groupsIn, ready: groupsReady } = useGridGroups(dbId, filteredImages, groupingMode, mosaic);
+  const isLoading = imagesLoading || !groupsReady;
+  useStableScrollAnchor(containerRef, !isLoading);
   const imageGroups = useMemo(() => groupsIn(order), [groupsIn, order]);
 
   const visibleExpandedGroups = useMemo(

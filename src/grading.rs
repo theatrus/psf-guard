@@ -71,8 +71,8 @@ pub struct ImageStatistics {
     pub original_status: i32,
     pub metadata_json: String,
     /// The Target Scheduler profile the light was captured with, which
-    /// stands for its rig: two rigs merged into one catalog are compared
-    /// apart. `None` when the row names none.
+    /// stands for its rig: where a target and filter hold two or more, each
+    /// is compared only with itself. `None` when the row names none.
     pub instrument: Option<String>,
 }
 
@@ -120,17 +120,33 @@ impl StatisticalGrader {
                 .then_with(|| a.exposure_time.cmp(&b.exposure_time))
         });
 
-        // Group images by target, filter and instrument: one rig's HFR and
-        // star counts are no yardstick for another's.
+        // Group images by target and filter, and by instrument where a
+        // target and filter hold two or more: one rig's HFR and star counts
+        // are no yardstick for another's. With one profile, rows that name
+        // none belong to it (Target Scheduler never backfilled profileId).
         type GroupKey = (i32, String, Option<String>);
+        let mut differ: HashMap<(i32, &str), Vec<Option<&str>>> = HashMap::new();
+        for image in &images {
+            differ
+                .entry((image.target_id, image.filter_name.as_str()))
+                .or_default()
+                .push(image.instrument.as_deref());
+        }
+        let differ: std::collections::HashSet<(i32, &str)> = differ
+            .into_iter()
+            .filter(|(_, instruments)| {
+                crate::sequence_analysis::instruments_differ(instruments.iter().copied())
+            })
+            .map(|(key, _)| key)
+            .collect();
         let mut target_filter_groups: HashMap<GroupKey, Vec<&ImageStatistics>> = HashMap::new();
         for image in &images {
+            let instrument = differ
+                .contains(&(image.target_id, image.filter_name.as_str()))
+                .then(|| image.instrument.clone())
+                .flatten();
             target_filter_groups
-                .entry((
-                    image.target_id,
-                    image.filter_name.clone(),
-                    image.instrument.clone(),
-                ))
+                .entry((image.target_id, image.filter_name.clone(), instrument))
                 .or_default()
                 .push(image);
         }
@@ -575,8 +591,9 @@ pub fn parse_image_metadata(
 
 /// [`parse_image_metadata`] for a catalog row, with its instrument: the
 /// Target Scheduler profile it was captured with
-/// ([`crate::sequence_analysis::add_instrument_to_capture_profile`] keys
-/// sequence scoring the same way).
+/// ([`crate::sequence_analysis::instrument_of`]). The grader compares
+/// instruments apart only where a target and filter hold two or more, as
+/// sequence scoring does.
 pub fn light_statistics(
     image: &crate::models::AcquiredImage,
     target_name: &str,
@@ -589,12 +606,7 @@ pub fn light_statistics(
         &image.filter_name,
         image.grading_status,
     )?;
-    stats.instrument = image
-        .profile_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_ascii_lowercase);
+    stats.instrument = crate::sequence_analysis::instrument_of(image.profile_id.as_deref());
     Ok(stats)
 }
 
@@ -780,9 +792,18 @@ mod tests {
         assert_eq!(rejected_ids(&two_rig_rows(None, None)), vec![4, 9, 14]);
         // Apart, each rig is steady and nothing is rejected.
         assert!(rejected_ids(&two_rig_rows(Some("askar"), Some("esprit"))).is_empty());
-        // One profile for the whole catalog grades as no profile did.
+        // One profile for the whole catalog grades as no profile did, and so
+        // does one profile beside rows that name none.
         assert_eq!(
             rejected_ids(&two_rig_rows(Some("askar"), Some("askar"))),
+            rejected_ids(&two_rig_rows(None, None))
+        );
+        assert_eq!(
+            rejected_ids(&two_rig_rows(Some("askar"), None)),
+            rejected_ids(&two_rig_rows(None, None))
+        );
+        assert_eq!(
+            rejected_ids(&two_rig_rows(None, Some("askar"))),
             rejected_ids(&two_rig_rows(None, None))
         );
     }

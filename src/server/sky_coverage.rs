@@ -296,6 +296,34 @@ pub fn catalog_night_boundary(conn: &rusqlite::Connection) -> rusqlite::Result<i
     Ok(night_boundary(times))
 }
 
+/// [`catalog_night_boundary`], kept until the catalog next changes, so the
+/// stats the Library and Images read for every catalog do not scan each
+/// capture time on the shared connection. Any write, such as a new frame,
+/// recomputes it; noon UTC when the lights cannot be read.
+///
+/// The caller holds this context's connection mutex, as for
+/// [`super::exposure_groups::cached_project_groups`].
+pub fn cached_night_boundary(
+    ctx: &super::database_context::DatabaseContext,
+    conn: &rusqlite::Connection,
+) -> Result<i64, super::handlers::AppError> {
+    use super::exposure_groups::CatalogRevision;
+    let revision = CatalogRevision::read(conn)?;
+    let mut cache = ctx
+        .exposure_groups_cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((cached, boundary)) = cache.night_boundary
+        && cached == revision
+    {
+        return Ok(boundary);
+    }
+    let boundary = catalog_night_boundary(conn).unwrap_or(12 * 3_600);
+    cache.night_boundary =
+        (CatalogRevision::read(conn)? == revision).then_some((revision, boundary));
+    Ok(boundary)
+}
+
 /// The civil date a capture's night began on, for a catalog whose nights
 /// split `boundary` seconds after 00:00 UTC: a local evening and the small
 /// hours that follow it share one key.
@@ -1095,6 +1123,44 @@ mod tests {
             catalog_night_boundary(&one_local_night(9)).unwrap(),
             3 * 3_600 + 1_800
         );
+    }
+
+    #[test]
+    fn the_cached_boundary_moves_when_a_writer_adds_frames() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("catalog.sqlite");
+        let writer = rusqlite::Connection::open(&path).unwrap();
+        writer
+            .execute_batch("CREATE TABLE acquiredimage (acquireddate INTEGER)")
+            .unwrap();
+        // A UTC-7 night, 02:00 to 11:30 UTC.
+        let evening = local(-7, 12, 19, 0);
+        for step in 0..20 {
+            writer
+                .execute(
+                    "INSERT INTO acquiredimage (acquireddate) VALUES (?1)",
+                    [evening + step * 1_800],
+                )
+                .unwrap();
+        }
+        let ctx = crate::server::database_context::DatabaseContext::new_for_test(
+            rusqlite::Connection::open(&path).unwrap(),
+        );
+        let db = ctx.db();
+        let conn = db.lock().unwrap();
+        let first = cached_night_boundary(&ctx, &conn).unwrap();
+        assert_eq!(first, catalog_night_boundary(&conn).unwrap());
+        assert_eq!(cached_night_boundary(&ctx, &conn).unwrap(), first);
+        // A frame in the quiet afternoon (20:00 UTC) moves the split.
+        writer
+            .execute(
+                "INSERT INTO acquiredimage (acquireddate) VALUES (?1)",
+                [local(0, 13, 20, 0)],
+            )
+            .unwrap();
+        let moved = cached_night_boundary(&ctx, &conn).unwrap();
+        assert_ne!(moved, first);
+        assert_eq!(moved, catalog_night_boundary(&conn).unwrap());
     }
 
     #[test]

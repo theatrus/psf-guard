@@ -201,7 +201,10 @@ export function groupGridImages(
     filterName: group.label,
     filter: group.filter,
     date: group.date,
-    aliases: [...group.aliases].sort(),
+    // West of Greenwich a night's small hours fall on the next UTC date,
+    // which is the next night's own key. An old name that is a group's key
+    // today names that group and no other.
+    aliases: [...group.aliases].filter((alias) => !groups.has(alias)).sort(),
     // Capture order, stable for frames with the same time; newest first is
     // its mirror image.
     images: group.images.sort((a, b) => (a.acquired_date || 0) - (b.acquired_date || 0)),
@@ -227,6 +230,27 @@ export function groupGridImages(
       images: groupImages,
     })),
   ));
+}
+
+/** Whether a grouping groups by night, and so needs the night boundary. */
+export function isDateGrouping(groupingMode: GroupingMode): boolean {
+  return groupingMode === 'both' || groupingMode.includes('date');
+}
+
+/**
+ * The Images grid's groups in one order, under a mosaic's panels when the
+ * scope is a mosaic. The grid and the detail view's next and previous both
+ * group through here (see `useGridGroups`), so they walk the same groups.
+ */
+export function groupImagesForGrid(
+  images: GroupedImage[],
+  groupingMode: GroupingMode,
+  order: ImageOrder,
+  { mosaic, ...scope }: GroupingScope & { mosaic?: ProjectMosaic | null },
+): ImageGroup[] {
+  return mosaic
+    ? groupImagesByPanel(images, mosaic, (inPanel) => groupGridImages(inPanel, groupingMode, order, scope))
+    : groupGridImages(images, groupingMode, order, scope);
 }
 
 export const NO_EXPANDED_GROUPS = '__none__';
@@ -298,8 +322,12 @@ export function imageGroupKey(group: ImageGroup): string {
  * The groups shown open: the ones the link names, or, when it names none
  * of these groups, the default ones. Keys that match no group are ignored,
  * so a link from another grouping, such as an All projects link from
- * before All projects grouped by project, still opens something. A link
- * from before keys took ids and nights names a group by an alias.
+ * before All projects grouped by project, still opens something.
+ *
+ * A link from before keys took ids and nights names a group by an alias.
+ * Aliases are read only when the link names no group by today's keys, so a
+ * group folded in today's link stays folded, even where an old name for
+ * one group is spelled like another's key.
  */
 export function resolveExpandedGroups(
   imageGroups: ImageGroup[],
@@ -317,14 +345,17 @@ export function resolveExpandedGroups(
         }
       } catch { /* Existing filter/session keys are plain strings. */ }
     }
-    const named = imageGroups.filter((group) => {
+    const namedBy = (withAliases: boolean) => imageGroups.filter((group) => {
       const key = imageGroupKey(group);
-      const names = [key, ...(group.aliases ?? [])];
-      const baseNames = group.baseKey === undefined ? [] : [group.baseKey, ...(group.baseAliases ?? [])];
+      const names = withAliases ? [key, ...(group.aliases ?? [])] : [key];
+      const baseNames = group.baseKey === undefined ? []
+        : withAliases ? [group.baseKey, ...(group.baseAliases ?? [])] : [group.baseKey];
       return names.some((name) => expandedGroups.has(name))
         || baseNames.some((name) => expandedGroups.has(name))
         || (group.baseKey === undefined && names.some((name) => previousBaseKeys.has(name)));
     }).map(imageGroupKey);
+    let named = namedBy(false);
+    if (named.length === 0) named = namedBy(true);
     if (named.length > 0 || imageGroups.length === 0) return new Set(named);
   }
 

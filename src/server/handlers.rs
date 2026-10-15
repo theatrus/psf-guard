@@ -7079,7 +7079,7 @@ pub async fn get_overall_stats(
 
     // For now, we'll return empty recent activity - this could be enhanced later
     let recent_activity = Vec::new();
-    let night_boundary_seconds = crate::calibration::catalog_night_boundary(&conn);
+    let night_boundary_seconds = crate::server::sky_coverage::cached_night_boundary(&ctx, &conn)?;
 
     let response = OverallStatsResponse {
         total_projects: stats.total_projects,
@@ -7577,9 +7577,9 @@ pub(crate) fn stored_entry_for(
 /// per-cell temporal baselines) over one filter group and merge the signals
 /// into its `ImageMetrics`. `entries` parallels `metrics` index-for-index;
 /// frames without a stored scan entry contribute empty inputs and receive no
-/// signals. Frames are bucketed by instrument and exposure (flux ratios are
-/// only meaningful within one rig and one exposure length) and split into
-/// sessions before the pass.
+/// signals. Frames are bucketed by exposure, and by instrument where the
+/// group holds several (flux ratios are only meaningful within one rig and
+/// one exposure length), and split into sessions before the pass.
 pub(crate) fn merge_photometric_signals(
     metrics: &mut [crate::sequence_analysis::ImageMetrics],
     entries: &[Option<crate::server::spatial_scan::StoredSpatialMetrics>],
@@ -7597,7 +7597,11 @@ pub(crate) fn merge_photometric_signals(
     let mut order: Vec<usize> = (0..metrics.len()).collect();
     order.sort_by_key(|&i| (metrics[i].timestamp.unwrap_or(0), metrics[i].image_id));
 
-    // Bucket by instrument and exposure seconds.
+    // Bucket by exposure seconds, and by instrument where the group holds
+    // two or more (see sequence_analysis::instruments_differ).
+    let instruments_differ = crate::sequence_analysis::instruments_differ(
+        metrics.iter().map(|metric| metric.instrument.as_deref()),
+    );
     let mut buckets: std::collections::BTreeMap<(Option<String>, i64), Vec<usize>> =
         std::collections::BTreeMap::new();
     for &i in &order {
@@ -7607,7 +7611,12 @@ pub(crate) fn merge_photometric_signals(
             .map(|e| e.round() as i64)
             .unwrap_or(-1);
         buckets
-            .entry((metrics[i].instrument.clone(), exposure))
+            .entry((
+                instruments_differ
+                    .then(|| metrics[i].instrument.clone())
+                    .flatten(),
+                exposure,
+            ))
             .or_default()
             .push(i);
     }

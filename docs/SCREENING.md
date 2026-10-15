@@ -224,13 +224,16 @@ ruined whatever the setting. API callers pass `penalty_satellite`,
 `star_count_reject_below` on the analysis endpoints.
 
 Capture sessions split at a Target Scheduler session change, a capture-profile
-change, or a 60-minute gap. Each Target Scheduler profile forms sessions of its
-own and is part of the capture profile, so two rigs merged into one catalog by
-Sync are scored apart even at the same exposure, gain and binning. The profile
-stands in for the camera and telescope: catalog rows do not record them, and
-reading every light's header would make scoring slow. One rig kept under two
-N.I.N.A. profiles is therefore scored as two. Rows without a profile keep the
-capture profile they had. Frames measured from calibrated pixels (a light
+change, or a 60-minute gap. Where a target and filter hold frames from two or
+more Target Scheduler profiles, each profile forms sessions of its own and is
+part of the capture profile, so two rigs merged into one catalog by Sync are
+scored apart even at the same exposure, gain and binning. The profile stands in
+for the camera and telescope: catalog rows do not record them, and reading
+every light's header would make scoring slow. One rig kept under two N.I.N.A.
+profiles is therefore scored as two. With one profile, nothing changes: rows
+with no profile, which Target Scheduler leaves on frames from before it
+recorded one, score with that profile's rows as they always did. Beside two
+or more profiles, rows with no profile form a set of their own. Frames measured from calibrated pixels (a light
 catalogued from its [calibrated copy](design/calibrated-subs.md), or measured
 from one) form sessions and stack comparisons of their own, since their
 background, flux and star counts differ from raw frames of the same sky. CLI screening still reports **OK**, **WARN**, and
@@ -307,9 +310,18 @@ observing nights. An evening and the small hours after it share the date the
 evening began, wherever the site is. Nights split where the catalog's nights
 split: the middle of the longest stretch of the day in which it never
 captured. Calibration and the AstroBin export split there too, and
-`/stats/overall` reports it as `night_boundary_seconds`. A link that names a
-group by the UTC date older versions used opens the nights holding that
-date's frames.
+`/stats/overall` reports it as `night_boundary_seconds`, kept until the
+catalog next changes. The image detail's next and previous walk the same
+nights as the grid.
+
+A link that names no group by today's keys but names one by the UTC date
+older versions used opens the nights holding that date's frames. A date that
+is a night's key today names that night alone, so folding a night stays
+folded even west of Greenwich, where a night's small hours fall on the next
+night's date. The boundary moves only when frames arrive in an hour the
+catalog had never captured in. That can move some frames to the neighbouring
+night, and a link naming only nights that no longer exist opens the default
+groups.
 
 ### Order and new frames
 

@@ -112,14 +112,16 @@ pub struct ProjectExposureGroups {
     pub by_image: HashMap<i32, ExposureGroup>,
 }
 
+/// A catalog's state as SQLite counts writes: any commit, on this connection
+/// or another, changes it.
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct CatalogRevision {
+pub(crate) struct CatalogRevision {
     data_version: i64,
     total_changes: u64,
 }
 
 impl CatalogRevision {
-    fn read(conn: &Connection) -> Result<Self, AppError> {
+    pub(crate) fn read(conn: &Connection) -> Result<Self, AppError> {
         Ok(Self {
             data_version: conn
                 .query_row("PRAGMA data_version", [], |row| row.get(0))
@@ -132,6 +134,9 @@ impl CatalogRevision {
 #[derive(Default)]
 pub(crate) struct ProjectExposureGroupsCache {
     entries: HashMap<i32, (CatalogRevision, Arc<ProjectExposureGroups>)>,
+    /// Where the catalog's nights split
+    /// ([`super::sky_coverage::cached_night_boundary`]), as of a revision.
+    pub(crate) night_boundary: Option<(CatalogRevision, i64)>,
 }
 
 impl ProjectExposureGroupsCache {
@@ -139,6 +144,7 @@ impl ProjectExposureGroupsCache {
     /// holds the connection mutex while clearing, before another read can run.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+        self.night_boundary = None;
     }
 }
 
