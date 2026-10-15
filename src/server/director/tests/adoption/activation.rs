@@ -1652,6 +1652,19 @@ async fn a_separate_framings_gap_is_judged_against_every_framing_on_the_sky() {
             ),
         ]
     );
+    // Its own single panel on the shared mosaic's east edge, sharing 0.1°:
+    // 10% of its 1° side, under the 20% the seam needs across rigs too.
+    edit_framing(&a.f, a.project, |framing| {
+        let mut beside = own(None);
+        beside.layout.panels = vec![PanelPlacement::at("r1c1", 1.4, 0.0)];
+        framing.rig_framings = vec![beside];
+    });
+    let said = panel_warnings().await;
+    assert!(
+        said.iter()
+            .any(|w| w.ends_with(&format!("and {name} r1c1 overlap by only 10%."))),
+        "{said:?}"
+    );
     // On the shared 2 × 1 mosaic with a field of its own, rig B is told the
     // panels are not sized for it.
     {

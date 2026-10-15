@@ -76,7 +76,8 @@
   rig goes off. A rig framed on its own is checked with the other framings
   on the sky, so its panels need not touch where another rig's cover the sky
   between them; gaps, lone panels and groups apart are said for the whole
-  object.
+  object. A seam between two rigs' panels needs the larger of their minimum
+  overlaps, counted on the smaller panel, or it is flagged as thin.
 - Activation no longer takes over an existing Target Scheduler target with
   frames that sits more than a quarter of a panel from the panel it would
   stand for: the panel gets a new target, the frames stay where they were

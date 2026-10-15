@@ -1523,20 +1523,31 @@ mod tests {
     }
 
     #[test]
-    fn panels_of_two_framings_join_when_they_touch() {
+    fn a_seam_between_two_framings_needs_the_larger_minimum_of_the_smaller_panel() {
         let center = request().center;
         let shared = framing_at(center, 0.0, (2.0, 1.5), &[(0.0, 0.0)]);
-        // A rig's panel sharing 5% of the larger width: thin within one
-        // framing, but across two the sky is covered.
+        // A 1° rig panel beside the shared 2° one. Its share is read of the
+        // smaller panel: 0.2° shared is 20%, the minimum, and joins.
         let beside = |x: f64| framing_at(center, 0.0, (1.0, 0.75), &[(x, 0.0)]);
-        assert!(coverage(&[shared.clone(), beside(1.4)]).is_empty());
-        let one = framing_at(center, 0.0, (2.0, 1.5), &[(0.0, 0.0), (0.95, 0.0)]);
-        assert_eq!(one.issues().unwrap()[0].kind, LayoutIssueKind::ThinOverlap);
-        // A tenth of a degree apart, 5% of the larger width: a gap across the two.
+        assert!(coverage(&[shared.clone(), beside(1.3)]).is_empty());
+        // 0.1° shared is 10% of the smaller panel (5% of the larger): thin.
+        let thin = coverage_issues(&[shared.clone(), beside(1.4)]).unwrap();
+        assert_eq!(thin.len(), 1, "{thin:?}");
+        assert_eq!(thin[0].kind, LayoutIssueKind::ThinOverlap);
+        assert_eq!(thin[0].percent, Some(10.0));
+        // The larger of the two minimums holds: with the rig asking 5%, the
+        // shared framing's 20% still does.
+        let mut lax = beside(1.4);
+        lax.layout.min_overlap_percent = 5;
+        assert_eq!(
+            coverage_issues(&[shared.clone(), lax]).unwrap()[0].kind,
+            LayoutIssueKind::ThinOverlap
+        );
+        // A tenth of a degree apart, 10% of the smaller width: a gap.
         let read = coverage_issues(&[shared.clone(), beside(1.6)]).unwrap();
         assert_eq!(read.len(), 1, "{read:?}");
         assert_eq!(read[0].kind, LayoutIssueKind::Gap);
-        assert_eq!(read[0].percent, Some(5.0));
+        assert_eq!(read[0].percent, Some(10.0));
         assert_eq!(
             read[0].panels,
             vec![

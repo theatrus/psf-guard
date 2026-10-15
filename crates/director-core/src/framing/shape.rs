@@ -311,10 +311,11 @@ pub(crate) struct TaggedIssue {
 /// `k` belongs to, and `minimum[f]` that framing's minimum overlap.
 ///
 /// Two panels of one framing are read in its own frame against its
-/// minimum, as [`shape_issues`] reads them, so a thin overlap is said only
-/// where a framing's own panels meet. Two panels of different framings are
-/// read in the first one's frame and are joined when they overlap or touch:
-/// across framings only the sky's cover counts. A gap is covered by any
+/// minimum, as [`shape_issues`] reads them. Two panels of different
+/// framings are read in the first one's frame against the larger of the
+/// two framings' minimums, so a seam between rigs gets the overlap stitching
+/// needs too, and a thin seam or a gap is said, as within a framing, only
+/// between panels side by side. A gap is covered by any
 /// panel of any framing, and isolated panels and groups apart are read over
 /// them all. With more than one framing, groups apart are said whatever else
 /// is: two panels a thin overlap or a gap keeps apart count as one group
@@ -337,13 +338,23 @@ pub(crate) fn tagged_issues(
         let shapes = frames[framing[i]];
         for j in i + 1..n {
             let same = framing[i] == framing[j];
+            // Across framings a seam needs the larger of the two minimums:
+            // stitching needs whichever overlap asks more.
             let threshold = if same {
                 f64::from(minimum[framing[i]]) / 100.0
             } else {
-                0.0
+                f64::from(minimum[framing[i]].max(minimum[framing[j]])) / 100.0
             };
             let Some(pair) = shape_overlap(&shapes[i], &shapes[j]) else {
                 continue;
+            };
+            // Two rigs' panels may differ in size; a seam between them is
+            // read as shares of the smaller one, as a person stitching them
+            // would count it.
+            let pair = if same {
+                pair
+            } else {
+                of_smaller(pair, &shapes[i], &shapes[j])
             };
             if pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= threshold {
                 linked[i].push(j);
@@ -413,6 +424,31 @@ pub(crate) fn tagged_issues(
         }
     }
     issues
+}
+
+/// `pair` as shares of the smaller of the two panels' sides, not the
+/// larger's: across the seam for its thickness, along it for its run.
+fn of_smaller(pair: ShapeOverlap, a: &PanelShape, b: &PanelShape) -> ShapeOverlap {
+    let (ab, bb) = (a.bounds(), b.bounds());
+    let ratio = |lo: usize, hi: usize| {
+        let (sa, sb) = (ab[hi] - ab[lo], bb[hi] - bb[lo]);
+        let smaller = sa.min(sb);
+        if smaller > 0.0 {
+            sa.max(sb) / smaller
+        } else {
+            1.0
+        }
+    };
+    let (across, along) = if pair.vertical_seam {
+        (ratio(0, 1), ratio(2, 3))
+    } else {
+        (ratio(2, 3), ratio(0, 1))
+    };
+    ShapeOverlap {
+        thickness: pair.thickness * across,
+        run: (pair.run * along).min(1.0),
+        vertical_seam: pair.vertical_seam,
+    }
 }
 
 /// Whether other panels cover the sky between panels `i` and `j`, which

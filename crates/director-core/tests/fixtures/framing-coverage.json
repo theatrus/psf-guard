@@ -183,6 +183,20 @@
   ],
   "issues": [
     {
+      "kind": "thin_overlap",
+      "panels": [
+        {
+          "framing": 0,
+          "id": "r1c1"
+        },
+        {
+          "framing": 1,
+          "id": "r1c1"
+        }
+      ],
+      "percent": 14.0
+    },
+    {
       "kind": "gap",
       "panels": [
         {
@@ -194,7 +208,7 @@
           "id": "p3"
         }
       ],
-      "percent": 10.0
+      "percent": 17.0
     },
     {
       "kind": "thin_overlap",
@@ -211,6 +225,34 @@
       "percent": 7.0
     },
     {
+      "kind": "thin_overlap",
+      "panels": [
+        {
+          "framing": 0,
+          "id": "p3"
+        },
+        {
+          "framing": 1,
+          "id": "p2"
+        }
+      ],
+      "percent": 10.2
+    },
+    {
+      "kind": "thin_overlap",
+      "panels": [
+        {
+          "framing": 0,
+          "id": "p4"
+        },
+        {
+          "framing": 1,
+          "id": "r1c1"
+        }
+      ],
+      "percent": 11.8
+    },
+    {
       "kind": "gap",
       "panels": [
         {
@@ -222,7 +264,7 @@
           "id": "p3"
         }
       ],
-      "percent": 16.2
+      "percent": 17.3
     },
     {
       "kind": "thin_overlap",

@@ -252,13 +252,26 @@ function groupStarts(linked: number[][]): number[][] {
 /** An issue read across framings, its panels by their place in the input. */
 export interface TaggedIssue { kind: DirectorLayoutIssue['kind']; panels: number[]; percent: number | null }
 
+/** `pair` as shares of the smaller of the two panels' sides, not the
+ *  larger's: across the seam for its thickness, along it for its run. The
+ *  core's `of_smaller`. */
+function ofSmaller(pair: ShapeOverlap, a: Bounds, b: Bounds): ShapeOverlap {
+  const ratio = (lo: number, hi: number) => {
+    const [sa, sb] = [a[hi] - a[lo], b[hi] - b[lo]];
+    const smaller = Math.min(sa, sb);
+    return smaller > 0 ? Math.max(sa, sb) / smaller : 1;
+  };
+  const [across, along] = pair.verticalSeam ? [ratio(0, 1), ratio(2, 3)] : [ratio(2, 3), ratio(0, 1)];
+  return { ...pair, thickness: pair.thickness * across, run: Math.min(1, pair.run * along) };
+}
+
 /** The rule read over the panels of several framings of one object, as one
  *  cover of the sky: the core's `tagged_issues`. `frames[f]` holds every
  *  panel's outline in framing `f`'s camera frame, all in one order;
  *  `framing[k]` is the framing panel `k` belongs to, and `minimum[f]` its
  *  minimum overlap. Two panels of one framing are read in its frame against
- *  its minimum; two of different framings in the first one's frame, joined
- *  when they overlap or touch. With more than one framing, groups apart are
+ *  its minimum; two of different framings in the first one's frame against
+ *  the larger of the two minimums. With more than one framing, groups apart are
  *  said whatever else is, two panels a thin overlap or a gap keeps apart
  *  counting as one group, and a lone panel as said already. `groups[k]` is
  *  the first member of panel `k`'s group of joined panels. */
@@ -274,14 +287,18 @@ export function readTagged(frames: PanelShape[][], framing: number[], minimum: n
   for (let i = 0; i < n; i += 1) {
     const shapes = frames[framing[i]];
     for (let j = i + 1; j < n; j += 1) {
-      const threshold = framing[i] === framing[j] ? minimum[framing[i]] / 100 : 0;
+      // Across framings a seam needs the larger of the two minimums.
+      const threshold = (framing[i] === framing[j] ? minimum[framing[i]] : Math.max(minimum[framing[i]], minimum[framing[j]])) / 100;
       // Apart on both axes, or a whole panel or more apart on one: nothing to
       // say about the pair. Most pairs of a large cover end here.
       const a = bounds[framing[i]][i]; const b = bounds[framing[i]][j];
       const gapX = Math.max(a[0], b[0]) - Math.min(a[1], b[1]); const gapY = Math.max(a[2], b[2]) - Math.min(a[3], b[3]);
       if ((gapX >= 0 && gapY >= 0) || gapX >= Math.max(a[1] - a[0], b[1] - b[0]) || gapY >= Math.max(a[3] - a[2], b[3] - b[2])) continue;
-      const pair = shapeOverlap(shapes[i], shapes[j]);
-      if (!pair) continue;
+      const read = shapeOverlap(shapes[i], shapes[j]);
+      if (!read) continue;
+      // Two rigs' panels may differ in size; a seam between them is read as
+      // shares of the smaller one, as a person stitching them would count it.
+      const pair = framing[i] === framing[j] ? read : ofSmaller(read, a, b);
       if (pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= threshold) { linked[i].push(j); linked[j].push(i); continue; }
       if (pair.run + PLACE_TOLERANCE < SIDE_BY_SIDE) continue;
       if (pair.thickness >= -PLACE_TOLERANCE) {

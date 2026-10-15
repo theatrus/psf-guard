@@ -434,6 +434,9 @@ fn the_coverage_fixture_matches_the_core() {
     };
     assert!(has(LayoutIssueKind::ThinOverlap, &[0, 0]), "{issues:?}");
     assert!(has(LayoutIssueKind::ThinOverlap, &[2, 2]), "{issues:?}");
+    // A seam between two rigs needs the larger minimum, of the smaller
+    // panel: the shared 2° panels against the gapped rig's 1.2° ones.
+    assert!(has(LayoutIssueKind::ThinOverlap, &[0, 1]), "{issues:?}");
     assert!(has(LayoutIssueKind::Isolated, &[1]), "{issues:?}");
     assert!(has(LayoutIssueKind::Isolated, &[2]), "{issues:?}");
     // Across two framings, read in the shared framing's frame, where the

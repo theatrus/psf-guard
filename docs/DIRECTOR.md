@@ -1121,11 +1121,10 @@ the framing's, plus its own turn, plus north's lean at its center (about
 framing drew them. With rigs framed on their own, gaps, lone panels and
 groups apart are read across every framing on the sky: the shared one while
 a rig shoots it, and the own framing of each rig that is on. A rig's own
-panels need not touch where another framing covers the sky between them, and
-two panels of different framings that overlap or touch are joined, so a lone
-panel there is one that touches no other panel. A thin overlap is still said
-only where two panels of one framing meet, and groups that never meet are
-said beside any other issue. The panel
+panels need not touch where another framing covers the sky between them. A
+seam between two framings' panels needs the larger of their two minimum
+overlaps, counted on the smaller panel, as stitching needs; below it the seam
+is a thin overlap. Groups that never meet are said beside any other issue. The panel
 list gives another framing's panel with its rig's name, or `shared`, before
 its id. The rules, the stored shape and the migrations are in the
 [design record](design/flexible-mosaics.md).
