@@ -23,11 +23,17 @@ const port = Number(process.env.PSF_GUARD_DIRECTOR_E2E_PORT ?? 13742);
 const binary = process.env.PSF_GUARD_E2E_BINARY;
 const command = binary ? `"${binary}"` : 'cargo run --manifest-path ../Cargo.toml --bin psf-guard --';
 
+// Locally, end a hung run; see playwright.config.ts. CI keeps no limit.
+const globalTimeout = process.env.CI
+  ? 0
+  : Number(process.env.PSF_GUARD_E2E_GLOBAL_TIMEOUT_MS ?? 30 * 60_000);
+
 export default defineConfig({
   testDir: './e2e-director',
   workers: 1,
   retries: 0,
   timeout: 30_000,
+  globalTimeout,
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     trace: 'retain-on-failure',

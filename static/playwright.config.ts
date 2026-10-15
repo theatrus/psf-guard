@@ -52,12 +52,24 @@ const dyldFallback =
     ? '/Library/Developer/CommandLineTools/usr/lib'
     : undefined);
 
+// Locally, end a hung run instead of letting it hold browsers forever.
+// scripts/e2e-local.mjs sets this just under its own hard limit. CI keeps
+// Playwright's default of no limit; the job has its own timeout.
+const globalTimeout = process.env.CI
+  ? 0
+  : Number(process.env.PSF_GUARD_E2E_GLOBAL_TIMEOUT_MS ?? 30 * 60_000);
+
+// Reusing a server already on the port is handy by hand, but under
+// scripts/e2e-local.mjs that server would belong to another run.
+const reuseExistingServer = !process.env.CI && !process.env.PSF_GUARD_E2E_NO_REUSE;
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
   workers: 1,
   retries: 0,
   timeout: 30_000,
+  globalTimeout,
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
 
   globalSetup: './e2e/global-setup.ts',
@@ -110,6 +122,10 @@ export default defineConfig({
     },
   ],
 
+  // Playwright starts each server as its own process group and kills that
+  // group when the run ends, even on failure or Ctrl-C. Only a runner killed
+  // with SIGKILL leaves them behind; scripts/e2e-local.mjs then stops the
+  // groups itself.
   webServer: [
     {
       // Run the CLI server against an isolated registry and cache directory.
@@ -129,7 +145,7 @@ export default defineConfig({
         `--allow-database-management`,
       url: `http://127.0.0.1:${PORT}/api/info`,
       timeout: 180_000,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer,
       env: {
         ...(dyldFallback ? { DYLD_FALLBACK_LIBRARY_PATH: dyldFallback } : {}),
         // Expose the tmp base to specs so they can reach the fixture files.
@@ -158,7 +174,7 @@ export default defineConfig({
         (manage ? ' --allow-database-management' : ''),
       url: `http://127.0.0.1:${port}/api/info`,
       timeout: 180_000,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer,
       env: {
         ...(dyldFallback ? { DYLD_FALLBACK_LIBRARY_PATH: dyldFallback } : {}),
         RUST_LOG: 'info',

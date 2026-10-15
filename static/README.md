@@ -52,6 +52,39 @@ cargo run --release -- server catalog.sqlite /path/to/images \
   --static-dir static/dist
 ```
 
+## Running e2e locally
+
+Run Playwright through the guard script, not bare `npx playwright test`:
+
+```bash
+cargo build --release                            # the server the specs start
+scripts/e2e-local.mjs e2e/navigation.spec.ts     # from the repository root
+scripts/e2e-local.mjs --director                 # Director suite; needs npm run build
+```
+
+Arguments it does not know go to `playwright test`. The script:
+
+- holds a machine-wide lock in `/tmp/psf-guard-e2e.lock`, so only one run
+  goes at a time across worktrees. A second run prints
+  `waiting for <worktree> (pid …, started …)` and waits; `--no-wait` exits
+  with status 75 instead. A lock whose owner has died is broken.
+- refuses to start while Playwright browsers sit in the exiting state (`E`
+  in `ps`). macOS cannot kill them, even with `kill -9`, and new browser
+  launches hang behind them. Reboot; do not retry or `pkill`.
+- uses `PSF_GUARD_E2E_BINARY`, or else this worktree's
+  `target/release/psf-guard`, and ports derived from the worktree path
+  unless `PSF_GUARD_E2E_PORT` or `PSF_GUARD_DIRECTOR_E2E_PORT` is set. It
+  refuses a port that is already in use rather than reuse that server.
+- stops the run after `--max-time` (30 minutes), after `--idle` without
+  output (5 minutes), or on Ctrl-C. It sends SIGTERM to the process groups
+  the run created, browsers and servers included, then SIGKILL after
+  `--grace` (10 seconds). It never signals anything else.
+- ends with one line: passed, failed, timed out, watchdog, or interrupted.
+
+Without the script, both Playwright configs still stop a local run after
+30 minutes (`globalTimeout`); CI keeps no limit. `npm run test:scripts`
+tests the script itself.
+
 ## Styling
 
 Colours are tokens in the `:root` block of `src/App.css`. Stylesheets and
