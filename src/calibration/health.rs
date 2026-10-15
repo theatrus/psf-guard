@@ -1459,8 +1459,17 @@ mod tests {
             .unwrap();
         assert_eq!((outcome.measured, outcome.compared), (2, 1));
         assert_eq!(fixture.health(1).level, None);
+        let alike = |explained: &crate::calibration::CalibrationExplanation| {
+            explained
+                .kinds
+                .iter()
+                .find(|kind| kind.kind == "flat")
+                .and_then(|kind| kind.alike.as_ref().map(|alike| alike.nights))
+        };
+        assert_eq!(alike(&fixture.explain(1)), Some(2));
 
-        // Grouping by time, the check is as it always was, measured or not.
+        // Grouping by time, the check is as it always was, measured or not,
+        // and the light's account says nothing of measurements.
         let _rules = crate::calibration::tests::RulesInForce::global(&[(
             "flat_grouping",
             serde_json::json!("time"),
@@ -1469,6 +1478,7 @@ mod tests {
             reason(&fixture.health(1), HealthCode::MixedFlats),
             "Its flat master mixes flats from 2 nights"
         );
+        assert_eq!(alike(&fixture.explain(1)), None);
     }
 
     #[test]

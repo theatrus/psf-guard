@@ -3357,7 +3357,10 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
             (
                 flat_groups::describe_basis(&selected.flat_basis, &selected.rules),
                 basis,
-                measured_alike(conn, &master),
+                // Grouping by time says nothing of measurements.
+                (selected.rules.flat_grouping == rules::FlatGrouping::Measured)
+                    .then(|| measured_alike(conn, &master))
+                    .flatten(),
             )
         } else {
             (None, None, None)

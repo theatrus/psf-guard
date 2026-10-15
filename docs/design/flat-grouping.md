@@ -347,8 +347,11 @@ opens the rig's own value or the global one.
   (`plan_workers` with its samples), yielding to interactive work before
   each read, comparison and evidence session, committing as it goes.
 - **Grouping by time** is the previous behaviour throughout: selection,
-  the mixed-flats Check and its wording, and export sessions (no
-  per-flat-set sessions).
+  the mixed-flats Check and its wording, export sessions (no per-flat-set
+  sessions), and the light's account, which says nothing of measurements.
+  On copies of UltraCat131 and RedCat61 its selection and health match
+  main's light for light; the account only adds the setting to its notes,
+  as for any setting off its default.
 
 ## 7. Validation on real flats
 
