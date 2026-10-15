@@ -208,40 +208,55 @@ export interface ShapeReading {
 }
 
 export function readShapes(shapes: PanelShape[], minOverlapPercent: number): ShapeReading {
-  const minimum = minOverlapPercent / 100;
-  const n = shapes.length;
-  const issues: DirectorLayoutIssue[] = [];
-  const linked: number[][] = shapes.map(() => []);
-  const bounds = shapes.map(shape => boundsOf(shape.corners));
-  const flagged = shapes.map(() => false);
+  const tagged = readTagged([shapes], shapes.map(() => 0), [minOverlapPercent]);
+  const groups = new Map<string, string>();
+  shapes.forEach((shape, k) => groups.set(shape.id, shapes[tagged.groups[k]].id));
+  return { issues: tagged.issues.map(issue => ({ ...issue, panels: issue.panels.map(k => shapes[k].id) })), groups };
+}
+
+/** An issue read across framings, its panels by their place in the input. */
+export interface TaggedIssue { kind: DirectorLayoutIssue['kind']; panels: number[]; percent: number | null }
+
+/** The rule read over the panels of several framings of one object, as one
+ *  cover of the sky: the core's `tagged_issues`. `frames[f]` holds every
+ *  panel's outline in framing `f`'s camera frame, all in one order;
+ *  `framing[k]` is the framing panel `k` belongs to, and `minimum[f]` its
+ *  minimum overlap. Two panels of one framing are read in its frame against
+ *  its minimum; two of different framings in the first one's frame, joined
+ *  when they overlap or touch. `groups[k]` is the first member of panel
+ *  `k`'s group of joined panels. */
+export function readTagged(frames: PanelShape[][], framing: number[], minimum: number[]): { issues: TaggedIssue[]; groups: number[] } {
+  const n = framing.length;
+  const issues: TaggedIssue[] = [];
+  const linked: number[][] = framing.map(() => []);
+  const bounds = frames.map(shapes => shapes.map(shape => boundsOf(shape.corners)));
+  const flagged = framing.map(() => false);
   for (let i = 0; i < n; i += 1) {
+    const shapes = frames[framing[i]];
     for (let j = i + 1; j < n; j += 1) {
+      const threshold = framing[i] === framing[j] ? minimum[framing[i]] / 100 : 0;
       const pair = shapeOverlap(shapes[i], shapes[j]);
       if (!pair) continue;
-      if (pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= minimum) { linked[i].push(j); linked[j].push(i); continue; }
+      if (pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= threshold) { linked[i].push(j); linked[j].push(i); continue; }
       if (pair.run + PLACE_TOLERANCE < SIDE_BY_SIDE) continue;
-      const ids = [shapes[i].id, shapes[j].id];
       if (pair.thickness >= -PLACE_TOLERANCE) {
-        issues.push({ kind: 'thin_overlap', panels: ids, percent: roundPercent(Math.max(0, pair.thickness)) });
+        issues.push({ kind: 'thin_overlap', panels: [i, j], percent: roundPercent(Math.max(0, pair.thickness)) });
         flagged[i] = true; flagged[j] = true;
-      } else if (-pair.thickness < 1 && !gapCovered(shapes, bounds, i, j, pair)) {
-        issues.push({ kind: 'gap', panels: ids, percent: roundPercent(-pair.thickness) });
+      } else if (-pair.thickness < 1 && !gapCovered(shapes, bounds[framing[i]], i, j, pair)) {
+        issues.push({ kind: 'gap', panels: [i, j], percent: roundPercent(-pair.thickness) });
         flagged[i] = true; flagged[j] = true;
       }
     }
   }
-  if (n > 1) for (let i = 0; i < n; i += 1) if (linked[i].length === 0 && !flagged[i]) issues.push({ kind: 'isolated', panels: [shapes[i].id], percent: null });
-  const groups = new Map<string, string>();
-  const seen = shapes.map(() => false);
-  const starts: string[] = [];
+  if (n > 1) for (let i = 0; i < n; i += 1) if (linked[i].length === 0 && !flagged[i]) issues.push({ kind: 'isolated', panels: [i], percent: null });
+  const groups = framing.map(() => -1);
+  const starts: number[] = [];
   for (let start = 0; start < n; start += 1) {
-    if (seen[start]) continue;
+    if (groups[start] >= 0) continue;
     // A group is named by its first member in input order.
-    const group = [start]; seen[start] = true;
-    for (let next = 0; next < group.length; next += 1) for (const other of linked[group[next]]) if (!seen[other]) { seen[other] = true; group.push(other); }
-    const name = shapes[Math.min(...group)].id;
-    for (const member of group) groups.set(shapes[member].id, name);
-    starts.push(name);
+    const group = [start]; groups[start] = start;
+    for (let next = 0; next < group.length; next += 1) for (const other of linked[group[next]]) if (groups[other] < 0) { groups[other] = start; group.push(other); }
+    starts.push(start);
   }
   if (issues.length === 0 && starts.length > 1) issues.push({ kind: 'disconnected', panels: starts, percent: null });
   return { issues, groups };

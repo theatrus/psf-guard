@@ -8,11 +8,11 @@ import { describeFramingChanges } from './draftChanges';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { SkyPreview } from '../../api/types';
-import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorLayout, DirectorMosaicPanel, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
+import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorLayout, DirectorMosaicPanel, DirectorPanelSize, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
 import {
   DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, TILE_MAX_FOV, angleAt, clampFov, deprojectFrom, deprojectOn, draftFromState, fitViewFov, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, framingProblems, fromStage,
   compassDirections, insidePolygon, markLabelBudget, normaliseAngle, offsetFrom, panelForRig, pixelScale, polygonPoints, preferredSurveyId, previewRequest, projectOn, rigGeometries, rotationHandleSky, roundRa, stackMatrix, stageAngleAt, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
-  cameraDegreesToPlane, framingBoxes, framingShapes, panelHandleSky, readFraming, rigLayout, turnToward,
+  cameraDegreesToPlane, coverageFor, framingBoxes, framingShapes, panelHandleSky, readFraming, rigLayout, turnToward, type CoverageFraming,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import MosaicPanels, { type ExtendScope } from './MosaicPanels';
@@ -58,6 +58,8 @@ const TURN_STEP = 1;
 /** A turned panel settles on the framing's angle, a neighbour's or a shot
  *  panel's this many degrees away. */
 const SNAP_TURN_DEG = 2;
+/** Two panel sizes the same to a billionth of a degree. */
+const sameSize = (a: DirectorPanelSize, b: DirectorPanelSize) => Math.abs(a.width_degrees - b.width_degrees) <= 1e-9 && Math.abs(a.height_degrees - b.height_degrees) <= 1e-9;
 /** A turn as said beside the panels: signed, to a tenth of a degree. */
 const signedTurn = (degrees: number) => `${degrees < 0 ? '−' : '+'}${Math.abs(degrees).toFixed(1)}°`;
 /** The way a panel's up edge leans in the camera frame, as a turn. */
@@ -330,6 +332,9 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     if (state.layout.panels.some(panel => panel.locked && (Math.abs(panel.x) > 1e-9 || Math.abs(panel.y) > 1e-9))) return;
     const next = rigList.find(r => sizesShared(state, r));
     if (!next) return;
+    // A mosaic keeps its size rather than move every panel to another field.
+    const field = panelForRig(rigList, next.rig.id);
+    if (state.layout.panels.length > 1 && state.panel && field && !sameSize(field, state.panel)) return;
     const take = (current: FramingState | null) => current ? { ...current, panelRigId: next.rig.id, panel: panelForRig(rigList, next.rig.id) } : current;
     if (first) adjust(take); else setState(take);
   }, [state, onToggleRig, shootingRigIds, rigList, sizesShared, adjust]);
@@ -364,9 +369,25 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // a pan or a zoom does not clip every pair of panels again.
   const activeShapes = useMemo(() => active?.panel ? readFraming(active.center, active.positionAngle, active.panel, active.layout).shapes : [], [active]);
   const activeBoxes = useMemo(() => active?.panel ? framingBoxes(active.center, active.positionAngle, active.panel, active.layout) : undefined, [active]);
-  // The rule's reading of a layout of the active framing: what falls short,
-  // and which panels are joined.
-  const readingOf = (layout: DirectorLayout): ShapeReading => active?.panel ? readFraming(active.center, active.positionAngle, active.panel, layout).reading : { issues: [], groups: new Map() };
+  // The object's cover: the shared framing while a rig shoots it, and every
+  // rig that is on and framed on its own, in the order activation reads
+  // them. Gaps, lone panels and groups apart are read across all of them.
+  const cover = useMemo(() => {
+    if (!state) return [];
+    const live = (id: string) => rigList.some(entry => entry.rig.id === id) && (!onToggleRig || (shootingRigIds ?? []).includes(id));
+    const out: Array<{ key: string | null; label: string; framing: CoverageFraming }> = [];
+    if (sharedInUse && state.panel) out.push({ key: null, label: 'shared', framing: { center: state.center, positionAngle: state.positionAngle, panel: state.panel, layout: state.layout } });
+    for (const own of ownRigs) {
+      if (!live(own.rigId)) continue;
+      const label = rigList.find(entry => entry.rig.id === own.rigId)?.catalog_name ?? 'Rig';
+      out.push({ key: own.rigId, label, framing: { center: own.layout.center, positionAngle: own.layout.positionAngle, panel: own.layout.panel, layout: own.layout.layout } });
+    }
+    return out;
+  }, [state, sharedInUse, ownRigs, rigList, onToggleRig, shootingRigIds]);
+  // The rule's reading of a layout of the active framing, across the cover:
+  // what falls short, and which panels are joined.
+  const readingOf = (layout: DirectorLayout): ShapeReading => !active?.panel ? { issues: [], groups: new Map() }
+    : coverageFor(cover, active.rig, layout) ?? readFraming(active.center, active.positionAngle, active.panel, layout).reading;
   /** What placing or turning panel `id` leaves short that `before` did not. */
   const freshFrom = (before: DirectorLayout, after: DirectorLayout, id: string) => {
     const was = readingOf(before); const now = readingOf(after);
@@ -726,7 +747,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     editLayout(next, `${turn === 0 ? `Turned ${id} back to the framing angle` : `Turned ${id} ${signedTurn(turn)} from the framing`}${fresh.length ? `; it leaves ${fresh.map(describeIssue).join('; ')}` : ''}.`);
   };
   // What each panel is short of, for the sky and the list.
-  const layoutIssueList = useMemo(() => active?.geometry?.issues ?? [], [active]);
+  const layoutIssueList = useMemo(() => (active?.panel && coverageFor(cover, active.rig, active.layout)?.issues) || (active?.geometry?.issues ?? []), [active, cover]);
   const flagged = useMemo(() => flaggedPanels(layoutIssueList), [layoutIssueList]);
   // A view narrower than the footprint hides its edges and handle. The fit
   // takes every panel corner as it is drawn, turned by the camera angle,
@@ -1211,9 +1232,18 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     update(current => current.rigFramings.some(own => own.rig_id === id) ? {} : ({ rigFramings: [...current.rigFramings, { rig_id: id, center: null, position_angle_degrees: null, layout: { ...current.layout, panels: current.layout.panels.map(panel => setLocked({ ...current.layout, panels: [panel] }, panel.id, false).panels[0]) }, panel: panelForRig(rigList, id) ? null : current.panel }] }));
     setEditingRig(id);
   };
-  const chooseRig = (rigId: string) => {
+  // A rig whose field would move a shared mosaic's panels asks first: frame
+  // it on its own, or size the shared mosaic by it anyway.
+  const [askRig, setAskRig] = useState<string | null>(null);
+  const movesMosaic = (rigId: string) => {
+    const field = panelForRig(rigList, rigId);
+    return !!state && state.layout.panels.length > 1 && !!field && !!state.panel && !sameSize(field, state.panel);
+  };
+  const chooseRig = (rigId: string, ask = true) => {
     // A new size moves every panel off the center, a locked one too.
     if (sizeLocked) { setPanelNotice('A locked panel off the center holds the panel size: unlock it to frame with another rig.'); return; }
+    if (ask && rigId && movesMosaic(rigId)) { setAskRig(rigId); return; }
+    setAskRig(null);
     update({ panelRigId: rigId || null, panel: rigId ? panelForRig(rigList, rigId) : null });
   };
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
@@ -1314,6 +1344,12 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         })()}
       </div>
       <p className="framing-rig-role">{shownRole}</p>
+      {canWrite && canFrame && askRig === id && movesMosaic(id) && <p className="framing-rig-ask" role="status" data-testid="framing-rig-ask">
+        Its field moves all {state.layout.panels.length} panels.{' '}
+        <button type="button" className="link-button" onClick={() => { setAskRig(null); frameRig(id); }}>Frame separately</button>{' '}
+        <button type="button" className="link-button" onClick={() => chooseRig(id, false)}>Use its field</button>{' '}
+        <button type="button" className="link-button" onClick={() => setAskRig(null)}>Cancel</button>
+      </p>}
       {canWrite && <div className="framing-rig-actions">
         {!own && field && <label className="framing-check" title="Draw its field on the sky"><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
         {!own && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}

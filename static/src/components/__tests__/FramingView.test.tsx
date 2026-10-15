@@ -1486,6 +1486,74 @@ describe('Mosaic panels', () => {
     // The shared framing is as it was.
     expect(saves[0].layout.panels).toEqual([{ id: 'r1c1', x: 0, y: 0, locked: false }]);
   });
+  it('asks before another rig\'s field moves a shared mosaic, then frames that rig separately or uses its field', async () => {
+    const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107',
+      field_of_view: { width_degrees: 1.2, height_degrees: 0.8, pixel_scale_arcsec: 1.9, focal_ratio: 7 } };
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
+    mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    const source = () => screen.getByTestId('framing-panel-source');
+    const askar = () => screen.getByRole('group', { name: 'Askar 107' });
+    // Nothing moves yet: Askar's card asks.
+    fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
+    expect(within(askar()).getByTestId('framing-rig-ask')).toHaveTextContent('Its field moves all 2 panels.');
+    expect(source()).toHaveTextContent('Size from RedCat 61 · 5.38° × 3.60°');
+    const ask = () => within(screen.getByTestId('framing-rig-ask'));
+    fireEvent.click(ask().getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('framing-rig-ask')).not.toBeInTheDocument();
+    // Framed separately, Askar gets its own copy and the shared mosaic keeps its size.
+    fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
+    fireEvent.click(ask().getByRole('button', { name: 'Frame separately' }));
+    expect(screen.getByRole('group', { name: 'Mosaic panels · Askar 107' })).toBeInTheDocument();
+    expect(source()).toHaveTextContent('Size from RedCat 61 · 5.38° × 3.60°');
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].panel).toEqual({ width_degrees: 5.38, height_degrees: 3.6 });
+    expect(saves[0].rig_framings!.map(own => [own.rig_id, own.layout.panels.map(panel => panel.id)])).toEqual([[rigC.rig.id, ['r1c1', 'p2']]]);
+    // Back on the shared framing, Use its field sizes the shared mosaic by Askar.
+    fireEvent.click(within(askar()).getByRole('button', { name: 'Use shared' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
+    fireEvent.click(ask().getByRole('button', { name: 'Use its field' }));
+    expect(source()).toHaveTextContent('Size from Askar 107 · 1.20° × 48.0′');
+    expect(screen.queryByTestId('framing-rig-ask')).not.toBeInTheDocument();
+  });
+
+  it('keeps a shared mosaic\'s size when its rig goes off and the rig that is on has another field', async () => {
+    const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107',
+      field_of_view: { width_degrees: 1.2, height_degrees: 0.8, pixel_scale_arcsec: 1.9, focal_ratio: 7 } };
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const view = (shooting: string[]) => <QueryClientProvider client={client}><FramingView projectId="project" seed={seed} preferredRigIds={[rigA.rig.id]}
+      shootingRigIds={shooting} onToggleRig={() => {}} /></QueryClientProvider>;
+    const { rerender } = render(view([rigA.rig.id, rigC.rig.id]));
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61 · 5.38° × 3.60°'));
+    rerender(view([rigC.rig.id]));
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61 (off) · 5.38° × 3.60°'));
+    expect(screen.getByTestId('framing-extent')).toHaveTextContent('2 panels');
+  });
+
+  it('reads a separate framing\'s gaps over every framing on the sky', async () => {
+    // C925 framed on its own: two half-size panels half a panel apart, either
+    // side of the shared framing's one panel, which fills the sky between.
+    const draft = { ...placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]), rig_framings: [{ rig_id: rigB.rig.id, center: null, position_angle_degrees: null,
+      layout: { min_overlap_percent: 20, panels: [{ id: 'r1c1', x: -0.75, y: 0, locked: false }, { id: 'p2', x: 0.75, y: 0, locked: false }] },
+      panel: { width_degrees: 2.69, height_degrees: 1.8 } }] };
+    fixture(draft);
+    mount(true, true, [rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    fireEvent.click(within(screen.getByRole('group', { name: 'C925 data' })).getByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('group', { name: 'Mosaic panels · C925 data' })).toBeInTheDocument();
+    expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2);
+    expect(screen.queryByTestId('framing-issues')).not.toBeInTheDocument();
+    expect(document.querySelector("[data-panel-id='p2']")).not.toHaveAttribute('data-panel-state');
+    // Moved off the shared panel, its own gap is said.
+    fireEvent.change(screen.getByLabelText('C925 data right ascension degrees'), { target: { value: '40' } });
+    expect(screen.getByTestId('framing-issues')).toHaveTextContent('r1c1 and p2 leave a gap of 50% of a panel.');
+    expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-panel-state', 'invalid');
+  });
+
   it('says a lock or unlock on a grid panel is unsaved on the plan page', async () => {
     fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }]));
     const drafts = mountOnPage();

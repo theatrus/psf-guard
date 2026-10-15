@@ -4,7 +4,7 @@
 //! the operator reviews is what Apply commits. Captures and grades are never
 //! touched; removed panels leave their targets behind.
 
-use super::framing::describe_issue;
+use super::framing::{cover_warnings, rig_field, ShootingRig};
 use super::*;
 use crate::{
     commands::sync::{sync_remote, RemoteDirection, RemoteSyncOptions},
@@ -470,12 +470,9 @@ async fn execute_guarded(
                 "Save a plan with at least one objective first.",
             ))?;
         // The shared framing's panels; a rig framed on its own has its own.
-        let (panels, layout_issues) = match framing.shared_request() {
-            Some(request) => {
-                let preview = request.preview().map_err(|_| Error::Invalid)?;
-                (preview.panels, preview.issues)
-            }
-            None => (vec![], vec![]),
+        let panels = match framing.shared_request() {
+            Some(request) => request.preview().map_err(|_| Error::Invalid)?.panels,
+            None => vec![],
         };
         let mut by_rig: BTreeMap<Uuid, Vec<&Contribution>> = BTreeMap::new();
         // A plan saved before duplicates were refused may hold two
@@ -534,11 +531,17 @@ async fn execute_guarded(
         // Every objective should have some rig on every shared panel; say
         // where not. A rig framed on its own covers its own grid.
         // A layout short of its minimum overlap is the operator's call, not
-        // a refusal: it is said with the coverage.
-        let mut coverage_warnings: Vec<String> = layout_issues
-            .iter()
-            .map(|issue| format!("Panels: {}.", describe_issue(issue)))
-            .collect();
+        // a refusal: it is said with the coverage, read across the shared
+        // framing and every rig's own as one cover of the object.
+        let mut shooting = Vec::new();
+        for rig in by_rig.keys() {
+            shooting.push(ShootingRig {
+                id: *rig,
+                name: store.rig(*rig)?.map(|rig| rig.name).unwrap_or_default(),
+                field: rig_field(store.rig_profile(*rig)?.as_ref()),
+            });
+        }
+        let mut coverage_warnings = cover_warnings(&framing, &shooting);
         let on_shared = |c: &&&Contribution| framing.rig_framing(c.rig_id).is_none();
         for objective in &plan.objectives {
             let uncovered: Vec<&str> = panels
@@ -619,14 +622,7 @@ async fn execute_guarded(
             let scheduling = store.effective_observing_preferences(*rig_id, Some(id))?.scheduling;
             // This rig's own layout, or the shared one; its field stands in
             // for a panel size its own framing leaves unset.
-            let field = profile
-                .as_ref()
-                .and_then(|p| p.optics.as_ref())
-                .and_then(|optics| optics.value.field_of_view().ok())
-                .map(|fov| psf_guard_director_core::framing::PanelSize {
-                    width_degrees: fov.width_degrees,
-                    height_degrees: fov.height_degrees,
-                });
+            let field = rig_field(profile.as_ref());
             let Some(layout) = framing.layout_for(*rig_id, field) else {
                 reports.push(RigReport {
                     rig,
@@ -652,12 +648,8 @@ async fn execute_guarded(
                 // laid out here; one the core refuses (too wide a mosaic)
                 // is this rig's warning, not a refused request.
                 match layout.request().preview() {
-                    Ok(preview) => {
-                        warnings.extend(preview.issues.iter().map(|issue| {
-                            format!("Its separate framing: {}.", describe_issue(issue))
-                        }));
-                        preview.panels
-                    }
+                    // Its layout's issues are said with the coverage.
+                    Ok(preview) => preview.panels,
                     Err(error) => {
                         reports.push(RigReport {
                             rig,

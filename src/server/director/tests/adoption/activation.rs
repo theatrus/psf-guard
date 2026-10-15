@@ -1564,6 +1564,100 @@ async fn a_rig_framed_on_its_own_gets_its_own_panels_and_angle() {
     assert!((mean_ra - 39.2 / 15.0).abs() < 1e-3, "{mean_ra}");
 }
 
+/// Layout warnings read the shared framing and every rig's own as one cover
+/// of the object: a rig's own panels may sit apart where the shared mosaic
+/// fills the sky between them, and are said, under the rig's name, once
+/// they leave sky uncovered.
+#[tokio::test]
+async fn a_separate_framings_gap_is_judged_against_every_framing_on_the_sky() {
+    use psf_guard_director_core::framing::PanelPlacement;
+    use psf_guard_director_meta::framing::RigFraming;
+    let a = activated().await;
+    let (other_rig, _other_db) = add_rig(&a.f, "rig-b").await;
+    let name = {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut plan = store.plan_draft(a.project).unwrap().unwrap();
+        let revision = plan.revision;
+        let mut second = plan.contributions[0].clone();
+        second.id = Uuid::new_v4();
+        second.rig_id = other_rig;
+        plan.contributions.push(second);
+        store.save_plan_draft(&plan, revision).unwrap();
+        store.rig(other_rig).unwrap().unwrap().name
+    };
+    // Rig B's two small panels half a panel apart, either side of the
+    // shared 2 × 1 mosaic's middle.
+    let own = |center: Option<IcrsPosition>| RigFraming {
+        rig_id: other_rig,
+        center,
+        position_angle_degrees: None,
+        layout: Layout {
+            min_overlap_percent: 20,
+            panels: vec![
+                PanelPlacement::at("r1c1", -0.75, 0.0),
+                PanelPlacement::at("p2", 0.75, 0.0),
+            ],
+        },
+        panel: Some(PanelSize {
+            width_degrees: 1.0,
+            height_degrees: 0.75,
+        }),
+    };
+    let panel_warnings = || async {
+        let (status, preview) = call(
+            &a.f.app,
+            "POST",
+            &format!("/projects/{}/activation/preview", a.project),
+            json!({}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        let mut said: Vec<String> = preview["data"]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(
+                preview["data"]["rigs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|rig| rig["warnings"].as_array().unwrap()),
+            )
+            .map(|w| w.as_str().unwrap().to_owned())
+            .filter(|w| w.starts_with("Panels:") || w.contains("separate framing:"))
+            .collect();
+        said.sort();
+        said
+    };
+    edit_framing(&a.f, a.project, |framing| {
+        framing.rig_framings = vec![own(None)];
+    });
+    assert_eq!(panel_warnings().await, Vec::<String>::new());
+    // Ten degrees north, nothing fills the sky between them.
+    edit_framing(&a.f, a.project, |framing| {
+        framing.rig_framings = vec![own(Some(IcrsPosition {
+            ra_degrees: 38.2,
+            dec_degrees: 71.45,
+        }))];
+    });
+    assert_eq!(
+        panel_warnings().await,
+        vec![format!(
+            "Panels: {name} r1c1 and {name} p2 leave a gap of 50% of a panel."
+        )]
+    );
+    // With rig B off, its framing is not part of the cover.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut plan = store.plan_draft(a.project).unwrap().unwrap();
+        let revision = plan.revision;
+        plan.contributions.retain(|c| c.rig_id != other_rig);
+        store.save_plan_draft(&plan, revision).unwrap();
+    }
+    assert_eq!(panel_warnings().await, Vec::<String>::new());
+}
+
 #[tokio::test]
 async fn activation_writes_the_plans_scheduling_limits_and_keeps_hand_edits_nobody_planned() {
     use psf_guard_director_core::priority::Scope;

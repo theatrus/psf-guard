@@ -294,3 +294,4 @@
 .framing-turn label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text-secondary); }
 .framing-turn .framing-input { max-width: 120px; }
 .framing-issues { margin: 0; padding-left: 18px; font-size: 13px; color: var(--color-error-light); }
+.framing-rig-ask { margin: 0; padding: 6px 9px; font-size: 13px; color: var(--color-text-primary); background: var(--color-bg-secondary); border-left: 3px solid var(--color-border-tertiary); border-radius: 4px; }
