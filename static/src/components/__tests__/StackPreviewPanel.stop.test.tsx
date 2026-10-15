@@ -169,8 +169,7 @@ describe('StackPreviewPanel stop', () => {
     expect(within(live).getByText('Live rebuild progress')).toBeInTheDocument();
     expect(within(live).getByText('Exact measurements (2)')).toBeInTheDocument();
 
-    // Found again: the panel may draw the button anew as the job is polled.
-    await userEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
     expect(await screen.findByText('Stack stopped')).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.queryByRole('region', { name: 'Live build SNR progress' })).not.toBeInTheDocument()
@@ -293,7 +292,8 @@ describe('StackPreviewPanel stop', () => {
 
     await screen.findByRole('button', { name: 'Stop' });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Build stacks' })).toBeEnabled());
-    await userEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    // Found again: the panel may draw the button anew as the job is polled.
+    await userEvent.click(await screen.findByRole('button', { name: 'Stop' }, { timeout: 5000 }));
 
     await waitFor(() => expect(cancelled).toBe(true));
     expect(await screen.findByText('Stack stopped')).toBeInTheDocument();
