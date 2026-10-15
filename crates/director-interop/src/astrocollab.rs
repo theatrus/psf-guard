@@ -108,6 +108,9 @@ pub struct Requirements {
     pub min_scale_arcsec: Option<f64>,
     pub max_scale_arcsec: Option<f64>,
     pub accept_colour: bool,
+    pub accept_osc_rgb: bool,
+    pub accept_osc_narrowband: bool,
+    pub max_bortle: Option<u32>,
     pub colour_max_moon: Option<f64>,
     pub max_hfr_arcsec: Option<f64>,
     pub max_guide_rms_arcsec: Option<f64>,
@@ -180,6 +183,9 @@ pub struct PanelDemand {
     pub filter: String,
     pub exposure_ms: u64,
     pub requested_frames: u32,
+    /// Starfront data bands delivered through the physical `filter`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<String>,
 }
 
 /// A proposed visit, not a Program, Allocation, reservation or dispatch permit.
@@ -526,11 +532,17 @@ fn share(raw: &Value, source: &Source, night: &str, wants: Option<&Value>) -> Re
             review_reasons.push(ReviewReason::MissingVisit);
             continue;
         };
-        let exposure = exposures
-            .get(&filter)
-            .copied()
-            .flatten()
-            .ok_or(Error::InvalidValue)?;
+        let task_filter = exposures.get(&filter).ok_or(Error::InvalidValue)?;
+        let exposure = task_filter.exposure_ms.ok_or(Error::InvalidValue)?;
+        let bands = if task_filter.channels.is_empty() {
+            std::slice::from_ref(&filter)
+        } else {
+            &task_filter.channels
+        };
+        let bands = bands
+            .iter()
+            .map(|band| fold_band(band))
+            .collect::<Result<Vec<_>, _>>()?;
         if exposure == 0 {
             return Err(Error::InvalidValue);
         }
@@ -546,7 +558,20 @@ fn share(raw: &Value, source: &Source, night: &str, wants: Option<&Value>) -> Re
             {
                 review_reasons.push(ReviewReason::ExposureOutsideRequirements);
             }
-            if !r.filters_nm.is_empty() && !r.filters_nm.contains_key(&filter) {
+            let allowed_bands = r
+                .filters_nm
+                .keys()
+                .map(|band| fold_band(band))
+                .collect::<Result<BTreeSet<_>, _>>()?;
+            if !allowed_bands.is_empty() && !bands.iter().any(|band| allowed_bands.contains(band)) {
+                review_reasons.push(ReviewReason::FilterOutsideRequirements);
+            }
+            if bands.iter().any(|band| {
+                band.starts_with("OSC-")
+                    && (!r.accept_colour
+                        || (!band.contains('+') && !r.accept_osc_rgb)
+                        || (band.contains('+') && !r.accept_osc_narrowband))
+            }) {
                 review_reasons.push(ReviewReason::FilterOutsideRequirements);
             }
         }
@@ -559,6 +584,7 @@ fn share(raw: &Value, source: &Source, night: &str, wants: Option<&Value>) -> Re
                 filter: filter.clone(),
                 exposure_ms: exposure,
                 requested_frames: frames,
+                channels: task_filter.channels.clone(),
             });
         }
     }
@@ -647,12 +673,22 @@ fn requirements(raw: &Value) -> Result<Requirements, Error> {
     if min_frames_per_visit.is_none() {
         unresolved_fields.push("minFramesPerVisit".into());
     }
+    let max_bortle = optional_integer(map, "maxBortle", 1)?;
+    if max_bortle.is_some_and(|n| n > 9) {
+        return Err(Error::InvalidValue);
+    }
+    if map.get("maxBortle").is_some_and(|v| !v.is_null()) && max_bortle.is_none() {
+        unresolved_fields.push("maxBortle".into());
+    }
     Ok(Requirements {
         min_focal_length_mm,
         max_focal_length_mm,
         min_scale_arcsec,
         max_scale_arcsec,
         accept_colour: json::boolean(map, "acceptColour", true)?,
+        accept_osc_rgb: json::boolean(map, "acceptOscRgb", true)?,
+        accept_osc_narrowband: json::boolean(map, "acceptOscNarrowband", true)?,
+        max_bortle,
         colour_max_moon,
         max_hfr_arcsec,
         max_guide_rms_arcsec,
@@ -668,14 +704,33 @@ fn requirements(raw: &Value) -> Result<Requirements, Error> {
     })
 }
 
-fn task_exposures(map: &Map<String, Value>) -> Result<BTreeMap<String, Option<u64>>, Error> {
+struct TaskFilter {
+    exposure_ms: Option<u64>,
+    channels: Vec<String>,
+}
+
+fn task_exposures(map: &Map<String, Value>) -> Result<BTreeMap<String, TaskFilter>, Error> {
     let mut out = BTreeMap::new();
     if let Some(raw) = map.get("filters") {
         for entry in json::array(raw, MAX_FILTERS)? {
             let e = json::object(entry)?;
             let key = fold_filter(&json::text(required(e, "filter")?, 80)?)?;
+            let mut channels = BTreeSet::new();
+            if let Some(raw) = e.get("channels") {
+                for channel in json::array(raw, MAX_FILTERS)? {
+                    if !channels.insert(fold_band(&json::text(channel, 80)?)?) {
+                        return Err(Error::AmbiguousFilter);
+                    }
+                }
+            }
             if out
-                .insert(key, milliseconds(required(e, "exposure")?)?)
+                .insert(
+                    key,
+                    TaskFilter {
+                        exposure_ms: milliseconds(required(e, "exposure")?)?,
+                        channels: channels.into_iter().collect(),
+                    },
+                )
                 .is_some()
             {
                 return Err(Error::AmbiguousFilter);
@@ -731,6 +786,32 @@ pub fn fold_filter(name: &str) -> Result<String, Error> {
         _ => return Ok(name),
     };
     Ok(letter.into())
+}
+
+/// Bands are a separate wire field; do not rename legacy physical filters.
+fn fold_band(name: &str) -> Result<String, Error> {
+    let name = fold_filter(name)?;
+    let key: String = name
+        .chars()
+        .filter(|c| !c.is_whitespace() && !matches!(c, '_' | '-' | '/'))
+        .flat_map(char::to_lowercase)
+        .collect();
+    let band = match key.as_str() {
+        "oscrgb" => "OSC-RGB",
+        "oscha" => "OSC-Ha",
+        "oscoiii" => "OSC-OIII",
+        "oscsii" => "OSC-SII",
+        "oscha+oiii" => "OSC-Ha+OIII",
+        "oscsii+oiii" => "OSC-SII+OIII",
+        "oscha+sii" => "OSC-Ha+SII",
+        "oscha+oiii+sii" => "OSC-Ha+OIII+SII",
+        "ha+oiii" => "Ha+OIII",
+        "sii+oiii" => "SII+OIII",
+        "ha+sii" => "Ha+SII",
+        "ha+oiii+sii" => "Ha+OIII+SII",
+        _ => return Ok(name),
+    };
+    Ok(band.into())
 }
 
 fn required<'a>(map: &'a Map<String, Value>, key: &str) -> Result<&'a Value, Error> {

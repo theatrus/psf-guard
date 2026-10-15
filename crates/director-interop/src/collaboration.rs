@@ -133,13 +133,19 @@ fn canonical_snapshot(source: &Source, s: &Share) -> Result<Vec<u8>, Error> {
     let mut exposures = std::collections::BTreeMap::new();
     for d in &s.demands {
         frames.insert(d.filter.clone(), json!(d.requested_frames));
-        exposures.insert(d.filter.clone(), d.exposure_ms);
+        exposures.insert(d.filter.clone(), (d.exposure_ms, d.channels.clone()));
     }
     let filters: Vec<_> = exposures
         .into_iter()
-        .map(|(filter, exposure)| json!({"filter": filter, "exposure": exposure as f64 / 1000.0}))
+        .map(|(filter, (exposure, channels))| {
+            let mut entry = json!({"filter": filter, "exposure": exposure as f64 / 1000.0});
+            if !channels.is_empty() {
+                entry["channels"] = json!(channels);
+            }
+            entry
+        })
         .collect();
-    let requirements = json!({
+    let mut requirements = json!({
         "minFocalLength": r.min_focal_length_mm, "maxFocalLength": r.max_focal_length_mm,
         "minScale": r.min_scale_arcsec, "maxScale": r.max_scale_arcsec,
         "acceptColour": r.accept_colour, "colourMaxMoon": r.colour_max_moon,
@@ -150,6 +156,16 @@ fn canonical_snapshot(source: &Source, s: &Share) -> Result<Vec<u8>, Error> {
         "minMoonSeparation": r.min_moon_separation_degrees, "minAltitude": r.min_altitude_degrees,
         "requireCalibrated": r.require_calibrated, "minFramesPerVisit": r.min_frames_per_visit,
     });
+    // Omit extension defaults so legacy reviewed snapshots keep their digest.
+    if !r.accept_osc_rgb {
+        requirements["acceptOscRgb"] = json!(false);
+    }
+    if !r.accept_osc_narrowband {
+        requirements["acceptOscNarrowband"] = json!(false);
+    }
+    if let Some(limit) = r.max_bortle {
+        requirements["maxBortle"] = json!(limit);
+    }
     let mut task = json!({
         "id": s.task_id, "project": s.project_id, "agent": source.agent_id(),
         "version": s.version, "state": "accepted", "kind": s.kind,
@@ -237,6 +253,8 @@ pub struct ContributionReport {
     task: String,
     night: String,
     filter_name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    channels: Vec<String>,
     panel: String,
     frames: u32,
     seconds: f64,
@@ -327,6 +345,13 @@ pub fn finalize_contribution_for_night(
         .iter()
         .find(|d| d.panel_index == first.panel_index && d.filter == filter)
         .ok_or(Error::InvalidEvidence)?;
+    if demand
+        .channels
+        .iter()
+        .any(|band| band.starts_with("OSC-") != first.colour)
+    {
+        return Err(Error::InvalidEvidence);
+    }
     let mut captures = BTreeMap::new();
     let mut images = BTreeSet::new();
     let mut integration_ms = 0_u64;
@@ -400,6 +425,7 @@ pub fn finalize_contribution_for_night(
         task: import.share.task_id.clone(),
         night: observing_night.into(),
         filter_name: filter.clone(),
+        channels: demand.channels.clone(),
         panel: first.panel_index.to_string(),
         frames: frames.len() as u32,
         seconds: integration_ms as f64 / 1000.0,

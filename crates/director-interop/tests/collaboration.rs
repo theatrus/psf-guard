@@ -20,6 +20,92 @@ fn import_round_trip_preserves_identity_and_strips_unknown_secrets() {
 }
 
 #[test]
+fn reviewed_import_retains_starfront_colour_camera_and_sky_limits() {
+    let mut v = wire();
+    v.as_object_mut().unwrap().remove("requirementsByProject");
+    v["requirements"]["acceptOscRgb"] = json!(false);
+    v["requirements"]["acceptOscNarrowband"] = json!(true);
+    v["requirements"]["maxBortle"] = json!(5);
+    let p = prepared(&v);
+    let snapshot: serde_json::Value = serde_json::from_slice(p.snapshot()).unwrap();
+    assert_eq!(snapshot["requirements"]["acceptOscRgb"], false);
+    assert!(snapshot["requirements"]
+        .get("acceptOscNarrowband")
+        .is_none());
+    assert_eq!(snapshot["requirements"]["maxBortle"], 5);
+    let r = p.share().requirements.as_ref().unwrap();
+    assert!(!r.accept_osc_rgb);
+    assert!(r.accept_osc_narrowband);
+    assert_eq!(r.max_bortle, Some(5));
+    let again = prepare_import(p.snapshot(), p.source(), p.night(), &p.share().task_id).unwrap();
+    assert_eq!(again.digest(), p.digest());
+    v["requirements"]["acceptOscRgb"] = json!(true);
+    assert_ne!(prepared(&v).digest(), p.digest());
+}
+
+#[test]
+fn starfront_bands_survive_import_and_reports_require_matching_camera_evidence() {
+    let mut v = wire();
+    v.as_object_mut().unwrap().remove("task");
+    v.as_object_mut().unwrap().remove("requirementsByProject");
+    v["tasks"][0]["filters"] = json!([{"filter":"L","exposure":300,"channels":["OSC-RGB"]}]);
+    v["tasks"][0]["visit"] = json!({"frames":{"L":11}});
+    v["requirements"]["filters"] = json!({"OSC-RGB":null});
+    let p = prepared(&v);
+    let read = prepare_import(p.snapshot(), p.source(), p.night(), TASK).unwrap();
+    assert_eq!(read.digest(), p.digest());
+    assert_eq!(read.share().demands, p.share().demands);
+    let mut f = frame(&p, 1);
+    f.filter = "Clear".into();
+    assert!(matches!(
+        finalize_contribution(&p, &[f.clone()]),
+        Err(Error::InvalidEvidence)
+    ));
+    f.colour = true;
+    let report = finalize_contribution(&p, &[f]).unwrap();
+    let wire = serde_json::to_value(report.report()).unwrap();
+    assert_eq!(wire["filterName"], "L");
+    assert_eq!(wire["channels"], json!(["OSC-RGB"]));
+    assert_eq!(wire["colour"], true);
+}
+
+#[test]
+fn legacy_imports_and_reports_do_not_gain_extension_defaults() {
+    let p = import();
+    let snapshot: serde_json::Value = serde_json::from_slice(p.snapshot()).unwrap();
+    assert!(snapshot["requirements"].get("acceptOscRgb").is_none());
+    assert!(snapshot["requirements"]
+        .get("acceptOscNarrowband")
+        .is_none());
+    assert!(snapshot["requirements"].get("maxBortle").is_none());
+    assert!(snapshot["tasks"][0]["filters"][0].get("channels").is_none());
+    let report = finalize_contribution(&p, &[frame(&p, 1)]).unwrap();
+    let serialized = serde_json::to_value(report.report()).unwrap();
+    assert!(serialized.get("channels").is_none());
+    assert!(serde_json::from_value::<ContributionReport>(serialized).is_ok());
+}
+
+#[test]
+fn legacy_physical_band_spelling_is_not_renamed_in_reviewed_snapshots() {
+    let mut v = wire();
+    v.as_object_mut().unwrap().remove("task");
+    v.as_object_mut().unwrap().remove("requirementsByProject");
+    v["tasks"][0]["filters"] = json!([{"filter":"osc-rgb","exposure":300}]);
+    v["tasks"][0]["visit"] = json!({"frames":{"osc-rgb":11}});
+    v["requirements"]["filters"] = json!({"osc-rgb":null});
+    let p = prepared(&v);
+    let snapshot: serde_json::Value = serde_json::from_slice(p.snapshot()).unwrap();
+    assert_eq!(snapshot["tasks"][0]["filters"][0]["filter"], "osc-rgb");
+    assert!(snapshot["requirements"]["filters"].get("osc-rgb").is_some());
+    assert_eq!(
+        prepare_import(p.snapshot(), p.source(), p.night(), TASK)
+            .unwrap()
+            .digest(),
+        p.digest()
+    );
+}
+
+#[test]
 fn project_identity_rolls_up_agents_but_import_identity_keeps_the_rig_and_night() {
     let a = import();
     let source_b = psf_guard_director_interop::astrocollab::Source::new(

@@ -7,14 +7,15 @@ Activation to write ordinary Target Scheduler rows, with GUID-based capture
 association and actual-observing-night credit. Neither remote registration nor
 import grants acquisition. Direct Starfront intake is not a requirement of
 Director or PSF Guard Sync. Reporting-owner handoff remains planned.
-Last reviewed: 2026-10-07.
+Last reviewed: 2026-10-15.
 
 ## Sources and scope
 
 Reviewed AstroCollab **0.2.0-draft.1**, wire protocol **1**, at
 [`35a6f06`](https://github.com/theatrus/astrocollab-api/tree/35a6f068c6015367b4dbb69c1c4de5b7a0747d90),
 and Starfront at
-[`4cfa896`](https://github.com/bray-sfro/starfront/tree/4cfa8961c9fb98098645896a19c59b5f5ec3b976).
+[`60f87d0`](https://github.com/bray-sfro/starfront/tree/60f87d016c65798ec244b161f722587004af5d18)
+(server version **0.2.43**, wire protocol **1**).
 The public [protocol](https://github.com/theatrus/astrocollab-api/blob/35a6f068c6015367b4dbb69c1c4de5b7a0747d90/spec/protocol.md),
 [OpenAPI](https://github.com/theatrus/astrocollab-api/blob/35a6f068c6015367b4dbb69c1c4de5b7a0747d90/openapi/astrocollab.yaml),
 and [conformance scenarios](https://github.com/theatrus/astrocollab-api/blob/35a6f068c6015367b4dbb69c1c4de5b7a0747d90/spec/conformance.md)
@@ -22,18 +23,82 @@ own the wire contract. Do not maintain a second API specification here.
 
 This draft adopts Starfront's hello, tonight and report routes. It is not the
 earlier draft's capacity, revision-sync and calibrated-upload API. Core credit
-comes from per-night reports; the optional `files` extension has **no defined
-upload routes**. Monthly commitments, file delivery and coordinator project
-administration are not part of this client contract.
+comes from per-night reports. The draft's optional `files` extension has no
+standard upload routes; current Starfront defines its own opt-in file API.
+Monthly commitments, file delivery and coordinator project administration
+are not part of this client contract.
 
 Starfront's useful reference points are `astrocontrol/collabclient.py` for
 polling/reporting, `astrocontrol/main.py` for adopting work into a local plan,
 `astrocontrol/collab.py` for requirements, tiling and allocation, and
 `server/app.py` / `server/store.py` for routes and report persistence. Its
 capture software and collaboration server are in the same repository.
-AstroCollab publishes an MIT license. This Starfront checkout has no license
-file and GitHub reports no license: use it to inspect interoperability, not to
-copy its implementation into the core without permission.
+Current upstream also supplies a NINA acquisition plugin under `nina/`;
+the standalone Target Scheduler adapter remains a separate integration.
+AstroCollab publishes an MIT license. Starfront now publishes its source under
+[MPL-2.0](https://github.com/bray-sfro/starfront/blob/60f87d016c65798ec244b161f722587004af5d18/LICENSE).
+PSF Guard's client implements the wire contract independently; no Starfront
+implementation is copied into this Apache-2.0 core.
+
+### Current Starfront compatibility
+
+The standalone plugin and PSF Guard are checked independently. A passing
+standalone check is not evidence that PSF Guard's host, durable outbox or
+saved-image review passed. Both checks use a throwaway loopback server; no
+synthetic contribution is sent to a shared collaboration service.
+
+| Operation | Current routes and behavior |
+| --- | --- |
+| Authentication | `/api/v1/auth`, `/auth/login`, `/auth/poll`, and `/agents`; person and telescope credentials remain separate. Current Starfront does not expose the draft's pairing-code route. |
+| Hello and presence | `/api/v1/agent/hello` still replaces the full equipment profile. Presence RA remains hours; task/footprint RA remains degrees. |
+| Browse and join | `/api/v1/agent/projects` and `/agent/projects/{id}/join`; joining an existing share is idempotent and returns that share. |
+| Tonight | `/api/v1/agent/task?night=...&moon=...&moonUp=...`; multiple tasks, per-project requirements, fixed nightly panel order and visit frame counts remain supported. |
+| Reports | `/api/v1/agent/report`; metadata/integration reports, positional receipts, cumulative totals and duplicate replies remain supported. This is not an image upload. |
+| Files | Starfront-specific `GET /api/v1/files/projects`, `GET /api/v1/projects/{id}/files`, and `PUT /api/v1/projects/{id}/files/{name}`. Opt-in `collectFiles` does not authorize PSF Guard to transfer image files. Not implemented in either client. |
+
+Starfront now distinguishes mono channels from data bands such as `OSC-RGB`,
+`OSC-Ha+OIII` and `Ha+OIII`. Task `filters[].filter` and `visit.frames` still
+name physical filters; `filters[].channels` names the data bands they deliver.
+Readers retain that mapping and normalize known band spellings without
+turning them into mono credit. They retain `acceptOscRgb`,
+`acceptOscNarrowband` and `maxBortle`; PSF Guard includes these rules in its
+canonical reviewed snapshot and digest. Explicitly disabled OSC bands are held
+even when still listed under `filters`. The guards follow Starfront's current
+classification: OSC names with `+` use its narrowband switch, other OSC names
+use its broadband switch. An unreadable sky limit requires review.
+
+The server can infer familiar physical filters such as `Clear` and
+`L-eXtreme` from the hello profile. Acquisition retains the physical name and
+its sub length; report credit carries the assigned channels explicitly.
+PSF Guard preserves channels in reviewed snapshots and requires saved-frame
+camera evidence to agree with the OSC/mono band. The standalone host saves
+channels beside each nightly TS plan so delayed reports do not depend on a
+later server reply; conflicting same-night mappings are held, not relabeled.
+Neither host invents a selectable NINA wheel filter from a band name.
+
+**Remaining commissioning gaps:** neither host offers custom channel mapping
+for physical filters Starfront cannot infer, or sends a commissioned Bortle
+rating. These values remain unknown; do not manufacture them from a project's
+requirements. Explicit file delivery remains unimplemented. Existing saved
+reports without channels retain their payload rather than being silently
+rewritten or credited differently on upgrade. Reviewed legacy snapshots keep
+their digest when the new extension fields are absent or at default values.
+
+Run PSF Guard's real-server host check with a fresh Starfront server bound to
+`127.0.0.1`, isolated `STARFRONT_DATA`, and its generated owner-token file:
+
+```powershell
+$env:STARFRONT_TEST_URL = 'http://127.0.0.1:18880/'
+$env:STARFRONT_TEST_OWNER_FILE = '<isolated-data>/admin-token.txt'
+cargo test --lib starfront_server_hello_join_import_report_and_replay -- --ignored --exact server::director::collaboration_auth::tests::starfront::starfront_server_hello_join_import_report_and_replay
+```
+
+The test enrolls through the owner's API, then uses PSF Guard's private config
+credential store and normal browse/join/import/check-in routes. It verifies
+reviewed import grants no acquisition, delivers synthetic test evidence once,
+and checks duplicate replay. It does not exercise a real Discord browser
+approval or drive NINA hardware. The standalone host's independent check is
+`tools/InteropCheck` in its repository.
 
 ## Integration ownership
 

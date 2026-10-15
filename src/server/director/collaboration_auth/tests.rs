@@ -7,6 +7,7 @@ use axum::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceExt;
 mod background;
+mod starfront;
 
 async fn fixture() -> (tempfile::TempDir, Arc<AppState>, Router, Uuid) {
     let dir = tempfile::tempdir().unwrap();

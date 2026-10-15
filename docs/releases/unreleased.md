@@ -15,6 +15,11 @@
   your work has been quiet for 30 seconds, from where it stopped when no
   frame or grade changed meanwhile, and its row turns into the running
   build without appearing twice. One you stopped yourself stays stopped.
+
+- Collaboration imports preserve Starfront's physical-filter/data-band mapping
+  and OSC camera and Bortle limits in reviewed plans. Reports carry the data
+  bands explicitly, and work for bands disabled by the project stays held.
+
 - Images' **Date** groups are observing nights, split where the catalog's
   nights split, as calibration and the AstroBin export do: a night west of
   Greenwich no longer lands on the next day's date or across two dates.
