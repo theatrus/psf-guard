@@ -10,7 +10,10 @@
 //! A flat can also be shown against its session: binned, divided by its
 //! median, then by the median of every flat of the session treated the same
 //! way. What all the flats share, dust and vignetting, divides out; what
-//! changes between them, such as drying dew, stays.
+//! changes between them, such as drying dew, stays. A star in a sky flat
+//! changes between them too, but it adds light where dew takes it away:
+//! compact bright sources are drawn at the neutral level, with the mask flat
+//! grouping measures by ([`crate::calibration::flat_groups::metric::star_mask`]).
 //!
 //! Frames are read through [`crate::image_io`] and reduced by block means,
 //! which keeps a hot pixel visible at any size and costs one pass.
@@ -24,7 +27,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Bump when what a preview shows changes, so cached previews are redrawn.
-pub const RENDER_VERSION: u32 = 1;
+/// 2: a flat against its session draws stars at the neutral level.
+pub const RENDER_VERSION: u32 = 2;
 /// The largest side of a session comparison before any further shrinking.
 const SESSION_SIDE: usize = 1024;
 /// At most this many flats make a session's median, evenly spaced.
@@ -202,7 +206,7 @@ pub fn render(source: &Path, output: &Path, spec: &RenderSpec) -> Result<()> {
                 own.width == median.width && own.height == median.height,
                 "the frame is not the size of its session"
             );
-            let ratio = Plane {
+            let mut ratio = Plane {
                 width: own.width,
                 height: own.height,
                 data: own
@@ -218,6 +222,7 @@ pub fn render(source: &Path, output: &Path, spec: &RenderSpec) -> Result<()> {
                     })
                     .collect(),
             };
+            neutral_stars(&mut ratio);
             shrink(ratio, spec.max_side)
         }
     };
@@ -351,6 +356,23 @@ fn bin(image: &seiza_stacking::LinearImage, factor: usize, gains: &[f32]) -> Pla
         height: out_height,
         data,
     }
+}
+
+/// Draw compact bright sources at 1, the neutral level of a ratio: a star
+/// that moved between sky flats is not the drying dew this view looks for.
+fn neutral_stars(ratio: &mut Plane) {
+    let plane = crate::calibration::flat_groups::metric::Plane {
+        width: ratio.width,
+        height: ratio.height,
+        data: std::mem::take(&mut ratio.data),
+    };
+    let stars = crate::calibration::flat_groups::metric::star_mask(&plane);
+    ratio.data = plane
+        .data
+        .into_iter()
+        .zip(stars)
+        .map(|(value, star)| if star { 1.0 } else { value })
+        .collect();
 }
 
 /// Block means of a plane, to bring it within `max_side`.

@@ -1349,6 +1349,15 @@ fn merge_rows(conn: &Connection, merge: &Merge<'_>, remote_table: bool, now: i64
     if remote_table {
         merge_remote_record(conn, merge.keep, &members)?;
     }
+    // A flat response built from either row is built from rows that no
+    // longer stand as they were: it is measured again.
+    super::flat_groups::store::forget_frames(
+        conn,
+        &members
+            .iter()
+            .map(|uuid| uuid.to_string())
+            .collect::<Vec<_>>(),
+    )?;
     let mut removed = 0;
     {
         let mut statement =

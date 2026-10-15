@@ -43,6 +43,15 @@ pub const DEFAULT_FLAT_CHECK_AGE_DAYS: f64 = 30.0;
 /// read noise into every light.
 pub const DEFAULT_THIN_MASTER_FRAMES: usize = 5;
 
+/// Dust that splits two nights' flats, percent of the sky background. Real
+/// nights with nothing moved differ by at most 0.46% (a filter reflection
+/// that changes with the dawn sky); new dust on one rig measured 1.6%.
+pub const DEFAULT_FLAT_SPLIT_DUST_PCT: f64 = 1.0;
+
+/// A broad difference that splits two nights' flats, percent of the sky
+/// background: the per-frame light-pattern suspect limit within a session.
+pub const DEFAULT_FLAT_SPLIT_PATTERN_PCT: f64 = 2.0;
+
 /// What a light check does when it finds something.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -83,10 +92,11 @@ pub enum Check {
     MixedFlats,
     SuspectFrames,
     ShortAfterKeepOut,
+    FlatsDiffer,
 }
 
 impl Check {
-    pub const ALL: [Check; 11] = [
+    pub const ALL: [Check; 12] = [
         Check::NoLibrary,
         Check::NoFlat,
         Check::NoBiasOrDark,
@@ -98,6 +108,7 @@ impl Check {
         Check::MixedFlats,
         Check::SuspectFrames,
         Check::ShortAfterKeepOut,
+        Check::FlatsDiffer,
     ];
 
     pub fn key(self) -> &'static str {
@@ -113,6 +124,7 @@ impl Check {
             Check::MixedFlats => "check_mixed_flats",
             Check::SuspectFrames => "check_suspect_frames",
             Check::ShortAfterKeepOut => "check_short_after_keep_out",
+            Check::FlatsDiffer => "check_flats_differ",
         }
     }
 
@@ -240,8 +252,20 @@ pub enum Effect {
 pub enum Group {
     Matching,
     Darks,
+    FlatGroups,
     Checks,
     Grades,
+}
+
+/// How a rig's flats of different nights may share a master.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FlatGrouping {
+    /// Nights mix in one master only when their flats measure alike, and a
+    /// light takes flats from its own side of every measured change.
+    #[default]
+    Measured,
+    /// By time alone: the flat session around the nearest flat.
+    Time,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -443,7 +467,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             Effect::Matching,
             "Flat session",
             "How far apart the flats one master takes may have been shot. Longer pools \
-             sky flats shot on several evenings.",
+             sky flats shot on several evenings; with flats grouped by measurement, only \
+             nights that measure alike pool.",
             (1.0, 720.0, 1.0),
             "h",
             None,
@@ -532,6 +557,55 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             },
             default: json!("complete"),
         },
+        // Flat groups.
+        FieldSpec {
+            key: "flat_grouping",
+            group: Group::FlatGroups,
+            label: "Group flats",
+            help: "Measured: nights mix in one master only when their flats measure alike, \
+                   and a light takes flats from its own side of every measured change, such \
+                   as new dust. By time: one master takes the flats within the flat session.",
+            effect: Effect::Matching,
+            kind: FieldKind::Choice {
+                options: vec![
+                    ChoiceOption {
+                        value: "measured",
+                        label: "By measurement",
+                    },
+                    ChoiceOption {
+                        value: "time",
+                        label: "By time only",
+                    },
+                ],
+            },
+            default: json!("measured"),
+        },
+        number(
+            "flat_split_dust_pct",
+            Group::FlatGroups,
+            Effect::Matching,
+            "Dust that splits flats",
+            "The largest dust difference two nights' flats may have and still share a \
+             master: what moved, new or vanished dust would leave in a light calibrated \
+             with the other night's flats, in percent of the sky background.",
+            (0.1, 10.0, 0.1),
+            "%",
+            None,
+            DEFAULT_FLAT_SPLIT_DUST_PCT,
+        ),
+        number(
+            "flat_split_pattern_pct",
+            Group::FlatGroups,
+            Effect::Matching,
+            "Light pattern that splits flats",
+            "The largest broad difference two nights' flats may have, such as a changed \
+             vignette, after a straight gradient is removed, in percent of the sky \
+             background.",
+            (0.2, 20.0, 0.1),
+            "%",
+            None,
+            DEFAULT_FLAT_SPLIT_PATTERN_PCT,
+        ),
         // Light checks.
         number(
             "flat_max_age_days",
@@ -613,7 +687,15 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         check(
             Check::MixedFlats,
             "Flats from several nights",
-            "Its flat master takes flats from more than one night.",
+            "Its flat master takes flats from nights not measured against each other. \
+             Nights whose flats measure alike mix without a word.",
+            false,
+        ),
+        check(
+            Check::FlatsDiffer,
+            "Flats from across a change",
+            "A measured change, such as new dust, lies between the light and its flats, \
+             or the light was shot while it happened and nothing tells which side it is on.",
             false,
         ),
         check(
@@ -982,6 +1064,10 @@ pub struct Rules {
     /// Days; infinite when the check is off.
     pub flat_check_age_days: f64,
     pub thin_master_frames: usize,
+    pub flat_grouping: FlatGrouping,
+    /// Percent of the sky background.
+    pub flat_split_dust_pct: f64,
+    pub flat_split_pattern_pct: f64,
     checks: [CheckMode; Check::ALL.len()],
     pub bias: BiasScreening,
     pub dark: DarkScreening,
@@ -1082,6 +1168,12 @@ impl Rules {
             flat_max_age_days: days_or_never("flat_max_age_days"),
             flat_check_age_days: days_or_never("flat_check_age_days"),
             thin_master_frames: count("thin_master_frames"),
+            flat_grouping: match value("flat_grouping").as_str() {
+                Some("time") => FlatGrouping::Time,
+                _ => FlatGrouping::Measured,
+            },
+            flat_split_dust_pct: number("flat_split_dust_pct"),
+            flat_split_pattern_pct: number("flat_split_pattern_pct"),
             checks,
             bias,
             dark,
@@ -1233,6 +1325,13 @@ impl RuleBook {
 
     pub fn global_values(&self) -> &RuleValues {
         &self.global
+    }
+
+    /// Whether a rig sets `key` for itself rather than inheriting it.
+    pub fn rig_sets(&self, rig_uuid: &str, key: &str) -> bool {
+        self.rigs
+            .get(rig_uuid)
+            .is_some_and(|layer| layer.values.contains_key(key))
     }
 
     /// The rules every rig without settings of its own follows.

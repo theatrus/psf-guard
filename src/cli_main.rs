@@ -392,6 +392,13 @@ pub fn main() -> Result<()> {
                     plan.uncalibrated.len()
                 );
             }
+            if let Some(example) = plan.flat_warning_example() {
+                eprintln!(
+                    "  ⚠️ {} light(s) take flats from across a measured change that this \
+                     export cannot match as a stack would, e.g. {example}",
+                    plan.flat_warnings().len()
+                );
+            }
             if !plan.calibration_settings.is_empty() {
                 println!("Calibration frames matched with:");
                 for line in &plan.calibration_settings {
@@ -1583,6 +1590,25 @@ pub fn main() -> Result<()> {
                 )?;
             }
         },
+        Commands::FlatGroups {
+            catalog,
+            work,
+            images,
+            map_prefix,
+            report,
+            lights,
+            fresh,
+        } => {
+            crate::commands::flat_groups::run(
+                std::path::Path::new(&catalog),
+                std::path::Path::new(&work),
+                &images,
+                &map_prefix,
+                report.as_deref().map(std::path::Path::new),
+                lights,
+                fresh,
+            )?;
+        }
         Commands::SkyMaps { action } => {
             crate::commands::sky_maps::run(action)?;
         }

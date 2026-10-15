@@ -54,6 +54,17 @@ always plans afresh into a new folder. An export into a folder that already
 holds an earlier one keeps the earlier frames, which WBPP would scan along with
 the new ones, so the runner warns about them.
 
+The flats follow the [flat groups](CALIBRATION_LIBRARY.md#flat-groups): a
+light gets flats from its own side of each measured change, as a stack
+would. Lights of one night that take different flats get a session each,
+`SESSION_<night>-<digest>`, so WBPP builds each its own master. A light a
+stack would give flats corrected across a change gets the flats as shot,
+in a `SESSION_<night>-across-<key>` folder of its own, because WBPP cannot
+apply the correction. The runner names each change in force, and the
+runner, the export summary, the run dialog and a `FLATS-ACROSS-A-CHANGE.txt`
+beside a downloaded export list those lights and any light whose flats
+may not match.
+
 ## Export a WBPP tree and run it yourself
 
 The Export action on a project card or target row, with the **WBPP**

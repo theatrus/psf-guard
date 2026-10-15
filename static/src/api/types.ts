@@ -461,10 +461,19 @@ export interface CalibrationFramePreviewDescriptor {
   stretch: CalibrationFrameStretch;
 }
 
+/** The ratio picture of two flat sessions, later ÷ earlier. */
+export interface FlatRatioPreviewDescriptor {
+  kind: 'flat_ratio';
+  earlier: string;
+  later: string;
+  stretch: CalibrationFrameStretch;
+}
+
 export type PreviewDescriptor =
   | ImagePreviewDescriptor
   | CalibrationMasterPreviewDescriptor
-  | CalibrationFramePreviewDescriptor;
+  | CalibrationFramePreviewDescriptor
+  | FlatRatioPreviewDescriptor;
 
 export interface StackCalibrationMaster {
   id: string;
@@ -1650,7 +1659,7 @@ export type CalibrationRuleFieldKind =
 /** One tunable calibration check. */
 export interface CalibrationRuleField {
   key: string;
-  group: 'matching' | 'darks' | 'checks' | 'grades';
+  group: 'matching' | 'darks' | 'flat_groups' | 'checks' | 'grades';
   label: string;
   help: string;
   /** What changing it changes: which frames match, what is flagged, or how frames grade. */
@@ -1810,6 +1819,10 @@ export interface WbppRunProgress {
   uncalibrated_lights?: number;
   /** Calibration settings that differ from the defaults, with who set them. */
   calibration_settings?: string[];
+  /** Measured flat changes the lights' flats were chosen around, with their windows. */
+  flat_changes?: string[];
+  /** Lights whose flats are from across such a change, which WBPP may not calibrate as a stack would. */
+  flat_warnings?: number;
   command: string | null;
   pid: number | null;
   started_at: number | null;
@@ -2169,6 +2182,10 @@ export interface ExportSummary {
   uncalibrated?: number;
   /** One of them and why: "acc_0001.fits: No matching flat". */
   uncalibrated_example?: string | null;
+  /** Lights whose flats are from across a measured change, which WBPP may not calibrate as a stack would. */
+  flat_warnings?: number;
+  /** One of them and why. */
+  flat_warning_example?: string | null;
 }
 
 /** Progress of the singleton per-DB server export job. */
@@ -2561,6 +2578,8 @@ export interface CalibrationFacets {
   last_night?: string | null;
   temp_min_c?: number | null;
   temp_max_c?: number | null;
+  /** The flats' rotator angles, whole degrees, one per angle. */
+  rotations?: number[];
 }
 
 export interface CalibrationSessionPage {
@@ -2589,6 +2608,8 @@ export interface CalibrationListFilters {
   grade?: CalibrationGradeFilter;
   kept_out?: boolean;
   missing?: boolean;
+  /** A rotator angle in degrees, matched within 2°. */
+  rotation?: number;
   session?: string;
   sort?: CalibrationFrameSort;
   page?: number;
@@ -2672,7 +2693,8 @@ export type CalibrationHealthCode =
   | 'old_flats'
   | 'mixed_flats'
   | 'suspect_frames'
-  | 'short_after_keep_out';
+  | 'short_after_keep_out'
+  | 'flats_differ';
 
 export interface CalibrationHealthFinding {
   code: CalibrationHealthCode;
@@ -2751,7 +2773,59 @@ export interface CalibrationKindExplanation {
   suspect: CalibrationNamedFrame[];
   other_filters: number;
   other_cameras: number;
+  /** Flats only: how its flats were chosen around a measured change, in a sentence. */
+  chosen_by?: string;
+  /** Flats only: absent when the nearest flats were taken and no change was involved. */
+  basis?: FlatBasis;
+  /** Flats only: the master mixes nights measured alike. Fractions, not percent. */
+  alike?: { nights: number; dust: number; broad: number };
 }
+
+/** A measured change near a light, as its account names it. Fractions. */
+export interface FlatEventNote {
+  key: string;
+  start: number;
+  end: number;
+  dust: number;
+  broad: number;
+  camera_side: boolean;
+  filters: string[];
+  what: string;
+}
+
+/** Which side of a change a light was put on, and by what. */
+export type FlatPlacement =
+  | { by: 'time'; side: 'before' | 'after' }
+  | { by: 'session'; side: 'before' | 'after'; start: number; end: number }
+  | { by: 'pixels'; side: 'before' | 'after'; targets: string[]; filters: string[]; lights: number }
+  | { by: 'undetermined'; session: [number, number] | null; pixels: string | null };
+
+/** How a light's flats were chosen around a measured change. */
+export type FlatBasis =
+  | { basis: 'same_side'; event: FlatEventNote; placement: FlatPlacement; left_out: number }
+  | {
+      basis: 'other_angle';
+      event: FlatEventNote;
+      placement: FlatPlacement;
+      rotation: number | null;
+      angle_term: { pairs: number; dust: number; broad: number };
+      /** The rotation tolerance the stacker holds this light to, wide enough for those flats. */
+      rotation_tolerance_deg: number | null;
+    }
+  | {
+      basis: 'corrected';
+      event: FlatEventNote;
+      placement: FlatPlacement;
+      correction: {
+        event: string;
+        before_response: string;
+        after_response: string;
+        light_side: 'before' | 'after';
+        key: string;
+      };
+    }
+  | { basis: 'no_same_side'; event: FlatEventNote; placement: FlatPlacement }
+  | { basis: 'undetermined'; event: FlatEventNote; placement: FlatPlacement };
 
 /** Why one light got the calibration it did, and what is wrong with it. */
 export interface ImageCalibrationExplanation {
@@ -3912,4 +3986,148 @@ export interface RejectTrashReport {
 export interface RejectPurgeReport {
   frames: number;
   bytes: number;
+}
+
+/** Flat groups: nights whose flats measure alike share a group. Numbers
+ *  named `_pct` are percent. */
+export interface FlatGroupsView {
+  /** False when the catalog has no flat-group tables (read-only or old). */
+  available: boolean;
+  rigs: FlatGroupsRig[];
+}
+
+export interface FlatGroupsRig {
+  rig_uuid: string;
+  name: string;
+  /** False: this rig's setting groups its flats by time only. */
+  measured: boolean;
+  dust_limit_pct: number;
+  pattern_limit_pct: number;
+  /** The flat-group settings the rig sets for itself; the rest it inherits. */
+  own_limits?: string[];
+  angle_term: FlatPairDifference | null;
+  angle_pairs: number;
+  /** Newest first. */
+  events: FlatChangeEvent[];
+  families: FlatFamily[];
+  unmeasured: FlatUnmeasuredSession[];
+}
+
+export interface FlatPairDifference {
+  dust_pct: number;
+  broad_pct: number;
+}
+
+export interface FlatUnmeasuredSession {
+  night: string;
+  filter: string | null;
+  rotation: number | null;
+  frames: number;
+  reason: string;
+  /** The Calibration page's sessions that hold its flats. */
+  sessions?: string[];
+}
+
+/** A change seen across one rig's flats at once. */
+export interface FlatChangeEvent {
+  key: string;
+  /** Unix seconds: the window the change happened in. */
+  start: number;
+  end: number;
+  what: string;
+  dust_pct: number;
+  broad_pct: number;
+  camera_side: boolean;
+  filters: string[];
+  rotations: (number | null)[];
+  spots: FlatSpot[];
+  /** The pair whose ratio picture shows it. */
+  before_response: string;
+  after_response: string;
+}
+
+/** A shadow that came, went or moved; position and radius in sensor pixels. */
+export interface FlatSpot {
+  kind: 'new' | 'gone' | 'moved';
+  darker: boolean;
+  x: number;
+  y: number;
+  radius: number;
+  peak_pct: number;
+}
+
+/** One filter at one angle on one rig. */
+export interface FlatFamily {
+  key: string;
+  filter: string | null;
+  rotation: number | null;
+  /** Newest first. */
+  groups: FlatGroup[];
+  /** `splits[i]` lies between `groups[i + 1]` (older) and `groups[i]` (newer). */
+  splits: FlatSplit[];
+}
+
+export interface FlatGroup {
+  first_night: string;
+  last_night: string;
+  frames: number;
+  /** Newest first. */
+  sessions: FlatSession[];
+}
+
+export interface FlatSession {
+  response_key: string;
+  night: string;
+  first: number;
+  last: number;
+  frames: number;
+  combined: number;
+  noise_pct: number | null;
+  /** The response grid is the sensor binned by `bin` into width × height. */
+  bin: number | null;
+  width: number | null;
+  height: number | null;
+  /** Against the session before it in its family. */
+  previous: FlatPairDifference | null;
+  /** The Calibration page's sessions that hold its flats. */
+  sessions?: string[];
+}
+
+export interface FlatSplit {
+  before_response: string;
+  after_response: string;
+  before_night: string;
+  after_night: string;
+  start: number;
+  end: number;
+  dust_pct: number | null;
+  broad_pct: number | null;
+  reason: string;
+  event_key: string | null;
+  spots: FlatSpot[];
+}
+
+/** What the calibration quality job is doing. */
+export interface CalibrationQualityProgress {
+  running: boolean;
+  stage: string | null;
+  to_measure: number;
+  done: number;
+  workers: number;
+  started_at: number | null;
+  finished_at: number | null;
+  stage_done?: number;
+  stage_total?: number;
+  last_flat_groups?: {
+    sessions: number;
+    measured: number;
+    unreadable: number;
+    compared: number;
+    evidence: number;
+  } | null;
+  last_error?: string | null;
+}
+
+export interface CalibrationQualityStatus {
+  progress: CalibrationQualityProgress;
 }

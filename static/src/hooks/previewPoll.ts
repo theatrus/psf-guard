@@ -55,6 +55,9 @@ export function descriptorKey(d: PreviewDescriptor): string {
       d.masterId, d.size, d.midtone ?? '', d.shadow ?? '',
     ]);
   }
+  if (d.kind === 'flat_ratio') {
+    return JSON.stringify([d.kind, d.earlier, d.later, d.stretch]);
+  }
   if (d.kind === 'calibration_frame') {
     return JSON.stringify([d.kind, d.frameUuid, d.view, d.size, d.stretch]);
   }

@@ -2406,6 +2406,16 @@ pub async fn export_archive_route(
                 return;
             }
         }
+        if let Some(note) = plan.flat_note() {
+            let entry = ZipEntryBuilder::new(
+                crate::commands::export::FLATS_NOTE.to_string().into(),
+                Compression::Stored,
+            );
+            if let Err(e) = zip.write_entry_whole(entry, note.as_bytes()).await {
+                tracing::warn!("📦 export db={}: zip write failed: {}", db_id, e);
+                return;
+            }
+        }
         // The runner scripts ride along in the zip, so an export unpacked on
         // the machine PixInsight runs on already knows how to hand itself to
         // WBPP. A zip has no destination path, so nothing here can be

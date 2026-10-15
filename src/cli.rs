@@ -1216,6 +1216,44 @@ pub enum Commands {
         action: SkyMapsCommand,
     },
 
+    /// Measure a catalog's flat groups on a copy: which nights' flats
+    /// agree, where they changed, and how each light's flats are chosen.
+    ///
+    /// The catalog is opened read-only and copied into WORK; responses,
+    /// comparisons and the report are written there. Frames are only read.
+    FlatGroups {
+        /// The catalog (.sqlite) to measure.
+        catalog: String,
+
+        /// Folder for the working copy, the response planes and the report.
+        #[arg(long)]
+        work: String,
+
+        /// Image folders that hold the lights, for light evidence and
+        /// `--lights`.
+        #[arg(long = "images", value_name = "DIR")]
+        images: Vec<String>,
+
+        /// Rewrite calibration paths in the copy, as FROM=TO, when the
+        /// catalog was made on another machine. Repeat for more.
+        #[arg(long = "map-prefix", value_name = "FROM=TO")]
+        map_prefix: Vec<String>,
+
+        /// Write the report as JSON here.
+        #[arg(long)]
+        report: Option<String>,
+
+        /// Also say how every light's flats are chosen (reads each light's
+        /// header).
+        #[arg(long)]
+        lights: bool,
+
+        /// Copy the catalog again even when WORK already holds a copy, and
+        /// measure everything again.
+        #[arg(long)]
+        fresh: bool,
+    },
+
     /// Start the web server for API access and static file serving
     Server {
         /// Path to TOML configuration file

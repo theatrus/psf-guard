@@ -678,4 +678,149 @@ mod tests {
         let refused = open(MatchTolerances::default());
         assert!(refused.contains("focal length"), "{refused}");
     }
+
+    /// A light before new dust whose only same-side flats are 110.6° off,
+    /// taken because the rig's flats measure alike across angles, must
+    /// stack through the live and final passes: its session's gate widens
+    /// the rotation just enough for those flats, and nothing else.
+    #[test]
+    fn flats_from_another_angle_stack_through_the_final_pass() {
+        use crate::calibration::test_frames::write_frame_with;
+        let temp = tempfile::tempdir().unwrap();
+        let angle = |degrees: f64| format!("ROTATANG= {degrees:20.1}");
+        let mut frames = Vec::new();
+        let write = |name: &str, kind: &str, captured: &str, degrees: f64, value: f64| {
+            let path = temp.path().join(name);
+            let card = angle(degrees);
+            write_frame_with(&path, kind, (32, 32), captured, &[card.as_str()], |_, _| {
+                value
+            });
+            path
+        };
+        for index in 0..2 {
+            frames.push(write(
+                &format!("bias-{index}.fits"),
+                "BIAS",
+                "2026-09-10T13:00:00",
+                0.0,
+                500.0,
+            ));
+        }
+        for (stem, captured, degrees) in [
+            ("before-0", "2026-09-10T14:0", 0.0),
+            ("after-0", "2026-09-14T14:0", 0.0),
+            ("after-110", "2026-09-14T14:3", 110.6),
+        ] {
+            for index in 0..3 {
+                frames.push(write(
+                    &format!("{stem}-{index}.fits"),
+                    "FLAT",
+                    &format!("{captured}{index}:00"),
+                    degrees,
+                    30_000.0,
+                ));
+            }
+        }
+        let light = write("light.fits", "LIGHT", "2026-09-09T04:00:00", 110.6, 1_100.0);
+        let metas: Vec<_> = frames
+            .iter()
+            .map(|path| crate::commands::import::headers::read_frame_meta(path))
+            .collect();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            crate::calibration::import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        // New dust between the mornings at 0°; the after morning's two
+        // angles measure alike, which is the rig's angle term.
+        crate::calibration::flat_groups::testing::measure_as(&conn, |a, b| {
+            if a.night != b.night {
+                0.02
+            } else {
+                0.0
+            }
+        });
+        let light_meta = crate::commands::import::headers::read_frame_meta(&light);
+        let selected = crate::calibration::select_for_light(&conn, &light_meta).unwrap();
+        let tolerance = selected
+            .flat_basis
+            .rotation_tolerance()
+            .expect("other angle");
+        assert!((tolerance - 112.6).abs() < 0.01, "{tolerance}");
+
+        // The plan gives the light's session the widened gate.
+        let plan = crate::calibration::resolve_or_build_master_plan(
+            &conn,
+            &temp.path().join("masters"),
+            std::slice::from_ref(&light),
+            None,
+            None,
+            crate::calibration::CalibrationMode::Auto,
+            &[],
+        )
+        .unwrap();
+        let session = &plan.sessions[plan.assignments[0]];
+        assert!(
+            session.applied.flat_master.is_some(),
+            "{:?}",
+            session.applied
+        );
+        let gate = session.match_tolerances;
+        assert!((gate.rotation_deg - tolerance).abs() < 1e-9);
+        assert_eq!(
+            MatchTolerances {
+                rotation_deg: MatchTolerances::default().rotation_deg,
+                ..gate
+            },
+            crate::calibration::light_match_tolerances_at(&light),
+            "only the rotation is widened"
+        );
+        let masters = &session.masters;
+        let replay = |path: &std::path::Path, gate: &MatchTolerances| {
+            let frame = crate::image_io::open_linear_frame(path).unwrap();
+            let raw = frame.image.clone();
+            prepare_registered_frame(
+                frame,
+                Some(masters),
+                gate,
+                None,
+                &RegisteredFrameMapping::identity(&raw),
+                Interpolation::Bilinear,
+            )
+        };
+        // The final pass calibrates the light under its session's gate, and
+        // Seiza's default gate would refuse it.
+        replay(&light, &gate)
+            .expect("the final pass calibrates the light with its side's flats at another angle");
+        let refused = replay(&light, &MatchTolerances::default())
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("rotat"), "{refused}");
+
+        // The live pass judges it under the same gate: the masters pass, and
+        // only this tiny starless frame's registration stops it.
+        let open = |gate: MatchTolerances| {
+            LiveStacker::new(
+                crate::image_io::open_linear_frame(&light).unwrap(),
+                masters.clone(),
+                StackOptions {
+                    match_tolerances: gate,
+                    ..StackOptions::default()
+                },
+            )
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default()
+        };
+        let opened = open(gate);
+        assert!(!opened.contains("rotat"), "{opened}");
+        assert!(opened.contains("usable stars"), "{opened}");
+        assert!(open(MatchTolerances::default()).contains("rotat"));
+
+        // A light further from the flats than the widened gate is still
+        // refused.
+        let stray = write("stray.fits", "LIGHT", "2026-09-09T05:00:00", 180.0, 1_100.0);
+        assert!(replay(&stray, &gate).is_err());
+    }
 }

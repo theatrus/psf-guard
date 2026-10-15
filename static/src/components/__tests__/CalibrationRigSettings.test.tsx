@@ -146,6 +146,23 @@ describe('CalibrationRigSettings', () => {
     expect(screen.getByRole('button', { name: /RedCat 51/ })).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('opens on a setting of the rig another page names, and focuses it', async () => {
+    server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current([
+      rig(REDCAT, 'RedCat 51 · ASI533MC'),
+      rig(ASKAR, 'Askar 120 · ASI2600MM', { flat_split_dust_pct: 3 }),
+    ]))));
+    render(
+      <CalibrationRigSettings focusRig={{ uuid: ASKAR, name: 'Askar 120 · ASI2600MM' }} focusField="flat_split_dust_pct" />,
+      { wrapper: wrapper() },
+    );
+    const editor = await screen.findByRole('region', { name: 'Askar 120 · ASI2600MM calibration settings' });
+    const dust = within(editor).getByLabelText('Dust that splits flats');
+    expect(dust).toHaveValue(3);
+    await waitFor(() => expect(dust).toHaveFocus());
+    // Its group is open because the rig sets a value in it.
+    expect(dust.closest('details')).toHaveAttribute('open');
+  });
+
   it('keeps what is being edited for a rig no catalog lists when the page draws again', async () => {
     server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current([rig(REDCAT, 'RedCat 51 · ASI533MC')]))));
     const focus = { uuid: ASKAR, name: 'Askar 120 · ASI2600MM' };

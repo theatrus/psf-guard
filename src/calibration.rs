@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
 pub mod browse;
+pub mod flat_groups;
 mod health;
 mod quality;
 pub mod rules;
@@ -39,7 +40,7 @@ pub use twins::{
 /// Synthetic frames for tests elsewhere in the crate.
 #[cfg(test)]
 pub(crate) mod test_frames {
-    pub(crate) use super::quality::tests::{noise, write_frame};
+    pub(crate) use super::quality::tests::{noise, write_frame, write_frame_with};
 }
 pub use quality::{
     describe_finding, grade_library, measure_and_grade, measure_frame, measure_frames,
@@ -237,6 +238,14 @@ pub struct CalibrationSelection {
     /// afterwards reads them here, so one light is never matched by one
     /// rule and built or checked by another.
     pub rules: Arc<Rules>,
+    /// Why the flats are the ones they are: the nearest, or chosen around a
+    /// measured change (see [`flat_groups`]).
+    pub flat_basis: flat_groups::FlatBasis,
+    /// Flats from the far side of a measured change that stay in `flat`
+    /// only so the light's stacks keep their keys, by frame UUID: too far
+    /// for its own master, and refused by every fallback (the next set when
+    /// one is unstable, an external master).
+    pub flat_held_back: Vec<String>,
 }
 
 /// Which kinds of usable frame the library holds for one light's sensor,
@@ -288,6 +297,18 @@ pub fn master_input_counts(selection: &CalibrationSelection) -> CalibrationInput
 }
 
 impl CalibrationSelection {
+    /// The tolerances a stack holds this light to against its masters, its
+    /// gate: its rig's, with the rotation widened just enough for flats
+    /// taken from the nearest other angle (see [`flat_groups`]). Its
+    /// calibration session carries it.
+    pub fn match_tolerances(&self) -> seiza_calibration::MatchTolerances {
+        let mut tolerances = self.rules.tolerances();
+        if let Some(widened) = self.flat_basis.rotation_tolerance() {
+            tolerances.rotation_deg = tolerances.rotation_deg.max(widened);
+        }
+        tolerances
+    }
+
     pub fn is_empty(&self) -> bool {
         self.bias.is_empty()
             && self.dark.is_empty()
@@ -658,7 +679,9 @@ const READABLE_FRAME_COLUMNS: &[&str] = &[
 /// without a bump (see [`CALIBRATION_SCHEMA_VERSION`]).
 fn add_dark_level_columns_and_grades(conn: &Connection) -> Result<bool> {
     let columns = add_dark_level_columns(conn)?;
-    Ok(quality::add_quality_table(conn)? | columns)
+    let grades = quality::add_quality_table(conn)?;
+    // Flat grouping's tables came later still, the same way.
+    Ok(flat_groups::store::add_tables(conn)? | grades | columns)
 }
 
 fn add_dark_level_columns(conn: &Connection) -> Result<bool> {
@@ -1269,6 +1292,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         .context("creating PSF Guard calibration tables")?;
     conn.execute_batch(twins::TWIN_TABLE_SQL)
         .context("creating PSF Guard calibration tables")?;
+    conn.execute_batch(flat_groups::store::TABLES_SQL)
+        .context("creating PSF Guard calibration tables")?;
     // A catalog that has just had its tables created is already at the
     // current version; one that had them from an older build is stamped with
     // whatever it was, and the ladder below carries it up.
@@ -1763,6 +1788,7 @@ pub fn forget_frames(
     quality::forget(&transaction, frame_uuids)?;
     twins::forget_twins_of(&transaction, frame_uuids)?;
     twins::forget_merges_of(&transaction, frame_uuids)?;
+    flat_groups::store::forget_frames(&transaction, frame_uuids)?;
     transaction.commit()?;
     Ok(CalibrationMutationOutcome {
         frames_removed,
@@ -1992,6 +2018,11 @@ pub fn select_for_light(conn: &Connection, light: &FrameMeta) -> Result<Calibrat
 pub(crate) struct LibrarySnapshot {
     /// Newest first, as matching walks them.
     frames: Vec<CalibrationFrame>,
+    /// What flat grouping measured; empty in a catalog without its tables.
+    flat_book: Arc<flat_groups::model::Book>,
+    /// Where the catalog's flat responses are kept, when the server said:
+    /// a change's map is made from them.
+    flat_responses: Option<PathBuf>,
 }
 
 impl LibrarySnapshot {
@@ -2002,7 +2033,11 @@ impl LibrarySnapshot {
         // upgrades it; one that could not be upgraded reports no
         // calibration instead.
         if !schema_supports_current_reads(conn) {
-            return Ok(Self { frames: Vec::new() });
+            return Ok(Self {
+                frames: Vec::new(),
+                flat_book: Arc::default(),
+                flat_responses: None,
+            });
         }
         let mut statement = conn.prepare(&format!(
             "{} ORDER BY f.captured_at DESC, f.id DESC",
@@ -2011,7 +2046,35 @@ impl LibrarySnapshot {
         let frames = statement
             .query_map([], row_to_frame)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(Self { frames })
+        // Grouping that cannot be read leaves matching as it always was.
+        let flat_book = flat_groups::load_book(conn).unwrap_or_else(|error| {
+            tracing::debug!("flat groups unavailable: {error:#}");
+            Arc::default()
+        });
+        let flat_responses = conn
+            .path()
+            .filter(|path| !path.is_empty())
+            .and_then(|path| flat_groups::response_dir(Path::new(path)));
+        Ok(Self {
+            frames,
+            flat_book,
+            flat_responses,
+        })
+    }
+
+    /// Whether a change's map can be made from these two sessions: both
+    /// responses are on disk. A light is promised corrected flats only
+    /// then, so its stack's key never names a correction it did not get.
+    fn can_correct(&self, before: &str, after: &str) -> bool {
+        self.flat_responses.as_deref().is_some_and(|dir| {
+            [before, after]
+                .iter()
+                .all(|key| flat_groups::response_path(dir, key).is_file())
+        })
+    }
+
+    pub(crate) fn flat_book(&self) -> &Arc<flat_groups::model::Book> {
+        &self.flat_book
     }
 
     pub(crate) fn frames(&self) -> &[CalibrationFrame] {
@@ -2087,6 +2150,7 @@ impl LibrarySnapshot {
         sort_candidates(&mut selected.bias, light.timestamp);
         sort_candidates(&mut selected.dark, light.timestamp);
         sort_candidates(&mut selected.flat, light.timestamp);
+        self.choose_flats_around_changes(light, &rules, &mut selected);
         if let Some(flat) = selected.flat.first() {
             for candidate in self.of_kind(CalibrationKind::DarkFlat) {
                 // Dark-flats pair with the flat, but the boundary is judged
@@ -2107,6 +2171,265 @@ impl LibrarySnapshot {
         }
         sort_candidates(&mut selected.dark_flat, light.timestamp);
         selected
+    }
+}
+
+impl LibrarySnapshot {
+    /// Give a light flats from its own side of every measured change near
+    /// it, or the closest stand-in this rig's measurements allow, and say
+    /// why (see [`flat_groups`]). A light no change touches keeps the
+    /// nearest flats, as always.
+    fn choose_flats_around_changes(
+        &self,
+        light: &FrameMeta,
+        rules: &Rules,
+        selected: &mut CalibrationSelection,
+    ) {
+        use flat_groups::{EventNote, FlatBasis};
+        if rules.flat_grouping != rules::FlatGrouping::Measured {
+            return;
+        }
+        let Some(at) = light.timestamp else {
+            return;
+        };
+        let book = Arc::clone(&self.flat_book);
+        let rig = rules::light_rig_uuid(light);
+        let events: Vec<(usize, &flat_groups::model::Event)> = book
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| event.rig_uuid == rig && event.applies_to(light.filter.as_deref()))
+            .collect();
+        if events.is_empty() || selected.flat.is_empty() {
+            return;
+        }
+        let placements: Vec<(usize, flat_groups::model::Placement)> = events
+            .iter()
+            .map(|(index, event)| (*index, book.place(event, at)))
+            .collect();
+        let side_of = |frame: &CalibrationFrame, event: &flat_groups::model::Event| {
+            frame
+                .captured_at
+                .and_then(|captured| event.side_of(captured))
+        };
+        // Same side of every event whose side is known.
+        let on_side = |frame: &CalibrationFrame| {
+            placements
+                .iter()
+                .all(|(index, placement)| match placement.side() {
+                    Some(side) => side_of(frame, &book.events[*index]) == Some(side),
+                    None => true,
+                })
+        };
+        for (index, placement) in &placements {
+            let event = &book.events[*index];
+            let note = EventNote::of(event);
+            let Some(side) = placement.side() else {
+                // Shot while it happened: whichever flats it takes may be
+                // the wrong ones, unless they all lie on one side and that
+                // side is ruled out by nothing. Say so either way.
+                if selected
+                    .flat
+                    .iter()
+                    .any(|frame| side_of(frame, event).is_some())
+                {
+                    selected.flat_basis = std::mem::take(&mut selected.flat_basis).followed_by(
+                        FlatBasis::Undetermined {
+                            event: note,
+                            placement: placement.clone(),
+                            then: None,
+                        },
+                    );
+                }
+                continue;
+            };
+            let before = selected.flat.len();
+            let kept: Vec<CalibrationFrame> = selected
+                .flat
+                .iter()
+                .filter(|frame| on_side(frame))
+                .cloned()
+                .collect();
+            if kept.len() == before {
+                continue;
+            }
+            if !kept.is_empty() {
+                // Flats from the other side that no master of this light
+                // could reach stay in the list, so its stacks keep their
+                // keys: the nearest flat is on its side with another
+                // beside it, and every flat dropped is further than twice
+                // the flat session from it.
+                let reach = book.limits(&rig).map_or(0, |limits| 2 * limits.window);
+                let apart = |a: &CalibrationFrame, b: &CalibrationFrame| match (
+                    a.captured_at,
+                    b.captured_at,
+                ) {
+                    (Some(a), Some(b)) => (a - b).abs(),
+                    _ => 0,
+                };
+                let anchor = &kept[0];
+                let unreachable = on_side(&selected.flat[0])
+                    && kept
+                        .iter()
+                        .filter(|frame| apart(frame, anchor) <= reach / 2)
+                        .count()
+                        >= 2
+                    && selected
+                        .flat
+                        .iter()
+                        .filter(|frame| !on_side(frame))
+                        .all(|frame| apart(frame, anchor) > reach);
+                if unreachable {
+                    for frame in selected.flat.iter().filter(|frame| !on_side(frame)) {
+                        if !selected.flat_held_back.contains(&frame.frame_uuid) {
+                            selected.flat_held_back.push(frame.frame_uuid.clone());
+                        }
+                    }
+                    continue;
+                }
+                selected.flat = kept;
+                if !selected.flat_basis.flags() {
+                    selected.flat_basis = FlatBasis::SameSide {
+                        event: note,
+                        placement: placement.clone(),
+                        left_out: before - selected.flat.len(),
+                    };
+                }
+                continue;
+            }
+            // Nothing at its angle on its side. First: its side at the
+            // nearest other angle, when the rig's angle term is measured
+            // and within the limits.
+            let limits = book.limits(&rig);
+            let angle_term = book.angle_terms.get(&rig).copied();
+            let angle_ok = match (angle_term, limits) {
+                (Some(term), Some(limits)) => {
+                    term.pairs > 0 && term.dust <= limits.dust && term.broad <= limits.broad
+                }
+                _ => false,
+            };
+            if angle_ok {
+                let other = self.other_angle_flats(light, rules, &on_side);
+                if let Some((rotation, frames)) = other {
+                    selected.flat = frames;
+                    // Wide enough to admit exactly these flats: their angle
+                    // from the light, plus the rig's own tolerance.
+                    let rotation_tolerance_deg = match (light.rotator_position, rotation) {
+                        (Some(light_at), Some(flats_at)) => Some(
+                            (rotation_gap(light_at, flats_at) + rules.rotation_deg)
+                                .clamp(rules.rotation_deg, 180.0),
+                        ),
+                        _ => None,
+                    };
+                    selected.flat_basis = std::mem::take(&mut selected.flat_basis).followed_by(
+                        FlatBasis::OtherAngle {
+                            event: note,
+                            placement: placement.clone(),
+                            rotation,
+                            angle_term: angle_term.unwrap_or_default(),
+                            rotation_tolerance_deg,
+                        },
+                    );
+                    continue;
+                }
+            }
+            // Then: the flats at its angle from the other side, carried
+            // across by the change's map, when the change is on the camera
+            // side and so the same at every angle.
+            if event.camera_side
+                && let Some((before_key, after_key)) =
+                    book.map_source(*index, light.filter.as_deref())
+                && self.can_correct(&before_key, &after_key)
+            {
+                let pedestal = |key: &str| {
+                    book.session_by_response(key)
+                        .and_then(|index| book.sessions[index].row.pedestal_adu)
+                };
+                let key = flat_groups::correction_key(
+                    &before_key,
+                    &after_key,
+                    side,
+                    (pedestal(&before_key), pedestal(&after_key)),
+                );
+                selected.flat_basis =
+                    std::mem::take(&mut selected.flat_basis).followed_by(FlatBasis::Corrected {
+                        event: note,
+                        placement: placement.clone(),
+                        correction: flat_groups::FlatCorrection {
+                            event: event.key.clone(),
+                            before_response: before_key,
+                            after_response: after_key,
+                            light_side: side,
+                            key,
+                        },
+                    });
+                continue;
+            }
+            selected.flat_basis =
+                std::mem::take(&mut selected.flat_basis).followed_by(FlatBasis::NoSameSide {
+                    event: note,
+                    placement: placement.clone(),
+                });
+        }
+    }
+
+    /// Flats for a light at the nearest other rotator angle that pass every
+    /// other gate and `keep`, nearest first: the angle and the frames.
+    fn other_angle_flats(
+        &self,
+        light: &FrameMeta,
+        rules: &Rules,
+        keep: &dyn Fn(&CalibrationFrame) -> bool,
+    ) -> Option<(Option<f64>, Vec<CalibrationFrame>)> {
+        let light_signature = light_signature(light);
+        let mut tolerances = rules.tolerances();
+        tolerances.rotation_deg = 360.0;
+        let candidates: Vec<&CalibrationFrame> = self
+            .of_kind(CalibrationKind::Flat)
+            .filter(|frame| {
+                !frame.is_master
+                    && frame.kept_out.is_none()
+                    && validity_admits(frame, light.timestamp)
+                    && sensor_matches(light, frame)
+                    && seiza_calibration::optics_match(
+                        &light_signature.seiza,
+                        &frame_signature(frame).seiza,
+                        &tolerances,
+                    )
+                    && keep(frame)
+            })
+            .collect();
+        let gap = |frame: &CalibrationFrame| match (light.rotator_position, frame.rotation) {
+            (Some(a), Some(b)) => rotation_gap(a, b),
+            _ => 0.0,
+        };
+        let nearest = candidates
+            .iter()
+            .map(|frame| gap(frame))
+            .fold(f64::INFINITY, f64::min);
+        if !nearest.is_finite() {
+            return None;
+        }
+        let rotation = candidates
+            .iter()
+            .find(|frame| gap(frame) == nearest)
+            .and_then(|frame| frame.rotation);
+        let mut frames: Vec<CalibrationFrame> = candidates
+            .into_iter()
+            .filter(|frame| match (rotation, frame.rotation) {
+                (Some(a), Some(b)) => {
+                    rotation_gap(a, b) <= rules.coherence_tolerances().rotation_deg
+                }
+                (None, None) => true,
+                _ => false,
+            })
+            .cloned()
+            .collect();
+        if frames.is_empty() {
+            return None;
+        }
+        sort_candidates(&mut frames, light.timestamp);
+        Some((rotation, frames))
     }
 }
 
@@ -2535,11 +2858,15 @@ fn external_master_notes(
         // fallback setting only when the raw frames cannot build one.
         let raw_enough =
             chosen.iter().filter(|frame| !frame.is_master).count() >= MIN_MASTER_FRAMES;
+        // Never a master from the far side of a measured change.
+        let standing_in = |frame: &&CalibrationFrame| {
+            frame.is_master
+                && !(kind == CalibrationKind::Flat
+                    && selected.flat_held_back.contains(&frame.frame_uuid))
+        };
         let used_uuid = match policy {
-            ExternalMasterPolicy::Prefer => chosen.iter().find(|frame| frame.is_master),
-            ExternalMasterPolicy::Fallback if !raw_enough => {
-                chosen.iter().find(|frame| frame.is_master)
-            }
+            ExternalMasterPolicy::Prefer => chosen.iter().find(standing_in),
+            ExternalMasterPolicy::Fallback if !raw_enough => chosen.iter().find(standing_in),
             _ => None,
         }
         .map(|frame| frame.frame_uuid.clone());
@@ -2819,6 +3146,25 @@ pub struct KindExplanation {
     pub other_filters: usize,
     /// Frames from another camera or sensor size, counted.
     pub other_cameras: usize,
+    /// Flats only: how they were chosen around a measured change, in words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chosen_by: Option<String>,
+    /// Flats only: the choice itself, for the panel to mark.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub basis: Option<flat_groups::FlatBasis>,
+    /// Flats only: when the master mixes nights measured alike, the largest
+    /// difference between them, fractions of the background.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alike: Option<MeasuredAlike>,
+}
+
+/// Nights of one master whose flats were measured against each other and
+/// found alike.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct MeasuredAlike {
+    pub nights: usize,
+    pub dust: f64,
+    pub broad: f64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -3006,7 +3352,24 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
                 })
             })
             .collect();
+        let (chosen_by, basis, alike) = if kind == CalibrationKind::Flat {
+            let basis = (selected.flat_basis != flat_groups::FlatBasis::Nearest)
+                .then(|| selected.flat_basis.clone());
+            (
+                flat_groups::describe_basis(&selected.flat_basis, &selected.rules),
+                basis,
+                // Grouping by time says nothing of measurements.
+                (selected.rules.flat_grouping == rules::FlatGrouping::Measured)
+                    .then(|| measured_alike(conn, &master))
+                    .flatten(),
+            )
+        } else {
+            (None, None, None)
+        };
         kinds.push(KindExplanation {
+            chosen_by,
+            basis,
+            alike,
             kind: kind.as_str().to_string(),
             master: FrameSpan::of(master.iter().map(|frame| {
                 (
@@ -3063,6 +3426,34 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
         findings,
         waived,
         rules,
+    })
+}
+
+/// When a flat master's frames span nights that were measured against each
+/// other and found alike: how many nights and the largest differences.
+fn measured_alike(conn: &Connection, flats: &[CalibrationFrame]) -> Option<MeasuredAlike> {
+    let book = flat_groups::load_book(conn).ok()?;
+    let sessions: BTreeSet<usize> = flats
+        .iter()
+        .map(|frame| book.session_of_frame(&frame.frame_uuid))
+        .collect::<Option<_>>()?;
+    let sessions: Vec<usize> = sessions.into_iter().collect();
+    if sessions.len() < 2 || !book.measured_alike(&sessions) {
+        return None;
+    }
+    let (mut dust, mut broad) = (0f64, 0f64);
+    for (i, a) in sessions.iter().enumerate() {
+        for b in &sessions[i + 1..] {
+            if let Some(c) = book.comparison(*a, *b) {
+                dust = dust.max(c.dust);
+                broad = broad.max(c.broad);
+            }
+        }
+    }
+    Some(MeasuredAlike {
+        nights: sessions.len(),
+        dust,
+        broad,
     })
 }
 
@@ -3165,14 +3556,14 @@ fn flat_near_miss_in(
 /// way N.I.N.A.'s local `DATEMINUS12` folders group them. Twelve hours off
 /// UTC would not: a site west of Greenwich would see its dawn flats a day
 /// late and its nights split at local evening.
-fn night_of(timestamp: i64, boundary: i64) -> String {
+pub(crate) fn night_of(timestamp: i64, boundary: i64) -> String {
     chrono::DateTime::from_timestamp(timestamp - boundary, 0)
         .map(|when| when.date_naive().to_string())
         .unwrap_or_else(|| "unknown".into())
 }
 
 /// Where this catalog's nights split; noon UTC when its lights cannot be read.
-fn catalog_night_boundary(conn: &Connection) -> i64 {
+pub(crate) fn catalog_night_boundary(conn: &Connection) -> i64 {
     crate::server::sky_coverage::catalog_night_boundary(conn).unwrap_or(12 * 3600)
 }
 
@@ -3721,6 +4112,9 @@ fn resolve_or_build_masters_pinned(
     // a dropped frame usually means the library holds something the selection
     // should not have offered.
     let mut set_aside: Vec<SetAside> = Vec::new();
+    let held_back = |kind: CalibrationKind, frame: &CalibrationFrame| {
+        kind == CalibrationKind::Flat && selected.flat_held_back.contains(&frame.frame_uuid)
+    };
     let build_or_warn = |kind: CalibrationKind,
                          frames: &[CalibrationFrame],
                          inputs: MasterInputs<'_>,
@@ -3736,6 +4130,11 @@ fn resolve_or_build_masters_pinned(
         // the one shot closest to the lights.
         let (masters, raw): (Vec<&CalibrationFrame>, Vec<&CalibrationFrame>) =
             frames.iter().partition(|frame| frame.is_master);
+        // A master from the far side of a measured change never stands in.
+        let masters: Vec<&CalibrationFrame> = masters
+            .into_iter()
+            .filter(|frame| !held_back(kind, frame))
+            .collect();
         let raw: Vec<CalibrationFrame> = raw.into_iter().cloned().collect();
         let adopt = match selected.rules.external_masters {
             ExternalMasterPolicy::Prefer => masters.first().copied(),
@@ -3809,6 +4208,11 @@ fn resolve_or_build_masters_pinned(
             &settings.watch,
             cancel,
             &selected.rules,
+            if kind == CalibrationKind::Flat {
+                &selected.flat_held_back
+            } else {
+                &[]
+            },
         ) {
             // The integrator reads the headers, so it catches what selection
             // could not: a catalog holds only what it recorded at import.
@@ -3938,6 +4342,30 @@ fn resolve_or_build_masters_pinned(
         &mut build_failures,
         &mut set_aside,
     );
+    // A light on one side of a measured change whose only flats at its
+    // angle are from the other side takes them carried across by the
+    // change's map (see `flat_groups`).
+    let flat = match (flat, selected.flat_basis.correction()) {
+        (Some(master), Some(correction)) => {
+            match corrected_flat_master(conn, &master_root, &master, correction) {
+                Ok((corrected, note)) => {
+                    stability_notes.borrow_mut().push(note);
+                    Some(corrected)
+                }
+                // The stack's key names the correction: a stack built
+                // without it would be kept as if it had it. Selection
+                // promised it only with the change's measurements on disk,
+                // so this is a fault to report, not a choice to make.
+                Err(error) => {
+                    return Err(error.context(
+                        "the flats are from the other side of a measured change and could not \
+                         be carried across it",
+                    ));
+                }
+            }
+        }
+        (flat, _) => flat,
+    };
     // A flat can only be DIVIDED into a light whose pedestal has been
     // removed. With neither a bias nor a dark master, the division
     // amplifies the light's uncorrected pedestal by 1/vignette at the
@@ -4183,9 +4611,10 @@ pub struct CalibrationSession {
     pub masters: seiza_stacking::CalibrationMasters,
     pub applied: AppliedCalibration,
     /// The gate a stack judges this session's lights against its masters
-    /// under: their rig's tolerances, the ones the masters were matched by.
-    /// Every light of a session shares a rig's matching settings, since the
-    /// session key takes them.
+    /// under: their rig's tolerances, the ones the masters were matched by,
+    /// with the rotation widened for flats taken from another angle
+    /// ([`CalibrationSelection::match_tolerances`]). Every light of a
+    /// session shares it, since the session key takes both.
     pub match_tolerances: seiza_calibration::MatchTolerances,
 }
 
@@ -4273,6 +4702,14 @@ fn session_key(selected: &CalibrationSelection) -> String {
     // even from the same frames: a master's other choices follow its rules.
     if let Some(rules) = selected.rules.matching_digest() {
         parts.push(format!("rules={rules}"));
+    }
+    if let Some(correction) = selected.flat_basis.correction() {
+        parts.push(format!("flat-correction={}", correction.key));
+    }
+    // Its stack gate admits flats from another angle, and every light of
+    // one session shares the session's gate.
+    if let Some(tolerance) = selected.flat_basis.rotation_tolerance() {
+        parts.push(format!("flat-rotation-tolerance={tolerance:.3}"));
     }
     hex_digest(&parts.join("\u{1e}"))
 }
@@ -4474,6 +4911,10 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
     let mut assignments = Vec::with_capacity(light_paths.len());
     let mut session_lights: Vec<Vec<PathBuf>> = Vec::new();
     let mut keys: Vec<String> = Vec::new();
+    // Each session's gate, from its first light: every light of a session
+    // shares it, since the key takes the rig's settings and any widening
+    // for flats from another angle.
+    let mut gates: Vec<seiza_calibration::MatchTolerances> = Vec::new();
     for path in light_paths {
         let light = crate::commands::import::headers::read_frame_meta(path);
         let mut selected = select_for_light(conn, &light)?;
@@ -4483,6 +4924,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
             Some(index) => index,
             None => {
                 keys.push(key);
+                gates.push(selected.match_tolerances());
                 session_lights.push(Vec::new());
                 keys.len() - 1
             }
@@ -4492,7 +4934,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
     }
 
     let mut sessions = Vec::with_capacity(session_lights.len());
-    for lights in &session_lights {
+    for (lights, gate) in session_lights.iter().zip(gates) {
         stop_requested(cancel)?;
         // A session's pin is looked up by its selection fingerprint, which
         // the resolution below recomputes identically from the same lights.
@@ -4522,7 +4964,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
         sessions.push(CalibrationSession {
             masters,
             applied,
-            match_tolerances: light_match_tolerances_at(&lights[0]),
+            match_tolerances: gate,
         });
     }
 
@@ -4655,6 +5097,104 @@ impl BuiltMaster {
             .to_string_lossy()
             .into_owned()
     }
+}
+
+/// A flat master carried across a measured change: divided by the change's
+/// map for a light shot before it, multiplied for one shot after. The map
+/// is in sensor coordinates, measured from a before and an after session of
+/// the change, and is 1 away from it. Written beside the master it comes
+/// from, keyed by both, and reused.
+fn corrected_flat_master(
+    conn: &Connection,
+    master_root: &Path,
+    master: &BuiltMaster,
+    correction: &flat_groups::FlatCorrection,
+) -> Result<(BuiltMaster, String)> {
+    use flat_groups::model::Side;
+    let stem = master
+        .path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let path = master_root.join(format!("{stem}-across-{}.fits", correction.key));
+    let note = format!(
+        "No flats from the light's side of a measured change at its angle; the nearest \
+         were carried across it with the change's map ({} → {})",
+        &correction.before_response[..8.min(correction.before_response.len())],
+        &correction.after_response[..8.min(correction.after_response.len())],
+    );
+    let built = BuiltMaster {
+        path: path.clone(),
+        master_uuid: stable_uuid(&format!(
+            "flat-across:{}:{}",
+            master.master_uuid, correction.key
+        )),
+        skipped: master.skipped.clone(),
+        flat_star_masking: master.flat_star_masking.clone(),
+        stability_note: master.stability_note.clone(),
+    };
+    if path.is_file() {
+        note_master_used(&path);
+        return Ok((built, note));
+    }
+    let catalog = conn
+        .path()
+        .map(PathBuf::from)
+        .context("the catalog has no file")?;
+    let dir = flat_groups::response_dir(&catalog)
+        .context("no measured flat responses are kept for this catalog")?;
+    let rows = flat_groups::store::load_responses(conn)?;
+    let row = |key: &str| rows.iter().find(|row| row.response_key == key).cloned();
+    let before = row(&correction.before_response).context("the change's before session is gone")?;
+    let after = row(&correction.after_response).context("the change's after session is gone")?;
+    let bin = before.bin.unwrap_or(1);
+    let map = flat_groups::metric::change_map(
+        &flat_groups::job::session_plane(&dir, &before).context("before session not measured")?,
+        &flat_groups::job::session_plane(&dir, &after).context("after session not measured")?,
+    )
+    .context("the change's map could not be made")?;
+    let mut frame = crate::image_io::open_linear_frame(&master.path)
+        .with_context(|| format!("reading {}", master.path.display()))?;
+    let (width, channels) = (frame.image.width, frame.image.channels);
+    flat_groups::metric::apply_change_map(
+        &mut frame.image.data,
+        width,
+        channels,
+        &map,
+        bin,
+        correction.light_side == Side::Before,
+    );
+    let mut headers: Vec<WriteHeaderCard> = frame
+        .headers
+        .iter()
+        .filter(|(name, _)| !is_structural_fits_card(name))
+        .map(|(name, value)| WriteHeaderCard::new(name, value.clone()))
+        .collect();
+    headers.push(WriteHeaderCard::new(
+        "PSFGACRS",
+        HeaderValue::String(correction.key.clone()),
+    ));
+    let pixels = match frame.image.channels {
+        1 => seiza_fits::F32ImageData::Mono(&frame.image.data),
+        3 => seiza_fits::F32ImageData::RgbInterleaved(&frame.image.data),
+        other => anyhow::bail!("{other}-channel master is not supported"),
+    };
+    // Two builds of one correction in this process each write their own.
+    let temporary = path.with_extension(format!(
+        "fits.tmp-{}-{}",
+        std::process::id(),
+        STAGED_MASTERS.fetch_add(1, Ordering::Relaxed)
+    ));
+    seiza_fits::write_f32_image(
+        &temporary,
+        frame.image.width,
+        frame.image.height,
+        pixels,
+        &headers,
+    )
+    .with_context(|| format!("writing {}", temporary.display()))?;
+    std::fs::rename(&temporary, &path)?;
+    Ok((built, note))
 }
 
 fn flat_masking_warning(statistics: &seiza_stacking::FlatStarMaskingStatistics) -> Option<String> {
@@ -5066,12 +5606,16 @@ fn build_master_once(
         // recorded, nothing to check" for a week because reuse never asked.
         // The exception is a blocked recorder: it cannot rebuild, and an old
         // master under today's validation still beats no master at all.
-        // A flat recorded before the flat-set check carries no judgement;
-        // it rebuilds once so the check runs, without disturbing the other
-        // kinds.
+        // A flat recorded before the flat-set check carries no judgement,
+        // and one an older check judged carries one that no longer stands
+        // (see [`FLAT_STABILITY_VERSION`]); either rebuilds once so the
+        // check runs again, without disturbing the other kinds.
         let judged = kind != CalibrationKind::Flat
-            || recorded_master_statistics(conn, &path)
-                .is_some_and(|statistics| statistics["flat_stability"].is_object());
+            || recorded_master_statistics(conn, &path).is_some_and(|statistics| {
+                statistics["flat_stability"]["version"]
+                    .as_u64()
+                    .is_some_and(|version| version >= u64::from(FLAT_STABILITY_VERSION))
+            });
         let row_current = recorded_version == Some(i64::from(MASTER_CACHE_VERSION)) && judged;
         let file_valid = crate::image_io::open_linear_frame(&path)
             .and_then(|frame| frame.validate_master_kind(expected_kind))
@@ -5368,6 +5912,7 @@ fn build_master(
     watch: &MasterBuildWatch,
     cancel: Option<&AtomicBool>,
     rules: &Rules,
+    held_back: &[String],
 ) -> Result<Option<BuiltMaster>> {
     let context = MasterBuildContext {
         conn,
@@ -5387,13 +5932,15 @@ fn build_master(
             .map(|attempt| publish_master(&context, attempt, None))
             .transpose();
     }
+    // The next set never comes from the far side of a measured change.
     let without = |excluded: &[CalibrationFrame]| -> Vec<CalibrationFrame> {
         frames
             .iter()
             .filter(|frame| {
-                !excluded
-                    .iter()
-                    .any(|other| other.frame_uuid == frame.frame_uuid)
+                !held_back.contains(&frame.frame_uuid)
+                    && !excluded
+                        .iter()
+                        .any(|other| other.frame_uuid == frame.frame_uuid)
             })
             .cloned()
             .collect()
@@ -5657,6 +6204,7 @@ fn flat_stability_json(
     note: Option<&str>,
 ) -> serde_json::Value {
     let mut value = serde_json::json!({
+        "version": FLAT_STABILITY_VERSION,
         "feature_pixels": stability.feature_pixels,
         "drift_threshold": stability.drift_threshold,
         "frames": used.iter().map(|frame| frame.frame_uuid.as_str()).collect::<Vec<_>>(),
@@ -5779,9 +6327,13 @@ fn recorded_master_statistics(conn: &Connection, path: &Path) -> Option<serde_js
 
 /// The stability note recorded with a cached master, if it has one.
 fn cached_stability_note(conn: &Connection, path: &Path) -> Option<String> {
-    recorded_master_statistics(conn, path)?["flat_stability"]["note"]
-        .as_str()
-        .map(str::to_string)
+    let statistics = recorded_master_statistics(conn, path)?;
+    let stability = &statistics["flat_stability"];
+    // An older check's note, such as stars taken for dew, no longer stands.
+    if stability["version"].as_u64().unwrap_or(1) < u64::from(FLAT_STABILITY_VERSION) {
+        return None;
+    }
+    stability["note"].as_str().map(str::to_string)
 }
 
 /// The flat-set judgement recorded with the master at `path`, lined up with
@@ -5796,6 +6348,11 @@ fn recorded_flat_stability(
     let statistics = recorded_master_statistics(conn, path)?;
     let stability = &statistics["flat_stability"];
     if superseded_only && stability["superseded"] != serde_json::Value::Bool(true) {
+        return None;
+    }
+    // A judgement an older check made, such as one that took stars for
+    // dew, is made again.
+    if stability["version"].as_u64().unwrap_or(1) < u64::from(FLAT_STABILITY_VERSION) {
         return None;
     }
     let by_frame: HashMap<&str, usize> = stability["frames"]
@@ -5819,10 +6376,17 @@ fn recorded_flat_stability(
     })
 }
 
-/// A master pixel counts as a feature when it departs from the smooth
+/// A master pixel counts as a feature when it falls below the smooth
 /// response around it by more than this fraction. Dust shadows sit at a few
 /// percent; a drying droplet reads at 3 to 70 percent of its surround.
+/// Only dips count: dew, frost and dust take light away, while a star in a
+/// sky flat adds it, sits on other pixels in every frame, and would make a
+/// good set look like a drying window.
 const FLAT_FEATURE_DEPTH: f32 = 0.10;
+/// The flat-set check's generation, recorded with each judgement. 2: dips
+/// only, so stars in sky flats are no longer taken for dew; a judgement the
+/// first generation made is made again.
+const FLAT_STABILITY_VERSION: u32 = 2;
 /// A frame disagrees with the master at a feature when its own value departs
 /// from the master's by more than this fraction of the local response. Half
 /// the feature depth, so a spot that only drifts slowly across the run still
@@ -5956,9 +6520,7 @@ fn flat_set_stability(
         .filter(|&index| {
             let value = master.data[index];
             let surround = smooth[index];
-            value.is_finite()
-                && surround > 0.0
-                && (value - surround).abs() > FLAT_FEATURE_DEPTH * surround
+            value.is_finite() && surround > 0.0 && surround - value > FLAT_FEATURE_DEPTH * surround
         })
         .collect();
     // Below this many feature pixels there is nothing to judge a set by: a
@@ -6574,6 +7136,12 @@ fn selection_hash(selection: &CalibrationSelection, flat_star_masking: bool) -> 
         && let Some(rules) = selection.rules.matching_digest()
     {
         values.push(format!("calibration-rules={rules}"));
+    }
+    // A flat carried across a measured change is another flat from the same
+    // frames. Which frames a change leaves a light already shows in the
+    // candidates above.
+    if let Some(correction) = selection.flat_basis.correction() {
+        values.push(format!("flat-correction={}", correction.key));
     }
     if values.is_empty() {
         "none".into()
@@ -7510,6 +8078,38 @@ pub struct ExportCalibration {
     /// The rules the light was matched with: its rig's, the server's or the
     /// defaults.
     pub rules: Arc<Rules>,
+    /// The flats this light's master takes, so an export can give lights
+    /// that need different flats different sessions.
+    pub flat_set: Option<FlatSet>,
+    /// How the light's flats were chosen around a measured change, when one
+    /// touches it (see [`flat_groups`]).
+    pub flat_choice: Option<FlatChoice>,
+}
+
+/// One light's flat master, as an export names it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FlatSet {
+    /// The night of its earliest flat: the session label it starts from.
+    pub night: String,
+    /// Which flats, sorted.
+    pub frame_uuids: Vec<String>,
+    /// The key of the change map a stack carries these flats across with,
+    /// when it does.
+    pub correction: Option<String>,
+}
+
+/// How a light's flats were chosen around a measured change, in words.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlatChoice {
+    /// `same_side`, `other_angle`, `corrected`, `no_same_side` or
+    /// `undetermined`.
+    pub basis: &'static str,
+    /// The light's account of it.
+    pub text: String,
+    /// Whether the light is worth a look for it.
+    pub flagged: bool,
+    /// The change, with its window.
+    pub change: String,
 }
 
 /// One light's dark master, as an export names it.
@@ -7564,8 +8164,34 @@ pub fn export_destinations(
         kept_out: Vec::new(),
         library: selected.library,
         rules: Arc::clone(rules),
+        flat_basis: selected.flat_basis.clone(),
+        flat_held_back: selected.flat_held_back.clone(),
     };
     let flat_session = flat_session_label(&selected.flat, night_boundary);
+    let flat_set = flat_session.clone().map(|night| {
+        let mut frame_uuids: Vec<String> = selected
+            .flat
+            .iter()
+            .map(|frame| frame.frame_uuid.clone())
+            .collect();
+        frame_uuids.sort();
+        FlatSet {
+            night,
+            frame_uuids,
+            correction: selected
+                .flat_basis
+                .correction()
+                .map(|correction| correction.key.clone()),
+        }
+    });
+    let flat_choice = selected.flat_basis.event().map(|event| FlatChoice {
+        basis: selected.flat_basis.name(),
+        text: flat_groups::describe_flag(&selected.flat_basis, &selected.rules)
+            .or_else(|| flat_groups::describe_basis(&selected.flat_basis, &selected.rules))
+            .unwrap_or_default(),
+        flagged: selected.flat_basis.flags(),
+        change: flat_groups::describe_change(event, &selected.rules),
+    });
     let dark_set = selected.dark.first().map(|nearest| {
         let mut frame_uuids: Vec<String> = selected
             .dark
@@ -7679,6 +8305,8 @@ pub fn export_destinations(
         dark_set,
         gap,
         rules: Arc::clone(&selected.rules),
+        flat_set,
+        flat_choice,
     })
 }
 
@@ -11496,6 +12124,21 @@ pub(crate) mod tests {
         offset: i64,
         pixel: impl Fn(usize, usize) -> f64,
     ) {
+        write_gradient_fits_with(path, kind, width, height, camera, offset, &[], pixel);
+    }
+
+    /// [`write_gradient_fits`] with more cards, each a whole card's text.
+    #[allow(clippy::too_many_arguments)]
+    fn write_gradient_fits_with(
+        path: &Path,
+        kind: &str,
+        width: usize,
+        height: usize,
+        camera: &str,
+        offset: i64,
+        extra: &[&str],
+        pixel: impl Fn(usize, usize) -> f64,
+    ) {
         let mut header = Vec::new();
         fits_card(&mut header, "SIMPLE  =                    T");
         fits_card(&mut header, "BITPIX  =                   16");
@@ -11512,6 +12155,9 @@ pub(crate) mod tests {
         fits_card(&mut header, "CCD-TEMP=                -10.0");
         fits_card(&mut header, "TELESCOP= 'Scope'");
         fits_card(&mut header, &format!("INSTRUME= '{camera}'"));
+        for card in extra {
+            fits_card(&mut header, card);
+        }
         fits_card(&mut header, "END");
         header.resize(header.len().div_ceil(2880) * 2880, b' ');
         let mut payload = Vec::new();
@@ -11839,6 +12485,79 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn stars_left_in_a_sky_flat_master_are_not_dew() {
+        // Tracked sky flats: each frame has a star somewhere else, and the
+        // master kept one that rejection missed. Only dips are dust or
+        // dew; a bright blob the frames do not share must not mark the set
+        // unstable.
+        let temp = tempfile::tempdir().unwrap();
+        let (width, height) = (64usize, 64usize);
+        let star = |x: usize, y: usize, cx: usize, cy: usize| {
+            let d2 = (x as f64 - cx as f64).powi(2) + (y as f64 - cy as f64).powi(2);
+            8_000.0 * (-d2 / 16.0).exp()
+        };
+        let frames: Vec<CalibrationFrame> = (0..5)
+            .map(|index| {
+                let path = temp.path().join(format!("sky-{index}.fits"));
+                let (cx, cy) = (10 + 10 * index, 50 - 8 * index);
+                test_frames::write_frame(
+                    &path,
+                    "FLAT",
+                    (width, height),
+                    "2026-09-10T14:00:00",
+                    |x, y| {
+                        30_000.0
+                            + star(x, y, cx, cy)
+                            + 20.0 * test_frames::noise(x, y, index as u64)
+                    },
+                );
+                CalibrationFrame {
+                    id: index as i64,
+                    frame_uuid: format!("sky-{index}"),
+                    rig_uuid: "r".into(),
+                    kind: CalibrationKind::Flat,
+                    source_path: path,
+                    source_fingerprint: "x".into(),
+                    captured_at: Some(1_000_000_000 + index as i64),
+                    telescope: None,
+                    camera: None,
+                    width: Some(width as i64),
+                    height: Some(height as i64),
+                    channels: Some(1),
+                    binning_x: Some(1),
+                    binning_y: Some(1),
+                    gain: Some(100),
+                    offset: Some(20),
+                    readout_mode: None,
+                    readout_mode_name: None,
+                    is_master: false,
+                    bayer_pattern: None,
+                    exposure_s: Some(2.0),
+                    camera_temp: Some(-10.0),
+                    filter: Some("Ha".into()),
+                    focal_length_mm: None,
+                    rotation: None,
+                    valid_direction: None,
+                    kept_out: None,
+                    source_verified: false,
+                }
+            })
+            .collect();
+        let master = seiza_stacking::LinearImage {
+            width,
+            height,
+            channels: 1,
+            data: (0..height)
+                .flat_map(|y| (0..width).map(move |x| (x, y)))
+                .map(|(x, y)| (30_000.0 + star(x, y, 54, 54)) as f32)
+                .collect(),
+        };
+        let stability = flat_set_stability(&frames, &[], &master, None, None);
+        assert_eq!(stability.feature_pixels, 0);
+        assert!(stability.disagreement.iter().all(|&count| count == 0));
+    }
+
+    #[test]
     fn an_unstable_flat_set_gives_way_to_the_next_one() {
         // Six flats shot while a droplet dried off the sensor window: the
         // spot reads 10% of its surround in the first frame and 85% in the
@@ -11904,6 +12623,108 @@ pub(crate) mod tests {
             checks,
             "a remembered judgement must not read the flats again"
         );
+    }
+
+    /// The spotted library with new dust measured between the clean flats
+    /// and the wet ones, and the light dated two hours after the wet ones:
+    /// the clean flats lie on the far side of the change.
+    fn spotted_library_after_a_change(
+        temp: &tempfile::TempDir,
+        factor: impl Fn(usize) -> f64,
+    ) -> (Connection, PathBuf, PathBuf) {
+        let (conn, cache, light) = spotted_flat_library(temp, 6, factor, 4);
+        // 1_750_000_000 + 2 h, as the flats count time.
+        write_gradient_fits_with(
+            &light,
+            "LIGHT",
+            64,
+            64,
+            "Camera",
+            30,
+            &["DATE-OBS= '2025-06-15T17:06:40'"],
+            |x, _| 400.0 + 100.0 * (0.7 + 0.6 * x as f64 / 63.0),
+        );
+        flat_groups::testing::measure_as(&conn, |a, b| if a.night == b.night { 0.0 } else { 0.02 });
+        (conn, cache, light)
+    }
+
+    #[test]
+    fn an_unstable_set_never_gives_way_to_flats_from_across_a_change() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, light) =
+            spotted_library_after_a_change(&temp, |index| 0.10 + 0.15 * index as f64);
+        let meta = crate::commands::import::headers::read_frame_meta(&light);
+        let selected = select_for_light(&conn, &meta).unwrap();
+        // The clean flats stay listed, for the stack's key, but held back.
+        assert_eq!(selected.flat.len(), 10, "{:?}", selected.flat_basis);
+        assert_eq!(selected.flat_held_back.len(), 4);
+        let (_, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        let label = applied.flat_master.expect("a flat master");
+        let response = spot_response(&cache, &label);
+        assert!(
+            response < 0.9,
+            "the wet set must serve, not the clean one from before the dust; spot response {response}"
+        );
+        let warning = applied.warning.as_deref().unwrap_or_default();
+        assert!(!warning.contains("instead"), "{warning}");
+    }
+
+    #[test]
+    fn an_external_master_from_across_a_change_never_stands_in() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        configure_external_master_policy(Some(ExternalMasterPolicy::Prefer));
+        let temp = tempfile::tempdir().unwrap();
+        // A clean set after the dust, and someone else's master from before.
+        let (conn, cache, light) = spotted_library_after_a_change(&temp, |_| 1.0);
+        let master = temp.path().join("masterFlat.fits");
+        write_gradient_fits_with(&master, "MASTER FLAT", 64, 64, "Camera", 30, &[], |x, _| {
+            100.0 + 20_000.0 * (0.7 + 0.6 * x as f64 / 63.0)
+        });
+        let mut meta = crate::commands::import::headers::read_frame_meta(&master);
+        meta.timestamp = Some(1_750_000_000 - 3 * 86_400 + 300);
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            import_calibration_frames(&tx, &[meta], Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let light_meta = crate::commands::import::headers::read_frame_meta(&light);
+        let selected = select_for_light(&conn, &light_meta).unwrap();
+        assert!(
+            selected.flat.iter().any(|frame| frame.is_master),
+            "the master is listed: {:?}",
+            selected.flat
+        );
+        let (_, applied) = resolve_or_build_masters(
+            &conn,
+            &cache,
+            std::slice::from_ref(&light),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        configure_external_master_policy(None);
+        assert!(applied.flat_master.is_some());
+        assert!(
+            !applied
+                .warning
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Used masters built by other software"),
+            "{:?}",
+            applied.warning
+        );
+        let notes = external_master_notes(&conn, &light_meta, &selected).unwrap();
+        assert!(notes.iter().all(|note| !note.used), "{notes:?}");
     }
 
     #[test]
@@ -12054,6 +12875,63 @@ pub(crate) mod tests {
             })
             .unwrap_or_default();
         assert!(left.is_empty(), "a stopped flat build left {left:?}");
+    }
+
+    #[test]
+    fn an_older_checks_judgement_is_made_again() {
+        // The first generation of the check judged this set and recorded
+        // it; that record no longer stands, but the set really is wet. The
+        // next selection must judge it again, not serve it as sound.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, cache, light) =
+            spotted_flat_library(&temp, 6, |index| 0.10 + 0.15 * index as f64, 0);
+        let resolve = || {
+            resolve_or_build_masters(
+                &conn,
+                &cache,
+                std::slice::from_ref(&light),
+                None,
+                None,
+                CalibrationMode::Auto,
+            )
+            .unwrap()
+            .1
+        };
+        assert!(resolve()
+            .warning
+            .unwrap_or_default()
+            .contains("unstable flat set"));
+        conn.execute(
+            "UPDATE psf_guard_calibration_master
+             SET statistics_json = json_set(statistics_json, '$.flat_stability.version', 1)
+             WHERE kind = 'flat'",
+            [],
+        )
+        .unwrap();
+        let checks = stability_checks(&cache);
+        let again = resolve();
+        assert!(
+            again
+                .warning
+                .as_deref()
+                .unwrap_or_default()
+                .contains("unstable flat set"),
+            "the set is judged again and keeps its note: {:?}",
+            again.warning
+        );
+        assert!(
+            stability_checks(&cache) > checks,
+            "the flats were read back again"
+        );
+        let version: i64 = conn
+            .query_row(
+                "SELECT json_extract(statistics_json, '$.flat_stability.version')
+                 FROM psf_guard_calibration_master WHERE kind = 'flat'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, i64::from(FLAT_STABILITY_VERSION));
     }
 
     #[test]

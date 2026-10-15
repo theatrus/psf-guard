@@ -98,6 +98,9 @@ import type { GuidFillReport, GuidReport,
   ImagePreviewDescriptor,
   CalibrationMasterPreviewDescriptor,
   CalibrationFramePreviewDescriptor,
+  CalibrationQualityStatus,
+  FlatGroupsView,
+  FlatRatioPreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
   SatelliteAnalysis,
@@ -1708,6 +1711,39 @@ export const apiClient = {
     );
   },
 
+  /** How each rig's flats group by measurement, with the changes between groups. */
+  getFlatGroups: async (dbId: string): Promise<FlatGroupsView> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<FlatGroupsView>>(
+      dbPath(dbId, '/calibrations/flat-groups')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read the flat groups');
+    return data.data;
+  },
+
+  /** The ratio picture of two flat sessions, later ÷ earlier; 202 while it is drawn. */
+  getFlatRatioUrl: (
+    dbId: string,
+    options: { earlier: string; later: string; stretch: CalibrationFrameStretch }
+  ): string => {
+    const params = new URLSearchParams({
+      earlier: options.earlier,
+      later: options.later,
+      stretch: options.stretch,
+    });
+    return withServerUrl(`/api${dbPath(dbId, '/calibrations/flat-groups/ratio')}?${params}`);
+  },
+
+  /** The calibration quality job's progress. */
+  getCalibrationQuality: async (dbId: string): Promise<CalibrationQualityStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CalibrationQualityStatus>>(
+      dbPath(dbId, '/calibrations/quality')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read calibration grading progress');
+    return data.data;
+  },
+
   /** Every master the library recorded, in the inspector's shape. */
   getLibraryCalibrationMasters: async (dbId: string): Promise<LibraryCalibrationMasters> => {
     const apiInstance = await getApi();
@@ -2630,7 +2666,8 @@ export const apiClient = {
     // Three endpoints answer: light previews, a stack's masters, and the
     // calibration library's frames and masters.
     const route = (d: PreviewDescriptor) =>
-      d.kind === 'calibration_frame' || (d.kind === 'calibration_master' && d.source.kind === 'library')
+      d.kind === 'calibration_frame' || d.kind === 'flat_ratio'
+        || (d.kind === 'calibration_master' && d.source.kind === 'library')
         ? 'library'
         : d.kind === 'calibration_master' ? 'stack' : 'image';
     const imageRequests = requests.filter((d) => route(d) === 'image') as ImagePreviewDescriptor[];
@@ -2638,7 +2675,7 @@ export const apiClient = {
       CalibrationMasterPreviewDescriptor & { source: StackMasterSource }
     )[];
     const libraryRequests = requests.filter((d) => route(d) === 'library') as (
-      CalibrationFramePreviewDescriptor | CalibrationMasterPreviewDescriptor
+      CalibrationFramePreviewDescriptor | CalibrationMasterPreviewDescriptor | FlatRatioPreviewDescriptor
     )[];
     const imageRequest = imageRequests.length ? apiInstance.post<
       ApiResponse<{ statuses: GenerationStatus[] }>
@@ -2676,7 +2713,9 @@ export const apiClient = {
     >(dbPath(dbId, '/calibrations/generation-status'), {
       requests: libraryRequests.map((d) => d.kind === 'calibration_frame'
         ? { target: 'frame', id: d.frameUuid, view: d.view, size: d.size, stretch: d.stretch }
-        : { target: 'master', id: d.masterId, size: d.size, midtone: d.midtone, shadow: d.shadow }),
+        : d.kind === 'flat_ratio'
+          ? { target: 'ratio', earlier: d.earlier, later: d.later, stretch: d.stretch }
+          : { target: 'master', id: d.masterId, size: d.size, midtone: d.midtone, shadow: d.shadow }),
     }).then(({ data }) => data.data?.statuses ?? []) : Promise.resolve([]);
     // An unavailable endpoint must not stall unrelated previews in this batch.
     const [images, masters, library] = await Promise.allSettled([imageRequest, masterRequest, libraryRequest]);

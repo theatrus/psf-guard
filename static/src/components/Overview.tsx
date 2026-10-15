@@ -71,7 +71,7 @@ import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog
 import { useAccess } from '../auth/access';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
-import { uncalibratedNote } from '../utils/uncalibratedNote';
+import { flatWarningNote, uncalibratedNote } from '../utils/uncalibratedNote';
 import { useNavigateNow } from '../hooks/useNavigateNow';
 import './projectCard.css';
 import './Overview.css';
@@ -254,6 +254,7 @@ export default function Overview() {
           `${summary.skipped_existing > 0 ? `, ${summary.skipped_existing} already present` : ''}` +
           `${summary.missing > 0 ? `, ${summary.missing} missing on disk` : ''}` +
           `${uncalibratedNote(summary) ? `, ${uncalibratedNote(summary)}` : ''}` +
+          `${flatWarningNote(summary) ? `, ${flatWarningNote(summary)}` : ''}` +
           `${summary.errors > 0 ? `, ${summary.errors} ERRORS` : ''}\n\n${dest}`
       );
     } catch (err) {

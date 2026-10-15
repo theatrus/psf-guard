@@ -86,6 +86,14 @@ pub struct WbppRunProgress {
     /// defaults, in words with who set them; empty when the defaults did.
     #[serde(default)]
     pub calibration_settings: Vec<String>,
+    /// The measured flat changes the lights' flats were chosen around, in
+    /// words with their windows.
+    #[serde(default)]
+    pub flat_changes: Vec<String>,
+    /// Lights whose flats are from across such a change, which WBPP may not
+    /// calibrate as a PSF Guard stack would.
+    #[serde(default)]
+    pub flat_warnings: usize,
     /// The command line, as a person would type it.
     pub command: Option<String>,
     pub pid: Option<u32>,
@@ -1179,6 +1187,8 @@ struct PlanSummary {
     kept_out: usize,
     uncalibrated: usize,
     calibration_settings: Vec<String>,
+    flat_changes: Vec<String>,
+    flat_warnings: usize,
 }
 
 /// The run itself: plan, write, launch, watch. Returns the closing stage.
@@ -1243,6 +1253,8 @@ async fn run(
             kept_out: plan.kept_out.len(),
             uncalibrated: plan.uncalibrated.len(),
             calibration_settings: plan.calibration_settings.clone(),
+            flat_changes: plan.flat_changes.clone(),
+            flat_warnings: plan.flat_warnings().len(),
         };
         let _ = &plan_store;
         Ok((summary, runner))
@@ -1257,6 +1269,8 @@ async fn run(
         progress.kept_out_frames = plan_summary.kept_out;
         progress.uncalibrated_lights = plan_summary.uncalibrated;
         progress.calibration_settings = plan_summary.calibration_settings;
+        progress.flat_changes = plan_summary.flat_changes;
+        progress.flat_warnings = plan_summary.flat_warnings;
         progress.stage = "launching".to_string();
     });
     if cancel.load(Ordering::SeqCst) {

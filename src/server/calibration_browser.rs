@@ -59,6 +59,8 @@ pub struct ListQuery {
     pub night_to: Option<String>,
     pub grade: Option<GradeFilter>,
     pub kept_out: Option<bool>,
+    /// Keep only frames shot at this rotator angle, in degrees.
+    pub rotation: Option<f64>,
     /// Keep only frames whose file is not on disk. Each file is checked, so
     /// this is slow on a large library over a network share.
     pub missing: Option<bool>,
@@ -81,6 +83,7 @@ impl ListQuery {
             night_to: self.night_to.clone().filter(|night| !night.is_empty()),
             grade: self.grade,
             kept_out: self.kept_out,
+            rotation: self.rotation.filter(|angle| angle.is_finite()),
             session: self.session.clone().filter(|session| !session.is_empty()),
         }
     }
@@ -461,6 +464,12 @@ pub enum StatusItem {
         midtone: Option<f64>,
         shadow: Option<f64>,
     },
+    /// One flat session divided by another (the Flat groups view).
+    Ratio {
+        earlier: String,
+        later: String,
+        stretch: Option<crate::server::flat_groups::RatioStretch>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -472,6 +481,11 @@ pub struct StatusRequest {
 enum Resolved {
     Frame(Result<Box<FrameToDraw>, AppError>, FramePicture),
     Master(Option<Box<RecordedLibraryMaster>>, DisplayOptions),
+    Ratio(
+        String,
+        String,
+        Option<crate::server::flat_groups::RatioStretch>,
+    ),
 }
 
 /// POST /api/db/{db}/calibrations/generation-status — whether each frame
@@ -538,6 +552,11 @@ pub async fn post_generation_status(
                         },
                     )
                 }
+                StatusItem::Ratio {
+                    earlier,
+                    later,
+                    stretch,
+                } => Resolved::Ratio(earlier, later, stretch),
             });
         }
         resolved
@@ -554,6 +573,9 @@ pub async fn post_generation_status(
                     Resolved::Master(master, display) => master
                         .ok_or(AppError::NotFound)
                         .and_then(|master| master_job(&ctx, &master, &display)),
+                    Resolved::Ratio(earlier, later, stretch) => {
+                        crate::server::flat_groups::status_job(&ctx, earlier, later, stretch)
+                    }
                 };
                 match job {
                     Ok(job) => stack_masters::generation_status(&state, job),

@@ -921,6 +921,11 @@ impl DatabaseContext {
 
         let conn = open_scheduler_connection(&db_path)?;
         let fingerprint = fingerprint_path(&db_path);
+        // Master builds find a catalog's measured flat responses by its path.
+        crate::calibration::flat_groups::register_response_dir(
+            Path::new(&db_path),
+            cache_dir_path.join(crate::calibration::flat_groups::CACHE_CATEGORY),
+        );
 
         Ok(Self {
             id,
@@ -2131,6 +2136,10 @@ impl DatabaseContext {
     /// for tests.
     #[doc(hidden)]
     pub fn use_storage_for_test(&mut self, directory: &Path) {
+        crate::calibration::flat_groups::register_response_dir(
+            Path::new(&self.database_path),
+            directory.join(crate::calibration::flat_groups::CACHE_CATEGORY),
+        );
         self.cache_dir_path = directory.to_path_buf();
         self.stack_root = directory.to_path_buf();
         self.calibration_root = directory.to_path_buf();

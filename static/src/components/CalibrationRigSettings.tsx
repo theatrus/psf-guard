@@ -13,6 +13,7 @@ import {
   RULE_GROUPS,
   describeRuleValue,
   draftOf,
+  focusRuleRow,
   parseDraft,
   rulesKey,
   sameRules,
@@ -30,6 +31,8 @@ export interface CalibrationRigFocus {
 interface CalibrationRigSettingsProps {
   /** Open this rig's values, adding it to the list if no catalog records it. */
   focusRig?: CalibrationRigFocus | null;
+  /** With `focusRig`: the setting of the rig's to bring into view and focus. */
+  focusField?: string | null;
 }
 
 /** The values of a rig no catalog lists yet: none, the same object every render. */
@@ -44,7 +47,7 @@ function plural(count: number, one: string, many = `${one}s`): string {
  * telescope, camera, frame size and binning. A value it sets beats the
  * global one, which beats the default; a value it leaves alone inherits.
  */
-export default function CalibrationRigSettings({ focusRig = null }: CalibrationRigSettingsProps) {
+export default function CalibrationRigSettings({ focusRig = null, focusField = null }: CalibrationRigSettingsProps) {
   const settings = useQuery({
     queryKey: ['calibration-settings'],
     queryFn: apiClient.getCalibrationSettings,
@@ -57,13 +60,21 @@ export default function CalibrationRigSettings({ focusRig = null }: CalibrationR
   }, [focusRig]);
   // Arriving for one rig: bring its values into view once they are drawn.
   const ready = !!settings.data?.fields;
+  // With a setting named, that setting comes into view and takes focus
+  // once the rig's values are open: once per arrival. A rig's own value
+  // opens its group.
+  const arrived = useRef<string | null>(null);
   useEffect(() => {
     if (!focusRig || !ready) return;
-    document
-      .getElementById(`calibration-rig-${focusRig.uuid}`)
-      ?.closest('.calibration-rig-item')
-      ?.scrollIntoView?.({ block: 'start' });
-  }, [focusRig, ready]);
+    const arrival = `${focusRig.uuid}:${focusField ?? ''}`;
+    if (arrived.current === arrival) return;
+    const editor = document.getElementById(`calibration-rig-${focusRig.uuid}`);
+    if (!editor) return;
+    if (!focusField || !focusRuleRow(editor, focusField)) {
+      editor.closest('.calibration-rig-item')?.scrollIntoView?.({ block: 'start' });
+    }
+    arrived.current = arrival;
+  }, [focusField, focusRig, open, ready]);
 
   if (settings.isLoading || settings.isError || !settings.data?.fields) return null;
   const data = settings.data;

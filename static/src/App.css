@@ -163,6 +163,18 @@
   --quality-background-rise: rgb(250 235 70);
   --quality-background-fall: rgb(90 160 255);
 
+  /* Dust marked on the ratio picture of two flat sessions: a shadow that
+     came (darker in the later flats) and one that went (brighter). */
+  --color-flat-dust-new: rgb(255 140 90);
+  --color-flat-dust-gone: rgb(110 200 255);
+
+  /* Flat groups in the Calibration page's session list: neighbouring
+     groups of one filter and angle take neighbouring colours. */
+  --color-flat-group-1: rgb(120 165 255);
+  --color-flat-group-2: rgb(235 180 85);
+  --color-flat-group-3: rgb(125 205 150);
+  --color-flat-group-4: rgb(205 140 230);
+
   /* Border Colors */
   --color-border-primary: #333;
   --color-border-secondary: #444;

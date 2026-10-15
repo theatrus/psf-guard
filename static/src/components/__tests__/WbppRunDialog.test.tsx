@@ -181,4 +181,32 @@ describe('WbppRunDialog while another project runs', () => {
       screen.getByText('Calibration frames matched with: Use darks: off (for Askar 120 · ASI2600MM Pro).')
     ).toBeInTheDocument();
   });
+
+  it('names the flat changes in force and the lights WBPP cannot calibrate as a stack would', async () => {
+    mockCommon();
+    server.use(
+      http.get('/api/db/alpha/wbpp/runs/current', () =>
+        ok({
+          started: true,
+          queued: [],
+          progress: {
+            ...running,
+            flat_changes: ['new dust: 1 shadow near (1423, 3545), between 2026-09-17 and 2026-09-21'],
+            flat_warnings: 3,
+          },
+        })
+      )
+    );
+    render(
+      <WbppRunDialog
+        request={{ dbId: 'alpha', scope: { project_id: 1 }, label: 'Sh2 86' }}
+        defaultOptions={DEFAULT_WBPP_OPTIONS}
+        onClose={() => {}}
+      />,
+      { wrapper: wrapper() }
+    );
+    const line = await screen.findByTestId('wbpp-run-flat-changes');
+    expect(line).toHaveTextContent('Flats chosen around measured changes: new dust: 1 shadow near (1423, 3545)');
+    expect(line).toHaveTextContent('3 lights take flats from across a change');
+  });
 });

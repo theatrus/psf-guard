@@ -30,13 +30,17 @@ export interface OpenSettingsDetail {
   intent?: SettingsIntent;
   /** With `calibration`: the rig to open. */
   rig?: SettingsRig;
+  /** With `calibration`: the setting to bring into view and focus, by its
+   *  key: the rig's own when a rig rides along, else the global one. */
+  field?: string;
 }
 
 /** Ask `App` to open settings, optionally on a specific form. */
-export function openSettings(intent?: SettingsIntent, options: { rig?: SettingsRig } = {}): void {
+export function openSettings(intent?: SettingsIntent, options: { rig?: SettingsRig; field?: string } = {}): void {
   const detail: OpenSettingsDetail = {};
   if (intent) detail.intent = intent;
   if (options.rig) detail.rig = options.rig;
+  if (options.field) detail.field = options.field;
   window.dispatchEvent(new CustomEvent<OpenSettingsDetail>(OPEN_SETTINGS_EVENT, { detail }));
 }
 
@@ -50,4 +54,10 @@ export function settingsIntentOf(event: Event): SettingsIntent | null {
 export function settingsRigOf(event: Event): SettingsRig | null {
   const detail = (event as CustomEvent<OpenSettingsDetail>).detail;
   return detail?.rig ?? null;
+}
+
+/** Read the setting to focus back off an event, if one rode along. */
+export function settingsFieldOf(event: Event): string | null {
+  const detail = (event as CustomEvent<OpenSettingsDetail>).detail;
+  return detail?.field ?? null;
 }

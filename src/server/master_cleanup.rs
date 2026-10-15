@@ -26,6 +26,13 @@
 //! - anything while a build of this server runs: the deletes take the build
 //!   permit.
 //!
+//! A flat master carried across a measured change
+//! (`<master>-across-<key>.fits`) is made from the master it names and the
+//! change's measurements, and goes the way that master's record says: it
+//! counts as recorded and rebuildable while its source master is, and a
+//! newer one carried across by the same change from the same frames
+//! replaces it.
+//!
 //! A removed master that is needed again is built again from its frames.
 
 use crate::calibration::{self, RecordedMasterFile};
@@ -195,8 +202,22 @@ fn masters_in_folder(
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
         .filter_map(|entry| {
             let name = entry.file_name().to_str()?.to_string();
-            let record = by_name.get(&name)?.clone();
-            Some((entry.path(), record))
+            if let Some(record) = by_name.get(&name) {
+                return Some((entry.path(), record.clone()));
+            }
+            // Carried across a change: its source master's record speaks
+            // for it, under sources of its own.
+            let (source, key) = across_parts(&name)?;
+            let record = by_name.get(&source)?;
+            Some((
+                entry.path(),
+                RecordedMasterFile {
+                    cache_path: entry.path(),
+                    sources: format!("{}|across-{key}", record.sources),
+                    created_at: record.created_at,
+                    rebuildable: record.rebuildable,
+                },
+            ))
         })
         .collect();
     (!masters.is_empty()).then_some(masters)
@@ -295,7 +316,18 @@ fn labels_in(text: &str) -> impl Iterator<Item = String> + '_ {
     })
 }
 
+/// A master carried across a change: its source master's file name and
+/// the correction key, from `<stem>-across-<key>.fits`.
+fn across_parts(name: &str) -> Option<(String, &str)> {
+    let (stem, key) = name.strip_suffix(".fits")?.rsplit_once("-across-")?;
+    (!key.is_empty() && key.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| (format!("{stem}.fits"), key))
+}
+
 fn is_master_label(name: &str) -> bool {
+    if let Some((source, _)) = across_parts(name) {
+        return is_master_label(&source);
+    }
     ["bias", "dark", "dark_flat", "flat"].iter().any(|kind| {
         name.strip_prefix(kind)
             .and_then(|rest| rest.strip_prefix('-'))
@@ -367,6 +399,10 @@ mod tests {
         );
         assert!(is_master_label(&format!("dark_flat-{hash}.fits")));
         assert!(!is_master_label("flat-short.fits"));
+        assert!(is_master_label(&format!(
+            "flat-{hash}-across-0123456789abcdef.fits"
+        )));
+        assert!(!is_master_label("flat-short-across-0123456789abcdef.fits"));
     }
 
     fn aged(path: &Path, days: u64) {
@@ -524,6 +560,36 @@ mod tests {
         assert_eq!(sweep(&f.state, &f.ctx, SystemTime::now()), 0);
         assert!(lru_candidates(&f.ctx, SystemTime::now()).is_empty());
         assert!(f.folder.join(label_of('a')).exists());
+    }
+
+    #[test]
+    fn masters_carried_across_a_change_go_the_way_of_their_source() {
+        let f = fixture(&[('a', 1, r#"["present"]"#), ('c', 3, r#"["gone"]"#)]);
+        let across = |fill: char, key: &str| {
+            let name = label_of(fill).replace(".fits", &format!("-across-{key}.fits"));
+            let path = f.folder.join(name);
+            std::fs::write(&path, "corrected").unwrap();
+            aged(&path, 60);
+            label(&path).unwrap().to_string()
+        };
+        let from_a = across('a', "0123456789abcdef");
+        let from_c = across('c', "0123456789abcdef");
+        // Its source master is not recorded: nothing shows how to make it.
+        let orphan = across('9', "0123456789abcdef");
+
+        let mut paths: Vec<String> = lru_candidates(&f.ctx, SystemTime::now())
+            .into_iter()
+            .map(|candidate| label(&candidate.path).unwrap().to_string())
+            .collect();
+        paths.sort();
+        let mut expected = vec![label_of('a'), from_a.clone()];
+        expected.sort();
+        assert_eq!(paths, expected);
+        // Carried across, a master is no newer copy of its source.
+        assert_eq!(sweep(&f.state, &f.ctx, SystemTime::now()), 0);
+        for kept in [&from_a, &from_c, &orphan] {
+            assert!(f.folder.join(kept).exists(), "{kept}");
+        }
     }
 
     #[test]

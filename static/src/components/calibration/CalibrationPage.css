@@ -755,7 +755,13 @@
   }
 
   .calibration-tabs {
+    max-width: 100%;
     gap: 0.9rem;
+    overflow-x: auto;
+  }
+
+  .calibration-tabs button {
+    flex: none;
   }
 }
 

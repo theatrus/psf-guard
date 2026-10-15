@@ -42,8 +42,10 @@ use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 /// Bump when the rules or what a result keeps change, so every kept result
-/// is computed again. 2: each finding keeps its lights' ids.
-pub const HEALTH_ALGORITHM_VERSION: u32 = 2;
+/// is computed again. 2: each finding keeps its lights' ids. 3: measured
+/// flat groups: mixed nights only when unmeasured, flats across a change.
+/// 4: grouping by time checks mixed nights as version 2 did.
+pub const HEALTH_ALGORITHM_VERSION: u32 = 4;
 
 /// Flats further than this from a light are worth a look, though they are
 /// within the age limit that makes a light one that cannot be calibrated,
@@ -76,8 +78,12 @@ pub enum HealthCode {
     FlatSpots,
     /// The flats were shot more than [`FLAT_CHECK_AGE_DAYS`] from the light.
     OldFlats,
-    /// The flat master takes flats from more than one night.
+    /// The flat master takes flats from nights not measured against each
+    /// other.
     MixedFlats,
+    /// A measured change lies between the light and its flats, or the
+    /// light was shot while it happened.
+    FlatsDiffer,
     /// The masters use frames graded suspect.
     SuspectFrames,
     /// Frames a person kept out leave a set short.
@@ -603,8 +609,14 @@ impl HealthLibrary {
                 );
             }
         }
-        if let Some(finding) = self.mixed_flats(flat.raw()) {
+        if let Some(finding) = self.mixed_flats(flat.raw(), rules) {
             found.push(Check::MixedFlats, finding);
+        }
+        if let Some(reason) = super::flat_groups::describe_flag(&selected.flat_basis, rules) {
+            found.push(
+                Check::FlatsDiffer,
+                check(HealthCode::FlatsDiffer, reason).about([CalibrationKind::Flat]),
+            );
         }
         let mut suspect = 0;
         let mut suspect_kinds = Vec::new();
@@ -671,18 +683,53 @@ impl HealthLibrary {
     /// [`Self::judge`] makes of the finding; this decides only whether
     /// there is one, so a rule about flats that measure alike can replace it
     /// here alone.
-    fn mixed_flats(&self, flats: &[CalibrationFrame]) -> Option<LightFinding> {
+    fn mixed_flats(&self, flats: &[CalibrationFrame], rules: &Rules) -> Option<LightFinding> {
         let nights: BTreeSet<String> = flats
             .iter()
             .filter_map(|frame| frame.captured_at)
             .map(|at| night_of(at, self.boundary))
             .collect();
-        (nights.len() > 1).then(|| {
-            check(
-                HealthCode::MixedFlats,
-                format!("Its flat master mixes flats from {} nights", nights.len()),
+        if nights.len() <= 1 {
+            return None;
+        }
+        let finding =
+            |text: String| Some(check(HealthCode::MixedFlats, text).about([CalibrationKind::Flat]));
+        // Grouping by time: the check as it always was.
+        if rules.flat_grouping != super::rules::FlatGrouping::Measured {
+            return finding(format!(
+                "Its flat master mixes flats from {} nights",
+                nights.len()
+            ));
+        }
+        // Nights whose flats were measured against each other and found
+        // alike mix without a word.
+        let book = self.snapshot.flat_book();
+        let sessions: Option<BTreeSet<usize>> = flats
+            .iter()
+            .map(|frame| book.session_of_frame(&frame.frame_uuid))
+            .collect();
+        let sessions: Vec<usize> = sessions
+            .map(|s| s.into_iter().collect())
+            .unwrap_or_default();
+        if !sessions.is_empty() && book.measured_alike(&sessions) {
+            return None;
+        }
+        let compared = !sessions.is_empty()
+            && sessions.iter().enumerate().all(|(i, a)| {
+                sessions[i + 1..]
+                    .iter()
+                    .all(|b| book.comparison(*a, *b).is_some())
+            });
+        finding(if compared {
+            format!(
+                "Its flat master mixes flats from {} nights that measure unlike each other",
+                nights.len()
             )
-            .about([CalibrationKind::Flat])
+        } else {
+            format!(
+                "Its flat master mixes flats from {} nights not measured against each other",
+                nights.len()
+            )
         })
     }
 
@@ -917,6 +964,9 @@ pub fn library_digest(conn: &Connection) -> Result<String> {
             &mut hasher,
         )?;
     }
+    hasher.update(b"\x1d");
+    // What flat grouping measured decides which flats a light takes.
+    super::flat_groups::store::digest_rows(conn, &mut hasher)?;
     Ok(hex(hasher))
 }
 
@@ -1371,7 +1421,7 @@ mod tests {
         );
         assert_eq!(
             reason(&health, HealthCode::MixedFlats),
-            "Its flat master mixes flats from 2 nights"
+            "Its flat master mixes flats from 2 nights not measured against each other"
         );
 
         // A view of the light names the finding, its kind, and both nights.
@@ -1392,6 +1442,43 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("2026-09-10", 3), ("2026-09-09", 3)]
         );
+
+        // Measured, the two nights' flats are alike: they mix without a word.
+        crate::calibration::flat_groups::store::add_tables(&fixture.conn).unwrap();
+        let responses = fixture.temp.path().join("responses");
+        let outcome =
+            crate::calibration::flat_groups::job::run(crate::calibration::flat_groups::job::Pass {
+                conn: &fixture.conn,
+                dir: &responses,
+                keep_going: &|| true,
+                yield_now: &|| {},
+                progress: &mut |_, _, _| {},
+                find_light: &|_| None,
+                pool: None,
+            })
+            .unwrap();
+        assert_eq!((outcome.measured, outcome.compared), (2, 1));
+        assert_eq!(fixture.health(1).level, None);
+        let alike = |explained: &crate::calibration::CalibrationExplanation| {
+            explained
+                .kinds
+                .iter()
+                .find(|kind| kind.kind == "flat")
+                .and_then(|kind| kind.alike.as_ref().map(|alike| alike.nights))
+        };
+        assert_eq!(alike(&fixture.explain(1)), Some(2));
+
+        // Grouping by time, the check is as it always was, measured or not,
+        // and the light's account says nothing of measurements.
+        let _rules = crate::calibration::tests::RulesInForce::global(&[(
+            "flat_grouping",
+            serde_json::json!("time"),
+        )]);
+        assert_eq!(
+            reason(&fixture.health(1), HealthCode::MixedFlats),
+            "Its flat master mixes flats from 2 nights"
+        );
+        assert_eq!(alike(&fixture.explain(1)), None);
     }
 
     #[test]

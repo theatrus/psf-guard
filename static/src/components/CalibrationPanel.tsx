@@ -38,6 +38,17 @@ interface CalibrationPanelProps {
   projectId: number | null;
 }
 
+/** Bases that leave a light's flats from across a change: worth a check. */
+const UNSETTLED_BASES = new Set(['no_same_side', 'undetermined']);
+
+/** A fraction as a percent with one decimal: `0.2%`. */
+/** A fraction in percent: two decimals below 1%, and `<0.01%` below that. */
+function fractionPercent(value: number): string {
+  const percent = value * 100;
+  if (percent < 0.01) return '<0.01%';
+  return `${percent >= 1 ? percent.toFixed(1) : percent.toFixed(2)}%`;
+}
+
 /** Refusals shown before "N more". */
 const REFUSED_SHOWN = 4;
 
@@ -400,11 +411,28 @@ function KindAccount({ kind, parts, folded, level, lightNight, hrefFor }: KindAc
               </ul>
             </div>
           )}
+          {kind.alike && (
+            <p className="light-calibration-part light-calibration-alike" data-testid="calibration-flat-alike">
+              Measured alike: dust within {fractionPercent(kind.alike.dust)}, pattern within{' '}
+              {fractionPercent(kind.alike.broad)} across {plural(kind.alike.nights, 'night')}
+            </p>
+          )}
           {kind.matching_unused.length > 0 && (
             <div className="light-calibration-part">
               <span className="light-calibration-part-label">Also match, not used</span>
-              <ul>{kind.matching_unused.map((night) => nightRow(night, null))}</ul>
+              <ul>{kind.matching_unused.map((night) => nightRow(night, 'unused'))}</ul>
             </div>
+          )}
+          {kind.chosen_by && (
+            <p
+              className={`light-calibration-part light-calibration-chosen-by${
+                kind.basis && UNSETTLED_BASES.has(kind.basis.basis) ? ' is-check' : ''
+              }`}
+              data-testid="calibration-flat-chosen-by"
+            >
+              <span className="light-calibration-part-label">Chosen by</span>
+              <span>{kind.chosen_by}</span>
+            </p>
           )}
           {kind.refused.length > 0 && (
             <div className={`light-calibration-part${focused('refused')}`}>

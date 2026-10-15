@@ -652,6 +652,7 @@ fn calibration_note(comment: &str, plan: &ExportPlan, spec: &WbppScriptSpec) -> 
             text(reason),
         ));
     }
+    note.push_str(&flat_group_note(comment, plan));
     if let Some(first) = spec.stale_frames.first() {
         let count = spec.stale_frames.len();
         let (one, it) = if count == 1 {
@@ -667,6 +668,72 @@ fn calibration_note(comment: &str, plan: &ExportPlan, spec: &WbppScriptSpec) -> 
             if one { "" } else { "s" },
             if one { "is" } else { "are" },
             text(first),
+        ));
+    }
+    note
+}
+
+/// The measured flat changes in force and how they chose the lights' flats,
+/// with the lights WBPP cannot calibrate as a PSF Guard stack would.
+fn flat_group_note(comment: &str, plan: &ExportPlan) -> String {
+    if plan.flat_changes.is_empty() {
+        return String::new();
+    }
+    let text = |value: &str| comment_text(comment, value);
+    let lights = |count: usize| format!("{count} light{}", if count == 1 { "" } else { "s" });
+    let mut note = format!(
+        "{comment}\n\
+         {comment}PSF Guard measured where this rig's flats changed and gives each\n\
+         {comment}light flats from its own side of every change. In force:\n"
+    );
+    for change in &plan.flat_changes {
+        note.push_str(&format!("{comment}  {}\n", text(change)));
+    }
+    let of = |basis: &str| {
+        plan.flat_choices
+            .iter()
+            .filter(|(_, _, choice)| choice.basis == basis)
+            .collect::<Vec<_>>()
+    };
+    let same_side = of("same_side");
+    if !same_side.is_empty() {
+        note.push_str(&format!(
+            "{comment}{} take flats from their own side of a change only.\n",
+            lights(same_side.len())
+        ));
+    }
+    let other_angle = of("other_angle");
+    if !other_angle.is_empty() {
+        note.push_str(&format!(
+            "{comment}{} take flats from their own side at another rotator angle,\n\
+             {comment}which this rig's flats allow, measured within the split limits.\n",
+            lights(other_angle.len())
+        ));
+    }
+    let corrected = of("corrected");
+    if let Some((_, name, choice)) = corrected.first() {
+        note.push_str(&format!(
+            "{comment}WARNING: {} have flats only from the other side of a change at\n\
+             {comment}their angle. PSF Guard's stacks carry those flats across with the\n\
+             {comment}change's map; WBPP cannot, so here they get the flats as shot, in\n\
+             {comment}{SESSION_KEYWORD}_<night>-across-<key> folders of their own. Stack them in\n\
+             {comment}PSF Guard or retake flats. {}: {}\n",
+            lights(corrected.len()),
+            text(name),
+            text(&choice.text),
+        ));
+    }
+    let flagged: Vec<_> = plan
+        .flat_choices
+        .iter()
+        .filter(|(_, _, choice)| choice.flagged)
+        .collect();
+    if let Some((_, name, choice)) = flagged.first() {
+        note.push_str(&format!(
+            "{comment}WARNING: {} may not match their flats. {}: {}\n",
+            lights(flagged.len()),
+            text(name),
+            text(&choice.text),
         ));
     }
     note

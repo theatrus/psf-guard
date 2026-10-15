@@ -49,6 +49,7 @@ function NumberField({ label, value, onCommit }: { label: string; value: number 
 }
 
 const exposureLabel = (seconds: number) => `${Number(seconds.toFixed(2))}s`;
+const angleLabel = (degrees: number) => `${Math.round(degrees * 10) / 10}°`;
 
 function rangeLabel(from: string | undefined, to: string | undefined): string {
   if (from && to) return `${from} – ${to}`;
@@ -68,9 +69,13 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
     .filter(([key]) => sessions || DUPLICATE_FILTERS.includes(key as keyof CalibrationFilterState))
     .length;
   const celsius = (value: number | undefined) => (value === undefined ? undefined : `${value} °C`);
+  // A rig the address names that this library has no frames of, as an old
+  // link may: shown as it is, so the pill says what narrows the list.
+  const staleRig = rigs.length > 0 && filters.rig !== undefined && filters.rig !== ALL_RIGS
+    && !rigs.some((rig) => rig.rig_uuid === filters.rig);
   const fields = (
     <>
-      {rigs.length > 1 && (
+      {(rigs.length > 1 || staleRig) && (
         <PillSelect
           label="Rig"
           active={filters.rig !== undefined && filters.rig !== ALL_RIGS}
@@ -79,6 +84,7 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
         >
           <option value={ALL_RIGS}>All</option>
           {rigs.map((rig) => <option key={rig.rig_uuid} value={rig.rig_uuid}>{rig.name}</option>)}
+          {staleRig && <option value={filters.rig}>A rig not in this library</option>}
         </PillSelect>
       )}
       <PillSelect
@@ -119,6 +125,23 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
           <option value={String(filters.exposure)}>{exposureLabel(filters.exposure)}</option>
         )}
       </PillSelect>
+      {((facets?.rotations ?? []).length > 0 || filters.rotation !== undefined) && (
+        <PillSelect
+          label="Angle"
+          active={filters.rotation !== undefined}
+          value={filters.rotation === undefined ? '' : String(filters.rotation)}
+          pillTitle="Keep only flats shot at this rotator angle, within 2°"
+          onChange={(event) => onChange({ rotation: event.target.value === '' ? undefined : Number(event.target.value) })}
+        >
+          <option value="">All</option>
+          {(facets?.rotations ?? []).map((degrees) => (
+            <option key={degrees} value={String(degrees)}>{angleLabel(degrees)}</option>
+          ))}
+          {filters.rotation !== undefined && !(facets?.rotations ?? []).includes(filters.rotation) && (
+            <option value={String(filters.rotation)}>{angleLabel(filters.rotation)}</option>
+          )}
+        </PillSelect>
+      )}
       <ToolbarPopover
         id="calibration-temperature"
         label="Temp"

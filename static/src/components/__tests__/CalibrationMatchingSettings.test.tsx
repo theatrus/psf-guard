@@ -33,6 +33,24 @@ const current = (rules: Record<string, unknown> = {}, flatStarMasking = false) =
 
 
 describe('CalibrationMatchingSettings', () => {
+  it('brings a setting another page names into view and focuses it', async () => {
+    server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current())));
+    const scrolled: Element[] = [];
+    const scroll = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      render(<CalibrationMatchingSettings focusField="flat_split_dust_pct" />, { wrapper: wrapper() });
+      const dust = await screen.findByLabelText('Dust that splits flats');
+      await waitFor(() => expect(dust).toHaveFocus());
+      expect(dust.closest('fieldset')).toHaveTextContent('Flat groups');
+      expect(scrolled).toEqual([dust.closest('[data-rule]')]);
+    } finally {
+      Element.prototype.scrollIntoView = scroll;
+    }
+  });
+
   it('shows each default as the empty field\'s placeholder and nothing to save', async () => {
     server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current())));
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });

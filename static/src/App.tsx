@@ -23,6 +23,7 @@ import { scopeForView } from './utils/viewScope';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
   OPEN_SETTINGS_EVENT,
+  settingsFieldOf,
   settingsIntentOf,
   settingsRigOf,
   type SettingsIntent,
@@ -70,6 +71,8 @@ function AppContent() {
   );
   // With the Calibration tab: the rig whose own settings to open.
   const [settingsRig, setSettingsRig] = useState<SettingsRig | null>(null);
+  // With the Calibration tab: the setting to bring into view.
+  const [settingsField, setSettingsField] = useState<string | null>(null);
   // We track this only to short-circuit checks against Tauri-only commands;
   // the modal itself is shown regardless of mode.
   const [, setIsTauri] = useState(false);
@@ -136,6 +139,7 @@ function AppContent() {
       // Clear first so asking twice for the same form still lands on it.
       setSettingsIntent(null);
       setSettingsRig(settingsRigOf(event));
+      setSettingsField(settingsFieldOf(event));
       queueMicrotask(() => setSettingsIntent(settingsIntentOf(event)));
       setShowSettings(true);
     };
@@ -280,10 +284,12 @@ function AppContent() {
           isOpen={showSettings}
           initialIntent={settingsIntent}
           initialRig={settingsRig}
+          initialField={settingsField}
           onClose={() => {
             setShowSettings(false);
             setSettingsIntent(null);
             setSettingsRig(null);
+            setSettingsField(null);
           }}
         />
       )}

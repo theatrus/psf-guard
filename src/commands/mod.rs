@@ -7,6 +7,7 @@ pub mod calibration_repair;
 pub mod dump_grading;
 pub mod export;
 pub mod filter_rejected;
+pub mod flat_groups;
 pub mod import;
 pub mod list_projects;
 pub mod list_targets;

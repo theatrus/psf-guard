@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { describeExportProgress } from '../../hooks/useExportJob';
 import type { ExportSummary } from '../../api/types';
-import { uncalibratedNote } from '../uncalibratedNote';
+import { flatWarningNote, uncalibratedNote } from '../uncalibratedNote';
 
 const summary: ExportSummary = {
   planned: 4,
@@ -45,5 +45,17 @@ describe('uncalibratedNote', () => {
       "Exported project M42: 4 file(s) placed, 2 lights that can't be calibrated left out " +
         '(b.fits: No matching flat) → /exports/m42'
     );
+  });
+});
+
+describe('flatWarningNote', () => {
+  it('says nothing when every light has flats from its own side', () => {
+    expect(flatWarningNote(summary)).toBeNull();
+  });
+
+  it('counts the lights with flats from across a change and gives one reason', () => {
+    expect(
+      flatWarningNote({ ...summary, flat_warnings: 2, flat_warning_example: 'r.fits: shot during a change' })
+    ).toBe('2 lights with flats from across a measured change (r.fits: shot during a change)');
   });
 });
