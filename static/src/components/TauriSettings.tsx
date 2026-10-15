@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKe
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import OpenLogsButton from './OpenLogsButton';
+import DesktopServerSettings from './DesktopServerSettings';
 import type {
   RemoteImageUploadDirectoryTemplateSource,
   ImportFolder,
@@ -60,7 +61,7 @@ import PathField from './PathField';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'performance' | 'review' | 'rigs' | 'templates' | 'users' | 'agents';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'performance' | 'review' | 'rigs' | 'templates' | 'users' | 'agents' | 'server';
 
 /** An intent that only picks a tab. */
 type TabIntent = Extract<SettingsIntent, SettingsTab>;
@@ -877,14 +878,8 @@ export default function TauriSettings({
     setIsApplying(true);
     setStatusMessage('Restarting server...');
     try {
-      const restarted = await tauriConfig.restartServer();
-      if (restarted) {
-        setStatusMessage('Restarting interface...');
-        setTimeout(() => window.location.reload(), 1500);
-      } else {
-        setStatusMessage('Server restart failed; falling back to app restart...');
-        setTimeout(() => tauriConfig.restartApplication(), 1500);
-      }
+      await tauriConfig.restartServer();
+      window.location.reload();
     } catch (err) {
       console.error('restart failed:', err);
       setStatusMessage(`Restart failed: ${err}`);
@@ -901,6 +896,7 @@ export default function TauriSettings({
   // talk about until a catalog exists.
   const visibleTabs: Array<{ id: SettingsTab; label: string }> = [
     { id: 'databases', label: 'Databases' },
+    ...(isTauri ? ([{ id: 'server', label: 'Server' }] as const) : []),
     ...(canEdit
       ? ([{ id: 'catalogs', label: 'Catalogs' }] as const)
       : []),
@@ -1976,7 +1972,8 @@ export default function TauriSettings({
             </div>
           )}
 
-          {currentTab === 'agents' && <AgentsSettings />}
+          {currentTab === 'server' && <DesktopServerSettings />}
+          {currentTab === 'agents' && <AgentsSettings onServerSettings={isTauri ? () => setActiveTab('server') : undefined} />}
 
           {currentTab === 'users' && (
             <>
@@ -2006,7 +2003,7 @@ export default function TauriSettings({
               Done
             </button>
             {isTauri && <OpenLogsButton onError={setStatusMessage} />}
-            <button
+            {currentTab !== 'server' && <button
               onClick={handleRestart}
               className="cancel-button"
               disabled={isApplying}
@@ -2017,7 +2014,7 @@ export default function TauriSettings({
               }
             >
               {isTauri ? 'Restart Server' : 'Reload Page'}
-            </button>
+            </button>}
           </div>
         </div>
       </div>
@@ -2027,7 +2024,7 @@ export default function TauriSettings({
 
 /** Agents on a server without accounts: the endpoint answers this machine
  *  without a token, so the setup is the URL alone. */
-function AgentsSettings() {
+function AgentsSettings({ onServerSettings }: { onServerSettings?: () => void }) {
   const url = useMcpUrl();
   return (
     <div className="settings-section">
@@ -2038,6 +2035,9 @@ function AgentsSettings() {
         only this machine and needs no token.
       </p>
       <AgentConnect url={url} />
+      {onServerSettings && <p><button type="button" className="link-button" onClick={onServerSettings}>
+        Choose a fixed server port
+      </button> to keep this address across desktop restarts.</p>}
     </div>
   );
 }

@@ -4,6 +4,11 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- **Settings › Server** can fix the desktop app's localhost port, so browser,
+  API, and agent connections keep the same address across restarts. A port
+  conflict shows the error and Server settings so you can choose another
+  port or return to Automatic.
+
 - A calibration frame that is on disk twice, such as a copy a filer has not
   yet cleaned out of the drop folder, is catalogued once. When the original
   goes, its row moves to the copy and keeps its grade and marks, instead of

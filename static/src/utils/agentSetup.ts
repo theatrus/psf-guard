@@ -8,7 +8,9 @@ export function useMcpUrl(): string {
   useEffect(() => {
     if (!isTauriApp()) return;
     let live = true;
-    void getServerUrl().then((url) => { if (live) setBase(url); });
+    void getServerUrl()
+      .then((url) => { if (live) setBase(url); })
+      .catch(() => { if (live) setBase(''); });
     return () => { live = false; };
   }, []);
   return base ? `${base}/api/mcp` : '';

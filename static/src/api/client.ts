@@ -230,11 +230,6 @@ const getCachedServerUrl = (): string => {
   return cachedServerUrl || '';
 };
 
-// Initialize the client early - call this in your app root
-export const initializeApiClient = async () => {
-  await initializeApi();
-};
-
 // Build a per-DB path under /api/db/{dbId}.
 const dbPath = (dbId: string, path: string) => `/db/${encodeURIComponent(dbId)}${path}`;
 

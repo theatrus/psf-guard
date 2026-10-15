@@ -135,7 +135,7 @@ pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> 
         .with_thread_ids(false) // Don't show thread IDs for cleaner output
         .init();
 
-    run_server_internal(config, None).await
+    run_server_internal(config, None, None, None).await
 }
 
 /// Set once the first server of this process starts.
@@ -792,6 +792,8 @@ pub fn api_router(state: Arc<AppState>) -> Router {
 async fn run_server_internal(
     config: ServerConfig,
     shutdown_rx: Option<oneshot::Receiver<()>>,
+    listener: Option<tokio::net::TcpListener>,
+    ready: Option<oneshot::Sender<()>>,
 ) -> anyhow::Result<()> {
     let anonymous_access_trusted =
         anonymous_access_is_trusted(&config.host, config.allow_anonymous_access);
@@ -1129,8 +1131,10 @@ async fn run_server_internal(
     };
 
     // Create listener
-    let listener =
-        tokio::net::TcpListener::bind(format!("{}:{}", config.host, config.port)).await?;
+    let listener = match listener {
+        Some(listener) => listener,
+        None => tokio::net::TcpListener::bind(format!("{}:{}", config.host, config.port)).await?,
+    };
 
     tracing::info!(
         "🌐 Server listening on http://{}:{}",
@@ -1142,6 +1146,9 @@ async fn run_server_internal(
         std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string())
     );
     tracing::info!("🎯 Ready to serve requests!");
+    if let Some(ready) = ready {
+        let _ = ready.send(());
+    }
 
     // Run server with optional graceful shutdown
     let stopping_state = Arc::clone(&journal_state);
@@ -1220,7 +1227,19 @@ pub async fn run_server_with_shutdown(
     shutdown_rx: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     // Don't initialize tracing here - it should already be initialized by the first server or Tauri app
-    run_server_internal(config, Some(shutdown_rx)).await
+    run_server_internal(config, Some(shutdown_rx), None, None).await
+}
+
+/// Desktop startup reserves its socket before opening the UI, and reports
+/// readiness only once the API router and catalog state are ready.
+#[cfg(feature = "tauri")]
+pub(crate) async fn run_server_on_listener(
+    config: ServerConfig,
+    shutdown_rx: oneshot::Receiver<()>,
+    listener: tokio::net::TcpListener,
+    ready: oneshot::Sender<()>,
+) -> anyhow::Result<()> {
+    run_server_internal(config, Some(shutdown_rx), Some(listener), Some(ready)).await
 }
 
 async fn background_pregeneration_task(state: Arc<AppState>) {
