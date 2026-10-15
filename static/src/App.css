@@ -767,31 +767,6 @@
   font-size: 0.8rem;
 }
 
-.refresh-button.compact {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-quaternary);
-  padding: 0.4rem 0.6rem;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-size: 0.9rem;
-  min-width: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.refresh-button.compact:hover {
-  background: var(--color-bg-quaternary);
-  border-color: var(--color-bg-input);
-}
-
-.refresh-button.compact:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 /* The views take a row of their own only when the brand, the views and the
    utilities do not fit on one; useHeaderFit measures and sets the class. */
 .app-header.is-stacked {
@@ -873,10 +848,6 @@
   .compact-select {
     font-size: 0.75rem;
     padding: 0.32rem 0.4rem;
-  }
-
-  .refresh-button.compact {
-    min-width: 28px;
   }
 }
 
@@ -1023,27 +994,6 @@
 .selector-group select option:disabled {
   color: var(--color-text-hint);
   font-style: italic;
-}
-
-.refresh-button {
-  background: var(--color-bg-quaternary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-bg-input);
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-size: 0.9rem;
-}
-
-.refresh-button:hover:not(:disabled) {
-  background: var(--color-bg-input);
-  border-color: var(--color-bg-button);
-}
-
-.refresh-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 
 /* Main Content */

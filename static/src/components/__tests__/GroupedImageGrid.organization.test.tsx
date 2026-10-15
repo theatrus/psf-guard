@@ -158,6 +158,8 @@ describe('GroupedImageGrid organization navigation', () => {
     await screen.findByTestId('image-2');
     // Move exposures waits under ⋯ with the other rarely used tools.
     await userEvent.click(await screen.findByRole('button', { name: 'More tools' }));
+    // So does Rescan image folders, which left the header.
+    expect(screen.getByRole('button', { name: 'Rescan image folders' })).toBeInTheDocument();
     await userEvent.click(await screen.findByRole('button', { name: 'Move exposures' }));
     await screen.findByRole('dialog', { name: 'Move exposures' });
 

@@ -54,10 +54,11 @@ describe('ProjectTargetSelector on a merged view', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/plan?dbfilter=attic&db=attic&project=1&plan=attic%3A1');
   });
 
-  it('refreshes caches only for the database a scoped view shows', async () => {
+  it('keeps no rescan in the header: it lives under ⋯ in Images and Sequence, which show one database', async () => {
     renderAt('/?db=attic&project=1');
-    const refresh = await screen.findByRole('button', { name: '↻' });
-    expect(refresh).toBeDisabled();
+    await waitFor(() => expect(document.querySelector('#scope-select')).not.toBeNull());
+    expect(screen.queryByRole('button', { name: '↻' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Rescan/ })).toBeNull();
   });
 
   it('only moves the scope when already on a scoped view', async () => {

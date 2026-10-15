@@ -18,6 +18,7 @@ import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
 import { imageFilterCount } from '../utils/imageFilterCount';
 import ViewToolbar from './toolbar/ViewToolbar';
+import RescanImageFolders from './toolbar/RescanImageFolders';
 import SelectionBar from './toolbar/SelectionBar';
 import ImageOrderToggle from './toolbar/ImageOrderToggle';
 import { availableFlags, matchesFlagFilter } from '../utils/flagFilter';
@@ -997,6 +998,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             </>
           )}
           menu={grading.canWrite ? (
+            <>
             <button
               type="button"
               className="toolbar-menu-item organization-action"
@@ -1017,6 +1019,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             >
               <FolderInput size={14} aria-hidden="true" /> Move exposures
             </button>
+            <RescanImageFolders dbId={dbId ?? null} />
+            </>
           ) : undefined}
           summary={(
             <>
