@@ -167,6 +167,39 @@ two of them intersect in a convex polygon (Sutherland–Hodgman clipping).
 - A panel joined to nobody is **isolated**; groups of joined panels that never
   meet are **disconnected** (said only when nothing else explains it).
 
+**Across framings.** A rig framed on its own covers the same object as the
+shared framing and the other rigs, so its panels are judged with theirs as
+one cover of the sky (`coverage_issues` in the core, `readCoverage` in the
+browser). The cover is the shared framing while a rig shoots it, and the own
+framing of each rig that is on, in the draft's order.
+
+- Two panels of one framing are read as above, in that framing's own camera
+  frame and against its own minimum. A thin overlap is said only here.
+- Two panels of different framings are read in the first one's frame, every
+  outline taken there through the sky. They are joined when they overlap or
+  touch: across cameras only the cover counts. Side by side with sky between
+  them they are a gap.
+- A gap is covered by a panel of any framing, and isolated panels and groups
+  apart are read over every panel. A rig's own panels therefore need not
+  touch where another framing fills the sky between them. A lone panel is
+  said as touching no other panel.
+- Groups apart are said beside any other issue, not only when nothing else
+  is: one framing's thin seam does not explain another framing's panels far
+  away. Two panels a thin overlap or a gap keeps apart count as one group
+  for this, since that issue is said already, and a lone panel is said as
+  such, not again as a group.
+- One framing alone reads exactly as before.
+
+The framing view lists the issues that touch the framing being edited, and
+groups apart, with another framing's panels given as `shared r1c1` or
+`{rig} p2`; a drop or a turn springs back on the same reading. Activation
+lists every issue of the cover as a plan warning, a rig's own panels under
+its database's name; the cover holds only the rigs that get panels from a
+framing (not one skipped, nor one shooting a collaboration's assignment). A
+rig on a shared mosaic of more than one panel whose field is another size is
+warned, and its card says **field differs**. `POST /framing/preview` reads
+one framing and stays as it was.
+
 For panels of one size on the camera's axes this is exactly the first
 round's rule, `1 − |aₓ − bₓ|` of a panel width across a vertical seam, so
 every layout reads as it did. Shares are of the larger panel, so each of two
@@ -518,7 +551,8 @@ What PSF Guard keeps on its side:
   `r1c1` and targets on a grid are its cells, as the framing taken in from
   them names them;
 - activation lists layout issues (a thin overlap, a gap, a lone panel) as
-  warnings in its preview, never as a refusal.
+  warnings in its preview, never as a refusal, read across every framing
+  that rigs shoot.
 
 ## Workflow and UI
 
@@ -543,7 +577,10 @@ What PSF Guard keeps on its side:
    added", "panel p4 turned", "r1c1 locked"); activation creates the new
    targets, each at its own angle, and leaves the shot one alone.
 7. **A rig on its own.** *Frame separately* or *Edit* on a rig's card opens
-   its own panels in the same tools.
+   its own panels in the same tools. Picking another rig to size a shared
+   mosaic of more than one panel, when its field differs, asks first: frame
+   it separately, or use its field for the shared mosaic anyway. Its panels
+   need not touch each other; the cover across framings is what is checked.
 
 States are drawn from data attributes (`data-panel-state='locked' |
 'invalid'`, `data-selected`, `data-shot`, `data-framing`, `data-rig-index`)
@@ -595,6 +632,11 @@ activation, read back on import, and kept for targets already shot; turned
 panels with the turn handle, `[` and `]`, snapping, spring-back and undo,
 with every rig given the same angles whatever turns its camera; the same
 panel tools for a rig framed on its own.
+
+Built, third round: another rig picked for a shared mosaic of more than one
+panel asks before its field moves the panels; gaps, lone panels and groups
+apart read across every framing on the sky, in the core, the browser and
+activation.
 
 Proposed, not built:
 

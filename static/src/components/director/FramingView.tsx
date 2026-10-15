@@ -8,15 +8,15 @@ import { describeFramingChanges } from './draftChanges';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { SkyPreview } from '../../api/types';
-import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorLayout, DirectorMosaicPanel, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
+import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPreview, DirectorLayout, DirectorMosaicPanel, DirectorPanelSize, DirectorRigFraming, DirectorRigProfileSummary, DirectorSkyMarks, DirectorSkyPosition } from '../../api/directorTypes';
 import {
   DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, TILE_MAX_FOV, angleAt, clampFov, deprojectFrom, deprojectOn, draftFromState, fitViewFov, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, framingProblems, fromStage,
   compassDirections, insidePolygon, markLabelBudget, normaliseAngle, offsetFrom, panelForRig, pixelScale, polygonPoints, preferredSurveyId, previewRequest, projectOn, rigGeometries, rotationHandleSky, roundRa, stackMatrix, stageAngleAt, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
-  cameraDegreesToPlane, framingBoxes, framingShapes, panelHandleSky, readFraming, rigLayout, turnToward,
+  cameraDegreesToPlane, coverageFor, framingBoxes, framingShapes, panelHandleSky, readFraming, rigLayout, turnToward, type CoverageFraming,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import MosaicPanels, { type ExtendScope } from './MosaicPanels';
-import { asGrid, cameraStep, cameraToPlane, describeIssue, extendFrom, extendMosaic, fillHoles, findPanel, flaggedPanels, freshIssues, movePanel, planeToCamera, ringAround, setLocked, snapPlacement, snapTurn, turnOf, turnPanel, wrapTurn, type Direction } from './mosaicLayout';
+import { asGrid, cameraStep, keepHandUnlocks, cameraToPlane, describeIssue, extendFrom, extendMosaic, fillHoles, findPanel, flaggedPanels, freshIssues, movePanel, planeToCamera, ringAround, setLocked, snapPlacement, snapTurn, turnOf, turnPanel, wrapTurn, type Direction } from './mosaicLayout';
 import { shapeCenter, shapeOverlap, sharedStrips, splitApart, type PanelShape, type Point, type ShapeReading } from './panelShape';
 import TargetSearch, { type TargetPick } from './TargetSearch';
 import SkyCanvas, { type SkyTileImage } from './SkyCanvas';
@@ -58,6 +58,8 @@ const TURN_STEP = 1;
 /** A turned panel settles on the framing's angle, a neighbour's or a shot
  *  panel's this many degrees away. */
 const SNAP_TURN_DEG = 2;
+/** Two panel sizes the same to a billionth of a degree. */
+const sameSize = (a: DirectorPanelSize, b: DirectorPanelSize) => Math.abs(a.width_degrees - b.width_degrees) <= 1e-9 && Math.abs(a.height_degrees - b.height_degrees) <= 1e-9;
 /** A turn as said beside the panels: signed, to a tenth of a degree. */
 const signedTurn = (degrees: number) => `${degrees < 0 ? '−' : '+'}${Math.abs(degrees).toFixed(1)}°`;
 /** The way a panel's up edge leans in the camera frame, as a turn. */
@@ -328,8 +330,13 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     if (!state.panelRigId || shootingRigIds.includes(state.panelRigId)) return;
     // A locked panel off the center holds the size it was placed at.
     if (state.layout.panels.some(panel => panel.locked && (Math.abs(panel.x) > 1e-9 || Math.abs(panel.y) > 1e-9))) return;
-    const next = rigList.find(r => sizesShared(state, r));
+    // A rig with the same field first, so a mosaic keeps its size.
+    const eligible = rigList.filter(r => sizesShared(state, r));
+    const next = eligible.find(r => state.panel && r.field_of_view && sameSize(r.field_of_view, state.panel)) ?? eligible[0];
     if (!next) return;
+    // A mosaic keeps its size rather than move every panel to another field.
+    const field = panelForRig(rigList, next.rig.id);
+    if (state.layout.panels.length > 1 && state.panel && field && !sameSize(field, state.panel)) return;
     const take = (current: FramingState | null) => current ? { ...current, panelRigId: next.rig.id, panel: panelForRig(rigList, next.rig.id) } : current;
     if (first) adjust(take); else setState(take);
   }, [state, onToggleRig, shootingRigIds, rigList, sizesShared, adjust]);
@@ -364,9 +371,32 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   // a pan or a zoom does not clip every pair of panels again.
   const activeShapes = useMemo(() => active?.panel ? readFraming(active.center, active.positionAngle, active.panel, active.layout).shapes : [], [active]);
   const activeBoxes = useMemo(() => active?.panel ? framingBoxes(active.center, active.positionAngle, active.panel, active.layout) : undefined, [active]);
-  // The rule's reading of a layout of the active framing: what falls short,
-  // and which panels are joined.
-  const readingOf = (layout: DirectorLayout): ShapeReading => active?.panel ? readFraming(active.center, active.positionAngle, active.panel, layout).reading : { issues: [], groups: new Map() };
+  // The object's cover: the shared framing while a rig shoots it, and every
+  // rig that is on and framed on its own, in the order activation reads
+  // them. Gaps, lone panels and groups apart are read across all of them.
+  // Read from the framings alone, not the view, so a pan or a zoom reads
+  // nothing again.
+  const sharedCenter = state?.center; const sharedAngle = state?.positionAngle; const sharedPanel = state?.panel;
+  const sharedLayout = state?.layout; const rigFramings = state?.rigFramings;
+  const cover = useMemo(() => {
+    if (!sharedCenter || sharedAngle === undefined || !sharedLayout || !rigFramings) return [];
+    const live = (id: string) => rigList.some(entry => entry.rig.id === id) && (!onToggleRig || (shootingRigIds ?? []).includes(id));
+    const out: Array<{ key: string | null; label: string; framing: CoverageFraming }> = [];
+    if (sharedInUse && sharedPanel) out.push({ key: null, label: 'shared', framing: { center: sharedCenter, positionAngle: sharedAngle, panel: sharedPanel, layout: sharedLayout } });
+    for (const own of rigFramings) {
+      const panel = own.panel ?? panelForRig(rigList, own.rig_id);
+      if (!live(own.rig_id) || !panel) continue;
+      const label = rigList.find(entry => entry.rig.id === own.rig_id)?.catalog_name ?? 'Rig';
+      out.push({ key: own.rig_id, label, framing: { center: own.center ?? sharedCenter, positionAngle: own.position_angle_degrees ?? sharedAngle, panel, layout: own.layout } });
+    }
+    return out;
+  }, [sharedCenter, sharedAngle, sharedPanel, sharedLayout, rigFramings, sharedInUse, rigList, onToggleRig, shootingRigIds]);
+  // Whether the active framing's issues are read across several framings.
+  const across = !!active && cover.length > 1 && cover.some(entry => entry.key === active.rig);
+  // The rule's reading of a layout of the active framing, across the cover:
+  // what falls short, and which panels are joined.
+  const readingOf = (layout: DirectorLayout): ShapeReading => !active?.panel ? { issues: [], groups: new Map() }
+    : coverageFor(cover, active.rig, layout) ?? readFraming(active.center, active.positionAngle, active.panel, layout).reading;
   /** What placing or turning panel `id` leaves short that `before` did not. */
   const freshFrom = (before: DirectorLayout, after: DirectorLayout, id: string) => {
     const was = readingOf(before); const now = readingOf(after);
@@ -723,10 +753,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const next = turnPanel(active.layout, id, degrees);
     const fresh = freshFrom(active.layout, next, id);
     const turn = turnOf(findPanel(next, id) ?? { id, x: 0, y: 0, locked: false });
-    editLayout(next, `${turn === 0 ? `Turned ${id} back to the framing angle` : `Turned ${id} ${signedTurn(turn)} from the framing`}${fresh.length ? `; it leaves ${fresh.map(describeIssue).join('; ')}` : ''}.`);
+    editLayout(next, `${turn === 0 ? `Turned ${id} back to the framing angle` : `Turned ${id} ${signedTurn(turn)} from the framing`}${fresh.length ? `; it leaves ${fresh.map(issue => describeIssue(issue, across)).join('; ')}` : ''}.`);
   };
   // What each panel is short of, for the sky and the list.
-  const layoutIssueList = useMemo(() => active?.geometry?.issues ?? [], [active]);
+  const layoutIssueList = useMemo(() => (active?.panel && coverageFor(cover, active.rig, active.layout)?.issues) || (active?.geometry?.issues ?? []), [active, cover]);
   const flagged = useMemo(() => flaggedPanels(layoutIssueList), [layoutIssueList]);
   // A view narrower than the footprint hides its edges and handle. The fit
   // takes every panel corner as it is drawn, turned by the camera angle,
@@ -1104,7 +1134,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       // A placement or a turn that leaves a thin overlap, a gap or a lone
       // panel the layout did not have springs back unless Alt asks for it.
       const fresh = freshFrom(before, after, id);
-      const short = fresh.map(describeIssue).join('; ');
+      const short = fresh.map(issue => describeIssue(issue, across)).join('; ');
       const offRule = `${turned ? 'Turned' : 'Placed'} ${id} off the rule: ${short}.`;
       if (fresh.length > 0 && snap && !event.altKey) {
         update(current => withLayout(current, rig, before));
@@ -1208,12 +1238,42 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   const editOwn = (patch: Partial<DirectorRigFraming>) => update(current => ({ rigFramings: current.rigFramings.map(own => own.rig_id === editingRig ? { ...own, ...patch } : own) }));
   const frameRig = (id: string) => {
     if (!id) return;
-    update(current => current.rigFramings.some(own => own.rig_id === id) ? {} : ({ rigFramings: [...current.rigFramings, { rig_id: id, center: null, position_angle_degrees: null, layout: { ...current.layout, panels: current.layout.panels.map(panel => setLocked({ ...current.layout, panels: [panel] }, panel.id, false).panels[0]) }, panel: panelForRig(rigList, id) ? null : current.panel }] }));
+    update(current => current.rigFramings.some(own => own.rig_id === id) ? {} : ({ rigFramings: [...current.rigFramings, { rig_id: id, center: null, position_angle_degrees: null, layout: keepHandUnlocks({ ...current.layout, panels: current.layout.panels.map(panel => setLocked({ ...current.layout, panels: [panel] }, panel.id, false).panels[0]) }, current.layout), panel: panelForRig(rigList, id) ? null : current.panel }] }));
     setEditingRig(id);
   };
-  const chooseRig = (rigId: string) => {
+  // A rig whose field would move a shared mosaic's panels asks first: frame
+  // it on its own, or size the shared mosaic by it anyway.
+  const [askRig, setAskRig] = useState<string | null>(null);
+  const movesMosaic = (rigId: string) => {
+    const field = panelForRig(rigList, rigId);
+    return !!state && state.layout.panels.length > 1 && !!field && !!state.panel && !sameSize(field, state.panel);
+  };
+  // The question takes the focus, and gives it back to its rig's card.
+  // Focused as it is drawn: a rig just turned on is drawn asking only once
+  // the page has heard it is on.
+  const askRef = useCallback((element: HTMLDivElement | null) => element?.focus(), []);
+  const cardRefs = useRef(new Map<string, HTMLLIElement>());
+  const [focusCard, setFocusCard] = useState<{ id: string } | null>(null);
+  useEffect(() => { if (focusCard) cardRefs.current.get(focusCard.id)?.focus(); }, [focusCard]);
+  const answer = (id: string, then: () => void) => { setAskRig(null); then(); setFocusCard({ id }); };
+  // A question whose rig went off, or whose mosaic is down to one panel,
+  // goes. A rig just turned on asks before the page has heard it is on, so
+  // only a rig seen on and then off counts.
+  const shootingBefore = useRef(shootingRigIds);
+  useEffect(() => {
+    const before = shootingBefore.current;
+    shootingBefore.current = shootingRigIds;
+    if (!askRig || !state) return;
+    const field = panelForRig(rigList, askRig);
+    const wentOff = !!onToggleRig && (before ?? []).includes(askRig) && !(shootingRigIds ?? []).includes(askRig);
+    const still = !wentOff && !state.rigFramings.some(own => own.rig_id === askRig) && state.layout.panels.length > 1 && !!field && !!state.panel && !sameSize(field, state.panel);
+    if (!still) setAskRig(null);
+  }, [askRig, state, rigList, onToggleRig, shootingRigIds]);
+  const chooseRig = (rigId: string, ask = true) => {
     // A new size moves every panel off the center, a locked one too.
     if (sizeLocked) { setPanelNotice('A locked panel off the center holds the panel size: unlock it to frame with another rig.'); return; }
+    if (ask && rigId && movesMosaic(rigId)) { setAskRig(rigId); return; }
+    setAskRig(null);
     update({ panelRigId: rigId || null, panel: rigId ? panelForRig(rigList, rigId) : null });
   };
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
@@ -1280,7 +1340,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const role = own
       ? `Separate framing · ${grid(own.layout)} · ${round(own.position_angle_degrees ?? state.positionAngle, 1)}°${own.center ? ' · moved center' : ''}`
       : sizes ? `Frames the plan · ${grid(state.layout)}`
-      : field ? `Shared framing · ${grid(state.layout)}` : 'No optics';
+      : field ? `Shared framing · ${grid(state.layout)}${state.layout.panels.length > 1 && state.panel && !sameSize(field, state.panel) ? ' · field differs' : ''}` : 'No optics';
     const swatch = own ? `is-own-${ownIndex % 4}` : sizes ? 'is-shared' : shown ? 'is-compared' : 'is-none';
     const blocked = !shooting && !!joinBlocked;
     // A rig that is off shoots nothing; it may still hold the panel size
@@ -1288,7 +1348,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const shownRole = off && !own ? (sizes ? 'Not in this plan · sets the panel size' : 'Not in this plan') : off ? `Not in this plan · ${role}` : role;
     // Only a rig that is on frames the plan, on a page that keeps one.
     const canFrame = !own && !!field && !off && !sizeLocked;
-    return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}${sizes && !own && !off ? ' is-framing' : ''}`} role="group" aria-label={entry.catalog_name}>
+    // Its field would move a shared mosaic: the card asks what to do.
+    const asking = canWrite && canFrame && askRig === id && movesMosaic(id);
+    return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}${sizes && !own && !off ? ' is-framing' : ''}`} role="group" aria-label={entry.catalog_name}
+      tabIndex={-1} ref={element => { if (element) cardRefs.current.set(id, element); else cardRefs.current.delete(id); }}>
       <div className="framing-rig-head">
         {onToggleRig && <button type="button" role="switch" className="framing-rig-switch" aria-checked={shooting}
           aria-label={`${entry.catalog_name} on`} title={blocked ? joinBlocked : shooting ? 'Shoots this plan' : 'Off: not in this plan'}
@@ -1314,9 +1377,15 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         })()}
       </div>
       <p className="framing-rig-role">{shownRole}</p>
+      {asking && <div className="framing-rig-ask" role="group" aria-labelledby={`framing-rig-ask-${id}`} tabIndex={-1} ref={askRef} data-testid="framing-rig-ask">
+        <span id={`framing-rig-ask-${id}`}>Its field moves all {state.layout.panels.length} panels.</span>{' '}
+        <button type="button" className="link-button" onClick={() => answer(id, () => frameRig(id))}>Frame separately</button>{' '}
+        <button type="button" className="link-button" onClick={() => answer(id, () => chooseRig(id, false))}>Use its field</button>{' '}
+        <button type="button" className="link-button" onClick={() => answer(id, () => {})}>Cancel</button>
+      </div>}
       {canWrite && <div className="framing-rig-actions">
         {!own && field && <label className="framing-check" title="Draw its field on the sky"><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
-        {!own && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
+        {!own && !asking && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
         {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit'}</button>}
         {own && <button type="button" className="link-button" onClick={() => { update(current => ({ rigFramings: current.rigFramings.filter(framing => framing.rig_id !== id) })); if (editingRig === id) setEditingRig(null); }}>Use shared</button>}
       </div>}
@@ -1560,7 +1629,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       {active && <fieldset className="framing-mosaic-fieldset">
         <legend>Mosaic panels{activeRig ? ` · ${rigName(activeRig)}` : ''}</legend>
         {activeRig && <p className="director-muted framing-mosaic-note" data-testid="framing-panels-of">The panels of {rigName(activeRig)}, framed on its own. Done under Rigs goes back to the shared framing.</p>}
-        <MosaicPanels layout={active.layout} issues={layoutIssueList} selected={selectedPanel && findPanel(active.layout, selectedPanel) ? selectedPanel : null} onSelect={setSelectedPanel}
+        <MosaicPanels layout={active.layout} issues={layoutIssueList} across={across} selected={selectedPanel && findPanel(active.layout, selectedPanel) ? selectedPanel : null} onSelect={setSelectedPanel}
           frames={panelFrames} isLocked={panelLocked} canWrite={canWrite} invalid={problemAt(activeRig ? `rig:${activeRig}:mosaic` : 'mosaic')}
           namePrefix={activeRig ? rigName(activeRig) : undefined}
           onEdit={editLayout} onExtend={extend}

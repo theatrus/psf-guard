@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DirectorFramingPreview, DirectorFramingRequest, DirectorLayout, DirectorMeasuredGeometry } from '../../../api/directorTypes';
-import { cameraAngleAt, framingBoxes, framingGeometry, framingShapes, northTurn, offsetFrom } from '../framingModel';
+import { cameraAngleAt, coverageFor, framingBoxes, framingGeometry, framingShapes, northTurn, offsetFrom, readCoverage, type CoverageFraming, type CoverageIssue } from '../framingModel';
 import {
-  asGrid, cameraStep, cameraToPlane, extendFrom, extendMosaic, fillHoles, freshIssues, gridLayout, layoutIssues, layoutStructureProblem, movePanel, nextPanelId,
+  asGrid, cameraStep, cameraToPlane, describeIssue, extendFrom, extendMosaic, fillHoles, freshIssues, gridLayout, layoutIssues, layoutStructureProblem, movePanel, nextPanelId,
   planeToCamera, removePanel, ringAround, setLocked, singleLayout, snapPlacement, snapTurn, turnPanel, unitShape, wrapTurn,
 } from '../mosaicLayout';
 import { boundsOf, intersection, readShapes, rectangleShape, shapeIssues, shapeOverlap, sharedStrips, splitApart, turnedShape } from '../panelShape';
@@ -403,5 +403,100 @@ describe('review fixes for turned and grouped panels', () => {
       fastest = Math.min(fastest, performance.now() - started);
     }
     expect(fastest).toBeLessThan(40);
+  });
+});
+
+/** Written by the core: the shared framing and two rigs framed on their own
+ *  over one object, read as one cover of the sky. */
+const coverage = JSON.parse(readFileSync(resolve(__dirname, '../../../../../crates/director-core/tests/fixtures/framing-coverage.json'), 'utf8')) as
+  { framings: DirectorFramingRequest[]; issues: CoverageIssue[] };
+const asCoverage = (request: DirectorFramingRequest): CoverageFraming => ({ center: request.center, positionAngle: request.position_angle_degrees, panel: request.panel, layout: request.layout });
+
+describe('coverage across framings', () => {
+  const center = { ra_degrees: 10.6847, dec_degrees: 41.269 };
+  const framingAt = (places: Array<[number, number]>, panel: [number, number], angle = 0, at = center): CoverageFraming => ({
+    center: at, positionAngle: angle, panel: { width_degrees: panel[0], height_degrees: panel[1] },
+    layout: layout(places.map(([x, y], k) => place(k === 0 ? 'r1c1' : `p${k + 1}`, x, y))),
+  });
+
+  it('reads the core\'s fixture exactly as the core does', () => {
+    const ours = readCoverage(coverage.framings.map(asCoverage)).issues;
+    expect(ours.map(issue => [issue.kind, issue.panels])).toEqual(coverage.issues.map(issue => [issue.kind, issue.panels]));
+    ours.forEach((issue, k) => expect(issue.percent ?? -1).toBeCloseTo(coverage.issues[k].percent ?? -1, 6));
+  });
+
+  it('reads one framing as its own issues', () => {
+    const alone = framingAt([[0, 0], [1.25, 0]], [2, 1.5], 35);
+    const own = readShapes(framingShapes(alone.center, alone.positionAngle, alone.panel, alone.layout), 20).issues;
+    expect(readCoverage([alone]).issues.map(issue => ({ ...issue, panels: issue.panels.map(panel => panel.id) }))).toEqual(own);
+  });
+
+  it('lets another framing fill a rig\'s gap, joins two framings that touch, and says the rest with their framing', () => {
+    const own = framingAt([[-0.75, 0], [0.75, 0]], [1, 0.75]);
+    expect(readCoverage([own]).issues.map(issue => issue.kind)).toEqual(['gap']);
+    const shared = framingAt([[0, 0]], [2, 1.5]);
+    expect(readCoverage([shared, own]).issues).toEqual([]);
+    // Five per cent of the larger side: thin in one framing, joined across two.
+    expect(readCoverage([shared, framingAt([[1.4, 0]], [1, 0.75])]).issues).toEqual([]);
+    const apart = readCoverage([shared, framingAt([[1.6, 0]], [1, 0.75])]).issues;
+    expect(apart.map(issue => [issue.kind, issue.panels])).toEqual([['gap', [{ framing: 0, id: 'r1c1' }, { framing: 1, id: 'r1c1' }]]]);
+    expect(apart[0].percent).toBeCloseTo(5, 6);
+  });
+
+  it('says groups apart beside other issues once several framings are read, as the core does', () => {
+    const north = { ra_degrees: center.ra_degrees, dec_degrees: center.dec_degrees + 10 };
+    const shared = framingAt([[0, 0], [0.9, 0]], [2, 1.5]);
+    const read = (framings: CoverageFraming[]) => readCoverage(framings).issues.map(issue => [issue.kind, issue.panels.map(panel => `${panel.framing}:${panel.id}`)]);
+    expect(read([shared, framingAt([[0, 0], [0.8, 0]], [1, 0.75], 0, north)])).toEqual([['thin_overlap', ['0:r1c1', '0:p2']], ['disconnected', ['0:r1c1', '1:r1c1']]]);
+    // A lone panel is said as such, not again as a group.
+    expect(read([shared, framingAt([[0, 0]], [1, 0.75], 0, north)])).toEqual([['thin_overlap', ['0:r1c1', '0:p2']], ['isolated', ['1:r1c1']]]);
+    // One framing keeps the old rule.
+    expect(read([framingAt([[0, 0], [0.9, 0], [5, 0], [5.8, 0]], [2, 1.5])])).toEqual([['thin_overlap', ['0:r1c1', '0:p2']]]);
+    // Across framings a lone panel touches nothing.
+    expect(describeIssue({ kind: 'isolated', panels: ['p2'], percent: null }, true)).toBe('p2 touches no other panel');
+    expect(describeIssue({ kind: 'isolated', panels: ['p2'], percent: null })).toBe('p2 overlaps no other panel by the minimum');
+  });
+
+  it('reads two 16 by 16 mosaics as one cover well inside a frame', () => {
+    const grid = (offset: number): CoverageFraming => {
+      const panels = [];
+      for (let row = 0; row < 16; row += 1) for (let column = 0; column < 16; column += 1) {
+        panels.push({ ...place(`r${row + 1}c${column + 1}`, column * 0.8 + offset, row * 0.8), ...((row + column) % 7 === 0 ? { angle_offset_degrees: 2 } : {}) });
+      }
+      return { center, positionAngle: 20, panel: { width_degrees: 0.5, height_degrees: 0.4 }, layout: layout(panels, 15) };
+    };
+    // The fastest of several reads of fresh layouts, so neither a cache nor
+    // a busy machine decides it. About 15 ms on an idle desktop; twice the
+    // 256-panel budget, and room for a slow runner, still catches reading
+    // every pair of 512 panels, which takes seconds.
+    let fastest = Infinity;
+    for (let i = 0; i < 7; i += 1) {
+      // Side by side, the second turned 15° and over the first one's edge.
+      const framings = [grid(0), { ...grid(12.4), positionAngle: 35 }];
+      const started = performance.now();
+      readCoverage(framings);
+      fastest = Math.min(fastest, performance.now() - started);
+    }
+    expect(fastest).toBeLessThan(120);
+  });
+
+  it('gives the active framing its own issues by id and the others\' panels by label', () => {
+    const shared = framingAt([[0, 0]], [2, 1.5]);
+    const beside = framingAt([[1.6, 0]], [1, 0.75]);
+    const cover = [{ key: null, label: 'shared', framing: shared }, { key: 'rig-b', label: 'Askar', framing: beside }];
+    expect(coverageFor(cover.slice(0, 1), null, shared.layout)).toBeNull();
+    expect(coverageFor(cover, 'rig-x', shared.layout)).toBeNull();
+    expect(coverageFor(cover, 'rig-b', beside.layout)!.issues.map(issue => issue.panels)).toEqual([['shared r1c1', 'r1c1']]);
+    expect(coverageFor(cover, null, shared.layout)!.issues.map(issue => issue.panels)).toEqual([['r1c1', 'Askar r1c1']]);
+    // A layout in place of the framing's own: moved onto the shared panel, the gap goes.
+    const moved = movePanel(beside.layout, 'r1c1', 1.4, 0);
+    const reading = coverageFor(cover, 'rig-b', moved)!;
+    expect(reading.issues).toEqual([]);
+    expect(reading.groups.get('r1c1')).toBe('shared r1c1');
+    // An issue among other framings' panels alone is not the active framing's.
+    const far = framingAt([[0, 0]], [1, 0.75], 0, { ra_degrees: center.ra_degrees, dec_degrees: center.dec_degrees + 8 });
+    const three = [...cover, { key: 'rig-c', label: 'C925', framing: far }];
+    expect(coverageFor(three, 'rig-b', beside.layout)!.issues.map(issue => issue.panels)).toEqual([['shared r1c1', 'r1c1']]);
+    expect(coverageFor(three, 'rig-c', far.layout)!.issues.map(issue => issue.panels)).toEqual([['r1c1']]);
   });
 });

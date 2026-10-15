@@ -6,8 +6,8 @@
 
 use psf_guard_director_core::{
     framing::{
-        FramingRequest, Layout, LayoutIssueKind, MeasuredGeometry, MeasuredSource, Mosaic, Overlay,
-        PanelPlacement, PanelSize, View,
+        coverage_issues, FramingRequest, Layout, LayoutIssueKind, MeasuredGeometry, MeasuredSource,
+        Mosaic, Overlay, PanelPlacement, PanelSize, View,
     },
     visibility::IcrsPosition,
 };
@@ -301,6 +301,166 @@ fn the_free_layout_fixture_matches_the_core() {
     assert_eq!(preview.panels.len(), 4);
     assert!(preview.panels[0].locked);
     assert_eq!(preview.issues.len(), 1, "{:?}", preview.issues);
+}
+
+/// The shared framing and three rigs framed on their own over one object:
+/// - the shared mosaic, with a thin seam of its own;
+/// - a rig whose first two panels sit half a panel apart, where the shared
+///   mosaic covers the sky between them, and a panel far out on its own;
+/// - a rig turned 50° from the shared framing, its first panel shot (a
+///   measured outline) and a thin seam of its own, a panel a tenth of a
+///   degree off the shared mosaic's edge (a gap read in a frame the rig's
+///   outline is turned in), and a panel far out on its own;
+/// - a rig eight degrees north whose two joined panels meet nothing else.
+fn coverage_requests() -> Vec<FramingRequest> {
+    let shared = free_request();
+    let mut gapped = FramingRequest {
+        center: IcrsPosition {
+            ra_degrees: 38.4,
+            dec_degrees: 61.6,
+        },
+        position_angle_degrees: 35.0,
+        panel: PanelSize {
+            width_degrees: 1.2,
+            height_degrees: 0.9,
+        },
+        layout: Layout {
+            min_overlap_percent: 20,
+            panels: vec![
+                PanelPlacement::at("r1c1", -1.2, 0.0),
+                PanelPlacement::at("p2", 0.3, 0.0),
+                PanelPlacement::at("p3", 9.0, 9.0),
+            ],
+        },
+        overlays: vec![],
+        view: None,
+    };
+    gapped.layout.panels[1].angle_offset_degrees = 4.0;
+    let mut turned = FramingRequest {
+        center: shared.center,
+        position_angle_degrees: 85.0,
+        panel: PanelSize {
+            width_degrees: 1.0,
+            height_degrees: 0.7,
+        },
+        layout: Layout {
+            min_overlap_percent: 25,
+            panels: vec![
+                PanelPlacement::at("r1c1", 0.0, 0.0),
+                PanelPlacement::at("p2", 0.85, 0.0),
+                PanelPlacement::at("p3", TURNED_EDGE.0, TURNED_EDGE.1),
+                PanelPlacement::at("p4", -6.0, 8.0),
+            ],
+        },
+        overlays: vec![],
+        view: None,
+    };
+    turned.layout.panels[0].locked = true;
+    turned.layout.panels[0].measured = Some(MeasuredGeometry {
+        center: IcrsPosition {
+            ra_degrees: shared.center.ra_degrees + 0.02,
+            dec_degrees: shared.center.dec_degrees - 0.01,
+        },
+        position_angle_degrees: 86.0,
+        size: PanelSize {
+            width_degrees: 1.05,
+            height_degrees: 0.72,
+        },
+        source: MeasuredSource::Solved,
+        size_source: MeasuredSource::Solved,
+        frames: 9,
+    });
+    let apart = FramingRequest {
+        center: IcrsPosition {
+            ra_degrees: 38.2,
+            dec_degrees: 69.45,
+        },
+        position_angle_degrees: 10.0,
+        panel: PanelSize {
+            width_degrees: 1.0,
+            height_degrees: 0.7,
+        },
+        layout: Layout {
+            min_overlap_percent: 20,
+            panels: vec![
+                PanelPlacement::at("r1c1", 0.0, 0.0),
+                PanelPlacement::at("p2", 0.8, 0.0),
+            ],
+        },
+        overlays: vec![],
+        view: None,
+    };
+    vec![shared, gapped, turned, apart]
+}
+
+/// The turned rig's panel off the shared mosaic's edge, in its own panel sizes.
+const TURNED_EDGE: (f64, f64) = (1.151, -1.959);
+
+#[test]
+fn the_coverage_fixture_matches_the_core() {
+    let path = format!(
+        "{}/tests/fixtures/framing-coverage.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let framings = coverage_requests();
+    let issues = coverage_issues(&framings).expect("framings on one sky");
+    let current = serde_json::json!({ "framings": framings, "issues": issues });
+    if std::env::var_os("PSF_GUARD_WRITE_FIXTURES").is_some() {
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&current).unwrap() + "\n",
+        )
+        .unwrap();
+    }
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture present")).unwrap();
+    let mut differences = Vec::new();
+    compare(&saved, &current, "$", &mut differences);
+    assert!(
+        differences.is_empty(),
+        "regenerate the fixture if this change is meant:\n{}",
+        differences.join("\n")
+    );
+    let has = |kind: LayoutIssueKind, framings: &[usize]| {
+        issues.iter().any(|issue| {
+            issue.kind == kind
+                && issue.panels.len() == framings.len()
+                && issue
+                    .panels
+                    .iter()
+                    .zip(framings)
+                    .all(|(p, f)| p.framing == *f)
+        })
+    };
+    assert!(has(LayoutIssueKind::ThinOverlap, &[0, 0]), "{issues:?}");
+    assert!(has(LayoutIssueKind::ThinOverlap, &[2, 2]), "{issues:?}");
+    assert!(has(LayoutIssueKind::Isolated, &[1]), "{issues:?}");
+    assert!(has(LayoutIssueKind::Isolated, &[2]), "{issues:?}");
+    // Across two framings, read in the shared framing's frame, where the
+    // turned rig's outline leans by 50°.
+    assert!(has(LayoutIssueKind::Gap, &[0, 2]), "{issues:?}");
+    // Groups apart are said beside the other issues once several framings
+    // are read.
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.kind == LayoutIssueKind::Disconnected
+                && issue.panels.iter().any(|p| p.framing == 3)),
+        "{issues:?}"
+    );
+    // The gapped rig's first two panels sit half a panel apart: a gap on
+    // their own, but the shared mosaic covers the sky between them.
+    let alone = coverage_issues(&framings[1..2]).unwrap();
+    assert!(
+        alone.iter().any(|issue| issue.kind == LayoutIssueKind::Gap
+            && issue
+                .panels
+                .iter()
+                .map(|p| p.id.as_str())
+                .eq(["r1c1", "p2"])),
+        "{alone:?}"
+    );
+    assert!(!has(LayoutIssueKind::Gap, &[1, 1]), "{issues:?}");
 }
 
 /// Structural equality with numbers within 1e-9; every mismatch is named.

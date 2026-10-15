@@ -4,7 +4,7 @@
 //! the operator reviews is what Apply commits. Captures and grades are never
 //! touched; removed panels leave their targets behind.
 
-use super::framing::describe_issue;
+use super::framing::{cover_warnings, rig_field, ShootingRig};
 use super::*;
 use crate::{
     commands::sync::{sync_remote, RemoteDirection, RemoteSyncOptions},
@@ -251,6 +251,15 @@ pub(super) async fn apply(
     .await
 }
 
+/// Two panel sizes the same to a millionth of a degree.
+fn same_size(
+    a: psf_guard_director_core::framing::PanelSize,
+    b: psf_guard_director_core::framing::PanelSize,
+) -> bool {
+    (a.width_degrees - b.width_degrees).abs() <= 1e-6
+        && (a.height_degrees - b.height_degrees).abs() <= 1e-6
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -470,12 +479,9 @@ async fn execute_guarded(
                 "Save a plan with at least one objective first.",
             ))?;
         // The shared framing's panels; a rig framed on its own has its own.
-        let (panels, layout_issues) = match framing.shared_request() {
-            Some(request) => {
-                let preview = request.preview().map_err(|_| Error::Invalid)?;
-                (preview.panels, preview.issues)
-            }
-            None => (vec![], vec![]),
+        let panels = match framing.shared_request() {
+            Some(request) => request.preview().map_err(|_| Error::Invalid)?.panels,
+            None => vec![],
         };
         let mut by_rig: BTreeMap<Uuid, Vec<&Contribution>> = BTreeMap::new();
         // A plan saved before duplicates were refused may hold two
@@ -533,12 +539,9 @@ async fn execute_guarded(
         }
         // Every objective should have some rig on every shared panel; say
         // where not. A rig framed on its own covers its own grid.
-        // A layout short of its minimum overlap is the operator's call, not
-        // a refusal: it is said with the coverage.
-        let mut coverage_warnings: Vec<String> = layout_issues
-            .iter()
-            .map(|issue| format!("Panels: {}.", describe_issue(issue)))
-            .collect();
+        let mut coverage_warnings: Vec<String> = Vec::new();
+        // The rigs that get panels from a framing, for the layout's warnings.
+        let mut shooting: Vec<ShootingRig> = Vec::new();
         let on_shared = |c: &&&Contribution| framing.rig_framing(c.rig_id).is_none();
         for objective in &plan.objectives {
             let uncovered: Vec<&str> = panels
@@ -619,14 +622,7 @@ async fn execute_guarded(
             let scheduling = store.effective_observing_preferences(*rig_id, Some(id))?.scheduling;
             // This rig's own layout, or the shared one; its field stands in
             // for a panel size its own framing leaves unset.
-            let field = profile
-                .as_ref()
-                .and_then(|p| p.optics.as_ref())
-                .and_then(|optics| optics.value.field_of_view().ok())
-                .map(|fov| psf_guard_director_core::framing::PanelSize {
-                    width_degrees: fov.width_degrees,
-                    height_degrees: fov.height_degrees,
-                });
+            let field = rig_field(profile.as_ref());
             let Some(layout) = framing.layout_for(*rig_id, field) else {
                 reports.push(RigReport {
                     rig,
@@ -652,12 +648,8 @@ async fn execute_guarded(
                 // laid out here; one the core refuses (too wide a mosaic)
                 // is this rig's warning, not a refused request.
                 match layout.request().preview() {
-                    Ok(preview) => {
-                        warnings.extend(preview.issues.iter().map(|issue| {
-                            format!("Its separate framing: {}.", describe_issue(issue))
-                        }));
-                        preview.panels
-                    }
+                    // Its layout's issues are said with the coverage.
+                    Ok(preview) => preview.panels,
                     Err(error) => {
                         reports.push(RigReport {
                             rig,
@@ -676,8 +668,26 @@ async fn execute_guarded(
                     }
                 }
             } else {
+                // The shared panels are sized for one field; a rig with
+                // another shoots them at that place, not as they were drawn.
+                if layout.layout.panels.len() > 1
+                    && let Some(own) = field
+                    && !same_size(own, layout.panel)
+                {
+                    warnings.push(format!(
+                        "Its field is {:.2}° × {:.2}°, the shared panels {:.2}° × {:.2}°: frame it separately, or size the shared mosaic by it.",
+                        own.width_degrees, own.height_degrees, layout.panel.width_degrees, layout.panel.height_degrees
+                    ));
+                }
                 panels.clone()
             };
+            if assignment.is_none() {
+                shooting.push(ShootingRig {
+                    id: *rig_id,
+                    name: catalog.context.name.clone(),
+                    field,
+                });
+            }
             if profile.as_ref().is_none_or(|p| p.configuration.is_none()) {
                 warnings.push("The N.I.N.A. plugin has not reported this rig's camera yet; the Target Scheduler plugin can still run these rows.".into());
             }
@@ -924,7 +934,11 @@ async fn execute_guarded(
             });
             pending.push((*rig_id, connection, None, false));
         }
-        let mut warnings = coverage_warnings;
+        // A layout short of its minimum overlap is the operator's call, not
+        // a refusal: it is said first, read across the shared framing and
+        // the own framing of every rig given panels, as one cover.
+        let mut warnings = cover_warnings(&framing, &shooting);
+        warnings.extend(coverage_warnings);
         if pending.iter().all(|(_, _, record, _)| record.is_none()) {
             warnings.push("No rig database can take this plan yet.".into());
         }

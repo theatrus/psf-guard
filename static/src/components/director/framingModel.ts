@@ -3,7 +3,7 @@ import type { SkyPreview } from '../../api/types';
 import { formatDecShort, formatRaShort, galacticBandQuads, tanPixelToSky } from '../../utils/skyProjection';
 import { BRIGHT_STARS, CONSTELLATION_LINES, CONSTELLATION_NAMES } from '../../data/skyBackdrop';
 import { gridLayout, layoutStructureProblem, singleLayout, turnOf, type BoxOf } from './mosaicLayout';
-import { boundsOf, readShapes, shapeCenter, turnedShape, type Bounds, type PanelShape, type Point, type ShapeReading } from './panelShape';
+import { boundsOf, readShapes, readTagged, shapeCenter, turnedShape, type Bounds, type PanelShape, type Point, type ShapeReading, type TaggedIssue } from './panelShape';
 
 /** The stage's logical pixels; CSS scales the drawing to the element. The
  *  longer side is always 1024, so a 4:3 stage is 1024 × 768. */
@@ -470,6 +470,71 @@ export function readFraming(center: DirectorSkyPosition, positionAngle: number, 
 function shapesOf(center: DirectorSkyPosition, positionAngle: number, panel: DirectorPanelSize, layout: DirectorLayout): PanelShape[] {
   const known = readings.get(layout);
   return known && known.key === readingKey(center, positionAngle, panel) ? known.shapes : framingShapes(center, positionAngle, panel, layout);
+}
+
+/** One of several framings of one object: the shared framing, or a rig's own. */
+export interface CoverageFraming { center: DirectorSkyPosition; positionAngle: number; panel: DirectorPanelSize; layout: DirectorLayout }
+/** A panel among several framings: the framing's place in the list read, and the panel's id. */
+export interface CoveragePanel { framing: number; id: string }
+export interface CoverageIssue { kind: TaggedIssue['kind']; panels: CoveragePanel[]; percent: number | null }
+
+/** Where several framings of one object fall short as one cover of the sky:
+ *  the core's `coverage_issues`. A thin overlap is said only where two
+ *  panels of one framing meet. A gap, a lone panel and groups apart are read
+ *  over every panel, so a rig's own panels need not touch where another
+ *  framing fills the sky between them. `groups[f][k]` is the group of
+ *  framing `f`'s panel `k`, as a panel of the list. */
+export function readCoverage(framings: CoverageFraming[]): CoverageReading {
+  if (framings.length === 0) return { issues: [], groups: [] };
+  // Kept per first layout, for the framings read with it: a pan, a zoom or
+  // an edit elsewhere reads it again for free.
+  const known = coverReadings.get(framings[0].layout) ?? [];
+  const hit = known.find(entry => entry.framings.length === framings.length && entry.framings.every((f, k) => sameCoverageFraming(f, framings[k])));
+  if (hit) return hit.reading;
+  const reading = readCoverageAfresh(framings);
+  coverReadings.set(framings[0].layout, [{ framings, reading }, ...known].slice(0, 4));
+  return reading;
+}
+export interface CoverageReading { issues: CoverageIssue[]; groups: CoveragePanel[][] }
+const coverReadings = new WeakMap<DirectorLayout, Array<{ framings: CoverageFraming[]; reading: CoverageReading }>>();
+const sameCoverageFraming = (a: CoverageFraming, b: CoverageFraming) => a.layout === b.layout && a.positionAngle === b.positionAngle
+  && a.center.ra_degrees === b.center.ra_degrees && a.center.dec_degrees === b.center.dec_degrees
+  && a.panel.width_degrees === b.panel.width_degrees && a.panel.height_degrees === b.panel.height_degrees;
+
+function readCoverageAfresh(framings: CoverageFraming[]): CoverageReading {
+  const own = framings.map(f => shapesOf(f.center, f.positionAngle, f.panel, f.layout));
+  const sky = framings.map((f, g) => own[g].map(shape => shape.corners.map(corner => deprojectFrom(f.center, cameraDegreesToPlane(corner, f.positionAngle)))));
+  // Every panel in each framing's camera frame: its own panels as they are,
+  // the others' taken there through the sky.
+  const frames = framings.map((f, index) => own.flatMap((shapes, g) => g === index ? shapes : shapes.map((shape, k) => ({
+    id: shape.id,
+    corners: sky[g][k].map(corner => { const offset = offsetFrom(f.center, corner); return offset ? planeToCameraDegrees(offset, f.positionAngle) : [NaN, NaN] as Point; }) as PanelShape['corners'],
+  }))));
+  const framing = own.flatMap((shapes, f) => shapes.map(() => f));
+  const ids = own.flatMap(shapes => shapes.map(shape => shape.id));
+  const panelAt = (k: number): CoveragePanel => ({ framing: framing[k], id: ids[k] });
+  const read = readTagged(frames, framing, framings.map(f => f.layout.min_overlap_percent));
+  const groups = own.map(() => [] as CoveragePanel[]);
+  read.groups.forEach((group, k) => groups[framing[k]].push(panelAt(group)));
+  return { issues: read.issues.map(issue => ({ ...issue, panels: issue.panels.map(panelAt) })), groups };
+}
+
+/** The cover as one framing's tools read it, with that framing's `layout`
+ *  in place of its own: its panels by id, the others' as `label id`, and
+ *  only the issues that touch its panels, or say the panels fall apart.
+ *  Null when only this framing covers the object, or it is not among them. */
+export function coverageFor(cover: Array<{ key: string | null; label: string; framing: CoverageFraming }>, key: string | null, layout: DirectorLayout): ShapeReading | null {
+  const index = cover.findIndex(entry => entry.key === key);
+  if (cover.length < 2 || index < 0) return null;
+  const read = readCoverage(cover.map((entry, f) => f === index ? { ...entry.framing, layout } : entry.framing));
+  const name = (panel: CoveragePanel) => panel.framing === index ? panel.id : `${cover[panel.framing].label} ${panel.id}`;
+  const groups = new Map<string, string>();
+  read.groups.forEach((members, f) => members.forEach((group, k) => groups.set(name({ framing: f, id: (f === index ? layout : cover[f].framing.layout).panels[k].id }), name(group))));
+  return {
+    issues: read.issues.filter(issue => issue.kind === 'disconnected' || issue.panels.some(panel => panel.framing === index))
+      .map(issue => ({ kind: issue.kind, panels: issue.panels.map(name), percent: issue.percent })),
+    groups,
+  };
 }
 
 /** Each panel's reach in panel sizes, from its true outline, for placing

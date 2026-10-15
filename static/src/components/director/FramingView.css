@@ -200,7 +200,7 @@
 .framing-other-rigs { margin-top: 8px; }
 .framing-other-rigs > summary { cursor: pointer; color: var(--color-text-secondary); margin-bottom: 8px; }
 .framing-rig-card .framing-own { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--color-border-secondary); }
-.director-page .framing-rig-actions button { min-height: 28px; padding: 2px 10px; font-size: 13px; }
+.director-page .framing-rig-actions button, .director-page .framing-rig-ask button { min-height: 28px; padding: 2px 10px; font-size: 13px; }
 .framing-legend-swatch { display: inline-block; width: 14px; height: 10px; margin-left: 4px; border: 2px solid var(--framing-panel); border-radius: 3px; background: color-mix(in srgb, var(--framing-panel) 25%, transparent); vertical-align: middle; }
 /* A pickable swatch: an outline that fills on hover; the panel rig's is filled and ringed. */
 .framing-rig-group { margin: 8px 0 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-secondary); }
@@ -294,3 +294,4 @@
 .framing-turn label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--color-text-secondary); }
 .framing-turn .framing-input { max-width: 120px; }
 .framing-issues { margin: 0; padding-left: 18px; font-size: 13px; color: var(--color-error-light); }
+.framing-rig-ask { margin: 0; padding: 6px 9px; font-size: 13px; color: var(--color-text-primary); background: var(--color-bg-secondary); border-left: 3px solid var(--color-border-tertiary); border-radius: 4px; }

@@ -286,8 +286,47 @@ fn round_percent(share: f64) -> f64 {
 /// explains it). Shares are of the larger panel's side, so each panel of a
 /// pair shares at least the minimum of its own side.
 pub fn shape_issues(shapes: &[PanelShape], min_overlap_percent: u32) -> Vec<LayoutIssue> {
-    let minimum = f64::from(min_overlap_percent) / 100.0;
-    let n = shapes.len();
+    let framing = vec![0; shapes.len()];
+    tagged_issues(&[shapes], &framing, &[min_overlap_percent])
+        .into_iter()
+        .map(|issue| LayoutIssue {
+            kind: issue.kind,
+            panels: issue.panels.iter().map(|&k| shapes[k].id.clone()).collect(),
+            percent: issue.percent,
+        })
+        .collect()
+}
+
+/// An issue read across framings, its panels by their place in the input.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TaggedIssue {
+    pub kind: LayoutIssueKind,
+    pub panels: Vec<usize>,
+    pub percent: Option<f64>,
+}
+
+/// The rule read over the panels of several framings of one object, as one
+/// cover of the sky. `frames[f]` holds every panel's outline in framing
+/// `f`'s camera frame, all in one order; `framing[k]` is the framing panel
+/// `k` belongs to, and `minimum[f]` that framing's minimum overlap.
+///
+/// Two panels of one framing are read in its own frame against its
+/// minimum, as [`shape_issues`] reads them, so a thin overlap is said only
+/// where a framing's own panels meet. Two panels of different framings are
+/// read in the first one's frame and are joined when they overlap or touch:
+/// across framings only the sky's cover counts. A gap is covered by any
+/// panel of any framing, and isolated panels and groups apart are read over
+/// them all. With more than one framing, groups apart are said whatever else
+/// is: two panels a thin overlap or a gap keeps apart count as one group
+/// there, since that is said already, and so does a lone panel; but a
+/// framing's panels far from the rest are not explained by a thin seam
+/// elsewhere.
+pub(crate) fn tagged_issues(
+    frames: &[&[PanelShape]],
+    framing: &[usize],
+    minimum: &[u32],
+) -> Vec<TaggedIssue> {
+    let n = framing.len();
     let mut issues = Vec::new();
     if n < 2 {
         return issues;
@@ -295,12 +334,18 @@ pub fn shape_issues(shapes: &[PanelShape], min_overlap_percent: u32) -> Vec<Layo
     let mut linked = vec![Vec::new(); n];
     let mut flagged = vec![false; n];
     for i in 0..n {
+        let shapes = frames[framing[i]];
         for j in i + 1..n {
-            let (a, b) = (&shapes[i], &shapes[j]);
-            let Some(pair) = shape_overlap(a, b) else {
+            let same = framing[i] == framing[j];
+            let threshold = if same {
+                f64::from(minimum[framing[i]]) / 100.0
+            } else {
+                0.0
+            };
+            let Some(pair) = shape_overlap(&shapes[i], &shapes[j]) else {
                 continue;
             };
-            if pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= minimum {
+            if pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= threshold {
                 linked[i].push(j);
                 linked[j].push(i);
                 continue;
@@ -308,19 +353,18 @@ pub fn shape_issues(shapes: &[PanelShape], min_overlap_percent: u32) -> Vec<Layo
             if pair.run + PLACE_TOLERANCE < SIDE_BY_SIDE {
                 continue;
             }
-            let ids = vec![a.id.clone(), b.id.clone()];
             if pair.thickness >= -PLACE_TOLERANCE {
-                issues.push(LayoutIssue {
+                issues.push(TaggedIssue {
                     kind: LayoutIssueKind::ThinOverlap,
-                    panels: ids,
+                    panels: vec![i, j],
                     percent: Some(round_percent(pair.thickness.max(0.0))),
                 });
                 flagged[i] = true;
                 flagged[j] = true;
             } else if -pair.thickness < 1.0 && !gap_covered(shapes, i, j, pair) {
-                issues.push(LayoutIssue {
+                issues.push(TaggedIssue {
                     kind: LayoutIssueKind::Gap,
-                    panels: ids,
+                    panels: vec![i, j],
                     percent: Some(round_percent(-pair.thickness)),
                 });
                 flagged[i] = true;
@@ -328,24 +372,42 @@ pub fn shape_issues(shapes: &[PanelShape], min_overlap_percent: u32) -> Vec<Layo
             }
         }
     }
+    let mut isolated = vec![false; n];
     for i in 0..n {
         if linked[i].is_empty() && !flagged[i] {
-            issues.push(LayoutIssue {
+            isolated[i] = true;
+            issues.push(TaggedIssue {
                 kind: LayoutIssueKind::Isolated,
-                panels: vec![shapes[i].id.clone()],
+                panels: vec![i],
                 percent: None,
             });
         }
     }
-    if issues.is_empty() {
+    if frames.len() > 1 {
+        let mut near = linked.clone();
+        for issue in &issues {
+            if let [a, b] = issue.panels[..] {
+                near[a].push(b);
+                near[b].push(a);
+            }
+        }
+        let groups: Vec<Vec<usize>> = components(&near)
+            .into_iter()
+            .filter(|group| !group.iter().all(|&k| isolated[k]))
+            .collect();
+        if groups.len() > 1 {
+            issues.push(TaggedIssue {
+                kind: LayoutIssueKind::Disconnected,
+                panels: groups.iter().map(|group| group[0]).collect(),
+                percent: None,
+            });
+        }
+    } else if issues.is_empty() {
         let groups = components(&linked);
         if groups.len() > 1 {
-            issues.push(LayoutIssue {
+            issues.push(TaggedIssue {
                 kind: LayoutIssueKind::Disconnected,
-                panels: groups
-                    .iter()
-                    .map(|group| shapes[group[0]].id.clone())
-                    .collect(),
+                panels: groups.iter().map(|group| group[0]).collect(),
                 percent: None,
             });
         }

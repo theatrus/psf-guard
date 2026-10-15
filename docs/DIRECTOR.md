@@ -1001,13 +1001,20 @@ page, each rig has an **On** switch: rigs that shoot the plan are listed under
 **On**, the rest under **Off**, and several can be on. Turning a rig on
 frames the plan with it, and clicking an on rig's heading (swatch, name and
 field) does the same: its field sets the shared framing's panel size, and its
-card is highlighted. **Shared framing** shows the rig its size
+card is highlighted. A shared mosaic of more than one panel keeps its panels
+where they are: when the rig's field differs, its card asks first.
+**Frame separately** gives the rig its own copy of the panels and leaves the
+shared mosaic as it is, **Use its field** sizes the shared mosaic by the rig
+anyway, and **Cancel** changes nothing. A rig on a shared mosaic of more than
+one panel whose field is another size says **field differs** on its card, and
+activation warns about it. **Shared framing** shows the rig its size
 comes from and the size the rectangle uses; **Type a size** sets one by
 hand instead, starting from that rig's, and **Use current field** appears
 when the rig's field has changed since it was picked. When the rig that
 sets the size is turned off, here or elsewhere, the first rig that is on,
-knows its optics and shoots the shared framing takes over; with none, the
-size stays and the line says its rig is off. **Outline** draws its field on the sky, labelled
+knows its optics and shoots the shared framing takes over, one with the same
+field first; with none, or when it would give a mosaic of more than one panel
+another size, the size stays and the line says its rig is off. **Outline** draws its field on the sky, labelled
 in small text, and **Frame separately** gives it panels, a camera angle and a panel size of its own, edited
 in its card: while the card's editor is open, **Mosaic panels** and the sky work on its
 panels with the same tools as the shared framing's, in the rig's colour, and the shared
@@ -1108,7 +1115,16 @@ panels side by side should share at least the minimum; turning the whole
 mosaic never changes an overlap. Each panel is shot at its own camera angle:
 the framing's, plus its own turn, plus north's lean at its center (about
 Δα · sin δ, 2.6° three degrees east at +60°), so its edges run where the
-framing drew them. The rules, the stored shape and the migrations are in the
+framing drew them. With rigs framed on their own, gaps, lone panels and
+groups apart are read across every framing on the sky: the shared one while
+a rig shoots it, and the own framing of each rig that is on. A rig's own
+panels need not touch where another framing covers the sky between them, and
+two panels of different framings that overlap or touch are joined, so a lone
+panel there is one that touches no other panel. A thin overlap is still said
+only where two panels of one framing meet, and groups that never meet are
+said beside any other issue. The panel
+list gives another framing's panel with its rig's name, or `shared`, before
+its id. The rules, the stored shape and the migrations are in the
 [design record](design/flexible-mosaics.md).
 
 ### Finished stacks on the sky
@@ -1436,7 +1452,9 @@ meta store, so it appears under Project planning links at once.
 
 **Preview activation** shows, per rig database, what would be created,
 updated or left alone, lists any objective and panel no rig covers and any
-panels short of the minimum overlap (a warning, never a refusal), and gives
+panels short of the minimum overlap or leaving sky uncovered across every
+framing that rigs shoot, a rig's own panels under its name (a warning, never
+a refusal), and gives
 any reason a rig is skipped: no registered database on this server, a Target
 Scheduler schema older than 22, a database with no N.I.N.A. profile yet, or
 one that cannot be opened, locked or written. Each rig database waits up to a

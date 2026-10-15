@@ -595,6 +595,15 @@ impl FramingRequest {
         ))
     }
 
+    /// Every panel's corners on the sky, in the order of [`Self::shapes`].
+    fn sky_corners(&self, shapes: &[PanelShape]) -> Result<Vec<[IcrsPosition; 4]>, FramingError> {
+        let plane = TangentPlane::at(self.center)?;
+        Ok(shapes
+            .iter()
+            .map(|shape| shape.corners.map(|c| plane.deproject(self.plane_offset(c))))
+            .collect())
+    }
+
     pub fn preview(&self) -> Result<FramingPreview, FramingError> {
         self.validate()?;
         let plane = TangentPlane::at(self.center)?;
@@ -709,6 +718,96 @@ impl FramingRequest {
             issues: shape::shape_issues(&shapes, self.layout.min_overlap_percent),
         })
     }
+}
+
+/// One panel among several framings of one object: the framing's place in
+/// the list read, and the panel's id in that framing.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CoveragePanel {
+    pub framing: usize,
+    pub id: String,
+}
+
+/// A [`LayoutIssue`] read across framings.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CoverageIssue {
+    pub kind: LayoutIssueKind,
+    pub panels: Vec<CoveragePanel>,
+    #[serde(default, deserialize_with = "Option::deserialize")]
+    pub percent: Option<f64>,
+}
+
+/// Where several framings of one object, such as the shared framing and the
+/// rigs framed on their own, fall short as one cover of the sky. A thin
+/// overlap is said only where two panels of one framing meet, each framing
+/// read as [`FramingRequest::issues`] reads it. A gap, a lone panel and
+/// groups apart are read over every panel: a framing's own panels need not
+/// touch when another framing's panels fill the sky between them, and two
+/// framings' panels that overlap or touch are joined. One framing reads
+/// exactly as its own issues.
+pub fn coverage_issues(framings: &[FramingRequest]) -> Result<Vec<CoverageIssue>, FramingError> {
+    let own = framings
+        .iter()
+        .map(FramingRequest::shapes)
+        .collect::<Result<Vec<_>, _>>()?;
+    let sky = framings
+        .iter()
+        .zip(&own)
+        .map(|(request, shapes)| request.sky_corners(shapes))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Every panel in each framing's camera frame: its own panels as they
+    // are, the others' taken there through the sky.
+    let mut frames: Vec<Vec<PanelShape>> = Vec::with_capacity(framings.len());
+    for (f, request) in framings.iter().enumerate() {
+        let plane = TangentPlane::at(request.center)?;
+        let mut all = Vec::new();
+        for (g, shapes) in own.iter().enumerate() {
+            if g == f {
+                all.extend(shapes.iter().cloned());
+                continue;
+            }
+            for (shape, corners) in shapes.iter().zip(&sky[g]) {
+                let mut out = [[0.0; 2]; 4];
+                for (slot, corner) in out.iter_mut().zip(corners) {
+                    *slot =
+                        request.camera_place(plane.project(*corner).ok_or(FramingError::TooLarge)?);
+                }
+                all.push(PanelShape {
+                    id: shape.id.clone(),
+                    corners: out,
+                });
+            }
+        }
+        frames.push(all);
+    }
+    let framing: Vec<usize> = own
+        .iter()
+        .enumerate()
+        .flat_map(|(f, shapes)| std::iter::repeat_n(f, shapes.len()))
+        .collect();
+    let minimum: Vec<u32> = framings
+        .iter()
+        .map(|request| request.layout.min_overlap_percent)
+        .collect();
+    let views: Vec<&[PanelShape]> = frames.iter().map(Vec::as_slice).collect();
+    let all = frames.first().map(Vec::as_slice).unwrap_or_default();
+    Ok(shape::tagged_issues(&views, &framing, &minimum)
+        .into_iter()
+        .map(|issue| CoverageIssue {
+            kind: issue.kind,
+            panels: issue
+                .panels
+                .iter()
+                .map(|&k| CoveragePanel {
+                    framing: framing[k],
+                    id: all[k].id.clone(),
+                })
+                .collect(),
+            percent: issue.percent,
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -1325,5 +1424,235 @@ mod tests {
         loose.locked = false;
         request.layout.panels[0] = loose;
         assert_eq!(request.preview(), Err(FramingError::InvalidMosaic));
+    }
+
+    /// A framing at `center` and `angle` with `panel`-sized panels at
+    /// `places` (in panel sizes), the first `r1c1`.
+    fn framing_at(
+        center: IcrsPosition,
+        angle: f64,
+        panel: (f64, f64),
+        places: &[(f64, f64)],
+    ) -> FramingRequest {
+        FramingRequest {
+            center,
+            position_angle_degrees: angle,
+            panel: PanelSize {
+                width_degrees: panel.0,
+                height_degrees: panel.1,
+            },
+            layout: Layout {
+                min_overlap_percent: 20,
+                panels: places
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &(x, y))| {
+                        let id = if k == 0 {
+                            "r1c1".to_string()
+                        } else {
+                            format!("p{}", k + 1)
+                        };
+                        PanelPlacement::at(id, x, y)
+                    })
+                    .collect(),
+            },
+            overlays: vec![],
+            view: None,
+        }
+    }
+
+    fn coverage(framings: &[FramingRequest]) -> Vec<(LayoutIssueKind, Vec<(usize, String)>)> {
+        coverage_issues(framings)
+            .unwrap()
+            .into_iter()
+            .map(|issue| {
+                (
+                    issue.kind,
+                    issue
+                        .panels
+                        .into_iter()
+                        .map(|panel| (panel.framing, panel.id))
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn one_framing_covers_the_sky_as_its_own_issues_say() {
+        let center = request().center;
+        let layouts: [&[(f64, f64)]; 4] = [
+            &[(0.0, 0.0), (0.9, 0.0)],
+            &[(0.0, 0.0), (1.25, 0.0)],
+            &[(0.0, 0.0), (3.0, 3.0)],
+            &[(0.0, 0.0), (0.8, 0.0), (4.0, 0.0), (4.8, 0.0)],
+        ];
+        for places in layouts {
+            let alone = framing_at(center, 35.0, (2.0, 1.5), places);
+            let own = alone.issues().unwrap();
+            let read = coverage_issues(std::slice::from_ref(&alone)).unwrap();
+            assert_eq!(read.len(), own.len(), "{places:?}");
+            for (a, b) in read.iter().zip(&own) {
+                assert_eq!(a.kind, b.kind);
+                assert_eq!(a.percent, b.percent);
+                let ids: Vec<&str> = a.panels.iter().map(|p| p.id.as_str()).collect();
+                assert_eq!(ids, b.panels.iter().map(String::as_str).collect::<Vec<_>>());
+                assert!(a.panels.iter().all(|p| p.framing == 0));
+            }
+        }
+        assert!(coverage_issues(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn another_framings_panels_fill_a_rigs_gap() {
+        let center = request().center;
+        // A rig's own two small panels half a panel apart, either side of
+        // the shared framing's one large panel.
+        let own = framing_at(center, 0.0, (1.0, 0.75), &[(-0.75, 0.0), (0.75, 0.0)]);
+        assert_eq!(
+            coverage(std::slice::from_ref(&own)),
+            vec![(
+                LayoutIssueKind::Gap,
+                vec![(0, "r1c1".to_string()), (0, "p2".to_string())]
+            )]
+        );
+        let shared = framing_at(center, 0.0, (2.0, 1.5), &[(0.0, 0.0)]);
+        assert!(coverage(&[shared.clone(), own.clone()]).is_empty());
+        // Either order reads the same.
+        assert!(coverage(&[own, shared]).is_empty());
+    }
+
+    #[test]
+    fn panels_of_two_framings_join_when_they_touch() {
+        let center = request().center;
+        let shared = framing_at(center, 0.0, (2.0, 1.5), &[(0.0, 0.0)]);
+        // A rig's panel sharing 5% of the larger width: thin within one
+        // framing, but across two the sky is covered.
+        let beside = |x: f64| framing_at(center, 0.0, (1.0, 0.75), &[(x, 0.0)]);
+        assert!(coverage(&[shared.clone(), beside(1.4)]).is_empty());
+        let one = framing_at(center, 0.0, (2.0, 1.5), &[(0.0, 0.0), (0.95, 0.0)]);
+        assert_eq!(one.issues().unwrap()[0].kind, LayoutIssueKind::ThinOverlap);
+        // A tenth of a degree apart, 5% of the larger width: a gap across the two.
+        let read = coverage_issues(&[shared.clone(), beside(1.6)]).unwrap();
+        assert_eq!(read.len(), 1, "{read:?}");
+        assert_eq!(read[0].kind, LayoutIssueKind::Gap);
+        assert_eq!(read[0].percent, Some(5.0));
+        assert_eq!(
+            read[0].panels,
+            vec![
+                CoveragePanel {
+                    framing: 0,
+                    id: "r1c1".into()
+                },
+                CoveragePanel {
+                    framing: 1,
+                    id: "r1c1".into()
+                },
+            ]
+        );
+        // Far apart, each is on its own.
+        assert_eq!(
+            coverage(&[shared, beside(5.0)]),
+            vec![
+                (LayoutIssueKind::Isolated, vec![(0, "r1c1".to_string())]),
+                (LayoutIssueKind::Isolated, vec![(1, "r1c1".to_string())]),
+            ]
+        );
+    }
+
+    #[test]
+    fn groups_of_two_framings_that_never_meet_are_disconnected() {
+        let center = request().center;
+        let north = IcrsPosition {
+            ra_degrees: center.ra_degrees,
+            dec_degrees: center.dec_degrees + 5.0,
+        };
+        let shared = framing_at(center, 0.0, (2.0, 1.5), &[(0.0, 0.0), (0.8, 0.0)]);
+        let own = framing_at(north, 20.0, (1.0, 0.75), &[(0.0, 0.0), (0.8, 0.0)]);
+        assert_eq!(
+            coverage(&[shared, own]),
+            vec![(
+                LayoutIssueKind::Disconnected,
+                vec![(0, "r1c1".to_string()), (1, "r1c1".to_string())]
+            )]
+        );
+    }
+
+    #[test]
+    fn groups_apart_across_framings_are_said_beside_other_issues() {
+        let center = request().center;
+        let north = IcrsPosition {
+            ra_degrees: center.ra_degrees,
+            dec_degrees: center.dec_degrees + 10.0,
+        };
+        // The shared pair overlaps thinly, an issue of its own; the rig's
+        // pair ten degrees north is joined, but far from everything else.
+        let shared = framing_at(center, 0.0, (2.0, 1.5), &[(0.0, 0.0), (0.9, 0.0)]);
+        let own = framing_at(north, 0.0, (1.0, 0.75), &[(0.0, 0.0), (0.8, 0.0)]);
+        assert_eq!(
+            coverage(&[shared.clone(), own]),
+            vec![
+                (
+                    LayoutIssueKind::ThinOverlap,
+                    vec![(0, "r1c1".to_string()), (0, "p2".to_string())]
+                ),
+                (
+                    LayoutIssueKind::Disconnected,
+                    vec![(0, "r1c1".to_string()), (1, "r1c1".to_string())]
+                ),
+            ]
+        );
+        // A lone panel far away is said as such, not again as a group.
+        let lone = framing_at(north, 0.0, (1.0, 0.75), &[(0.0, 0.0)]);
+        assert_eq!(
+            coverage(&[shared.clone(), lone]),
+            vec![
+                (
+                    LayoutIssueKind::ThinOverlap,
+                    vec![(0, "r1c1".to_string()), (0, "p2".to_string())]
+                ),
+                (LayoutIssueKind::Isolated, vec![(1, "r1c1".to_string())]),
+            ]
+        );
+        // One framing keeps the old rule: groups apart only when nothing
+        // else is said.
+        let alone = framing_at(
+            center,
+            0.0,
+            (2.0, 1.5),
+            &[(0.0, 0.0), (0.9, 0.0), (5.0, 0.0), (5.8, 0.0)],
+        );
+        assert_eq!(
+            coverage(std::slice::from_ref(&alone)),
+            vec![(
+                LayoutIssueKind::ThinOverlap,
+                vec![(0, "r1c1".to_string()), (0, "p2".to_string())]
+            )]
+        );
+    }
+
+    #[test]
+    fn a_framings_own_seams_are_read_in_its_own_frame() {
+        // A rig turned 30° from the shared framing: its thin seam reads as
+        // its own issues read it, not along the shared framing's axes.
+        let center = request().center;
+        let south = IcrsPosition {
+            ra_degrees: center.ra_degrees,
+            dec_degrees: center.dec_degrees - 6.0,
+        };
+        let shared = framing_at(south, 0.0, (2.0, 1.5), &[(0.0, 0.0)]);
+        let own = framing_at(center, 30.0, (1.0, 0.75), &[(0.0, 0.0), (0.9, 0.0)]);
+        let alone = own.issues().unwrap();
+        assert_eq!(alone[0].kind, LayoutIssueKind::ThinOverlap);
+        let read = coverage_issues(&[shared, own]).unwrap();
+        let thin = read
+            .iter()
+            .find(|issue| issue.kind == LayoutIssueKind::ThinOverlap)
+            .unwrap();
+        assert_eq!(thin.percent, alone[0].percent);
+        assert!(thin.panels.iter().all(|panel| panel.framing == 1));
+        assert!(read
+            .iter()
+            .any(|issue| issue.kind == LayoutIssueKind::Isolated && issue.panels[0].framing == 0));
     }
 }

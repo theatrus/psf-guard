@@ -5,12 +5,15 @@
 use super::*;
 use psf_guard_director_core::{
     bandpass::{default_exposure_seconds, BandpassKind, ExposureContext},
-    framing::{FramingPreview, FramingRequest, LayoutIssue, LayoutIssueKind},
+    framing::{
+        coverage_issues, FramingPreview, FramingRequest, LayoutIssue, LayoutIssueKind, PanelSize,
+    },
     optics::FieldOfView,
 };
 
-/// A layout issue in a few words, for warnings and refusals.
-pub(super) fn describe_issue(issue: &LayoutIssue) -> String {
+/// A layout issue in a few words, for warnings and refusals. Read `across`
+/// framings, a panel is on its own when it touches no other panel.
+pub(super) fn describe_issue(issue: &LayoutIssue, across: bool) -> String {
     let percent = issue
         .percent
         .map(|value| format!("{value:.0}%"))
@@ -19,6 +22,7 @@ pub(super) fn describe_issue(issue: &LayoutIssue) -> String {
     match issue.kind {
         LayoutIssueKind::ThinOverlap => format!("{pair} overlap by only {percent}"),
         LayoutIssueKind::Gap => format!("{pair} leave a gap of {percent} of a panel"),
+        LayoutIssueKind::Isolated if across => format!("{pair} touches no other panel"),
         LayoutIssueKind::Isolated => format!("{pair} overlaps no other panel by the minimum"),
         LayoutIssueKind::Disconnected => format!(
             "the panels fall into {} groups that do not overlap, starting at {}",
@@ -27,6 +31,94 @@ pub(super) fn describe_issue(issue: &LayoutIssue) -> String {
         ),
     }
 }
+
+/// A rig that shoots a plan, as its framing's warnings need it.
+pub(super) struct ShootingRig {
+    pub id: Uuid,
+    pub name: String,
+    /// Its camera's field, standing in for a size its own framing leaves unset.
+    pub field: Option<PanelSize>,
+}
+
+/// A rig's field from its profile's optics, when they give one.
+pub(super) fn rig_field(profile: Option<&RigProfile>) -> Option<PanelSize> {
+    profile
+        .and_then(|p| p.optics.as_ref())
+        .and_then(|optics| optics.value.field_of_view().ok())
+        .map(|fov| PanelSize {
+            width_degrees: fov.width_degrees,
+            height_degrees: fov.height_degrees,
+        })
+}
+
+/// What a plan's framings leave short as one cover of the object, one line
+/// each: the shared framing while a rig in `shooting` shoots it, and each of
+/// those rigs' own framings. A thin overlap is said where two panels of one
+/// framing meet; a gap, a lone panel and groups apart are read across every
+/// framing, so a rig's own panels may sit apart where another framing fills
+/// the sky. A rig's panels carry its name. A separate framing the core
+/// cannot lay out is left to that rig's own warning.
+pub(super) fn cover_warnings(framing: &FramingDraft, shooting: &[ShootingRig]) -> Vec<String> {
+    let mut cover: Vec<(Option<&str>, FramingRequest)> = Vec::new();
+    if shooting
+        .iter()
+        .any(|rig| framing.rig_framing(rig.id).is_none())
+        && let Some(request) = framing.shared_request()
+    {
+        cover.push((None, request));
+    }
+    for own in &framing.rig_framings {
+        let Some(rig) = shooting.iter().find(|rig| rig.id == own.rig_id) else {
+            continue;
+        };
+        if let Some(layout) = framing.layout_for(own.rig_id, rig.field)
+            && layout.request().validate().is_ok()
+        {
+            cover.push((Some(rig.name.as_str()), layout.request()));
+        }
+    }
+    let label = |framing: usize, id: &str| match cover[framing].0 {
+        Some(name) if !name.is_empty() => format!("{name} {id}"),
+        _ => id.to_owned(),
+    };
+    let across = cover.len() > 1;
+    let requests: Vec<FramingRequest> = cover.iter().map(|(_, request)| request.clone()).collect();
+    let issues: Vec<LayoutIssue> = match coverage_issues(&requests) {
+        Ok(issues) => issues
+            .into_iter()
+            .map(|issue| LayoutIssue {
+                kind: issue.kind,
+                panels: issue
+                    .panels
+                    .iter()
+                    .map(|panel| label(panel.framing, &panel.id))
+                    .collect(),
+                percent: issue.percent,
+            })
+            .collect(),
+        // Framings too far apart to share a plane are read one by one.
+        Err(_) => requests
+            .iter()
+            .enumerate()
+            .flat_map(|(f, request)| {
+                request
+                    .issues()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |issue| (f, issue))
+            })
+            .map(|(f, issue)| LayoutIssue {
+                panels: issue.panels.iter().map(|id| label(f, id)).collect(),
+                ..issue
+            })
+            .collect(),
+    };
+    issues
+        .iter()
+        .map(|issue| format!("Panels: {}.", describe_issue(issue, across)))
+        .collect()
+}
+
 use crate::server::database_context::DatabaseContext;
 use psf_guard_director_core::framing::{MeasuredGeometry, PanelPlacement};
 use psf_guard_director_meta::{framing::FramingDraft, profile::RigProfile, site_profile::RigSite};
