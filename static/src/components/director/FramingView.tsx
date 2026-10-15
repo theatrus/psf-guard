@@ -16,7 +16,7 @@ import {
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import MosaicPanels, { type ExtendScope } from './MosaicPanels';
-import { asGrid, cameraStep, cameraToPlane, describeIssue, extendFrom, extendMosaic, fillHoles, findPanel, flaggedPanels, freshIssues, movePanel, planeToCamera, ringAround, setLocked, snapPlacement, snapTurn, turnOf, turnPanel, wrapTurn, type Direction } from './mosaicLayout';
+import { asGrid, cameraStep, keepHandUnlocks, cameraToPlane, describeIssue, extendFrom, extendMosaic, fillHoles, findPanel, flaggedPanels, freshIssues, movePanel, planeToCamera, ringAround, setLocked, snapPlacement, snapTurn, turnOf, turnPanel, wrapTurn, type Direction } from './mosaicLayout';
 import { shapeCenter, shapeOverlap, sharedStrips, splitApart, type PanelShape, type Point, type ShapeReading } from './panelShape';
 import TargetSearch, { type TargetPick } from './TargetSearch';
 import SkyCanvas, { type SkyTileImage } from './SkyCanvas';
@@ -1229,7 +1229,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
   const editOwn = (patch: Partial<DirectorRigFraming>) => update(current => ({ rigFramings: current.rigFramings.map(own => own.rig_id === editingRig ? { ...own, ...patch } : own) }));
   const frameRig = (id: string) => {
     if (!id) return;
-    update(current => current.rigFramings.some(own => own.rig_id === id) ? {} : ({ rigFramings: [...current.rigFramings, { rig_id: id, center: null, position_angle_degrees: null, layout: { ...current.layout, panels: current.layout.panels.map(panel => setLocked({ ...current.layout, panels: [panel] }, panel.id, false).panels[0]) }, panel: panelForRig(rigList, id) ? null : current.panel }] }));
+    update(current => current.rigFramings.some(own => own.rig_id === id) ? {} : ({ rigFramings: [...current.rigFramings, { rig_id: id, center: null, position_angle_degrees: null, layout: keepHandUnlocks({ ...current.layout, panels: current.layout.panels.map(panel => setLocked({ ...current.layout, panels: [panel] }, panel.id, false).panels[0]) }, current.layout), panel: panelForRig(rigList, id) ? null : current.panel }] }));
     setEditingRig(id);
   };
   // A rig whose field would move a shared mosaic's panels asks first: frame

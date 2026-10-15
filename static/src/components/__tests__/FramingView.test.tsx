@@ -1489,7 +1489,8 @@ describe('Mosaic panels', () => {
   it('asks before another rig\'s field moves a shared mosaic, then frames that rig separately or uses its field', async () => {
     const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107',
       field_of_view: { width_degrees: 1.2, height_degrees: 0.8, pixel_scale_arcsec: 1.9, focal_ratio: 7 } };
-    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    // p2 was unlocked by hand on the shared framing; the separate copy keeps that.
+    const { saves } = fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }, { id: 'p2', x: -0.8, y: 0, locked: false, unlocked_by_hand: true }]));
     server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
     mount(true, true, [rigA.rig.id]);
     await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
@@ -1510,7 +1511,7 @@ describe('Mosaic panels', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].panel).toEqual({ width_degrees: 5.38, height_degrees: 3.6 });
-    expect(saves[0].rig_framings!.map(own => [own.rig_id, own.layout.panels.map(panel => panel.id)])).toEqual([[rigC.rig.id, ['r1c1', 'p2']]]);
+    expect(saves[0].rig_framings!.map(own => [own.rig_id, own.layout.panels.map(panel => [panel.id, panel.unlocked_by_hand ?? false])])).toEqual([[rigC.rig.id, [['r1c1', false], ['p2', true]]]]);
     // Back on the shared framing, Use its field sizes the shared mosaic by Askar.
     fireEvent.click(within(askar()).getByRole('button', { name: 'Use shared' }));
     fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
