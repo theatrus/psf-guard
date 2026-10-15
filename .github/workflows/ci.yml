@@ -96,6 +96,7 @@ jobs:
         cd static
         npx vitest run
         npm run test:release
+        npm run test:scripts
 
     - name: Check formatting
       run: cargo fmt --all -- --check

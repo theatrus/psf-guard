@@ -52,7 +52,7 @@ npm run build
 # Browser end-to-end tests; requires a built psf-guard binary. Scroll specs
 # also run in WebKit (Safari's engine and the macOS app's WebView).
 npx playwright install chromium webkit
-npx playwright test
+../scripts/e2e-local.mjs e2e/navigation.spec.ts   # locally; CI runs npx playwright test
 
 # Run the server or desktop app
 cargo run -- server db.sqlite /path/to/images
@@ -63,6 +63,11 @@ cargo build --release
 cargo build --release --features tauri
 cargo tauri build
 ```
+
+Run local Playwright through `scripts/e2e-local.mjs`: one run at a time per
+machine; never `pkill` by pattern; if browsers are stuck in the exiting
+state, stop and reboot rather than retry. See
+[Running e2e locally](static/README.md#running-e2e-locally).
 
 Use `--registry /tmp/psf-guard-test.json` for ad-hoc server work that must not
 touch the user's real database registry. Do not run import, sync, catalog

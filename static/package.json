@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:release": "node --test ../scripts/check-release-version.test.mjs ../scripts/release-feeds.test.mjs",
+    "test:scripts": "node --test ../scripts/e2e-local.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
