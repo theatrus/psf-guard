@@ -98,9 +98,14 @@ export default defineConfig({
     // own way and draws native form fields itself, so the detail's scroll
     // and phone specs, the View choices' long-page flip and the form-field
     // spec run here too; the rest stay Chromium-only to keep the run short.
+    //
+    // It asks for reduced motion. CI's WebKit draws in software, and while
+    // a dozen preview spinners turn it can go seconds without drawing a
+    // frame; an action that waits for an element to hold still across two
+    // frames then times out. Spinners hold still under reduced motion.
     {
       name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
+      use: { ...devices['Desktop Safari'], contextOptions: { reducedMotion: 'reduce' } },
       testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts'],
     },
   ],

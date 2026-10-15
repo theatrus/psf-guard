@@ -5892,6 +5892,16 @@
   animation: spin 1s linear infinite;
 }
 
+/* Asked for less motion, a spinner holds still: its label, or the work
+   it sits beside, still says something is under way. */
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner,
+  .stack-preview-spinner,
+  .spinner {
+    animation: none;
+  }
+}
+
 @keyframes fadeInOut {
   0% { opacity: 0; transform: translateX(-50%) translateY(10px); }
   20% { opacity: 1; transform: translateX(-50%) translateY(0); }
