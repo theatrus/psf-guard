@@ -574,6 +574,9 @@ describe('CalibrationPage', () => {
       expect(within(flat).getByText('Missing')).toBeInTheDocument();
       expect(within(flat).getByText('/data/_Incoming/flat_0007.fits')).toBeInTheDocument();
       expect(screen.getByRole('checkbox', { name: 'Duplicates' })).toBeChecked();
+      // Only the filters this view reads are offered.
+      expect(screen.queryByLabelText('Grade')).toBeNull();
+      expect(screen.queryByRole('checkbox', { name: 'Missing files' })).toBeNull();
       // The type filter narrows the groups shown.
       fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'dark' } });
       await waitFor(() => expect(within(section).getByText('1 of 2 exposures recorded more than once')).toBeInTheDocument());
@@ -591,6 +594,7 @@ describe('CalibrationPage', () => {
       const preview = within(dialog).getByRole('region', { name: 'Repair preview' });
       expect(within(preview).getByText('2 exposures recorded more than once')).toBeInTheDocument();
       expect(within(preview).getByText(/1 master built again, 1 of them averaged an exposure twice/)).toBeInTheDocument();
+      expect(within(preview).getByText(/covers every rig and type in this library/)).toBeInTheDocument();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
       await waitFor(() => expect(repaired).toEqual([{ token: 't2' }]));
       expect(await screen.findByText(/Repaired 2 exposures: 2 rows merged, 1 master to build again/)).toBeInTheDocument();

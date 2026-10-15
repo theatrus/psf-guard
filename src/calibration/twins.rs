@@ -10,10 +10,13 @@
 //!
 //! [`same_exposure`] decides whether two copies hold one exposure. The
 //! import asks it before cataloguing a file ([`recorded_copy`]), and the
-//! repair asks it to find twins already recorded ([`plan_repair`]). Nothing
-//! here moves or deletes a file.
+//! repair asks it to find twins already recorded ([`plan_repair`]). A repair
+//! records each merge, and a sync carries those records, so a pull from a
+//! catalog that still holds the twins does not bring them back
+//! ([`sync_merges`], [`fold_merged`]). Nothing here moves or deletes a file.
 
 use super::{canonical_text, hex_digest, CalibrationKind};
+use crate::commands::import::headers::FrameMeta;
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
@@ -29,6 +32,13 @@ use std::time::UNIX_EPOCH;
 /// the recorded file is still there; once it is gone, the next scan
 /// re-points the row to the copy. Paths are this host's, so the table is
 /// never synced.
+///
+/// `psf_guard_calibration_merged` records each row a repair merged away and
+/// the row it went into. It is synced, by frame uuid, so a pull never
+/// re-inserts a merged row and folds one the destination still holds.
+///
+/// The capture index keeps the import's twin lookup from growing with the
+/// library.
 pub(crate) const TWIN_TABLE_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS psf_guard_calibration_twin (
         source_path        TEXT PRIMARY KEY,
@@ -38,9 +48,57 @@ pub(crate) const TWIN_TABLE_SQL: &str = r#"
     );
     CREATE INDEX IF NOT EXISTS idx_psf_guard_calibration_twin_frame
         ON psf_guard_calibration_twin(frame_uuid);
+    CREATE TABLE IF NOT EXISTS psf_guard_calibration_merged (
+        merged_uuid TEXT PRIMARY KEY,
+        keep_uuid   TEXT NOT NULL,
+        merged_at   INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_psf_guard_calibration_merged_keep
+        ON psf_guard_calibration_merged(keep_uuid);
+    CREATE INDEX IF NOT EXISTS idx_psf_guard_calibration_frame_capture
+        ON psf_guard_calibration_frame(rig_uuid, kind, captured_at);
 "#;
 
 const TWIN_TABLE: &str = "psf_guard_calibration_twin";
+const MERGED_TABLE: &str = "psf_guard_calibration_merged";
+
+/// Columns a kept row takes from the twin whose file it moves to: the
+/// file's header and what was measured from it. Its uuid, rig, kind,
+/// validity mark and dates stay its own.
+const FILE_COLUMNS: &[&str] = &[
+    "source_fingerprint",
+    "captured_at",
+    "image_type_raw",
+    "telescope",
+    "camera",
+    "width",
+    "height",
+    "channels",
+    "binning_x",
+    "binning_y",
+    "gain",
+    "offset",
+    "readout_mode",
+    "readout_mode_name",
+    "is_master",
+    "bayer_pattern",
+    "bayer_x_offset",
+    "bayer_y_offset",
+    "exposure_s",
+    "camera_temp",
+    "filter_name",
+    "focal_length_mm",
+    "rotation",
+    "dark_level",
+    "dark_level_sigma",
+    "stray_light",
+    "file_size",
+    "file_mtime_ns",
+];
+
+/// Columns of [`HeaderSettings`], in its order.
+const SETTINGS_COLUMNS: &str =
+    "exposure_s, gain, offset, camera_temp, filter_name, binning_x, binning_y, width, height";
 
 /// Bytes read from each end of a file for the content check: the whole
 /// header of a N.I.N.A. frame and the first rows of its pixels, and the
@@ -80,22 +138,100 @@ impl ExposureKey {
     }
 }
 
+/// The capture settings a copy's header records. Two copies of one
+/// exposure carry the same header, so they agree on every one of these; a
+/// side that records a setting the other does not is a different frame.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct HeaderSettings {
+    exposure_s: Option<f64>,
+    gain: Option<i64>,
+    offset: Option<i64>,
+    camera_temp: Option<f64>,
+    filter: Option<String>,
+    binning_x: Option<i64>,
+    binning_y: Option<i64>,
+    width: Option<i64>,
+    height: Option<i64>,
+}
+
+impl HeaderSettings {
+    pub(crate) fn of_frame(frame: &FrameMeta) -> Self {
+        Self {
+            exposure_s: frame.exposure_s,
+            gain: frame.gain,
+            offset: frame.offset,
+            camera_temp: frame.camera_temp,
+            filter: frame.filter.clone(),
+            binning_x: frame.binning_x,
+            binning_y: frame.binning_y,
+            width: frame.width,
+            height: frame.height,
+        }
+    }
+
+    /// Read from a row whose [`SETTINGS_COLUMNS`] start at `start`.
+    fn read(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<Self> {
+        Ok(Self {
+            exposure_s: row.get(start)?,
+            gain: row.get(start + 1)?,
+            offset: row.get(start + 2)?,
+            camera_temp: row.get(start + 3)?,
+            filter: row.get(start + 4)?,
+            binning_x: row.get(start + 5)?,
+            binning_y: row.get(start + 6)?,
+            width: row.get(start + 7)?,
+            height: row.get(start + 8)?,
+        })
+    }
+
+    /// Exposure as a master would match it, temperature within the master
+    /// tolerance, and the rest exactly.
+    fn agrees(&self, other: &Self) -> bool {
+        fn both(left: Option<f64>, right: Option<f64>, same: impl Fn(f64, f64) -> bool) -> bool {
+            match (left, right) {
+                (None, None) => true,
+                (Some(left), Some(right)) => same(left, right),
+                _ => false,
+            }
+        }
+        let filter = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_lowercase)
+        };
+        both(self.exposure_s, other.exposure_s, |left, right| {
+            super::exposure_matches(Some(left), Some(right))
+        }) && both(self.camera_temp, other.camera_temp, |left, right| {
+            super::temperature_matches(Some(left), Some(right), super::rules::defaults())
+        }) && self.gain == other.gain
+            && self.offset == other.offset
+            && filter(&self.filter) == filter(&other.filter)
+            && self.binning_x == other.binning_x
+            && self.binning_y == other.binning_y
+            && self.width == other.width
+            && self.height == other.height
+    }
+}
+
 /// One copy: a recorded row or a scanned file.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ExposureCopy<'a> {
     pub key: &'a ExposureKey,
+    pub settings: &'a HeaderSettings,
     pub path: &'a Path,
     /// The size the catalog recorded, for a copy whose file is gone.
     pub recorded_size: Option<i64>,
 }
 
+/// Where a recorded path is read on this machine, or `None` for nowhere.
+type Resolve = dyn Fn(&Path) -> Option<PathBuf> + Send + Sync;
+
 /// How a recorded path is read on this machine. The server reads only
 /// inside a database's folders, as the calibration browser does; a dry run
 /// against a copied catalog can map the recording host's mount onto this
 /// one's.
-/// Where a recorded path is read on this machine, or `None` for nowhere.
-type Resolve = dyn Fn(&Path) -> Option<PathBuf> + Send + Sync;
-
 #[derive(Clone)]
 pub struct FileAccess {
     resolve: Arc<Resolve>,
@@ -202,18 +338,21 @@ fn content_sample(path: &Path) -> Option<String> {
 /// Whether two copies hold one exposure.
 ///
 /// They must agree on [`ExposureKey`] — kind, capture time, file name and
-/// rig — and on file size, read from disk or, for a file that is gone, from
-/// the catalog. When both files are there, their headers and the ends of
-/// their pixels must also be byte for byte the same, so a different frame
-/// that happens to share a name and second is never taken for a copy. When
-/// one is gone there is nothing left to compare, and the catalog's record
-/// decides.
+/// rig — on the capture settings their headers record ([`HeaderSettings`]),
+/// and on file size, read from disk or, for a file that is gone, from the
+/// catalog. When both files are there, their headers and the ends of their
+/// pixels must also be byte for byte the same, so a different frame that
+/// happens to share a name and second is never taken for a copy. When one
+/// is gone there is nothing left to compare, and the catalog's record
+/// decides — but only for a frame whose header dates it: without a capture
+/// time, a name and settings are too little to call a missing file the
+/// same exposure.
 pub(crate) fn same_exposure(
     left: &ExposureCopy<'_>,
     right: &ExposureCopy<'_>,
     files: &FileAccess,
 ) -> bool {
-    if left.key != right.key {
+    if left.key != right.key || !left.settings.agrees(right.settings) {
         return false;
     }
     let left_live = files.size(left.path);
@@ -234,7 +373,7 @@ pub(crate) fn same_exposure(
             (files.sample(left.path), files.sample(right.path)),
             (Some(left), Some(right)) if left == right
         ),
-        _ => true,
+        _ => left.key.captured_at.is_some(),
     }
 }
 
@@ -252,14 +391,16 @@ pub(crate) enum RecordedCopy {
 pub(crate) fn recorded_copy(
     conn: &Connection,
     key: &ExposureKey,
+    settings: &HeaderSettings,
     path: &Path,
     files: &FileAccess,
 ) -> Result<Option<RecordedCopy>> {
-    let mut statement = conn.prepare(
-        "SELECT id, frame_uuid, source_path, file_size FROM psf_guard_calibration_frame
-         WHERE kind = ?1 AND captured_at IS ?2 AND rig_uuid = ?3 AND source_path <> ?4
-         ORDER BY id",
-    )?;
+    let mut statement = conn.prepare(&format!(
+        "SELECT id, frame_uuid, source_path, file_size, {SETTINGS_COLUMNS}
+         FROM psf_guard_calibration_frame
+         WHERE rig_uuid = ?3 AND kind = ?1 AND captured_at IS ?2 AND source_path <> ?4
+         ORDER BY id"
+    ))?;
     let rows = statement
         .query_map(
             params![
@@ -274,17 +415,19 @@ pub(crate) fn recorded_copy(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<i64>>(3)?,
+                    HeaderSettings::read(row, 4)?,
                 ))
             },
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let scanned = ExposureCopy {
         key,
+        settings,
         path,
         recorded_size: None,
     };
     let mut moved = None;
-    for (id, frame_uuid, recorded, recorded_size) in rows {
+    for (id, frame_uuid, recorded, recorded_size, recorded_settings) in rows {
         let recorded = PathBuf::from(recorded);
         let Some(recorded_key) =
             ExposureKey::new(key.kind, key.captured_at, &recorded, &key.rig_uuid)
@@ -296,6 +439,7 @@ pub(crate) fn recorded_copy(
         }
         let copy = ExposureCopy {
             key: &recorded_key,
+            settings: &recorded_settings,
             path: &recorded,
             recorded_size,
         };
@@ -310,16 +454,20 @@ pub(crate) fn recorded_copy(
     Ok(moved.map(|id| RecordedCopy::Moved { id }))
 }
 
-fn twin_table_exists(conn: &Connection) -> bool {
+fn table_exists(conn: &Connection, table: &str) -> bool {
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-        [TWIN_TABLE],
+        [table],
         |_| Ok(()),
     )
     .optional()
     .ok()
     .flatten()
     .is_some()
+}
+
+fn twin_table_exists(conn: &Connection) -> bool {
+    table_exists(conn, TWIN_TABLE)
 }
 
 /// A copy recorded as a twin: its fingerprint when recorded, and the path of
@@ -421,6 +569,43 @@ pub(crate) fn skippable_twins(conn: &Connection) -> Result<Vec<(String, String)>
         .collect())
 }
 
+/// Forget recorded twins whose file is gone: nothing is left to skip.
+pub(crate) fn prune_twins(conn: &Connection) -> Result<usize> {
+    if !twin_table_exists(conn) {
+        return Ok(0);
+    }
+    let paths = {
+        let mut statement = conn.prepare("SELECT source_path FROM psf_guard_calibration_twin")?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut pruned = 0;
+    for path in paths.iter().filter(|path| !Path::new(path).is_file()) {
+        pruned += conn.execute(
+            "DELETE FROM psf_guard_calibration_twin WHERE source_path = ?1",
+            [path],
+        )?;
+    }
+    Ok(pruned)
+}
+
+/// Drop the merge records of rows that are forgotten, on either side: a
+/// forgotten row is no longer anything's twin, and nothing is merged into
+/// it, so a rescan or a pull may bring the files back.
+pub(crate) fn forget_merges_of(conn: &Connection, frame_uuids: &[String]) -> Result<()> {
+    if !table_exists(conn, MERGED_TABLE) {
+        return Ok(());
+    }
+    let mut statement = conn.prepare(
+        "DELETE FROM psf_guard_calibration_merged WHERE merged_uuid = ?1 OR keep_uuid = ?1",
+    )?;
+    for frame_uuid in frame_uuids {
+        statement.execute([frame_uuid])?;
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Repair
 // ---------------------------------------------------------------------------
@@ -435,8 +620,8 @@ struct RecordedRow {
     source_fingerprint: String,
     captured_at: Option<i64>,
     file_size: Option<i64>,
-    file_mtime_ns: Option<String>,
     valid_direction: Option<String>,
+    settings: HeaderSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -477,42 +662,35 @@ pub fn duplicate_snapshot(conn: &Connection) -> Result<DuplicateSnapshot> {
     };
     let mut statement = conn.prepare(&format!(
         "SELECT id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
-                captured_at, file_size, file_mtime_ns, {validity}
+                captured_at, file_size, {validity}, {SETTINGS_COLUMNS}
          FROM psf_guard_calibration_frame ORDER BY id"
     ))?;
     let rows = statement
         .query_map([], |row| {
             Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, Option<i64>>(6)?,
-                row.get::<_, Option<i64>>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, Option<String>>(9)?,
+                RecordedRow {
+                    id: row.get(0)?,
+                    frame_uuid: row.get(1)?,
+                    rig_uuid: row.get(2)?,
+                    kind: CalibrationKind::Bias,
+                    source_path: row.get(4)?,
+                    source_fingerprint: row.get(5)?,
+                    captured_at: row.get(6)?,
+                    file_size: row.get(7)?,
+                    valid_direction: row.get(8)?,
+                    settings: HeaderSettings::read(row, 9)?,
+                },
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?
         .into_iter()
-        .filter_map(
-            |(id, uuid, rig, kind, path, fingerprint, captured, size, mtime, validity)| {
-                Some(RecordedRow {
-                    id,
-                    frame_uuid: uuid,
-                    rig_uuid: rig,
-                    kind: CalibrationKind::from_db(&kind)?,
-                    source_path: path,
-                    source_fingerprint: fingerprint,
-                    captured_at: captured,
-                    file_size: size,
-                    file_mtime_ns: mtime,
-                    valid_direction: validity,
-                })
-            },
-        )
+        .filter_map(|(kind, row)| {
+            Some(RecordedRow {
+                kind: CalibrationKind::from_db(&kind)?,
+                ..row
+            })
+        })
         .collect::<Vec<_>>();
     let masters = master_links(conn)?;
     let mut statement = conn.prepare("SELECT rig_uuid, name FROM psf_guard_rig")?;
@@ -524,7 +702,7 @@ pub fn duplicate_snapshot(conn: &Connection) -> Result<DuplicateSnapshot> {
     for row in &rows {
         hasher.update(
             format!(
-                "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1e}",
+                "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1e}",
                 row.id,
                 row.frame_uuid,
                 row.rig_uuid,
@@ -534,6 +712,7 @@ pub fn duplicate_snapshot(conn: &Connection) -> Result<DuplicateSnapshot> {
                 row.captured_at,
                 row.file_size,
                 row.valid_direction,
+                row.settings,
             )
             .as_bytes(),
         );
@@ -666,19 +845,13 @@ pub struct TwinGroup {
     pub physical: bool,
     /// The oldest first.
     pub members: Vec<TwinMember>,
+    /// The twin whose file, and header, the kept row takes.
     #[serde(skip)]
-    repoint: Option<Repoint>,
+    repoint: Option<String>,
     #[serde(skip)]
     twins: Vec<(String, String)>,
     #[serde(skip)]
     validity: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct Repoint {
-    fingerprint: String,
-    size: Option<i64>,
-    mtime_ns: Option<String>,
 }
 
 /// A generated master the repair removes, so it is built again.
@@ -688,8 +861,8 @@ pub struct InvalidatedMaster {
     pub kind: String,
     pub source_count: usize,
     pub created_at: i64,
-    /// Whether it cites a row the repair removes itself, rather than being
-    /// built on a master that does.
+    /// Whether it cites a row the repair removes or moves to another file
+    /// itself, rather than being built on a master that does.
     pub direct: bool,
     /// Whether it took more than one copy of an exposure: it averaged that
     /// exposure twice.
@@ -791,7 +964,19 @@ pub fn plan_repair(snapshot: &DuplicateSnapshot, files: &FileAccess) -> Duplicat
         .flat_map(|group| group.members.iter().filter(|member| !member.keep))
         .map(|member| member.frame_uuid.as_str())
         .collect::<HashSet<_>>();
-    let invalid = citing(&snapshot.masters, &removed);
+    // A kept row that moves to a twin's file has that file's fingerprint
+    // from then on, so a master built from it would never be found again.
+    let changed = removed
+        .iter()
+        .copied()
+        .chain(
+            groups
+                .iter()
+                .filter(|group| group.repointed)
+                .map(|group| group.keep.as_str()),
+        )
+        .collect::<HashSet<_>>();
+    let invalid = citing(&snapshot.masters, &changed);
     let group_of = groups
         .iter()
         .enumerate()
@@ -814,7 +999,7 @@ pub fn plan_repair(snapshot: &DuplicateSnapshot, files: &FileAccess) -> Duplicat
             direct: master
                 .sources
                 .iter()
-                .any(|source| removed.contains(source.as_str())),
+                .any(|source| changed.contains(source.as_str())),
             doubled: {
                 let mut seen = HashSet::new();
                 master
@@ -900,6 +1085,7 @@ pub fn plan_repair(snapshot: &DuplicateSnapshot, files: &FileAccess) -> Duplicat
 fn row_copy<'a>(key: &'a ExposureKey, row: &'a RecordedRow) -> ExposureCopy<'a> {
     ExposureCopy {
         key,
+        settings: &row.settings,
         path: Path::new(&row.source_path),
         recorded_size: row.file_size,
     }
@@ -922,11 +1108,7 @@ fn twin_group(
     } else {
         exists.iter().position(|live| *live).unwrap_or(0)
     };
-    let repoint = (target != 0).then(|| Repoint {
-        fingerprint: members[target].source_fingerprint.clone(),
-        size: members[target].file_size,
-        mtime_ns: members[target].file_mtime_ns.clone(),
-    });
+    let repoint = (target != 0).then(|| members[target].frame_uuid.clone());
     let twins = members
         .iter()
         .zip(&exists)
@@ -1033,9 +1215,7 @@ pub fn apply_repair(
     }
     super::ensure_schema(&transaction)?;
     let now = chrono::Utc::now().timestamp();
-    let remote_table = super::table_column_names(&transaction, "psf_guard_remote_calibration_file")
-        .map(|columns| !columns.is_empty())
-        .unwrap_or(false);
+    let remote_table = table_exists(&transaction, "psf_guard_remote_calibration_file");
 
     for master in &report.masters {
         transaction.execute(
@@ -1055,69 +1235,21 @@ pub fn apply_repair(
             .filter(|member| !member.keep)
             .map(|member| member.frame_uuid.clone())
             .collect::<Vec<_>>();
-        let members = group
-            .members
-            .iter()
-            .map(|member| member.frame_uuid.as_str())
-            .collect::<Vec<_>>();
-        let fingerprint = group
-            .repoint
-            .as_ref()
-            .map(|repoint| repoint.fingerprint.clone())
-            .map(Ok)
-            .unwrap_or_else(|| {
-                transaction.query_row(
-                    "SELECT source_fingerprint FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
-                    [&group.keep],
-                    |row| row.get::<_, String>(0),
-                )
-            })?;
-        merge_quality(&transaction, &group.keep, &members, &fingerprint, now)?;
-        if remote_table {
-            merge_remote_record(&transaction, &group.keep, &members)?;
-        }
-        {
-            let mut statement = transaction
-                .prepare("DELETE FROM psf_guard_calibration_frame WHERE frame_uuid = ?1")?;
-            for frame_uuid in &removed {
-                outcome.rows_removed += statement.execute([frame_uuid])?;
-            }
-        }
-        if let Some(repoint) = &group.repoint {
-            transaction.execute(
-                "UPDATE psf_guard_calibration_frame
-                 SET source_path = ?1, source_fingerprint = ?2, file_size = ?3,
-                     file_mtime_ns = ?4, updated_at = ?5
-                 WHERE frame_uuid = ?6",
-                params![
-                    group.path,
-                    repoint.fingerprint,
-                    repoint.size,
-                    repoint.mtime_ns,
-                    now,
-                    group.keep
-                ],
-            )?;
+        outcome.rows_removed += merge_rows(
+            &transaction,
+            &Merge {
+                keep: &group.keep,
+                removed: &removed,
+                repoint_from: group.repoint.as_deref(),
+                path: &group.path,
+                twins: &group.twins,
+                validity: group.validity.as_deref(),
+            },
+            remote_table,
+            now,
+        )?;
+        if group.repointed {
             outcome.repointed += 1;
-        }
-        if let Some(direction) = &group.validity {
-            transaction.execute(
-                "UPDATE psf_guard_calibration_frame SET valid_direction = ?1, updated_at = ?2
-                 WHERE frame_uuid = ?3 AND valid_direction IS NULL",
-                params![direction, now, group.keep],
-            )?;
-        }
-        {
-            let mut statement = transaction.prepare(
-                "UPDATE psf_guard_calibration_twin SET frame_uuid = ?1 WHERE frame_uuid = ?2",
-            )?;
-            for frame_uuid in &removed {
-                statement.execute(params![group.keep, frame_uuid])?;
-            }
-        }
-        forget_twin(&transaction, &group.path)?;
-        for (path, fingerprint) in &group.twins {
-            record_twin(&transaction, path, &group.keep, fingerprint, now)?;
         }
         tracing::info!(
             "calibration repair: kept {} {} at {} ({}); merged {} twin row(s): {}",
@@ -1151,6 +1283,7 @@ pub fn apply_repair(
             master.master_uuid
         );
     }
+    prune_twins(&transaction)?;
     transaction.commit()?;
     tracing::info!(
         "calibration repair: {} group(s), {} row(s) merged, {} re-pointed, {} master(s) invalidated",
@@ -1162,9 +1295,110 @@ pub fn apply_repair(
     Ok(outcome)
 }
 
+/// One exposure's rows folding into the row kept.
+struct Merge<'a> {
+    keep: &'a str,
+    removed: &'a [String],
+    /// The twin whose file the kept row moves to, its own being gone.
+    repoint_from: Option<&'a str>,
+    /// The kept row's file afterwards.
+    path: &'a str,
+    /// Second copies still on disk, by path and fingerprint.
+    twins: &'a [(String, String)],
+    /// A validity mark the kept row takes when it has none.
+    validity: Option<&'a str>,
+}
+
+/// Fold `merge.removed` into `merge.keep`: the kept row takes a twin's file
+/// and header when it moves, the grade rows and a person's choice merge, a
+/// remote upload's record follows, the other rows go, their second copies
+/// are remembered, and each merge is recorded so a sync honours it. Masters
+/// are the caller's. Returns the rows deleted.
+fn merge_rows(conn: &Connection, merge: &Merge<'_>, remote_table: bool, now: i64) -> Result<usize> {
+    if let Some(target) = merge.repoint_from {
+        let present = super::table_column_names(conn, "psf_guard_calibration_frame")?
+            .into_iter()
+            .map(|name| name.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        let columns = FILE_COLUMNS
+            .iter()
+            .filter(|column| present.contains(**column))
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        conn.execute(
+            &format!(
+                "UPDATE psf_guard_calibration_frame
+                 SET ({columns}) = (SELECT {columns} FROM psf_guard_calibration_frame
+                                    WHERE frame_uuid = ?1),
+                     updated_at = ?2
+                 WHERE frame_uuid = ?3"
+            ),
+            params![target, now, merge.keep],
+        )?;
+    }
+    let fingerprint: String = conn.query_row(
+        "SELECT source_fingerprint FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+        [merge.keep],
+        |row| row.get(0),
+    )?;
+    let members = std::iter::once(merge.keep)
+        .chain(merge.removed.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    merge_quality(conn, merge.keep, &members, &fingerprint, now)?;
+    if remote_table {
+        merge_remote_record(conn, merge.keep, &members)?;
+    }
+    let mut removed = 0;
+    {
+        let mut statement =
+            conn.prepare("DELETE FROM psf_guard_calibration_frame WHERE frame_uuid = ?1")?;
+        for frame_uuid in merge.removed {
+            removed += statement.execute([frame_uuid])?;
+        }
+    }
+    if merge.repoint_from.is_some() {
+        conn.execute(
+            "UPDATE psf_guard_calibration_frame SET source_path = ?1 WHERE frame_uuid = ?2",
+            params![merge.path, merge.keep],
+        )?;
+    }
+    if let Some(direction) = merge.validity {
+        conn.execute(
+            "UPDATE psf_guard_calibration_frame SET valid_direction = ?1, updated_at = ?2
+             WHERE frame_uuid = ?3 AND valid_direction IS NULL",
+            params![direction, now, merge.keep],
+        )?;
+    }
+    {
+        let mut twins = conn.prepare(
+            "UPDATE psf_guard_calibration_twin SET frame_uuid = ?1 WHERE frame_uuid = ?2",
+        )?;
+        let mut recorded = conn.prepare(
+            "INSERT INTO psf_guard_calibration_merged (merged_uuid, keep_uuid, merged_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(merged_uuid) DO UPDATE SET
+                keep_uuid = excluded.keep_uuid, merged_at = excluded.merged_at",
+        )?;
+        let mut chained = conn.prepare(
+            "UPDATE psf_guard_calibration_merged SET keep_uuid = ?1 WHERE keep_uuid = ?2",
+        )?;
+        for frame_uuid in merge.removed {
+            twins.execute(params![merge.keep, frame_uuid])?;
+            chained.execute(params![merge.keep, frame_uuid])?;
+            recorded.execute(params![frame_uuid, merge.keep, now])?;
+        }
+    }
+    forget_twin(conn, merge.path)?;
+    for (path, fingerprint) in merge.twins {
+        record_twin(conn, path, merge.keep, fingerprint, now)?;
+    }
+    Ok(removed)
+}
+
 /// One grade row for the kept frame: the measurement that matches its
 /// file, else its own, else the newest; and a person's most recent choice
-/// among all of them.
+/// among all of them — a cleared one too, which is a choice.
 fn merge_quality(
     conn: &Connection,
     keep: &str,
@@ -1214,7 +1448,7 @@ fn merge_quality(
         .expect("rows is not empty");
     let choice = rows
         .iter()
-        .filter(|row| row.3.is_some())
+        .filter(|row| row.4.is_some())
         .max_by_key(|row| row.4)
         .map(|row| (row.3.clone(), row.4));
     for (frame_uuid, ..) in &rows {
@@ -1260,6 +1494,150 @@ fn merge_remote_record(conn: &Connection, keep: &str, members: &[&str]) -> Resul
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Sync
+// ---------------------------------------------------------------------------
+
+/// Copy the source's merge records that this catalog lacks. Returns how
+/// many were new.
+pub(crate) fn sync_merges(source: &Connection, destination: &Connection) -> Result<usize> {
+    if !table_exists(source, MERGED_TABLE) {
+        return Ok(0);
+    }
+    let mut statement = source
+        .prepare("SELECT merged_uuid, keep_uuid, merged_at FROM psf_guard_calibration_merged")?;
+    let records = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut insert = destination.prepare(
+        "INSERT INTO psf_guard_calibration_merged (merged_uuid, keep_uuid, merged_at)
+         VALUES (?1, ?2, ?3) ON CONFLICT(merged_uuid) DO NOTHING",
+    )?;
+    let mut added = 0;
+    for (merged, keep, at) in records {
+        added += insert.execute(params![merged, keep, at])?;
+    }
+    Ok(added)
+}
+
+/// Every merged uuid this catalog records, and the row it lives on in now,
+/// following a merge into a row that was later merged itself.
+pub(crate) fn merge_map(conn: &Connection) -> Result<HashMap<String, String>> {
+    if !table_exists(conn, MERGED_TABLE) {
+        return Ok(HashMap::new());
+    }
+    let mut statement =
+        conn.prepare("SELECT merged_uuid, keep_uuid FROM psf_guard_calibration_merged")?;
+    let direct = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+    Ok(direct
+        .keys()
+        .map(|merged| {
+            let mut keep = &direct[merged];
+            for _ in 0..direct.len() {
+                match direct.get(keep) {
+                    Some(next) if next != merged => keep = next,
+                    _ => break,
+                }
+            }
+            (merged.clone(), keep.clone())
+        })
+        .collect())
+}
+
+/// What folding a source's merges into this catalog did.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct FoldOutcome {
+    pub rows: usize,
+    pub masters: usize,
+}
+
+/// Merge each row this catalog still holds that `map` says was merged into
+/// another row it also holds, as the repair that recorded the merge did:
+/// the kept row moves to the merged row's file when its own is gone here,
+/// the grades and choices merge, and the masters built from either go.
+pub(crate) fn fold_merged(conn: &Connection, map: &HashMap<String, String>) -> Result<FoldOutcome> {
+    let mut outcome = FoldOutcome::default();
+    if map.is_empty() {
+        return Ok(outcome);
+    }
+    let now = chrono::Utc::now().timestamp();
+    let remote_table = table_exists(conn, "psf_guard_remote_calibration_file");
+    let row = |uuid: &str| {
+        conn.query_row(
+            "SELECT source_path, source_fingerprint, valid_direction
+             FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+            [uuid],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()
+    };
+    let mut pairs = map.iter().collect::<Vec<_>>();
+    pairs.sort();
+    for (merged, keep) in pairs {
+        let (Some(gone), Some(kept)) = (row(merged)?, row(keep)?) else {
+            continue;
+        };
+        let moves = !Path::new(&kept.0).is_file() && Path::new(&gone.0).is_file();
+        let mut changed = HashSet::from([merged.as_str()]);
+        if moves {
+            changed.insert(keep.as_str());
+        }
+        let invalid = masters_citing(conn, &changed)?;
+        for master in &invalid {
+            conn.execute(
+                "DELETE FROM psf_guard_calibration_master WHERE master_uuid = ?1",
+                [master],
+            )?;
+        }
+        outcome.masters += invalid.len();
+        let twins = if !moves && Path::new(&gone.0).is_file() {
+            vec![(gone.0.clone(), gone.1.clone())]
+        } else {
+            Vec::new()
+        };
+        let path = if moves {
+            gone.0.clone()
+        } else {
+            kept.0.clone()
+        };
+        outcome.rows += merge_rows(
+            conn,
+            &Merge {
+                keep,
+                removed: std::slice::from_ref(merged),
+                repoint_from: moves.then_some(merged.as_str()),
+                path: &path,
+                twins: &twins,
+                validity: if kept.2.is_none() {
+                    gone.2.as_deref()
+                } else {
+                    None
+                },
+            },
+            remote_table,
+            now,
+        )?;
+        tracing::info!("calibration sync: merged {merged} into {keep}, as the source's repair did");
+    }
+    Ok(outcome)
 }
 
 #[cfg(test)]

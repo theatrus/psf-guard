@@ -189,6 +189,11 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, fil
                   The oldest row of each exposure stays, with its grade and marks; the others are merged into it.
                   No file is moved or deleted. A second copy on disk is remembered, so later scans skip it.
                 </p>
+                <p className="calibration-muted">
+                  The repair covers every rig and type in this library, not only the groups shown. A catalog this
+                  one pulls from keeps its own duplicates until it is repaired there; a pull leaves these rows
+                  merged here.
+                </p>
                 {preview.masters.length > 0 && (
                   <details>
                     <summary>Masters built again</summary>

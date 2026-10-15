@@ -41,6 +41,9 @@ pub fn repair_duplicates(db: &Path, dry_run: bool, map_prefix: Option<&str>) -> 
         "Repaired {} exposure(s): {} row(s) merged, {} moved to a live copy, {} master(s) to rebuild. No file was moved or deleted.",
         outcome.groups, outcome.rows_removed, outcome.repointed, outcome.masters_removed
     );
+    println!(
+        "A server open on this catalog sees the change at its next scan, regrade or restart; a master it was building from a merged row is not recorded."
+    );
     Ok(())
 }
 

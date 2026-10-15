@@ -883,6 +883,7 @@ pub(super) fn forget(conn: &Transaction<'_>, frame_uuids: &[String]) -> Result<(
 pub(super) fn sync_quality(
     source: &Connection,
     destination: &Transaction<'_>,
+    merged: &std::collections::HashMap<String, String>,
 ) -> Result<(CalibrationSyncCounts, CalibrationChoiceCounts)> {
     let mut counts = CalibrationSyncCounts::default();
     let mut choices = CalibrationChoiceCounts::default();
@@ -929,7 +930,14 @@ pub(super) fn sync_quality(
     let mut statement = source.prepare(&select)?;
     let mut rows = statement.query([])?;
     while let Some(row) = rows.next()? {
-        let values = row_values(row)?;
+        let mut values = row_values(row)?;
+        // A row a repair here merged away grades the row it went into: its
+        // newer choice, a cleared one too, still counts.
+        if let Value::Text(frame_uuid) = &values[0]
+            && let Some(keep) = merged.get(frame_uuid)
+        {
+            values[0] = Value::Text(keep.clone());
+        }
         let Value::Text(frame_uuid) = &values[0] else {
             continue;
         };

@@ -226,14 +226,27 @@ then moves them into the calibration tree, often by copying them and
 deleting the originals later. Both ends are supported, and so is the window
 in between, when one frame is on disk twice.
 
-Two files hold the same exposure when they agree on the kind, the capture
-time to the second from the header, the file name (case aside), the rig, and
-the file size. When both files are on disk, their first and last 32 KiB must
-also be byte for byte the same: that covers the header and the ends of the
-pixels, where two different exposures never share sensor noise, so a
-different frame that happens to share a name and second is never taken for a
-copy. When one file is gone there is nothing left to compare, and the
-library's record decides. No folder name plays a part.
+Two files hold the same exposure when they agree on:
+
+- the kind;
+- the capture time to the second, from the header's `DATE-OBS`, or
+  `MJD-OBS` when it has no date text;
+- the file name, case aside;
+- the rig;
+- the capture settings the header records: exposure, gain, offset,
+  temperature (within the dark temperature tolerance), filter, binning and
+  frame size;
+- the file size.
+
+When both files are on disk, their first and last 32 KiB must also be byte
+for byte the same. That covers the header and the ends of the pixels, where
+two different exposures never share sensor noise, so a different frame that
+happens to share a name and second is never taken for a copy.
+
+When one file is gone there is nothing left to compare, and the library's
+record decides, but only for a frame whose header gives a capture time. A
+row for an undated frame, as many masters are, is never matched to another
+file on its record alone. No folder name plays a part.
 
 When an import meets a file that holds an exposure the library already
 records at another path:
@@ -243,7 +256,8 @@ records at another path:
   reading its header while the recorded file is there.
 - Once the recorded file is gone, the row learns the new path and keeps its
   identity: its uuid, grade, keep-out or use choice, validity mark, and the
-  masters built from it.
+  masters built from it. It takes the new file's header with it.
+- A remembered copy whose own file is gone is forgotten at the next import.
 
 At stack time a row whose file has moved is followed by name, and a file is
 handed to the integrator once even when two rows point at it.
@@ -259,21 +273,31 @@ twice.
 Tick **Duplicates** among the Calibration page's filters
 (`calDupes=true` in the address) to list every exposure recorded more than
 once. Each group shows its files, which are missing, and which row a repair
-keeps; **Rig** and **Type** narrow the list. A row whose file is gone only
-joins a twin that is on disk, so a disk that is not mounted never merges
-anything.
+keeps. **Rig** and **Type** narrow the list, and the view offers no other
+filters. A row whose file is gone only joins a twin that is on disk. A group
+whose copies are all on a disk that is not mounted is left alone. When only
+some of its copies are, a row on the unmounted disk reads as missing and
+merges into a copy on disk; the kept row moves to that copy, and a later
+scan moves it back if that copy goes.
 
 **Repair duplicates…** previews the repair: how many rows merge, how many of
 them had lost their file, how many were second copies on disk, and which
-masters are built again. **Apply** then, for each exposure:
+masters are built again. The repair covers every rig and type in the
+library, whatever the filters show. **Apply** then, for each exposure:
 
-- keeps the oldest row, and moves it to a twin's file when its own is gone;
-- carries over a grade, the newest keep-out or use choice, a validity mark,
-  and a remote upload's record, then deletes the other rows;
+- keeps the oldest row, and moves it to a twin's file when its own is gone,
+  taking that file's header and fingerprint;
+- carries over a grade, the newest keep-out or use choice (a cleared choice
+  counts when it is the newest), a validity mark, and a remote upload's
+  record, then deletes the other rows;
 - remembers second copies still on disk, so scans skip them;
-- removes every master built from a deleted row, and every master built on
-  one of those, so stacks build them again. Stacks key on the frames they
-  use, so their previews rebuild too.
+- records each merge, so a sync honours it (below);
+- removes every master built from a deleted row or from a kept row that
+  moves, and every master built on one of those, so stacks build them again.
+  Stacks key on the frames they use, so their previews rebuild too.
+
+A master that was being built while the repair ran is not recorded if a row
+it used has gone; the next stack builds it again.
 
 No file is moved or deleted. Apply is refused when the library, or which
 files are on disk, has changed since the preview; preview again. A second
@@ -282,12 +306,29 @@ app, or a server started with `--allow-database-management`.
 
 From the command line, `psf-guard calibration repair-duplicates <db>
 --dry-run` prints the same plan without writing, and without `--dry-run`
-applies it. For a dry run against a catalog copied from another machine,
+applies it. A server open on the same catalog sees the change at its next
+scan, regrade or restart. For a dry run against a catalog copied from another machine,
 `--map-prefix /mnt/share=/Volumes/share` reads the recorded paths through
 this machine's mount. The API is `GET /api/db/{db}/calibrations/duplicates`,
 which returns the groups, the plan and a `token`, and
 `POST /api/db/{db}/calibrations/duplicates/repair` with that `token`, which
 answers `409` when the plan has changed.
+
+#### Repairs and sync
+
+A pull copies the repair's merge records with the calibration library, by
+frame uuid:
+
+- A row a repair here merged is never inserted again from a catalog that
+  still holds it. The row it went into keeps the file the repair chose, and
+  a later choice made on the merged row at the source arrives on the kept
+  row.
+- A row the source's repair merged, which this catalog still holds, is
+  merged here too, and the masters built from it go.
+
+Only a pull carries the calibration library. The catalog a pull reads from
+keeps its own duplicates until it is repaired there. The pull's preview
+counts the merged rows it leaves out and the rows it merges.
 
 ## Flats that changed while they were shot
 

@@ -14,6 +14,9 @@ interface CalibrationFiltersProps {
   onClear: () => void;
 }
 
+/** The filters the Duplicates view reads; the others narrow sessions. */
+const DUPLICATE_FILTERS: (keyof CalibrationFilterState)[] = ['rig', 'kind', 'duplicates'];
+
 /** A number typed in full before it narrows the lists. */
 function NumberField({ label, value, onCommit }: { label: string; value: number | undefined; onCommit: (value: number | undefined) => void }) {
   const [text, setText] = useState(value === undefined ? '' : String(value));
@@ -58,8 +61,11 @@ function rangeLabel(from: string | undefined, to: string | undefined): string {
  *  toolbar: in one row on a wide screen, folded behind its Filters button
  *  on a phone. */
 export default function CalibrationFilters({ filters, facets, rigs, onChange, onClear }: CalibrationFiltersProps) {
+  // Duplicates lists exposures, not sessions: only rig and type narrow it.
+  const sessions = !filters.duplicates;
   const active = Object.entries(filters)
     .filter(([key, value]) => key !== 'sort' && value !== undefined && !(key === 'rig' && value === ALL_RIGS))
+    .filter(([key]) => sessions || DUPLICATE_FILTERS.includes(key as keyof CalibrationFilterState))
     .length;
   const celsius = (value: number | undefined) => (value === undefined ? undefined : `${value} °C`);
   const fields = (
@@ -86,6 +92,7 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
           <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>
         ))}
       </PillSelect>
+      {sessions && (<>
       <PillSelect
         label="Filter"
         active={filters.filter !== undefined}
@@ -184,6 +191,7 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
         />
         Missing files
       </label>
+      </>)}
       <label className="toolbar-pill toolbar-pill-check" title="Exposures the library records more than once">
         <input
           type="checkbox"

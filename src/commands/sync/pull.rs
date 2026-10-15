@@ -124,6 +124,27 @@ impl PullSummary {
     }
 }
 
+/// What a pull does with calibration rows a duplicate repair merged, on
+/// either side, for the preview and the summary.
+pub(crate) fn calibration_merge_line(
+    calibration: &crate::calibration::CalibrationSyncOutcome,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if calibration.frames.skipped > 0 {
+        parts.push(format!(
+            "{} calibration row(s) a repair here merged stay merged; the source keeps its own duplicates until it is repaired",
+            calibration.frames.skipped
+        ));
+    }
+    if calibration.merged_rows > 0 {
+        parts.push(format!(
+            "{} calibration row(s) the source's repair merged are merged here too ({} master(s) to rebuild)",
+            calibration.merged_rows, calibration.merged_masters
+        ));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
 fn as_i64(v: &Value) -> Option<i64> {
     match v {
         Value::Integer(n) => Some(*n),
@@ -1257,7 +1278,7 @@ pub(crate) fn sync_pull_in_transaction(
         inserted: calibration.frames.inserted,
         updated: calibration.frames.updated,
         unchanged: calibration.frames.unchanged,
-        skipped: 0,
+        skipped: calibration.frames.skipped,
     };
     summary.calibration_grades = TableCounts {
         inserted: calibration.quality.inserted,
@@ -1268,6 +1289,9 @@ pub(crate) fn sync_pull_in_transaction(
     summary.calibration_choices = calibration.choices;
     if let Some(line) = calibration_choice_line(&calibration.choices) {
         // First, so a long list of entity lines cannot push it out.
+        summary.changes.insert(0, line);
+    }
+    if let Some(line) = calibration_merge_line(&calibration) {
         summary.changes.insert(0, line);
     }
 

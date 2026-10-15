@@ -529,3 +529,292 @@ fn rows_whose_files_are_all_gone_or_differ_are_left_alone() {
     assert_eq!((remapped.groups.len(), remapped.missing_rows), (1, 1));
     assert_eq!(remapped.groups[0].keep, "kept");
 }
+
+// --- Review fixes ------------------------------------------------------------
+
+/// A frame whose header gives no capture time, as many masters' do.
+fn undated(path: &Path, gain: i64) -> FrameMeta {
+    let mut frame = dark_at(path, 0);
+    frame.timestamp = None;
+    frame.gain = Some(gain);
+    frame
+}
+
+#[test]
+fn an_undated_missing_frame_is_never_taken_for_another_on_its_record() {
+    // Two masters of one name in two folders, shot at different gains, of
+    // one size. The gain-100 one is deleted.
+    let temp = tempfile::tempdir().unwrap();
+    let gain100 = temp.path().join("gain100").join("MasterDark_60s.fits");
+    let gain200 = temp.path().join("gain200").join("MasterDark_60s.fits");
+    std::fs::create_dir_all(gain100.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(gain200.parent().unwrap()).unwrap();
+    std::fs::write(&gain100, b"master dark at gain 100").unwrap();
+    std::fs::write(&gain200, b"master dark at gain 200").unwrap();
+    let mut conn = Connection::open_in_memory().unwrap();
+    let outcome = import_now(&mut conn, &[undated(&gain100, 100), undated(&gain200, 200)]);
+    assert_eq!(outcome.imported, 2, "{outcome:?}");
+    let gain100_row = uuid_at(&conn, &gain100);
+    std::fs::remove_file(&gain100).unwrap();
+    assert!(duplicate_plan(&conn).is_empty(), "different settings");
+
+    // Even with the same settings, an undated row whose file is gone is not
+    // merged into a live file of its name: there is nothing to compare.
+    conn.execute(
+        "UPDATE psf_guard_calibration_frame SET gain = 200 WHERE frame_uuid = ?1",
+        [&gain100_row],
+    )
+    .unwrap();
+    assert!(duplicate_plan(&conn).is_empty(), "undated, one file gone");
+
+    // Nor does the import move it onto a new undated file of its name.
+    let elsewhere = temp.path().join("elsewhere").join("MasterDark_60s.fits");
+    std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+    std::fs::write(&elsewhere, b"master dark at gain 100").unwrap();
+    let outcome = import_now(&mut conn, &[undated(&elsewhere, 200)]);
+    assert_eq!((outcome.imported, outcome.updated), (1, 0), "{outcome:?}");
+}
+
+#[test]
+fn a_dated_twin_must_agree_on_its_capture_settings() {
+    let temp = tempfile::tempdir().unwrap();
+    let (drop, library) = two_copies(&temp);
+    let mut conn = Connection::open_in_memory().unwrap();
+    import_now(&mut conn, &[dark_at(&drop, 1_000)]);
+    let oldest = uuid_at(&conn, &drop);
+    record_twin_row(&conn, &oldest, "library-row", &library);
+    std::fs::remove_file(&drop).unwrap();
+    for (column, value) in [
+        ("gain", "200"),
+        ("offset", "50"),
+        ("exposure_s", "120.0"),
+        ("camera_temp", "0.0"),
+        ("filter_name", "'OIII'"),
+        ("binning_x", "2"),
+        ("width", "1500"),
+    ] {
+        conn.execute(
+            &format!(
+                "UPDATE psf_guard_calibration_frame SET {column} = {value}
+                 WHERE frame_uuid = 'library-row'"
+            ),
+            [],
+        )
+        .unwrap();
+        assert!(duplicate_plan(&conn).is_empty(), "{column} differs");
+        record_rows_reset(&conn, &oldest);
+    }
+    assert_eq!(duplicate_plan(&conn).groups.len(), 1, "and agrees again");
+}
+
+/// Put the library row's settings back to the oldest row's.
+fn record_rows_reset(conn: &Connection, oldest: &str) {
+    conn.execute(
+        "UPDATE psf_guard_calibration_frame SET
+            (gain, offset, exposure_s, camera_temp, filter_name, binning_x, width) =
+            (SELECT gain, offset, exposure_s, camera_temp, filter_name, binning_x, width
+             FROM psf_guard_calibration_frame WHERE frame_uuid = ?1)
+         WHERE frame_uuid = 'library-row'",
+        [oldest],
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_kept_row_that_moves_takes_its_new_files_header_and_its_masters_rebuild() {
+    let temp = tempfile::tempdir().unwrap();
+    let (drop, library) = two_copies(&temp);
+    let mut conn = Connection::open_in_memory().unwrap();
+    import_now(&mut conn, &[dark_at(&drop, 1_000)]);
+    let oldest = uuid_at(&conn, &drop);
+    record_twin_row(&conn, &oldest, "library-row", &library);
+    conn.execute(
+        "UPDATE psf_guard_calibration_frame
+         SET focal_length_mm = 530.0, camera_temp = -10.2, readout_mode_name = 'High Gain'
+         WHERE frame_uuid = 'library-row'",
+        [],
+    )
+    .unwrap();
+    std::fs::remove_file(&drop).unwrap();
+    // Built from the kept row alone: its file changes, so its record would
+    // never be found again.
+    insert_master(&conn, "m-kept-row", &[&oldest], None);
+
+    let report = duplicate_plan(&conn);
+    assert!(report.groups[0].repointed);
+    assert_eq!(
+        report
+            .masters
+            .iter()
+            .map(|master| (master.master_uuid.as_str(), master.direct))
+            .collect::<Vec<_>>(),
+        vec![("m-kept-row", true)]
+    );
+    super::apply_repair(&mut conn, &report).unwrap();
+    let (uuid, path, focal, temp_c, mode, fingerprint): (String, String, f64, f64, String, String) =
+        conn.query_row(
+            "SELECT frame_uuid, source_path, focal_length_mm, camera_temp, readout_mode_name,
+                    source_fingerprint
+             FROM psf_guard_calibration_frame",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(uuid, oldest);
+    assert_eq!(path, canonical_text(&library));
+    assert_eq!((focal, temp_c, mode.as_str()), (530.0, -10.2, "High Gain"));
+    assert_eq!(fingerprint, source_fingerprint(&library).1);
+    assert!(master_uuids(&conn).is_empty());
+}
+
+#[test]
+fn a_cleared_choice_survives_a_merge() {
+    let temp = tempfile::tempdir().unwrap();
+    let (drop, library) = two_copies(&temp);
+    let mut conn = Connection::open_in_memory().unwrap();
+    import_now(&mut conn, &[dark_at(&library, 1_000)]);
+    let oldest = uuid_at(&conn, &library);
+    record_twin_row(&conn, &oldest, "second-copy", &drop);
+    // An older Keep out on the twin, and a newer clear on the kept row.
+    set_overrides(
+        &conn,
+        &["second-copy".into()],
+        Some(QualityOverride::Exclude),
+    )
+    .unwrap();
+    set_overrides(
+        &conn,
+        std::slice::from_ref(&oldest),
+        Some(QualityOverride::Use),
+    )
+    .unwrap();
+    set_overrides(&conn, std::slice::from_ref(&oldest), None).unwrap();
+    conn.execute(
+        "UPDATE psf_guard_calibration_frame_quality SET override_at = override_at - 100
+         WHERE frame_uuid = 'second-copy'",
+        [],
+    )
+    .unwrap();
+
+    let report = duplicate_plan(&conn);
+    super::apply_repair(&mut conn, &report).unwrap();
+    let (choice, at): (Option<String>, Option<i64>) = conn
+        .query_row(
+            "SELECT override_choice, override_at FROM psf_guard_calibration_frame_quality
+             WHERE frame_uuid = ?1",
+            [&oldest],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(choice, None, "the newer clear stands");
+    assert!(at.is_some(), "and is dated, so a sync honours it");
+}
+
+/// Copy `source`'s calibration library into `destination`, as a pull does.
+fn pull(source: &Connection, destination: &mut Connection) -> CalibrationSyncOutcome {
+    let tx = destination.transaction().unwrap();
+    let outcome = sync_library(source, &tx).unwrap();
+    tx.commit().unwrap();
+    outcome
+}
+
+#[test]
+fn a_pull_from_an_unrepaired_catalog_does_not_undo_the_repair() {
+    // The telescope recorded the drop-zone copy, then the library copy; the
+    // drop-zone copy is gone. The review catalog pulled both, then repaired.
+    let temp = tempfile::tempdir().unwrap();
+    let (drop, library) = two_copies(&temp);
+    let mut telescope = Connection::open_in_memory().unwrap();
+    import_now(&mut telescope, &[dark_at(&drop, 1_000)]);
+    let oldest = uuid_at(&telescope, &drop);
+    record_twin_row(&telescope, &oldest, "library-row", &library);
+    std::fs::remove_file(&drop).unwrap();
+    let mut review = Connection::open_in_memory().unwrap();
+    pull(&telescope, &mut review);
+    assert_eq!(recorded_rows(&review).len(), 2);
+    let report = duplicate_plan(&review);
+    assert!(report.groups[0].repointed);
+    super::apply_repair(&mut review, &report).unwrap();
+    let repaired = vec![(oldest.clone(), canonical_text(&library))];
+    assert_eq!(recorded_rows(&review), repaired);
+
+    // A choice made on the telescope's merged row afterwards still arrives.
+    set_overrides(
+        &telescope,
+        &["library-row".into()],
+        Some(QualityOverride::Exclude),
+    )
+    .unwrap();
+    let outcome = pull(&telescope, &mut review);
+    assert_eq!(outcome.frames.skipped, 1, "{:?}", outcome.frames);
+    assert_eq!(outcome.frames.inserted, 0);
+    assert_eq!(recorded_rows(&review), repaired, "nothing came back");
+    assert!(duplicate_plan(&review).is_empty());
+    let choice: Option<String> = review
+        .query_row(
+            "SELECT override_choice FROM psf_guard_calibration_frame_quality
+             WHERE frame_uuid = ?1",
+            [&oldest],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(choice.as_deref(), Some("exclude"));
+
+    // Again: nothing changes. The telescope keeps its own twins until it is
+    // repaired itself.
+    let again = pull(&telescope, &mut review);
+    assert_eq!((again.frames.inserted, again.frames.updated), (0, 0));
+    assert_eq!(recorded_rows(&review), repaired);
+    assert_eq!(recorded_rows(&telescope).len(), 2);
+}
+
+#[test]
+fn a_pull_from_a_repaired_catalog_merges_the_same_rows_here() {
+    let temp = tempfile::tempdir().unwrap();
+    let (drop, library) = two_copies(&temp);
+    let mut telescope = Connection::open_in_memory().unwrap();
+    import_now(&mut telescope, &[dark_at(&library, 1_000)]);
+    let oldest = uuid_at(&telescope, &library);
+    record_twin_row(&telescope, &oldest, "second-copy", &drop);
+    insert_master(&telescope, "m-both", &[&oldest, "second-copy"], None);
+    let mut review = Connection::open_in_memory().unwrap();
+    pull(&telescope, &mut review);
+    insert_master(&review, "m-both", &[&oldest, "second-copy"], None);
+    let report = duplicate_plan(&telescope);
+    super::apply_repair(&mut telescope, &report).unwrap();
+
+    let outcome = pull(&telescope, &mut review);
+    assert_eq!((outcome.merged_rows, outcome.merged_masters), (1, 1));
+    assert_eq!(
+        recorded_rows(&review),
+        vec![(oldest.clone(), canonical_text(&library))]
+    );
+    assert!(master_uuids(&review).is_empty());
+    assert_eq!(twin_paths(&review), vec![canonical_text(&drop)]);
+}
+
+#[test]
+fn a_remembered_copy_whose_file_is_gone_is_forgotten() {
+    let temp = tempfile::tempdir().unwrap();
+    let (drop, library) = two_copies(&temp);
+    let mut conn = Connection::open_in_memory().unwrap();
+    import_now(
+        &mut conn,
+        &[dark_at(&library, 1_000), dark_at(&drop, 1_000)],
+    );
+    assert_eq!(twin_paths(&conn), vec![canonical_text(&drop)]);
+    std::fs::remove_file(&drop).unwrap();
+    let other = temp.path().join("other.fits");
+    std::fs::write(&other, b"another dark").unwrap();
+    import_now(&mut conn, &[dark_at(&other, 2_000)]);
+    assert!(twin_paths(&conn).is_empty());
+}
