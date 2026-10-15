@@ -253,7 +253,8 @@ describe('project workspace', () => {
   it('offers both an activation and the send when the rows differ and a site missed the last one', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 5, shoots: true, activated: { plan_revision: 4, pushes: () => [{ rig_id: 'rig-catalog', peer_id: 'obs', peer_name: 'observatory-pi', applied: false }] } });
     const due = await screen.findByRole('region', { name: 'Activation due' });
-    expect(due).toHaveTextContent("Not synced: saved plan not activated yet; observatory-pi hasn't received this activation");
+    // The missed send shows first; the plan's revision follows.
+    await waitFor(() => expect(due).toHaveTextContent("Not synced: saved plan not activated yet; observatory-pi hasn't received this activation"));
     expect(within(due).getByRole('button', { name: 'Send to observatory-pi' })).not.toHaveClass('is-primary');
     expect(within(due).getByRole('button', { name: 'Activate again…' })).toHaveClass('is-primary');
   });
@@ -402,7 +403,8 @@ describe('attaching and detaching database projects', () => {
     fireEvent.click(await screen.findByRole('tab', { name: 'Rigs' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Detach Third data' }));
     fireEvent.click(screen.getByRole('button', { name: 'Detach' }));
-    expect(await screen.findByRole('note')).toHaveTextContent('This plan has 2 exposure goals for Third data; detaching takes them out of this plan. Detach Heart anyway?');
+    // "Detaching…" shows until the refusal comes back with what it would take out.
+    await waitFor(() => expect(screen.getByRole('note')).toHaveTextContent('This plan has 2 exposure goals for Third data; detaching takes them out of this plan. Detach Heart anyway?'));
     fireEvent.click(screen.getByRole('button', { name: 'Detach anyway' }));
     expect(await screen.findByText('Detached: Heart is a separate plan.')).toBeInTheDocument();
     expect(posts.map(post => (post.body as { drop_rig_work: boolean }).drop_rig_work)).toEqual([false, true]);

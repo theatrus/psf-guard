@@ -91,7 +91,8 @@ describe('Template library', () => {
     // Copying from a rig skips what the library already has.
     fireEvent.change(screen.getByLabelText('Copy templates from'), { target: { value: 'redcat' } });
     const copyList = await screen.findByRole('group', { name: 'Templates to copy' });
-    expect(within(copyList).getByRole('button', { name: /Lum 90/ })).toBeDisabled();
+    // The list says it is loading until the rig's templates arrive.
+    expect(await within(copyList).findByRole('button', { name: /Lum 90/ })).toBeDisabled();
     fireEvent.click(within(copyList).getByRole('button', { name: /Ha 300/ }));
     await waitFor(() => expect(saves).toHaveLength(3));
     expect(saves[2]).toMatchObject({ revision: 0, name: 'Ha 300', filter_name: 'Ha', gain: 100, default_exposure_seconds: 300 });

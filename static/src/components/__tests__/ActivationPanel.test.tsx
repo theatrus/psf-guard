@@ -158,10 +158,11 @@ describe('Activation panel', () => {
     expect(within(rigSummary).getByRole('note', { name: 'Turned off in RedCat 61' })).toHaveTextContent('Heart · G_120 · 120 s plan #34');
     expect(screen.getByText('What changes in RedCat 61').closest('details')).not.toHaveAttribute('open');
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
-    const applied = await screen.findByRole('note', { name: 'Turned off in RedCat 61' });
+    // The preview's note stays until the applied record arrives.
+    await waitFor(() => expect(screen.getByLabelText('RedCat 61 activation')).toHaveTextContent('Applied · Turned off 2 plans'));
+    const applied = screen.getByRole('note', { name: 'Turned off in RedCat 61' });
     expect(applied).toHaveTextContent('Turned off');
     expect(applied).not.toHaveTextContent('To keep one');
-    expect(screen.getByLabelText('RedCat 61 activation')).toHaveTextContent('Applied · Turned off 2 plans');
   });
 
   it('says what Target Scheduler shoots afterwards, what it turns off and on, before the other changes', async () => {

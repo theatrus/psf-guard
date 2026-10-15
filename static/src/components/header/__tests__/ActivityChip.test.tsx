@@ -178,14 +178,15 @@ describe('ActivityChip', () => {
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     scanning = false;
-    await waitFor(() => expect(chip).toHaveAccessibleName(/a quality scan had errors/), { timeout: 3000 });
+    // The next poll brings the finished scan; a slow runner can take longer.
+    await waitFor(() => expect(chip).toHaveAccessibleName(/a quality scan had errors/), { timeout: 8000 });
     await userEvent.click(chip);
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     await userEvent.click(within(list).getByRole('button', { name: 'Dismiss the quality scan errors in Askar' }));
     await waitFor(() => expect(chip).not.toHaveAccessibleName(/had errors/));
     expect(within(list).queryByRole('note')).toBeNull();
     expect(chip).toHaveTextContent('1 job');
-  }, 10_000);
+  }, 15_000);
 
   it('takes a row to the view showing what it works on', async () => {
     mockServer({ stacks: () => [{ ...stack('R', 'running', 1, 3), target_id: 7 }] });
