@@ -1043,6 +1043,60 @@ mod tests {
         assert_eq!(night_boundary((0..24).map(|hour| hour * 3_600)), 12 * 3_600);
     }
 
+    /// A catalog of one night's lights every half hour from 19:30 to 05:00
+    /// local time, at `offset_hours` from UTC, on the evening of 2026-10-12.
+    fn one_local_night(offset_hours: i64) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE acquiredimage (acquireddate INTEGER)")
+            .unwrap();
+        let evening = local(offset_hours, 12, 19, 30);
+        for step in 0..20 {
+            conn.execute(
+                "INSERT INTO acquiredimage (acquireddate) VALUES (?1)",
+                [evening + step * 1_800],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    /// 2026-10-`day` `hour`:`minute` local time at `offset_hours` from UTC.
+    fn local(offset_hours: i64, day: u32, hour: u32, minute: u32) -> i64 {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, day)
+            .unwrap()
+            .and_hms_opt(hour, minute, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp()
+            - offset_hours * 3_600
+    }
+
+    #[test]
+    fn the_catalog_boundary_keeps_a_local_night_together_west_and_east() {
+        for offset in [-7, 9] {
+            let boundary = catalog_night_boundary(&one_local_night(offset)).unwrap();
+            // 23:30 and 01:30 local are one night, the evening's date, even
+            // where the UTC date turns over between them.
+            assert_eq!(night_of(local(offset, 12, 23, 30), boundary), "2026-10-12");
+            assert_eq!(night_of(local(offset, 13, 1, 30), boundary), "2026-10-12");
+            // The boundary itself starts the next night; a second earlier is
+            // still the night before.
+            let split = local(0, 13, 0, 0) + boundary;
+            assert_eq!(night_of(split, boundary), "2026-10-13", "UTC{offset:+}");
+            assert_eq!(night_of(split - 1, boundary), "2026-10-12", "UTC{offset:+}");
+        }
+        // West of Greenwich the quiet hours centre on 19:30 UTC (12:30
+        // local); east, on 03:30 UTC (12:30 local).
+        assert_eq!(
+            catalog_night_boundary(&one_local_night(-7)).unwrap(),
+            19 * 3_600 + 1_800
+        );
+        assert_eq!(
+            catalog_night_boundary(&one_local_night(9)).unwrap(),
+            3 * 3_600 + 1_800
+        );
+    }
+
     #[test]
     fn assembly_totals_frames_and_seconds_per_target_filter_and_night() {
         let targets = vec![

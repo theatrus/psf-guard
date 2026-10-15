@@ -7079,6 +7079,7 @@ pub async fn get_overall_stats(
 
     // For now, we'll return empty recent activity - this could be enhanced later
     let recent_activity = Vec::new();
+    let night_boundary_seconds = crate::calibration::catalog_night_boundary(&conn);
 
     let response = OverallStatsResponse {
         total_projects: stats.total_projects,
@@ -7099,6 +7100,7 @@ pub async fn get_overall_stats(
             span_days,
         },
         recent_activity,
+        night_boundary_seconds,
     };
 
     Ok(Json(ApiResponse::success(response)))

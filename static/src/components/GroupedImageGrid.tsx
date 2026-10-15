@@ -49,6 +49,7 @@ import {
 } from '../utils/gridNavigation';
 import { thumbnailCardHeightEstimate, thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
+import { useNightBoundary } from '../hooks/useNightBoundary';
 import { mosaicLabel, useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
@@ -139,7 +140,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   }, [navigateNow, searchParams]);
   
   // Fetch ALL images (no pagination for grouping) with periodic refresh
-  const { data: allImages = [], isLoading } = useQuery({
+  const { data: allImages = [], isLoading: imagesLoading } = useQuery({
     queryKey: ['db', dbId, 'all-images', projectId, targetId],
     queryFn: () =>
       apiClient.getImages(dbId!, {
@@ -151,6 +152,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: true,
   });
+  // Date groups are observing nights, split where this catalog's nights
+  // split. They wait for the boundary rather than open on UTC dates and move.
+  const nightBoundary = useNightBoundary(
+    dbId,
+    groupingMode === 'both' || groupingMode.includes('date'),
+  );
+  const isLoading = imagesLoading || !nightBoundary.ready;
   useStableScrollAnchor(containerRef, !isLoading);
 
   const imagesToMove = allImages.filter(image => selectedImages.has(image.id));
@@ -300,11 +308,15 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   
   // Group images based on selected mode, under their panels in a mosaic.
+  const nightBoundarySeconds = nightBoundary.boundarySeconds;
   const groupsIn = useCallback(
-    (inOrder: ImageOrder) => mosaic
-      ? groupImagesByPanel(filteredImages, mosaic, images => groupGridImages(images, groupingMode, inOrder))
-      : groupGridImages(filteredImages, groupingMode, inOrder),
-    [filteredImages, groupingMode, mosaic],
+    (inOrder: ImageOrder) => {
+      const scope = { nightBoundarySeconds };
+      return mosaic
+        ? groupImagesByPanel(filteredImages, mosaic, images => groupGridImages(images, groupingMode, inOrder, scope))
+        : groupGridImages(filteredImages, groupingMode, inOrder, scope);
+    },
+    [filteredImages, groupingMode, mosaic, nightBoundarySeconds],
   );
   const imageGroups = useMemo(() => groupsIn(order), [groupsIn, order]);
 

@@ -294,6 +294,17 @@ turns the rule off and keeps the frames; **Clear** empties the selection and
 turns the rule off. Rejecting a selection always opens a per-image review
 before anything is written.
 
+### Dates are nights
+
+The **Date**, **Filter + Date** and **Project + Date** groups in Images are
+observing nights. An evening and the small hours after it share the date the
+evening began, wherever the site is. Nights split where the catalog's nights
+split: the middle of the longest stretch of the day in which it never
+captured. Calibration and the AstroBin export split there too, and
+`/stats/overall` reports it as `night_boundary_seconds`. A link that names a
+group by the UTC date older versions used opens the nights holding that
+date's frames.
+
 ### Order and new frames
 
 Images and Sequence show frames in capture order. **View › Sort › Newest

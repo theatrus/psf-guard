@@ -3459,6 +3459,13 @@ export interface OverallStats {
   unique_filters: string[];
   date_range: DateRange;
   recent_activity: RecentActivity[];
+  /**
+   * Where this catalog's nights split, in seconds after 00:00 UTC: the
+   * middle of the longest stretch of the day it never captured in. Images
+   * groups by night, calibration and the AstroBin export all split here.
+   * Absent from a sum over several catalogs.
+   */
+  night_boundary_seconds?: number;
 }
 
 export interface RecentActivity {
