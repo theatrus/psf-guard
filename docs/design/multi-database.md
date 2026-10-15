@@ -269,6 +269,8 @@ The `db` param appears alongside `project`/`target`/`image` whenever a view is s
 
 **Missing `?db=` on a scoped view is an error**, not something to fall back from. Show "Database not found, this link may be stale" and a button back to overview. This catches bugs early and protects against accidental cross-DB writes.
 
+Views that show one target across several rigs keep this rule; see [Multi-rig views](multi-rig-views.md).
+
 ### 6.2 API client
 `static/src/api/client.ts` gains a `dbId` parameter on every per-DB method and embeds it in the path:
 ```ts
