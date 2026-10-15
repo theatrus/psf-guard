@@ -926,6 +926,32 @@ describe('Framing view', () => {
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(10);
   });
 
+  it('outlines a rig that is on while a locked panel hides its field, even once it frames the plan', async () => {
+    // Shot with RedCat: drawn where and how its frames say, whatever rig frames the plan.
+    const shot = { center: heart.center, position_angle_degrees: 0, size: { width_degrees: 5.38, height_degrees: 3.6 }, source: 'header' as const, size_source: 'header' as const, frames: 8 };
+    const locked = { ...gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }) };
+    locked.panels = [{ ...locked.panels[0], locked: true, measured: shot }];
+    fixture({ ...heart, layout: locked, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 } });
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
+    const view = mountWithRigs([rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    // RedCat's field is the locked panel's: no outline.
+    expect(document.querySelectorAll('.framing-overlay')).toHaveLength(0);
+    // Askar is turned on: its field is outlined, its box ticked and held.
+    view.rerender([rigA.rig.id, rigC.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-overlay')).toHaveLength(1));
+    expect(document.querySelector('.framing-overlay-label')).toHaveTextContent('Askar 107');
+    const box = screen.getByLabelText('Askar 107 outline');
+    expect(box).toBeChecked();
+    expect(box).toBeDisabled();
+    // Picked to frame the plan, Askar stays outlined: the locked panel is
+    // still drawn at RedCat's field.
+    fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from Askar 107'));
+    expect([...document.querySelectorAll('.framing-overlay-label')].map(label => label.textContent)).toEqual(['Askar 107']);
+    expect(screen.getByLabelText('Askar 107 outline')).toBeChecked();
+  });
+
   it('hands the panel size to a rig that is on once its rig goes off, and says when none can take it', async () => {
     fixture({ ...heart, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 } });
     server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));

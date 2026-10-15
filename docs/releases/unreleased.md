@@ -18,6 +18,9 @@
   quick run of arrow keys. On a busy page it used to snap back between
   steps, so some were lost.
 - With reduced motion turned on in the system, loading spinners hold still.
+- While a framing has a locked panel, each other rig that is on shows its
+  field as an outline, so turning a rig on or picking it shows where it
+  would shoot even though the locked panel stays drawn as shot.
 - A plan's mosaic panels are placed one by one. A framed target that already
   has frames starts locked where they were shot, and **Unlock** frees it;
   **Mosaic panels** adds

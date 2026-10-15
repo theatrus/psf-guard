@@ -12,7 +12,7 @@ import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPr
 import {
   DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, TILE_MAX_FOV, angleAt, clampFov, deprojectFrom, deprojectOn, draftFromState, fitViewFov, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, framingProblems, fromStage,
   compassDirections, insidePolygon, markLabelBudget, normaliseAngle, offsetFrom, panelForRig, pixelScale, polygonPoints, preferredSurveyId, previewRequest, projectOn, rigGeometries, rotationHandleSky, roundRa, stackMatrix, stageAngleAt, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
-  cameraDegreesToPlane, coverageFor, framingBoxes, framingShapes, panelHandleSky, readFraming, rigLayout, turnToward, type CoverageFraming,
+  cameraDegreesToPlane, coverageFor, framingBoxes, framingShapes, lockedOutlineRigs, panelHandleSky, readFraming, rigLayout, turnToward, type CoverageFraming,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import MosaicPanels, { type ExtendScope } from './MosaicPanels';
@@ -343,7 +343,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
 
   // The rectangle is drawn here, with the same tangent-plane math the server
   // uses when it activates, so it follows the pointer without a round trip.
-  const request = useMemo(() => state ? previewRequest(state, rigList) : null, [state, rigList]);
+  // Rigs outlined because a locked panel hides their field; only on a plan
+  // page, where it is known which rigs are on.
+  const lockedOutlines = useMemo(() => state && onToggleRig ? lockedOutlineRigs(state, rigList, shootingRigIds ?? []) : [], [state, rigList, onToggleRig, shootingRigIds]);
+  const request = useMemo(() => state ? previewRequest(state, rigList, lockedOutlines) : null, [state, rigList, lockedOutlines]);
   const geometry = useMemo(() => request ? framingGeometry(request) : undefined, [request]);
   // Rigs framed on their own: their grids over the same target, each in its own colour.
   const ownRigs = useMemo(() => state ? rigGeometries(state, rigList) : [], [state, rigList]);
@@ -1332,7 +1335,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const own = state.rigFramings.find(framing => framing.rig_id === id);
     const ownIndex = ownRigs.findIndex(framed => framed.rigId === id);
     const sizes = state.panelRigId === id;
-    const shown = state.shownRigIds.includes(id);
+    const shownByLock = lockedOutlines.includes(id);
+    const shown = state.shownRigIds.includes(id) || shownByLock;
     const field = entry.field_of_view;
     const grid = (layout: DirectorRigFraming['layout']) => { const g = asGrid(layout); return g ? (g.rows * g.columns > 1 ? `${g.rows} × ${g.columns}, ${g.overlap_percent}%` : '1 panel') : `${layout.panels.length} panels`; };
     const shooting = shootingRigIds?.includes(id) ?? false;
@@ -1384,7 +1388,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <button type="button" className="link-button" onClick={() => answer(id, () => {})}>Cancel</button>
       </div>}
       {canWrite && <div className="framing-rig-actions">
-        {!own && field && <label className="framing-check" title="Draw its field on the sky"><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
+        {!own && field && <label className="framing-check" title={shownByLock ? 'Drawn while a locked panel shows another field' : 'Draw its field on the sky'}><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} disabled={shownByLock} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
         {!own && !asking && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
         {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit'}</button>}
         {own && <button type="button" className="link-button" onClick={() => { update(current => ({ rigFramings: current.rigFramings.filter(framing => framing.rig_id !== id) })); if (editingRig === id) setEditingRig(null); }}>Use shared</button>}
