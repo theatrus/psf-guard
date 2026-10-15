@@ -7331,7 +7331,12 @@ mod tests {
             model_of(&own),
             serde_json::to_value(mtf_request(0.3).stretch.model).unwrap()
         );
-        assert_eq!(state.stack_previews.reapply_count(), 0);
+        // The card shows the result a moment before the run leaves the
+        // re-apply ledger, so wait for the count rather than read it once.
+        eventually("the re-apply ledger empties", || {
+            state.stack_previews.reapply_count() == 0
+        })
+        .await;
         // The selection carried: a reload of the card restores it, and the
         // old card keeps its own.
         let source = r_source(&state, &second);
@@ -7390,7 +7395,12 @@ mod tests {
             shown(&state, &third).is_some_and(|shown| shown.reprocessing.is_none())
         })
         .await;
-        assert_eq!(state.stack_previews.reapply_count(), 0);
+        // The card shows the result a moment before the run leaves the
+        // re-apply ledger, so wait for the count rather than read it once.
+        eventually("the re-apply ledger empties", || {
+            state.stack_previews.reapply_count() == 0
+        })
+        .await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -7455,7 +7465,12 @@ mod tests {
                 .any(|entry| entry.job_id == automatic.job_id)
         })
         .await;
-        assert_eq!(state.stack_previews.reapply_count(), 0);
+        // The card shows the result a moment before the run leaves the
+        // re-apply ledger, so wait for the count rather than read it once.
+        eventually("the re-apply ledger empties", || {
+            state.stack_previews.reapply_count() == 0
+        })
+        .await;
         assert!(
             shown(&state, &second).is_none(),
             "their own result replaces the carried one once it lands"
@@ -7536,7 +7551,12 @@ mod tests {
         let failed = shown(&state, &second).unwrap();
         assert_eq!(failed.stretch_id, applied, "the previous result stays");
         assert!(failed.reprocessing.unwrap().error.is_some());
-        assert_eq!(state.stack_previews.reapply_count(), 0);
+        // The card shows the result a moment before the run leaves the
+        // re-apply ledger, so wait for the count rather than read it once.
+        eventually("the re-apply ledger empties", || {
+            state.stack_previews.reapply_count() == 0
+        })
+        .await;
 
         // The card moving to that stack again starts nothing.
         let ctx = state.get_database("test").unwrap();
