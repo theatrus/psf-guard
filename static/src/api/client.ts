@@ -140,6 +140,7 @@ import type { GuidFillReport, GuidReport,
   CalibrationRepairOutcome,
   CalibrationFrameDetail,
   CalibrationFramePage,
+  CalibrationProjectScope,
   CalibrationFrameSize,
   CalibrationFrameStretch,
   CalibrationFrameView,
@@ -1685,6 +1686,17 @@ export const apiClient = {
     return data.data;
   },
 
+  /** What one project's lights use from the calibration library. */
+  getCalibrationProjectScope: async (dbId: string, project: number): Promise<CalibrationProjectScope> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CalibrationProjectScope>>(
+      dbPath(dbId, '/calibrations/project-scope'),
+      { params: { project } }
+    );
+    if (!data.data) throw new Error(data.error || "Failed to read the project's calibration");
+    return data.data;
+  },
+
   /** One frame: its measurement, findings and its session's numbers. */
   getCalibrationFrame: async (dbId: string, frameUuid: string): Promise<CalibrationFrameDetail> => {
     const apiInstance = await getApi();
@@ -1712,10 +1724,11 @@ export const apiClient = {
   },
 
   /** How each rig's flats group by measurement, with the changes between groups. */
-  getFlatGroups: async (dbId: string): Promise<FlatGroupsView> => {
+  getFlatGroups: async (dbId: string, project?: number): Promise<FlatGroupsView> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<FlatGroupsView>>(
-      dbPath(dbId, '/calibrations/flat-groups')
+      dbPath(dbId, '/calibrations/flat-groups'),
+      { params: project === undefined ? {} : { project } }
     );
     if (!data.data) throw new Error(data.error || 'Failed to read the flat groups');
     return data.data;
@@ -1745,10 +1758,11 @@ export const apiClient = {
   },
 
   /** Every master the library recorded, in the inspector's shape. */
-  getLibraryCalibrationMasters: async (dbId: string): Promise<LibraryCalibrationMasters> => {
+  getLibraryCalibrationMasters: async (dbId: string, project?: number): Promise<LibraryCalibrationMasters> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<LibraryCalibrationMasters>>(
-      dbPath(dbId, '/calibrations/masters')
+      dbPath(dbId, '/calibrations/masters'),
+      { params: project === undefined ? {} : { project } }
     );
     if (!data.data) throw new Error(data.error || 'Failed to read calibration masters');
     return {

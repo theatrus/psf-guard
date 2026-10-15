@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { CalibrationFacets, CalibrationRigSummary } from '../../api/types';
 import PillSelect from '../toolbar/PillSelect';
 import ToolbarPopover from '../toolbar/ToolbarPopover';
@@ -10,6 +10,8 @@ interface CalibrationFiltersProps {
   filters: CalibrationFilterState;
   facets: CalibrationFacets | undefined;
   rigs: CalibrationRigSummary[];
+  /** The project scope's chip, first in the bar; Clear removes it too. */
+  scope?: ReactNode;
   onChange: (changes: Partial<CalibrationFilterState>) => void;
   onClear: () => void;
 }
@@ -61,11 +63,12 @@ function rangeLabel(from: string | undefined, to: string | undefined): string {
 /** What the session list and the strip keep, as pills in the shared
  *  toolbar: in one row on a wide screen, folded behind its Filters button
  *  on a phone. */
-export default function CalibrationFilters({ filters, facets, rigs, onChange, onClear }: CalibrationFiltersProps) {
+export default function CalibrationFilters({ filters, facets, rigs, scope, onChange, onClear }: CalibrationFiltersProps) {
   // Duplicates lists exposures, not sessions: only rig and type narrow it.
   const sessions = !filters.duplicates;
   const active = Object.entries(filters)
-    .filter(([key, value]) => key !== 'sort' && value !== undefined && !(key === 'rig' && value === ALL_RIGS))
+    // The scope has its own chip, so the Filters button counts the rest.
+    .filter(([key, value]) => key !== 'sort' && key !== 'project' && value !== undefined && !(key === 'rig' && value === ALL_RIGS))
     .filter(([key]) => sessions || DUPLICATE_FILTERS.includes(key as keyof CalibrationFilterState))
     .length;
   const celsius = (value: number | undefined) => (value === undefined ? undefined : `${value} °C`);
@@ -229,6 +232,7 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
     <ViewToolbar
       label="Calibration filters"
       className="calibration-filters"
+      scope={scope}
       filters={fields}
       activeFilters={active}
       onClearFilters={onClear}

@@ -50,9 +50,49 @@ frames of a session as pictures, one frame with its numbers beside its
 session's, and the masters built from them. Open it with the header's
 **Calibration** tab, between Sequence and Stacks. It shows the
 database the header's project picker has in scope, or the first database
-when none is. With a project in scope it opens on that project's rig: the
-one whose frames came from the project's N.I.N.A. profile, when exactly one
-did. **Rig › All** shows them all again.
+when none is. On Calibration the header's **Rig · target** control names
+the rig alone: the page shows a rig's library, never one target's. For a
+project shot by several rigs it offers only those rigs, and choosing one
+opens the same project there; the target stays in the address, so Images
+shows it again.
+
+### Project scope
+
+Opened from a project's view (Images, Sequence, Stacks, a light's
+calibration panel or a project's Calibration report), the page shows the
+calibration that project uses, with a **Project: M 44 ✕** chip first in the
+filter bar and the heading **Calibration · for M 44 · Askar 120**. Opened
+from the Library, the Sky or with All projects, it shows the whole library.
+
+The scope is what the project's lights use, matched the way a stack matches
+them:
+
+- **Frames**: the sessions holding a frame some light takes, kept out or
+  not: its rig, filter, exposure and settings, and the nights its flats come
+  from, flat grouping's choices included (flats from another angle,
+  corrected flats, the side of a change). Flats a light keeps only so its
+  stacks keep their keys, from the far side of a change, are not in it.
+- **Masters**: the recorded masters whose every source frame one light
+  would build that master from, and those the project's latest stacks used.
+- **Flat groups** and their changes: only the families the scope's flat
+  sessions belong to.
+
+A project whose lights span several calibration rigs, after a camera swap
+or at another binning, shows them all, grouped by rig, and the chip says
+how many. With one rig the Rig filter opens on it; with several, on All.
+
+**✕** on the chip, or **Show the whole library** under the heading, widens
+to the whole library and keeps the Rig filter, so you see everything for
+that rig; the Rig filter's **All** then shows the whole catalog. **Clear**
+removes the scope with every filter. Choosing another project in the
+header moves a scope to it; a page you widened stays wide. The address keeps
+the scope as `calProject=<id>`. **Scheduler flats** and **Duplicates** read
+the whole library.
+
+The server works the scope out from the light headers the calibration
+health pass keeps, reading only those it has not reached, on a connection
+of its own, and keeps it until the library, its grades and flat groups,
+the settings or the project's lights change.
 
 **Browse calibration** in a project's Calibration report, which the
 Library's calibration pill also opens, and **Open Calibration** on a
@@ -529,6 +569,13 @@ answers `202` while the picture is queued and the PNG once it is ready;
 `POST /api/db/{db}/calibrations/generation-status` reports on it with
 `{"target": "ratio", …}`. In a light's calibration explanation the flat
 kind gains `chosen_by`, `basis` and `alike`.
+
+`project=<id>` on `calibrations/sessions`, `calibrations/frames`,
+`calibrations/masters` and `calibrations/flat-groups` keeps what that
+project's lights use (see [Project scope](#project-scope)).
+`GET /api/db/{db}/calibrations/project-scope?project=<id>` returns the scope
+itself: its sessions, masters and rigs, and how many lights were matched or
+could not be read.
 
 `psf-guard flat-groups CATALOG --work DIR` measures a catalog on a copy: it
 opens the catalog read-only, copies it into `DIR`, writes responses and

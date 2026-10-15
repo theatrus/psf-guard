@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useMergedProjects, useMergedTargets } from '../../hooks/useDatabases';
+import { useAllDatabases, useMergedProjects, useMergedTargets } from '../../hooks/useDatabases';
 import { isMergedPath, keepScoringInScope, MOSAIC_PARAM, useDbProjectTarget, withoutPlanningParams } from '../../hooks/useUrlState';
 import { mosaicLabel, useProjectMosaics } from '../../hooks/useProjectMosaic';
 import { useCurrentPlan } from './useCurrentPlan';
@@ -24,6 +24,7 @@ export default function RigTargetSelect() {
   const { current: planInScope } = useCurrentPlan();
   const { data: projects } = useMergedProjects();
   const { data: targets } = useMergedTargets();
+  const { data: databases } = useAllDatabases();
 
   const members: Member[] = useMemo(() => {
     // In a workspace the plan names its rigs; elsewhere the project in scope
@@ -47,6 +48,14 @@ export default function RigTargetSelect() {
   // A project whose targets are one mosaic also offers them all at once.
   const mosaics = useProjectMosaics(members);
   const mosaicOf = (member: Member) => mosaics[members.indexOf(member)] ?? null;
+
+  // Calibration shows a rig's library, narrowed on the page by a project
+  // chip, never by a target: the control names the rig only, and offers
+  // only rigs. The target stays in the address for the views after it.
+  if (pathname === '/calibration') {
+    return <CalibrationRigSelect members={members} databases={databases ?? []} dbId={dbId}
+      projectId={projectId} onChoose={(db, project) => setDbProjectTarget(db, project, null)} />;
+  }
 
   const targetsOf = (member: Member) =>
     targets.filter(target => target.db_id === member.db_id && target.project_id === member.id)
@@ -125,5 +134,36 @@ export default function RigTargetSelect() {
     }}>
     {!inScope && <option value="" disabled>Choose a rig</option>}
     {single ? options(members[0]) : members.map(member => <optgroup key={`${member.db_id}:${member.id}`} label={groupLabel.get(`${member.db_id}:${member.id}`)}>{options(member)}</optgroup>)}
+  </select>;
+}
+
+/** The rig half of the scope on Calibration: the rig alone, as a fact when
+ *  there is one, else a choice among the project's rigs. Choosing one
+ *  opens the same project there, so a project chip on the page stays. */
+function CalibrationRigSelect({ members, databases, dbId, projectId, onChoose }: {
+  members: Member[];
+  databases: { id: string; name: string }[];
+  dbId: string | null;
+  projectId: number | null;
+  onChoose: (db: string, project: number) => void;
+}) {
+  if (members.length < 2) {
+    const name = members[0]?.db_name ?? databases.find(entry => entry.id === dbId)?.name;
+    return <span className={`rig-target-fixed${name ? '' : ' is-empty'}`} aria-label={`Rig: ${name ?? 'none in scope'}`}
+      data-testid="calibration-rig" title="Calibration shows one rig's library; a project chip on the page narrows it">
+      <small>Rig</small><span>{name ?? 'None in scope'}</span>
+    </span>;
+  }
+  const key = (member: Member) => `${member.db_id}:${member.id}`;
+  const chosen = members.find(member => member.db_id === dbId && member.id === projectId);
+  const shown = chosen?.db_name ?? 'Choose a rig';
+  return <select className="compact-select rig-target-select" aria-label="Rig" data-testid="calibration-rig"
+    value={chosen ? key(chosen) : ''} title={shown} style={{ width: fittedWidth(shown) }}
+    onChange={event => {
+      const member = members.find(entry => key(entry) === event.target.value);
+      if (member) onChoose(member.db_id, member.id);
+    }}>
+    {!chosen && <option value="" disabled>Choose a rig</option>}
+    {members.map(member => <option key={key(member)} value={key(member)}>{member.db_name}</option>)}
   </select>;
 }

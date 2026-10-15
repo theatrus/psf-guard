@@ -65,6 +65,9 @@ pub struct ListQuery {
     /// this is slow on a large library over a network share.
     pub missing: Option<bool>,
     pub session: Option<String>,
+    /// Keep only what this project's lights use: the sessions holding the
+    /// frames they match ([`crate::calibration::project_scope`]).
+    pub project: Option<i32>,
     pub sort: Option<FrameSort>,
     pub page: Option<usize>,
     pub per_page: Option<usize>,
@@ -85,7 +88,19 @@ impl ListQuery {
             kept_out: self.kept_out,
             rotation: self.rotation.filter(|angle| angle.is_finite()),
             session: self.session.clone().filter(|session| !session.is_empty()),
+            within: None,
         }
+    }
+
+    /// The filter, narrowed to a project's sessions when the query names
+    /// one.
+    async fn scoped_filter(&self, ctx: &DbContext) -> Result<FrameFilter, AppError> {
+        let mut filter = self.filter();
+        if let Some(project) = self.project {
+            let scope = crate::server::calibration_scope::scope_for(&ctx.0, project).await?;
+            filter.within = Some(Arc::new(scope.sessions.clone()));
+        }
+        Ok(filter)
     }
 }
 
@@ -141,11 +156,11 @@ pub async fn list_frames(
     ctx: DbContext,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ApiResponse<FramePage>>, AppError> {
+    let filter = query.scoped_filter(&ctx).await?;
     // Read under the shared connection; files are checked after it is free.
     let library = read_library(&ctx)?;
     let roots = ReadableRoots::of(&ctx);
     let page = tokio::task::spawn_blocking(move || {
-        let filter = query.filter();
         let missing = query
             .missing
             .unwrap_or(false)
@@ -178,10 +193,10 @@ pub async fn list_sessions(
     ctx: DbContext,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ApiResponse<SessionPage>>, AppError> {
+    let filter = query.scoped_filter(&ctx).await?;
     let library = read_library(&ctx)?;
     let roots = ReadableRoots::of(&ctx);
     let page = tokio::task::spawn_blocking(move || {
-        let filter = query.filter();
         let missing = query
             .missing
             .unwrap_or(false)
@@ -738,12 +753,24 @@ fn project_names(conn: &Connection) -> HashMap<i32, String> {
         .unwrap_or_default()
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MastersQuery {
+    /// Keep only the masters this project's lights calibrate with, or its
+    /// latest stacks used.
+    pub project: Option<i32>,
+}
+
 /// GET /api/db/{db}/calibrations/masters — every master the library
 /// recorded, newest first, with its sources, its statistics and the
 /// projects whose latest stacks use it.
 pub async fn list_masters(
     ctx: DbContext,
+    Query(query): Query<MastersQuery>,
 ) -> Result<Json<ApiResponse<LibraryMasterCatalog>>, AppError> {
+    let scope = match query.project {
+        Some(project) => Some(crate::server::calibration_scope::scope_for(&ctx.0, project).await?),
+        None => None,
+    };
     let (masters, names) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
@@ -757,6 +784,14 @@ pub async fn list_masters(
         let projects = crate::server::master_cleanup::projects_by_label(&ctx.stack_root);
         let masters = masters
             .into_iter()
+            .filter(|master| {
+                scope.as_ref().is_none_or(|scope| {
+                    scope.masters.contains(&master.master_uuid)
+                        || projects
+                            .get(&label_of(master))
+                            .is_some_and(|ids| ids.contains(&scope.project_id))
+                })
+            })
             .map(|master| {
                 let used_by = projects
                     .get(&label_of(&master))

@@ -99,6 +99,17 @@ fn read_headers(cache_dir: &FsPath, project: i32) -> BTreeMap<i32, KeptHeader> {
         .unwrap_or_default()
 }
 
+/// One project's kept headers, for the Calibration page's project scope.
+pub(crate) fn kept_headers(cache_dir: &FsPath, project: i32) -> BTreeMap<i32, KeptHeader> {
+    read_headers(cache_dir, project)
+}
+
+/// When a project's kept headers were last written, so a scope worked out
+/// from them is worked out again once a pass reads more.
+pub(crate) fn headers_stamp(cache_dir: &FsPath, project: i32) -> u128 {
+    crate::server::calibration_scope::file_stamp(&headers_path(cache_dir, project))
+}
+
 /// Remove the kept headers of projects the catalog no longer holds,
 /// whether or not the results file still lists them.
 fn remove_gone_headers(cache_dir: &FsPath, keys: &BTreeMap<i32, String>) {

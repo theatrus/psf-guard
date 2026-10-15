@@ -18,6 +18,7 @@ use std::time::UNIX_EPOCH;
 pub mod browse;
 pub mod flat_groups;
 mod health;
+pub mod project_scope;
 mod quality;
 pub mod rules;
 mod twins;

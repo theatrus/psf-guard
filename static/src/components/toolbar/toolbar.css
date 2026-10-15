@@ -237,6 +237,53 @@
   color: var(--color-text-primary);
 }
 
+/* The scope a view is narrowed to, "Project: M 44 ✕": first in the bar
+   and in sight at every width. Only its ✕ is a button. */
+.toolbar-scope-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 18rem;
+  padding-right: 0.2rem;
+  cursor: default;
+}
+
+.toolbar-scope-detail {
+  flex: none;
+  color: var(--color-text-lighter);
+}
+
+.toolbar-scope-remove {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-lighter);
+  cursor: pointer;
+}
+
+.toolbar-scope-remove:hover {
+  border-color: var(--color-border-quaternary);
+  color: var(--color-text-primary);
+}
+
+.toolbar-scope-remove:focus-visible {
+  outline: none;
+  border-color: var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
+}
+
+.view-toolbar-scope {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
 /* Search: a pill-shaped field with a magnifier. */
 .toolbar-search {
   position: relative;

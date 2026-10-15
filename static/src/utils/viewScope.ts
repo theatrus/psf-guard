@@ -1,4 +1,4 @@
-import { withoutPlanningParams } from '../hooks/useUrlState';
+import { isMergedPath, withoutPlanningParams } from '../hooks/useUrlState';
 import { imageDetailReturnView } from './imageDetailRoutes';
 
 /**
@@ -31,6 +31,13 @@ export function scopeForView(search: string, fromPath: string, toPath: string): 
   const to = thumbnailViewOf(toPath, next);
   if (from === null || from !== to) {
     for (const key of VIEW_ONLY_PARAMS) next.delete(key);
+  }
+  // Calibration opened from a project's view shows the calibration that
+  // project uses, as Images shows its lights. From the Library or the Sky,
+  // where the scope is only parked, or with All projects, it opens on the
+  // whole library.
+  if (toPath === '/calibration' && !isMergedPath(fromPath) && next.get('project')) {
+    next.set('calProject', next.get('project')!);
   }
   return next;
 }

@@ -29,6 +29,20 @@ describe('the scope the header carries', () => {
     expect(query(`${images}&returnTo=sequence`, '/detail/5', '/grid')).not.toHaveProperty('size');
   });
 
+  it('opens Calibration on the project from a project\'s view, and on the whole library elsewhere', () => {
+    const scope = '?db=rig&project=1&target=2';
+    for (const from of ['/grid', '/sequence', '/stacks', '/detail/5']) {
+      expect(query(scope, from, '/calibration')).toHaveProperty('calProject', '1');
+    }
+    // The Library and the Sky only park the scope; All projects names none.
+    expect(query(scope, '/', '/calibration')).not.toHaveProperty('calProject');
+    expect(query(scope, '/sky', '/calibration')).not.toHaveProperty('calProject');
+    expect(query('?db=rig', '/grid', '/calibration')).not.toHaveProperty('calProject');
+    // Only Calibration reads it, and no other view carries it on.
+    expect(query(scope, '/grid', '/sequence')).not.toHaveProperty('calProject');
+    expect(query(`${scope}&calProject=1`, '/calibration', '/grid')).not.toHaveProperty('calProject');
+  });
+
   it('still leaves Planning\'s own keys behind', () => {
     expect(query('?db=rig&project=1&plan=rig:1', '/plan', '/grid')).toEqual({ db: 'rig', project: '1' });
   });

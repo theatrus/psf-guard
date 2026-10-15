@@ -29,6 +29,12 @@ function number(value: string | null): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+/** A project id the address names, or none. */
+function projectId(value: string | null): number | undefined {
+  const parsed = number(value);
+  return parsed !== undefined && Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 /** The rig filter's value for every rig, chosen on purpose. An absent rig
  *  lets a project in scope open on its own rig; this one does not. (The
  *  URL helper drops a value of `all`.) */
@@ -51,6 +57,9 @@ export interface CalibrationFilterState {
   duplicates?: boolean;
   /** A rotator angle in degrees: flats at that angle. */
   rotation?: number;
+  /** The project whose calibration the page shows: the sessions, masters
+   *  and flat groups its lights use. Its scope chip removes it. */
+  project?: number;
   sort?: CalibrationFrameSort;
 }
 
@@ -68,6 +77,7 @@ const FILTER_KEYS: Record<keyof CalibrationFilterState, (typeof CALIBRATION_PARA
   missing: 'calMissing',
   duplicates: 'calDupes',
   rotation: 'calRotation',
+  project: 'calProject',
   sort: 'calSort',
 };
 
@@ -86,6 +96,7 @@ export function listFilters(state: CalibrationFilterState): CalibrationListFilte
     kept_out: state.keptOut,
     missing: state.missing || undefined,
     rotation: state.rotation,
+    project: state.project,
   };
   return Object.fromEntries(
     Object.entries(filters).filter(([, value]) => value !== undefined)
@@ -119,9 +130,10 @@ export function useCalibrationUrlState() {
   const duplicates = getParam('calDupes') === 'true' || undefined;
   const rotation = number(getParam('calRotation'));
   const sort = oneOf(getParam('calSort'), SORTS);
+  const project = projectId(getParam('calProject'));
   const filters = useMemo<CalibrationFilterState>(
-    () => ({ rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, rotation, sort }),
-    [rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, rotation, sort]
+    () => ({ rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, rotation, project, sort }),
+    [rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, rotation, project, sort]
   );
   const page = Math.max(0, Math.floor(number(getParam('calPage')) ?? 0));
   const session = getParam('calSession');
@@ -186,9 +198,10 @@ export function useCalibrationUrlState() {
   );
   /** Another database chosen elsewhere, as in the header: the session,
    *  frame, page, master and filters chosen in the last one go. Its rig
-   *  above all would match nothing here. */
+   *  above all would match nothing here. A project scope moves to
+   *  `project`, the same project in that database, when there is one. */
   const resetForDatabase = useCallback(
-    () =>
+    (project?: number) =>
       updateParams({
         calSession: null,
         calFrame: null,
@@ -198,6 +211,7 @@ export function useCalibrationUrlState() {
         calEarlier: null,
         calLater: null,
         ...Object.fromEntries(Object.values(FILTER_KEYS).map((key) => [key, null])),
+        calProject: project === undefined ? null : String(project),
       }),
     [updateParams]
   );

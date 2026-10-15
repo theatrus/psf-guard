@@ -9,6 +9,9 @@ interface ViewToolbarProps {
   className?: string;
   /** Stays at the top of the scrolling view. */
   sticky?: boolean;
+  /** The scope the view is narrowed to, as a ScopeChip: first in the
+   *  control row and in sight at every width. Clear removes it too. */
+  scope?: ReactNode;
   /** Filter pills that narrow what the view shows. */
   filters?: ReactNode;
   /** How many filters narrow the view: the Filters button counts them,
@@ -51,6 +54,7 @@ export default function ViewToolbar({
   label,
   className,
   sticky = false,
+  scope,
   filters,
   activeFilters = 0,
   onClearFilters,
@@ -76,6 +80,7 @@ export default function ViewToolbar({
   return (
     <section className={classes} aria-label={label}>
       <div className="view-toolbar-bar">
+        {scope && <div className="view-toolbar-scope">{scope}</div>}
         {foldable && (
           <button
             type="button"
@@ -96,7 +101,7 @@ export default function ViewToolbar({
         {filters && (
           <div id={panelId} className="view-toolbar-filters">
             {filters}
-            {onClearFilters && activeFilters > 0 && (
+            {onClearFilters && (activeFilters > 0 || Boolean(scope)) && (
               <button
                 type="button"
                 className="toolbar-pill toolbar-pill-clear"
