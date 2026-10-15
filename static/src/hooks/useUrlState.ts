@@ -24,6 +24,17 @@ import {
   useDisplayPreferences,
 } from './useDisplayPreferences';
 
+export interface UpdateParamsOptions {
+  /**
+   * Render the new params before the event that set them ends. The router
+   * otherwise applies a change as a transition, and until it renders, a
+   * control showing a param shows the old value: a range input is put back
+   * to it, so a second arrow key steps from there and the first is lost.
+   * For a control the person moves directly, such as a slider.
+   */
+  immediate?: boolean;
+}
+
 /**
  * Hook for managing URL search parameters as state
  */
@@ -59,7 +70,10 @@ export function useUrlParams() {
     return value ? value.split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : [];
   }, [searchParams]);
   
-  const updateParams = useCallback((updates: Record<string, string | number | boolean | string[] | number[] | null | undefined>) => {
+  const updateParams = useCallback((
+    updates: Record<string, string | number | boolean | string[] | number[] | null | undefined>,
+    options: UpdateParamsOptions = {},
+  ) => {
     const newParams = new URLSearchParams(searchParamsRef.current);
     const scope = scopeKey(newParams);
 
@@ -80,7 +94,7 @@ export function useUrlParams() {
     // A view's own scoring stays with the database and project it was set in.
     if (scopeKey(newParams) !== scope) dropScoringParams(newParams);
     searchParamsRef.current = newParams;
-    setSearchParamsRef.current(newParams, { replace: true });
+    setSearchParamsRef.current(newParams, { replace: true, flushSync: options.immediate === true });
   }, []);
   
   return {
@@ -395,7 +409,7 @@ export function useGridState(view: ThumbnailView = 'grid') {
     setDisplayPreferences(view === 'sequence'
       ? { ...saved, sequenceThumbnailSize: size }
       : { ...saved, gridThumbnailSize: size });
-    updateParams({ size });
+    updateParams({ size }, { immediate: true });
   }, [updateParams, view]);
   
   const setShowStats = useCallback((show: boolean) => {

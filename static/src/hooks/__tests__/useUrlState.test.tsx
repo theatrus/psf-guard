@@ -1,7 +1,8 @@
 import type { PropsWithChildren } from 'react';
-import { act, renderHook, waitFor } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { createMemoryRouter, MemoryRouter, RouterProvider, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it } from 'vitest';
+import ThumbnailSizeControl from '../../components/ThumbnailSizeControl';
 import { useGridState, useImageOrder } from '../useUrlState';
 import { setDisplayPreferences, useDisplayPreferences } from '../useDisplayPreferences';
 
@@ -39,6 +40,46 @@ describe('useGridState', () => {
     await waitFor(() => expect(result.current.currentImageId).toBe(12));
     expect([...result.current.selectedImages]).toEqual([11, 12]);
     expect(result.current.setSelectedImages).toBe(initialSetter);
+  });
+
+  it('shows each size step before the next key, so quick arrow keys all count', async () => {
+    function SizeSlider() {
+      const { imageSize, setImageSize } = useGridState();
+      return <ThumbnailSizeControl id="grid-thumbnail-size" value={imageSize} onChange={setImageSize} />;
+    }
+    // The app's router: it applies a change as a transition unless told
+    // to render it at once.
+    const router = createMemoryRouter(
+      [{ path: '/grid', element: <SizeSlider /> }],
+      { initialEntries: ['/grid?size=300'] },
+    );
+    render(<RouterProvider router={router} />);
+    const slider = await screen.findByRole<HTMLInputElement>('slider');
+    expect(slider.value).toBe('300');
+
+    // What a browser does for ArrowRight: step from the value the input
+    // holds now, then report it. Outside act, so React renders when it
+    // would in a browser, and the keys come before any later task.
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    const arrowRight = async () => {
+      setValue.call(slider, String(Number(slider.value) + 50));
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      for (let tick = 0; tick < 10; tick++) await Promise.resolve();
+    };
+    const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const previous = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      await arrowRight();
+      expect(slider.value).toBe('350');
+      await arrowRight();
+      await arrowRight();
+      expect(slider.value).toBe('450');
+    } finally {
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = previous;
+    }
+    await waitFor(() => expect(router.state.location.search).toBe('?size=450'));
+    expect(slider.value).toBe('450');
   });
 });
 

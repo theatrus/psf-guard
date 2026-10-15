@@ -4,6 +4,10 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- The thumbnail size slider in Images and Sequence counts every step of a
+  quick run of arrow keys. On a busy page it used to snap back between
+  steps, so some were lost.
+- With reduced motion turned on in the system, loading spinners hold still.
 - A plan's mosaic panels are placed one by one. A framed target that already
   has frames stays locked where they were shot, and **Mosaic panels** adds
   panels beside it or round the whole mosaic to the north, east, south, west
