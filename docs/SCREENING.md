@@ -224,7 +224,13 @@ ruined whatever the setting. API callers pass `penalty_satellite`,
 `star_count_reject_below` on the analysis endpoints.
 
 Capture sessions split at a Target Scheduler session change, a capture-profile
-change, or a 60-minute gap. Frames measured from calibrated pixels (a light
+change, or a 60-minute gap. Each Target Scheduler profile forms sessions of its
+own and is part of the capture profile, so two rigs merged into one catalog by
+Sync are scored apart even at the same exposure, gain and binning. The profile
+stands in for the camera and telescope: catalog rows do not record them, and
+reading every light's header would make scoring slow. One rig kept under two
+N.I.N.A. profiles is therefore scored as two. Rows without a profile keep the
+capture profile they had. Frames measured from calibrated pixels (a light
 catalogued from its [calibrated copy](design/calibrated-subs.md), or measured
 from one) form sessions and stack comparisons of their own, since their
 background, flux and star counts differ from raw frames of the same sky. CLI screening still reports **OK**, **WARN**, and

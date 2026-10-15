@@ -771,6 +771,12 @@ pub struct ImageMetrics {
     /// sequence. Missing profiles do not force a split for older catalogs.
     #[serde(default)]
     pub capture_profile: Option<String>,
+    /// The rig the frame was captured with: its Target Scheduler profile
+    /// (see [`add_instrument_to_capture_profile`]). Each instrument forms its
+    /// own sessions, so two rigs merged into one catalog, shooting the same
+    /// target on the same night, are never scored against each other.
+    #[serde(default)]
+    pub instrument: Option<String>,
     /// Stars and HFR the sequence scores: the capture software's until
     /// [`choose_star_source`] picks one source for the whole set.
     pub star_count: Option<f64>,
@@ -1458,7 +1464,8 @@ impl SequenceAnalyzer {
         // outlier, and the other way round.
         let mut sequences: Vec<ScoredSequence> = split_by_pixel_domain(images)
             .into_iter()
-            .flat_map(|domain| self.split_into_sequences(&domain))
+            .flat_map(|domain| split_by_instrument(&domain))
+            .flat_map(|frames| self.split_into_sequences(&frames))
             .map(|seq| self.score_sequence(seq, target_id, target_name, filter_name, context))
             .collect();
         sequences.sort_by_key(|sequence| sequence.session_start.unwrap_or(0));
@@ -3560,6 +3567,20 @@ fn split_by_pixel_domain(images: &[ImageMetrics]) -> Vec<Vec<ImageMetrics>> {
         .collect()
 }
 
+/// One set of frames per instrument, so two rigs' frames interleaved in time
+/// form two runs of sessions rather than one frame each. A catalog with one
+/// profile, or none, is one set.
+fn split_by_instrument(images: &[ImageMetrics]) -> Vec<Vec<ImageMetrics>> {
+    let mut sets: Vec<(Option<String>, Vec<ImageMetrics>)> = Vec::new();
+    for image in images {
+        match sets.iter_mut().find(|(key, _)| *key == image.instrument) {
+            Some((_, set)) => set.push(image.clone()),
+            None => sets.push((image.instrument.clone(), vec![image.clone()])),
+        }
+    }
+    sets.into_iter().map(|(_, set)| set).collect()
+}
+
 pub fn choose_star_source(images: &[ImageMetrics]) -> Vec<ImageMetrics> {
     if images.iter().all(|image| image.own_stars.is_some()) {
         return images.to_vec();
@@ -4033,6 +4054,42 @@ fn capture_profile_from_metadata(metadata: &serde_json::Value) -> Option<String>
     ))
 }
 
+/// The instrument a light was captured with, as a catalog row records it:
+/// its Target Scheduler profile, the N.I.N.A. equipment profile. Empty when
+/// the row names none.
+fn instrument_text(profile_id: Option<&str>) -> Option<&str> {
+    profile_id.map(str::trim).filter(|id| !id.is_empty())
+}
+
+/// Add the instrument to a light's capture profile, so frames from two rigs
+/// that share exposure, gain and the rest still fall into separate sequences.
+/// A Sync "Merge catalog" puts two rigs' frames in one database, and each row
+/// keeps its own profile.
+///
+/// The profile id stands in for the camera and telescope the calibration
+/// library tells rigs apart by: catalog rows do not record those, and reading
+/// every light's header would be too slow for scoring. A row without a profile
+/// id, or a frame without a capture profile, keeps today's profile, so a
+/// catalog with one profile scores exactly as before.
+pub fn add_instrument_to_capture_profile(metrics: &mut ImageMetrics, profile_id: Option<&str>) {
+    let Some(instrument) = instrument_text(profile_id).map(str::to_ascii_lowercase) else {
+        return;
+    };
+    if let Some(profile) = metrics.capture_profile.as_mut() {
+        profile.push_str("|instrument=");
+        profile.push_str(&instrument);
+    }
+    metrics.instrument = Some(instrument);
+}
+
+/// [`extract_metrics_from_metadata`] for a catalog row, with its instrument
+/// in the capture profile ([`add_instrument_to_capture_profile`]).
+pub fn extract_light_metrics(image: &crate::models::AcquiredImage) -> ImageMetrics {
+    let mut metrics = extract_metrics_from_metadata(image.id, &image.metadata, image.acquired_date);
+    add_instrument_to_capture_profile(&mut metrics, image.profile_id.as_deref());
+    metrics
+}
+
 pub fn extract_metrics_from_metadata(
     image_id: i32,
     metadata_json: &str,
@@ -4109,6 +4166,7 @@ pub fn extract_metrics_from_metadata(
         session_id: metadata_value_text(&metadata["SessionId"])
             .or_else(|| metadata_value_text(&metadata["SessionID"])),
         capture_profile: capture_profile_from_metadata(&metadata),
+        instrument: None,
         star_count,
         hfr,
         eccentricity,
@@ -4148,6 +4206,7 @@ mod tests {
             timestamp: Some(ts),
             session_id: None,
             capture_profile: None,
+            instrument: None,
             star_count: Some(stars),
             hfr: Some(hfr),
             eccentricity: None,
@@ -4267,6 +4326,7 @@ mod tests {
             timestamp: Some(ts),
             session_id: None,
             capture_profile: None,
+            instrument: None,
             star_count: Some(stars),
             hfr: Some(hfr),
             eccentricity: Some(ecc),
@@ -4387,6 +4447,7 @@ mod tests {
             timestamp: Some(ts),
             session_id: None,
             capture_profile: None,
+            instrument: None,
             star_count: Some(stars),
             hfr: Some(hfr),
             eccentricity: None,
@@ -6475,6 +6536,175 @@ mod tests {
             details.contains("all target/filter stack candidates with matching capture settings")
         }));
         assert_eq!(rollup.images[5].category, None);
+    }
+
+    /// A catalog row captured at 300 s, gain 100, with the capture software's
+    /// stars and HFR, under Target Scheduler profile `profile`.
+    fn light_row(
+        id: i32,
+        at: i64,
+        stars: i32,
+        hfr: f64,
+        profile: Option<&str>,
+    ) -> crate::models::AcquiredImage {
+        crate::models::AcquiredImage {
+            id,
+            project_id: 1,
+            target_id: 1,
+            acquired_date: Some(at),
+            filter_name: "Ha".into(),
+            grading_status: 0,
+            metadata: serde_json::json!({
+                "ExposureDuration": 300, "Gain": 100, "Offset": 10, "Binning": "1x1",
+                "ReadoutMode": 0, "ROI": 100, "DetectedStars": stars, "HFR": hfr,
+            })
+            .to_string(),
+            reject_reason: None,
+            profile_id: profile.map(str::to_string),
+            guid: None,
+        }
+    }
+
+    fn scores(sequences: &[ScoredSequence]) -> Vec<(i32, f64)> {
+        let mut scores: Vec<(i32, f64)> = sequences
+            .iter()
+            .flat_map(|sequence| sequence.images.iter())
+            .map(|image| (image.image_id, image.quality_score))
+            .collect();
+        scores.sort_by_key(|(id, _)| *id);
+        scores
+    }
+
+    /// Two rigs merged into one catalog, shooting one target at once with
+    /// the same settings: the Askar sees twice the stars at a tighter HFR.
+    fn two_rigs() -> Vec<crate::models::AcquiredImage> {
+        (0..16)
+            .map(|i| {
+                let at = 1_000_000 + i as i64 * 150;
+                if i % 2 == 0 {
+                    light_row(i, at, 1_000 + i * 7, 2.0 + i as f64 * 0.01, Some("askar"))
+                } else {
+                    light_row(i, at, 450 + i * 3, 3.2 + i as f64 * 0.01, Some("esprit"))
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn two_instruments_with_identical_settings_are_scored_apart() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let rows = two_rigs();
+        let merged: Vec<ImageMetrics> = rows.iter().map(extract_light_metrics).collect();
+        assert_ne!(merged[0].capture_profile, merged[1].capture_profile);
+
+        let (sequences, _) = analyzer.analyze_with_target_filter_rollup(&merged, 1, "M42", "Ha");
+        // One session per rig, not one frame each as the rigs alternate.
+        assert_eq!(sequences.len(), 2);
+        for sequence in &sequences {
+            let rigs: std::collections::HashSet<i32> = sequence
+                .images
+                .iter()
+                .map(|image| image.image_id % 2)
+                .collect();
+            assert_eq!(rigs.len(), 1, "a session mixes rigs");
+            assert_eq!(sequence.images.len(), 8);
+        }
+        // Each rig scores exactly as it would in a catalog of its own.
+        for rig in ["askar", "esprit"] {
+            let alone: Vec<ImageMetrics> = rows
+                .iter()
+                .filter(|row| row.profile_id.as_deref() == Some(rig))
+                .map(extract_light_metrics)
+                .collect();
+            let (own, _) = analyzer.analyze_with_target_filter_rollup(&alone, 1, "M42", "Ha");
+            let own = scores(&own);
+            let in_merged: Vec<(i32, f64)> = scores(&sequences)
+                .into_iter()
+                .filter(|(id, _)| own.iter().any(|(own_id, _)| own_id == id))
+                .collect();
+            assert_eq!(in_merged, own, "{rig}");
+        }
+    }
+
+    #[test]
+    fn a_single_instrument_catalog_scores_as_it_did_before() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        // Two nights of one rig, with a soft patch on the second.
+        let rows: Vec<_> = (0..24)
+            .map(|i| {
+                let night = i64::from(i / 12) * 86_400;
+                let hfr = if i == 18 {
+                    3.4
+                } else {
+                    2.0 + (i % 5) as f64 * 0.03
+                };
+                light_row(
+                    i,
+                    1_000_000 + night + i as i64 * 300,
+                    900 + (i % 4) * 20,
+                    hfr,
+                    Some("Askar"),
+                )
+            })
+            .collect();
+        let before: Vec<ImageMetrics> = rows
+            .iter()
+            .map(|row| extract_metrics_from_metadata(row.id, &row.metadata, row.acquired_date))
+            .collect();
+        let after: Vec<ImageMetrics> = rows.iter().map(extract_light_metrics).collect();
+        assert!(after
+            .iter()
+            .all(|image| image.instrument.as_deref() == Some("askar")));
+
+        let (old_sessions, old_rollup) =
+            analyzer.analyze_with_target_filter_rollup(&before, 1, "M42", "Ha");
+        let (new_sessions, new_rollup) =
+            analyzer.analyze_with_target_filter_rollup(&after, 1, "M42", "Ha");
+        assert_eq!(new_sessions.len(), old_sessions.len());
+        assert_eq!(scores(&new_sessions), scores(&old_sessions));
+        let rollup_scores = |rollup: Option<TargetFilterRollup>| {
+            scores(&[rollup.expect("two nights support a rollup").sequence])
+        };
+        assert_eq!(rollup_scores(new_rollup), rollup_scores(old_rollup));
+    }
+
+    #[test]
+    fn a_missing_profile_id_keeps_the_capture_profile_it_had() {
+        for profile in [None, Some(""), Some("  ")] {
+            let row = light_row(1, 1_000, 900, 2.0, profile);
+            let light = extract_light_metrics(&row);
+            let plain = extract_metrics_from_metadata(row.id, &row.metadata, row.acquired_date);
+            assert_eq!(light.capture_profile, plain.capture_profile, "{profile:?}");
+            assert_eq!(light.instrument, None, "{profile:?}");
+        }
+        // A frame with no capture settings gains no profile from its rig.
+        let mut bare = extract_metrics_from_metadata(1, "{}", Some(1_000));
+        add_instrument_to_capture_profile(&mut bare, Some("askar"));
+        assert_eq!(bare.capture_profile, None);
+        assert_eq!(bare.instrument.as_deref(), Some("askar"));
+    }
+
+    #[test]
+    fn one_rig_under_two_profiles_scores_each_profile_apart() {
+        // The catalog cannot tell one rig with two N.I.N.A. profiles from two
+        // rigs, so the profiles are compared apart: two sessions where one
+        // run of frames used to be one.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let rows: Vec<_> = (0..12)
+            .map(|i| {
+                let profile = if i < 6 { "summer" } else { "winter" };
+                light_row(i, 1_000_000 + i as i64 * 300, 900, 2.0, Some(profile))
+            })
+            .collect();
+        let profiled: Vec<ImageMetrics> = rows.iter().map(extract_light_metrics).collect();
+        let plain: Vec<ImageMetrics> = rows
+            .iter()
+            .map(|row| extract_metrics_from_metadata(row.id, &row.metadata, row.acquired_date))
+            .collect();
+        assert_eq!(analyzer.analyze(&plain, 1, "M42", "Ha").len(), 1);
+        let sessions = analyzer.analyze(&profiled, 1, "M42", "Ha");
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions.iter().all(|session| session.images.len() == 6));
     }
 
     #[test]

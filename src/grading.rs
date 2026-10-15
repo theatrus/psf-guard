@@ -70,6 +70,10 @@ pub struct ImageStatistics {
     pub exposure_time: String,
     pub original_status: i32,
     pub metadata_json: String,
+    /// The Target Scheduler profile the light was captured with, which
+    /// stands for its rig: two rigs merged into one catalog are compared
+    /// apart. `None` when the row names none.
+    pub instrument: Option<String>,
 }
 
 #[derive(Debug)]
@@ -116,18 +120,23 @@ impl StatisticalGrader {
                 .then_with(|| a.exposure_time.cmp(&b.exposure_time))
         });
 
-        // Group images by target and filter
-        let mut target_filter_groups: HashMap<(i32, String), Vec<&ImageStatistics>> =
-            HashMap::new();
+        // Group images by target, filter and instrument: one rig's HFR and
+        // star counts are no yardstick for another's.
+        type GroupKey = (i32, String, Option<String>);
+        let mut target_filter_groups: HashMap<GroupKey, Vec<&ImageStatistics>> = HashMap::new();
         for image in &images {
             target_filter_groups
-                .entry((image.target_id, image.filter_name.clone()))
+                .entry((
+                    image.target_id,
+                    image.filter_name.clone(),
+                    image.instrument.clone(),
+                ))
                 .or_default()
                 .push(image);
         }
 
-        // Analyze each target/filter group
-        for ((_target_id, _filter_name), target_filter_images) in target_filter_groups {
+        // Analyze each target/filter/instrument group
+        for (_, target_filter_images) in target_filter_groups {
             if target_filter_images.len() < 3 {
                 // Not enough images for statistical analysis
                 continue;
@@ -560,7 +569,33 @@ pub fn parse_image_metadata(
         exposure_time: metadata.exposure_start_time,
         original_status,
         metadata_json: metadata_json.to_string(),
+        instrument: None,
     })
+}
+
+/// [`parse_image_metadata`] for a catalog row, with its instrument: the
+/// Target Scheduler profile it was captured with
+/// ([`crate::sequence_analysis::add_instrument_to_capture_profile`] keys
+/// sequence scoring the same way).
+pub fn light_statistics(
+    image: &crate::models::AcquiredImage,
+    target_name: &str,
+) -> Result<ImageStatistics> {
+    let mut stats = parse_image_metadata(
+        image.id,
+        image.target_id,
+        target_name,
+        &image.metadata,
+        &image.filter_name,
+        image.grading_status,
+    )?;
+    stats.instrument = image
+        .profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_ascii_lowercase);
+    Ok(stats)
 }
 
 #[cfg(test)]
@@ -578,6 +613,7 @@ mod tests {
             exposure_time: "300".to_string(),
             original_status: 0,
             metadata_json: String::new(),
+            instrument: None,
         }
     }
 
@@ -685,6 +721,70 @@ mod tests {
             .collect();
         let refs: Vec<&ImageStatistics> = images.iter().collect();
         assert!(grader.check_cloud_sequence(&refs).is_empty());
+    }
+
+    /// Fourteen Askar frames and three Esprit frames of one target and filter,
+    /// merged into one catalog, each rig steady on its own scale.
+    fn two_rig_rows(
+        askar: Option<&str>,
+        esprit: Option<&str>,
+    ) -> Vec<crate::models::AcquiredImage> {
+        (0..17)
+            .map(|i| {
+                let (profile, hfr, stars) = if i % 5 == 4 {
+                    (esprit, 3.4, 450)
+                } else {
+                    (askar, 2.0, 1000)
+                };
+                crate::models::AcquiredImage {
+                    id: i,
+                    project_id: 1,
+                    target_id: 1,
+                    acquired_date: None,
+                    filter_name: "Ha".into(),
+                    grading_status: 0,
+                    metadata: serde_json::json!({
+                        "FileName": format!("f{i}.fits"), "FilterName": "Ha",
+                        "ExposureStartTime": format!("2026-10-13T04:{i:02}:00Z"),
+                        "HFR": hfr, "DetectedStars": stars,
+                    })
+                    .to_string(),
+                    reject_reason: None,
+                    profile_id: profile.map(str::to_string),
+                    guid: None,
+                }
+            })
+            .collect()
+    }
+
+    fn rejected_ids(rows: &[crate::models::AcquiredImage]) -> Vec<i32> {
+        let stats = rows
+            .iter()
+            .map(|row| light_statistics(row, "M42").unwrap())
+            .collect();
+        let grader = StatisticalGrader::new(StatisticalGradingConfig::default());
+        let mut ids: Vec<i32> = grader
+            .analyze_images(stats)
+            .unwrap()
+            .into_iter()
+            .map(|rejection| rejection.image_id)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    #[test]
+    fn statistical_grading_compares_each_instrument_with_itself() {
+        // Pooled, the Esprit's softer, sparser frames read as outliers.
+        assert_eq!(rejected_ids(&two_rig_rows(None, None)), vec![4, 9, 14]);
+        // Apart, each rig is steady and nothing is rejected.
+        assert!(rejected_ids(&two_rig_rows(Some("askar"), Some("esprit"))).is_empty());
+        // One profile for the whole catalog grades as no profile did.
+        assert_eq!(
+            rejected_ids(&two_rig_rows(Some("askar"), Some("askar"))),
+            rejected_ids(&two_rig_rows(None, None))
+        );
     }
 
     #[test]
@@ -952,6 +1052,7 @@ mod tests {
                 exposure_time: "2023-08-27T10:00:00Z".to_string(),
                 original_status: 0,
                 metadata_json: "{}".to_string(),
+                instrument: None,
             },
             ImageStatistics {
                 id: 2,
@@ -963,6 +1064,7 @@ mod tests {
                 exposure_time: "2023-08-27T10:05:00Z".to_string(),
                 original_status: 0,
                 metadata_json: "{}".to_string(),
+                instrument: None,
             },
         ];
         // Less than 3 images, should not perform analysis
@@ -998,6 +1100,7 @@ mod tests {
                 exposure_time: format!("2023-08-27T10:{:02}:00Z", i * 5),
                 original_status: 0,
                 metadata_json: "{}".to_string(),
+                instrument: None,
             });
         }
 
@@ -1012,6 +1115,7 @@ mod tests {
             exposure_time: "2023-08-27T10:20:00Z".to_string(),
             original_status: 0,
             metadata_json: "{}".to_string(),
+            instrument: None,
         });
 
         let result = grader.analyze_images(images).unwrap();
