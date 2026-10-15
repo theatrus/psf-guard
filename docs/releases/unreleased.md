@@ -17,18 +17,6 @@
   that name no profile. Two projects with one name stay in separate Project
   groups. Links to groups from before still open them, and the image
   detail's next and previous walk the same nights as the grid.
-- Director's **Activate…** is now **Send to rigs…**, and the plan's state
-  reads **On the rigs** or **Rigs behind** instead of Synced or Not synced,
-  so neither is mistaken for Target Scheduler's project Active flag or the
-  catalog Sync. The **Send to the rigs** dialog previews by itself when it
-  opens and again whenever its inputs change, so there is no Preview button
-  to press; **Send** waits for a current preview. The preview reads a copy
-  of each rig's planning tables, so it never waits for N.I.N.A. or holds a
-  rig database's lock; **Send** checks the databases themselves and writes
-  only when they match. A send refused because something changed says what
-  it found and previews again. A plan that cannot be sent yet says what to
-  do first instead of offering a send. Unsaved plan edits are never saved
-  unasked: the dialog offers **Save and send…**.
 - A Director plan's status now reads **Activated** or **Needs activating**
   instead of Synced or Not synced, so it is not mistaken for the catalog
   Sync, and the Library badge says **Activated on N rigs** rather than
