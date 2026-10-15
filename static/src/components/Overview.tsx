@@ -72,6 +72,7 @@ import { useAccess } from '../auth/access';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
 import { uncalibratedNote } from '../utils/uncalibratedNote';
+import { useNavigateNow } from '../hooks/useNavigateNow';
 import './projectCard.css';
 import './Overview.css';
 
@@ -92,6 +93,7 @@ function projectKey(dbId: string, projectId: number): string {
 export default function Overview() {
   const color = useColorPreview();
   const navigate = useNavigate();
+  const navigateNow = useNavigateNow();
   const location = useLocation();
   const queryClient = useQueryClient();
   const [projectSort, setProjectSort] = useState<ProjectSort>('recent');
@@ -593,7 +595,7 @@ export default function Overview() {
       project: String(project.id),
       target: String(image.target_id),
     });
-    navigate(imageDetailPath(image.id, params, 'grid'));
+    navigateNow(imageDetailPath(image.id, params, 'grid'));
   };
 
   const handleSelectTarget = (target: WithDb<TargetOverview>) => {

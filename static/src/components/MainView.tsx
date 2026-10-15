@@ -1,9 +1,10 @@
-import { useLocation, useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { useDbProjectTarget } from '../hooks/useUrlState';
 import GroupedImageGrid from './GroupedImageGrid';
 import ImageDetailView from './ImageDetailView';
 import ImageComparisonView from './ImageComparisonView';
 import { useImageNavigation } from '../hooks/useImageNavigation';
+import { useNavigateNow } from '../hooks/useNavigateNow';
 import { useGrading } from '../hooks/useGrading';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import { imageDetailReturnView } from '../utils/imageDetailRoutes';
@@ -11,7 +12,8 @@ import { imageDetailReturnView } from '../utils/imageDetailRoutes';
 export default function MainView() {
   const location = useLocation();
   const params = useParams();
-  const navigate = useNavigate();
+  // Compare's arrows and swap keep the keyboard in Compare; see useNavigateNow.
+  const navigate = useNavigateNow();
   const [searchParams] = useSearchParams();
   const { dbId, projectId, targetId } = useDbProjectTarget();
 

@@ -1,4 +1,4 @@
-import { expect, test, type Route } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 import type { ScoredSequence, TargetFilterRollup } from '../src/api/types';
 import {
   registerFixtureDb,
@@ -433,6 +433,124 @@ test('grid shortcuts do not leak into the detail overlay', async ({ page }) => {
   await page.keyboard.press('ArrowRight');
   await expect(page).toHaveURL(new RegExp(`#/detail/${secondId}`));
   await expect(page).toHaveURL(new RegExp(`current=${firstId}`));
+});
+
+// A key can reach the page after the router has changed the URL but before
+// React has drawn the view that URL names. These tests press their second
+// key at exactly that moment: in a microtask queued by the history call that
+// moves to `urlPattern`. The view the URL names must already be listening.
+async function pressWhenUrlChanges(page: Page, urlPattern: RegExp, keys: string[]) {
+  await page.evaluate(({ source, flags, keys }) => {
+    const pattern = new RegExp(source, flags);
+    const press = (key: string) => {
+      const code = key === ' ' ? 'Space' : key.length === 1 ? `Key${key.toUpperCase()}` : key;
+      const target = document.activeElement ?? document.body;
+      for (const type of ['keydown', 'keyup']) {
+        target.dispatchEvent(new KeyboardEvent(type, { key, code, bubbles: true, cancelable: true }));
+      }
+    };
+    const originals = { pushState: history.pushState, replaceState: history.replaceState };
+    for (const name of ['pushState', 'replaceState'] as const) {
+      history[name] = function (this: History, ...args: Parameters<History['pushState']>) {
+        originals[name].apply(this, args);
+        if (pattern.test(location.href)) {
+          history.pushState = originals.pushState;
+          history.replaceState = originals.replaceState;
+          queueMicrotask(() => keys.forEach(press));
+        }
+      };
+    }
+  }, { source: urlPattern.source, flags: urlPattern.flags, keys });
+}
+
+test('an arrow pressed as the detail opens goes to the detail', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const wrappers = page.locator('.image-card-wrapper');
+  await expect(wrappers).toHaveCount(3, { timeout: 15_000 });
+  const firstId = await wrappers.nth(0).getAttribute('data-image-id');
+  const secondId = await wrappers.nth(1).getAttribute('data-image-id');
+
+  await pressWhenUrlChanges(page, /#\/detail\//, ['ArrowRight']);
+  await page.keyboard.press('Enter');
+
+  await expect(page).toHaveURL(new RegExp(`#/detail/${secondId}\\?`));
+  await expect(page).toHaveURL(new RegExp(`current=${firstId}`));
+});
+
+test('arrows pressed back to back each move the detail one image', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const wrappers = page.locator('.image-card-wrapper');
+  await expect(wrappers).toHaveCount(3, { timeout: 15_000 });
+  const [firstId, secondId, thirdId] = await Promise.all(
+    [0, 1, 2].map(index => wrappers.nth(index).getAttribute('data-image-id')),
+  );
+  await wrappers.nth(0).locator('.image-card').dblclick();
+  await expect(page).toHaveURL(new RegExp(`#/detail/${firstId}\\?`));
+  await expect(page.locator('.image-detail-overlay')).toBeVisible();
+
+  await pressWhenUrlChanges(page, new RegExp(`#/detail/${secondId}\\?`), ['ArrowRight']);
+  await page.keyboard.press('ArrowRight');
+
+  await expect(page).toHaveURL(new RegExp(`#/detail/${thirdId}\\?`));
+});
+
+test('an arrow pressed as the detail closes moves the grid cursor', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const wrappers = page.locator('.image-card-wrapper');
+  await expect(wrappers).toHaveCount(3, { timeout: 15_000 });
+  const firstId = await wrappers.nth(0).getAttribute('data-image-id');
+  const secondId = await wrappers.nth(1).getAttribute('data-image-id');
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(new RegExp(`#/detail/${firstId}\\?`));
+  await expect(page.locator('.image-detail-overlay')).toBeVisible();
+
+  await pressWhenUrlChanges(page, /#\/grid\?/, ['ArrowRight']);
+  await page.keyboard.press('Escape');
+
+  await expect(wrappers.nth(1)).toHaveClass(/current-selection/);
+  await expect(page).toHaveURL(new RegExp(`#/grid\\?.*current=${secondId}`));
+  await expect(page.locator('.image-detail-overlay')).toHaveCount(0);
+});
+
+test('an arrow pressed as Compare opens moves its right image', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+
+  const wrappers = page.locator('.image-card-wrapper');
+  await expect(wrappers).toHaveCount(3, { timeout: 15_000 });
+  const [firstId, , thirdId] = await Promise.all(
+    [0, 1, 2].map(index => wrappers.nth(index).getAttribute('data-image-id')),
+  );
+
+  await pressWhenUrlChanges(page, /#\/compare\//, ['ArrowRight']);
+  await page.keyboard.press('c');
+
+  await expect(page).toHaveURL(new RegExp(`#/compare/${firstId}/${thirdId}\\?`));
+});
+
+test('an arrow pressed as the detail opens from Sequence stays in the detail', async ({ page }) => {
+  await page.goto(
+    `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`
+  );
+
+  const cards = page.locator('.sequence-image-card');
+  await expect(cards).toHaveCount(3, { timeout: 15_000 });
+  const secondId = await cards.nth(1).getAttribute('data-card-image-id');
+
+  await pressWhenUrlChanges(page, /#\/detail\//, ['ArrowRight']);
+  await cards.nth(0).dblclick();
+
+  await expect(page).toHaveURL(new RegExp(`#/detail/${secondId}\\?`));
+  await expect(page.locator('.image-detail-overlay')).toBeVisible();
+
+  await pressWhenUrlChanges(page, /#\/sequence\?/, ['ArrowRight']);
+  await page.keyboard.press('Escape');
+
+  await expect(page).toHaveURL(/#\/sequence\?/);
+  await expect(cards.nth(2)).toHaveClass(/current-selection/);
+  await expect(page.locator('.image-detail-overlay')).toHaveCount(0);
 });
 
 test('sequence mode uses arrows and Space for the same keyboard selection flow', async ({ page }) => {

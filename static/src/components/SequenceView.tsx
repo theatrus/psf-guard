@@ -52,6 +52,7 @@ import { thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { formatCategory } from '../utils/issueCategory';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
 import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
+import { useNavigateNow } from '../hooks/useNavigateNow';
 import {
   type BasisScores,
   qualityScoreDescription,
@@ -142,6 +143,7 @@ export default function SequenceView() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const navigateNow = useNavigateNow();
   const grading = useGrading(dbId!);
   // Calibration marks for the chips and the Poor calibration choice.
   const calibration = useCalibrationMarks(dbId, projectId, targetId != null);
@@ -756,10 +758,10 @@ export default function SequenceView() {
     const offsetTop = scroller && anchor
       ? anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
       : 0;
-    navigate(imageDetailPath(imageId, searchParams, 'sequence', calibrationFocus), {
+    navigateNow(imageDetailPath(imageId, searchParams, 'sequence', calibrationFocus), {
       state: imageDetailNavigationState({ scrollTop, imageId, offsetTop }),
     });
-  }, [navigate, searchParams]);
+  }, [navigateNow, searchParams]);
 
   const selectSequence = useCallback((choice: SequenceChoice) => {
     const sequence = choice.sequence;

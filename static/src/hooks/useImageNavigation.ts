@@ -1,6 +1,6 @@
 import { useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import {
   CALIBRATION_FOCUS_PARAM,
@@ -27,13 +27,15 @@ import { matchesFlagFilter } from '../utils/flagFilter';
 import { matchesCalibrationFilter } from '../utils/calibrationFilter';
 import { useScopedQuality } from './useSequenceAnalysis';
 import { useCalibrationMarks } from './useCalibrationMarks';
+import { useNavigateNow } from './useNavigateNow';
 
 /**
  * Hook for navigating between images in the current context
  */
 export function useImageNavigation(currentImageId?: number) {
   const location = useLocation();
-  const navigate = useNavigate();
+  // Each move hands the keyboard to the view it opens; see useNavigateNow.
+  const navigate = useNavigateNow();
   const [searchParams] = useSearchParams();
   const { dbId, projectId, targetId, mosaic: mosaicScope } = useDbProjectTarget();
   const { filters } = useFilters();
