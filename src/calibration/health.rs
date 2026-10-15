@@ -26,15 +26,14 @@
 
 use super::quality::{self, StoredMeasurement};
 use super::{
-    calibration_gap_with, coherent_master_subset, dark_choice, dark_reach_days,
-    external_master_policy, flat_max_age_days, flat_session_at, night_of, tolerances,
-    CalibrationFrame, CalibrationKind, ExternalMasterPolicy, LibrarySnapshot, MIN_MASTER_FRAMES,
-    THIN_MASTER_FRAMES,
+    calibration_gaps, coherent_master_subset, flat_session_at, night_of, rule_book,
+    CalibrationFrame, CalibrationKind, Check, CheckMode, ExternalMasterPolicy, LibrarySnapshot,
+    Rules, MIN_MASTER_FRAMES, THIN_MASTER_FRAMES,
 };
 use crate::commands::import::headers::FrameMeta;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use seiza_calibration::{FlatMeasurement, FlatScreening, Grade, FRAME_QUALITY_ALGORITHM_VERSION};
+use seiza_calibration::{FlatMeasurement, Grade, FRAME_QUALITY_ALGORITHM_VERSION};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -47,8 +46,9 @@ use std::time::UNIX_EPOCH;
 pub const HEALTH_ALGORITHM_VERSION: u32 = 2;
 
 /// Flats further than this from a light are worth a look, though they are
-/// within the age limit that makes a light one that cannot be calibrated.
-pub const FLAT_CHECK_AGE_DAYS: f64 = 30.0;
+/// within the age limit that makes a light one that cannot be calibrated,
+/// unless a setting says otherwise ([`super::Rules::flat_check_age_days`]).
+pub const FLAT_CHECK_AGE_DAYS: f64 = super::rules::DEFAULT_FLAT_CHECK_AGE_DAYS;
 
 /// How serious a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -201,8 +201,71 @@ pub struct HealthLibrary {
     suspect: HashSet<String>,
     by_hand: HashSet<String>,
     flat_measurements: HashMap<String, FlatMeasurement>,
-    /// Seiza's verdict on each flat set already judged, by its frames.
+    /// Seiza's verdict on each flat set already judged, by its frames and
+    /// the limits it was judged by.
     flat_sets: Mutex<HashMap<String, Option<(Grade, usize)>>>,
+    /// The settings in force when the library was read, so every light of
+    /// one pass is judged by the same ones.
+    book: std::sync::Arc<super::RuleBook>,
+}
+
+/// What the checks made of one light.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Judgement {
+    /// What they flag, at the level its check's setting allows.
+    pub findings: Vec<LightFinding>,
+    /// What a check would have flagged had a setting not turned it off.
+    pub waived: Vec<LightFinding>,
+}
+
+/// Findings as their checks' settings have them: flagged, made advisory, or
+/// set aside as waived.
+struct Gathered<'a> {
+    rules: &'a Rules,
+    judgement: Judgement,
+}
+
+impl<'a> Gathered<'a> {
+    fn new(rules: &'a Rules) -> Self {
+        Self {
+            rules,
+            judgement: Judgement::default(),
+        }
+    }
+
+    /// Who set a check's mode, in words.
+    fn set_by(&self, check: Check) -> String {
+        self.rules
+            .set_by(check.key())
+            .unwrap_or_else(|| "set for this rig".into())
+    }
+
+    fn push(&mut self, check: Check, mut finding: LightFinding) {
+        match self.rules.mode(check) {
+            CheckMode::Flag => self.judgement.findings.push(finding),
+            CheckMode::Advisory => {
+                if finding.level == HealthLevel::Poor {
+                    finding.level = HealthLevel::Check;
+                    finding.reason =
+                        format!("{} (advisory, {})", finding.reason, self.set_by(check));
+                }
+                self.judgement.findings.push(finding);
+            }
+            CheckMode::Off => {
+                finding.reason = format!("{} (check off, {})", finding.reason, self.set_by(check));
+                self.judgement.waived.push(finding);
+            }
+        }
+    }
+}
+
+/// `" (fewer than 4, set globally)"` after a finding whose limit someone
+/// set, or nothing for a default limit.
+fn limit_note(rules: &Rules, key: &str, limit: impl FnOnce() -> String) -> String {
+    rules
+        .set_by(key)
+        .map(|by| format!(" ({}, {by})", limit()))
+        .unwrap_or_default()
 }
 
 /// The frames one master would take: a master from other software as it
@@ -216,7 +279,7 @@ enum MasterInput {
 impl MasterInput {
     /// The rule a stack build follows: an external master by the policy,
     /// otherwise the raw frames' coherent subset.
-    fn of(kind: CalibrationKind, frames: &[CalibrationFrame]) -> Self {
+    fn of(kind: CalibrationKind, frames: &[CalibrationFrame], rules: &Rules) -> Self {
         if frames.is_empty() {
             return Self::None;
         }
@@ -226,8 +289,8 @@ impl MasterInput {
             .cloned()
             .collect();
         let has_external = raw.len() < frames.len();
-        let subset = coherent_master_subset(kind, &raw);
-        let external = match external_master_policy() {
+        let subset = coherent_master_subset(kind, &raw, rules);
+        let external = match rules.external_masters {
             ExternalMasterPolicy::Prefer => has_external,
             ExternalMasterPolicy::Fallback => has_external && subset.len() < MIN_MASTER_FRAMES,
             ExternalMasterPolicy::Ignore => false,
@@ -325,6 +388,7 @@ impl HealthLibrary {
             by_hand,
             flat_measurements,
             flat_sets: Mutex::new(HashMap::new()),
+            book: rule_book(),
         })
     }
 
@@ -394,64 +458,105 @@ impl HealthLibrary {
         })
     }
 
-    /// What the library would give this light, judged.
+    /// What the library would give this light, judged by its rig's rules.
     pub fn findings(&self, light: &FrameMeta) -> Result<Vec<LightFinding>> {
-        let selected = self.snapshot.select(light);
+        let rules = self.book.for_light(light);
+        Ok(self.judge(light, &rules)?.findings)
+    }
+
+    /// What the library would give this light, judged by `rules`: what the
+    /// checks flag, and what a setting turned off.
+    pub fn judge(&self, light: &FrameMeta, rules: &std::sync::Arc<Rules>) -> Result<Judgement> {
+        let selected = self
+            .snapshot
+            .select_with(light, std::sync::Arc::clone(rules));
+        let rules: &Rules = rules;
         let library = selected.library;
-        if self.has_frames && !library.bias && !library.dark && !library.flat {
-            return Ok(vec![poor(
-                HealthCode::NoLibrary,
-                "No calibration frames match its camera and settings",
-            )
-            .about([
-                CalibrationKind::Bias,
-                CalibrationKind::Dark,
-                CalibrationKind::DarkFlat,
-                CalibrationKind::Flat,
-            ])]);
+        let mut found = Gathered::new(rules);
+        if self.has_frames
+            && !library.bias
+            && !library.dark
+            && !library.flat
+            && !library.unused_dark
+        {
+            found.push(
+                Check::NoLibrary,
+                poor(
+                    HealthCode::NoLibrary,
+                    "No calibration frames match its camera and settings",
+                )
+                .about([
+                    CalibrationKind::Bias,
+                    CalibrationKind::Dark,
+                    CalibrationKind::DarkFlat,
+                    CalibrationKind::Flat,
+                ]),
+            );
+            return Ok(found.judgement);
         }
-        let mut found = Vec::new();
-        if let Some(reason) = calibration_gap_with(light, &selected, self.boundary, || {
+        let gaps = calibration_gaps(light, &selected, self.boundary, || {
             Ok(self.flats.as_slice())
-        })? {
-            // The gap rule's order: no flat, then no bias or dark, then
-            // flats past the age limit.
-            let no_bias_or_dark = !(selected.flat.is_empty() && library.flat)
-                && selected.bias.is_empty()
-                && selected.dark.is_empty()
-                && (library.bias || library.dark);
-            let kinds = if no_bias_or_dark {
+        })?;
+        // One gap speaks for the light, in the gap rule's order (no flat,
+        // then no bias or dark, then flats past the age limit): the first
+        // flagged, else the first advisory. A gap whose check is off is
+        // only noted.
+        let speaks = gaps
+            .iter()
+            .find(|gap| gap.mode == CheckMode::Flag)
+            .or_else(|| gaps.iter().find(|gap| gap.mode == CheckMode::Advisory));
+        for gap in &gaps {
+            let is_speaker = speaks.is_some_and(|speaker| std::ptr::eq(speaker, gap));
+            if !is_speaker && gap.mode != CheckMode::Off {
+                continue;
+            }
+            let kinds = if gap.check == Check::NoBiasOrDark {
                 vec![CalibrationKind::Bias, CalibrationKind::Dark]
             } else {
                 vec![CalibrationKind::Flat]
             };
-            found.push(poor(HealthCode::CannotCalibrate, reason).about(kinds));
+            found.push(
+                gap.check,
+                poor(HealthCode::CannotCalibrate, gap.reason.clone()).about(kinds),
+            );
         }
-        let bias = MasterInput::of(CalibrationKind::Bias, &selected.bias);
-        let dark = MasterInput::of(CalibrationKind::Dark, &selected.dark);
-        let dark_flat = MasterInput::of(CalibrationKind::DarkFlat, &selected.dark_flat);
-        let flat = MasterInput::of(CalibrationKind::Flat, &selected.flat);
+        let bias = MasterInput::of(CalibrationKind::Bias, &selected.bias, rules);
+        let dark = MasterInput::of(CalibrationKind::Dark, &selected.dark, rules);
+        let dark_flat = MasterInput::of(CalibrationKind::DarkFlat, &selected.dark_flat, rules);
+        let flat = MasterInput::of(CalibrationKind::Flat, &selected.flat, rules);
+        let thin = rules.thin_master_frames;
+        let thin_note = || limit_note(rules, "thin_master_frames", || format!("fewer than {thin}"));
 
         if let MasterInput::Raw(darks) = &dark
             && !darks.is_empty()
-            && darks.len() < THIN_MASTER_FRAMES
+            && darks.len() < thin
         {
             found.push(
+                Check::ThinDark,
                 poor(
                     HealthCode::ThinDark,
-                    format!("Its dark master would use only {}", frames(darks.len())),
+                    format!(
+                        "Its dark master would use only {}{}",
+                        frames(darks.len()),
+                        thin_note()
+                    ),
                 )
                 .about([CalibrationKind::Dark]),
             );
         }
         if let MasterInput::Raw(biases) = &bias
             && !biases.is_empty()
-            && biases.len() < THIN_MASTER_FRAMES
+            && biases.len() < thin
         {
             // A dark carries the bias for the light; then a thin bias only
             // touches the flats.
-            let reason = format!("Its bias master would use only {}", frames(biases.len()));
+            let reason = format!(
+                "Its bias master would use only {}{}",
+                frames(biases.len()),
+                thin_note()
+            );
             found.push(
+                Check::ThinBias,
                 if dark.applies() {
                     check(HealthCode::ThinBias, reason)
                 } else {
@@ -460,49 +565,46 @@ impl HealthLibrary {
                 .about([CalibrationKind::Bias]),
             );
         }
-        if let Some((grade, carried)) = self.flat_set_verdict(flat.raw()) {
+        if let Some((grade, carried)) = self.flat_set_verdict(flat.raw(), rules) {
             let reason = format!(
-                "Its flats carry {carried} changing spot{} into their master",
-                if carried == 1 { "" } else { "s" }
+                "Its flats carry {carried} changing spot{} into their master{}",
+                if carried == 1 { "" } else { "s" },
+                limit_note(rules, "grade_flat_carried_spots", || "spot limits".into())
             );
             match grade {
-                Grade::Poor => {
-                    found.push(poor(HealthCode::FlatSpots, reason).about([CalibrationKind::Flat]))
-                }
-                Grade::Suspect => {
-                    found.push(check(HealthCode::FlatSpots, reason).about([CalibrationKind::Flat]))
-                }
+                Grade::Poor => found.push(
+                    Check::FlatSpots,
+                    poor(HealthCode::FlatSpots, reason).about([CalibrationKind::Flat]),
+                ),
+                Grade::Suspect => found.push(
+                    Check::FlatSpots,
+                    check(HealthCode::FlatSpots, reason).about([CalibrationKind::Flat]),
+                ),
                 Grade::Ok => {}
             }
         }
-        let limit = flat_max_age_days();
         if let (Some(flats_at), Some(light_at)) = (flat_session_at(&selected), light.timestamp) {
             let age = flats_at.abs_diff(light_at) as f64 / 86_400.0;
-            // Past the limit, the gap rule has already made it poor.
-            if age > FLAT_CHECK_AGE_DAYS && age <= limit {
+            // Past the limit, the gap rule has already spoken, unless its
+            // check is off.
+            let stale =
+                age > rules.flat_max_age_days && rules.mode(Check::StaleFlats) != CheckMode::Off;
+            if age > rules.flat_check_age_days && !stale {
+                let note = limit_note(rules, "flat_check_age_days", || {
+                    format!("more than {:.0} days", rules.flat_check_age_days)
+                });
                 found.push(
+                    Check::OldFlats,
                     check(
                         HealthCode::OldFlats,
-                        format!("Its flats are {age:.0} days from it"),
+                        format!("Its flats are {age:.0} days from it{note}"),
                     )
                     .about([CalibrationKind::Flat]),
                 );
             }
         }
-        let nights: BTreeSet<String> = flat
-            .raw()
-            .iter()
-            .filter_map(|frame| frame.captured_at)
-            .map(|at| night_of(at, self.boundary))
-            .collect();
-        if nights.len() > 1 {
-            found.push(
-                check(
-                    HealthCode::MixedFlats,
-                    format!("Its flat master mixes flats from {} nights", nights.len()),
-                )
-                .about([CalibrationKind::Flat]),
-            );
+        if let Some(finding) = self.mixed_flats(flat.raw()) {
+            found.push(Check::MixedFlats, finding);
         }
         let mut suspect = 0;
         let mut suspect_kinds = Vec::new();
@@ -524,6 +626,7 @@ impl HealthLibrary {
         }
         if suspect > 0 {
             found.push(
+                Check::SuspectFrames,
                 check(
                     HealthCode::SuspectFrames,
                     format!(
@@ -544,26 +647,54 @@ impl HealthLibrary {
                 .iter()
                 .any(|frame| frame.kind == kind && self.by_hand.contains(&frame.frame_uuid));
             let left = input.raw().len();
-            if kept && !matches!(input, MasterInput::External) && left < THIN_MASTER_FRAMES {
+            if kept && !matches!(input, MasterInput::External) && left < thin {
                 found.push(
+                    Check::ShortAfterKeepOut,
                     check(
                         HealthCode::ShortAfterKeepOut,
                         format!(
-                            "Frames kept out by hand leave its {name} at {}",
-                            frames(left)
+                            "Frames kept out by hand leave its {name} at {}{}",
+                            frames(left),
+                            thin_note()
                         ),
                     )
                     .about([kind]),
                 );
             }
         }
-        Ok(found)
+        Ok(found.judgement)
+    }
+
+    /// The mixed-flats check ([`Check::MixedFlats`], `check_mixed_flats`):
+    /// the flats one master would take, counted by the night each was shot.
+    /// More than one night is worth a look. The check's mode decides what
+    /// [`Self::judge`] makes of the finding; this decides only whether
+    /// there is one, so a rule about flats that measure alike can replace it
+    /// here alone.
+    fn mixed_flats(&self, flats: &[CalibrationFrame]) -> Option<LightFinding> {
+        let nights: BTreeSet<String> = flats
+            .iter()
+            .filter_map(|frame| frame.captured_at)
+            .map(|at| night_of(at, self.boundary))
+            .collect();
+        (nights.len() > 1).then(|| {
+            check(
+                HealthCode::MixedFlats,
+                format!("Its flat master mixes flats from {} nights", nights.len()),
+            )
+            .about([CalibrationKind::Flat])
+        })
     }
 
     /// Seiza's master verdict on a flat set and how many changing spots it
-    /// carries, from the stored measurements of the frames measured; `None`
-    /// with fewer than three, since the set check needs peers.
-    fn flat_set_verdict(&self, flats: &[CalibrationFrame]) -> Option<(Grade, usize)> {
+    /// carries, from the stored measurements of the frames measured, by the
+    /// light's flat limits; `None` with fewer than three, since the set
+    /// check needs peers.
+    fn flat_set_verdict(
+        &self,
+        flats: &[CalibrationFrame],
+        rules: &Rules,
+    ) -> Option<(Grade, usize)> {
         let mut uuids: Vec<&str> = flats
             .iter()
             .map(|frame| frame.frame_uuid.as_str())
@@ -573,7 +704,7 @@ impl HealthLibrary {
             return None;
         }
         uuids.sort_unstable();
-        let key = uuids.join(",");
+        let key = format!("{}|{:?}", uuids.join(","), rules.flat);
         if let Some(known) = self
             .flat_sets
             .lock()
@@ -586,7 +717,7 @@ impl HealthLibrary {
             .iter()
             .filter_map(|uuid| self.flat_measurements.get(*uuid).cloned())
             .collect();
-        let verdict = seiza_calibration::screen_flats(&measurements, &FlatScreening::default())
+        let verdict = seiza_calibration::screen_flats(&measurements, &rules.flat)
             .ok()
             .map(|report| (report.master.grade, report.carried_features));
         self.flat_sets
@@ -791,16 +922,24 @@ pub fn library_digest(conn: &Connection) -> Result<String> {
 
 /// The settings that change what matches a light, with the night boundary.
 pub fn settings_digest(boundary: i64) -> String {
-    format!(
+    let book = rule_book();
+    let global = book.global();
+    let mut digest = format!(
         "reach={};complete={};choice={:?};flat_age={};rotation={};external={:?};night={boundary};\
          flat_check={FLAT_CHECK_AGE_DAYS};thin={THIN_MASTER_FRAMES}",
-        dark_reach_days(),
-        super::complete_dark_frames(),
-        dark_choice(),
-        flat_max_age_days(),
-        tolerances().rotation_deg,
-        external_master_policy(),
-    )
+        global.dark_reach_days,
+        global.complete_dark_frames,
+        global.dark_choice,
+        global.flat_max_age_days,
+        global.rotation_deg,
+        global.external_masters,
+    );
+    // Every setting, a rig's included; nothing when none is set, so a
+    // catalog nobody tuned keeps the keys it had.
+    if let Some(rules) = book.digest() {
+        digest.push_str(&format!(";rules={rules}"));
+    }
+    digest
 }
 
 /// Each project's lights as health reads them: which, whether rejected,
@@ -918,6 +1057,21 @@ mod tests {
     struct Fixture {
         temp: tempfile::TempDir,
         conn: Connection,
+        /// The telescope the next frames are shot with: five letters, to
+        /// patch the header in place. Another telescope is another rig.
+        scope: std::cell::Cell<&'static str>,
+    }
+
+    /// Write `to` over the first `from` in a file's header.
+    fn patch(path: &Path, from: &[u8], to: &[u8]) {
+        assert_eq!(from.len(), to.len());
+        let mut bytes = std::fs::read(path).unwrap();
+        let at = bytes
+            .windows(from.len())
+            .position(|window| window == from)
+            .unwrap();
+        bytes[at..at + to.len()].copy_from_slice(to);
+        std::fs::write(path, bytes).unwrap();
     }
 
     fn timestamp(captured: &str) -> i64 {
@@ -942,11 +1096,27 @@ mod tests {
             )
             .unwrap();
             std::fs::create_dir_all(temp.path().join("frames")).unwrap();
-            Self { temp, conn }
+            Self {
+                temp,
+                conn,
+                scope: std::cell::Cell::new("Scope"),
+            }
         }
 
         fn path(&self, name: &str) -> PathBuf {
             self.temp.path().join("frames").join(name)
+        }
+
+        /// Put a frame on the fixture's current telescope.
+        fn on_scope(&self, path: &Path) {
+            let scope = self.scope.get();
+            if scope != "Scope" {
+                patch(
+                    path,
+                    b"TELESCOP= 'Scope'",
+                    format!("TELESCOP= '{scope}'").as_bytes(),
+                );
+            }
         }
 
         /// A light of project 1 (or `project`), shot by `camera`.
@@ -966,6 +1136,7 @@ mod tests {
                 bytes[at + 11..at + 17].copy_from_slice(camera.as_bytes());
                 std::fs::write(&path, bytes).unwrap();
             }
+            self.on_scope(&path);
             self.conn
                 .execute(
                     "INSERT INTO acquiredimage
@@ -1016,6 +1187,7 @@ mod tests {
                 write_frame(&path, kind, SIZE, &at, |x, y| {
                     pixel(index, x, y) + 5.0 * noise(x, y, index as u64 + 7)
                 });
+                self.on_scope(&path);
                 metas.push(read_frame_meta(&path));
                 names.push(name);
             }
@@ -1512,5 +1684,295 @@ mod tests {
         let health = fixture.health(1);
         assert_eq!((health.checked, health.missing_files), (0, 1));
         assert_eq!(health.level, None);
+    }
+
+    // ---------- Tunable checks ----------
+
+    use super::super::tests::RulesInForce;
+    use super::super::{rules, RuleSource};
+    use serde_json::json;
+
+    fn levels(findings: &[LightFinding]) -> Vec<(HealthCode, HealthLevel)> {
+        findings
+            .iter()
+            .map(|finding| (finding.code, finding.level))
+            .collect()
+    }
+
+    #[test]
+    fn a_thin_master_is_flagged_below_the_limit_and_not_at_or_above_it() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 4, "2026-09-09T13:00:00", 503.0);
+        // The default limit is five: four darks are thin.
+        assert_eq!(
+            codes(&fixture.health(1)),
+            [(HealthCode::ThinDark, HealthLevel::Poor)]
+        );
+        for (limit, flagged) in [(3, false), (4, false), (5, true), (6, true)] {
+            let _rules = RulesInForce::global(&[("thin_master_frames", json!(limit))]);
+            let health = fixture.health(1);
+            assert_eq!(
+                !health.findings.is_empty(),
+                flagged,
+                "four darks against a limit of {limit}"
+            );
+        }
+        let _rules = RulesInForce::global(&[("thin_master_frames", json!(6))]);
+        assert_eq!(
+            reason(&fixture.health(1), HealthCode::ThinDark),
+            "Its dark master would use only 4 frames (fewer than 6, set globally)"
+        );
+    }
+
+    #[test]
+    fn a_check_can_be_made_advisory_or_turned_off() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 3, "2026-09-09T13:00:00", 503.0);
+        assert_eq!(
+            codes(&fixture.health(1)),
+            [(HealthCode::ThinDark, HealthLevel::Poor)]
+        );
+        {
+            let _rules = RulesInForce::global(&[("check_thin_dark", json!("advisory"))]);
+            let health = fixture.health(1);
+            assert_eq!(codes(&health), [(HealthCode::ThinDark, HealthLevel::Check)]);
+            assert_eq!(
+                reason(&health, HealthCode::ThinDark),
+                "Its dark master would use only 3 frames (advisory, set globally)"
+            );
+        }
+        let _rules = RulesInForce::global(&[("check_thin_dark", json!("off"))]);
+        assert_eq!(fixture.health(1).level, None);
+        // The light's own account says what was not flagged, and why.
+        let explained = fixture.explain(1);
+        assert!(explained.findings.is_empty());
+        assert_eq!(
+            explained
+                .waived
+                .iter()
+                .map(|finding| finding.reason.as_str())
+                .collect::<Vec<_>>(),
+            ["Its dark master would use only 3 frames (check off, set globally)"]
+        );
+    }
+
+    #[test]
+    fn an_advisory_gap_is_shown_but_never_leaves_a_light_out_of_a_stack() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        fixture.frames("FLAT", 5, "2026-07-02T02:00:00", 30_000.0);
+        let light = read_frame_meta(&fixture.path("light-1.fits"));
+        let gap = || {
+            let selected = super::super::select_for_light(&fixture.conn, &light).unwrap();
+            super::super::calibration_gap(&fixture.conn, &light, &selected, 0).unwrap()
+        };
+        assert_eq!(
+            gap().as_deref(),
+            Some("Its flats are 70 days from it, past the 60-day limit")
+        );
+        {
+            let _rules = RulesInForce::global(&[("check_stale_flats", json!("advisory"))]);
+            assert_eq!(gap(), None, "a stack keeps it");
+            let health = fixture.health(1);
+            assert_eq!(
+                codes(&health),
+                [(HealthCode::CannotCalibrate, HealthLevel::Check)]
+            );
+            assert_eq!(
+                reason(&health, HealthCode::CannotCalibrate),
+                "Its flats are 70 days from it, past the 60-day limit (advisory, set globally)"
+            );
+        }
+        // Off, the age is still worth a look: past 30 days.
+        let _rules = RulesInForce::global(&[("check_stale_flats", json!("off"))]);
+        assert_eq!(gap(), None);
+        assert_eq!(
+            codes(&fixture.health(1)),
+            [(HealthCode::OldFlats, HealthLevel::Check)]
+        );
+    }
+
+    #[test]
+    fn flats_are_worth_a_look_past_the_check_age_and_not_at_or_before_it() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        // 40 days before the light.
+        fixture.frames("FLAT", 5, "2026-08-01T04:00:00", 30_000.0);
+        assert_eq!(
+            codes(&fixture.health(1)),
+            [(HealthCode::OldFlats, HealthLevel::Check)]
+        );
+        for (days, flagged) in [(39, true), (40, false), (41, false), (0, false)] {
+            let _rules = RulesInForce::global(&[("flat_check_age_days", json!(days))]);
+            assert_eq!(
+                !fixture.health(1).findings.is_empty(),
+                flagged,
+                "40-day-old flats against {days} days"
+            );
+        }
+        let _rules = RulesInForce::global(&[("flat_check_age_days", json!(39))]);
+        assert_eq!(
+            reason(&fixture.health(1), HealthCode::OldFlats),
+            "Its flats are 40 days from it (more than 39 days, set globally)"
+        );
+    }
+
+    #[test]
+    fn one_rigs_settings_change_only_its_own_lights() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        // Two rigs on one camera, each with flats 70 days before its light.
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        fixture.frames("FLAT", 5, "2026-07-02T02:00:00", 30_000.0);
+        fixture.scope.set("Other");
+        fixture.light(2, 2, LIGHT_AT, "Camera");
+        fixture.frames("FLAT", 5, "2026-07-02T03:00:00", 30_000.0);
+        let scope = rules::light_rig_uuid(&read_frame_meta(&fixture.path("light-1.fits")));
+        let other = rules::light_rig_uuid(&read_frame_meta(&fixture.path("light-2.fits")));
+        assert_ne!(scope, other);
+        let stale = [(HealthCode::CannotCalibrate, HealthLevel::Poor)];
+        assert_eq!(codes(&fixture.health(1)), stale);
+        assert_eq!(codes(&fixture.health(2)), stale);
+
+        // A longer limit for the first rig: its lights are only worth a
+        // look; the other rig's stay poor.
+        let _rules = RulesInForce::with(
+            &[],
+            &[(
+                scope.as_str(),
+                "Scope · Camera",
+                &[("flat_max_age_days", json!(90))],
+            )],
+        );
+        assert_eq!(
+            codes(&fixture.health(1)),
+            [(HealthCode::OldFlats, HealthLevel::Check)]
+        );
+        assert_eq!(codes(&fixture.health(2)), stale);
+        let explained = fixture.explain(1);
+        assert!(explained.rules.rig_has_settings);
+        assert_eq!(
+            explained
+                .rules
+                .notes
+                .iter()
+                .map(|note| (note.key, note.text.as_str(), note.source))
+                .collect::<Vec<_>>(),
+            [("flat_max_age_days", "90 days", RuleSource::Rig)]
+        );
+        assert!(!fixture.explain(2).rules.rig_has_settings);
+    }
+
+    #[test]
+    fn a_rig_without_darks_is_not_flagged_for_lacking_them() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        // Three darks shot uncapped are all the library holds for it.
+        fixture.frames("DARK", 3, "2026-09-09T13:00:00", 503.0);
+        assert_eq!(
+            codes(&fixture.health(1)),
+            [(HealthCode::ThinDark, HealthLevel::Poor)]
+        );
+        let light = read_frame_meta(&fixture.path("light-1.fits"));
+        let _rules = RulesInForce::with(
+            &[],
+            &[(
+                rules::light_rig_uuid(&light).as_str(),
+                "Scope · Camera",
+                &[("use_darks", json!(false))],
+            )],
+        );
+        // Not thin, not lacking a bias or dark, and not a camera the
+        // library holds nothing for.
+        let health = fixture.health(1);
+        assert_eq!(
+            health.level,
+            None,
+            "{:?}",
+            levels(&fixture.explain(1).findings)
+        );
+    }
+
+    #[test]
+    fn a_rigs_flat_grade_limits_decide_its_spots_and_suspect_flats() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        // Twelve spots in every flat, fading from 16% to 3%, as above.
+        let depths = [0.16, 0.10, 0.05, 0.03];
+        fixture.frames_with("FLAT", 4, "2026-09-10T02:00:00", |index, x, y| {
+            let spot = (16..112).contains(&x)
+                && (16..88).contains(&y)
+                && (x - 16) % 24 < 4
+                && (y - 16) % 24 < 4;
+            30_000.0 * if spot { 1.0 - depths[index] } else { 1.0 }
+        });
+        measure_and_grade(&fixture.conn).unwrap();
+        let health = fixture.health(1);
+        assert!(codes(&health).contains(&(HealthCode::FlatSpots, HealthLevel::Poor)));
+        assert!(codes(&health).contains(&(HealthCode::SuspectFrames, HealthLevel::Check)));
+        let rig = rules::light_rig_uuid(&read_frame_meta(&fixture.path("light-1.fits")));
+        let spots = |limits: serde_json::Value| {
+            let _rules = RulesInForce::with(
+                &[],
+                &[(
+                    rig.as_str(),
+                    "Scope · Camera",
+                    &[("grade_flat_carried_spots", limits)],
+                )],
+            );
+            fixture
+                .health(1)
+                .findings
+                .iter()
+                .find(|finding| finding.code == HealthCode::FlatSpots)
+                .map(|finding| finding.level)
+        };
+        // Twelve carried spots against the limits: at the poor limit, at the
+        // suspect limit, and below both.
+        assert_eq!(
+            spots(json!({"suspect": 1, "poor": 12})),
+            Some(HealthLevel::Poor)
+        );
+        assert_eq!(
+            spots(json!({"suspect": 12, "poor": 13})),
+            Some(HealthLevel::Check)
+        );
+        assert_eq!(spots(json!({"suspect": 13, "poor": null})), None);
+
+        // The flats' own grades follow the rig's limits once grading runs.
+        let _rules = RulesInForce::with(
+            &[],
+            &[(
+                rig.as_str(),
+                "Scope · Camera",
+                &[(
+                    "grade_flat_changing_spots",
+                    json!({"suspect": 50, "poor": null}),
+                )],
+            )],
+        );
+        let graded = measure_and_grade(&fixture.conn).unwrap().1;
+        assert_eq!((graded.suspect, graded.poor), (0, 0), "{graded:?}");
+        assert!(
+            !codes(&fixture.health(1)).contains(&(HealthCode::SuspectFrames, HealthLevel::Check))
+        );
     }
 }

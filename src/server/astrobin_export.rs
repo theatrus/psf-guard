@@ -159,15 +159,19 @@ async fn build(
         target_id: query.target_id,
         include_pending: query.include_pending,
         detail: query.detail,
+        exclude_uncalibrated: crate::calibration::exclude_uncalibrated_enabled(),
     };
-    // Only full detail reads frames from disk, so only it needs the
-    // folder index; essentials answers from the catalog alone.
-    let directory_tree = match query.detail {
-        AstroBinDetail::Full => Some(ctx.get_directory_tree().map_err(|error| {
-            AppError::InternalError(format!("indexing image folders: {error}"))
-        })?),
-        AstroBinDetail::Essentials => None,
-    };
+    // Full detail reads frames from disk, and so does leaving out the
+    // lights that can't be calibrated; only they need the folder index.
+    // Otherwise essentials answers from the catalog alone.
+    let directory_tree =
+        if query.detail == AstroBinDetail::Full || request.exclude_uncalibrated {
+            Some(ctx.get_directory_tree().map_err(|error| {
+                AppError::InternalError(format!("indexing image folders: {error}"))
+            })?)
+        } else {
+            None
+        };
     let database_path = ctx.database_path.clone();
     tokio::task::spawn_blocking(move || {
         let conn = open_scheduler_connection_with_flags(

@@ -1,81 +1,82 @@
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
-import type { DarkChoice, ExternalMasterPolicy } from '../api/types';
+import type { CalibrationRuleField, CalibrationRuleValue, CalibrationRuleValues } from '../api/types';
+import {
+  RULE_GROUPS,
+  describeRuleValue,
+  draftOf,
+  parseDraft,
+  sameRuleValue,
+  type RuleDraft,
+} from '../utils/calibrationRules';
+import CalibrationRuleControl from './CalibrationRuleControl';
+import { invalidateCalibrationViews } from '../utils/calibrationQueries';
 
-const EXTERNAL_MASTER_OPTIONS: ReadonlyArray<{
-  value: ExternalMasterPolicy;
-  label: string;
-  hint: string;
-}> = [
-  {
-    value: 'prefer',
-    label: 'Use them whenever one matches',
-    hint: 'The nearest matching external master is used as-is, even when raw frames match too.',
-  },
-  {
-    value: 'fallback',
-    label: 'Only when raw frames cannot build one',
-    hint: 'PSF Guard integrates its own master from raw frames when enough match.',
-  },
-  {
-    value: 'ignore',
-    label: 'Never',
-    hint: 'External masters stay in the library but never calibrate a stack.',
-  },
-];
+/** What each group's settings change, said once above them. */
+const GROUP_NOTES: Record<CalibrationRuleField['group'], string> = {
+  matching:
+    'Which frames calibrate a light. A change builds new masters for the stacks it touches.',
+  darks: 'Which darks a master takes. A change builds new masters for the stacks it touches.',
+  checks:
+    'What the Library, Images and the Calibration panel flag. Nothing is rebuilt. Check only shows a finding but never calls a light one that can\'t be calibrated, so stacks keep it.',
+  grades:
+    'Where a calibration frame turns suspect, then poor. Grading runs again on the stored measurements; a poor frame leaves its masters. Leave a limit empty for never.',
+};
+
+/** What a global field shows: an unset number is empty, so its placeholder names the default. */
+function globalDraft(field: CalibrationRuleField, value: CalibrationRuleValue | undefined): RuleDraft {
+  if ((field.kind.type === 'number' || field.kind.type === 'count') && value === undefined) return '';
+  return draftOf(field, value ?? field.default);
+}
+
+/** The value a save writes: `null` for the default, which is not written down. */
+function wanted(field: CalibrationRuleField, value: CalibrationRuleValue | null): CalibrationRuleValue | null {
+  return value === null || sameRuleValue(value, field.default) ? null : value;
+}
+
+function defaultNote(field: CalibrationRuleField): string {
+  const text = describeRuleValue(field, field.default);
+  return field.kind.type === 'number' || field.kind.type === 'count'
+    ? `Empty: ${text}.`
+    : `Default: ${text}.`;
+}
 
 /**
- * Server-wide matching and master-building settings, persisted in the
- * registry and applied to the next stack without a restart.
+ * Server-wide calibration checks, persisted in the registry and applied at
+ * once: matching tolerances, dark masters, what the light checks flag, and
+ * where calibration frames grade suspect or poor. A rig can set any of them
+ * for itself (see `CalibrationRigSettings`).
  */
 export default function CalibrationMatchingSettings() {
   const queryClient = useQueryClient();
   const settings = useQuery({
     queryKey: ['calibration-settings'],
     queryFn: apiClient.getCalibrationSettings,
+    // Another tab or editor may have changed them; read them afresh on opening.
+    staleTime: 0,
   });
 
-  // The field edits as text so a half-typed "1." is not fought by the parser;
-  // it commits on Save.
-  const [draft, setDraft] = useState<string>('');
-  const [policy, setPolicy] = useState<ExternalMasterPolicy>('prefer');
-  const [flatStarMasking, setFlatStarMasking] = useState(false);
-  const [reachDraft, setReachDraft] = useState('');
-  const [completeDraft, setCompleteDraft] = useState('');
-  const [darkChoice, setDarkChoice] = useState<DarkChoice>('complete');
-  const [flatAgeDraft, setFlatAgeDraft] = useState('');
-  const [excludeUncalibrated, setExcludeUncalibrated] = useState(false);
-  useEffect(() => {
-    if (settings.data) {
-      setDraft(
-        settings.data.rotation_tolerance_deg === null
-          ? ''
-          : String(settings.data.rotation_tolerance_deg)
-      );
-      setPolicy(settings.data.external_masters);
-      setFlatStarMasking(settings.data.flat_star_masking ?? false);
-      setReachDraft(settings.data.dark_reach_days == null ? '' : String(settings.data.dark_reach_days));
-      setCompleteDraft(settings.data.complete_dark_frames == null ? '' : String(settings.data.complete_dark_frames));
-      setDarkChoice(settings.data.dark_choice ?? 'complete');
-      setFlatAgeDraft(settings.data.flat_max_age_days == null ? '' : String(settings.data.flat_max_age_days));
-      setExcludeUncalibrated(settings.data.exclude_uncalibrated ?? false);
-    }
-  }, [settings.data]);
+  const fields = useMemo(() => settings.data?.fields ?? [], [settings.data]);
+  const rules: CalibrationRuleValues = useMemo(() => settings.data?.rules ?? {}, [settings.data]);
+  // Only what the person edited. A field not here shows the saved value, so
+  // the settings read afresh (another tab's save, a rig's save) reach every
+  // field nobody is editing, and a save sends only what was edited: what
+  // another tab saved, or a value this build cannot read, is kept.
+  const [drafts, setDrafts] = useState<Record<string, RuleDraft>>({});
+  const [flatStarMasking, setFlatStarMasking] = useState<boolean | null>(null);
+  const [excludeUncalibrated, setExcludeUncalibrated] = useState<boolean | null>(null);
 
   const save = useMutation({
-    mutationFn: (update: {
-      rotation_tolerance_deg: number | null;
-      external_masters: ExternalMasterPolicy;
-      flat_star_masking: boolean;
-      dark_reach_days: number | null;
-      complete_dark_frames: number | null;
-      dark_choice: DarkChoice;
-      flat_max_age_days: number | null;
-      exclude_uncalibrated: boolean;
-    }) => apiClient.updateCalibrationSettings(update),
+    mutationFn: apiClient.updateCalibrationSettings,
     onSuccess: (updated) => {
       queryClient.setQueryData(['calibration-settings'], updated);
+      setDrafts({});
+      setFlatStarMasking(null);
+      setExcludeUncalibrated(null);
+      // A light's account names the limits it was checked by, and the
+      // Library, Grid and reports show what the checks now find.
+      invalidateCalibrationViews(queryClient);
     },
   });
 
@@ -90,148 +91,114 @@ export default function CalibrationMatchingSettings() {
   }
 
   const current = settings.data!;
-  const parsed = draft.trim() === '' ? null : Number(draft);
-  const invalid =
-    parsed !== null && (!Number.isFinite(parsed) || parsed < 0 || parsed > 180);
-  const reach = reachDraft.trim() === '' ? null : Number(reachDraft);
-  const reachInvalid = reach !== null && (!Number.isFinite(reach) || reach < 1 || reach > 3650);
-  const complete = completeDraft.trim() === '' ? null : Number(completeDraft);
-  const completeInvalid = complete !== null && (!Number.isInteger(complete) || complete < 2 || complete > 64);
-  const flatAge = flatAgeDraft.trim() === '' ? null : Number(flatAgeDraft);
-  const flatAgeInvalid = flatAge !== null && (!Number.isFinite(flatAge) || flatAge < 0 || flatAge > 3650);
-  const dirty =
-    reach !== (current.dark_reach_days ?? null) ||
-    complete !== (current.complete_dark_frames ?? null) ||
-    darkChoice !== (current.dark_choice ?? 'complete') ||
-    flatAge !== (current.flat_max_age_days ?? null) ||
-    excludeUncalibrated !== (current.exclude_uncalibrated ?? false) ||
-    (parsed === null) !== (current.rotation_tolerance_deg === null) ||
-    (parsed !== null && parsed !== current.rotation_tolerance_deg) ||
-    policy !== current.external_masters ||
-    flatStarMasking !== (current.flat_star_masking ?? false);
-  const policyHint =
-    EXTERNAL_MASTER_OPTIONS.find((option) => option.value === policy)?.hint ?? '';
+  const savedMasking = current.flat_star_masking ?? false;
+  const savedExclude = current.exclude_uncalibrated ?? false;
+  const masking = flatStarMasking ?? savedMasking;
+  const exclude = excludeUncalibrated ?? savedExclude;
+  const parsed = new Map(
+    fields
+      .filter((field) => field.key in drafts)
+      .map((field) => [field.key, parseDraft(field, drafts[field.key])]),
+  );
+  const invalid = [...parsed.values()].some((result) => !result.ok);
+  // What the save sends: each edited value that differs from the saved one,
+  // `null` to go back to the default.
+  const edits: Record<string, CalibrationRuleValue | null> = {};
+  for (const field of fields) {
+    const result = parsed.get(field.key);
+    if (!result?.ok) continue;
+    const before = wanted(field, rules[field.key] ?? null);
+    const after = wanted(field, result.value);
+    const same = before === null || after === null ? before === after : sameRuleValue(before, after);
+    if (!same) edits[field.key] = after;
+  }
+  const update: Parameters<typeof apiClient.updateCalibrationSettings>[0] = {};
+  if (Object.keys(edits).length > 0) update.rules = edits;
+  if (masking !== savedMasking) update.flat_star_masking = masking;
+  if (exclude !== savedExclude) update.exclude_uncalibrated = exclude;
+  const dirty = Object.keys(update).length > 0;
+
+  const row = (field: CalibrationRuleField) => {
+    const result = parsed.get(field.key);
+    const error = result && !result.ok ? result.error : null;
+    return (
+      <div key={field.key} className="review-preference calibration-rule-row" data-rule={field.key}>
+        <span>
+          {field.label}
+          <small>
+            {field.help} {defaultNote(field)}
+          </small>
+        </span>
+        <div className="calibration-rule-setting">
+          <CalibrationRuleControl
+            field={field}
+            draft={drafts[field.key] ?? globalDraft(field, rules[field.key])}
+            placeholder={typeof field.default === 'number' ? String(field.default) : undefined}
+            invalid={!!error}
+            onChange={(draft) => setDrafts((previous) => ({ ...previous, [field.key]: draft }))}
+          />
+          {error && <p className="error-text">{error}</p>}
+        </div>
+      </div>
+    );
+  };
+  const group = (name: CalibrationRuleField['group']) => fields.filter((field) => field.group === name);
+  const legend = (name: CalibrationRuleField['group']) =>
+    RULE_GROUPS.find((entry) => entry.group === name)?.legend ?? name;
+  const fieldset = (name: CalibrationRuleField['group']) =>
+    group(name).length > 0 && (
+      <fieldset key={name} className="calibration-settings-group calibration-matching-group" disabled={save.isPending}>
+        <legend>{legend(name)}</legend>
+        <p className="calibration-group-note">{GROUP_NOTES[name]}</p>
+        {group(name).map(row)}
+      </fieldset>
+    );
 
   return (
     <div className="calibration-matching-settings">
       <h3>Calibration</h3>
-      <fieldset className="calibration-settings-group calibration-matching-group" disabled={save.isPending}>
-        <legend>Matching</legend>
-        <label className="review-preference">
-          <span>
-            Rotation tolerance (degrees)
-            <small>
-              How far a flat's rotator angle may sit from the light it corrects.
-              Wider accepts a rotator that re-homes loosely between nights;
-              narrower keeps dust motes pinned. Empty uses the default of{' '}
-              {current.default_rotation_tolerance_deg}°. Applies to every
-              database on this server, starting with the next stack.
-            </small>
-          </span>
-          <input
-            type="number"
-            min={0}
-            max={180}
-            step={0.1}
-            value={draft}
-            placeholder={String(current.default_rotation_tolerance_deg)}
-            aria-label="Rotation tolerance in degrees"
-            aria-invalid={invalid}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-        </label>
-        {invalid && (
-          <p className="error-text">Enter a value between 0 and 180 degrees.</p>
-        )}
-        <label className="review-preference">
-          <span>
-            Masters from other software
-            <small>
-              A master dark, bias, or flat integrated by PixInsight, Siril, or
-              another tool is matched on what its header kept — such files
-              usually drop gain, offset, and temperature — and used as-is rather
-              than integrated again. {policyHint}
-            </small>
-          </span>
-          <select
-            value={policy}
-            aria-label="Masters from other software"
-            onChange={(event) => setPolicy(event.target.value as ExternalMasterPolicy)}
-          >
-            {EXTERNAL_MASTER_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </fieldset>
-      <fieldset className="calibration-settings-group" disabled={save.isPending}>
-        <legend>Dark masters</legend>
-        <label className="review-preference">
-          <span>
-            Dark reach (days)
-            <small>Darks this close to the lights. Marked darks follow their mark. Empty: {current.default_dark_reach_days ?? 183}.</small>
-          </span>
-          <input type="number" min={1} max={3650} step={1} value={reachDraft} placeholder={String(current.default_dark_reach_days ?? 183)}
-            aria-label="Dark reach in days" aria-invalid={reachInvalid} onChange={(event) => setReachDraft(event.target.value)} />
-        </label>
-        {reachInvalid && <p className="error-text">Enter 1 to 3650 days.</p>}
-        <label className="review-preference">
-          <span>
-            Complete night (darks)
-            <small>The nearest night with this many matching darks is used alone. Fewer: nights pool. Empty: {current.default_complete_dark_frames ?? 10}.</small>
-          </span>
-          <input type="number" min={2} max={64} step={1} value={completeDraft} placeholder={String(current.default_complete_dark_frames ?? 10)}
-            aria-label="Darks in a complete night" aria-invalid={completeInvalid} onChange={(event) => setCompleteDraft(event.target.value)} />
-        </label>
-        {completeInvalid && <p className="error-text">Enter 2 to 64 frames.</p>}
-        <label className="review-preference">
-          <span>
-            Dark choice
-            <small>
-              {darkChoice === 'complete'
-                ? 'A complete set beats a nearer, shorter one. Bias and WBPP exports follow it too.'
-                : 'The nearest two or more frames at one temperature, however few.'}
-            </small>
-          </span>
-          <select value={darkChoice} aria-label="Dark choice" onChange={(event) => setDarkChoice(event.target.value as DarkChoice)}>
-            <option value="complete">Complete set first</option>
-            <option value="nearest">Nearest set</option>
-          </select>
-        </label>
-      </fieldset>
+      <p className="review-preferences-note">
+        Every database on this server, and every rig without a value of its own (see Rigs below).
+        A change applies to the next match, check and stack.
+      </p>
+      {fieldset('matching')}
+      {fieldset('darks')}
       <fieldset className="calibration-settings-group" disabled={save.isPending}>
         <legend>Flat masters</legend>
         <label className="review-preference">
           <input
             type="checkbox"
-            checked={flatStarMasking}
+            checked={masking}
             onChange={(event) => setFlatStarMasking(event.target.checked)}
           />
           <span>Mask stars in flats</span>
         </label>
-        <label className="review-preference">
-          <span>
-            Flat age limit (days)
-            <small>Lights whose flats are further away than this can't be calibrated. 0: no limit. Empty: {current.default_flat_max_age_days ?? 60}.</small>
-          </span>
-          <input type="number" min={0} max={3650} step={1} value={flatAgeDraft} placeholder={String(current.default_flat_max_age_days ?? 60)}
-            aria-label="Flat age limit in days" aria-invalid={flatAgeInvalid} onChange={(event) => setFlatAgeDraft(event.target.value)} />
-        </label>
-        {flatAgeInvalid && <p className="error-text">Enter 0 to 3650 days.</p>}
       </fieldset>
+      {fieldset('checks')}
+      {group('grades').length > 0 && (
+        <details className="calibration-settings-group calibration-grades">
+          <summary>{legend('grades')}</summary>
+          <fieldset className="calibration-matching-group" aria-label={legend('grades')} disabled={save.isPending}>
+            <p className="calibration-group-note">{GROUP_NOTES.grades}</p>
+            {group('grades').map(row)}
+          </fieldset>
+        </details>
+      )}
       <fieldset className="calibration-settings-group" disabled={save.isPending}>
-        <legend>Stacks</legend>
+        <legend>Stacks and exports</legend>
         <label className="review-preference">
           <input
             type="checkbox"
-            checked={excludeUncalibrated}
+            checked={exclude}
             onChange={(event) => setExcludeUncalibrated(event.target.checked)}
           />
           <span>
             Leave out lights that can't be calibrated
-            <small>No matching flat, bias or dark, or flats past the age limit, where the library holds them for that camera.</small>
+            <small>
+              No matching flat, bias or dark, or flats past the age limit, where the library holds them
+              for that camera and the check flags it. Stacks, WBPP runs and every export leave them out,
+              and each export says how many and why.
+            </small>
           </span>
         </label>
       </fieldset>
@@ -241,19 +208,8 @@ export default function CalibrationMatchingSettings() {
       <button
         type="button"
         className="save-button"
-        disabled={invalid || reachInvalid || completeInvalid || flatAgeInvalid || !dirty || save.isPending}
-        onClick={() =>
-          save.mutate({
-            rotation_tolerance_deg: parsed,
-            external_masters: policy,
-            flat_star_masking: flatStarMasking,
-            dark_reach_days: reach,
-            complete_dark_frames: complete,
-            dark_choice: darkChoice,
-            flat_max_age_days: flatAge,
-            exclude_uncalibrated: excludeUncalibrated,
-          })
-        }
+        disabled={invalid || !dirty || save.isPending}
+        onClick={() => save.mutate(update)}
       >
         {save.isPending ? 'Saving…' : 'Save'}
       </button>

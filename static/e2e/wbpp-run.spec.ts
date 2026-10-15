@@ -57,6 +57,7 @@ test.beforeEach(async ({ request }) => {
 
 test.afterEach(async ({ request }) => {
   await request.put('/api/settings/pixinsight', { data: { binary: null, runs_dir: null } });
+  await request.put('/api/settings/calibration', { data: { rules: { flat_session_hours: null } } });
   await resetDatabases(request);
 });
 
@@ -102,6 +103,13 @@ test('a run writes the script for the install, launches it, and lists what it wr
   const updated = await request.put(`/api/databases/${dbId}`, { data: { process_dir: processDir } });
   expect(updated.ok()).toBe(true);
   expect((await updated.json()).data.process_directory).toBe(processDir);
+
+  // A run matches calibration frames by the settings in force, and says
+  // which of them differ from the defaults.
+  const tuned = await request.put('/api/settings/calibration', {
+    data: { rules: { flat_session_hours: 72 } },
+  });
+  expect(tuned.ok()).toBe(true);
 
   const started = await request.post(`/api/db/${dbId}/wbpp/runs`, {
     data: {
@@ -196,6 +204,9 @@ test('a run writes the script for the install, launches it, and lists what it wr
   expect(js).toContain('var psfDrizzle = { enabled: true, fast: true, scale: 2 };');
   expect(js).toContain('var psfLoadOnly = false;');
   expect(js).toMatch(/\{ path: "[^"]+\.fits" \}/);
+  expect(progress.calibration_settings).toEqual([expect.stringMatching(/^Flat session: .+ \(global\)$/)]);
+  expect(js).toContain('matched by these settings, which differ from the defaults:');
+  expect(js).toContain(`//   ${progress.calibration_settings[0]}`);
   const log = await request.get(`/api/db/${dbId}/wbpp/runs/current/files/wbpp-out/logs/fake.log`);
   expect(await log.text()).toContain('automation mode parameter: maxStars=500');
   const escape = await request.get(`/api/db/${dbId}/wbpp/runs/current/files/../registry.json`);

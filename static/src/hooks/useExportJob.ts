@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { ExportJobProgress, ExportStatus } from '../api/types';
+import { uncalibratedNote } from '../utils/uncalibratedNote';
 
 /**
  * Monitor the singleton per-DB server export job (started via
@@ -64,6 +65,8 @@ export function describeExportProgress(progress: ExportJobProgress | undefined):
       if ((outcome.symlinked ?? 0) > 0) parts.push(`${outcome.symlinked} linked to the originals`);
       if (outcome.skipped_existing > 0) parts.push(`${outcome.skipped_existing} already present`);
       if (outcome.missing > 0) parts.push(`${outcome.missing} missing on disk`);
+      const uncalibrated = uncalibratedNote(outcome);
+      if (uncalibrated) parts.push(uncalibrated);
       if (outcome.errors > 0) parts.push(`${outcome.errors} ERRORS`);
       return `Exported${scope}: ${parts.join(', ')} → ${progress.destination}`;
     }

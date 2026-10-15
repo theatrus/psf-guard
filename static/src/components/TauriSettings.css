@@ -1957,6 +1957,282 @@
   }
 }
 
+/* Calibration checks: a row per setting, its value and unit on the right. */
+.tauri-settings .settings-setups .calibration-group-note {
+  margin: 0 0 12px;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.tauri-settings .settings-setups .calibration-rule-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.tauri-settings .settings-setups .calibration-rule-setting > select {
+  flex: 1 1 11rem;
+  max-width: 19rem;
+}
+
+.tauri-settings .settings-setups .calibration-rule-setting .error-text {
+  flex-basis: 100%;
+  margin: 0;
+  text-align: right;
+}
+
+.tauri-settings .settings-setups .calibration-rule-number,
+.tauri-settings .settings-setups .calibration-rule-limit {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Words beside a field read inline; `.review-preference span` stacks spans. */
+.tauri-settings .settings-setups .calibration-rule-unit,
+.tauri-settings .settings-setups .calibration-rule-limit-name {
+  display: inline;
+}
+
+/* A grade's two limits want room for both. */
+.tauri-settings .settings-setups .calibration-matching-group .calibration-rule-row:has(.calibration-rule-limits) {
+  grid-template-columns: minmax(0, 1fr) minmax(11rem, 22rem);
+}
+
+.tauri-settings .settings-setups .calibration-matching-group .calibration-rule-number input {
+  width: 7rem;
+}
+
+.tauri-settings .settings-setups .calibration-matching-group .calibration-rule-limit input {
+  width: 4.8rem;
+}
+
+.tauri-settings .settings-setups .calibration-rule-limits {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px 12px;
+}
+
+.tauri-settings .settings-setups .calibration-rule-limit-name {
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+}
+
+.tauri-settings .settings-setups .calibration-rule-unit {
+  min-width: 3rem;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.tauri-settings .settings-setups .calibration-rule-limit .calibration-rule-unit {
+  min-width: 1rem;
+}
+
+.tauri-settings .settings-setups .calibration-grades,
+.tauri-settings .settings-setups .calibration-rig-group {
+  margin: 14px 0 0;
+}
+
+.tauri-settings .settings-setups .calibration-grades > summary,
+.tauri-settings .settings-setups .calibration-rig-group > summary {
+  margin-bottom: 10px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tauri-settings .settings-setups .calibration-grades > fieldset,
+.tauri-settings .settings-setups .calibration-rig-group > fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.tauri-settings .settings-setups .calibration-rule-row + .calibration-rule-row {
+  margin-top: 0.75rem;
+}
+
+/* Rigs: one row each; an open one shows its values beneath. */
+.calibration-rig-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.calibration-rig-item {
+  min-width: 0;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+}
+
+.calibration-rig-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.calibration-rig-toggle:hover {
+  background: var(--color-bg-hover);
+}
+
+.calibration-rig-toggle[aria-expanded='true'] {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  background: var(--state-on-bg);
+}
+
+.calibration-rig-toggle:focus-visible,
+.calibration-rig-preset:focus-visible,
+.calibration-rule-own:focus-visible,
+.calibration-rig-reset:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 1px;
+}
+
+.calibration-rig-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.calibration-rig-meta {
+  grid-column: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.calibration-rig-count {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  padding: 2px 8px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.calibration-rig-count.has-own-values {
+  border-color: var(--color-own-values-border);
+  background: var(--color-own-values-bg);
+  color: var(--color-own-values-text);
+}
+
+.calibration-rig-editor {
+  padding: 4px 12px 14px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.calibration-rig-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 8px;
+}
+
+.calibration-rig-presets-label {
+  margin-right: 4px;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+.calibration-rig-preset,
+.calibration-rule-own,
+.calibration-rig-reset {
+  padding: 3px 10px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.calibration-rig-preset:hover:not(:disabled),
+.calibration-rule-own:hover:not(:disabled),
+.calibration-rig-reset:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.calibration-rig-preset[aria-pressed='true'],
+.calibration-rule-own[aria-pressed='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
+  color: var(--state-on-fg);
+}
+
+.calibration-rig-reset:disabled,
+.calibration-rig-preset:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* A value the rig sets for itself stands out from the ones it inherits. */
+.calibration-rig-editor .calibration-rule-row:has(.calibration-rule-own[aria-pressed='true']) {
+  margin-inline: -6px;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--state-set-bg);
+}
+
+.calibration-rule-inherited {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.88rem;
+  text-align: right;
+}
+
+.calibration-rule-inherited small {
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 640px) {
+  .tauri-settings .settings-setups .calibration-rule-setting,
+  .tauri-settings .settings-setups .calibration-rule-limits {
+    justify-content: flex-start;
+  }
+
+  .tauri-settings .settings-setups .calibration-rule-setting .error-text,
+  .calibration-rule-inherited {
+    text-align: left;
+  }
+
+  .calibration-rig-toggle {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .calibration-rig-count {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+  }
+}
+
 /* A per-database note, and the warning form used for missing GUIDs. */
 .tauri-settings .settings-note {
   margin: 8px 0;

@@ -1592,6 +1592,69 @@ export interface CalibrationSettings {
   default_flat_max_age_days?: number;
   /** Stacks leave out lights that cannot be calibrated. */
   exclude_uncalibrated?: boolean;
+  /** Every tunable check, with its range and default. */
+  fields?: CalibrationRuleField[];
+  /** The server's values by key; a key not listed uses the default. */
+  rules?: CalibrationRuleValues;
+  /** Every rig an open catalog records, and every rig with values of its own. */
+  rigs?: CalibrationRigSettings[];
+}
+
+/** What a light check does when it finds something. */
+export type CalibrationCheckMode = 'flag' | 'advisory' | 'off';
+
+/** A frame grade's two limits, `null` for never. Stored as Seiza measures them. */
+export interface CalibrationGradeLimits {
+  suspect: number | null;
+  poor: number | null;
+}
+
+export type CalibrationRuleValue = number | boolean | string | CalibrationGradeLimits;
+
+/** Settings by key. A key not listed inherits. */
+export type CalibrationRuleValues = Record<string, CalibrationRuleValue>;
+
+export type CalibrationRuleFieldKind =
+  | { type: 'number'; min: number; max: number; step: number; unit: string; zero?: string }
+  | { type: 'count'; min: number; max: number; unit: string }
+  | { type: 'toggle' }
+  | { type: 'choice'; options: { value: string; label: string }[] }
+  /** `levels`: the levels the check raises on its own. */
+  | { type: 'check'; levels: ('poor' | 'check')[] }
+  | {
+      type: 'limits';
+      min: number;
+      max: number;
+      step: number;
+      unit: string;
+      /** Show the limits times a hundred. */
+      percent: boolean;
+      lower_is_worse: boolean;
+    };
+
+/** One tunable calibration check. */
+export interface CalibrationRuleField {
+  key: string;
+  group: 'matching' | 'darks' | 'checks' | 'grades';
+  label: string;
+  help: string;
+  /** What changing it changes: which frames match, what is flagged, or how frames grade. */
+  effect: 'matching' | 'flags' | 'grades';
+  kind: CalibrationRuleFieldKind;
+  default: CalibrationRuleValue;
+}
+
+/** One rig and the values it sets for itself. */
+export interface CalibrationRigSettings {
+  rig_uuid: string;
+  name: string;
+  /** Frame size and binning. */
+  detail?: string;
+  /** The databases that record it. */
+  databases: string[];
+  frames: number;
+  /** Its own values; a key not listed inherits. */
+  rules: CalibrationRuleValues;
 }
 
 /** How much of the processor work may take, as fractions of logical cores. */
@@ -1722,6 +1785,10 @@ export interface WbppRunProgress {
   missing_files: number;
   /** Calibration frames the library keeps out: graded poor or kept out by hand. */
   kept_out_frames?: number;
+  /** Lights left out because they can't be calibrated, as stacks leave them out. */
+  uncalibrated_lights?: number;
+  /** Calibration settings that differ from the defaults, with who set them. */
+  calibration_settings?: string[];
   command: string | null;
   pid: number | null;
   started_at: number | null;
@@ -1877,6 +1944,8 @@ export interface AstroBinExport {
   /** Filter names with no AstroBin id yet; their `filter` cell is blank. */
   unmapped_filters: string[];
   lights_missing_files: number;
+  /** Lights left out because they can't be calibrated; `notes` says why. */
+  uncalibrated_lights?: number;
   notes: string[];
 }
 
@@ -2075,6 +2144,10 @@ export interface ExportSummary {
   missing: number;
   errors: number;
   bytes: number;
+  /** Lights left out because they can't be calibrated, as stacks leave them out. */
+  uncalibrated?: number;
+  /** One of them and why: "acc_0001.fits: No matching flat". */
+  uncalibrated_example?: string | null;
 }
 
 /** Progress of the singleton per-DB server export job. */
@@ -2678,6 +2751,28 @@ export interface ImageCalibrationExplanation {
   kinds: CalibrationKindExplanation[];
   /** Poor first. */
   findings: LightCalibrationFinding[];
+  /** What a check would have found had a setting not turned it off. */
+  waived?: LightCalibrationFinding[];
+  /** The rules the light was matched and checked with. */
+  rules?: LightCalibrationRules;
+}
+
+/** One setting that differs from its default for a light, and who set it. */
+export interface CalibrationRuleNote {
+  key: string;
+  label: string;
+  value: CalibrationRuleValue;
+  /** The value in words. */
+  text: string;
+  source: 'default' | 'global' | 'rig';
+}
+
+export interface LightCalibrationRules {
+  /** The light's rig, by the key its own settings are kept under. */
+  rig_uuid: string;
+  rig_name: string;
+  rig_has_settings: boolean;
+  notes: CalibrationRuleNote[];
 }
 
 export interface ProjectCalibrationHealth {

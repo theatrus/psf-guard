@@ -12,9 +12,9 @@
 //! pixels, so it runs again after every pass.
 
 use super::{
-    catalog_night_boundary, exposure_matches, frame_select, night_of, row_to_frame,
+    catalog_night_boundary, exposure_matches, frame_select, night_of, row_to_frame, rules_for_rig,
     schema_supports_current_reads, signature_sensor_consistent, signature_sensor_matches,
-    temperature_matches, tolerances, CalibrationChoiceCounts, CalibrationFrame, CalibrationKind,
+    temperature_matches, CalibrationChoiceCounts, CalibrationFrame, CalibrationKind,
     CalibrationSyncCounts,
 };
 use anyhow::{Context, Result};
@@ -55,8 +55,9 @@ pub(super) const QUALITY_TABLE_SQL: &str = r#"
 "#;
 
 /// A dark or bias master built from fewer frames than this puts its own
-/// read noise into every light; its record says so.
-pub const THIN_MASTER_FRAMES: usize = 5;
+/// read noise into every light; its record says so. The light checks read
+/// their own limit from [`super::Rules::thin_master_frames`].
+pub const THIN_MASTER_FRAMES: usize = super::rules::DEFAULT_THIN_MASTER_FRAMES;
 
 /// Frames measured between commits. Each is a full read of a raw frame.
 const MEASURE_CHUNK: usize = 10;
@@ -527,15 +528,22 @@ fn judge_darks(measured: &[Measured], judged: &mut HashMap<String, Judged>) {
                 .push((entry, dark));
         }
     }
-    let (dark_screening, bias_screening) = (DarkScreening::default(), BiasScreening::default());
-    for ((kind, _), frames) in buckets {
+    for ((kind, rig), frames) in buckets {
+        // Each rig's frames are graded by its own limits.
+        let rules = rules_for_rig(rig);
+        let (dark_screening, bias_screening): (&DarkScreening, &BiasScreening) =
+            (&rules.dark, &rules.bias);
         for (entry, _) in &frames {
             let peers: Vec<&(&Measured, &DarkMeasurement)> = frames
                 .iter()
                 .filter(|(other, _)| {
                     signature_sensor_matches(&entry.signature, &other.signature)
                         && exposure_matches(entry.frame.exposure_s, other.frame.exposure_s)
-                        && temperature_matches(entry.frame.camera_temp, other.frame.camera_temp)
+                        && temperature_matches(
+                            entry.frame.camera_temp,
+                            other.frame.camera_temp,
+                            &rules,
+                        )
                 })
                 .collect();
             let Some(index) = peers
@@ -546,9 +554,9 @@ fn judge_darks(measured: &[Measured], judged: &mut HashMap<String, Judged>) {
             };
             let set: Vec<DarkMeasurement> = peers.iter().map(|(_, dark)| (*dark).clone()).collect();
             let verdicts = if kind == CalibrationKind::Bias {
-                seiza_calibration::screen_bias(&set, &bias_screening)
+                seiza_calibration::screen_bias(&set, bias_screening)
             } else {
-                seiza_calibration::screen_darks(&set, &dark_screening)
+                seiza_calibration::screen_darks(&set, dark_screening)
             };
             let Some(verdict) = verdicts.into_iter().nth(index) else {
                 continue;
@@ -607,8 +615,12 @@ fn judge_flats(measured: &[Measured], boundary: i64, judged: &mut HashMap<String
                 StoredMeasurement::Dark(_) => None,
             })
             .collect();
-        let report = match seiza_calibration::screen_flats(&measurements, &FlatScreening::default())
-        {
+        // A session is one rig's, so its flats are graded by that rig's limits.
+        let Some(rig) = set.first().map(|entry| entry.frame.rig_uuid.as_str()) else {
+            continue;
+        };
+        let rules = rules_for_rig(rig);
+        let report = match seiza_calibration::screen_flats(&measurements, &rules.flat) {
             Ok(report) => report,
             Err(error) => {
                 tracing::warn!("calibration grade: a flat session was not screened: {error}");
@@ -651,6 +663,7 @@ fn flat_sessions(measured: &[Measured], boundary: i64) -> Vec<Vec<&Measured>> {
             width: flat.width,
             height: flat.height,
         };
+        let tolerances = rules_for_rig(&entry.frame.rig_uuid).tolerances();
         let joins = |(session_key, frames): &&mut (FlatSessionKey, Vec<&Measured>)| {
             *session_key == key
                 && frames.first().is_some_and(|first| {
@@ -658,7 +671,7 @@ fn flat_sessions(measured: &[Measured], boundary: i64) -> Vec<Vec<&Measured>> {
                         && seiza_calibration::optics_consistent(
                             &first.signature.seiza,
                             &entry.signature.seiza,
-                            &tolerances(),
+                            &tolerances,
                         )
                 })
         };
@@ -1399,6 +1412,7 @@ pub(super) mod tests {
             None,
             crate::commands::export::ExportLayout::Wbpp,
             12 * 3600,
+            false,
         )
         .unwrap();
         assert_eq!(export.kept_out.len(), 1);

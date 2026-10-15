@@ -213,9 +213,9 @@ Blank or undefined optional header values, such as `FILTER` in a PixInsight
 master bias XISF, are preserved in the cached FITS master. They do not prevent
 calibration, and the source file needs no header edits.
 
-**Settings > Setups > Calibration > Masters from other software** decides
+**Settings › Calibration › Matching › Masters from other software** decides
 how they take part: use one whenever it matches (the default), only when raw
-frames cannot build a master, or never.
+frames cannot build a master, or never. A rig can choose for itself.
 
 ## Files that move
 
@@ -407,7 +407,10 @@ PSF Guard only uses candidates that agree with every known hard setting:
 | Bias | camera, dimensions, channels, binning, gain, offset, readout mode, Bayer layout |
 | Dark | bias fields, exposure within 0.05 seconds, temperature within 3 C, shot within the dark reach of the light |
 | Dark-flat | flat sensor settings, exposure, and temperature |
-| Flat | bias fields, filter, telescope, and focal length within 1 mm |
+| Flat | bias fields, filter, telescope, focal length within 1 mm, and rotator angle within 2° |
+
+The temperature, dark reach, focal length and angle are the defaults; see
+[Tune the checks](#tune-the-checks) to change them for every rig or one.
 
 If the light records a hard setting and a candidate omits it, that candidate
 does not match. If the light itself omits a setting, PSF Guard cannot use that
@@ -621,7 +624,11 @@ A light cannot be calibrated properly when:
   example, every flat for its filter was shot at another rotator angle);
 - neither a bias nor a dark matches it, though the library holds either; or
 - the flats that match were shot further from it than the **Flat age limit**
-  (**Settings › Calibration › Flat masters**, default 60 days; 0 lifts it).
+  (**Settings › Calibration › Light checks**, default 60 days; 0 lifts it).
+
+Each of the three is a check that can be made advisory or turned off,
+for every rig or one (see [Tune the checks](#tune-the-checks)); only a gap
+whose check flags it makes a light one that cannot be calibrated.
 
 Each rule applies only where the library could have filled the gap, so a rig
 that never shoots flats, or never shoots darks, is not affected. The report
@@ -632,11 +639,13 @@ reason. **Reject N lights** then sets them Rejected with the reason, so
 Target Scheduler shoots them again. It refuses, and asks for a new check,
 when the list changed after it was shown.
 
-Stacks keep such lights unless **Settings › Calibration › Stacks › Leave out
-lights that can't be calibrated** is on. With it on, and calibration on or
-automatic, stack previews leave them out, so they never mix with properly
+Stacks keep such lights unless **Settings › Calibration › Stacks and exports ›
+Leave out lights that can't be calibrated** is on. With it on, and calibration
+on or automatic, stack previews leave them out, so they never mix with properly
 calibrated frames: the stack card counts them under **can't calibrate** and
-each frame's decision gives the reason.
+each frame's decision gives the reason. Every export leaves the same lights
+out, and says how many and why: both export layouts, WBPP runs, the CLI, and
+the AstroBin acquisition export (see [Export](#export)).
 
 ### Calibration health
 
@@ -666,6 +675,10 @@ it, and what it would get is judged on two levels.
 - Frames kept out by hand leave its bias, darks or flats under five frames.
 - Its bias master would use fewer than five frames while a dark serves it,
   or a few changing spots sit in most of its flats.
+
+The thirty days, the five frames and the spot limits are defaults, and each
+finding comes from a check that can be made advisory (Check at most) or
+turned off; see [Tune the checks](#tune-the-checks).
 
 A light takes its worst finding, and a project its worst light. The Library
 shows a **🧪 Poor** or **🧪 Check** pill after the grading and date pills,
@@ -732,6 +745,171 @@ rejecting one does. Until a project is read again, a result that no longer
 holds shows no pill. The image views keep showing its marks, so rejecting
 lights does not clear the rest until the pass ends; Sequence holds back
 **Poor calibration** in **Select** until then.
+
+## Tune the checks
+
+Every limit on this page that decides which frames calibrate a light, what
+the light checks flag, and where a calibration frame grades suspect or poor
+is a setting under **Settings › Calibration**. The defaults are the limits
+PSF Guard used before these settings existed, so a library nobody tunes
+behaves exactly as it did. A rig whose workflow is sound but unusual, such
+as one that shoots sky flats or cannot cap for darks, need not be flagged
+for it.
+
+### Where a value comes from
+
+1. The light's rig, when **Settings › Calibration › Rigs** sets the value
+   for that rig.
+2. Otherwise the server's value, set in the same tab above the rigs.
+3. Otherwise the default.
+
+A rig is the calibration library's rig (see [Rig identity](#rig-identity)):
+its telescope, camera, frame size and binning. Its key is a hash of those,
+so one rig has one key in every catalog and its values follow it from
+database to database. The header text is taken as written, lower-cased but
+not trimmed, so a renamed N.I.N.A. profile or a stray space in `TELESCOP` or
+`INSTRUME` makes another rig, which starts with no values of its own. A light's rig is read off its own header; a
+calibration frame is graded by its own rig's limits. The **Rigs** list
+shows every rig an open catalog records, with its databases and frame
+count; a rig opened from a light's Calibration panel shows even when no
+catalog lists it. Each row says whether a value is the rig's own or what
+it inherits and from where; **Own value** sets or clears one, and
+**Inherit everything** clears them all.
+
+**Start from** fills a rig's form with a preset to review before saving:
+
+| Preset | Sets |
+|---|---|
+| Sky flats | flat session 72 h, flats from several nights off, flat light pattern suspect 5% and poor 10%, flat too dim suspect 5% and poor 2% |
+| Dark library | dark reach 730 days, no matching bias or dark advisory |
+| No darks | use darks off |
+
+### What a change rebuilds
+
+- **Matching** settings change which frames a light's masters take.
+  Masters are content-addressed by their frames, so a changed set is a new
+  master. A stack's key takes the matching settings that differ from their
+  defaults, so a setting that changes only which matching darks or flats a
+  master keeps, such as the complete night or the flat session, still
+  builds the stack again; a stack nobody tuned keeps its key. The dark
+  temperature, flat rotation and flat focal length tolerances also decide
+  which frames are graded against each other, so changing one grades the
+  frames again too.
+  When a stack calibrates a light it checks the masters against the light
+  with the same tolerances, so a flat or dark matched by a wider one is
+  used, not refused.
+- WBPP exports and runs match the same way when they are planned, so one
+  planned after a change takes the new frames (see [Export](#export)).
+- **Light checks** change only what is flagged. The health pass judges the
+  lights again from the headers it kept; nothing is rebuilt and no pixel is
+  read.
+- **Frame grades** run grading again on the stored measurements, without
+  reading pixels. A frame that turns poor leaves its masters, which then
+  build again; one that stops being poor comes back.
+
+### Light checks
+
+Each light check is **Flag**, **Check only** or **Off**:
+
+- **Flag** raises the finding at its own level: Poor where the light cannot
+  be calibrated properly, Check where it is worth a look.
+- **Check only** shows the finding as Check. It never makes a light one
+  that cannot be calibrated, so stacks keep it, **Check lights** does not
+  list it, and the Library's pill reads Check at most.
+- **Off** does not flag it. The light's Calibration panel still lists it
+  under **Not flagged**, with who turned it off.
+
+The panel also says whose settings checked the light (the global ones or
+its rig's own), lists every limit that differs from its default with
+where it came from, and words each refusal with the limit it crossed:
+`dark is 3.2 °C warmer than the light (limit 2 °C, set for Askar 120 ·
+ASI2600MM)`. An editor can open the rig's settings from there.
+
+### Settings
+
+| Key | Setting | Default | Range | Changes |
+|---|---|---|---|---|
+| `rotation_tolerance_deg` | Flat rotation tolerance | 2° | 0–180 | matching |
+| `focal_length_tolerance_mm` | Flat focal length tolerance | 1 mm | 0–100 | matching |
+| `dark_temperature_tolerance_c` | Dark temperature tolerance (darks and dark flats) | 3 °C | 0–20 | matching |
+| `flat_session_hours` | Flat session: how far apart one master's flats may be | 24 h | 1–720 | matching |
+| `use_darks` | Use darks | on | on, off | matching |
+| `external_masters` | Masters from other software | use whenever one matches | prefer, fallback, ignore | matching |
+| `dark_reach_days` | Dark reach | 183 days | 1–3650 | matching |
+| `complete_dark_frames` | Complete night | 10 darks | 2–64 | matching |
+| `dark_choice` | Dark choice | complete set first | complete, nearest | matching |
+| `flat_max_age_days` | Flat age limit | 60 days | 0 (no limit)–3650 | light checks |
+| `flat_check_age_days` | Flats worth a look after | 30 days | 0 (off)–3650 | light checks |
+| `thin_master_frames` | Thin master below | 5 frames | 2–64 | light checks |
+| `check_no_library` | No frames for its camera | flag (Poor) | flag, advisory, off | light checks |
+| `check_no_flat` | No matching flat | flag (Poor) | flag, advisory, off | light checks |
+| `check_no_bias_or_dark` | No matching bias or dark | flag (Poor) | flag, advisory, off | light checks |
+| `check_stale_flats` | Flats past the age limit | flag (Poor) | flag, advisory, off | light checks |
+| `check_thin_dark` | Thin dark master | flag (Poor) | flag, advisory, off | light checks |
+| `check_thin_bias` | Thin bias master | flag (Poor without a dark, Check with one) | flag, advisory, off | light checks |
+| `check_flat_spots` | Changing spots in flats | flag (as the spot limits grade them) | flag, advisory, off | light checks |
+| `check_old_flats` | Old flats | flag (Check) | flag, off | light checks |
+| `check_mixed_flats` | Flats from several nights | flag (Check) | flag, off | light checks |
+| `check_suspect_frames` | Suspect frames in its masters | flag (Check) | flag, off | light checks |
+| `check_short_after_keep_out` | Short after keeping frames out | flag (Check) | flag, off | light checks |
+| `grade_bias_level` | Bias level, in the set's noise | suspect 1, poor 3 | 0–1000 | frame grades |
+| `grade_bias_noise` | Bias noise, ratio to its set | 1.1, 1.3 | 0–100 | frame grades |
+| `grade_bias_banding` | Bias banding, ratio to its noise | 0.25, 0.5 | 0–100 | frame grades |
+| `grade_dark_level` | Dark stray light, in its spread | 0.5, 1 | 0–1000 | frame grades |
+| `grade_dark_noise` | Dark noise, ratio to its peers | 1.1, 1.3 | 0–100 | frame grades |
+| `grade_dark_hot_pixels` | Dark hot pixels, ratio to its peers | 1.5, 3 | 0–1000 | frame grades |
+| `grade_dark_banding` | Dark banding, ratio to its noise | 0.25, 0.5 | 0–100 | frame grades |
+| `grade_flat_clipped` | Flat clipping | 0.05%, 0.5% | 0–100% | frame grades |
+| `grade_flat_bright` | Flat too bright | 80%, 92% | 0–100% | frame grades |
+| `grade_flat_dim` | Flat too dim (lower is worse) | 10%, 3% | 0–100% | frame grades |
+| `grade_flat_illumination` | Flat light pattern | 2%, 5% | 0–100% | frame grades |
+| `grade_flat_spots` | Flat spots | 100, 500 | 0–100000 | frame grades |
+| `grade_flat_changing_spots` | Flat changing spots | 3, 20 | 0–100000 | frame grades |
+| `grade_flat_carried_spots` | Spots carried into a flat master | 1, 10 | 0–100000 | frame grades and the changing-spots check |
+
+A grade limit left empty is never reached. **Mask stars in flats** and
+**Leave out lights that can't be calibrated** stay server-wide.
+
+### What stays fixed
+
+Some limits are the stacker's, and loosening them would only hand it frames
+it refuses:
+
+- A dark of another exposure than its light (beyond 0.05 s or 0.1% of the
+  longer) is refused when the stack calibrates.
+- The frames of one master are compared with its first: within 1 °C, and a
+  flat within 2° and 1 mm. A wider flat tolerance lets a light take flats
+  further off, but one master's flats still agree with each other that
+  closely.
+- Camera, frame size, binning, gain, offset, readout mode, Bayer layout,
+  filter and telescope must agree; they are identity, not tolerance.
+- The integrator's own stray-light screen, which applies only while some
+  dark of a master is not graded yet, uses its default limit.
+- The **Masters** tab's **Thin** badge and changing-spots note describe the
+  master itself, which may serve lights of several rigs, so they keep the
+  defaults.
+
+### API
+
+`GET /api/settings/calibration` returns every setting's range and default
+(`fields`), the server's values (`rules`) and each rig with its own values
+(`rigs`). `PUT /api/settings/calibration` takes `rules` by key: a key left
+out keeps its value and `null` restores the default.
+`PUT /api/settings/calibration/rigs/{rig_uuid}` replaces a rig's own values
+(`{"name": …, "rules": {…}}`), and `DELETE` on the same path lets it
+inherit everything. Viewers read; changing takes an editor account. Every
+value is checked against its setting: an unknown key, a value of the wrong
+kind, out of range, or a grade whose suspect limit comes after its poor one
+is refused, naming the setting.
+
+The registry keeps the values in its `calibration` block, the server's
+beside the keys older builds read and each rig's under `rigs`. At most 256
+rigs can have values of their own. A setting goes into force only once the
+registry is saved, so a save that fails changes nothing.
+
+An older build reads the keys it knows. If it saves the registry, it drops
+`rigs` and every key it does not know, so after a downgrade the rigs' values
+and the new global ones must be set again.
 
 ## Stack previews
 
@@ -839,6 +1017,26 @@ matched. Flats stay under their target because PSF Guard matched them to that
 target's lights, and under the night they were shot because two nights of one
 target can need different flats for one filter. Merging either would have WBPP
 integrate both into a single master flat.
+
+Matching follows the settings in force for each light's rig (see [Tune the
+checks](#tune-the-checks)); the CLI reads them from the registry. The flat
+rotation, focal length and session limits decide which flats land in a light's
+session folder, the dark settings decide which darks go and whether any do, and
+a master from other software goes only when its setting uses it.
+
+With **Leave out lights that can't be calibrated** on, every export leaves out
+the lights a stack would, in either layout and from the dialog, the server
+export directory, a download or the CLI: those whose gap is flagged. A check
+set to **Check only** or **Off** lets them go. Each export says how many it
+left out, with one and its reason: the export's summary, the CLI's output, a
+`LEFT-OUT-UNCALIBRATED.txt` note listing every one in a download, and the WBPP
+runner scripts.
+
+The runner scripts also list the settings that differ from the defaults and
+the rigs that export no darks. An export into a folder that already holds
+an earlier one keeps the earlier files, and WBPP scans each frame folder whole,
+so the runner warns when it finds frames this export did not place; remove
+them or export to an empty folder.
 
 In the WBPP layout the light's path carries the same night as its flats. The
 runner passes `keywords=SESSION` with keyword grouping on, and WBPP reads the

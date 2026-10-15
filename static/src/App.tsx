@@ -23,7 +23,9 @@ import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
   OPEN_SETTINGS_EVENT,
   settingsIntentOf,
+  settingsRigOf,
   type SettingsIntent,
+  type SettingsRig,
 } from './utils/settingsIntent';
 import { apiClient } from './api/client';
 import AuthGate from './auth/AccessContext';
@@ -65,6 +67,8 @@ function AppContent() {
   const [settingsIntent, setSettingsIntent] = useState<SettingsIntent | null>(
     null
   );
+  // With the Calibration tab: the rig whose own settings to open.
+  const [settingsRig, setSettingsRig] = useState<SettingsRig | null>(null);
   // We track this only to short-circuit checks against Tauri-only commands;
   // the modal itself is shown regardless of mode.
   const [, setIsTauri] = useState(false);
@@ -130,6 +134,7 @@ function AppContent() {
       if (!access.canWrite) return;
       // Clear first so asking twice for the same form still lands on it.
       setSettingsIntent(null);
+      setSettingsRig(settingsRigOf(event));
       queueMicrotask(() => setSettingsIntent(settingsIntentOf(event)));
       setShowSettings(true);
     };
@@ -273,9 +278,11 @@ function AppContent() {
         <TauriSettings
           isOpen={showSettings}
           initialIntent={settingsIntent}
+          initialRig={settingsRig}
           onClose={() => {
             setShowSettings(false);
             setSettingsIntent(null);
+            setSettingsRig(null);
           }}
         />
       )}

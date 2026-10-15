@@ -263,4 +263,58 @@ describe('CalibrationPanel', () => {
     await waitFor(() => expect(heading()).toHaveAttribute('aria-expanded', 'true'));
     await waitFor(() => expect(asked).toEqual([8, 9]));
   });
+
+  it('names the limits the light was checked by, what they kept from being flagged, and opens its rig', async () => {
+    const opened: unknown[] = [];
+    const listener = (event: Event) => opened.push((event as CustomEvent).detail);
+    window.addEventListener('psf-guard:open-settings', listener);
+    try {
+      show('/detail/8?db=c925&project=1&calib=thin_dark', {
+        ...explanation,
+        findings: [explanation.findings[0]],
+        waived: [{
+          code: 'mixed_flats',
+          level: 'check',
+          reason: 'Its flat master mixes flats from 2 nights (check off, set for Askar 120 · Cam)',
+          kinds: ['flat'],
+        }],
+        rules: {
+          rig_uuid: '5a1e0000-0000-5000-8000-0000000000a1',
+          rig_name: 'Askar 120 · Cam',
+          rig_has_settings: true,
+          notes: [
+            { key: 'thin_master_frames', label: 'Thin master below', value: 4, text: '4 frames', source: 'global' },
+            { key: 'check_mixed_flats', label: 'Flats from several nights', value: 'off', text: 'off', source: 'rig' },
+          ],
+        },
+      });
+      const rules = await screen.findByTestId('calibration-rules');
+      expect(within(rules).getByText('Not flagged')).toBeInTheDocument();
+      expect(within(rules).getByText(/mixes flats from 2 nights \(check off, set for Askar 120/)).toBeInTheDocument();
+      expect(within(rules).getByText("Checked by Askar 120 · Cam's own settings")).toBeInTheDocument();
+      const notes = within(rules).getByRole('list', { name: 'Settings that differ from the defaults' });
+      expect(within(notes).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+        'Thin master below4 framesglobal',
+        'Flats from several nightsoffthis rig',
+      ]);
+      fireEvent.click(within(rules).getByRole('button', { name: 'Tune checks for Askar 120 · Cam' }));
+      expect(opened).toEqual([
+        { intent: 'calibration', rig: { uuid: '5a1e0000-0000-5000-8000-0000000000a1', name: 'Askar 120 · Cam' } },
+      ]);
+    } finally {
+      window.removeEventListener('psf-guard:open-settings', listener);
+    }
+  });
+
+  it('says every limit is at its default when nothing is set', async () => {
+    show('/detail/8?db=c925&project=1&calib=thin_dark', {
+      ...explanation,
+      waived: [],
+      rules: { rig_uuid: 'r', rig_name: 'Scope · Cam', rig_has_settings: false, notes: [] },
+    });
+    const rules = await screen.findByTestId('calibration-rules');
+    expect(within(rules).getByText('Checked by the global settings')).toBeInTheDocument();
+    expect(within(rules).getByText('Every limit is at its default.')).toBeInTheDocument();
+    expect(within(rules).queryByText('Not flagged')).toBeNull();
+  });
 });

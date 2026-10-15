@@ -169,6 +169,15 @@ pub fn request(state: &Arc<AppState>, path: &str) {
     });
 }
 
+/// Grade every database's library again, after a grade limit changed. A
+/// pass reads only frames it has not measured; grading itself needs no
+/// pixels. Each pass asks for its catalog's health when it ends.
+pub fn request_all(state: &Arc<AppState>) {
+    for ctx in state.all_databases() {
+        request(state, &ctx.database_path);
+    }
+}
+
 /// Catalogs with uploaded frames waiting for a pass, and when the last one
 /// came.
 static UPLOADS: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);

@@ -2302,6 +2302,7 @@ pub async fn export_archive_route(
         target_id: query.target_id,
         filter_name: query.filter_name.clone(),
         layout: query.layout,
+        exclude_uncalibrated: crate::calibration::exclude_uncalibrated_enabled(),
         ..Default::default()
     };
     // A referenced download is the runner scripts alone: nothing is copied,
@@ -2337,8 +2338,10 @@ pub async fn export_archive_route(
 
     if plan.items.is_empty() {
         return Err(AppError::BadRequest(format!(
-            "nothing to export ({} matching rows had missing files)",
-            plan.missing.len()
+            "nothing to export ({} matching rows had missing files, {} lights can't be \
+             calibrated)",
+            plan.missing.len(),
+            plan.uncalibrated.len()
         )));
     }
 
@@ -2389,6 +2392,20 @@ pub async fn export_archive_route(
                 return;
             }
         }
+        // A download has no summary to read, so the lights left out because
+        // they can't be calibrated are listed in a note beside the frames.
+        if let Some(note) = plan.uncalibrated_note() {
+            let entry = ZipEntryBuilder::new(
+                crate::commands::export::UNCALIBRATED_NOTE
+                    .to_string()
+                    .into(),
+                Compression::Stored,
+            );
+            if let Err(e) = zip.write_entry_whole(entry, note.as_bytes()).await {
+                tracing::warn!("📦 export db={}: zip write failed: {}", db_id, e);
+                return;
+            }
+        }
         // The runner scripts ride along in the zip, so an export unpacked on
         // the machine PixInsight runs on already knows how to hand itself to
         // WBPP. A zip has no destination path, so nothing here can be
@@ -2400,6 +2417,7 @@ pub async fn export_archive_route(
                 files,
                 options: wbpp_options,
                 bpp_main: None,
+                stale_frames: Vec::new(),
             };
             let scripts = [
                 ("run-wbpp.sh", wbpp::shell_script(&plan, &spec)),
@@ -2496,6 +2514,7 @@ pub async fn export_local_route(
         target_id: req.target_id,
         filter_name: req.filter_name.clone(),
         layout: req.layout,
+        exclude_uncalibrated: crate::calibration::exclude_uncalibrated_enabled(),
         ..Default::default()
     };
     // `placement` supersedes the older `link` flag, whose default was to
@@ -2541,6 +2560,7 @@ pub async fn export_local_route(
                 files: files.clone(),
                 options: req.wbpp.clone().unwrap_or_default(),
                 bpp_main: None,
+                stale_frames: Vec::new(),
             };
             if let Err(error) = write_wbpp_scripts(&plan, std::path::Path::new(&dest), &spec) {
                 if !placement.places_files() {
@@ -2556,7 +2576,7 @@ pub async fn export_local_route(
     .map_err(|e| AppError::InternalError(format!("export: {e}")))?;
 
     tracing::info!(
-        "📤 Local export db={}: planned={} copied={} linked={} symlinked={} referenced={} skipped={} missing={} errors={}{}",
+        "📤 Local export db={}: planned={} copied={} linked={} symlinked={} referenced={} skipped={} missing={} uncalibrated={} errors={}{}",
         ctx.id,
         summary.planned,
         summary.copied,
@@ -2565,6 +2585,7 @@ pub async fn export_local_route(
         summary.referenced,
         summary.skipped_existing,
         summary.missing,
+        summary.uncalibrated,
         summary.errors,
         if dry_run { " (dry-run)" } else { "" }
     );
@@ -2610,6 +2631,7 @@ pub async fn start_server_export_route(
         target_id: req.target_id,
         filter_name: req.filter_name.clone(),
         layout: req.layout,
+        exclude_uncalibrated: crate::calibration::exclude_uncalibrated_enabled(),
         ..Default::default()
     };
     let placement = req.placement.unwrap_or(Placement::Reflink);
@@ -2660,6 +2682,7 @@ pub async fn start_server_export_route(
                     files: files.clone(),
                     options: wbpp_options.clone(),
                     bpp_main: None,
+                    stale_frames: Vec::new(),
                 };
                 if let Err(error) = write_wbpp_scripts(&plan, &dest, &spec) {
                     if !placement.places_files() {
@@ -2669,7 +2692,7 @@ pub async fn start_server_export_route(
                 }
             }
             tracing::info!(
-                "📤 Server export db={}: planned={} reflinked={} copied={} symlinked={} referenced={} skipped={} missing={} errors={} -> {}",
+                "📤 Server export db={}: planned={} reflinked={} copied={} symlinked={} referenced={} skipped={} missing={} uncalibrated={} errors={} -> {}",
                 job_ctx.id,
                 summary.planned,
                 summary.reflinked,
@@ -2678,6 +2701,7 @@ pub async fn start_server_export_route(
                 summary.referenced,
                 summary.skipped_existing,
                 summary.missing,
+                summary.uncalibrated,
                 summary.errors,
                 dest.display(),
             );

@@ -14,6 +14,8 @@ import type { GuidFillReport, GuidReport,
   FlatHistoryState,
   SchedulerFlatHistoryPage,
   CalibrationSettings,
+  CalibrationRuleValue,
+  CalibrationRuleValues,
   StackAutomationSettings,
   StackMasterSource,
   StackCalibrationMasters,
@@ -878,14 +880,16 @@ export const apiClient = {
   },
 
   updateCalibrationSettings: async (update: {
-    rotation_tolerance_deg: number | null;
-    external_masters: ExternalMasterPolicy;
-    flat_star_masking: boolean;
+    rotation_tolerance_deg?: number | null;
+    external_masters?: ExternalMasterPolicy;
+    flat_star_masking?: boolean;
     dark_reach_days?: number | null;
     complete_dark_frames?: number | null;
     dark_choice?: DarkChoice;
     flat_max_age_days?: number | null;
     exclude_uncalibrated?: boolean;
+    /** Any tunable check by key; a key left out keeps its value, `null` restores the default. */
+    rules?: Record<string, CalibrationRuleValue | null>;
   }): Promise<CalibrationSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<CalibrationSettings>>(
@@ -893,6 +897,30 @@ export const apiClient = {
       update
     );
     if (!data.data) throw new Error(data.error || 'Failed to update calibration settings');
+    return data.data;
+  },
+
+  /** Replace every value a rig sets for itself; an empty `rules` inherits them all. */
+  updateRigCalibrationSettings: async (
+    rigUuid: string,
+    update: { name?: string; rules: CalibrationRuleValues }
+  ): Promise<CalibrationSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<CalibrationSettings>>(
+      `/settings/calibration/rigs/${encodeURIComponent(rigUuid)}`,
+      update
+    );
+    if (!data.data) throw new Error(data.error || "Failed to save the rig's calibration settings");
+    return data.data;
+  },
+
+  /** The rig inherits every value again. */
+  deleteRigCalibrationSettings: async (rigUuid: string): Promise<CalibrationSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<CalibrationSettings>>(
+      `/settings/calibration/rigs/${encodeURIComponent(rigUuid)}`
+    );
+    if (!data.data) throw new Error(data.error || "Failed to reset the rig's calibration settings");
     return data.data;
   },
 

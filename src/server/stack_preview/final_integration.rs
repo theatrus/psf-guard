@@ -1,6 +1,7 @@
 //! Revisit admitted frames without repeating their registration decisions.
 
 use super::{resume, PreparedGroup, SessionCosmetics};
+use seiza_calibration::MatchTolerances;
 use seiza_stacking::{
     BatchStackOptions, BatchStackPass, BatchStackResult, CalibrationMasters, FitsFrame,
     ImpulseFilterOptions, LinearImage, ReferenceRegion, RegisteredFrameMapping,
@@ -48,6 +49,7 @@ pub(super) fn integrate(
         let image = prepare_registered_frame(
             frame,
             masters,
+            &plan.sessions[session].match_tolerances,
             cosmetic,
             mapping,
             method.seiza_interpolation(),
@@ -90,12 +92,15 @@ fn replay_weights(
 fn prepare_registered_frame(
     mut frame: FitsFrame,
     masters: Option<&CalibrationMasters>,
+    gate: &MatchTolerances,
     cosmetic: Option<ImpulseFilterOptions>,
     mapping: &RegisteredFrameMapping,
     interpolation: seiza_stacking::Interpolation,
 ) -> seiza_stacking::Result<LinearImage> {
     if let Some(masters) = masters {
-        masters.validate_light_frame(&frame)?;
+        // Under the gate its session's lights were admitted under: their
+        // rig's tolerances, the ones its masters were matched by.
+        masters.validate_light_frame_with(&frame, gate)?;
         masters.apply(&mut frame.image, frame.exposure_seconds, frame.bayer)?;
     }
     if let Some(cosmetic) = cosmetic {
@@ -151,6 +156,7 @@ mod tests {
         let corrected = prepare_registered_frame(
             frame(raw.clone()),
             Some(&masters),
+            &MatchTolerances::default(),
             Some(ImpulseFilterOptions::default()),
             &mapping,
             Interpolation::Bilinear,
@@ -160,6 +166,7 @@ mod tests {
         let calibrated = prepare_registered_frame(
             frame(raw.clone()),
             Some(&masters),
+            &MatchTolerances::default(),
             None,
             &mapping,
             Interpolation::Bilinear,
@@ -169,6 +176,7 @@ mod tests {
         let bypassed = prepare_registered_frame(
             frame(raw.clone()),
             None,
+            &MatchTolerances::default(),
             None,
             &mapping,
             Interpolation::Bilinear,
@@ -190,9 +198,15 @@ mod tests {
             NormalizationMap::identity(&raw),
         )
         .unwrap();
-        let registered =
-            prepare_registered_frame(frame(raw), None, None, &mapping, Interpolation::Bilinear)
-                .unwrap();
+        let registered = prepare_registered_frame(
+            frame(raw),
+            None,
+            &MatchTolerances::default(),
+            None,
+            &mapping,
+            Interpolation::Bilinear,
+        )
+        .unwrap();
         assert!(registered
             .data
             .chunks(9)
@@ -279,6 +293,7 @@ mod tests {
         let prepared = prepare_registered_frame(
             reference.clone(),
             Some(&masters),
+            &MatchTolerances::default(),
             cosmetic,
             &live.reference_mapping(),
             Interpolation::Bilinear,
@@ -289,6 +304,7 @@ mod tests {
         let uncorrected = prepare_registered_frame(
             reference,
             Some(&masters),
+            &MatchTolerances::default(),
             None,
             &live.reference_mapping(),
             Interpolation::Bilinear,
@@ -312,6 +328,7 @@ mod tests {
         let registered = prepare_registered_frame(
             source,
             Some(&masters),
+            &MatchTolerances::default(),
             cosmetic,
             &diagnostics.mapping,
             Interpolation::Bilinear,
@@ -529,5 +546,136 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Image 3 has no recorded frame weight"));
+    }
+
+    /// A flat 3 mm off the light, matched because its rig allows 5 mm, must
+    /// calibrate the light in the final pass too, not only in matching.
+    #[test]
+    fn a_flat_matched_by_a_wider_focal_length_tolerance_stacks_through_the_final_pass() {
+        use crate::calibration::tests::RulesInForce;
+        use std::io::Write as _;
+        fn write(path: &std::path::Path, kind: &str, focal_mm: u32, value: i16) {
+            let mut header = Vec::new();
+            for card in [
+                "SIMPLE  =                    T".to_string(),
+                "BITPIX  =                   16".to_string(),
+                "NAXIS   =                    2".to_string(),
+                "NAXIS1  =                    4".to_string(),
+                "NAXIS2  =                    4".to_string(),
+                format!("IMAGETYP= '{kind}'"),
+                "FILTER  = 'Ha'".to_string(),
+                "EXPTIME =                300.0".to_string(),
+                "GAIN    =                  100".to_string(),
+                "OFFSET  =                   20".to_string(),
+                "XBINNING=                    1".to_string(),
+                "YBINNING=                    1".to_string(),
+                "CCD-TEMP=                -10.0".to_string(),
+                "TELESCOP= 'Scope'".to_string(),
+                "INSTRUME= 'Camera'".to_string(),
+                format!("FOCALLEN= {focal_mm:20}"),
+                "END".to_string(),
+            ] {
+                let mut bytes = card.into_bytes();
+                bytes.resize(80, b' ');
+                header.extend(bytes);
+            }
+            header.resize(header.len().div_ceil(2880) * 2880, b' ');
+            let mut payload = Vec::new();
+            for _ in 0..16 {
+                payload.extend(value.to_be_bytes());
+            }
+            payload.resize(2880, 0);
+            let mut file = std::fs::File::create(path).unwrap();
+            file.write_all(&header).unwrap();
+            file.write_all(&payload).unwrap();
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        // Bias, so a flat master is built at all, and flats 3 mm off the light.
+        let mut flats = Vec::new();
+        for index in 0..2 {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write(&path, "BIAS", 600, 100);
+            flats.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        for index in 0..3 {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write(&path, "FLAT", 603, 1_000);
+            flats.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let light = temp.path().join("light.fits");
+        write(&light, "LIGHT", 600, 1_100);
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            crate::calibration::import_calibration_frames(&tx, &flats, Some("profile")).unwrap();
+            tx.commit().unwrap();
+        }
+        let rig = crate::calibration::rules::light_rig_uuid(
+            &crate::commands::import::headers::read_frame_meta(&light),
+        );
+        let _rules = RulesInForce::with(
+            &[],
+            &[(
+                rig.as_str(),
+                "Scope · Camera",
+                &[("focal_length_tolerance_mm", serde_json::json!(5))],
+            )],
+        );
+
+        let (masters, applied) = crate::calibration::resolve_or_build_masters(
+            &conn,
+            &temp.path().join("masters"),
+            std::slice::from_ref(&light),
+            None,
+            None,
+            crate::calibration::CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert_eq!(applied.state, "applied", "{applied:?}");
+        assert!(applied.flat_master.is_some(), "{applied:?}");
+
+        // The gate is the light's rig's: the tolerances its flat was matched by.
+        let gate = crate::calibration::light_match_tolerances_at(&light);
+        assert_eq!(gate.focal_length_mm, 5.0);
+        let replay = |gate: &MatchTolerances| {
+            let frame = crate::image_io::open_linear_frame(&light).unwrap();
+            let raw = frame.image.clone();
+            prepare_registered_frame(
+                frame,
+                Some(&masters),
+                gate,
+                None,
+                &RegisteredFrameMapping::identity(&raw),
+                Interpolation::Bilinear,
+            )
+        };
+        replay(&gate).expect("the final pass calibrates the light with the flat its rig matched");
+        // Seiza's default gate would refuse it, which is what the gate is for.
+        let refused = replay(&MatchTolerances::default()).unwrap_err().to_string();
+        assert!(refused.contains("focal length"), "{refused}");
+
+        // The live pass judges the light as its reference under the same
+        // gate: the masters pass, and only this tiny starless frame's
+        // registration stops it. Under the default gate the masters are
+        // refused first.
+        let open = |gate: MatchTolerances| {
+            LiveStacker::new(
+                crate::image_io::open_linear_frame(&light).unwrap(),
+                masters.clone(),
+                StackOptions {
+                    match_tolerances: gate,
+                    ..StackOptions::default()
+                },
+            )
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default()
+        };
+        let opened = open(gate);
+        assert!(!opened.contains("focal length"), "{opened}");
+        assert!(opened.contains("usable stars"), "{opened}");
+        let refused = open(MatchTolerances::default());
+        assert!(refused.contains("focal length"), "{refused}");
     }
 }

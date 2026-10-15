@@ -606,6 +606,11 @@ pub fn api_router(state: Arc<AppState>) -> Router {
                 .put(calibration_settings::update_calibration_settings),
         )
         .route(
+            "/settings/calibration/rigs/{rig_uuid}",
+            put(calibration_settings::update_rig_calibration_settings)
+                .delete(calibration_settings::delete_rig_calibration_settings),
+        )
+        .route(
             "/settings/export",
             get(export_settings::get_export_settings).put(export_settings::update_export_settings),
         )

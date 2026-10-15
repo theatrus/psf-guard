@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
+import { CALIBRATION_RULE_FIELDS } from '../../test/calibrationRuleFields';
 import CalibrationMatchingSettings from '../CalibrationMatchingSettings';
 
 function wrapper() {
@@ -15,255 +16,174 @@ function wrapper() {
   };
 }
 
-const current = (rotation: number | null, flatStarMasking = false) => ({
+const current = (rules: Record<string, unknown> = {}, flatStarMasking = false) => ({
   success: true,
   data: {
-    rotation_tolerance_deg: rotation,
+    rotation_tolerance_deg: (rules.rotation_tolerance_deg as number | undefined) ?? null,
     default_rotation_tolerance_deg: 2,
     external_masters: 'prefer',
     flat_star_masking: flatStarMasking,
+    exclude_uncalibrated: false,
+    fields: CALIBRATION_RULE_FIELDS,
+    rules,
+    rigs: [],
   },
   error: null,
 });
 
+
 describe('CalibrationMatchingSettings', () => {
-  it('saves the dark reach and the darks in a complete night, and refuses out-of-range values', async () => {
+  it('shows each default as the empty field\'s placeholder and nothing to save', async () => {
+    server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current())));
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const rotation = await screen.findByLabelText('Flat rotation tolerance');
+    expect(rotation).toHaveValue(null);
+    expect(rotation).toHaveAttribute('placeholder', '2');
+    expect(screen.getByLabelText('Dark reach')).toHaveAttribute('placeholder', '183');
+    expect(screen.getByLabelText('Dark choice')).toHaveValue('complete');
+    expect(screen.getByLabelText('No matching flat')).toHaveValue('flag');
+    for (const legend of ['Matching', 'Dark masters', 'Flat masters', 'Light checks', 'Stacks and exports']) {
+      expect(screen.getByRole('group', { name: legend })).toBeInTheDocument();
+    }
+    expect(screen.getByText(/Nothing is rebuilt/)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Mask stars in flats' })).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+  });
+
+  it('saves a tolerance, refuses one out of range, and writes no default', async () => {
     let saved: Record<string, unknown> | null = null;
     server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
+      http.get('/api/settings/calibration', () => HttpResponse.json(current())),
       http.put('/api/settings/calibration', async ({ request }) => {
-        saved = await request.json() as Record<string, unknown>;
-        return HttpResponse.json({ success: true, data: { ...current(null).data, dark_reach_days: 90, complete_dark_frames: 20 }, error: null });
+        saved = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(current({ dark_reach_days: 90 }));
       }),
     );
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const reach = await screen.findByLabelText('Dark reach in days');
-    expect(reach).toHaveAttribute('placeholder', '183');
+    const reach = await screen.findByLabelText('Dark reach');
     fireEvent.change(reach, { target: { value: '5000' } });
     expect(screen.getByText('Enter 1 to 3650 days.')).toBeInTheDocument();
+    expect(reach).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     fireEvent.change(reach, { target: { value: '90' } });
-    fireEvent.change(screen.getByLabelText('Darks in a complete night'), { target: { value: '20' } });
+    // The default, typed out, is still the default.
+    fireEvent.change(screen.getByLabelText('Complete night'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(saved).toMatchObject({ dark_reach_days: 90, complete_dark_frames: 20 }));
-  });
-
-  it('starts on a complete set of darks and saves the nearest set when chosen', async () => {
-    let saved: Record<string, unknown> | null = null;
-    server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
-      http.put('/api/settings/calibration', async ({ request }) => {
-        saved = await request.json() as Record<string, unknown>;
-        return HttpResponse.json({ success: true, data: { ...current(null).data, dark_choice: 'nearest' }, error: null });
-      }),
-    );
-    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const choice = await screen.findByLabelText('Dark choice');
-    expect(choice).toHaveValue('complete');
-    expect(screen.getByText(/A complete set beats a nearer, shorter one/)).toBeInTheDocument();
-    fireEvent.change(choice, { target: { value: 'nearest' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(saved).toMatchObject({ dark_choice: 'nearest' }));
+    // Only what changed: the default typed out changes nothing.
+    await waitFor(() => expect(saved).toEqual({ rules: { dark_reach_days: 90 } }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
+    expect(screen.getByLabelText('Dark reach')).toHaveValue(90);
   });
 
-  it('saves a flat age limit, zero for none, and refuses a negative one', async () => {
+  it('makes a check advisory or turns it off', async () => {
     let saved: Record<string, unknown> | null = null;
     server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json({ ...current(null), data: { ...current(null).data, default_flat_max_age_days: 60 } })),
+      http.get('/api/settings/calibration', () => HttpResponse.json(current())),
       http.put('/api/settings/calibration', async ({ request }) => {
-        saved = await request.json() as Record<string, unknown>;
-        return HttpResponse.json({ success: true, data: { ...current(null).data, flat_max_age_days: 0 }, error: null });
+        saved = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(current({ check_no_flat: 'advisory', check_mixed_flats: 'off' }));
       }),
     );
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const limit = await screen.findByLabelText('Flat age limit in days');
-    expect(limit).toHaveAttribute('placeholder', '60');
-    fireEvent.change(limit, { target: { value: '-1' } });
-    expect(screen.getByText('Enter 0 to 3650 days.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-    fireEvent.change(limit, { target: { value: '0' } });
+    const noFlat = await screen.findByLabelText('No matching flat');
+    expect(within(noFlat).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Poor', 'Check only', 'Off',
+    ]);
+    // A check that only ever says "check" has no advisory step.
+    const mixed = screen.getByLabelText('Flats from several nights');
+    expect(within(mixed).getAllByRole('option').map((option) => option.textContent)).toEqual(['Check', 'Off']);
+    fireEvent.change(noFlat, { target: { value: 'advisory' } });
+    fireEvent.change(mixed, { target: { value: 'off' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(saved).toMatchObject({ flat_max_age_days: 0 }));
+    await waitFor(() =>
+      expect(saved).toEqual({ rules: { check_no_flat: 'advisory', check_mixed_flats: 'off' } }),
+    );
   });
 
-  it('leaves out lights that cannot be calibrated only once turned on', async () => {
+  it('edits a frame grade\'s limits in percent and saves them as fractions', async () => {
     let saved: Record<string, unknown> | null = null;
     server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
+      http.get('/api/settings/calibration', () => HttpResponse.json(current())),
       http.put('/api/settings/calibration', async ({ request }) => {
-        saved = await request.json() as Record<string, unknown>;
-        return HttpResponse.json({ success: true, data: { ...current(null).data, exclude_uncalibrated: true }, error: null });
+        saved = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(current());
       }),
     );
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const exclude = await screen.findByRole('checkbox', { name: /Leave out lights that can't be calibrated/ });
-    expect(exclude).not.toBeChecked();
-    fireEvent.click(exclude);
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(saved).toMatchObject({ exclude_uncalibrated: true }));
-  });
-
-  it('shows the default as the placeholder, not as a configured value', async () => {
-    server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(null)))
-    );
-    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const input = await screen.findByLabelText('Rotation tolerance in degrees');
-    expect(input).toHaveValue(null);
-    expect(input).toHaveAttribute('placeholder', '2');
-    expect(screen.getByRole('checkbox', { name: 'Mask stars in flats' })).not.toBeChecked();
-    // Nothing to save while the field matches what the server holds.
+    fireEvent.click(await screen.findByText('Frame grades'));
+    const suspect = screen.getByLabelText('Flat light pattern: suspect at');
+    const poor = screen.getByLabelText('Flat light pattern: poor at');
+    expect(suspect).toHaveValue(2);
+    expect(poor).toHaveValue(5);
+    fireEvent.change(suspect, { target: { value: '12' } });
+    expect(screen.getByText('A frame must turn suspect before it turns poor.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
-  });
-
-  it('saves an override and reflects the server response', async () => {
-    let saved: unknown = null;
-    server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
-      http.put('/api/settings/calibration', async ({ request }) => {
-        saved = await request.json();
-        return HttpResponse.json(current(3.5));
-      })
-    );
-    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const input = await screen.findByLabelText('Rotation tolerance in degrees');
-    fireEvent.change(input, { target: { value: '3.5' } });
+    fireEvent.change(suspect, { target: { value: '5' } });
+    fireEvent.change(poor, { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(saved).toEqual({
-        rotation_tolerance_deg: 3.5,
-        external_masters: 'prefer',
-        flat_star_masking: false,
-        dark_reach_days: null,
-        complete_dark_frames: null,
-        dark_choice: 'complete',
-        flat_max_age_days: null,
-        exclude_uncalibrated: false,
-      })
+      expect(saved).toEqual({ rules: { grade_flat_illumination: { suspect: 0.05, poor: null } } }),
     );
-    // The response is the new truth; the button falls back to disabled.
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
-    );
-  });
-
-  it('saves the external-master policy on its own', async () => {
-    let saved: unknown = null;
-    server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
-      http.put('/api/settings/calibration', async ({ request }) => {
-        saved = await request.json();
-        return HttpResponse.json({
-          ...current(null),
-          data: { ...current(null).data, external_masters: 'fallback' },
-        });
-      })
-    );
-    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const select = await screen.findByLabelText('Masters from other software');
-    expect(select).toHaveValue('prefer');
-    fireEvent.change(select, { target: { value: 'fallback' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() =>
-      expect(saved).toEqual({
-        rotation_tolerance_deg: null,
-        external_masters: 'fallback',
-        flat_star_masking: false,
-        dark_reach_days: null,
-        complete_dark_frames: null,
-        dark_choice: 'complete',
-        flat_max_age_days: null,
-        exclude_uncalibrated: false,
-      })
-    );
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
-    );
-  });
-
-  it('refuses a value the server would reject, before sending it', async () => {
-    server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(null)))
-    );
-    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const input = await screen.findByLabelText('Rotation tolerance in degrees');
-    fireEvent.change(input, { target: { value: '181' } });
-    expect(
-      screen.getByText('Enter a value between 0 and 180 degrees.')
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 
   it('saves masking on and off and reloads its saved state', async () => {
     let masking = false;
     const updates: unknown[] = [];
     server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(3.5, masking))),
+      http.get('/api/settings/calibration', () => HttpResponse.json(current({}, masking))),
       http.put('/api/settings/calibration', async ({ request }) => {
-        const update = await request.json() as { flat_star_masking: boolean };
-        updates.push(update);
+        const update = (await request.json()) as { flat_star_masking: boolean };
+        updates.push(update.flat_star_masking);
         masking = update.flat_star_masking;
-        return HttpResponse.json(current(3.5, masking));
-      })
+        return HttpResponse.json(current({}, masking));
+      }),
     );
     const first = render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
     const toggle = await screen.findByRole('checkbox', { name: 'Mask stars in flats' });
-    expect(toggle).not.toBeChecked();
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(masking).toBe(true));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
     first.unmount();
 
-    const second = render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
     const restored = await screen.findByRole('checkbox', { name: 'Mask stars in flats' });
     await waitFor(() => expect(restored).toBeChecked());
     fireEvent.click(restored);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(masking).toBe(false));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
-    second.unmount();
-
-    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    expect(await screen.findByRole('checkbox', { name: 'Mask stars in flats' })).not.toBeChecked();
-    expect(updates).toEqual([true, false].map((enabled) => ({
-      rotation_tolerance_deg: 3.5,
-      external_masters: 'prefer',
-      flat_star_masking: enabled,
-      dark_reach_days: null,
-      complete_dark_frames: null,
-      dark_choice: 'complete',
-      flat_max_age_days: null,
-      exclude_uncalibrated: false,
-    })));
+    expect(updates).toEqual([true, false]);
   });
 
-  it('keeps masking off when an older server omits the field', async () => {
-    server.use(http.get('/api/settings/calibration', () => HttpResponse.json({
-      success: true,
-      data: {
-        rotation_tolerance_deg: null,
-        default_rotation_tolerance_deg: 2,
-        external_masters: 'prefer',
-      },
-      error: null,
-    })));
+  it('leaves out lights that cannot be calibrated only once turned on', async () => {
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current())),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(current());
+      }),
+    );
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    expect(await screen.findByRole('checkbox', { name: 'Mask stars in flats' })).not.toBeChecked();
-    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    const exclude = await screen.findByRole('checkbox', { name: /Leave out lights that can't be calibrated/ });
+    expect(exclude).not.toBeChecked();
+    // One setting for stacks and every export alike.
+    expect(screen.getByText(/Stacks, WBPP runs and every export leave them out/)).toBeInTheDocument();
+    fireEvent.click(exclude);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toMatchObject({ exclude_uncalibrated: true }));
   });
 
-  it('retains an unsaved masking change after a failed save and allows retry', async () => {
+  it('retains an unsaved change after a failed save and allows retry', async () => {
     let attempts = 0;
     server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
+      http.get('/api/settings/calibration', () => HttpResponse.json(current())),
       http.put('/api/settings/calibration', () => {
         attempts += 1;
         return HttpResponse.json(attempts === 1
           ? { success: false, data: null, error: 'Could not save the registry' }
-          : current(null, true));
-      })
+          : current({}, true));
+      }),
     );
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
     const toggle = await screen.findByRole('checkbox', { name: 'Mask stars in flats' });
@@ -275,7 +195,6 @@ describe('CalibrationMatchingSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
-    expect(toggle).toBeChecked();
     expect(attempts).toBe(2);
   });
 
@@ -283,19 +202,20 @@ describe('CalibrationMatchingSettings', () => {
     let finishSave: () => void = () => {};
     const pending = new Promise<void>((resolve) => { finishSave = resolve; });
     server.use(
-      http.get('/api/settings/calibration', () => HttpResponse.json(current(null))),
+      http.get('/api/settings/calibration', () => HttpResponse.json(current())),
       http.put('/api/settings/calibration', async () => {
         await pending;
-        return HttpResponse.json(current(null, true));
-      })
+        return HttpResponse.json(current({}, true));
+      }),
     );
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
     const toggle = await screen.findByRole('checkbox', { name: 'Mask stars in flats' });
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(toggle).toBeDisabled());
-    expect(screen.getByLabelText('Rotation tolerance in degrees')).toBeDisabled();
+    expect(screen.getByLabelText('Flat rotation tolerance')).toBeDisabled();
     expect(screen.getByLabelText('Masters from other software')).toBeDisabled();
+    expect(screen.getByLabelText('No matching flat')).toBeDisabled();
     finishSave();
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).toBeChecked();
@@ -309,5 +229,64 @@ describe('CalibrationMatchingSettings', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load calibration settings.');
     expect(screen.queryByRole('checkbox', { name: 'Mask stars in flats' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+  });
+
+  it('sends only what was edited, so another tab\'s save stands', async () => {
+    // Tab A saved Dark reach after this tab read the settings.
+    let stored: Record<string, unknown> = {};
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current(stored))),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = (await request.json()) as Record<string, unknown>;
+        stored = { ...stored, ...(saved.rules as Record<string, unknown>) };
+        return HttpResponse.json(current(stored));
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const thin = await screen.findByLabelText('Thin master below');
+    stored = { dark_reach_days: 30 };
+    fireEvent.change(thin, { target: { value: '4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toEqual({ rules: { thin_master_frames: 4 } }));
+    expect(stored).toEqual({ dark_reach_days: 30, thin_master_frames: 4 });
+    // The answer brings tab A's value into the field nobody edited here.
+    await waitFor(() => expect(screen.getByLabelText('Dark reach')).toHaveValue(30));
+  });
+
+  it('never clears a value this build cannot read', async () => {
+    // A newer build saved a dark choice this one does not know; the server
+    // hides it, so the field shows the default.
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current())),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(current());
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Mask stars in flats' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toEqual({ flat_star_masking: true }));
+    expect(saved).not.toHaveProperty('rules');
+  });
+
+  it('keeps unsaved edits when the settings are read afresh', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current())));
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CalibrationMatchingSettings />
+      </QueryClientProvider>,
+    );
+    const reach = await screen.findByLabelText('Dark reach');
+    fireEvent.change(reach, { target: { value: '45' } });
+    // A rig's save hands back the settings with a rig changed.
+    const answer = current({ thin_master_frames: 3 }).data;
+    queryClient.setQueryData(['calibration-settings'], answer);
+    await waitFor(() => expect(screen.getByLabelText('Thin master below')).toHaveValue(3));
+    expect(screen.getByLabelText('Dark reach')).toHaveValue(45);
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

@@ -49,7 +49,8 @@ lights never count.
 | `number` | Frames in the row |
 | `duration` | Seconds per frame, to four decimals |
 
-It reads nothing but the catalog, so it is instant.
+It reads nothing but the catalog, so it is instant, unless lights that can't
+be calibrated are left out (below).
 
 **Full** adds every column the catalog and the frames can fill. Rows also
 split by binning and gain, since AstroBin records those per row.
@@ -68,6 +69,12 @@ filter (the median one, read header-only from disk). When that file is
 missing, the export tries its neighbours and reports how many lights had
 no file. Columns PSF Guard cannot know (`iso`, `bortle`, `meanSqm`,
 `meanFwhm`) are left out; AstroBin treats an absent column as blank.
+
+With **Leave out lights that can't be calibrated** on (Settings › Calibration ›
+Stacks and exports), either level counts only the lights a stack would
+integrate: each light's header is read and judged as a stack judges it, and
+the export notes how many it left out, with one and its reason. That needs the
+image folders; without them the export counts every light and says so.
 
 ## Filter ids
 

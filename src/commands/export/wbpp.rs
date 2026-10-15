@@ -15,6 +15,7 @@
 
 use super::{ExportPlan, DARKSET_KEYWORD, SESSION_KEYWORD};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 /// WBPP release these scripts were written against. Its automation parameters
@@ -286,6 +287,11 @@ pub struct WbppScriptSpec {
     /// known (an in-app run). Absent, the script tries each platform's
     /// standard install path.
     pub bpp_main: Option<PathBuf>,
+    /// Files under the frame roots that this export does not place, left by
+    /// an earlier export into the same folder. WBPP scans those roots and
+    /// would take them, so the scripts say so. Filled by
+    /// [`super::write_wbpp_scripts`] for placed frames.
+    pub stale_frames: Vec<String>,
 }
 
 /// The script a WBPP export writes beside its runners.
@@ -426,6 +432,45 @@ fn populated_roots(plan: &ExportPlan) -> Vec<&'static str> {
         .collect()
 }
 
+/// Frames already under the roots this plan's runner scans that the plan
+/// does not place: left by an earlier export into the same folder, and
+/// matched by settings that may since have changed. `dir=` is recursive, so
+/// WBPP would take them. Relative to `dest_root`, sorted.
+pub fn stale_frames(plan: &ExportPlan, dest_root: &Path) -> Vec<String> {
+    let planned: HashSet<&Path> = plan
+        .items
+        .iter()
+        .map(|item| item.relative_dest.as_path())
+        .collect();
+    let mut stale = Vec::new();
+    let mut folders: Vec<PathBuf> = populated_roots(plan)
+        .into_iter()
+        .map(|root| dest_root.join(root))
+        .collect();
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => folders.push(path),
+                Ok(kind) if kind.is_file() || kind.is_symlink() => {
+                    let Ok(relative) = path.strip_prefix(dest_root) else {
+                        continue;
+                    };
+                    if crate::image_io::is_image_path(relative) && !planned.contains(relative) {
+                        stale.push(relative.to_string_lossy().replace('\\', "/"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    stale.sort();
+    stale
+}
+
 /// The POSIX runner, for Linux and macOS.
 pub fn shell_script(plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
     let mut script = String::new();
@@ -546,6 +591,87 @@ fn session_grouping_note(comment: &str) -> String {
     )
 }
 
+/// Text from the catalog or the settings, made safe inside one comment line:
+/// a line break or a JavaScript line separator would end the comment, a `%`
+/// in a batch file's `REM` line is expanded before the line is read, and
+/// PixInsight's preprocessor opens a block comment at `/*` even inside a
+/// `//` line, so `/*` and `*/` are split apart in the script.
+fn comment_text(comment: &str, text: &str) -> String {
+    let flat: String = text
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    if comment.starts_with("REM") {
+        flat.replace('%', "%%")
+    } else if comment.starts_with("//") {
+        flat.replace("/*", "/ *").replace("*/", "* /")
+    } else {
+        flat
+    }
+}
+
+/// How PSF Guard chose the calibration frames: the settings in force where
+/// they differ from the defaults, the rigs that do without darks, the lights
+/// left out as stacks leave them out, and stale files WBPP would sweep up.
+fn calibration_note(comment: &str, plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
+    let text = |value: &str| comment_text(comment, value);
+    let mut note = format!(
+        "{comment}\n\
+         {comment}The calibration frames are the ones a PSF Guard stack would take for\n\
+         {comment}each light, "
+    );
+    if plan.calibration_settings.is_empty() {
+        note.push_str("matched by PSF Guard's default limits.\n");
+    } else {
+        note.push_str("matched by these settings, which differ from the defaults:\n");
+        for line in &plan.calibration_settings {
+            note.push_str(&format!("{comment}  {}\n", text(line)));
+        }
+    }
+    if !plan.without_darks.is_empty() {
+        note.push_str(&format!(
+            "{comment}No darks are exported for {}: the settings leave darks out\n\
+             {comment}there, so WBPP calibrates those lights with bias and flats alone.\n",
+            text(&plan.without_darks.join(", "))
+        ));
+    }
+    if let Some((_, name, reason)) = plan.uncalibrated.first() {
+        let count = plan.uncalibrated.len();
+        note.push_str(&format!(
+            "{comment}{count} light{} that can't be calibrated {} left out, as stacks leave\n\
+             {comment}them out (Settings > Calibration > Stacks); {}: {}.\n",
+            if count == 1 { "" } else { "s" },
+            if count == 1 { "was" } else { "were" },
+            text(name),
+            text(reason),
+        ));
+    }
+    if let Some(first) = spec.stale_frames.first() {
+        let count = spec.stale_frames.len();
+        let (one, it) = if count == 1 {
+            (true, "it")
+        } else {
+            (false, "them")
+        };
+        note.push_str(&format!(
+            "{comment}\n\
+             {comment}WARNING: {count} file{} under the frame folders {} not part of this\n\
+             {comment}export, left by an earlier one, such as {}. WBPP scans these\n\
+             {comment}folders and would take {it}: remove {it} or export to an empty folder.\n",
+            if one { "" } else { "s" },
+            if one { "is" } else { "are" },
+            text(first),
+        ));
+    }
+    note
+}
+
 fn preamble(comment: &str, plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
     let layout = match spec.files {
         WbppFiles::Placed => format!(
@@ -575,6 +701,7 @@ fn preamble(comment: &str, plan: &ExportPlan, spec: &WbppScriptSpec) -> String {
     if matches!(spec.files, WbppFiles::Placed) && has_dark_sets(plan) {
         sessions.push_str(&dark_set_note(comment));
     }
+    sessions.push_str(&calibration_note(comment, plan, spec));
     let options: String = spec
         .options
         .describe()
@@ -1385,5 +1512,98 @@ mod tests {
             "{js}"
         );
         assert!(!js.contains("#ifeq"), "{js}");
+    }
+
+    /// The runners say what chose the calibration frames: the settings that
+    /// differ from the defaults, the rigs without darks, the lights left out
+    /// and any stale frames, in every runner's own comment style.
+    #[test]
+    fn the_runners_describe_the_calibration_settings_in_force() {
+        let mut plan = plan_with(&["lights"]);
+        plan.calibration_settings = vec![
+            "Flat rotation tolerance: 5° (global)".into(),
+            "Use darks: off (for Scope · Camera)".into(),
+        ];
+        plan.without_darks = vec!["Scope · Camera".into()];
+        plan.uncalibrated = vec![
+            (4, "a.fits".into(), "No matching flat".into()),
+            (5, "b.fits".into(), "No matching flat".into()),
+        ];
+        let spec = WbppScriptSpec {
+            stale_frames: vec!["lights/a/old-1.fits".into(), "lights/a/old-2.fits".into()],
+            ..Default::default()
+        };
+        let shell = shell_script(&plan, &spec);
+        for line in [
+            "# each light, matched by these settings, which differ from the defaults:",
+            "#   Flat rotation tolerance: 5° (global)",
+            "#   Use darks: off (for Scope · Camera)",
+            "# No darks are exported for Scope · Camera: the settings leave darks out",
+            "# 2 lights that can't be calibrated were left out, as stacks leave",
+            "# them out (Settings > Calibration > Stacks); a.fits: No matching flat.",
+            "# WARNING: 2 files under the frame folders are not part of this",
+            "# export, left by an earlier one, such as lights/a/old-1.fits. WBPP scans these",
+            "# folders and would take them: remove them or export to an empty folder.",
+        ] {
+            assert!(shell.contains(line), "{line}\n{shell}");
+        }
+        let batch = batch_script(&plan, &spec);
+        assert!(
+            batch.contains("REM   Use darks: off (for Scope · Camera)"),
+            "{batch}"
+        );
+        let js = js_runner(&plan, &spec);
+        assert!(
+            js.contains("//   Flat rotation tolerance: 5° (global)"),
+            "{js}"
+        );
+
+        // A name never ends the comment it sits in, nor expands in a batch file.
+        plan.without_darks = vec!["Rig\nalert(1)\u{2028}100%".into()];
+        let js = js_runner(&plan, &spec);
+        assert!(
+            js.contains("// No darks are exported for Rig alert(1) 100%:"),
+            "{js}"
+        );
+        let batch = batch_script(&plan, &spec);
+        assert!(
+            batch.contains("REM No darks are exported for Rig alert(1) 100%%:"),
+            "{batch}"
+        );
+
+        // Nor opens a block comment in the PixInsight script: a rig name, a
+        // reason and a stale path from the catalog, each with `/*` or `*/`.
+        let mut plan = plan_with(&["lights"]);
+        plan.calibration_settings = vec!["Use darks: off (for Esprit 100 /* f5.5)".into()];
+        plan.without_darks = vec!["Esprit 100 /* f5.5".into()];
+        plan.uncalibrated = vec![(
+            4,
+            "a.fits".into(),
+            "No matching bias, and darks are not used (set for RC /* 8 */)".into(),
+        )];
+        let spec = WbppScriptSpec {
+            stale_frames: vec!["lights/M42/*old.fits".into()],
+            ..Default::default()
+        };
+        let js = js_runner(&plan, &spec);
+        assert!(!js.contains("/*") && !js.contains("*/"), "{js}");
+        assert!(
+            js.contains("//   Use darks: off (for Esprit 100 / * f5.5)"),
+            "{js}"
+        );
+        assert!(js.contains("(set for RC / * 8 * /)"), "{js}");
+        assert!(js.contains("such as lights/M42/ *old.fits."), "{js}");
+        // The shell runner keeps the text as it is.
+        assert!(shell_script(&plan, &spec).contains("lights/M42/*old.fits"));
+
+        // Matched by the defaults, the runner says that much and no more.
+        let shell = shell_script(&plan_with(&["lights"]), &WbppScriptSpec::default());
+        assert!(
+            shell.contains("matched by PSF Guard's default limits."),
+            "{shell}"
+        );
+        for absent in ["No darks", "left out", "WARNING"] {
+            assert!(!shell.contains(absent), "{absent}\n{shell}");
+        }
     }
 }

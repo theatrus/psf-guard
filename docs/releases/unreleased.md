@@ -355,3 +355,20 @@
   stop kills a running RC-Astro tool instead of waiting for it, and after
   the restart the run comes back in its place and resumes after the last
   tool step that finished. A page left open picks it up again.
+- Calibration checks can be tuned in **Settings › Calibration**: the
+  matching tolerances, the dark-master choices, every light check and every
+  frame-grade limit. A light check can flag, be advisory (shown as Check,
+  never "can't calibrate", so stacks keep the light) or be off. Under
+  **Rigs**, any of them can be set for one rig, such as a rig that shoots
+  sky flats or can't cap for darks, while everything else inherits; presets
+  for sky flats, a dark library and no darks fill the form to review. A
+  light's Calibration panel names the limits it was checked by, who set
+  them, and what a setting kept from being flagged, and opens its rig's
+  settings. The defaults are the limits used before. WBPP exports and runs,
+  and `psf-guard export`, match by the same settings. With **Leave out
+  lights that can't be calibrated** on, every export leaves out the lights a
+  stack would, in either layout, from the CLI and in the AstroBin export,
+  and says how many and why. The WBPP runner scripts list the settings in
+  force and warn about frames an earlier export left in the folder. An
+  older PSF Guard that saves its settings drops the rigs' values and the new
+  settings, so set them again after a downgrade.

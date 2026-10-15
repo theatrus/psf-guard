@@ -62,7 +62,51 @@ pub struct ExportPlan {
     /// Calibration frames the library matched but keeps out: graded poor,
     /// kept out by hand, or marked for stray light.
     pub kept_out: std::collections::BTreeSet<PathBuf>,
+    /// Lights left out because they cannot be calibrated properly, as
+    /// stacks leave them out ([`ExportOptions::exclude_uncalibrated`]):
+    /// image id, file name and why.
+    pub uncalibrated: Vec<(i32, String, String)>,
+    /// The calibration settings that chose the frames and differ from PSF
+    /// Guard's defaults, in words, with who set them: "Use darks: off (for
+    /// Askar 120 · ZWO ASI2600MM Pro)". Empty when every light was matched
+    /// by the defaults.
+    pub calibration_settings: Vec<String>,
+    /// The rigs whose settings leave darks out, so their lights export
+    /// with none: rig names, or "every rig" when the server's settings do.
+    pub without_darks: Vec<String>,
 }
+
+impl ExportPlan {
+    /// One light left out because it cannot be calibrated, and why, for a
+    /// summary that counts them: "acc_0001.fits: No matching flat".
+    pub fn uncalibrated_example(&self) -> Option<String> {
+        self.uncalibrated
+            .first()
+            .map(|(_, name, reason)| format!("{name}: {reason}"))
+    }
+
+    /// The lights left out because they cannot be calibrated, one per line
+    /// with why, for an export that carries a note beside its frames.
+    /// `None` when none was.
+    pub fn uncalibrated_note(&self) -> Option<String> {
+        if self.uncalibrated.is_empty() {
+            return None;
+        }
+        let mut note = format!(
+            "{} light(s) that can't be calibrated were left out of this export, as stacks \
+             leave them out (Settings > Calibration > Stacks and exports > Leave out lights \
+             that can't be calibrated):\n\n",
+            self.uncalibrated.len()
+        );
+        for (id, name, reason) in &self.uncalibrated {
+            note.push_str(&format!("{name} (image {id}): {reason}\n"));
+        }
+        Some(note)
+    }
+}
+
+/// The note a zip export carries when it left lights out.
+pub const UNCALIBRATED_NOTE: &str = "LEFT-OUT-UNCALIBRATED.txt";
 
 /// How an export arranges its files under the destination root.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -199,6 +243,11 @@ pub struct ExportOptions {
     pub filter_name: Option<String>,
     /// How the destination tree is arranged.
     pub layout: ExportLayout,
+    /// Leave out lights that cannot be calibrated properly, as stacks do
+    /// when **Leave out lights that can't be calibrated** is on. Every
+    /// export, in either layout, passes
+    /// [`crate::calibration::exclude_uncalibrated_enabled`].
+    pub exclude_uncalibrated: bool,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -221,6 +270,13 @@ pub struct ExportSummary {
     pub missing: usize,
     pub errors: usize,
     pub bytes: u64,
+    /// Lights left out because they cannot be calibrated properly, as
+    /// stacks leave them out ([`ExportPlan::uncalibrated`]).
+    #[serde(default)]
+    pub uncalibrated: usize,
+    /// One of them and why: "acc_0001.fits: No matching flat".
+    #[serde(default)]
+    pub uncalibrated_example: Option<String>,
 }
 
 /// Make a name safe as a single path component (target and filter names are
@@ -285,6 +341,7 @@ pub fn plan_export(
     let mut dark_item_sets: Vec<(usize, crate::calibration::DarkSet)> = Vec::new();
     let night_boundary = crate::server::sky_coverage::catalog_night_boundary(conn)
         .context("reading capture times")?;
+    let mut notes = SettingsNotes::default();
 
     for (image, _project_name, target_name) in rows {
         if options.project_id.is_some_and(|id| image.project_id != id)
@@ -317,8 +374,19 @@ pub fn plan_export(
                 Some(&tree),
                 options.layout,
                 night_boundary,
+                options.exclude_uncalibrated,
             )
             .context("matching export calibration frames")?;
+            // A light a stack would leave out stays out of the export too,
+            // so WBPP never mixes it with properly calibrated frames.
+            if options.exclude_uncalibrated
+                && let Some(reason) = &calibration.gap
+            {
+                plan.uncalibrated
+                    .push((image.id, basename.clone(), reason.clone()));
+                continue;
+            }
+            notes.note(&calibration.rules, options.exclude_uncalibrated);
             if let Some(set) = &calibration.dark_set {
                 for (offset, (kind, _, _)) in calibration.items.iter().enumerate() {
                     if *kind == crate::calibration::CalibrationKind::Dark {
@@ -438,7 +506,84 @@ pub fn plan_export(
     // Deterministic order: by destination path.
     plan.items
         .sort_by(|a, b| a.relative_dest.cmp(&b.relative_dest));
+    (plan.calibration_settings, plan.without_darks) = notes.finish();
     Ok(plan)
+}
+
+/// The calibration settings an export's lights were matched by, gathered
+/// once per distinct set of rules.
+#[derive(Default)]
+struct SettingsNotes {
+    seen: HashSet<*const crate::calibration::Rules>,
+    /// Global settings first, then each rig's, each in the panel's order.
+    lines: std::collections::BTreeSet<(u8, String, usize, String)>,
+    without_darks: std::collections::BTreeSet<String>,
+    /// Kept alive so the pointers in `seen` stay unique.
+    held: Vec<std::sync::Arc<crate::calibration::Rules>>,
+}
+
+impl SettingsNotes {
+    /// Note what these rules set that changes which frames an export takes:
+    /// matching and grading, and the checks that make a light one to leave
+    /// out when the export leaves such lights out.
+    fn note(&mut self, rules: &std::sync::Arc<crate::calibration::Rules>, gaps_matter: bool) {
+        if !self.seen.insert(std::sync::Arc::as_ptr(rules)) {
+            return;
+        }
+        self.held.push(std::sync::Arc::clone(rules));
+        use crate::calibration::rules::{field, fields, Effect};
+        use crate::calibration::RuleSource;
+        let rig = rules
+            .rig
+            .as_ref()
+            .map(|rig| rig.name.clone())
+            .unwrap_or_default();
+        for note in rules.notes() {
+            let order = fields()
+                .iter()
+                .position(|spec| spec.key == note.key)
+                .unwrap_or(usize::MAX);
+            let effect = field(note.key).map(|spec| spec.effect);
+            let gap_check = matches!(
+                note.key,
+                "flat_max_age_days"
+                    | "check_no_flat"
+                    | "check_no_bias_or_dark"
+                    | "check_stale_flats"
+            );
+            if effect == Some(Effect::Flags) && !(gaps_matter && gap_check) {
+                continue;
+            }
+            let line = match note.source {
+                RuleSource::Rig => (
+                    1,
+                    rig.clone(),
+                    order,
+                    format!("{}: {} (for {rig})", note.label, note.text),
+                ),
+                _ => (
+                    0,
+                    String::new(),
+                    order,
+                    format!("{}: {} (global)", note.label, note.text),
+                ),
+            };
+            self.lines.insert(line);
+        }
+        if !rules.use_darks {
+            self.without_darks.insert(match rules.source("use_darks") {
+                RuleSource::Rig => rig,
+                _ => "every rig".to_string(),
+            });
+        }
+    }
+
+    fn finish(self) -> (Vec<String>, Vec<String>) {
+        (
+            self.lines.into_iter().map(|(_, _, _, line)| line).collect(),
+            self.without_darks.into_iter().collect(),
+        )
+    }
 }
 
 /// How planned files land at the destination.
@@ -501,6 +646,8 @@ pub fn execute_plan_with(
     let mut summary = ExportSummary {
         planned: plan.items.len(),
         missing: plan.missing.len(),
+        uncalibrated: plan.uncalibrated.len(),
+        uncalibrated_example: plan.uncalibrated_example(),
         ..Default::default()
     };
 
@@ -629,6 +776,16 @@ pub fn write_wbpp_scripts(
     std::fs::create_dir_all(dest_root)
         .with_context(|| format!("creating {}", dest_root.display()))?;
     let mut written = Vec::new();
+    // Frames an earlier export left under the scanned roots, which WBPP
+    // would take along with this one's: the scripts warn about them.
+    let mut placed;
+    let spec = if matches!(spec.files, wbpp::WbppFiles::Placed) {
+        placed = spec.clone();
+        placed.stale_frames = wbpp::stale_frames(plan, dest_root);
+        &placed
+    } else {
+        spec
+    };
     let scripts = [
         ("run-wbpp.sh", wbpp::shell_script(plan, spec)),
         ("run-wbpp.cmd", wbpp::batch_script(plan, spec)),
@@ -1236,5 +1393,661 @@ mod tests {
         .unwrap();
         assert_eq!(plan.items.len(), 1);
         assert_eq!(plan.items[0].image_id, 3);
+    }
+
+    /// An export matches each light by its own rig's calibration settings,
+    /// the way a stack does, so WBPP calibrates with the frames a stack
+    /// would have taken.
+    mod settings {
+        use super::*;
+        use crate::calibration::tests::{RulesInForce, POLICY_LOCK};
+        use serde_json::json;
+
+        /// `seed`'s catalog and a calibration library, as tiny FITS files in
+        /// a folder of their own.
+        struct Library {
+            dir: tempfile::TempDir,
+            conn: Connection,
+        }
+
+        impl Library {
+            /// The catalog's one accepted light carries `cards`.
+            fn new(cards: &[&str]) -> Self {
+                let dir = tempfile::tempdir().unwrap();
+                let conn = seed(dir.path());
+                write_test_fits_with(&dir.path().join("acc_Ha_0001.fits"), "LIGHT", cards);
+                Self { dir, conn }
+            }
+
+            /// Another accepted light.
+            fn light(&mut self, id: i32, name: &str, cards: &[&str]) {
+                let path = self.dir.path().join(name);
+                write_test_fits_with(&path, "LIGHT", cards);
+                self.conn
+                    .execute(
+                        "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate,
+                         filtername, gradingStatus, metadata) VALUES (?1, 1, 1, 200, 'Ha', 1, ?2)",
+                        rusqlite::params![
+                            id,
+                            serde_json::json!({ "FileName": path.display().to_string() })
+                                .to_string()
+                        ],
+                    )
+                    .unwrap();
+            }
+
+            /// `count` frames of `kind`, `<stem>-<n>.fits`, shot a minute
+            /// apart from `hour` ("2026-09-10T20"), each with `cards`.
+            fn frames(&mut self, stem: &str, kind: &str, hour: &str, count: usize, cards: &[&str]) {
+                let mut metas = Vec::new();
+                for index in 0..count {
+                    let path = self.dir.path().join(format!("{stem}-{index}.fits"));
+                    let date = format!("DATE-OBS= '{hour}:{index:02}:00'");
+                    let mut all = vec![date.as_str()];
+                    all.extend_from_slice(cards);
+                    write_test_fits_with(&path, kind, &all);
+                    metas.push(crate::commands::import::headers::read_frame_meta(&path));
+                }
+                let tx = self.conn.transaction().unwrap();
+                crate::calibration::import_calibration_frames(&tx, &metas, Some("p")).unwrap();
+                tx.commit().unwrap();
+            }
+
+            /// The rig the lights were shot with, as the settings name it.
+            fn rig(&self) -> String {
+                crate::calibration::rules::light_rig_uuid(
+                    &crate::commands::import::headers::read_frame_meta(
+                        &self.dir.path().join("acc_Ha_0001.fits"),
+                    ),
+                )
+            }
+
+            fn plan(&self, exclude_uncalibrated: bool) -> ExportPlan {
+                self.plan_in(ExportLayout::Wbpp, exclude_uncalibrated)
+            }
+
+            fn plan_in(&self, layout: ExportLayout, exclude_uncalibrated: bool) -> ExportPlan {
+                plan_export(
+                    &self.conn,
+                    &[self.dir.path().to_string_lossy().into_owned()],
+                    &ExportOptions {
+                        layout,
+                        exclude_uncalibrated,
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+            }
+        }
+
+        fn destinations(plan: &ExportPlan) -> Vec<String> {
+            plan.items
+                .iter()
+                .map(|item| item.relative_dest.to_string_lossy().replace('\\', "/"))
+                .collect()
+        }
+
+        /// The files placed below `root`, by file name.
+        fn names_below(plan: &ExportPlan, root: &str) -> Vec<String> {
+            let mut names: Vec<String> = destinations(plan)
+                .into_iter()
+                .filter(|path| path.starts_with(root))
+                .map(|path| path.rsplit('/').next().unwrap().to_string())
+                .collect();
+            names.sort();
+            names
+        }
+
+        fn numbered(stem: &str, count: usize) -> Vec<String> {
+            (0..count)
+                .map(|index| format!("{stem}-{index}.fits"))
+                .collect()
+        }
+
+        const LIGHT_AT: &str = "DATE-OBS= '2026-09-11T03:00:00'";
+
+        /// Flats past the default rotation or focal length limit go to the
+        /// export only once the light's rig, or the server, widens the limit,
+        /// and then into the light's session folder.
+        #[test]
+        fn the_light_s_rig_tolerances_choose_the_flats_an_export_places() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            for (key, flat_cards) in [
+                (
+                    "rotation_tolerance_deg",
+                    [
+                        "ROTATANG=                104.0",
+                        "FOCALLEN=                600.0",
+                    ],
+                ),
+                (
+                    "focal_length_tolerance_mm",
+                    [
+                        "ROTATANG=                100.0",
+                        "FOCALLEN=                603.0",
+                    ],
+                ),
+            ] {
+                let mut library = Library::new(&[
+                    LIGHT_AT,
+                    "ROTATANG=                100.0",
+                    "FOCALLEN=                600.0",
+                ]);
+                library.frames("flat", "FLAT", "2026-09-10T20", 2, &flat_cards);
+                let rig = library.rig();
+
+                let plan = library.plan(false);
+                assert!(names_below(&plan, "flats/").is_empty(), "{key}: {plan:?}");
+                assert!(
+                    destinations(&plan)
+                        .contains(&"lights/M42_Trapezium/Ha/acc_Ha_0001.fits".to_string()),
+                    "{key}: {plan:?}"
+                );
+                assert!(plan.calibration_settings.is_empty(), "{key}: {plan:?}");
+
+                // Another rig's wider limit changes nothing here.
+                {
+                    let _rules = RulesInForce::with(
+                        &[],
+                        &[("another-rig", "Other rig", &[(key, json!(5))])],
+                    );
+                    let plan = library.plan(false);
+                    assert!(names_below(&plan, "flats/").is_empty(), "{key}: {plan:?}");
+                    assert!(plan.calibration_settings.is_empty(), "{key}: {plan:?}");
+                }
+
+                // This rig's places them, in the light's session folder.
+                {
+                    let _rules =
+                        RulesInForce::with(&[], &[(rig.as_str(), "Test rig", &[(key, json!(5))])]);
+                    let plan = library.plan(false);
+                    let placed = destinations(&plan);
+                    for expected in [
+                        "lights/M42_Trapezium/Ha/SESSION_2026-09-10/acc_Ha_0001.fits",
+                        "flats/M42_Trapezium/Ha/SESSION_2026-09-10/flat-0.fits",
+                        "flats/M42_Trapezium/Ha/SESSION_2026-09-10/flat-1.fits",
+                    ] {
+                        assert!(placed.contains(&expected.to_string()), "{key}: {placed:?}");
+                    }
+                    assert_eq!(plan.calibration_settings.len(), 1, "{key}: {plan:?}");
+                    assert!(
+                        plan.calibration_settings[0].ends_with("(for Test rig)"),
+                        "{key}: {plan:?}"
+                    );
+                    let script = wbpp::shell_script(&plan, &wbpp::WbppScriptSpec::default());
+                    assert!(
+                        script.contains(&format!("#   {}", plan.calibration_settings[0])),
+                        "{script}"
+                    );
+                }
+
+                // As does the server's.
+                {
+                    let _rules = RulesInForce::global(&[(key, json!(5))]);
+                    let plan = library.plan(false);
+                    assert_eq!(names_below(&plan, "flats/"), numbered("flat", 2), "{key}");
+                    assert!(
+                        plan.calibration_settings[0].ends_with("(global)"),
+                        "{key}: {plan:?}"
+                    );
+                }
+            }
+        }
+
+        /// Sky flats from two evenings are two sessions by default, each
+        /// light with its own; a longer flat session pools them into one
+        /// folder that both lights share, as one master would take them.
+        #[test]
+        fn the_flat_session_decides_which_nights_share_a_session_folder() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[LIGHT_AT]);
+            library.light(9, "acc_Ha_0009.fits", &["DATE-OBS= '2026-09-13T03:00:00'"]);
+            library.frames("flat-a", "FLAT", "2026-09-10T20", 2, &[]);
+            library.frames("flat-b", "FLAT", "2026-09-12T20", 2, &[]);
+            let rig = library.rig();
+
+            let placed = destinations(&library.plan(false));
+            for expected in [
+                "lights/M42_Trapezium/Ha/SESSION_2026-09-10/acc_Ha_0001.fits",
+                "flats/M42_Trapezium/Ha/SESSION_2026-09-10/flat-a-0.fits",
+                "lights/M42_Trapezium/Ha/SESSION_2026-09-12/acc_Ha_0009.fits",
+                "flats/M42_Trapezium/Ha/SESSION_2026-09-12/flat-b-0.fits",
+            ] {
+                assert!(placed.contains(&expected.to_string()), "{placed:?}");
+            }
+
+            let _rules = RulesInForce::with(
+                &[],
+                &[(
+                    rig.as_str(),
+                    "Test rig",
+                    &[("flat_session_hours", json!(72))],
+                )],
+            );
+            let plan = library.plan(false);
+            let placed = destinations(&plan);
+            for expected in [
+                "lights/M42_Trapezium/Ha/SESSION_2026-09-10/acc_Ha_0001.fits",
+                "lights/M42_Trapezium/Ha/SESSION_2026-09-10/acc_Ha_0009.fits",
+                "flats/M42_Trapezium/Ha/SESSION_2026-09-10/flat-a-0.fits",
+                "flats/M42_Trapezium/Ha/SESSION_2026-09-10/flat-b-1.fits",
+            ] {
+                assert!(placed.contains(&expected.to_string()), "{placed:?}");
+            }
+            assert!(
+                placed
+                    .iter()
+                    .all(|path| !path.contains("SESSION_2026-09-12")),
+                "{placed:?}"
+            );
+            assert_eq!(names_below(&plan, "flats/").len(), 4, "{placed:?}");
+            assert!(
+                plan.calibration_settings.iter().any(
+                    |line| line.starts_with("Flat session") && line.ends_with("(for Test rig)")
+                ),
+                "{plan:?}"
+            );
+        }
+
+        /// A rig set to do without darks exports none, keeps its bias, and
+        /// the runner says why the darks are missing.
+        #[test]
+        fn a_rig_without_darks_exports_none_and_its_script_says_so() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[LIGHT_AT]);
+            library.frames("dark", "DARK", "2026-09-10T20", 10, &[]);
+            library.frames("bias", "BIAS", "2026-09-10T21", 2, &[]);
+            let rig = library.rig();
+
+            let plan = library.plan(false);
+            assert_eq!(names_below(&plan, "darks/"), numbered("dark", 10));
+            assert_eq!(names_below(&plan, "bias/"), numbered("bias", 2));
+            assert!(plan.without_darks.is_empty());
+            let script = wbpp::shell_script(&plan, &wbpp::WbppScriptSpec::default());
+            assert!(
+                script.contains("matched by PSF Guard's default limits."),
+                "{script}"
+            );
+            assert!(!script.contains("No darks are exported"), "{script}");
+
+            let _rules = RulesInForce::with(
+                &[],
+                &[(rig.as_str(), "Test rig", &[("use_darks", json!(false))])],
+            );
+            let plan = library.plan(false);
+            assert!(names_below(&plan, "darks/").is_empty(), "{plan:?}");
+            assert_eq!(names_below(&plan, "bias/"), numbered("bias", 2));
+            assert_eq!(plan.without_darks, vec!["Test rig".to_string()]);
+            let script = wbpp::shell_script(&plan, &wbpp::WbppScriptSpec::default());
+            assert!(
+                script.contains("# No darks are exported for Test rig"),
+                "{script}"
+            );
+            assert!(
+                plan.calibration_settings
+                    .iter()
+                    .any(|line| line.starts_with("Use darks") && line.ends_with("(for Test rig)")),
+                "{plan:?}"
+            );
+        }
+
+        /// Darks within the default temperature tolerance stay out once the
+        /// limit is tightened below their distance from the light.
+        #[test]
+        fn the_dark_temperature_limit_keeps_warmer_darks_out_of_an_export() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[LIGHT_AT, "CCD-TEMP=                -10.0"]);
+            library.frames(
+                "dark",
+                "DARK",
+                "2026-09-10T20",
+                10,
+                &["CCD-TEMP=                 -8.0"],
+            );
+
+            assert_eq!(
+                names_below(&library.plan(false), "darks/"),
+                numbered("dark", 10)
+            );
+
+            let _rules = RulesInForce::global(&[("dark_temperature_tolerance_c", json!(1))]);
+            let plan = library.plan(false);
+            assert!(names_below(&plan, "darks/").is_empty(), "{plan:?}");
+            assert!(
+                plan.calibration_settings
+                    .iter()
+                    .any(|line| line.starts_with("Dark temperature tolerance")
+                        && line.ends_with("(global)")),
+                "{plan:?}"
+            );
+        }
+
+        /// The darks an export places follow the dark choice and the dark
+        /// reach: a complete night two months off by default, the nearer,
+        /// shorter set when the rig asks for the nearest, and only that set
+        /// once the complete one is out of reach.
+        #[test]
+        fn dark_reach_and_dark_choice_pick_the_darks_an_export_places() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[
+                "DATE-OBS= '2026-03-10T03:00:00'",
+                "CCD-TEMP=                -10.0",
+            ]);
+            library.frames(
+                "dark-jan",
+                "DARK",
+                "2026-01-09T20",
+                10,
+                &["CCD-TEMP=                -10.0"],
+            );
+            library.frames(
+                "dark-mar",
+                "DARK",
+                "2026-03-09T20",
+                3,
+                &["CCD-TEMP=                 -8.5"],
+            );
+            let rig = library.rig();
+
+            assert_eq!(
+                names_below(&library.plan(false), "darks/"),
+                numbered("dark-jan", 10)
+            );
+            {
+                let _rules = RulesInForce::with(
+                    &[],
+                    &[(
+                        rig.as_str(),
+                        "Test rig",
+                        &[("dark_choice", json!("nearest"))],
+                    )],
+                );
+                let plan = library.plan(false);
+                assert_eq!(names_below(&plan, "darks/"), numbered("dark-mar", 3));
+                assert!(
+                    plan.calibration_settings
+                        .iter()
+                        .any(|line| line.starts_with("Dark choice")),
+                    "{plan:?}"
+                );
+            }
+            {
+                let _rules = RulesInForce::with(
+                    &[],
+                    &[(rig.as_str(), "Test rig", &[("dark_reach_days", json!(30))])],
+                );
+                assert_eq!(
+                    names_below(&library.plan(false), "darks/"),
+                    numbered("dark-mar", 3)
+                );
+            }
+        }
+
+        /// A master from other software is exported while the setting uses
+        /// such masters, and left behind when it ignores them.
+        #[test]
+        fn the_external_masters_setting_decides_whether_an_export_takes_one() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[LIGHT_AT]);
+            library.frames("dark", "DARK", "2026-09-10T20", 2, &[]);
+            library.frames("masterDark", "MASTER DARK", "2026-09-10T22", 1, &[]);
+
+            let placed = names_below(&library.plan(false), "darks/");
+            assert!(
+                placed.contains(&"masterDark-0.fits".to_string()),
+                "{placed:?}"
+            );
+
+            let _rules = RulesInForce::global(&[("external_masters", json!("ignore"))]);
+            let plan = library.plan(false);
+            assert_eq!(names_below(&plan, "darks/"), numbered("dark", 2));
+            assert!(
+                plan.calibration_settings
+                    .iter()
+                    .any(|line| line.starts_with("Masters from other software")),
+                "{plan:?}"
+            );
+        }
+
+        /// A light whose missing flat is flagged: the library holds flats
+        /// for this camera, none at the light's angle.
+        fn light_without_a_flat() -> Library {
+            let mut library = Library::new(&[LIGHT_AT, "ROTATANG=                100.0"]);
+            library.frames(
+                "flat",
+                "FLAT",
+                "2026-09-10T20",
+                2,
+                &["ROTATANG=                110.0"],
+            );
+            library
+        }
+
+        /// With **Leave out lights that can't be calibrated** on, every
+        /// export leaves out a light whose gap is flagged, in either layout,
+        /// as a stack does, and says how many and why. Off, or with the
+        /// check at Check only or Off, the light goes.
+        #[test]
+        fn every_export_leaves_out_the_lights_a_stack_leaves_out() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let library = light_without_a_flat();
+            let rig = library.rig();
+            for (layout, light) in [
+                (
+                    ExportLayout::Standard,
+                    "M42_Trapezium/LIGHT/Ha/acc_Ha_0001.fits",
+                ),
+                (
+                    ExportLayout::Wbpp,
+                    "lights/M42_Trapezium/Ha/acc_Ha_0001.fits",
+                ),
+            ] {
+                let light = light.to_string();
+
+                // Kept unless the setting asks.
+                let plan = library.plan_in(layout, false);
+                assert!(destinations(&plan).contains(&light), "{layout:?}: {plan:?}");
+                assert!(plan.uncalibrated.is_empty(), "{layout:?}");
+                assert_eq!(plan.uncalibrated_note(), None);
+
+                let plan = library.plan_in(layout, true);
+                assert!(plan.items.is_empty(), "{layout:?}: {plan:?}");
+                assert_eq!(plan.uncalibrated.len(), 1, "{layout:?}: {plan:?}");
+                let (id, name, reason) = &plan.uncalibrated[0];
+                assert_eq!((*id, name.as_str()), (1, "acc_Ha_0001.fits"));
+                assert!(reason.starts_with("No matching flat"), "{reason}");
+                // The summary every export reports, and the note a download
+                // carries, say how many and why.
+                let dest = tempfile::tempdir().unwrap();
+                let summary =
+                    execute_plan_with(&plan, dest.path(), Placement::Copy, false, &mut |_, _| {});
+                assert_eq!(summary.uncalibrated, 1, "{layout:?}");
+                let example = summary.uncalibrated_example.unwrap();
+                assert!(
+                    example.starts_with("acc_Ha_0001.fits: No matching flat"),
+                    "{example}"
+                );
+                let note = plan.uncalibrated_note().unwrap();
+                assert!(
+                    note.starts_with("1 light(s) that can't be calibrated were left out"),
+                    "{note}"
+                );
+                assert!(
+                    note.contains("acc_Ha_0001.fits (image 1): No matching flat"),
+                    "{note}"
+                );
+
+                for mode in ["advisory", "off"] {
+                    let _rules = RulesInForce::with(
+                        &[],
+                        &[(rig.as_str(), "Test rig", &[("check_no_flat", json!(mode))])],
+                    );
+                    let plan = library.plan_in(layout, true);
+                    assert!(
+                        destinations(&plan).contains(&light),
+                        "{layout:?} {mode}: {plan:?}"
+                    );
+                    assert!(plan.uncalibrated.is_empty(), "{layout:?} {mode}: {plan:?}");
+                    // The check matters to which lights went, so it is named.
+                    assert!(
+                        plan.calibration_settings
+                            .iter()
+                            .any(|line| line.starts_with("No matching flat")
+                                && line.ends_with("(for Test rig)")),
+                        "{layout:?} {mode}: {plan:?}"
+                    );
+                    // An export that keeps such lights has no use for it.
+                    assert!(
+                        library
+                            .plan_in(layout, false)
+                            .calibration_settings
+                            .is_empty(),
+                        "{layout:?} {mode}"
+                    );
+                }
+            }
+
+            // The WBPP runner says so too.
+            let plan = library.plan(true);
+            let script = wbpp::shell_script(&plan, &wbpp::WbppScriptSpec::default());
+            assert!(
+                script.contains("# 1 light that can't be calibrated was left out, as stacks leave"),
+                "{script}"
+            );
+            assert!(
+                script.contains("acc_Ha_0001.fits: No matching flat"),
+                "{script}"
+            );
+        }
+
+        /// The AstroBin acquisition counts only the lights a stack would
+        /// integrate when the setting is on, and says why one is missing.
+        #[test]
+        fn the_astrobin_export_leaves_out_the_lights_a_stack_leaves_out() {
+            use crate::astrobin::{AstroBinDetail, AstroBinExportRequest};
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let library = light_without_a_flat();
+            // AstroBin counts a light by its exposure, from the catalog.
+            let path = library.dir.path().join("acc_Ha_0001.fits");
+            library
+                .conn
+                .execute(
+                    "UPDATE acquiredimage SET metadata = ?1 WHERE Id = 1",
+                    [serde_json::json!({
+                        "FileName": path.display().to_string(),
+                        "ExposureDuration": 300,
+                    })
+                    .to_string()],
+                )
+                .unwrap();
+            let rig = library.rig();
+            let tree = crate::directory_tree::DirectoryTree::build(library.dir.path()).unwrap();
+            let export =
+                |exclude_uncalibrated: bool,
+                 tree: Option<&crate::directory_tree::DirectoryTree>| {
+                    crate::astrobin::export(
+                        &library.conn,
+                        tree,
+                        &std::collections::BTreeMap::new(),
+                        &AstroBinExportRequest {
+                            target_id: Some(1),
+                            detail: AstroBinDetail::Essentials,
+                            exclude_uncalibrated,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()
+                };
+
+            let kept = export(false, Some(&tree));
+            assert_eq!((kept.frames, kept.uncalibrated_lights), (1, 0));
+
+            let left_out = export(true, Some(&tree));
+            assert_eq!((left_out.frames, left_out.uncalibrated_lights), (0, 1));
+            assert!(
+                left_out.notes.iter().any(|note| note.starts_with(
+                    "1 light(s) that can't be calibrated were left out, as stacks leave them out"
+                ) && note
+                    .contains("acc_Ha_0001.fits: No matching flat")),
+                "{:?}",
+                left_out.notes
+            );
+
+            // Without the folders a light can't be judged, and the export says so.
+            let unjudged = export(true, None);
+            assert_eq!(unjudged.frames, 1);
+            assert!(
+                unjudged
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("could not be left out")),
+                "{:?}",
+                unjudged.notes
+            );
+
+            for mode in ["advisory", "off"] {
+                let _rules = RulesInForce::with(
+                    &[],
+                    &[(rig.as_str(), "Test rig", &[("check_no_flat", json!(mode))])],
+                );
+                let export = export(true, Some(&tree));
+                assert_eq!(
+                    (export.frames, export.uncalibrated_lights),
+                    (1, 0),
+                    "{mode}"
+                );
+            }
+        }
+
+        /// WBPP scans the frame roots recursively, so a frame an earlier
+        /// export left there would join this one. The runner warns about it;
+        /// nothing is deleted.
+        #[test]
+        fn a_placed_export_warns_about_frames_an_earlier_one_left() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[LIGHT_AT]);
+            library.frames("flat", "FLAT", "2026-09-10T20", 2, &[]);
+            let plan = library.plan(false);
+            let dest = tempfile::tempdir().unwrap();
+            let stale = dest
+                .path()
+                .join("lights/M42_Trapezium/Ha/SESSION_2026-08-01");
+            std::fs::create_dir_all(&stale).unwrap();
+            std::fs::write(stale.join("old.fits"), b"old").unwrap();
+            std::fs::write(stale.join("notes.txt"), b"not a frame").unwrap();
+            // WBPP's own output is not a scanned root.
+            std::fs::create_dir_all(dest.path().join(wbpp::OUTPUT_DIRECTORY)).unwrap();
+            std::fs::write(
+                dest.path().join(wbpp::OUTPUT_DIRECTORY).join("master.xisf"),
+                b"m",
+            )
+            .unwrap();
+
+            let summary =
+                execute_plan_with(&plan, dest.path(), Placement::Copy, false, &mut |_, _| {});
+            assert_eq!(summary.errors, 0);
+            assert_eq!(
+                wbpp::stale_frames(&plan, dest.path()),
+                vec!["lights/M42_Trapezium/Ha/SESSION_2026-08-01/old.fits".to_string()]
+            );
+            write_wbpp_scripts(&plan, dest.path(), &wbpp::WbppScriptSpec::default()).unwrap();
+            let script = std::fs::read_to_string(dest.path().join("run-wbpp.sh")).unwrap();
+            assert!(
+                script.contains("# WARNING: 1 file under the frame folders is not part of this"),
+                "{script}"
+            );
+            assert!(
+                script.contains("lights/M42_Trapezium/Ha/SESSION_2026-08-01/old.fits"),
+                "{script}"
+            );
+            assert!(stale.join("old.fits").exists());
+
+            // A fresh folder has nothing to warn about.
+            let fresh = tempfile::tempdir().unwrap();
+            execute_plan_with(&plan, fresh.path(), Placement::Copy, false, &mut |_, _| {});
+            write_wbpp_scripts(&plan, fresh.path(), &wbpp::WbppScriptSpec::default()).unwrap();
+            let script = std::fs::read_to_string(fresh.path().join("run-wbpp.sh")).unwrap();
+            assert!(!script.contains("WARNING"), "{script}");
+        }
     }
 }

@@ -319,6 +319,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-lc-rs"
+version = "1.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
+dependencies = [
+ "aws-lc-sys",
+ "zeroize",
+]
+
+[[package]]
+name = "aws-lc-sys"
+version = "0.45.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
+dependencies = [
+ "cc",
+ "cmake",
+ "dunce",
+ "fs_extra",
+ "pkg-config",
+]
+
+[[package]]
 name = "axum"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -781,6 +804,15 @@ name = "clap_lex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
+
+[[package]]
+name = "cmake"
+version = "0.1.54"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7caa3f9de89ddbe2c607f4101924c5abec803763ae9534e4f4d7d8f84aa81f0"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "cmov"
@@ -1645,6 +1677,12 @@ dependencies = [
  "libc",
  "winapi",
 ]
+
+[[package]]
+name = "fs_extra"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "futf"
@@ -4423,6 +4461,7 @@ version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e750cca55fe4f0439a15d0bb529da9651e79993e8e72c61a899a36d462befbe"
 dependencies = [
+ "aws-lc-rs",
  "bytes",
  "getrandom 0.4.2",
  "lru-slab",
@@ -4792,7 +4831,6 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-core",
- "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -4812,14 +4850,12 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
- "tokio-util",
  "tower",
  "tower-http 0.6.11",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams 0.4.2",
  "web-sys",
  "webpki-roots",
 ]
@@ -4844,11 +4880,13 @@ dependencies = [
  "log",
  "percent-encoding",
  "pin-project-lite",
+ "quinn",
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -4859,7 +4897,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams 0.5.0",
+ "wasm-streams",
  "web-sys",
 ]
 
@@ -5055,6 +5093,7 @@ version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
+ "aws-lc-rs",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -5118,6 +5157,7 @@ version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
+ "aws-lc-rs",
  "ring",
  "rustls-pki-types",
  "untrusted",
@@ -5274,9 +5314,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.29.0"
+version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f3cbe5c841d5167481ed87a98e2a358d625545fdafc33cddf1a9e58a86f3b5f"
+checksum = "bfa12b573157d6effdfd6d5259be51c84cb9aed56871a841b0e96c236f14cd57"
 dependencies = [
  "chrono",
  "directories",
@@ -5310,9 +5350,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7776879c15a57b9bbcb45d8d0c27fab7dbdc2717646ba7fa2b1cc081816f4e8"
+checksum = "9d1dff197eb787c08b397926ec0e974347785a14dbd6842a59be1f21e112fc98"
 dependencies = [
  "rayon",
  "seiza-imgproc",
@@ -5335,15 +5375,15 @@ dependencies = [
 
 [[package]]
 name = "seiza-download"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af38b823a64ffdbc2a58676dbe0e35d665b235f64c178b513b8dbd1acfa9bdb7"
+checksum = "f3838b2a298fe5ad7d27f8f7fc5bf6189307b621684f87909839d168009bc84d"
 dependencies = [
  "async-compression",
  "directories",
  "fs2",
  "futures-util",
- "reqwest 0.12.28",
+ "reqwest 0.13.2",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -5367,9 +5407,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-image-io"
-version = "0.4.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbf0c0e051091af233fe5ea17edbbf205d22bc463a11937d396b7459625e8cd0"
+checksum = "c23177db98199a1de41791f2891206a58d1298b78df4976182423461048f439f"
 dependencies = [
  "image",
  "seiza",
@@ -5389,13 +5429,13 @@ dependencies = [
 
 [[package]]
 name = "seiza-satellites"
-version = "0.18.0"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cd4ae3443b83c768c750c6a4ee8fbbe84cc41f7873b0ab1d18113e841908f39"
+checksum = "2dcb2b0863f8f11b9ed0cb696a18311e5dd8ced6da7ef48e78060e815fd62c5a"
 dependencies = [
  "directories",
  "fs2",
- "reqwest 0.12.28",
+ "reqwest 0.13.2",
  "satkit",
  "seiza",
  "seiza-download",
@@ -5408,9 +5448,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.31.0"
+version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98b776c6fec7bd6ba88458f79c314a6a48e9c1639c4cfbab09024b6d66a17a52"
+checksum = "8e7bf8e30f844935c64c7c25739e02a623df18bbebf18c3e50843247fb9c3e53"
 dependencies = [
  "multiversion",
  "postcard",
@@ -7419,19 +7459,6 @@ dependencies = [
  "indexmap 2.14.0",
  "wasm-encoder",
  "wasmparser",
-]
-
-[[package]]
-name = "wasm-streams"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
-dependencies = [
- "futures-util",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]

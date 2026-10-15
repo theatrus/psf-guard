@@ -150,4 +150,35 @@ describe('WbppRunDialog while another project runs', () => {
     expect(screen.queryByText('PixInsight is busy:')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /stacking$/ })).not.toBeInTheDocument();
   });
+
+  it('says which lights the calibration settings left out and which settings matched', async () => {
+    mockCommon();
+    server.use(
+      http.get('/api/db/alpha/wbpp/runs/current', () =>
+        ok({
+          started: true,
+          queued: [],
+          progress: {
+            ...running,
+            uncalibrated_lights: 2,
+            calibration_settings: ['Use darks: off (for Askar 120 · ASI2600MM Pro)'],
+          },
+        })
+      )
+    );
+    render(
+      <WbppRunDialog
+        request={{ dbId: 'alpha', scope: { project_id: 1 }, label: 'Sh2 86' }}
+        defaultOptions={DEFAULT_WBPP_OPTIONS}
+        onClose={() => {}}
+      />,
+      { wrapper: wrapper() }
+    );
+    expect(
+      await screen.findByText(/2 light\(s\) that can't be calibrated were left out, as stacks leave them out/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Calibration frames matched with: Use darks: off (for Askar 120 · ASI2600MM Pro).')
+    ).toBeInTheDocument();
+  });
 });

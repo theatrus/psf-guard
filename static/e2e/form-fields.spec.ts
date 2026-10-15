@@ -57,7 +57,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await page.goto('/');
       await openSettings(page);
       await page.getByRole('tab', { name: 'Calibration', exact: true }).click();
-      const reach = page.getByLabel('Dark reach in days');
+      const reach = page.getByLabel('Dark reach', { exact: true });
       await expect(reach).toBeVisible();
       await expectThemed(page, reach);
       await expectThemed(page, page.getByLabel('Dark choice'));
