@@ -926,6 +926,62 @@ describe('Framing view', () => {
     expect(screen.getByLabelText('Position angle degrees')).toHaveValue(10);
   });
 
+  it('outlines a rig that is on where a locked shot panel was taken, and lets it be hidden', async () => {
+    // Shot with RedCat, 0.3° east of the plan's center and turned 20°: drawn
+    // where and how its frames say, whatever rig frames the plan.
+    const shot = { center: { ra_degrees: heart.center.ra_degrees + 0.6, dec_degrees: heart.center.dec_degrees }, position_angle_degrees: 20, size: { width_degrees: 5.31, height_degrees: 3.55 }, source: 'solved' as const, size_source: 'solved' as const, frames: 12 };
+    const locked = { ...gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }) };
+    locked.panels = [{ ...locked.panels[0], locked: true, measured: shot }];
+    fixture({ ...heart, layout: locked, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 } });
+    server.use(
+      http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))),
+      http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok({ ...mosaic, panels: [mosaic.panels[0]] }))),
+    );
+    const view = mountWithRigs([rigA.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    // RedCat shot the panel: no outline of its own, though its solved size
+    // is a little off its nominal field.
+    expect(document.querySelectorAll('.framing-overlay')).toHaveLength(0);
+    // Askar is turned on: its field is outlined where the panel was shot,
+    // and the draft does not change for it.
+    view.rerender([rigA.rig.id, rigC.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-overlay')).toHaveLength(1));
+    expect(document.querySelector('.framing-overlay-label')).toHaveTextContent('Askar 107');
+    const middle = (polygon: Element) => {
+      const points = polygon.getAttribute('points')!.trim().split(/\s+/).map(pair => pair.split(',').map(Number));
+      return [points.reduce((sum, [x]) => sum + x, 0) / points.length, points.reduce((sum, [, y]) => sum + y, 0) / points.length];
+    };
+    const [ox, oy] = middle(document.querySelector('.framing-overlay')!);
+    const [px, py] = middle(document.querySelector('.framing-panel polygon')!);
+    expect(Math.hypot(ox - px, oy - py)).toBeLessThan(1);
+    const box = screen.getByLabelText('Askar 107 outline');
+    expect(box).toBeChecked();
+    expect(box).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Back to saved framing' })).toBeDisabled();
+    // Hidden for the visit, still with nothing to save.
+    fireEvent.click(box);
+    expect(document.querySelectorAll('.framing-overlay')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: 'Back to saved framing' })).toBeDisabled();
+    fireEvent.click(box);
+    expect(document.querySelectorAll('.framing-overlay')).toHaveLength(1);
+    // Picked to frame the plan, Askar stays outlined: the shot panel is
+    // still drawn as RedCat took it.
+    fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from Askar 107'));
+    expect([...document.querySelectorAll('.framing-overlay-label')].map(label => label.textContent)).toEqual(['Askar 107']);
+  });
+
+  it('outlines nothing for a locked panel that has no frames', async () => {
+    const locked = { ...gridLayout({ rows: 1, columns: 1, overlap_percent: 20 }) };
+    locked.panels = [{ ...locked.panels[0], locked: true }];
+    fixture({ ...heart, layout: locked, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 } });
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));
+    mountWithRigs([rigA.rig.id, rigC.rig.id]);
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(1));
+    expect(document.querySelectorAll('.framing-overlay')).toHaveLength(0);
+    expect(screen.getByLabelText('Askar 107 outline')).not.toBeChecked();
+  });
+
   it('hands the panel size to a rig that is on once its rig goes off, and says when none can take it', async () => {
     fixture({ ...heart, panel_rig_id: rigA.rig.id, panel: { width_degrees: 5.38, height_degrees: 3.6 } });
     server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC]))));

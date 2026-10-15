@@ -202,6 +202,29 @@ export function previewRequest(state: FramingState, rigs: DirectorRigProfileSumm
   };
 }
 
+/** A rig's field outlined where a locked shot panel holds the plan. */
+export interface LockedOutline { rigId: string; corners: DirectorFootprint['corners'] }
+
+/** The rigs whose field a locked shot panel hides. A shot panel is drawn
+ *  where and how its frames were taken, whatever rig frames the plan, so
+ *  turning a rig on or picking it changes nothing in sight. While the shared
+ *  framing has a locked shot panel, each rig in `onRigs` that shoots the
+ *  shared framing, knows its field and has no frames on a locked shot panel
+ *  (`shotBy`) gets its field outlined at that panel's shot center and angle,
+ *  where activation keeps the target: the panel at the framing's center,
+ *  else the first locked shot one. */
+export function lockedOutlines(state: FramingState, rigs: DirectorRigProfileSummary[], onRigs: string[], shotBy: Set<string>): LockedOutline[] {
+  const shot = state.layout.panels.filter(panel => panel.locked && panel.measured);
+  if (shot.length === 0) return [];
+  const anchor = (shot.find(panel => Math.abs(panel.x) < 1e-9 && Math.abs(panel.y) < 1e-9) ?? shot[0]).measured!;
+  return onRigs
+    .filter(id => !shotBy.has(id) && !state.rigFramings.some(own => own.rig_id === id))
+    .flatMap(id => {
+      const field = panelForRig(rigs, id);
+      return field ? [{ rigId: id, corners: measuredCorners({ ...anchor, size: field }) }] : [];
+    });
+}
+
 /** Degrees per stage pixel at the center of the view. */
 export function pixelScale(viewFov: number, stage: Stage = DEFAULT_STAGE): number {
   return viewFov / stage.width;

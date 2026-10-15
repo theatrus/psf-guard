@@ -23,6 +23,10 @@
   quick run of arrow keys. On a busy page it used to snap back between
   steps, so some were lost.
 - With reduced motion turned on in the system, loading spinners hold still.
+- While a plan's framing has a locked shot panel, every rig that is on and
+  did not shoot it shows its field as an outline where the panel was shot,
+  so turning a rig on or picking it shows what it would take there.
+  Unticking **Outline** hides it for the visit.
 - A plan's mosaic panels are placed one by one. A framed target that already
   has frames starts locked where they were shot, and **Unlock** frees it;
   **Mosaic panels** adds
