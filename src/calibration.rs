@@ -292,6 +292,18 @@ pub fn master_input_counts(selection: &CalibrationSelection) -> CalibrationInput
 }
 
 impl CalibrationSelection {
+    /// The tolerances a stack holds this light to against its masters, its
+    /// gate: its rig's, with the rotation widened just enough for flats
+    /// taken from the nearest other angle (see [`flat_groups`]). Its
+    /// calibration session carries it.
+    pub fn match_tolerances(&self) -> seiza_calibration::MatchTolerances {
+        let mut tolerances = self.rules.tolerances();
+        if let Some(widened) = self.flat_basis.rotation_tolerance() {
+            tolerances.rotation_deg = tolerances.rotation_deg.max(widened);
+        }
+        tolerances
+    }
+
     pub fn is_empty(&self) -> bool {
         self.bias.is_empty()
             && self.dark.is_empty()
@@ -2263,11 +2275,21 @@ impl LibrarySnapshot {
                 let other = self.other_angle_flats(light, rules, &on_side);
                 if let Some((rotation, frames)) = other {
                     selected.flat = frames;
+                    // Wide enough to admit exactly these flats: their angle
+                    // from the light, plus the rig's own tolerance.
+                    let rotation_tolerance_deg = match (light.rotator_position, rotation) {
+                        (Some(light_at), Some(flats_at)) => Some(
+                            (rotation_gap(light_at, flats_at) + rules.rotation_deg)
+                                .clamp(rules.rotation_deg, 180.0),
+                        ),
+                        _ => None,
+                    };
                     selected.flat_basis = FlatBasis::OtherAngle {
                         event: note,
                         placement: placement.clone(),
                         rotation,
                         angle_term: angle_term.unwrap_or_default(),
+                        rotation_tolerance_deg,
                     };
                     continue;
                 }
@@ -4516,9 +4538,10 @@ pub struct CalibrationSession {
     pub masters: seiza_stacking::CalibrationMasters,
     pub applied: AppliedCalibration,
     /// The gate a stack judges this session's lights against its masters
-    /// under: their rig's tolerances, the ones the masters were matched by.
-    /// Every light of a session shares a rig's matching settings, since the
-    /// session key takes them.
+    /// under: their rig's tolerances, the ones the masters were matched by,
+    /// with the rotation widened for flats taken from another angle
+    /// ([`CalibrationSelection::match_tolerances`]). Every light of a
+    /// session shares it, since the session key takes both.
     pub match_tolerances: seiza_calibration::MatchTolerances,
 }
 
@@ -4609,6 +4632,11 @@ fn session_key(selected: &CalibrationSelection) -> String {
     }
     if let Some(correction) = selected.flat_basis.correction() {
         parts.push(format!("flat-correction={}", correction.key));
+    }
+    // Its stack gate admits flats from another angle, and every light of
+    // one session shares the session's gate.
+    if let Some(tolerance) = selected.flat_basis.rotation_tolerance() {
+        parts.push(format!("flat-rotation-tolerance={tolerance:.3}"));
     }
     hex_digest(&parts.join("\u{1e}"))
 }
@@ -4810,6 +4838,10 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
     let mut assignments = Vec::with_capacity(light_paths.len());
     let mut session_lights: Vec<Vec<PathBuf>> = Vec::new();
     let mut keys: Vec<String> = Vec::new();
+    // Each session's gate, from its first light: every light of a session
+    // shares it, since the key takes the rig's settings and any widening
+    // for flats from another angle.
+    let mut gates: Vec<seiza_calibration::MatchTolerances> = Vec::new();
     for path in light_paths {
         let light = crate::commands::import::headers::read_frame_meta(path);
         let mut selected = select_for_light(conn, &light)?;
@@ -4819,6 +4851,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
             Some(index) => index,
             None => {
                 keys.push(key);
+                gates.push(selected.match_tolerances());
                 session_lights.push(Vec::new());
                 keys.len() - 1
             }
@@ -4828,7 +4861,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
     }
 
     let mut sessions = Vec::with_capacity(session_lights.len());
-    for lights in &session_lights {
+    for (lights, gate) in session_lights.iter().zip(gates) {
         stop_requested(cancel)?;
         // A session's pin is looked up by its selection fingerprint, which
         // the resolution below recomputes identically from the same lights.
@@ -4858,7 +4891,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
         sessions.push(CalibrationSession {
             masters,
             applied,
-            match_tolerances: light_match_tolerances_at(&lights[0]),
+            match_tolerances: gate,
         });
     }
 

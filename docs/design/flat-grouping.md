@@ -176,13 +176,20 @@ An undetermined light keeps the nearest flats and is flagged. The basis
 travels on `CalibrationSelection::flat_basis` into the explanation
 (`chosen_by`, `basis`) and the health check.
 
-The stacker holds a light to its flat master's angle within 2°
-(`CalibrationMasters::validate_light_frame`, with Seiza's default
-tolerances). A light given another angle's flats therefore needs its
-masters to carry a wider rotation tolerance, set for that calibration
-session only (`CalibrationMasters::with_match_tolerances`, seiza #270).
-A corrected master keeps its source master's headers, the light's own
-angle, and passes with the defaults.
+A stack judges each light against its masters under a gate
+(`StackOptions::match_tolerances`, `LiveStacker::set_match_tolerances`,
+seiza-stacking 0.34): its rig's tolerances, from #839, carried on the
+light's `CalibrationSession` and set before each session's pushes and in
+the final pass. A light given another angle's flats gets a gate whose
+rotation is just wide enough for them, the angle between the light and the
+flats plus the rig's own (112.6° for the Heart of the Soul lights), with
+every other field the rig's (`CalibrationSelection::match_tolerances`).
+The widening is part of the session key, so every light of a session
+shares its gate; the stack key does not need it, since the other angle's
+flats already change the light's candidates. A flat of another filter,
+focal length or angle than the one chosen is still refused. A corrected
+master keeps its source master's headers, the light's own angle, and
+passes under the rig's gate.
 
 **Seiza's `residual_flat`** was checked before writing the correction and
 the light evidence. `build_residual_flat_patch` estimates an
@@ -324,12 +331,10 @@ Once the current calibration work lands:
   sky flats look like dew. Seiza's `measure_flat` already finds dips only
   (`FlatFeature` is "one compact dip"), so the check can be built on it
   and leave PSF Guard.
-- **Caller tolerances on light validation.** seiza-stacking's
-  `CalibrationMasters::validate_light_frame` used `MatchTolerances::default()`
-  (3 °C, 2°, 1 mm), which capped #839's dark temperature setting and
-  refused the other-angle fallback. seiza #270 adds
-  `with_match_tolerances` and `validate_light_frame_with`; PSF Guard takes
-  them through #839's pin.
+- **Caller tolerances on light validation.** Done in seiza-stacking 0.34
+  (seiza #270): a stack's gate and `validate_light_frame_with` replace the
+  fixed `MatchTolerances::default()` (3 °C, 2°, 1 mm) that capped #839's
+  dark temperature setting and refused the other-angle fallback.
 
 ### PSF Guard
 

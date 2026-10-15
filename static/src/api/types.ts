@@ -2805,6 +2805,8 @@ export type FlatBasis =
       placement: FlatPlacement;
       rotation: number | null;
       angle_term: { pairs: number; dust: number; broad: number };
+      /** The rotation tolerance the stacker holds this light to, wide enough for those flats. */
+      rotation_tolerance_deg: number | null;
     }
   | {
       basis: 'corrected';

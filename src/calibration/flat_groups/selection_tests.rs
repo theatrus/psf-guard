@@ -198,10 +198,8 @@ fn a_light_before_new_dust_takes_its_side_at_another_angle() {
     }
     assert!(!selected.flat_basis.flags());
 
-    // The stacker holds a light to its flats' angle within 2°, so these
-    // flats need the light's own tolerance carried on its masters.
-    // TODO: once #839 pins seiza-stacking with `with_match_tolerances`
-    // (seiza #270), build them that way here and assert the light passes.
+    // The stacker holds a light to its flats' angle within 2°; the
+    // light's gate is wide enough for these flats.
     let masters = seiza_stacking::CalibrationMasters::from_fits_paths(
         None,
         None,
@@ -211,6 +209,9 @@ fn a_light_before_new_dust_takes_its_side_at_another_angle() {
     .unwrap();
     let light_frame = crate::image_io::open_linear_frame(&before.path).unwrap();
     assert!(masters.validate_light_frame(&light_frame).is_err());
+    masters
+        .validate_light_frame_with(&light_frame, &selected.match_tolerances())
+        .unwrap();
 
     // At its own angle the nearest flats are from its side, and the ones
     // after the change lie too far off to join its master: the list is

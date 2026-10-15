@@ -245,6 +245,10 @@ pub enum FlatBasis {
         placement: Placement,
         rotation: Option<f64>,
         angle_term: AngleTerm,
+        /// The rotation tolerance the stacker must hold this light to so
+        /// those flats pass: the angle between them and the light, plus the
+        /// rig's own tolerance. Absent when either angle is unknown.
+        rotation_tolerance_deg: Option<f64>,
     },
     /// None on its side at any allowed angle; flats at its angle from the
     /// other side, carried across by the change's map.
@@ -296,6 +300,18 @@ impl FlatBasis {
             FlatBasis::Corrected { .. } => "corrected",
             FlatBasis::NoSameSide { .. } => "no_same_side",
             FlatBasis::Undetermined { .. } => "undetermined",
+        }
+    }
+
+    /// The rotation tolerance this light's masters must carry, when its
+    /// flats are from another angle.
+    pub fn rotation_tolerance(&self) -> Option<f64> {
+        match self {
+            FlatBasis::OtherAngle {
+                rotation_tolerance_deg,
+                ..
+            } => *rotation_tolerance_deg,
+            _ => None,
         }
     }
 
@@ -469,6 +485,7 @@ pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String>
             placement,
             rotation,
             angle_term,
+            ..
         } => Some(format!(
             "No flats from its side of a measured change ({}) at its angle: {}. Flats from \
              its side at {} stand in; this rig's flats differ by at most {:.1}% broad and \
