@@ -116,6 +116,14 @@ describe('SequenceView order', () => {
     expect(screen.getByRole('button', { name: 'View (newest first)' })).toHaveClass('is-set');
   });
 
+  it('offers Rescan image folders under More tools', async () => {
+    handlers();
+    render(<SequenceView />, { wrapper: wrapper('/sequence?db=test&project=1&target=1') });
+    await waitFor(() => expect(stripIds()).toHaveLength(10));
+    fireEvent.click(screen.getByRole('button', { name: 'More tools' }));
+    expect(await screen.findByRole('button', { name: 'Rescan image folders' })).toBeEnabled();
+  });
+
   it('at rest, flips onto the new first frame; once moved, keeps the cursor', async () => {
     handlers();
     render(<SequenceView />, { wrapper: wrapper('/sequence?db=test&project=1&target=1') });

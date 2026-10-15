@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from '../api/client';
+import { useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { isMergedPath, keepScoringInScope, useDbProjectTarget, useScopedDbId, withoutPlanningParams } from '../hooks/useUrlState';
+import { isMergedPath, keepScoringInScope, useDbProjectTarget, withoutPlanningParams } from '../hooks/useUrlState';
 import { useMergedProjects, useMergedTargets } from '../hooks/useDatabases';
 import {
   buildProjectTargetNavigation,
@@ -10,7 +9,6 @@ import {
   type NavigationProject,
   type NavigationTarget,
 } from '../utils/projectTargetNavigation';
-import { useAccess } from '../auth/access';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import ProjectTreeOption from './projectSelector/ProjectTreeOption';
 import ProjectFamilyOption from './projectSelector/ProjectFamilyOption';
@@ -23,7 +21,6 @@ export default function ProjectTargetSelector() {
     targetId: selectedTargetId,
     setDbProjectTarget,
   } = useDbProjectTarget();
-  const access = useAccess();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
@@ -31,8 +28,6 @@ export default function ProjectTargetSelector() {
   const currentPlan = useCurrentPlan();
   // Only a live Planning answers a workspace; with it off the page says so.
   const onPlan = location.pathname === '/plan' && plans.enabled;
-  // Refresh acts on the database a scoped view shows, never on one parked in a merged view's URL.
-  const scopedDbId = useScopedDbId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -47,26 +42,6 @@ export default function ProjectTargetSelector() {
   // How the list is organized — by activity or by database — set in
   // Settings → Review and stored in this browser.
   const { projectPickerGrouping } = useDisplayPreferences();
-
-  const invalidateAllForDb = () => {
-    if (!dbId) return;
-    queryClient.invalidateQueries({ queryKey: ['db', dbId] });
-  };
-
-  const refreshCacheMutation = useMutation({
-    mutationFn: () => apiClient.refreshFileCache(dbId!),
-    onSuccess: invalidateAllForDb,
-    onError: (error) => console.error('File cache refresh failed:', error),
-  });
-
-  const refreshBothCachesMutation = useMutation({
-    mutationFn: async () => {
-      await apiClient.refreshDirectoryCache(dbId!);
-      await apiClient.refreshFileCache(dbId!);
-    },
-    onSuccess: invalidateAllForDb,
-    onError: (error) => console.error('Combined cache refresh failed:', error),
-  });
 
   const { data: projects, databases, isLoading: projectsLoading } = useMergedProjects();
   const {
@@ -251,7 +226,6 @@ export default function ProjectTargetSelector() {
   // Plans no database takes yet can only be planned: their workspace.
   const databaseless = plans.rows.filter((row) => row.links.length === 0)
     .filter((row) => !search.trim() || row.project.name.toLowerCase().includes(search.trim().toLowerCase()));
-  const refreshPending = refreshCacheMutation.isPending || refreshBothCachesMutation.isPending;
 
   const renderProject = (project: NavigationProject) => {
     const family = navigation.familyOf(project);
@@ -427,25 +401,6 @@ export default function ProjectTargetSelector() {
         )}
       </div>
 
-      <button
-        className="refresh-button compact"
-        onClick={(event) => {
-          if (event.shiftKey) refreshBothCachesMutation.mutate();
-          else refreshCacheMutation.mutate();
-        }}
-        disabled={!access.canWrite || !scopedDbId || refreshPending}
-        title={
-          !access.canWrite
-            ? 'A read-only account cannot refresh file caches.'
-            : refreshBothCachesMutation.isPending
-            ? 'Refreshing directory and file caches...'
-            : refreshCacheMutation.isPending
-              ? 'Refreshing file cache...'
-              : 'Refresh file cache (Shift+Click for directory + file cache)'
-        }
-      >
-        {refreshPending ? '⟳' : '↻'}
-      </button>
     </div>
   );
 }

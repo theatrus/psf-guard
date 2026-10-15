@@ -23,6 +23,11 @@
   quick run of arrow keys. On a busy page it used to snap back between
   steps, so some were lost.
 - With reduced motion turned on in the system, loading spinners hold still.
+- The reload button left the header. **Rescan image folders**, under ⋯ in
+  Images and Sequence, looks for image files added since the last scan
+  (folder tree and files together; no Shift-click). PSF Guard still rescans
+  a database's folders on its own every five minutes and after sync and
+  automatic import.
 - While a plan's framing has a locked shot panel, every rig that is on and
   did not shoot it shows its field as an outline where the panel was shot,
   so turning a rig on or picking it shows what it would take there.
