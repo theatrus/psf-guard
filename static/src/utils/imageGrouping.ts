@@ -21,6 +21,8 @@ export interface ImageGroup {
 /**
  * A frame as the grid groups it. A list merged from several databases stamps
  * each frame with its own (see `WithDb`); one database's grid leaves it off.
+ * Target ids, project names and filter names repeat from one database to the
+ * next, so every group key in a merged list carries the database.
  */
 export type GroupedImage = Image & { db_id?: string };
 
@@ -40,6 +42,20 @@ function nightBoundaryFor(image: GroupedImage, scope: GroupingScope): number {
     ?? FALLBACK_NIGHT_BOUNDARY_SECONDS;
 }
 
+/**
+ * A key in one database: the plain key a single database's grid has always
+ * written, or, in a list whose frames carry their database, the same key
+ * under it.
+ */
+function inDatabase(dbId: string | undefined, key: string): string {
+  return dbId === undefined ? key : JSON.stringify(['db', dbId, key]);
+}
+
+/** A key made of ids, under the frame's database when it carries one. */
+function idKey(dbId: string | undefined, parts: (string | number)[]): string {
+  return JSON.stringify(dbId === undefined ? parts : ['db', dbId, ...parts]);
+}
+
 /** The UTC calendar date Date groups were keyed by before they meant nights. */
 const utcDate = (seconds: number) => new Date(seconds * 1000).toISOString().split('T')[0];
 
@@ -53,6 +69,8 @@ export function splitImageGroupsByExposure(groups: ImageGroup[]): ImageGroup[] {
     const partitions = new Map<string, ImageGroup>();
     for (const image of group.images) {
       const exposure = image.exposure_group;
+      // The base key carries the database in a merged list, so the ids
+      // after it cannot meet another database's.
       const exposureKey = (base: string) => exposure
         ? JSON.stringify(['exposure', base, image.project_id, image.target_id, image.filter_name ?? '', exposure.key])
         : base;
@@ -96,8 +114,10 @@ export function splitImageGroupsByExposure(groups: ImageGroup[]): ImageGroup[] {
  * mirrors each one's frames. The detail view's next and previous walk the
  * same list.
  *
- * A date group also answers to the keys older links used for it
- * (`aliases`): the UTC dates its frames fell on.
+ * Keys name projects by id, never by display name, and carry the database
+ * when the frames do. Each group also answers to the keys older links used
+ * for it (`aliases`): a project's display name, and the UTC dates its
+ * frames fell on.
  */
 export function groupGridImages(
   images: GroupedImage[],
@@ -120,33 +140,60 @@ export function groupGridImages(
     aliases: Set<string>;
   }>();
   for (const image of images) {
+    const db = image.db_id;
     const project = image.project_display_name || 'Unknown Project';
     const filter = image.filter_name || 'No Filter';
     const date = image.acquired_date
       ? nightOf(image.acquired_date, nightBoundaryFor(image, scope))
       : 'Unknown Date';
     const oldDate = image.acquired_date ? utcDate(image.acquired_date) : 'Unknown Date';
+    let label: string;
     let key: string;
     let oldKey: string;
     switch (groupingMode) {
-      case 'date': key = date; oldKey = oldDate; break;
-      case 'both': key = `${filter} - ${date}`; oldKey = `${filter} - ${oldDate}`; break;
-      case 'project': key = project; oldKey = key; break;
-      case 'project+filter': key = `${project} - ${filter}`; oldKey = key; break;
-      case 'project+date': key = `${project} - ${date}`; oldKey = `${project} - ${oldDate}`; break;
+      case 'date':
+        label = date;
+        key = inDatabase(db, label);
+        oldKey = oldDate;
+        break;
+      case 'both':
+        label = `${filter} - ${date}`;
+        key = inDatabase(db, label);
+        oldKey = `${filter} - ${oldDate}`;
+        break;
+      case 'project':
+        label = project;
+        key = idKey(db, ['project', image.project_id]);
+        oldKey = project;
+        break;
+      case 'project+filter':
+        label = `${project} - ${filter}`;
+        key = idKey(db, ['project', image.project_id, filter]);
+        oldKey = label;
+        break;
+      case 'project+date':
+        label = `${project} - ${date}`;
+        key = idKey(db, ['project', image.project_id, date]);
+        oldKey = `${project} - ${oldDate}`;
+        break;
       case 'project+date+filter':
-        key = `${project} - ${date} - ${filter}`;
+        label = `${project} - ${date} - ${filter}`;
+        key = idKey(db, ['project', image.project_id, date, filter]);
         oldKey = `${project} - ${oldDate} - ${filter}`;
         break;
-      default: key = filter; oldKey = key;
+      default:
+        label = filter;
+        key = inDatabase(db, label);
+        oldKey = label;
     }
     let group = groups.get(key);
     if (!group) {
-      group = { label: key, filter, date, images: [], aliases: new Set() };
+      group = { label, filter, date, images: [], aliases: new Set() };
       groups.set(key, group);
     }
     group.images.push(image);
-    if (oldKey !== key) group.aliases.add(oldKey);
+    // Old links name one database's groups; a merged list has none.
+    if (db === undefined && oldKey !== key) group.aliases.add(oldKey);
   }
 
   const sorted = Array.from(groups.entries()).map(([key, group]) => ({
@@ -160,13 +207,16 @@ export function groupGridImages(
     images: group.images.sort((a, b) => (a.acquired_date || 0) - (b.acquired_date || 0)),
   }));
 
+  // Two groups can share a label (two projects of one name, one filter in
+  // two databases); their keys keep the order fixed.
+  const byKey = (a: { key: string }, b: { key: string }) => a.key.localeCompare(b.key);
   if (order === 'newest' && groupingMode === 'both') {
-    sorted.sort((a, b) => a.filter.localeCompare(b.filter) || b.date.localeCompare(a.date));
+    sorted.sort((a, b) => a.filter.localeCompare(b.filter) || b.date.localeCompare(a.date) || byKey(a, b));
   } else if (groupingMode.includes('date')) {
     // Date modes: the newest night first.
-    sorted.sort((a, b) => b.filterName.localeCompare(a.filterName));
+    sorted.sort((a, b) => b.filterName.localeCompare(a.filterName) || byKey(a, b));
   } else {
-    sorted.sort((a, b) => a.filterName.localeCompare(b.filterName));
+    sorted.sort((a, b) => a.filterName.localeCompare(b.filterName) || byKey(a, b));
   }
 
   return inOrder(splitImageGroupsByExposure(
@@ -183,21 +233,23 @@ export const NO_EXPANDED_GROUPS = '__none__';
 
 const SESSION_GAP_SECONDS = 60 * 60;
 
+/**
+ * Time runs of one target in one filter, split at an hour's gap. A target id
+ * names one target in one database only, so a merged list's runs are told
+ * apart by database too. One database's keys stay as they were:
+ * `project|target|filter|start`.
+ */
 export function groupImagesBySession(images: GroupedImage[]): ImageGroup[] {
   const streams = new Map<string, GroupedImage[]>();
   for (const image of images) {
-    const key = [
-      image.project_display_name,
-      image.target_id,
-      image.filter_name || 'No Filter',
-    ].join('|');
+    const key = JSON.stringify([image.db_id ?? null, image.target_id, image.filter_name || 'No Filter']);
     const stream = streams.get(key);
     if (stream) stream.push(image);
     else streams.set(key, [image]);
   }
 
   const groups: Array<ImageGroup & { sortTime: number }> = [];
-  for (const [streamKey, stream] of streams) {
+  for (const stream of streams.values()) {
     stream.sort((a, b) => (a.acquired_date || 0) - (b.acquired_date || 0));
     let current: GroupedImage[] = [];
 
@@ -205,8 +257,12 @@ export function groupImagesBySession(images: GroupedImage[]): ImageGroup[] {
       if (current.length === 0) return;
       const first = current[0];
       const last = current[current.length - 1];
+      const filter = first.filter_name || 'No Filter';
+      const start = first.acquired_date ?? `image-${first.id}`;
       groups.push({
-        key: `${streamKey}|${first.acquired_date ?? `image-${first.id}`}`,
+        key: first.db_id === undefined
+          ? [first.project_display_name, first.target_id, filter, start].join('|')
+          : idKey(first.db_id, ['session', first.target_id, filter, start]),
         filterName: sessionLabel(first, last),
         images: current,
         sortTime: first.acquired_date || 0,
@@ -243,7 +299,7 @@ export function imageGroupKey(group: ImageGroup): string {
  * of these groups, the default ones. Keys that match no group are ignored,
  * so a link from another grouping, such as an All projects link from
  * before All projects grouped by project, still opens something. A link
- * from before dates meant nights names a group by an alias.
+ * from before keys took ids and nights names a group by an alias.
  */
 export function resolveExpandedGroups(
   imageGroups: ImageGroup[],
@@ -303,7 +359,9 @@ function sessionLabel(first: Image, last: Image): string {
 
 /** A mosaic's images under its panels, row by row from the top: each
  *  panel's frames grouped by `groupWithin`, its first group carrying the
- *  panel's heading. Frames of targets outside the mosaic come last. */
+ *  panel's heading. Frames of targets outside the mosaic come last. A
+ *  mosaic is one project in one database, and the inner keys carry the
+ *  database when the frames do. */
 export function groupImagesByPanel(
   images: GroupedImage[],
   mosaic: ProjectMosaic,

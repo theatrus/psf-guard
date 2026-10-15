@@ -56,9 +56,12 @@ describe('session image grouping', () => {
       { ...image(2, 2, 'OIII'), project_id: 2, project_display_name: 'Beta' },
     ], 'project');
     expect(projects.map((group) => group.filterName)).toEqual(['Alpha', 'Beta']);
-    expect([...resolveExpandedGroups(projects, 'project', new Set(['HA']))]).toEqual(['Alpha', 'Beta']);
-    // One it does name still opens alone.
-    expect([...resolveExpandedGroups(projects, 'project', new Set(['HA', 'Beta']))]).toEqual(['Beta']);
+    const [alpha, beta] = projects.map(imageGroupKey);
+    expect([...resolveExpandedGroups(projects, 'project', new Set(['HA']))]).toEqual([alpha, beta]);
+    // One it does name still opens alone, by its key or the name older
+    // links used.
+    expect([...resolveExpandedGroups(projects, 'project', new Set(['HA', 'Beta']))]).toEqual([beta]);
+    expect([...resolveExpandedGroups(projects, 'project', new Set(['HA', beta]))]).toEqual([beta]);
     // Collapse-all stays collapsed.
     expect([...resolveExpandedGroups(projects, 'project', new Set([NO_EXPANDED_GROUPS]))]).toEqual([]);
 

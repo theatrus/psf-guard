@@ -356,7 +356,10 @@ Each view has its own thumbnail size: `size` in the address is the size of
 the view it names, and the header leaves it behind when it moves to another
 view. A link that names open groups (`expanded`) none of which the view has
 any more, such as an All projects link from before All projects grouped by
-project, opens the default groups. Signed in to a server with accounts,
+project, opens the default groups. Group keys name projects by id, so two
+projects with one name stay apart, and a link that names a project group by
+its name, as older versions wrote it, still opens that group. A list merged
+from several databases keys every group by its database too. Signed in to a server with accounts,
 these choices follow you to another browser (see
 [view preferences](AUTHENTICATION.md#view-preferences)).
 
