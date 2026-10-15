@@ -41,7 +41,7 @@ vi.mock('../director/ObservingPreferences', () => ({ default: () => <output>Obse
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 function Where() { return <output data-testid="where">{useLocation().search}</output>; }
 /** The saved framing, plan and last activation the summary reads. */
-function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number; rigs?: string[]; pushes?: () => DirectorActivationRemotePush[] }; databaseManagement?: boolean; matches?: boolean; plans?: Array<{ action: string; name: string; detail: string }>; checkAfter?: Promise<void>; check?: 'fails' | 'unreadable' } = {}) {
+function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; layoutRevision?: number; planRevision?: number; shoots?: boolean; activated?: { plan_revision: number; rigs?: string[]; pushes?: () => DirectorActivationRemotePush[] }; databaseManagement?: boolean; matches?: boolean; plans?: Array<{ action: string; name: string; detail: string }>; checkAfter?: Promise<void>; check?: 'fails' | 'unreadable' | 'not-ready' } = {}) {
   return [
     http.get('/api/director/v1/projects/project/framing', () => ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, draft: saved.framing ? {
       project_id: 'project', revision: saved.framingRevision ?? 2, layout_revision: saved.layoutRevision, target_name: 'M31', center: { ra_degrees: 10.68, dec_degrees: 41.27 }, position_angle_degrees: 0, mosaic: { rows: 1, columns: 1, overlap_percent: 20 },
@@ -61,6 +61,7 @@ function summaryHandlers(saved: { framing?: boolean; framingRevision?: number; l
     http.get('/api/director/v1/projects/project/activation/check', async () => {
       await saved.checkAfter;
       if (saved.check === 'fails') return HttpResponse.json({ success: false, data: null, error: 'The check failed: disk I/O error' }, { status: 500 });
+      if (saved.check === 'not-ready') return HttpResponse.json({ success: false, data: null, error: 'Choose a panel rig or enter a panel size in Framing first.' }, { status: 422 });
       const unreadable = saved.check === 'unreadable';
       return ok({ project: { id: 'project', name: 'Andromeda', revision: 1 }, framing_revision: 2, plan_revision: saved.planRevision ?? 1, panels: 1,
         warnings: [], preview_digest: '0'.repeat(64), applied: false, activation_revision: null,
@@ -265,6 +266,15 @@ describe('project workspace', () => {
     expect(within(summary).getByTestId('summary-activation')).toHaveAttribute('title', 'The check failed: disk I/O error');
     expect(screen.queryByRole('region', { name: 'Rigs behind' })).not.toBeInTheDocument();
     expect(within(summary).getByRole('button', { name: 'Send to rigs…' })).toBeInTheDocument();
+  });
+  it('offers no send for a plan the server cannot send yet, and says what to do first', async () => {
+    mount(links, '/plan?plan=project', { framing: true, planRevision: 1, shoots: true, check: 'not-ready' });
+    const summary = await screen.findByRole('region', { name: 'Plan summary' });
+    await waitFor(() => expect(within(summary).getByTestId('summary-activation')).toHaveTextContent(/^Can't send yet$/));
+    expect(within(summary).getByTestId('summary-not-ready')).toHaveTextContent('Choose a panel rig or enter a panel size in Framing first.');
+    expect(within(summary).queryByRole('button', { name: /^Send to rigs/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Rigs behind' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't check/)).not.toBeInTheDocument();
   });
   it('says which rig could not be checked when its database could not be read', async () => {
     mount(links, '/plan?plan=project', { framing: true, planRevision: 4, shoots: true, activated: { plan_revision: 4 }, check: 'unreadable' });

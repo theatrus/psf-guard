@@ -9,13 +9,15 @@ import type { Drafts } from './pageDraftsState';
  *  databases lack the saved plan or framing or their rows differ from it,
  *  and opens the preview. While a remote site lacks the last activation it
  *  says so and offers to send it there again. */
-export default function ActivationBar({ projectId, drafts, canWrite, open, onOpen, onClose }: {
+export default function ActivationBar({ projectId, drafts, canWrite, open, onOpen, onClose, onFraming }: {
   projectId: string;
   drafts: Drafts;
   canWrite: boolean;
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
+  /** Close the dialog on the Framing tab, for a plan that needs a framing first. */
+  onFraming?: () => void;
 }) {
   const { last, notSynced, notSent, unsent } = useActivationState(projectId);
   const { activate, send } = useActivationBar(projectId, canWrite, drafts.unsaved.length);
@@ -34,7 +36,7 @@ export default function ActivationBar({ projectId, drafts, canWrite, open, onOpe
     </div>}
     <Dialog open={open} title="Send to the rigs" onClose={onClose} className="activation-dialog">
       {/* The dialog sits outside the page; this keeps the page's styles. */}
-      <div className="director-page director-embedded"><ActivationPanel projectId={projectId} /></div>
+      <div className="director-page director-embedded"><ActivationPanel projectId={projectId} onFraming={onFraming} /></div>
     </Dialog>
   </>;
 }

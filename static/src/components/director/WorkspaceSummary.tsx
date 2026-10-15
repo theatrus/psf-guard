@@ -45,7 +45,7 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
   /** The activation bar is up and says it already. */
   hideActivation?: boolean;
 }) {
-  const { last, savedPlan, savedFraming, behind, notSynced, unsent, matches, checking, unchecked } = useActivationState(projectId);
+  const { last, savedPlan, savedFraming, behind, notSynced, unsent, matches, checking, unchecked, notReady } = useActivationState(projectId);
   const status = useDirectorStatus();
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const framing = savedFraming.data?.draft;
@@ -58,7 +58,10 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
   // site that lacks the last send leaves the rigs behind, whatever the rows
   // here hold. Not "Synced" either: that is the catalog Sync.
   const synced = { tone: 'ok', text: 'On the rigs', title: 'The rigs hold the saved plan' } as const;
+  // A plan the server cannot send yet says what to do instead of offering
+  // a send it would refuse.
   const activation: { tone?: 'ok' | 'behind'; text: string; title?: string } | null = checking ? { text: 'Checking the rigs…' }
+    : notReady ? { tone: 'behind', text: "Can't send yet", title: notReady }
     : matches && unsent.length === 0 ? synced
     : last.data
       ? behind.length > 0 || unsent.length > 0 ? { tone: 'behind', text: 'Rigs behind', title: notSynced }
@@ -77,7 +80,9 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
           {activation.tone === 'behind' && <TriangleAlert size={14} aria-hidden="true" />}
           {activation.text}
         </span>
-        {onActivation && <button type="button" className="workspace-activate" title="Preview what sending writes to the rigs" onClick={onActivation}><Send size={14} aria-hidden="true" />Send to rigs…</button>}
+        {notReady
+          ? <span className="workspace-activation-reason" data-testid="summary-not-ready">{notReady}</span>
+          : onActivation && <button type="button" className="workspace-activate" title="Preview what sending writes to the rigs" onClick={onActivation}><Send size={14} aria-hidden="true" />Send to rigs…</button>}
       </span>}
     </div>
     <div className="workspace-summary-line">

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Download, Power, RefreshCw, Save, Send, Telescope, TriangleAlert } from 'lucide-react';
@@ -7,7 +7,7 @@ import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import type { DirectorActivationAction, DirectorActivationChange, DirectorActivationPush, DirectorActivationReport, DirectorActivationShot, DirectorTakenValues } from '../../api/directorTypes';
 import { describeFailure, useDrafts } from './pageDraftsState';
-import { describeChange, sendLabel, turnedOff, useActivationState, useSendAgain, writesRows } from './activationState';
+import { answerOf, describeChange, notReadyReason, sendLabel, turnedOff, useActivationState, useSendAgain, writesRows } from './activationState';
 import { objectiveName } from './planModel';
 import './ActivationPanel.css';
 import CollaborationActivation from './CollaborationActivation';
@@ -180,14 +180,18 @@ function describePush(push: DirectorActivationPush | null, applied: boolean): st
 }
 
 /** Send the framing and plan into each participating rig's database. The
- *  preview runs by itself, on opening and whenever what it reads changes,
- *  since it writes nothing; only Send writes. Each rig's part of the result
- *  is shown with that rig (`onReport`); rigs not in `shownElsewhere` are
- *  listed here. */
-export default function ActivationPanel({ projectId, onReport, shownElsewhere }: {
+ *  preview runs by itself, on opening and whenever what it reads changes:
+ *  the server works it out on a copy of each rig's planning tables, so it
+ *  writes nothing and takes no lock. Send runs it again on the databases
+ *  themselves and writes only when that matches. Each rig's part of the
+ *  result is shown with that rig (`onReport`); rigs not in `shownElsewhere`
+ *  are listed here. `onFraming` opens the Framing tab, for a plan that
+ *  needs a framing before it can be sent. */
+export default function ActivationPanel({ projectId, onReport, shownElsewhere, onFraming }: {
   projectId: string;
   onReport?: (report: DirectorActivationReport | null) => void;
   shownElsewhere?: ReadonlySet<string>;
+  onFraming?: () => void;
 }) {
   // The page's unsaved edits: sending writes what is saved, so the dialog
   // asks to save them first rather than preview a plan about to change.
@@ -206,6 +210,8 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   };
   const [visits, setVisits] = useState<CollaborationVisit[]>([]);
   const busy = useRef(false);
+  const ids = useId();
+  const invalidate = (keys: unknown[][]) => Promise.all(keys.map(queryKey => client.invalidateQueries({ queryKey })));
   const save = useMutation({
     retry: false,
     mutationFn: async () => {
@@ -213,46 +219,72 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
       if (failed) throw new Error(`${describeFailure(failed)} Fix it, then try again.`);
     },
   });
+  // What the page reads about the rigs changes with a send, whether or not
+  // the dialog is still open when it lands, so these refresh here and not
+  // in a callback that closing the dialog would drop.
   const apply = useMutation({
     retry: false,
     mutationFn: (digest: string) => apiClient.applyDirectorActivation(projectId, digest, visits),
+    onSuccess: () => invalidate([['directorActivation', projectId], ['directorActivationCheck', projectId], ['collaborationActivation', projectId], ['directorPlanProgress', projectId], ['db'], ['directorCatalog'], ['directorPlans']]),
+    // A refusal may be a plan or framing saved elsewhere: read them again
+    // before the dialog previews again.
+    onError: async error => { if (httpStatus(error) === 409) await invalidate([['directorPlan', projectId], ['directorFraming', projectId], ['directorActivationCheck', projectId]]); },
   });
   const takeValues = useMutation({
     retry: false,
     mutationFn: (rigId: string) => apiClient.takeTargetSchedulerValues(projectId, rigId, planRevision ?? 0, framingRevision ?? 0),
+    onSuccess: () => invalidate([['directorPlan', projectId], ['directorFraming', projectId], ['directorActivationCheck', projectId]]),
+    onError: async error => { if (httpStatus(error) === 409) await invalidate([['directorPlan', projectId], ['directorFraming', projectId]]); },
   });
   // Everything the preview reads that this page sees change: the saved plan
   // and framing, and the collaboration work chosen here. The rig databases
-  // can change too; a refused Send catches that and previews again.
+  // can change too; Send catches that and previews again.
   const inputs = JSON.stringify([planRevision ?? null, framingRevision ?? null, visits]);
   const preview = useAutoPreview<DirectorActivationReport>({
     key: inputs,
     enabled: canWrite && !unsavedPlan && !savedPlan.isPending && !savedFraming.isPending,
-    fetch: () => apiClient.previewDirectorActivation(projectId, visits),
+    // A metadata store busy with a save answers 503: wait a moment, once.
+    fetch: () => apiClient.previewDirectorActivation(projectId, visits).catch(async (error: unknown) => {
+      if (httpStatus(error) !== 503) throw error;
+      await new Promise(resolve => window.setTimeout(resolve, 700));
+      return apiClient.previewDirectorActivation(projectId, visits);
+    }),
   });
   const report = unsavedPlan ? null : preview.result;
-  // A Send refused because something changed since the preview: what the
-  // preview was, so the new one can say what differs.
-  const [refused, setRefused] = useState<DirectorActivationReport | null>(null);
+  // The server cannot send this plan yet, and says what to do first.
+  const notReady = notReadyReason(preview.error);
+  // A Send refused because something changed since the preview: the
+  // preview it was refused for, and what Send found on the rigs.
+  const [refused, setRefused] = useState<{ shown: DirectorActivationReport; found: DirectorActivationReport | null } | null>(null);
+  // Until a new preview lands, Send stays off.
+  const reconciling = !!refused && preview.result === refused.shown;
   const [taken, setTaken] = useState<Record<string, DirectorTakenValues>>({});
   const [tookStale, setTookStale] = useState(false);
+  // Preview once more after a refusal or a take, once the page holds the
+  // saved plan and framing just read: a newer revision changes the inputs,
+  // and this one run serves for that change too.
+  const [again, setAgain] = useState(0);
+  useEffect(() => {
+    if (!again) return;
+    const plan = client.getQueryData<{ plan?: { revision: number } | null }>(['directorPlan', projectId])?.plan?.revision;
+    const framing = client.getQueryData<{ draft?: { revision: number } | null }>(['directorFraming', projectId])?.draft?.revision;
+    if (plan !== planRevision || framing !== framingRevision) return;
+    setAgain(0);
+    preview.refresh();
+  }, [again, client, projectId, planRevision, framingRevision, preview]);
   const send = () => {
     const shown = preview.result;
     if (!shown || !preview.fresh) return;
     setRefused(null);
     setTookStale(false);
     apply.mutate(shown.preview_digest, {
-      onSuccess: applied => {
-        preview.replace(applied);
-        for (const key of [['directorActivation', projectId], ['directorActivationCheck', projectId], ['collaborationActivation', projectId], ['directorPlanProgress', projectId], ['db'], ['directorCatalog'], ['directorPlans']]) void client.invalidateQueries({ queryKey: key });
-      },
-      onError: async error => {
+      onSuccess: applied => preview.replace(applied),
+      onError: error => {
         if (httpStatus(error) !== 409) return;
-        // Preview again at once; a newer saved plan or framing, once read,
-        // changes the inputs and runs it once more.
-        setRefused(shown);
-        preview.refresh();
-        for (const key of [['directorPlan', projectId], ['directorFraming', projectId]]) void client.invalidateQueries({ queryKey: key });
+        // What Send found on the rig databases themselves.
+        const found = (answerOf(error)?.data?.data as DirectorActivationReport | null | undefined) ?? null;
+        setRefused({ shown, found });
+        setAgain(count => count + 1);
       },
     });
   };
@@ -261,18 +293,11 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   const take = (rigId: string) => {
     setTookStale(false);
     takeValues.mutate(rigId, {
-      onSuccess: async result => {
+      onSuccess: result => {
         setTaken(current => ({ ...current, [rigId]: result }));
-        await Promise.all([['directorPlan', projectId], ['directorFraming', projectId], ['directorActivationCheck', projectId]]
-          .map(key => client.invalidateQueries({ queryKey: key })));
-        preview.refresh();
+        setAgain(count => count + 1);
       },
-      onError: error => {
-        if (httpStatus(error) !== 409) return;
-        setTookStale(true);
-        preview.refresh();
-        for (const key of [['directorPlan', projectId], ['directorFraming', projectId]]) void client.invalidateQueries({ queryKey: key });
-      },
+      onError: error => { if (httpStatus(error) === 409) { setTookStale(true); setAgain(count => count + 1); } },
     });
   };
   // Sending the last send again to the remote sites that lack it.
@@ -285,18 +310,37 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
   useEffect(() => {
     if (report?.applied && (!document.activeElement || document.activeElement === document.body)) outcome.current?.focus();
   }, [report]);
+  // Save and send… goes with the note it sits in; the status line, which
+  // says the preview is on its way, takes focus so it stays in the dialog.
+  const statusLine = useRef<HTMLParagraphElement>(null);
+  const wasUnsaved = useRef(unsavedPlan);
+  useEffect(() => {
+    if (wasUnsaved.current && !unsavedPlan && save.isSuccess) statusLine.current?.focus();
+    wasUnsaved.current = unsavedPlan;
+  }, [unsavedPlan, save.isSuccess]);
   const writing = apply.isPending || push.isPending || takeValues.isPending || save.isPending;
   const applyRefused = apply.isError && httpStatus(apply.error) === 409;
-  const error = save.error ?? preview.error ?? (applyRefused ? null : apply.error) ?? push.error ?? (tookStale ? null : takeValues.error);
+  const previewFailed = notReady ? null : preview.error;
+  const error = save.error ?? previewFailed ?? (applyRefused ? null : apply.error) ?? push.error ?? (tookStale ? null : takeValues.error);
   const nothingToWrite = !!report && report.rigs.every(r => r.warnings.length > 0 && r.changes.length === 0);
   const previewing = canWrite && !unsavedPlan;
-  // Said once, politely, for a screen reader: the region is busy until then.
+  // Said once, politely, for a screen reader. It sits outside the busy
+  // preview, so "Previewing…" is said too.
   const announcement = !previewing ? ''
     : preview.loading ? 'Previewing…'
+    : notReady ? `Not ready to send: ${notReady}`
     : preview.error ? 'Preview failed'
     : report?.applied ? 'Sent'
     : preview.fresh ? 'Preview ready' : '';
-  return <section className="activation" aria-label="Send to the rigs" aria-busy={preview.loading}>
+  // Why Send is off, said beside it and read with it.
+  const sendWait = !manageable ? 'This server cannot change rig databases.'
+    : notReady ? 'Nothing to send until then.'
+    : preview.loading || reconciling ? 'Waiting for the preview.'
+    : preview.error ? 'No preview to send.'
+    : nothingToWrite ? 'No rig database can take this plan yet.'
+    : '';
+  const changed = refused && (refused.found ?? (!reconciling ? preview.result : null));
+  return <section className="activation" aria-label="Send to the rigs">
     <CollaborationActivation projectId={projectId} value={visits} disabled={writing || !canWrite} onChange={setVisits} />
     {last.data && <p className="director-muted">Last sent {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
     {last.data && (behind.length > 0 || unsent.length > 0) && <p className="activation-behind" role="note">{notSynced}</p>}
@@ -312,7 +356,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
     {last.data && behind.length === 0 && unsent.length === 0 && !checking && !unsavedPlan && planRevision !== undefined && (unchecked
       ? <p className="director-muted" title={unchecked.title}>{unchecked.text}</p>
       : <p className="director-muted">On the rigs</p>)}
-    {!last.data && last.isSuccess && <p className="director-muted">{matches ? 'On the rigs' : notSynced}</p>}
+    {!last.data && last.isSuccess && !notReady && <p className="director-muted">{matches ? 'On the rigs' : notSynced}</p>}
     {canWrite && unsavedPlan && <div className="activation-unsaved" role="note" aria-label="Unsaved changes">
       <p>Unsaved changes in {unsavedLabels.join(', ')}. The rigs get the saved plan, so save first; the preview follows.</p>
       <div className="director-actions">
@@ -320,15 +364,17 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
       </div>
     </div>}
     <div className="activation-status">
-      <p className="director-muted" role="status">{announcement}</p>
-      {previewing && preview.error != null && !preview.loading && <button type="button" onClick={preview.refresh}><RefreshCw size={16} />Refresh</button>}
+      <p className={notReady ? 'activation-not-ready' : 'director-muted'} role="status" tabIndex={-1} ref={statusLine}>{announcement}</p>
+      {previewing && notReady && onFraming && /Framing/.test(notReady) && <button type="button" onClick={onFraming}>Open Framing</button>}
+      {previewing && previewFailed != null && !preview.loading && <button type="button" onClick={preview.refresh}><RefreshCw size={16} />Refresh</button>}
     </div>
     {error != null && <p className="director-error" role="alert">{message(error)}</p>}
-    {refused && <p className="activation-changed" role="note">{preview.fresh && preview.result && preview.result !== refused && !preview.result.applied
-      ? `Changed since the preview: ${describeChange(refused, preview.result)}. This preview is new; check it, then send.`
-      : 'Changed since the preview; previewing again.'}</p>}
-    {tookStale && <p className="activation-changed" role="note">The saved plan changed since this preview, so nothing was taken. The preview has run again.</p>}
-    {report && <div className="activation-report">
+    {refused && <p className="activation-changed" role="alert">{changed
+      ? `Changed since the preview: ${describeChange(refused.shown, changed).replace(/\.$/, '')}. Nothing was written. `
+      : 'Changed since the preview. Nothing was written. '}
+      {reconciling ? 'Previewing again…' : 'This preview is new; check it, then send.'}</p>}
+    {tookStale && <p className="activation-changed" role="alert">The saved plan changed since this preview, so nothing was taken. The preview has run again.</p>}
+    {report && <div className="activation-report" role="region" aria-label="Preview" aria-busy={preview.loading || reconciling}>
       <p tabIndex={-1} ref={outcome}><strong>{report.applied ? 'Sent' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Revision ${report.activation_revision} on the rigs.`}</p>
       {report.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
       {report.rigs.filter(rig => !shownElsewhere?.has(rig.rig.id)).map(rig => <div key={rig.rig.id}>
@@ -346,9 +392,10 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere }:
       <ul>{pushed.rigs.map(rig => <li key={rig.rig.id} className={rig.push.error ? 'director-error' : undefined}>{rig.catalog_name}: {describePush(rig.push, true)}</li>)}</ul>
     </div>}
     {previewing && !report?.applied && <div className="director-actions">
-      <button type="button" disabled={!preview.fresh || writing || !manageable || nothingToWrite}
-        title={!manageable ? 'This server cannot change rig databases' : !preview.fresh ? 'Waiting for a current preview' : undefined}
+      <button type="button" disabled={!preview.fresh || reconciling || writing || !!sendWait}
+        aria-describedby={sendWait ? `${ids}-send-wait` : undefined}
         onClick={() => run(send)}><Send size={16} />{apply.isPending ? 'Sending…' : 'Send'}</button>
+      {sendWait && <span id={`${ids}-send-wait`} className="director-muted">{sendWait}</span>}
     </div>}
     {!canWrite && <p className="director-muted">Read only</p>}
     {canWrite && !manageable && <p className="director-muted">Preview only: this server cannot change rig databases</p>}

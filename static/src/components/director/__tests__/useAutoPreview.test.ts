@@ -72,6 +72,45 @@ describe('useAutoPreview', () => {
     expect(api.most()).toBe(1);
   });
 
+  it('keeps the rest after the last change though a stale answer lands first', async () => {
+    const api = controlled();
+    const { result, rerender } = mount(api);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    rerender({ inputs: 'b', enabled: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    rerender({ inputs: 'c', enabled: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    // 'a' lands 250 ms after the change to 'c': dropped, and 'c' waits.
+    await act(async () => { api.calls[0].resolve('preview a'); });
+    expect(api.calls.map(call => call.key)).toEqual(['a']);
+    expect(result.current.loading).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(49); });
+    expect(api.calls).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(api.calls.map(call => call.key)).toEqual(['a', 'c']);
+  });
+
+  it('starts no answer twice when the inputs come back to the ones running', async () => {
+    const api = controlled();
+    const { result, rerender } = mount(api);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    rerender({ inputs: 'b', enabled: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    rerender({ inputs: 'a', enabled: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(400); });
+    await act(async () => { api.calls[0].resolve('preview a'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(api.calls.map(call => call.key)).toEqual(['a']);
+    expect(result.current).toMatchObject({ result: 'preview a', fresh: true, loading: false });
+    // A change and back before its rest is over asks nothing either.
+    rerender({ inputs: 'b', enabled: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    rerender({ inputs: 'a', enabled: true });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(api.calls).toHaveLength(1);
+    expect(result.current.fresh).toBe(true);
+  });
+
   it('runs again on refresh, never by itself, and keeps a result put in its place', async () => {
     const api = controlled();
     const { result, rerender } = mount(api);

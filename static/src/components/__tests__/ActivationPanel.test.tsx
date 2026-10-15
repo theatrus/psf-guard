@@ -240,9 +240,9 @@ describe('Activation panel', () => {
         rigs: [{ ...changed.rigs[0], changes: [...changed.rigs[0].changes, { kind: 'plan', action: 'create', name: 'Heart r1c1 · OIII 300', detail: '72 frames of 300 s' }] }, ...changed.rigs.slice(1)] }));
     }));
     await send();
-    const note = await screen.findByText(/^Changed since the preview: the saved plan \(revision 3 → 4\) and RedCat 61's rows\./);
+    const note = await screen.findByText(/^Changed since the preview: the saved plan \(revision 3 → 4\) and RedCat 61's rows\. Nothing was written\./);
+    expect(note).toHaveAttribute('role', 'alert');
     expect(note).toHaveTextContent('This preview is new; check it, then send.');
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Send to RedCat 61')).toHaveTextContent('Exposure plans: 3 new');
     expect(previews).toBe(2);
     // Sending again uses the new preview.
@@ -366,12 +366,12 @@ describe('Activation panel', () => {
     fixture(); mount();
     let fail = true;
     server.use(http.post('/api/director/v1/projects/project/activation/preview', () => fail
-      ? HttpResponse.json({ success: false, data: null, error: 'RedCat 61 is locked' }, { status: 503 })
+      ? HttpResponse.json({ success: false, data: null, error: 'RedCat 61 is locked' }, { status: 500 })
       : HttpResponse.json(ok(report(false)))));
     expect(await screen.findByRole('alert')).toHaveTextContent('RedCat 61 is locked');
     expect(screen.getByRole('status')).toHaveTextContent('Preview failed');
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
-    expect(screen.getByRole('region', { name: 'Send to the rigs' })).toHaveAttribute('aria-busy', 'false');
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAccessibleDescription('No preview to send.');
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Preview ready'));
@@ -379,18 +379,106 @@ describe('Activation panel', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
   });
 
-  it('marks the region busy while a preview runs', async () => {
+  it('says it is previewing, outside the busy preview, and why Send waits', async () => {
     fixture(); mount();
     let release: () => void = () => {};
     server.use(http.post('/api/director/v1/projects/project/activation/preview', async () => {
       await new Promise<void>(resolve => { release = resolve; });
       return HttpResponse.json(ok(report(false)));
     }));
-    const region = screen.getByRole('region', { name: 'Send to the rigs' });
-    await waitFor(() => expect(region).toHaveAttribute('aria-busy', 'true'));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Previewing…'));
+    expect(screen.getByRole('status').closest('[aria-busy="true"]')).toBeNull();
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAccessibleDescription('Waiting for the preview.');
     release();
-    await waitFor(() => expect(region).toHaveAttribute('aria-busy', 'false'));
-    expect(screen.getByRole('status')).toHaveTextContent('Preview ready');
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Preview ready'));
+    expect(screen.getByRole('region', { name: 'Preview' })).toHaveAttribute('aria-busy', 'false');
+    expect(screen.getByRole('button', { name: 'Send' })).not.toHaveAccessibleDescription();
+  });
+
+  it('sends once a matching preview reconciles, and on a refusal says what Send found, previewing once more', async () => {
+    fixture(); mount();
+    // Send found a row N.I.N.A. changed after the preview read its copy.
+    const found: DirectorActivationReport = { ...report(false), preview_digest: 'f'.repeat(64),
+      rigs: [{ ...report(false).rigs[0], warnings: ['Its database stayed locked (N.I.N.A. or a refresh may be writing it); try again in a moment.'] }, ...report(false).rigs.slice(1)] };
+    let previews = 0;
+    let release: () => void = () => {};
+    const applies: string[] = [];
+    server.use(http.post('/api/director/v1/projects/project/activation/apply', async ({ request }) => {
+      applies.push((await request.json() as { preview_digest: string }).preview_digest);
+      return applies.length === 1
+        ? HttpResponse.json({ success: false, data: found, error: 'The plan or a rig database changed since the preview; nothing was written. Preview again.' }, { status: 409 })
+        : HttpResponse.json(ok(report(true)));
+    }), http.post('/api/director/v1/projects/project/activation/preview', async () => {
+      previews++;
+      if (previews === 2) await new Promise<void>(resolve => { release = resolve; });
+      return HttpResponse.json(ok(previews === 1 ? report(false) : found));
+    }));
+    await send();
+    // What Send found is said at once; the new preview is on its way.
+    const note = await screen.findByRole('alert');
+    expect(note).toHaveTextContent("Changed since the preview: RedCat 61: Its database stayed locked (N.I.N.A. or a refresh may be writing it); try again in a moment. Nothing was written. Previewing again…");
+    await waitFor(() => expect(previews).toBe(2));
+    // Send stays off until it lands, never flickering on in between.
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.getByRole('region', { name: 'Preview' })).toHaveAttribute('aria-busy', 'true');
+    release();
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('This preview is new; check it, then send.'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    await new Promise(resolve => setTimeout(resolve, 500));
+    expect(previews).toBe(2);
+    await send();
+    await waitFor(() => expect(applies).toEqual(['d'.repeat(64), 'f'.repeat(64)]));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Sent'));
+  });
+
+  it('says what a plan needs before it can be sent, as an instruction, with no Refresh', async () => {
+    fixture();
+    const onFraming = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    server.use(http.post('/api/director/v1/projects/project/activation/preview', () =>
+      HttpResponse.json({ success: false, data: null, error: 'Choose a panel rig or enter a panel size in Framing first.' }, { status: 422 })));
+    render(<QueryClientProvider client={client}><ActivationPanel projectId="project" onFraming={onFraming} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Not ready to send: Choose a panel rig or enter a panel size in Framing first.'));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveAccessibleDescription('Nothing to send until then.');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Framing' }));
+    expect(onFraming).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes what the page shows after a send though the dialog closed while it ran', async () => {
+    fixture();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const invalidated = vi.spyOn(client, 'invalidateQueries');
+    let release: () => void = () => {};
+    server.use(http.post('/api/director/v1/projects/project/activation/apply', async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return HttpResponse.json(ok(report(true)));
+    }));
+    const view = render(<QueryClientProvider client={client}><ActivationPanel projectId="project" /></QueryClientProvider>);
+    await send();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Sending…' })).toBeInTheDocument());
+    // Escape, mid-send.
+    view.unmount();
+    invalidated.mockClear();
+    release();
+    await waitFor(() => expect(invalidated.mock.calls.map(([filters]) => filters?.queryKey)).toEqual(expect.arrayContaining([
+      ['directorActivation', 'project'], ['directorActivationCheck', 'project'], ['db'], ['directorPlans'],
+    ])));
+  });
+
+  it('keeps focus in the dialog once Save and send… has saved', async () => {
+    fixture();
+    const savePlan = vi.fn(async () => true);
+    const view = mount(true, { unsavedPlan: true, savePlan });
+    const save = await screen.findByRole('button', { name: 'Save and send…' });
+    save.focus();
+    fireEvent.click(save);
+    await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(1));
+    view.rerender(<Page unsaved={false} save={savePlan} />);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('status')));
+    expect(document.activeElement).not.toBe(document.body);
   });
 });

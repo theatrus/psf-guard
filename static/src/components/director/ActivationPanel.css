@@ -44,6 +44,8 @@
 .activation-status p { margin: 0; }
 .activation[aria-busy='true'] .activation-report { opacity: 0.6; }
 .activation-changed { margin: 8px 0; color: var(--color-warning-light); }
+/* What to do before the plan can be sent: an instruction, not a failure. */
+.activation-not-ready { color: var(--color-warning-light); }
 /* Unsaved edits: sending writes the saved plan, so saving comes first. */
 .activation-unsaved { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--color-status-caution); border-radius: 6px; background: var(--color-status-caution-bg); }
 .activation-unsaved p { margin: 0 0 6px; }

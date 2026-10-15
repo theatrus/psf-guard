@@ -118,7 +118,7 @@ pub(super) fn current(
                     .is_some()
             {
                 return Err(not_ready(
-                    "Rig assignment identity is ambiguous; review Send to rigs.",
+                    "Rig assignment identity is ambiguous; review the send to the rigs.",
                 ));
             }
         }

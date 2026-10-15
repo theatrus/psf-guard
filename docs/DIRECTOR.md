@@ -114,7 +114,7 @@ submitted by the manual view. **Review images** checks
 GUIDs, saved files, exposures, fresh pixel solves and shared measured coverage.
 Set **Observing night** to the night the selected images were captured, even if
 the assignment was issued earlier. Candidates include a time-zone margin, so
-review which images belong to that night. Activated targets associate captures
+review which images belong to that night. Targets sent to the rigs associate captures
 by stable target GUID, filter and assignment cutover time; delayed database sync
 does not change their original task or revision. **Queue finalized contribution**
 freezes the reviewed evidence. The review shows exposure, scale, focal length,
@@ -414,7 +414,7 @@ another tab. **Exposures** holds the objectives and, for
 each rig shooting the plan, its template, exposure and frames per objective.
 Each row also shows the rig's progress, accepted frames against what its
 Target Scheduler exposure plans ask for, with the frames taken and rejected
-beneath, and a status: **Off**, **Not activated**, **Done**, or the project's
+beneath, and a status: **Off**, **Not sent**, **Done**, or the project's
 state in Target Scheduler. The top row sums the rig: the plan's frames and
 hours, its progress over every objective, and its status. An exposure plan
 counts toward the objectives its activation wrote it for; one that sums
@@ -1275,25 +1275,40 @@ The preview builds itself. Opening the dialog starts it, and it runs again
 300 ms after an input stops changing: the collaboration assignments chosen
 in the dialog, or a newer saved plan or framing. Only one preview runs at a
 time; an answer for inputs that have since changed is dropped, and nothing
-polls. The region is busy while it runs, the last preview stays in place,
-dimmed, and a status line says **Previewing…**, **Preview ready** or
-**Preview failed**, with **Refresh** to try a failed one again.
+polls. The preview is busy while it runs and stays in place, dimmed, and a
+status line says **Previewing…**, **Preview ready** or **Preview failed**,
+with **Refresh** to try a failed one again. Beside a disabled **Send**, a
+line says why it waits.
+
+A plan the server cannot send yet (no framing saved, or no panel rig or
+panel size) is not a failure: the status line says what to do first, with
+**Open Framing** when the framing is what it lacks, and no Refresh. The
+header then says **Can't send yet** with the same reason in place of
+**Send to rigs…**, and the bar at the top does not ask.
 
 **Send** writes the rig databases. It is enabled only while the preview on
-screen is for the current inputs. When something changed between the preview
-and Send, the server refuses it; the dialog then previews again by itself and
-says what differs, such as "Changed since the preview: the saved plan
-(revision 3 → 4) and ultracat131's rows".
+screen is for the current inputs. It runs the same work again on each rig
+database itself, holding the database's write lock from its first read to
+its commit, and commits only when that reaches the preview's digest. When
+something changed between the preview and Send, nothing is written: the
+server answers `409` with what it found, and the dialog says what differs,
+such as "Changed since the preview: the saved plan (revision 3 → 4) and
+ultracat131's rows", or a rig's own reason, such as a database that stayed
+locked. It then previews once more by itself; **Send** stays off until that
+preview lands. Closing the dialog while **Send** runs still refreshes the
+header, the bar and the Library when it lands.
 
 The preview reads the saved plan, so unsaved edits come first. The dialog
 never saves them unasked: it says which sections have unsaved changes and
 offers **Save and send…**, which saves them; the preview then follows and
 **Send** waits for it.
 
-A preview opens each rig database, writes the rows in a transaction and rolls
-it back, so it takes each database's write turn for a moment, as N.I.N.A.
-and a directory refresh do. That is why it runs only when the dialog is open
-and its inputs change, never on a timer.
+A preview runs on an in-memory copy of each rig's planning tables, as the
+header's check does, so it never waits for N.I.N.A. or holds a rig
+database's lock, and never queues behind discovery or adoption. It first
+opens the file for writing, without locking it, so a database **Send**
+could not write is said in the preview too. A busy metadata store (`503`)
+gets one more try after a moment.
 
 ### What sending does
 
@@ -1493,13 +1508,16 @@ framing that rigs shoot, a rig's own panels under its name (a warning, never
 a refusal), and gives
 any reason a rig is skipped: no registered database on this server, a Target
 Scheduler schema older than 22, a database with no N.I.N.A. profile yet, or
-one that cannot be opened, locked or written. Each rig database waits up to a
-minute for its write lock, as every other writer on the server does, since
-N.I.N.A. and a directory refresh can hold the file that long. A plan saved
+one that cannot be opened or written. On **Send**, each rig database waits
+up to a minute for its write lock, as every other writer on the server does,
+since N.I.N.A. and a directory refresh can hold the file that long; the
+preview, on its copy, never waits. A plan saved
 before duplicates were refused may hold two contributions for one rig and
 objective; the first counts.
 **Send** carries the preview digest and is refused when the framing, plan or
-database changed in between; the dialog then previews again by itself. The activation record is checked before any rig
+database changed in between: it answers `409` with the report it reached on
+the databases themselves, and the dialog then previews again by itself. The
+activation record is checked before any rig
 database commits, so a record too large to keep refuses the Apply with
 nothing written. Each rig database then commits on its own: one whose commit
 fails says so in its row and keeps what the last activation knew of it, and

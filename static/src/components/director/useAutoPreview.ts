@@ -43,22 +43,31 @@ export function useAutoPreview<T>({ key, enabled, fetch, delay = PREVIEW_DEBOUNC
   const settledKey = useRef<string | null>(null);
   const setSettled = useCallback((next: Settled<T>) => { settledKey.current = next.key; setSettledState(next); }, []);
   const inFlight = useRef<string | null>(null);
+  // `refresh` was asked while a request ran: run once more when it ends.
   const again = useRef(false);
+  // The latest inputs rested long enough while a request ran, so their
+  // preview may start the moment it ends. Until then the effect's timer
+  // holds it: the rest after the last change always passes first.
+  const due = useRef(false);
   const ran = useRef(false);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
-  const start = useCallback((force: boolean) => {
+  /** Start a preview for the latest inputs; false when none was needed. */
+  const start = useCallback((force: boolean): boolean => {
     const { key: asked, enabled: on, fetch: run } = latest.current;
-    if (!on) return;
+    if (!on) return false;
     if (inFlight.current !== null) {
-      // The running request answers for these inputs unless forced.
-      if (force || inFlight.current !== asked) again.current = true;
-      return;
+      if (force) again.current = true;
+      // Back to the inputs already running: that answer will do.
+      else due.current = inFlight.current !== asked;
+      return true;
     }
-    if (!force && settledKey.current === asked) return;
+    // The answer for these inputs is in already.
+    if (!force && settledKey.current === asked) return false;
     inFlight.current = asked;
     again.current = false;
+    due.current = false;
     ran.current = true;
     setRunning(true);
     const settle = (next: { result: T | null; error: unknown }) => {
@@ -68,13 +77,19 @@ export function useAutoPreview<T>({ key, enabled, fetch, delay = PREVIEW_DEBOUNC
       const stale = asked !== latest.current.key;
       if (!stale) setSettled({ ...next, key: asked });
       const forced = again.current;
-      if ((stale || forced) && latest.current.enabled) start(forced);
-      else setRunning(false);
+      const rested = due.current;
+      again.current = false;
+      due.current = false;
+      if (latest.current.enabled && (forced || (stale && rested)) && start(forced)) return;
+      setRunning(false);
     };
     run().then(result => settle({ result, error: null }), (error: unknown) => settle({ result: null, error: error ?? new Error('Preview failed') }));
+    return true;
   }, [setSettled]);
 
   useEffect(() => {
+    // A new change starts its rest over.
+    due.current = false;
     // Nothing to do while off, or when the answer for these inputs is in.
     if (!enabled || settledKey.current === key) { setWaiting(false); return; }
     // Opening previews at once; a change waits for the inputs to rest.
@@ -84,7 +99,7 @@ export function useAutoPreview<T>({ key, enabled, fetch, delay = PREVIEW_DEBOUNC
     return () => window.clearTimeout(timer);
   }, [key, enabled, delay, start]);
 
-  const refresh = useCallback(() => start(true), [start]);
+  const refresh = useCallback(() => { start(true); }, [start]);
   const replace = useCallback((result: T) => setSettled({ result, error: null, key: latest.current.key }), [setSettled]);
   const current = settled.key === key;
   const loading = enabled && (running || waiting);
