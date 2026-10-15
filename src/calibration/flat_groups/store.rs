@@ -219,6 +219,36 @@ pub(crate) fn set_pedestal(
     Ok(())
 }
 
+/// Frames that left the library, or merged into a twin: the responses
+/// built from any of them go, with their comparisons, so the next pass
+/// measures those sessions again from the frames the library holds now.
+/// Returns how many responses went.
+pub(crate) fn forget_frames(conn: &Connection, frame_uuids: &[String]) -> Result<usize> {
+    if frame_uuids.is_empty() || !tables_exist(conn) {
+        return Ok(0);
+    }
+    let wanted: std::collections::HashSet<&str> = frame_uuids.iter().map(String::as_str).collect();
+    let keys: Vec<String> = load_responses(conn)?
+        .into_iter()
+        .filter(|row| {
+            row.frame_uuids
+                .iter()
+                .any(|uuid| wanted.contains(uuid.as_str()))
+        })
+        .map(|row| row.response_key)
+        .collect();
+    let mut comparisons = conn.prepare(
+        "DELETE FROM psf_guard_flat_comparison WHERE earlier_key = ?1 OR later_key = ?1",
+    )?;
+    let mut responses =
+        conn.prepare("DELETE FROM psf_guard_flat_response WHERE response_key = ?1")?;
+    for key in &keys {
+        comparisons.execute([key])?;
+        responses.execute([key])?;
+    }
+    Ok(keys.len())
+}
+
 #[derive(Serialize, Deserialize)]
 struct Detail {
     spots: Vec<Spot>,

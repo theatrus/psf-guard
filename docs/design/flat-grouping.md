@@ -325,6 +325,11 @@ opens the rig's own value or the global one.
   version. A pass takes each session's pedestal again; when it moved, as
   when a dark-flat arrived, the row keeps the new one and the session's
   comparisons are made again. A correction's key carries both pedestals.
+- **Forgets and twins**: forgetting a frame, or merging a twin row into
+  the row kept (the duplicates repair, or a sync that honours one), drops
+  every response built from those rows with its comparisons
+  (`store::forget_frames`); the next pass measures the session again from
+  the rows the library holds.
 - **Partial reads**: a session measured while some of its flats could not
   be read is measured again on each pass until it combines all of them. A
   session whose flats could not be combined at all stays recorded with its

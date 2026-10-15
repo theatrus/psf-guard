@@ -1788,6 +1788,7 @@ pub fn forget_frames(
     quality::forget(&transaction, frame_uuids)?;
     twins::forget_twins_of(&transaction, frame_uuids)?;
     twins::forget_merges_of(&transaction, frame_uuids)?;
+    flat_groups::store::forget_frames(&transaction, frame_uuids)?;
     transaction.commit()?;
     Ok(CalibrationMutationOutcome {
         frames_removed,

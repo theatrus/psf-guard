@@ -437,3 +437,93 @@ fn a_bias_that_arrives_later_is_taken_out_and_the_nights_compared_again() {
     );
     assert_eq!(pedestal(&conn), [Some(500.0), Some(500.0)]);
 }
+
+#[test]
+fn a_twin_merged_away_has_its_session_measured_again_from_the_row_kept() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut conn, dir) = measured_library(temp.path(), &[BEFORE_HA_0, AFTER_HA_0]);
+    // An older import catalogued one flat twice: a second row for a copy
+    // of its file elsewhere, which the next pass measures with the rest.
+    let copies = temp.path().join("copies");
+    std::fs::create_dir_all(&copies).unwrap();
+    let copy = copies.join("before-ha-0-0.fits");
+    std::fs::copy(temp.path().join("before-ha-0-0.fits"), &copy).unwrap();
+    let original: String = conn
+        .query_row(
+            "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE source_path LIKE '%before-ha-0-0.fits'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let columns = crate::calibration::table_column_names(&conn, "psf_guard_calibration_frame")
+        .unwrap()
+        .into_iter()
+        .filter(|name| !["id", "frame_uuid", "source_path"].contains(&name.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conn.execute(
+        &format!(
+            "INSERT INTO psf_guard_calibration_frame (frame_uuid, source_path, {columns})
+             SELECT 'second-row', ?1, {columns} FROM psf_guard_calibration_frame
+             WHERE frame_uuid = ?2"
+        ),
+        rusqlite::params![crate::calibration::canonical_text(&copy), original],
+    )
+    .unwrap();
+    let (outcome, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(outcome.measured, 1, "the session with its second row");
+    let holds = |conn: &Connection, uuid: &str| {
+        super::store::load_responses(conn)
+            .unwrap()
+            .iter()
+            .any(|row| row.frame_uuids.iter().any(|frame| frame == uuid))
+    };
+    assert!(holds(&conn, "second-row"));
+
+    // The repair merges the second row into the first.
+    let twins = crate::calibration::twins::plan_repair(
+        &crate::calibration::twins::duplicate_snapshot(&conn).unwrap(),
+        &crate::calibration::twins::FileAccess::disk(),
+    );
+    assert_eq!(twins.rows_removed, 1, "{twins:?}");
+    crate::calibration::twins::apply_repair(&mut conn, &twins).unwrap();
+    assert!(
+        !holds(&conn, "second-row"),
+        "the merged row's response is gone"
+    );
+    assert!(
+        !holds(&conn, &original),
+        "so is the one the kept row was measured in"
+    );
+    assert_eq!(
+        super::store::load_comparisons(&conn).unwrap().len(),
+        0,
+        "and its comparisons"
+    );
+    let book = super::load_book(&conn).unwrap();
+    assert!(book.session_of_frame("second-row").is_none());
+
+    // The next pass measures the session from the rows the library holds.
+    let (outcome, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!((outcome.measured, outcome.compared), (1, 1));
+    assert!(holds(&conn, &original) && !holds(&conn, "second-row"));
+}
+
+#[test]
+fn forgetting_a_flat_has_its_session_measured_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let (mut conn, dir) = measured_library(temp.path(), &[BEFORE_HA_0, AFTER_HA_0]);
+    let uuid: String = conn
+        .query_row(
+            "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE source_path LIKE '%after-ha-0-0.fits'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    crate::calibration::forget_frame(&mut conn, &uuid).unwrap();
+    assert_eq!(super::store::load_responses(&conn).unwrap().len(), 1);
+    assert!(super::store::load_comparisons(&conn).unwrap().is_empty());
+    let (outcome, _) = pass_counting_yields(&conn, &dir);
+    // Two flats are too few to measure: the session waits for more.
+    assert_eq!((outcome.measured, outcome.compared), (0, 0));
+}
