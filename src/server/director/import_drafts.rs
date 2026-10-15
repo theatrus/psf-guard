@@ -821,6 +821,7 @@ pub(super) fn refresh_drafts(
             for panel in &mut framing.layout.panels {
                 if let Some(kept) = stored.layout.panel(&panel.id) {
                     panel.locked = kept.locked;
+                    panel.unlocked_by_hand = kept.unlocked_by_hand;
                     panel.measured = kept.measured.clone().filter(|_| kept.locked);
                 }
             }

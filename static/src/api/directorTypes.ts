@@ -150,6 +150,8 @@ export interface DirectorMeasuredGeometry {
  *  drawn as shot; a panel may be turned from the framing's angle on its own. */
 export interface DirectorPanelPlacement {
   id: string; x: number; y: number; locked: boolean;
+  /** Unlocked by hand although its target has frames, so it is not locked again. */
+  unlocked_by_hand?: boolean;
   measured?: DirectorMeasuredGeometry | null;
   /** Degrees counter-clockwise from the framing's angle on the plane; absent for 0. */
   angle_offset_degrees?: number;

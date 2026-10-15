@@ -1,14 +1,9 @@
 import { Lock, LockOpen, Redo2, RotateCcw, Trash2, Undo2 } from 'lucide-react';
-import type { DirectorFramingPreview, DirectorLayout, DirectorLayoutIssue, DirectorMeasuredGeometry } from '../../api/directorTypes';
+import type { DirectorFramingPreview, DirectorLayout, DirectorLayoutIssue } from '../../api/directorTypes';
 import NumberInput from '../NumberInput';
 import { formatDegrees } from './framingModel';
-import { DIRECTIONS, DIRECTION_NAMES, asGrid, describeIssue, findPanel, gridLayout, layoutCells, setLocked, turnOf, type Direction } from './mosaicLayout';
+import { DIRECTIONS, DIRECTION_NAMES, asGrid, describeIssue, findPanel, gridLayout, keepHandUnlocks, layoutCells, setLocked, turnOf, type Direction } from './mosaicLayout';
 
-/** Where a shot panel's outline comes from, in a few words. */
-function shotFrom(measured: DirectorMeasuredGeometry): string {
-  const frames = `${measured.frames} frame${measured.frames === 1 ? '' : 's'}`;
-  return measured.source === 'solved' ? `${measured.frames} solved frame${measured.frames === 1 ? '' : 's'}` : measured.source === 'header' ? `the headers of ${frames}` : 'the plan';
-}
 /** A turn, signed, to a tenth of a degree. */
 const signed = (degrees: number) => `${degrees < 0 ? '−' : '+'}${Math.abs(degrees).toFixed(1)}°`;
 
@@ -71,7 +66,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
   for (const issue of issues) for (const id of issue.kind === 'disconnected' ? [] : issue.panels) flagged.set(id, [...(flagged.get(id) ?? []), describeIssue(issue)]);
   const fromChosen = scope === 'panel' && chosen;
   const where = (direction: Direction) => fromChosen ? `${DIRECTION_NAMES[direction]} of ${chosen.id}` : `on the mosaic's ${DIRECTION_NAMES[direction]} side`;
-  const setGrid = (rows: number, columns: number, overlapPercent: number) => onEdit(gridLayout({ rows: clamp(Math.round(rows), 1, 16), columns: clamp(Math.round(columns), 1, 16), overlap_percent: clamp(Math.round(overlapPercent), 0, 90) }), 'Laid the panels out as a grid.');
+  const setGrid = (rows: number, columns: number, overlapPercent: number) => onEdit(keepHandUnlocks(gridLayout({ rows: clamp(Math.round(rows), 1, 16), columns: clamp(Math.round(columns), 1, 16), overlap_percent: clamp(Math.round(overlapPercent), 0, 90) }), layout), 'Laid the panels out as a grid.');
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
   const rowsNow = Math.max(...cells.map(cell => cell[0]), 1);
   const columnsNow = Math.max(...cells.map(cell => cell[1]), 1);
@@ -140,7 +135,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
             onClick={() => onSelect(panel.id === selected ? null : panel.id)}>
             <strong>{panel.id}</strong>
             {held && <Lock size={13} aria-label="locked" />}
-            <small>{shot > 0 ? `${shot} frame${shot === 1 ? '' : 's'}${panel.measured ? `, ${panel.measured.source}` : ''}` : held ? 'locked' : problems.length > 0 ? 'check overlap' : turnOf(panel) !== 0 ? `turned ${signed(turnOf(panel))}` : ''}</small>
+            <small>{shot > 0 ? `${shot} frame${shot === 1 ? '' : 's'}` : held ? 'locked' : problems.length > 0 ? 'check overlap' : turnOf(panel) !== 0 ? `turned ${signed(turnOf(panel))}` : ''}</small>
           </button>
         </li>;
       })}
@@ -148,9 +143,10 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
     {chosen && <div className="framing-chosen" data-testid="framing-chosen">
       <p>
         <strong>{chosen.id}</strong>{' '}
-        {frames(chosen.id) > 0
-          ? <span className="director-muted">Locked: its {frames(chosen.id)} frames were shot here.</span>
-          : chosen.locked ? <span className="director-muted">Locked by hand.</span> : <span className="director-muted">Drag it on the sky with Panel, nudge it with the arrow keys, or turn it with its handle or [ and ].</span>}
+        {isLocked(chosen.id)
+          ? <span className="director-muted">Locked.</span>
+          : frames(chosen.id) > 0 ? <span className="director-muted">Has frames: a far move or a turn starts a new target.</span>
+          : <span className="director-muted">Drag it on the sky with Panel, nudge it with the arrow keys, or turn it with its handle or [ and ].</span>}
       </p>
       {(() => {
         const laid = props.shot?.(chosen.id);
@@ -159,7 +155,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
         const turn = turnOf(chosen);
         return <div className="framing-chosen-angle" data-testid="framing-chosen-angle">
           {laid.measured
-            ? <p className="director-muted" data-testid="framing-chosen-shot">Drawn as shot, from {shotFrom(laid.measured)}: {formatDegrees(laid.measured.size.width_degrees)} × {formatDegrees(laid.measured.size.height_degrees)} at {angle}{laid.measured.size_source !== laid.measured.source ? `; its size from ${laid.measured.size_source === 'plan' ? 'the plan' : 'frame headers'}` : ''}.</p>
+            ? <p className="director-muted" data-testid="framing-chosen-shot">Drawn as shot: {formatDegrees(laid.measured.size.width_degrees)} × {formatDegrees(laid.measured.size.height_degrees)} at {angle}.</p>
             : <p className="director-muted">Camera angle here {angle} east of north{turn !== 0 ? `, turned ${signed(turn)} from the framing` : ''}.</p>}
           {canWrite && !isLocked(chosen.id) && props.onTurn && <div className="framing-turn">
             <label>Turn<span className="framing-input"><NumberInput aria-label={`${chosen.id} turn degrees`} min={-180} max={180} step={0.1} value={Number(turn.toFixed(2))}
@@ -169,8 +165,11 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
         </div>;
       })()}
       {canWrite && <div className="director-actions">
-        {frames(chosen.id) === 0 && <button type="button" aria-pressed={chosen.locked} onClick={() => onEdit(setLocked(layout, chosen.id, !chosen.locked), chosen.locked ? `Unlocked ${chosen.id}.` : `Locked ${chosen.id}.`)}>
-          {chosen.locked ? <><LockOpen size={15} />Unlock</> : <><Lock size={15} />Lock</>}</button>}
+        {(() => {
+          const held = isLocked(chosen.id);
+          return <button type="button" aria-pressed={held} onClick={() => onEdit(setLocked(layout, chosen.id, !held, frames(chosen.id) > 0), held ? `Unlocked ${chosen.id}.` : `Locked ${chosen.id}.`)}>
+            {held ? <><LockOpen size={15} />Unlock</> : <><Lock size={15} />Lock</>}</button>;
+        })()}
         <button type="button" disabled={isLocked(chosen.id) || layout.panels.length < 2} title={isLocked(chosen.id) ? 'Unlock it first' : undefined}
           onClick={() => { onEdit({ ...layout, panels: layout.panels.filter(panel => panel.id !== chosen.id) }, `Removed ${chosen.id}.`); onSelect(null); }}><Trash2 size={15} />Remove</button>
       </div>}

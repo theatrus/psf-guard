@@ -56,6 +56,7 @@ fn free_request() -> FramingRequest {
         x,
         y,
         locked,
+        unlocked_by_hand: false,
         measured: None,
         angle_offset_degrees: 0.0,
     };
