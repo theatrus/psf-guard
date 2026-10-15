@@ -119,7 +119,9 @@
   each filter's groups, why they split, and the two nights' ratio. Three
   settings under **Settings › Calibration › Flat groups** set the limits
   or turn it off. `psf-guard flat-groups` measures a copy of a catalog
-  from the command line.
+  from the command line. Exports and WBPP runs place the same flats, give
+  lights of one night that need different flats a session each, and name
+  the lights WBPP cannot calibrate as a stack would.
 - Tracked sky flats with stars no longer read as dew or frost: the flat-set
   check counts only spots that take light away, and **Compare with
   session** draws stars at neutral grey.

@@ -406,6 +406,13 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               .
             </p>
           )}
+          {(progress.flat_changes?.length ?? 0) > 0 && (
+            <p className="wbpp-run-muted" data-testid="wbpp-run-flat-changes">
+              Flats chosen around measured changes: {progress.flat_changes?.join('; ')}.
+              {(progress.flat_warnings ?? 0) > 0 &&
+                ` ${progress.flat_warnings} light(s) take flats from across a change, which WBPP may not calibrate as a PSF Guard stack would; the runner's notes list them.`}
+            </p>
+          )}
           {(progress.calibration_settings?.length ?? 0) > 0 && (
             <p className="wbpp-run-muted">
               Calibration frames matched with: {progress.calibration_settings?.join('; ')}.

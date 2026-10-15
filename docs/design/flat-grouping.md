@@ -1,8 +1,9 @@
 # Flat grouping
 
-Status: **Built**. Still open: split and join by hand, moving the metric
-into Seiza, and gap lights (a light whose night has no flats between two
-groups that differ).
+Status: **Built**. Still open: split and join by hand, moving
+`flat_groups::measure` into Seiza, gap lights (a light whose night has no
+flats between two groups that differ), and corrected flats in WBPP
+exports (§8).
 Last updated: 2026-10-14
 
 User-facing behaviour is in
@@ -30,8 +31,15 @@ work, PSF Guard judged both by the clock alone:
 
 ## 2. Measurement
 
-All of it lives in `src/calibration/flat_groups/`. Nothing here reads a
-pixel except the background job (`job.rs`).
+All of it lives in `src/calibration/flat_groups/`. The measurements sit in
+one module, `flat_groups::measure`, with a pure API: planes and numbers
+in, plain structs out, no catalog, server or file types. Its `metric`
+holds the response, the star mask, the comparison (`Q`, dust, broad,
+spots), the change map and applying it to a flat; `model` holds groups,
+change events, the angle term and placement; `evidence` the light fit;
+`rows` the data they share. A test fails if any of them names `crate::`,
+`rusqlite` or the file system, so the module can move to Seiza as it
+stands (§8). Only the background job (`job.rs`) reads pixels.
 
 ### 2.1 Responses
 
@@ -168,7 +176,59 @@ An undetermined light keeps the nearest flats and is flagged. The basis
 travels on `CalibrationSelection::flat_basis` into the explanation
 (`chosen_by`, `basis`) and the health check.
 
-### 4.3 Validation of the order
+The stacker holds a light to its flat master's angle within 2°
+(`CalibrationMasters::validate_light_frame`, with Seiza's default
+tolerances). A light given another angle's flats therefore needs its
+masters to carry a wider rotation tolerance, set for that calibration
+session only (`CalibrationMasters::with_match_tolerances`, seiza #270).
+A corrected master keeps its source master's headers, the light's own
+angle, and passes with the defaults.
+
+**Seiza's `residual_flat`** was checked before writing the correction and
+the light evidence. `build_residual_flat_patch` estimates an
+attenuation-only patch, bounded at a 1.2× gain, from repeated crops of
+lights where the caller has shown a feature is fixed on the detector.
+Neither job here fits it:
+
+- The correction is measured from two flat sessions, which carry far less
+  noise than lights; it may brighten as well as darken (dust that left or
+  moved); and a light after a change multiplies by it. A patch only
+  divides out a dip.
+- The evidence asks whether lights carry a known map, not what they carry.
+  Over a nebula, structure that barely moves between dithers would pass
+  the patch's consensus as a fixed feature; the placebo fit measures that
+  confusion instead.
+
+`residual_flat` remains the tool for removing dust that no flat holds.
+
+### 4.3 Exports and WBPP
+
+Every export plans through `plan_export`, which matches each light with
+`select_for_light`, so an exported light's flats are its event-aware
+selection. On top of that:
+
+- **Sessions.** A light and its flats share a `SESSION_<night>` folder.
+  Lights of one target, filter and night that take different flats get a
+  session each, `<night>-<digest of the flats>`, so WBPP builds each its
+  own master. Nights whose flats a master pools, measured alike, share
+  the earliest night's session.
+- **Other angle.** The other angle's flats are exported in the light's
+  session; WBPP does not compare rotator angles.
+- **Corrected.** WBPP cannot apply a change map, and building the
+  corrected master during an export would make planning build masters.
+  The light takes the flats as shot in a session of its own,
+  `<night>-across-<key>`, and is listed in the runner's notes, the export
+  summary (`flat_warnings`), the WBPP run's progress and a
+  `FLATS-ACROSS-A-CHANGE.txt` beside a downloaded export.
+- **Flagged** lights (no same-side flats, or undetermined) are listed the
+  same way.
+- **Notes.** The runner names each change in force with its window and
+  counts the lights each fallback served.
+- **Run identity.** A server WBPP run plans its frames when it starts and
+  writes them into its own folder, so a run started after a regroup takes
+  the new flats; nothing caches a run by its frames.
+
+### 4.4 Validation of the order
 
 On the Heart of the Soul R lights (§1), measured in the lights themselves
 as the footprint against a ring around it:
@@ -249,13 +309,35 @@ with the PR's working notes; the Rust metric reproduced them.
 
 ## 8. Follow-ups
 
-- **Seiza.** The response, comparison, star mask and change map belong in
-  `seiza-calibration`, so the rule "dust and dew take light away; stars
-  add it" has one owner. They stay in `flat_groups::metric` until a Seiza
-  release carries them.
+### Move to Seiza
+
+Once the current calibration work lands:
+
+- **`flat_groups::measure` into `seiza-calibration`**: the session
+  response, star mask, comparison metrics, change map and its
+  application, event detection, placement and the light evidence. The
+  module is already pure (§2), so it lifts without rework; PSF Guard keeps
+  the job, the store and the selection.
+- **The stability check onto Seiza's measurement.** PSF Guard's
+  `flat_set_stability` reads each flat back against its master and, until
+  this change, counted bright departures too (`abs()`), which made tracked
+  sky flats look like dew. Seiza's `measure_flat` already finds dips only
+  (`FlatFeature` is "one compact dip"), so the check can be built on it
+  and leave PSF Guard.
+- **Caller tolerances on light validation.** seiza-stacking's
+  `CalibrationMasters::validate_light_frame` used `MatchTolerances::default()`
+  (3 °C, 2°, 1 mm), which capped #839's dark temperature setting and
+  refused the other-angle fallback. seiza #270 adds
+  `with_match_tolerances` and `validate_light_frame_with`; PSF Guard takes
+  them through #839's pin.
+
+### PSF Guard
+
 - **Split and join by hand**, synced as choices.
 - **Gap lights**: a light whose night has no flats, between groups that
   differ, takes the nearest by time without a word.
 - **Pedestal refresh**: a dark-flat imported after a session was measured
   does not refresh that session's pedestal; it shifts the metrics by about
   the pedestal over the level, near 2%.
+- **Corrected flats in WBPP exports**: export the corrected master itself
+  once exports can build masters.

@@ -392,6 +392,13 @@ pub fn main() -> Result<()> {
                     plan.uncalibrated.len()
                 );
             }
+            if let Some(example) = plan.flat_warning_example() {
+                eprintln!(
+                    "  ⚠️ {} light(s) take flats from across a measured change that this \
+                     export cannot match as a stack would, e.g. {example}",
+                    plan.flat_warnings().len()
+                );
+            }
             if !plan.calibration_settings.is_empty() {
                 println!("Calibration frames matched with:");
                 for line in &plan.calibration_settings {

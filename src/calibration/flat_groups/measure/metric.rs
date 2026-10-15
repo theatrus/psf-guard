@@ -939,6 +939,38 @@ pub fn change_map(before: &Plane, after: &Plane) -> Option<Plane> {
     })
 }
 
+/// Carry a flat across a change in place: divide by the change's map for a
+/// light shot before it (`divide`), multiply for one shot after. `data` is
+/// row-major, `channels` interleaved, at sensor resolution; the map is on
+/// the response grid, `bin` sensor pixels to one.
+pub fn apply_change_map(
+    data: &mut [f32],
+    width: usize,
+    channels: usize,
+    map: &Plane,
+    bin: usize,
+    divide: bool,
+) {
+    let channels = channels.max(1);
+    data.par_chunks_mut(width * channels)
+        .enumerate()
+        .for_each(|(y, row)| {
+            for x in 0..width {
+                let factor = map_at(map, bin, x as f32, y as f32);
+                if !(factor.is_finite() && factor > 0.0) {
+                    continue;
+                }
+                for value in &mut row[x * channels..(x + 1) * channels] {
+                    *value = if divide {
+                        *value / factor
+                    } else {
+                        *value * factor
+                    };
+                }
+            }
+        });
+}
+
 /// The value of a map at a sensor pixel, bilinear between map pixels.
 pub fn map_at(map: &Plane, bin: usize, x: f32, y: f32) -> f32 {
     let fx = ((x + 0.5) / bin as f32 - 0.5).clamp(0.0, (map.width - 1) as f32);

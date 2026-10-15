@@ -5,7 +5,6 @@
 
 use crate::commands::import::headers::FrameMeta;
 use anyhow::{Context, Result};
-use rayon::prelude::*;
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use seiza_fits::{HeaderValue, WriteHeaderCard};
@@ -41,7 +40,7 @@ pub use twins::{
 /// Synthetic frames for tests elsewhere in the crate.
 #[cfg(test)]
 pub(crate) mod test_frames {
-    pub(crate) use super::quality::tests::{noise, write_frame};
+    pub(crate) use super::quality::tests::{noise, write_frame, write_frame_with};
 }
 pub use quality::{
     describe_finding, grade_library, measure_and_grade, measure_frame, measure_frames,
@@ -5050,28 +5049,15 @@ fn corrected_flat_master(
     .context("the change's map could not be made")?;
     let mut frame = crate::image_io::open_linear_frame(&master.path)
         .with_context(|| format!("reading {}", master.path.display()))?;
-    let (width, channels) = (frame.image.width, frame.image.channels.max(1));
-    let divide = correction.light_side == Side::Before;
-    frame
-        .image
-        .data
-        .par_chunks_mut(width * channels)
-        .enumerate()
-        .for_each(|(y, row)| {
-            for x in 0..width {
-                let factor = flat_groups::metric::map_at(&map, bin, x as f32, y as f32);
-                if !(factor.is_finite() && factor > 0.0) {
-                    continue;
-                }
-                for value in &mut row[x * channels..(x + 1) * channels] {
-                    *value = if divide {
-                        *value / factor
-                    } else {
-                        *value * factor
-                    };
-                }
-            }
-        });
+    let (width, channels) = (frame.image.width, frame.image.channels);
+    flat_groups::metric::apply_change_map(
+        &mut frame.image.data,
+        width,
+        channels,
+        &map,
+        bin,
+        correction.light_side == Side::Before,
+    );
     let mut headers: Vec<WriteHeaderCard> = frame
         .headers
         .iter()
@@ -7974,6 +7960,38 @@ pub struct ExportCalibration {
     /// The rules the light was matched with: its rig's, the server's or the
     /// defaults.
     pub rules: Arc<Rules>,
+    /// The flats this light's master takes, so an export can give lights
+    /// that need different flats different sessions.
+    pub flat_set: Option<FlatSet>,
+    /// How the light's flats were chosen around a measured change, when one
+    /// touches it (see [`flat_groups`]).
+    pub flat_choice: Option<FlatChoice>,
+}
+
+/// One light's flat master, as an export names it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FlatSet {
+    /// The night of its earliest flat: the session label it starts from.
+    pub night: String,
+    /// Which flats, sorted.
+    pub frame_uuids: Vec<String>,
+    /// The key of the change map a stack carries these flats across with,
+    /// when it does.
+    pub correction: Option<String>,
+}
+
+/// How a light's flats were chosen around a measured change, in words.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlatChoice {
+    /// `same_side`, `other_angle`, `corrected`, `no_same_side` or
+    /// `undetermined`.
+    pub basis: &'static str,
+    /// The light's account of it.
+    pub text: String,
+    /// Whether the light is worth a look for it.
+    pub flagged: bool,
+    /// The change, with its window.
+    pub change: String,
 }
 
 /// One light's dark master, as an export names it.
@@ -8031,6 +8049,30 @@ pub fn export_destinations(
         flat_basis: selected.flat_basis.clone(),
     };
     let flat_session = flat_session_label(&selected.flat, night_boundary);
+    let flat_set = flat_session.clone().map(|night| {
+        let mut frame_uuids: Vec<String> = selected
+            .flat
+            .iter()
+            .map(|frame| frame.frame_uuid.clone())
+            .collect();
+        frame_uuids.sort();
+        FlatSet {
+            night,
+            frame_uuids,
+            correction: selected
+                .flat_basis
+                .correction()
+                .map(|correction| correction.key.clone()),
+        }
+    });
+    let flat_choice = selected.flat_basis.event().map(|event| FlatChoice {
+        basis: selected.flat_basis.name(),
+        text: flat_groups::describe_flag(&selected.flat_basis, &selected.rules)
+            .or_else(|| flat_groups::describe_basis(&selected.flat_basis, &selected.rules))
+            .unwrap_or_default(),
+        flagged: selected.flat_basis.flags(),
+        change: flat_groups::describe_change(event, &selected.rules),
+    });
     let dark_set = selected.dark.first().map(|nearest| {
         let mut frame_uuids: Vec<String> = selected
             .dark
@@ -8144,6 +8186,8 @@ pub fn export_destinations(
         dark_set,
         gap,
         rules: Arc::clone(&selected.rules),
+        flat_set,
+        flat_choice,
     })
 }
 

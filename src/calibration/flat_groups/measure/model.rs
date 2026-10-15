@@ -20,12 +20,9 @@
 //!   [`super::evidence`]); otherwise it is undetermined.
 
 use super::metric::Spot;
-use super::store::{ComparisonRow, EvidenceRow, ResponseRow, Verdict};
-use crate::calibration::rules::FlatGrouping;
-use crate::calibration::Rules;
+use super::rows::{ComparisonRow, EvidenceRow, ResponseRow, Verdict};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
 
 /// Sessions of a family whose rotator angles lie within this of the
 /// cluster's first angle are one rotation cluster: the coherence tolerance
@@ -47,15 +44,6 @@ pub struct Limits {
 }
 
 impl Limits {
-    pub fn of(rules: &Rules) -> Self {
-        Self {
-            measured: rules.flat_grouping == FlatGrouping::Measured,
-            dust: rules.flat_split_dust_pct / 100.0,
-            broad: rules.flat_split_pattern_pct / 100.0,
-            window: rules.flat_session_seconds as i64,
-        }
-    }
-
     /// How far two sessions are apart against these limits: alike at 1 or
     /// less.
     pub fn distance(&self, comparison: &ComparisonRow) -> f64 {
@@ -245,7 +233,7 @@ impl Book {
         comparisons: Vec<ComparisonRow>,
         evidence: Vec<EvidenceRow>,
         imaging: Vec<ImagingSession>,
-        limits_for: impl Fn(&str) -> Arc<Rules>,
+        limits_for: impl Fn(&str) -> Limits,
     ) -> Self {
         let mut book = Book::default();
         for row in responses {
@@ -282,8 +270,7 @@ impl Book {
             .map(|s| s.row.rig_uuid.clone())
             .collect();
         for rig in rigs {
-            book.limits
-                .insert(rig.clone(), Limits::of(&limits_for(&rig)));
+            book.limits.insert(rig.clone(), limits_for(&rig));
         }
         book.build_families();
         book.build_groups();
@@ -890,8 +877,14 @@ mod tests {
 
     const DAY: i64 = 86_400;
 
-    fn rules() -> Arc<Rules> {
-        Arc::new(Rules::default())
+    /// The default limits: 1% dust, 2% pattern, a 24-hour session.
+    fn rules() -> Limits {
+        Limits {
+            measured: true,
+            dust: 0.01,
+            broad: 0.02,
+            window: 86_400,
+        }
     }
 
     #[test]

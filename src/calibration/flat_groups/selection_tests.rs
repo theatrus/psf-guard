@@ -3,7 +3,7 @@
 
 use super::model::{Placement, Side};
 use super::{metric, FlatBasis};
-use crate::calibration::test_frames::write_frame;
+use crate::calibration::test_frames::write_frame_with;
 use crate::calibration::{
     corrected_flat_master, import_calibration_frames, select_for_light, BuiltMaster,
     CalibrationFrame,
@@ -41,7 +41,8 @@ fn write_session(dir: &Path, session: &Session, seed: u64) -> Vec<FrameMeta> {
             );
             // Frames a second apart.
             let captured = format!("{}:0{index}", session.captured);
-            write_frame(&path, "FLAT", SIZE, &captured, |x, y| {
+            let angle = format!("ROTATANG= {:20.1}", session.rotation);
+            write_frame_with(&path, "FLAT", SIZE, &captured, &[angle.as_str()], |x, y| {
                 30_000.0 * f64::from(plane.data[y * SIZE.0 + x])
             });
             let mut meta = read_frame_meta(&path);
@@ -90,7 +91,10 @@ fn settings_lock() -> std::sync::MutexGuard<'static, ()> {
 
 fn light(dir: &Path, captured: &str, rotation: f64) -> FrameMeta {
     let path = dir.join(format!("light-{captured}.fits"));
-    write_frame(&path, "LIGHT", SIZE, captured, |_, _| 1_000.0);
+    let angle = format!("ROTATANG= {rotation:20.1}");
+    write_frame_with(&path, "LIGHT", SIZE, captured, &[angle.as_str()], |_, _| {
+        1_000.0
+    });
     let mut meta = read_frame_meta(&path);
     meta.rotator_position = Some(rotation);
     meta
@@ -194,6 +198,20 @@ fn a_light_before_new_dust_takes_its_side_at_another_angle() {
     }
     assert!(!selected.flat_basis.flags());
 
+    // The stacker holds a light to its flats' angle within 2°, so these
+    // flats need the light's own tolerance carried on its masters.
+    // TODO: once #839 pins seiza-stacking with `with_match_tolerances`
+    // (seiza #270), build them that way here and assert the light passes.
+    let masters = seiza_stacking::CalibrationMasters::from_fits_paths(
+        None,
+        None,
+        Some(selected.flat[0].source_path.as_path()),
+        Some(300.0),
+    )
+    .unwrap();
+    let light_frame = crate::image_io::open_linear_frame(&before.path).unwrap();
+    assert!(masters.validate_light_frame(&light_frame).is_err());
+
     // At its own angle the nearest flats are from its side, and the ones
     // after the change lie too far off to join its master: the list is
     // left alone, so its stacks keep their keys.
@@ -252,6 +270,18 @@ fn without_an_angle_term_the_other_side_is_carried_across() {
     let (raw, fixed) = (dip(&master.path), dip(&corrected.path));
     assert!(raw > 0.02, "raw dip {raw}");
     assert!(fixed.abs() < 0.006, "corrected dip {fixed}");
+
+    // The corrected master keeps its source's signature, the light's
+    // angle, so the stacker takes it with its default tolerances.
+    let masters = seiza_stacking::CalibrationMasters::from_fits_paths(
+        None,
+        None,
+        Some(corrected.path.as_path()),
+        Some(300.0),
+    )
+    .unwrap();
+    let light_frame = crate::image_io::open_linear_frame(&before.path).unwrap();
+    masters.validate_light_frame(&light_frame).unwrap();
 }
 
 #[test]

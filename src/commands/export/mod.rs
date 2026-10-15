@@ -74,9 +74,56 @@ pub struct ExportPlan {
     /// The rigs whose settings leave darks out, so their lights export
     /// with none: rig names, or "every rig" when the server's settings do.
     pub without_darks: Vec<String>,
+    /// The measured flat changes the exported lights' flats were chosen
+    /// around, in words with their windows.
+    pub flat_changes: Vec<String>,
+    /// Lights whose flats were chosen around a measured change: image id,
+    /// file name and how.
+    pub flat_choices: Vec<(i32, String, crate::calibration::FlatChoice)>,
 }
 
 impl ExportPlan {
+    /// Lights a PSF Guard stack would calibrate otherwise than WBPP can
+    /// here, or that may not match their flats: flats carried across a
+    /// measured change in a stack, and lights flagged for their flats.
+    pub fn flat_warnings(&self) -> Vec<&(i32, String, crate::calibration::FlatChoice)> {
+        self.flat_choices
+            .iter()
+            .filter(|(_, _, choice)| choice.flagged || choice.basis == "corrected")
+            .collect()
+    }
+
+    /// One of [`Self::flat_warnings`] and why, for a summary that counts them.
+    pub fn flat_warning_example(&self) -> Option<String> {
+        self.flat_warnings()
+            .first()
+            .map(|(_, name, choice)| format!("{name}: {}", choice.text))
+    }
+
+    /// The lights of [`Self::flat_warnings`], one per line with why, for an
+    /// export that carries a note beside its frames. `None` when there are
+    /// none.
+    pub fn flat_note(&self) -> Option<String> {
+        let warnings = self.flat_warnings();
+        if warnings.is_empty() {
+            return None;
+        }
+        let mut note = format!(
+            "{} light(s) of this export may not match their flats, or take flats a PSF Guard \
+             stack carries across a measured change, which this export cannot. Changes in \
+             force:\n",
+            warnings.len()
+        );
+        for change in &self.flat_changes {
+            note.push_str(&format!("  {change}\n"));
+        }
+        note.push('\n');
+        for (id, name, choice) in warnings {
+            note.push_str(&format!("{name} (image {id}): {}\n", choice.text));
+        }
+        Some(note)
+    }
+
     /// One light left out because it cannot be calibrated, and why, for a
     /// summary that counts them: "acc_0001.fits: No matching flat".
     pub fn uncalibrated_example(&self) -> Option<String> {
@@ -107,6 +154,10 @@ impl ExportPlan {
 
 /// The note a zip export carries when it left lights out.
 pub const UNCALIBRATED_NOTE: &str = "LEFT-OUT-UNCALIBRATED.txt";
+
+/// The note a zip export carries when some lights' flats are from across a
+/// measured change ([`ExportPlan::flat_note`]).
+pub const FLATS_NOTE: &str = "FLATS-ACROSS-A-CHANGE.txt";
 
 /// How an export arranges its files under the destination root.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -191,6 +242,69 @@ fn dark_set_labels(
 }
 
 /// `path` with one more folder just above its file name.
+/// Name the flat sets that cannot share their night's session. Lights of
+/// one night with different flats need a session each: the night with a
+/// short digest of the set's frames. A set carried across a measured change
+/// always gets its own, `<night>-across-<key>`, so its lights stand apart.
+/// Sets alone on their night keep the night.
+fn flat_set_labels<'a>(keys: impl Iterator<Item = &'a FlatSetKey>) -> HashMap<FlatSetKey, String> {
+    use sha2::{Digest, Sha256};
+    let mut by_night: std::collections::BTreeMap<
+        (&str, &str, &str),
+        std::collections::BTreeSet<&FlatSetKey>,
+    > = Default::default();
+    for key in keys {
+        by_night
+            .entry((key.0.as_str(), key.1.as_str(), key.2.night.as_str()))
+            .or_default()
+            .insert(key);
+    }
+    let mut labels = HashMap::new();
+    for distinct in by_night.values() {
+        let plain = distinct
+            .iter()
+            .filter(|key| key.2.correction.is_none())
+            .count();
+        for key in distinct {
+            let set = &key.2;
+            let label = match &set.correction {
+                Some(key) => format!("{}-across-{}", set.night, &key[..key.len().min(6)]),
+                None if plain > 1 => {
+                    let digest = Sha256::digest(set.frame_uuids.join(",").as_bytes());
+                    let hex: String = digest
+                        .iter()
+                        .take(3)
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect();
+                    format!("{}-{hex}", set.night)
+                }
+                None => continue,
+            };
+            labels.insert((*key).clone(), label);
+        }
+    }
+    labels
+}
+
+/// A light's flat set within its target and filter, which an export
+/// already keeps apart by folder.
+type FlatSetKey = (String, String, crate::calibration::FlatSet);
+
+/// `path` with its `SESSION_<night>` component renamed to `label`.
+fn with_session(path: &Path, night: &str, label: &str) -> PathBuf {
+    let from = session_component(night);
+    let to = session_component(label);
+    path.components()
+        .map(|component| {
+            if component.as_os_str() == from.as_str() {
+                std::ffi::OsString::from(&to)
+            } else {
+                component.as_os_str().to_os_string()
+            }
+        })
+        .collect()
+}
+
 fn with_folder_before_file(path: &Path, folder: &str) -> PathBuf {
     match (path.parent(), path.file_name()) {
         (Some(parent), Some(name)) => parent.join(folder).join(name),
@@ -277,6 +391,14 @@ pub struct ExportSummary {
     /// One of them and why: "acc_0001.fits: No matching flat".
     #[serde(default)]
     pub uncalibrated_example: Option<String>,
+    /// Lights whose flats are from across a measured change, so WBPP may
+    /// not calibrate them as a PSF Guard stack would
+    /// ([`ExportPlan::flat_warnings`]).
+    #[serde(default)]
+    pub flat_warnings: usize,
+    /// One of them and why.
+    #[serde(default)]
+    pub flat_warning_example: Option<String>,
 }
 
 /// Make a name safe as a single path component (target and filter names are
@@ -339,6 +461,11 @@ pub fn plan_export(
     // belongs to which dark set, settled once every light is matched.
     let mut light_dark_sets: Vec<(usize, crate::calibration::DarkSet)> = Vec::new();
     let mut dark_item_sets: Vec<(usize, crate::calibration::DarkSet)> = Vec::new();
+    // Likewise which planned light, and which planned flat, takes which
+    // flat set, so lights that need different flats get different sessions.
+    let mut light_flat_sets: Vec<(usize, FlatSetKey)> = Vec::new();
+    let mut flat_item_sets: Vec<(usize, FlatSetKey)> = Vec::new();
+    let mut flat_changes = std::collections::BTreeSet::new();
     let night_boundary = crate::server::sky_coverage::catalog_night_boundary(conn)
         .context("reading capture times")?;
     let mut notes = SettingsNotes::default();
@@ -393,6 +520,19 @@ pub fn plan_export(
                         dark_item_sets.push((calibration_items.len() + offset, set.clone()));
                     }
                 }
+            }
+            if let Some(set) = &calibration.flat_set {
+                let key = (target_name.clone(), image.filter_name.clone(), set.clone());
+                for (offset, (kind, _, _)) in calibration.items.iter().enumerate() {
+                    if *kind == crate::calibration::CalibrationKind::Flat {
+                        flat_item_sets.push((calibration_items.len() + offset, key.clone()));
+                    }
+                }
+                light_flat_sets.push((plan.items.len(), key));
+            }
+            if let Some(choice) = calibration.flat_choice {
+                flat_changes.insert(choice.change.clone());
+                plan.flat_choices.push((image.id, basename.clone(), choice));
             }
             calibration_items.extend(calibration.items);
             plan.kept_out.extend(calibration.kept_out);
@@ -458,6 +598,26 @@ pub fn plan_export(
             }
         }
     }
+
+    // Lights of one night that take different flats, or flats carried
+    // across a change: a session of their own each, so WBPP integrates the
+    // flats a stack would for each light rather than one master for all.
+    let labels = flat_set_labels(light_flat_sets.iter().map(|(_, key)| key));
+    if !labels.is_empty() {
+        for (index, key) in &light_flat_sets {
+            if let Some(label) = labels.get(key) {
+                let item = &mut plan.items[*index];
+                item.relative_dest = with_session(&item.relative_dest, &key.2.night, label);
+            }
+        }
+        for (index, key) in &flat_item_sets {
+            if let Some(label) = labels.get(key) {
+                let dest = &mut calibration_items[*index].2;
+                *dest = with_session(dest, &key.2.night, label);
+            }
+        }
+    }
+    plan.flat_changes = flat_changes.into_iter().collect();
 
     let mut seen = HashSet::new();
     for (kind, frame, mut relative_dest) in calibration_items {
@@ -648,6 +808,8 @@ pub fn execute_plan_with(
         missing: plan.missing.len(),
         uncalibrated: plan.uncalibrated.len(),
         uncalibrated_example: plan.uncalibrated_example(),
+        flat_warnings: plan.flat_warnings().len(),
+        flat_warning_example: plan.flat_warning_example(),
         ..Default::default()
     };
 
@@ -1646,6 +1808,260 @@ mod tests {
                     |line| line.starts_with("Flat session") && line.ends_with("(for Test rig)")
                 ),
                 "{plan:?}"
+            );
+        }
+
+        /// The night of a fake flat session, for `measure_as`.
+        fn night(row: &crate::calibration::flat_groups::store::ResponseRow) -> &str {
+            row.night.as_str()
+        }
+
+        /// Flats of the light's angle exist only after new dust; the rig's
+        /// flats measure alike across angles. The export takes the flats
+        /// from before the dust at the other angle, never the dusty set.
+        #[test]
+        fn a_light_before_new_dust_exports_its_side_s_flats_at_another_angle() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[LIGHT_AT, "ROTATANG=                 90.0"]);
+            library.frames(
+                "before-0",
+                "FLAT",
+                "2026-09-12T14",
+                3,
+                &["ROTATANG=                  0.0"],
+            );
+            library.frames(
+                "after-0",
+                "FLAT",
+                "2026-09-16T14",
+                3,
+                &["ROTATANG=                  0.0"],
+            );
+            library.frames(
+                "after-90",
+                "FLAT",
+                "2026-09-16T15",
+                3,
+                &["ROTATANG=                 90.0"],
+            );
+            crate::calibration::flat_groups::testing::measure_as(&library.conn, |a, b| {
+                if night(a) != night(b) {
+                    0.02
+                } else {
+                    0.0
+                }
+            });
+
+            let plan = library.plan(false);
+            assert_eq!(
+                names_below(&plan, "flats/"),
+                numbered("before-0", 3),
+                "{plan:?}"
+            );
+            let placed = destinations(&plan);
+            assert!(
+                placed.contains(
+                    &"lights/M42_Trapezium/Ha/SESSION_2026-09-12/acc_Ha_0001.fits".to_string()
+                ),
+                "{placed:?}"
+            );
+            assert_eq!(plan.flat_choices.len(), 1);
+            assert_eq!(plan.flat_choices[0].2.basis, "other_angle");
+            assert!(plan.flat_warnings().is_empty());
+            let script = wbpp::shell_script(&plan, &wbpp::WbppScriptSpec::default());
+            assert!(script.contains("own side of every change"), "{script}");
+            assert!(script.contains("at another rotator angle"), "{script}");
+
+            // Grouped by time, it takes the dusty flats at its angle, as before.
+            let _rules = RulesInForce::global(&[("flat_grouping", json!("time"))]);
+            let plan = library.plan(false);
+            assert_eq!(names_below(&plan, "flats/"), numbered("after-90", 3));
+            assert!(plan.flat_changes.is_empty());
+        }
+
+        /// No flats from the light's side at any allowed angle: a stack
+        /// carries the dusty set across the change, which WBPP cannot. The
+        /// export gives the light a session of its own and says so in the
+        /// runner, the summary and a note.
+        #[test]
+        fn flats_a_stack_would_correct_get_their_own_session_and_a_warning() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[
+                "DATE-OBS= '2026-09-07T03:00:00'",
+                "ROTATANG=                 90.0",
+            ]);
+            // Two angles split at the same change two days apart, so no pair
+            // of angles shares a flat session to measure the angle term.
+            library.frames(
+                "before-45",
+                "FLAT",
+                "2026-09-08T14",
+                3,
+                &["ROTATANG=                 45.0"],
+            );
+            library.frames(
+                "before-0",
+                "FLAT",
+                "2026-09-10T14",
+                3,
+                &["ROTATANG=                  0.0"],
+            );
+            library.frames(
+                "after-0",
+                "FLAT",
+                "2026-09-14T14",
+                3,
+                &["ROTATANG=                  0.0"],
+            );
+            library.frames(
+                "after-45",
+                "FLAT",
+                "2026-09-16T14",
+                3,
+                &["ROTATANG=                 45.0"],
+            );
+            library.frames(
+                "after-90",
+                "FLAT",
+                "2026-09-18T14",
+                3,
+                &["ROTATANG=                 90.0"],
+            );
+            crate::calibration::flat_groups::testing::measure_as(&library.conn, |a, b| {
+                if night(a) < "2026-09-12" && night(b) > "2026-09-12" {
+                    0.02
+                } else {
+                    0.0
+                }
+            });
+
+            let plan = library.plan(false);
+            assert_eq!(
+                names_below(&plan, "flats/"),
+                numbered("after-90", 3),
+                "{plan:?}"
+            );
+            let placed = destinations(&plan);
+            let light = placed
+                .iter()
+                .find(|path| path.ends_with("acc_Ha_0001.fits"))
+                .unwrap();
+            assert!(
+                light.contains("/SESSION_2026-09-18-across-"),
+                "{light} {:?}",
+                plan.flat_choices
+            );
+            let session = light.split('/').nth(3).unwrap();
+            assert!(
+                placed
+                    .iter()
+                    .filter(|path| path.starts_with("flats/"))
+                    .all(|path| path.contains(session)),
+                "{placed:?}"
+            );
+            assert_eq!(plan.flat_warnings().len(), 1);
+            assert!(plan.flat_note().unwrap().contains("acc_Ha_0001.fits"));
+            let script = wbpp::shell_script(&plan, &wbpp::WbppScriptSpec::default());
+            assert!(
+                script.contains("WARNING: 1 light have flats only from the other side"),
+                "{script}"
+            );
+            let out = tempfile::tempdir().unwrap();
+            let summary = execute_plan(&plan, out.path(), false, true);
+            assert_eq!(summary.flat_warnings, 1);
+        }
+
+        /// Two lights of one night that need different flats go to two
+        /// sessions, so WBPP builds each its own master.
+        #[test]
+        fn two_flat_sets_in_one_night_give_two_sessions() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[LIGHT_AT, "ROTATANG=                  0.0"]);
+            library.light(
+                9,
+                "acc_Ha_0009.fits",
+                &[LIGHT_AT, "ROTATANG=                 90.0"],
+            );
+            library.frames(
+                "flat-0",
+                "FLAT",
+                "2026-09-10T20",
+                3,
+                &["ROTATANG=                  0.0"],
+            );
+            library.frames(
+                "flat-90",
+                "FLAT",
+                "2026-09-10T21",
+                3,
+                &["ROTATANG=                 90.0"],
+            );
+
+            let placed = destinations(&library.plan(false));
+            let session_of = |name: &str| {
+                placed
+                    .iter()
+                    .find(|path| path.ends_with(name))
+                    .map(|path| path.split('/').nth(3).unwrap().to_string())
+                    .unwrap()
+            };
+            let (first, second) = (
+                session_of("acc_Ha_0001.fits"),
+                session_of("acc_Ha_0009.fits"),
+            );
+            assert_ne!(first, second, "{placed:?}");
+            assert!(first.starts_with("SESSION_2026-09-10-"), "{first}");
+            assert_eq!(session_of("flat-0-0.fits"), first);
+            assert_eq!(session_of("flat-90-0.fits"), second);
+        }
+
+        /// A longer flat session pools two evenings into one session when
+        /// their flats measure alike, and keeps each light to its own
+        /// evening's when they differ.
+        #[test]
+        fn alike_nights_share_a_session_and_nights_that_differ_do_not() {
+            let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let mut library = Library::new(&[LIGHT_AT]);
+            library.light(9, "acc_Ha_0009.fits", &["DATE-OBS= '2026-09-13T03:00:00'"]);
+            // Dawn flats after the first light, dusk flats before the second.
+            library.frames("flat-a", "FLAT", "2026-09-11T05", 3, &[]);
+            library.frames("flat-b", "FLAT", "2026-09-12T20", 3, &[]);
+            let rig = library.rig();
+            let _rules = RulesInForce::with(
+                &[],
+                &[(
+                    rig.as_str(),
+                    "Test rig",
+                    &[("flat_session_hours", json!(72))],
+                )],
+            );
+
+            crate::calibration::flat_groups::testing::measure_as(&library.conn, |_, _| 0.002);
+            let placed = destinations(&library.plan(false));
+            for expected in [
+                "lights/M42_Trapezium/Ha/SESSION_2026-09-10/acc_Ha_0001.fits",
+                "lights/M42_Trapezium/Ha/SESSION_2026-09-10/acc_Ha_0009.fits",
+                "flats/M42_Trapezium/Ha/SESSION_2026-09-10/flat-b-2.fits",
+            ] {
+                assert!(placed.contains(&expected.to_string()), "{placed:?}");
+            }
+
+            crate::calibration::flat_groups::testing::measure_as(&library.conn, |_, _| 0.02);
+            let plan = library.plan(false);
+            let placed = destinations(&plan);
+            for expected in [
+                "lights/M42_Trapezium/Ha/SESSION_2026-09-10/acc_Ha_0001.fits",
+                "lights/M42_Trapezium/Ha/SESSION_2026-09-12/acc_Ha_0009.fits",
+            ] {
+                assert!(placed.contains(&expected.to_string()), "{placed:?}");
+            }
+            assert_eq!(names_below(&plan, "flats/").len(), 6, "{placed:?}");
+            assert!(
+                placed
+                    .iter()
+                    .filter(|path| path.contains("SESSION_2026-09-10/flat"))
+                    .all(|path| path.contains("flat-a")),
+                "{placed:?}"
             );
         }
 

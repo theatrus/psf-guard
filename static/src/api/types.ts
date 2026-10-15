@@ -1819,6 +1819,10 @@ export interface WbppRunProgress {
   uncalibrated_lights?: number;
   /** Calibration settings that differ from the defaults, with who set them. */
   calibration_settings?: string[];
+  /** Measured flat changes the lights' flats were chosen around, with their windows. */
+  flat_changes?: string[];
+  /** Lights whose flats are from across such a change, which WBPP may not calibrate as a stack would. */
+  flat_warnings?: number;
   command: string | null;
   pid: number | null;
   started_at: number | null;
@@ -2178,6 +2182,10 @@ export interface ExportSummary {
   uncalibrated?: number;
   /** One of them and why: "acc_0001.fits: No matching flat". */
   uncalibrated_example?: string | null;
+  /** Lights whose flats are from across a measured change, which WBPP may not calibrate as a stack would. */
+  flat_warnings?: number;
+  /** One of them and why. */
+  flat_warning_example?: string | null;
 }
 
 /** Progress of the singleton per-DB server export job. */

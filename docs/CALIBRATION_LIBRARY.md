@@ -460,6 +460,11 @@ Calibration panel says which of these chose its flats, under **Chosen
 by**, with the change and how the light was placed. When its flat master
 mixes nights, the panel says how alike they measured.
 
+An export, and a WBPP run, place the same flats a stack takes. WBPP
+cannot carry flats across a change, so such a light keeps its own
+session with the flats as shot and is named in the runner and the export
+summary; see [WBPP](WBPP.md#calibration-frames).
+
 ### Flat groups tab
 
 The Calibration page's **Flat groups** tab shows each rig's limits, how

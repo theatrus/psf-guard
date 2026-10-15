@@ -16,7 +16,7 @@
 
 use super::metric::{self, Plane};
 use super::model::Side;
-use super::store::Verdict;
+use super::rows::Verdict;
 
 /// Bump when equal lights may fit differently.
 pub const EVIDENCE_ALGORITHM_VERSION: u32 = 1;

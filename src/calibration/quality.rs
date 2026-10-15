@@ -1243,8 +1243,20 @@ pub(super) mod tests {
     pub(crate) fn write_frame(
         path: &Path,
         kind: &str,
+        size: (usize, usize),
+        captured: &str,
+        pixel: impl Fn(usize, usize) -> f64,
+    ) {
+        write_frame_with(path, kind, size, captured, &[], pixel);
+    }
+
+    /// [`write_frame`] with more header cards, each a whole card's text.
+    pub(crate) fn write_frame_with(
+        path: &Path,
+        kind: &str,
         (width, height): (usize, usize),
         captured: &str,
+        extra: &[&str],
         pixel: impl Fn(usize, usize) -> f64,
     ) {
         let exposure = match kind {
@@ -1271,8 +1283,11 @@ pub(super) mod tests {
             "CCD-TEMP=                -10.0".to_string(),
             "TELESCOP= 'Scope'".to_string(),
             "INSTRUME= 'Camera'".to_string(),
-            "END".to_string(),
         ];
+        let cards = cards
+            .into_iter()
+            .chain(extra.iter().map(|card| card.to_string()))
+            .chain(["END".to_string()]);
         let mut header = Vec::new();
         for card in cards {
             let mut bytes = card.into_bytes();

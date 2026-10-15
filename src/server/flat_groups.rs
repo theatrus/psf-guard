@@ -216,7 +216,7 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
     let mut rigs: BTreeMap<String, RigView> = BTreeMap::new();
     let rig_view = |rig: &str, book: &model::Book| {
         let rules = crate::calibration::rules_for_rig(rig);
-        let limits = model::Limits::of(&rules);
+        let limits = flat_groups::limits_of(&rules);
         let term = book.angle_terms.get(rig).copied();
         RigView {
             rig_uuid: rig.to_string(),
@@ -248,7 +248,7 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
         let rig = rigs
             .entry(family.rig_uuid.clone())
             .or_insert_with(|| rig_view(&family.rig_uuid, &book));
-        let limits = model::Limits::of(&crate::calibration::rules_for_rig(&family.rig_uuid));
+        let limits = flat_groups::rig_limits(&family.rig_uuid);
         let mut previous: Option<usize> = None;
         let mut groups: Vec<GroupView> = Vec::new();
         for group in &family.groups {

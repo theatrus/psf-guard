@@ -398,7 +398,7 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         store::load_comparisons(conn)?,
         Vec::new(),
         Vec::new(),
-        crate::calibration::rules::rules_for_rig,
+        super::rig_limits,
     );
     let pairs: Vec<(usize, usize)> = book
         .pairs_to_compare()

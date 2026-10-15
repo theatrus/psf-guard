@@ -12,13 +12,15 @@
 //!
 //! See `docs/design/flat-grouping.md`.
 
-pub mod evidence;
 pub mod job;
-pub mod metric;
-pub mod model;
+pub mod measure;
 #[cfg(test)]
 mod selection_tests;
 pub mod store;
+#[cfg(test)]
+pub(crate) mod testing;
+
+pub use measure::{evidence, metric, model};
 
 use anyhow::Result;
 use model::{AngleTerm, Book, Event, Placement, Side};
@@ -108,7 +110,7 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
         store::load_comparisons(conn)?,
         store::load_evidence(conn, evidence::EVIDENCE_ALGORITHM_VERSION)?,
         model::imaging_sessions(lights),
-        super::rules::rules_for_rig,
+        rig_limits,
     ));
     MEMO.lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -133,6 +135,21 @@ fn imaging_lights(conn: &Connection) -> Result<Vec<(i64, Option<String>, i64)>> 
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+/// The grouping limits a rig's settings put in force.
+pub fn limits_of(rules: &super::Rules) -> model::Limits {
+    model::Limits {
+        measured: rules.flat_grouping == super::rules::FlatGrouping::Measured,
+        dust: rules.flat_split_dust_pct / 100.0,
+        broad: rules.flat_split_pattern_pct / 100.0,
+        window: rules.flat_session_seconds as i64,
+    }
+}
+
+/// [`limits_of`] the rig's settings in force.
+pub fn rig_limits(rig_uuid: &str) -> model::Limits {
+    limits_of(&super::rules::rules_for_rig(rig_uuid))
 }
 
 /// A change as a light's account names it.
@@ -258,6 +275,30 @@ impl FlatBasis {
         )
     }
 
+    /// The change it chose around, when one touches the light.
+    pub fn event(&self) -> Option<&EventNote> {
+        match self {
+            FlatBasis::Nearest => None,
+            FlatBasis::SameSide { event, .. }
+            | FlatBasis::OtherAngle { event, .. }
+            | FlatBasis::Corrected { event, .. }
+            | FlatBasis::NoSameSide { event, .. }
+            | FlatBasis::Undetermined { event, .. } => Some(event),
+        }
+    }
+
+    /// Its name, as the light's explanation gives it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            FlatBasis::Nearest => "nearest",
+            FlatBasis::SameSide { .. } => "same_side",
+            FlatBasis::OtherAngle { .. } => "other_angle",
+            FlatBasis::Corrected { .. } => "corrected",
+            FlatBasis::NoSameSide { .. } => "no_same_side",
+            FlatBasis::Undetermined { .. } => "undetermined",
+        }
+    }
+
     pub fn correction(&self) -> Option<&FlatCorrection> {
         match self {
             FlatBasis::Corrected { correction, .. } => Some(correction),
@@ -289,6 +330,19 @@ fn day(at: i64) -> String {
         .unwrap_or_else(|| at.to_string())
 }
 
+/// A change with its window, for a note that lists the changes in force:
+/// "new dust: 1 shadow near (1423, 3545), between 2026-09-17 12:27 UTC and
+/// 2026-09-21 12:28 UTC, seen in B, G, R".
+pub fn describe_change(event: &EventNote, rules: &super::Rules) -> String {
+    format!(
+        "{}, between {} and {}, {}",
+        describe_event(event, rules),
+        when(event.start),
+        when(event.end),
+        scope(event)
+    )
+}
+
 /// The change in words with its size against the limit: "new dust: 2
 /// shadows near (1460, 3570), up to 1.6% of the sky background (limit 1%)".
 pub fn describe_event(event: &EventNote, rules: &super::Rules) -> String {
@@ -312,7 +366,7 @@ pub fn describe_event(event: &EventNote, rules: &super::Rules) -> String {
 fn scope(event: &EventNote) -> String {
     if event.camera_side {
         format!(
-            "seen in {} flats at more than one angle",
+            "seen in {} flats, so on the camera side and in every filter and angle",
             event.filters.join(", ").to_uppercase()
         )
     } else {
