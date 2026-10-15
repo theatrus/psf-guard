@@ -1318,6 +1318,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const shownRole = off && !own ? (sizes ? 'Not in this plan · sets the panel size' : 'Not in this plan') : off ? `Not in this plan · ${role}` : role;
     // Only a rig that is on frames the plan, on a page that keeps one.
     const canFrame = !own && !!field && !off && !sizeLocked;
+    // Its field would move a shared mosaic: the card asks what to do.
+    const asking = canWrite && canFrame && askRig === id && movesMosaic(id);
     return <li key={id} className={`framing-rig-card${editingRig === id ? ' is-editing' : ''}${sizes && !own && !off ? ' is-framing' : ''}`} role="group" aria-label={entry.catalog_name}>
       <div className="framing-rig-head">
         {onToggleRig && <button type="button" role="switch" className="framing-rig-switch" aria-checked={shooting}
@@ -1344,7 +1346,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         })()}
       </div>
       <p className="framing-rig-role">{shownRole}</p>
-      {canWrite && canFrame && askRig === id && movesMosaic(id) && <p className="framing-rig-ask" role="status" data-testid="framing-rig-ask">
+      {asking && <p className="framing-rig-ask" role="status" data-testid="framing-rig-ask">
         Its field moves all {state.layout.panels.length} panels.{' '}
         <button type="button" className="link-button" onClick={() => { setAskRig(null); frameRig(id); }}>Frame separately</button>{' '}
         <button type="button" className="link-button" onClick={() => chooseRig(id, false)}>Use its field</button>{' '}
@@ -1352,7 +1354,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       </p>}
       {canWrite && <div className="framing-rig-actions">
         {!own && field && <label className="framing-check" title="Draw its field on the sky"><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
-        {!own && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
+        {!own && !asking && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
         {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit'}</button>}
         {own && <button type="button" className="link-button" onClick={() => { update(current => ({ rigFramings: current.rigFramings.filter(framing => framing.rig_id !== id) })); if (editingRig === id) setEditingRig(null); }}>Use shared</button>}
       </div>}
