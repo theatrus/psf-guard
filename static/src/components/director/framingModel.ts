@@ -189,15 +189,12 @@ export function panelForRig(rigs: DirectorRigProfileSummary[], rigId: string | n
   return { width_degrees: rig.field_of_view.width_degrees, height_degrees: rig.field_of_view.height_degrees };
 }
 
-/** `alsoShown`: rigs outlined without being chosen, such as those a locked
- *  panel hides (see `lockedOutlineRigs`). */
-export function previewRequest(state: FramingState, rigs: DirectorRigProfileSummary[], alsoShown: string[] = []): DirectorFramingRequest | null {
+export function previewRequest(state: FramingState, rigs: DirectorRigProfileSummary[]): DirectorFramingRequest | null {
   if (!state.panel) return null;
-  const shown = [...state.shownRigIds, ...alsoShown.filter(id => !state.shownRigIds.includes(id))];
   return {
     center: state.center, position_angle_degrees: state.positionAngle, panel: state.panel, layout: state.layout,
     // A rig framed on its own is drawn as its own grid, not as an overlay.
-    overlays: shown.filter(id => !state.rigFramings.some(own => own.rig_id === id)).flatMap(id => {
+    overlays: state.shownRigIds.filter(id => !state.rigFramings.some(own => own.rig_id === id)).flatMap(id => {
       const size = panelForRig(rigs, id);
       return size ? [{ id, size, position_angle_degrees: state.positionAngle }] : [];
     }),
@@ -205,21 +202,27 @@ export function previewRequest(state: FramingState, rigs: DirectorRigProfileSumm
   };
 }
 
-/** The rigs whose field a locked panel hides. A locked panel is drawn as
- *  shot, not at the field of the rig that frames the plan, so picking
- *  another rig changes nothing in sight. While the shared framing has a
- *  locked panel, each rig in `onRigs` that shoots it and whose field no
- *  locked panel already shows (within 1%) is outlined. */
-export function lockedOutlineRigs(state: FramingState, rigs: DirectorRigProfileSummary[], onRigs: string[]): string[] {
-  const locked = state.layout.panels.filter(panel => panel.locked);
-  if (locked.length === 0) return [];
-  const drawn = locked.flatMap(panel => panel.measured?.size ?? state.panel ?? []);
-  const near = (a: DirectorPanelSize, b: DirectorPanelSize) =>
-    Math.abs(a.width_degrees - b.width_degrees) <= 0.01 * b.width_degrees && Math.abs(a.height_degrees - b.height_degrees) <= 0.01 * b.height_degrees;
-  return onRigs.filter(id => !state.rigFramings.some(own => own.rig_id === id)).filter(id => {
-    const field = panelForRig(rigs, id);
-    return !!field && !drawn.some(size => near(size, field));
-  });
+/** A rig's field outlined where a locked shot panel holds the plan. */
+export interface LockedOutline { rigId: string; corners: DirectorFootprint['corners'] }
+
+/** The rigs whose field a locked shot panel hides. A shot panel is drawn
+ *  where and how its frames were taken, whatever rig frames the plan, so
+ *  turning a rig on or picking it changes nothing in sight. While the shared
+ *  framing has a locked shot panel, each rig in `onRigs` that shoots the
+ *  shared framing, knows its field and has no frames on a locked shot panel
+ *  (`shotBy`) gets its field outlined at that panel's shot center and angle,
+ *  where activation keeps the target: the panel at the framing's center,
+ *  else the first locked shot one. */
+export function lockedOutlines(state: FramingState, rigs: DirectorRigProfileSummary[], onRigs: string[], shotBy: Set<string>): LockedOutline[] {
+  const shot = state.layout.panels.filter(panel => panel.locked && panel.measured);
+  if (shot.length === 0) return [];
+  const anchor = (shot.find(panel => Math.abs(panel.x) < 1e-9 && Math.abs(panel.y) < 1e-9) ?? shot[0]).measured!;
+  return onRigs
+    .filter(id => !shotBy.has(id) && !state.rigFramings.some(own => own.rig_id === id))
+    .flatMap(id => {
+      const field = panelForRig(rigs, id);
+      return field ? [{ rigId: id, corners: measuredCorners({ ...anchor, size: field }) }] : [];
+    });
 }
 
 /** Degrees per stage pixel at the center of the view. */

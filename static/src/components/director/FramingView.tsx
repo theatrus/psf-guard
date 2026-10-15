@@ -12,7 +12,7 @@ import type { DirectorCutoutRequest, DirectorFramingDraftView, DirectorFramingPr
 import {
   DEFAULT_STAGE, MAX_VIEW_FOV, MIN_VIEW_FOV, TILE_MAX_FOV, angleAt, clampFov, deprojectFrom, deprojectOn, draftFromState, fitViewFov, formatDec, formatDegrees, formatRaHours, framingBackdrop, framingGraticule, framingProblems, fromStage,
   compassDirections, insidePolygon, markLabelBudget, normaliseAngle, offsetFrom, panelForRig, pixelScale, polygonPoints, preferredSurveyId, previewRequest, projectOn, rigGeometries, rotationHandleSky, roundRa, stackMatrix, stageAngleAt, stageCorners, stageFor, stageProject, stateFromDraft, stateFromSeed, tileMatrix, tileSize, toStage, trueWidth, viewAt, type FramingSeed, type FramingState, type Stage, type StageView, chipSurveys, framingGeometry, tileFor, viewLeftTile, type SkyTile, defaultSurveyId,
-  cameraDegreesToPlane, coverageFor, framingBoxes, framingShapes, lockedOutlineRigs, panelHandleSky, readFraming, rigLayout, turnToward, type CoverageFraming,
+  cameraDegreesToPlane, coverageFor, framingBoxes, framingShapes, lockedOutlines, panelHandleSky, readFraming, rigLayout, turnToward, type CoverageFraming,
 } from './framingModel';
 import VisibilityPanel from './VisibilityPanel';
 import MosaicPanels, { type ExtendScope } from './MosaicPanels';
@@ -343,10 +343,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
 
   // The rectangle is drawn here, with the same tangent-plane math the server
   // uses when it activates, so it follows the pointer without a round trip.
-  // Rigs outlined because a locked panel hides their field; only on a plan
-  // page, where it is known which rigs are on.
-  const lockedOutlines = useMemo(() => state && onToggleRig ? lockedOutlineRigs(state, rigList, shootingRigIds ?? []) : [], [state, rigList, onToggleRig, shootingRigIds]);
-  const request = useMemo(() => state ? previewRequest(state, rigList, lockedOutlines) : null, [state, rigList, lockedOutlines]);
+  const request = useMemo(() => state ? previewRequest(state, rigList) : null, [state, rigList]);
   const geometry = useMemo(() => request ? framingGeometry(request) : undefined, [request]);
   // Rigs framed on their own: their grids over the same target, each in its own colour.
   const ownRigs = useMemo(() => state ? rigGeometries(state, rigList) : [], [state, rigList]);
@@ -641,6 +638,18 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     return shot;
   }, [mosaic.data, savedRigFramings]);
   const framesOf = useCallback((rig: string | null, id: string) => framesByKey.get(`${rig ?? ''}|${id}`) ?? 0, [framesByKey]);
+  // Rigs outlined because a locked shot panel hides their field, only on a
+  // plan page, where it is known which rigs are on; not the rigs that shot
+  // a locked panel. A person may hide one for the visit; nothing is saved.
+  const [hiddenOutlines, setHiddenOutlines] = useState<string[]>([]);
+  const lockedShown = useMemo(() => {
+    if (!state || !onToggleRig) return [];
+    const locked = new Set(state.layout.panels.filter(panel => panel.locked && panel.measured).map(panel => panel.id));
+    const shotBy = new Set((mosaic.data?.panels ?? [])
+      .filter(panel => locked.has(panel.panel_id) && (panel.progress?.acquired ?? 0) > 0 && !state.rigFramings.some(own => own.rig_id === panel.rig.id))
+      .map(panel => panel.rig.id));
+    return lockedOutlines(state, rigList, shootingRigIds ?? [], shotBy);
+  }, [state, onToggleRig, mosaic.data, rigList, shootingRigIds]);
   // Where each shot panel's frames say it was, as the server reads them.
   const measuredByKey = useMemo(() => new Map((mosaic.data?.measured ?? []).map(entry => [`${entry.framing_rig_id ?? ''}|${entry.panel_id}`, entry.geometry])), [mosaic.data]);
   const activeKey = active?.rig ?? null;
@@ -1335,8 +1344,8 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const own = state.rigFramings.find(framing => framing.rig_id === id);
     const ownIndex = ownRigs.findIndex(framed => framed.rigId === id);
     const sizes = state.panelRigId === id;
-    const shownByLock = lockedOutlines.includes(id);
-    const shown = state.shownRigIds.includes(id) || shownByLock;
+    const shownByLock = lockedShown.some(outline => outline.rigId === id);
+    const shown = shownByLock ? !hiddenOutlines.includes(id) : state.shownRigIds.includes(id);
     const field = entry.field_of_view;
     const grid = (layout: DirectorRigFraming['layout']) => { const g = asGrid(layout); return g ? (g.rows * g.columns > 1 ? `${g.rows} × ${g.columns}, ${g.overlap_percent}%` : '1 panel') : `${layout.panels.length} panels`; };
     const shooting = shootingRigIds?.includes(id) ?? false;
@@ -1388,7 +1397,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
         <button type="button" className="link-button" onClick={() => answer(id, () => {})}>Cancel</button>
       </div>}
       {canWrite && <div className="framing-rig-actions">
-        {!own && field && <label className="framing-check" title={shownByLock ? 'Drawn while a locked panel shows another field' : 'Draw its field on the sky'}><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown} disabled={shownByLock} onChange={event => update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
+        {!own && field && <label className="framing-check" title={shownByLock ? 'Drawn where the locked panel was shot, since it hides this field' : 'Draw its field on the sky'}><input type="checkbox" aria-label={`${entry.catalog_name} outline`} checked={shown}
+          onChange={event => shownByLock
+            ? setHiddenOutlines(list => event.target.checked ? list.filter(other => other !== id) : [...list, id])
+            : update(current => ({ shownRigIds: event.target.checked ? [...current.shownRigIds, id] : current.shownRigIds.filter(other => other !== id) }))} />Outline</label>}
         {!own && !asking && <button type="button" className="link-button" onClick={() => frameRig(id)}>Frame separately</button>}
         {own && <button type="button" className="link-button" aria-expanded={editingRig === id} onClick={() => setEditingRig(editingRig === id ? null : id)}>{editingRig === id ? 'Done' : 'Edit'}</button>}
         {own && <button type="button" className="link-button" onClick={() => { update(current => ({ rigFramings: current.rigFramings.filter(framing => framing.rig_id !== id) })); if (editingRig === id) setEditingRig(null); }}>Use shared</button>}
@@ -1446,9 +1458,10 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
           {backdrop && backdrop.names.length > 0 && <g className="framing-names" data-testid="framing-names">{backdrop.names.map(name => <text key={name.text} x={name.x} y={name.y}>{name.text}</text>)}</g>}
           {marks.data && marksWanted && <SkyMarks marks={marks.data} view={view} viewFov={state.viewFov} stage={stageSize} objects={showObjects} bodies={showBodies} solar={showSolar} />}
           {placedStacks.map(({ panel, preview, matrix }) => <image key={`${panel.rig.id}-${panel.panel_id}`} className="framing-stack" data-testid="framing-stack" href={preview.url} x={0} y={0} width={preview.width} height={preview.height} preserveAspectRatio="none" transform={matrix} />)}
-          {geometry?.overlays.map(overlay => { const corners = stageCorners(overlay.corners, view); return corners && <g key={overlay.id} className="framing-overlay-group">
+          {[...(geometry?.overlays.filter(overlay => !lockedShown.some(outline => outline.rigId === overlay.id)).map(overlay => ({ id: overlay.id, sky: overlay.corners })) ?? []),
+            ...lockedShown.filter(outline => !hiddenOutlines.includes(outline.rigId)).map(outline => ({ id: outline.rigId, sky: outline.corners }))].map(({ id, sky }) => { const corners = stageCorners(sky, view); return corners && <g key={id} className="framing-overlay-group">
             <polygon className="framing-overlay" points={polygonPoints(corners, state.viewFov, stageSize)} />
-            <text className="framing-overlay-label" x={toStage(corners[0], state.viewFov, stageSize)[0] + 6} y={toStage(corners[0], state.viewFov, stageSize)[1] + 14}>{rigName(overlay.id)}</text>
+            <text className="framing-overlay-label" x={toStage(corners[0], state.viewFov, stageSize)[0] + 6} y={toStage(corners[0], state.viewFov, stageSize)[1] + 14}>{rigName(id)}</text>
           </g>; })}
           {/* While a rig's own panels are edited, the shared framing stays in sight, drawn plain. */}
           {activeRig && sharedInUse && geometry && <g className="framing-shared-panels" data-testid="framing-shared-panels">

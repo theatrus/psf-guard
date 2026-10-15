@@ -1015,9 +1015,10 @@ sets the size is turned off, here or elsewhere, the first rig that is on,
 knows its optics and shoots the shared framing takes over, one with the same
 field first; with none, or when it would give a mosaic of more than one panel
 another size, the size stays and the line says its rig is off. **Outline** draws its field on the sky, labelled
-in small text. A locked panel is drawn as shot, whatever rig frames the plan, so while the shared framing has
-one, each rig that is on and whose field no locked panel shows is outlined by itself, its **Outline** box ticked
-and held. **Frame separately** gives it panels, a camera angle and a panel size of its own, edited
+in small text. A locked shot panel is drawn where and how its frames were taken, whatever rig frames the plan.
+So on a plan page, while the shared framing has one, every rig that is on and did not shoot it is outlined
+without being ticked by hand: at the shot center and angle, where activation keeps the target. Unticking its
+**Outline** box hides it until you leave the page; nothing is saved. **Frame separately** gives it panels, a camera angle and a panel size of its own, edited
 in its card: while the card's editor is open, **Mosaic panels** and the sky work on its
 panels with the same tools as the shared framing's, in the rig's colour, and the shared
 framing stays in sight, plain. A separate framing follows the shared center until it is dragged,
