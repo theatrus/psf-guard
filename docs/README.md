@@ -33,6 +33,7 @@ work. Historical checklists record delivery; they do not track current work.
 - [Reject removal](design/reject-removal.md)
 - [Calibrated subs](design/calibrated-subs.md)
 - [Flat grouping](design/flat-grouping.md)
+- [Multi-rig views (proposed)](design/multi-rig-views.md)
 
 ## Component-specific guides
 
