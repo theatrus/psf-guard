@@ -507,7 +507,7 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
                 if readable(&own.layout) {
                     own.center = Some(read_framing.center);
                     own.position_angle_degrees = Some(read_framing.position_angle_degrees);
-                    own.layout = read_framing.layout.clone();
+                    own.layout = with_hand_unlocks(&read_framing.layout, &own.layout);
                     taken.push("Framing: this rig's own, where Target Scheduler has it".into());
                     framing_next = Some(layout);
                 } else {
@@ -530,7 +530,7 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
             } else {
                 layout.center = read_framing.center;
                 layout.position_angle_degrees = read_framing.position_angle_degrees;
-                layout.layout = read_framing.layout.clone();
+                layout.layout = with_hand_unlocks(&read_framing.layout, &layout.layout);
                 taken.push("Framing: where Target Scheduler has it".into());
                 framing_next = Some(layout);
             }
@@ -542,5 +542,44 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
         framing: framing_next,
         taken,
         left,
+    }
+}
+
+/// Target Scheduler's layout, keeping each panel someone unlocked by hand
+/// unlocked, so the framing view does not lock it again.
+fn with_hand_unlocks(read: &Layout, planned: &Layout) -> Layout {
+    let mut layout = read.clone();
+    for panel in &mut layout.panels {
+        panel.unlocked_by_hand = planned
+            .panel(&panel.id)
+            .is_some_and(|before| before.unlocked_by_hand && !panel.locked);
+    }
+    layout
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use psf_guard_director_core::framing::PanelPlacement;
+
+    #[test]
+    fn taking_target_schedulers_layout_keeps_a_hand_unlock() {
+        let mut freed = PanelPlacement::at("r1c1", 0.0, 0.0);
+        freed.unlocked_by_hand = true;
+        let planned = Layout {
+            min_overlap_percent: 20,
+            panels: vec![freed, PanelPlacement::at("r1c2", 0.8, 0.0)],
+        };
+        let read = Layout {
+            min_overlap_percent: 20,
+            panels: vec![
+                PanelPlacement::at("r1c1", 0.1, 0.0),
+                PanelPlacement::at("r1c2", 0.9, 0.0),
+            ],
+        };
+        let taken = with_hand_unlocks(&read, &planned);
+        assert!(taken.panels[0].unlocked_by_hand);
+        assert_eq!(taken.panels[0].x, 0.1);
+        assert!(!taken.panels[1].unlocked_by_hand);
     }
 }

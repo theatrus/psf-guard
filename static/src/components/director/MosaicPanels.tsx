@@ -2,7 +2,7 @@ import { Lock, LockOpen, Redo2, RotateCcw, Trash2, Undo2 } from 'lucide-react';
 import type { DirectorFramingPreview, DirectorLayout, DirectorLayoutIssue } from '../../api/directorTypes';
 import NumberInput from '../NumberInput';
 import { formatDegrees } from './framingModel';
-import { DIRECTIONS, DIRECTION_NAMES, asGrid, describeIssue, findPanel, gridLayout, layoutCells, setLocked, turnOf, type Direction } from './mosaicLayout';
+import { DIRECTIONS, DIRECTION_NAMES, asGrid, describeIssue, findPanel, gridLayout, keepHandUnlocks, layoutCells, setLocked, turnOf, type Direction } from './mosaicLayout';
 
 /** A turn, signed, to a tenth of a degree. */
 const signed = (degrees: number) => `${degrees < 0 ? '−' : '+'}${Math.abs(degrees).toFixed(1)}°`;
@@ -66,7 +66,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
   for (const issue of issues) for (const id of issue.kind === 'disconnected' ? [] : issue.panels) flagged.set(id, [...(flagged.get(id) ?? []), describeIssue(issue)]);
   const fromChosen = scope === 'panel' && chosen;
   const where = (direction: Direction) => fromChosen ? `${DIRECTION_NAMES[direction]} of ${chosen.id}` : `on the mosaic's ${DIRECTION_NAMES[direction]} side`;
-  const setGrid = (rows: number, columns: number, overlapPercent: number) => onEdit(gridLayout({ rows: clamp(Math.round(rows), 1, 16), columns: clamp(Math.round(columns), 1, 16), overlap_percent: clamp(Math.round(overlapPercent), 0, 90) }), 'Laid the panels out as a grid.');
+  const setGrid = (rows: number, columns: number, overlapPercent: number) => onEdit(keepHandUnlocks(gridLayout({ rows: clamp(Math.round(rows), 1, 16), columns: clamp(Math.round(columns), 1, 16), overlap_percent: clamp(Math.round(overlapPercent), 0, 90) }), layout), 'Laid the panels out as a grid.');
   const number = (value: string, fallback: number) => { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; };
   const rowsNow = Math.max(...cells.map(cell => cell[0]), 1);
   const columnsNow = Math.max(...cells.map(cell => cell[1]), 1);
@@ -145,7 +145,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
         <strong>{chosen.id}</strong>{' '}
         {isLocked(chosen.id)
           ? <span className="director-muted">Locked.</span>
-          : frames(chosen.id) > 0 ? <span className="director-muted">Has frames: moving it far starts a new target.</span>
+          : frames(chosen.id) > 0 ? <span className="director-muted">Has frames: a far move or a turn starts a new target.</span>
           : <span className="director-muted">Drag it on the sky with Panel, nudge it with the arrow keys, or turn it with its handle or [ and ].</span>}
       </p>
       {(() => {

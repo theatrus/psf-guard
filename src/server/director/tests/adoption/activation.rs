@@ -677,7 +677,9 @@ async fn activation_previews_without_writing_then_applies_and_updates_in_place()
     // Turn the camera a little and ask for frames instead of hours: rows
     // update in place, and a rename by the operator survives. (A turn that
     // moves a panel with frames by more than a quarter of its size makes a
-    // new target; see a_grid_change_gives_a_moved_panel_with_frames_a_new_target.)
+    // new target; see a_grid_change_gives_a_moved_panel_with_frames_a_new_target.
+    // So does a turn of a shot panel unlocked by hand; see
+    // an_unlocked_shot_panel_turned_gets_a_new_target.)
     a.db.execute(
         "UPDATE target SET name='Heart top' WHERE name='IC 1805 r1c1'",
         [],
@@ -3327,6 +3329,70 @@ async fn a_grid_change_gives_a_moved_panel_with_frames_a_new_target() {
     assert_eq!(
         count("SELECT count(*) FROM exposureplan WHERE enabled=1"),
         3
+    );
+}
+
+/// A panel whose target has frames, unlocked by hand and turned, gets a new
+/// target at the new angle: the old one keeps its frames at their angle and
+/// stops being taken. A turn under a degree is made in place.
+#[tokio::test]
+async fn an_unlocked_shot_panel_turned_gets_a_new_target() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout = Layout::single(20);
+    });
+    activate_now(&a.f, a.project, "one panel").await;
+    let (old_guid, old_angle): (String, f64) =
+        a.db.query_row("SELECT guid, rotation FROM target", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .unwrap();
+    a.db.execute("UPDATE exposureplan SET acquired=40", [])
+        .unwrap();
+
+    // Half a degree: turned in place.
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout.panels[0].unlocked_by_hand = true;
+        framing.layout.panels[0].angle_offset_degrees = 0.5;
+    });
+    activate_now(&a.f, a.project, "a small turn").await;
+    assert_eq!(count("SELECT count(*) FROM target"), 1);
+
+    // Forty-five degrees: a new target, and the old one keeps its angle.
+    edit_framing(&a.f, a.project, |framing| {
+        framing.layout.panels[0].angle_offset_degrees = 45.0;
+    });
+    let data = activate_now(&a.f, a.project, "a big turn").await;
+    let created = data["rigs"][0]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "target" && c["action"] == "create")
+        .unwrap_or_else(|| panic!("{data}"));
+    assert!(
+        created["detail"]
+            .as_str()
+            .unwrap()
+            .contains("turned 44.5° from its old target, which keeps its 40 frames"),
+        "{created}"
+    );
+    assert_eq!(count("SELECT count(*) FROM target"), 2);
+    let kept: f64 =
+        a.db.query_row(
+            "SELECT rotation FROM target WHERE guid=?1",
+            [&old_guid],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        (kept - old_angle - 0.5).abs() < 1e-6,
+        "{kept} vs {old_angle}"
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE acquired=40 AND enabled=0"),
+        1,
+        "the old target keeps its frames, off"
     );
 }
 

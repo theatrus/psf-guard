@@ -1449,7 +1449,15 @@ describe('Mosaic panels', () => {
     fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
     expect(screen.getByRole('button', { name: 'Lock' })).toBeInTheDocument();
     expect(document.querySelector("[data-panel-id='r1c1']")).not.toHaveAttribute('data-panel-state');
-    expect(saves).toHaveLength(0);
+    // Laid out again as a grid, it stays unlocked and moves with the grid.
+    fireEvent.change(screen.getByLabelText('Mosaic columns'), { target: { value: '2' } });
+    await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
+    expect(document.querySelector("[data-panel-id='r1c1']")).not.toHaveAttribute('data-panel-state');
+    expect(screen.queryByText(/went back to the saved place/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].layout.panels[0]).toMatchObject({ id: 'r1c1', locked: false, unlocked_by_hand: true });
+    expect(saves[0].layout.panels[1].unlocked_by_hand).toBeUndefined();
   });
 
   it('gives a rig framed on its own the panel tools, and keeps its locks', async () => {

@@ -152,6 +152,9 @@ pub struct Panel {
     pub column: u32,
     #[serde(default)]
     pub locked: bool,
+    /// Unlocked by hand although its target has frames.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlocked_by_hand: bool,
     /// The camera angle to shoot it at, east of north at its own center:
     /// the framing's angle plus the panel's own turn, turned by north's
     /// lean there ([`camera_angle_at`]), or as shot for a measured panel.
@@ -673,6 +676,7 @@ impl FramingRequest {
                 row,
                 column,
                 locked: placement.locked,
+                unlocked_by_hand: placement.unlocked_by_hand,
                 position_angle_degrees,
                 angle_offset_degrees: placement.angle_offset_degrees,
                 measured: placement.measured.clone(),

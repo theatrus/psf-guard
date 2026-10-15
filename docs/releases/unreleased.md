@@ -12,8 +12,9 @@
   panel on the sky: it settles at the minimum overlap, shows what it shares
   with its neighbours, and a drop that would leave a gap or too thin an
   overlap goes back unless you hold Alt or press **Place anyway**. With
-  **Snap** off, a dragged panel stays where you drop it and the mosaic is
-  marked as having a problem. Arrow
+  **Snap** off, a dragged panel stays where you drop it, flagged if it
+  breaks the overlap rule. An unlocked panel with frames that is moved far or
+  turned gets a new Target Scheduler target; the old one keeps its frames. Arrow
   keys nudge the chosen panel, and panel edits undo. Activation adds a Target Scheduler target per new
   panel in the same project and leaves the shot one alone, and the Library
   shows the panels as one mosaic whatever their shape. Saved grids open

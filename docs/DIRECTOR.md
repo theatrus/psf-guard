@@ -1042,8 +1042,9 @@ instead** offers to start again.
 - **Locked panels stay where they are.** A panel whose target has frames
   starts locked by them: it is drawn solid with a padlock and the panel list
   gives its frames. **Unlock** frees it, and it stays unlocked: the view
-  does not lock it again. Moved more than a quarter of a panel, it gets a
-  new target at activation and its frames stay with the old one. **Lock**
+  does not lock it again. Moved more than a quarter of a panel, or turned
+  more than a degree, it gets a new target at activation, and its frames
+  stay with the old one at the angle they were shot. **Lock**
   holds any chosen panel the same way. While a panel is locked, the
   target's center, camera angle and search wait, and so does the panel size
   while a planned locked panel sits off the center, since each would move it.

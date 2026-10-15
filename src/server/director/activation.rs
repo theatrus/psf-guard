@@ -1941,7 +1941,13 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         // frames; its plans are turned off below.
                         let moved = separation_degrees(ra0 * 15.0, dec0, ra_hours * 15.0, dec);
                         let far = !moved.is_finite() || moved > 0.25 * panel_side_degrees(panel);
-                        if !same && far && frames > 0 {
+                        // So is a shot panel unlocked by hand and turned:
+                        // turning its target would mix two camera angles
+                        // under one target.
+                        let turn = angle_apart(rot0, in_place);
+                        let turned = panel.unlocked_by_hand
+                            && (!turn.is_finite() || turn > MAX_TURN_IN_PLACE_DEGREES);
+                        if !same && (far || turned) && frames > 0 {
                             let fresh = new_guid();
                             insert_target(
                                 tx,
@@ -1960,10 +1966,16 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                                 kind: "target",
                                 action: "create",
                                 name: name.clone(),
-                                detail: format!(
-                                    "{detail}; the panel moved {} from its old target, which keeps its {frames} frames and stops being taken",
-                                    format_distance(moved)
-                                ),
+                                detail: if far {
+                                    format!(
+                                        "{detail}; the panel moved {} from its old target, which keeps its {frames} frames and stops being taken",
+                                        format_distance(moved)
+                                    )
+                                } else {
+                                    format!(
+                                        "{detail}; the panel turned {turn:.1}° from its old target, which keeps its {frames} frames and stops being taken"
+                                    )
+                                },
                             });
                             fresh
                         } else {
@@ -2029,8 +2041,21 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     let moved =
                         separation_degrees(found.ra_hours * 15.0, found.dec, ra_hours * 15.0, dec);
                     let far = !moved.is_finite() || moved > 0.25 * panel_side_degrees(panel);
-                    (!kept && found.frames > 0 && far)
-                        .then(|| (found.name.clone(), found.frames, moved))
+                    // A shot panel unlocked by hand and turned leaves it
+                    // alone too, unless its frames were shot at the
+                    // framing's angle. Any other takeover sets the angle,
+                    // as a hand-made target's is often just 0.
+                    let unleaned =
+                        planned_angle(found.rotation, inputs.position_angle_degrees, panel);
+                    let turn = if unleaned {
+                        0.0
+                    } else {
+                        angle_apart(found.rotation, rotation)
+                    };
+                    let turned = panel.unlocked_by_hand
+                        && (!turn.is_finite() || turn > MAX_TURN_IN_PLACE_DEGREES);
+                    (!kept && found.frames > 0 && (far || turned))
+                        .then(|| (found.name.clone(), found.frames, moved, far, turn))
                 });
                 let found = if left_alone.is_some() { None } else { found };
                 match found {
@@ -2118,9 +2143,12 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         action: "create",
                         name: name.clone(),
                         detail: match &left_alone {
-                            Some((other, frames, moved)) => format!(
+                            Some((other, frames, moved, true, _)) => format!(
                                 "{detail}; the existing target {other} sits {} away with its {frames} frames, so it is left as it is",
                                 format_distance(*moved)
+                            ),
+                            Some((other, frames, _, false, turn)) => format!(
+                                "{detail}; the existing target {other} is turned {turn:.1}° from this panel with its {frames} frames, so it is left as it is"
                             ),
                             None => detail,
                         },
@@ -3407,6 +3435,11 @@ fn format_distance(degrees: f64) -> String {
         format!("{:.1}′", degrees * 60.0)
     }
 }
+
+/// The most a shot panel unlocked by hand turns its target in place at
+/// activation; turned further, it gets a new target, as one moved far
+/// does, and the old one keeps its frames at their angle.
+const MAX_TURN_IN_PLACE_DEGREES: f64 = 1.0;
 
 /// How far apart two angles are, the short way round.
 fn angle_apart(a: f64, b: f64) -> f64 {

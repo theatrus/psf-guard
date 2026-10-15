@@ -358,8 +358,10 @@ A panel is **locked** two ways:
 - **by hand**: the person locks or unlocks any panel. Unlocking a panel with
   frames sets `unlocked_by_hand`, so the view does not lock it again; locking
   it clears the flag, and the server clears it on any locked panel. A shot
-  panel moved more than a quarter of its size gets a new target at
-  activation, so unlocking it never moves its frames.
+  panel moved more than a quarter of its size, or turned more than a degree
+  (`MAX_TURN_IN_PLACE_DEGREES`), gets a new target at activation, so
+  unlocking it never moves or turns its frames. A grid relayout and *Take
+  values* keep the flag by panel id.
 
 A locked panel's center and camera angle on the sky cannot move. The server
 refuses a save (`422`, naming the panels) that moves or turns a panel locked

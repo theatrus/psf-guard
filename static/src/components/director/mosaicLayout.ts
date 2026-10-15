@@ -35,6 +35,14 @@ export function gridLayout(mosaic: DirectorMosaic): DirectorLayout {
   return { min_overlap_percent: mosaic.overlap_percent, panels };
 }
 
+/** `next` with each panel someone unlocked by hand in `before` still marked,
+ *  so a layout rebuilt by id does not get locked again by its frames. */
+export function keepHandUnlocks(next: DirectorLayout, before: DirectorLayout): DirectorLayout {
+  const freed = new Set(before.panels.filter(panel => panel.unlocked_by_hand).map(panel => panel.id));
+  if (freed.size === 0) return next;
+  return { ...next, panels: next.panels.map(panel => freed.has(panel.id) && !panel.locked ? { ...panel, unlocked_by_hand: true } : panel) };
+}
+
 export function singleLayout(minOverlapPercent = 20): DirectorLayout {
   return gridLayout({ rows: 1, columns: 1, overlap_percent: minOverlapPercent });
 }
