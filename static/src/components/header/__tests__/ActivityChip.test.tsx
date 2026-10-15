@@ -176,11 +176,12 @@ describe('ActivityChip', () => {
       stacks: () => [stack('R', 'running', 1, 3)],
     });
     renderChip();
-    await screen.findByRole('button', { name: /Background jobs/ });
-    scanning = false;
-    // Looked up each time: the chip may be drawn anew as a poll lands, and
-    // a slow runner can take a while to bring the finished scan.
+    // Looked up each time: the chip may be drawn anew as a poll lands.
     const chip = () => screen.getByRole('button', { name: /Background jobs/ });
+    // The scan must be seen running before it ends: frame errors belong only
+    // to a scan the header watched. The build alone shows the chip first.
+    await waitFor(() => expect(chip()).toHaveAccessibleName(/2 running/));
+    scanning = false;
     await waitFor(() => expect(chip()).toHaveAccessibleName(/a quality scan had errors/), { timeout: 8000 });
     await userEvent.click(chip());
     const list = await screen.findByRole('region', { name: 'Background jobs' });
