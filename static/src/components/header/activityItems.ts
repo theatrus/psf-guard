@@ -198,6 +198,8 @@ function processingItem(entry: StackActivityEntry): ActivityItem {
     detail,
     queued,
     percent: !queued && fractionDone != null ? Math.min(fractionDone * 100, 100) : null,
+    // Re-applied by the server after its stack refreshed.
+    automatic: entry.automatic,
     hint: processing?.waiting_for
       ? `${processing.operation} on ${entry.label}, waiting for ${processing.waiting_for}`
       : entry.detail,

@@ -1196,6 +1196,21 @@ export interface StackStretchPreview {
   stars_preview_url?: string | null;
   stars_original_preview_url?: string | null;
   stars_fits_url?: string | null;
+  /**
+   * Present when this is the stack's previous revision's result, shown while
+   * the server runs the same processing on the refreshed stack.
+   */
+  reprocessing?: StackReprocessing | null;
+}
+
+/** How the processing carried from a stack's previous revision stands. */
+export interface StackReprocessing {
+  state: 'waiting' | 'queued' | 'running' | 'failed';
+  /** The revision the shown result was made from. */
+  from_revision: string;
+  /** The re-apply's run, once queued: its row in the background jobs. */
+  run_id?: string | null;
+  error?: string | null;
 }
 
 export type StackColorRole = 'luminance' | 'red' | 'green' | 'blue' | 'ha' | 'oiii' | 'sii';
@@ -1684,6 +1699,12 @@ export interface StackAutomationSettings {
   /** How recent, in days; 0 takes channels of any age. */
   new_channel_window_days: number;
   default_new_channel_window_days: number;
+  /**
+   * A stack that refreshes, by an automatic refresh or a rebuild, gets the
+   * processing its previous revision showed. On by default; absent from an
+   * older server.
+   */
+  reapply_processing?: boolean;
 }
 
 /** How hard WBPP works at local normalization: its own presets. */

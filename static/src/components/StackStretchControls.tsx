@@ -142,7 +142,7 @@ export default function StackStretchControls({
       <summary>
         <span>View processing</span>
         <small>{applied
-          ? `${applied.deconvolution ? `${applied.deconvolution.config.psf_fwhm_pixels}px deconv · ` : ''}${applied.rc_astro ? `RC-Astro ×${applied.rc_astro.steps.length} · ` : ''}${stretchModelLabels[applied.config.model.type]} applied`
+          ? `${applied.deconvolution ? `${applied.deconvolution.config.psf_fwhm_pixels}px deconv · ` : ''}${applied.rc_astro ? `RC-Astro ×${applied.rc_astro.steps.length} · ` : ''}${stretchModelLabels[applied.config.model.type]} applied${applied.reprocessing ? ' to the previous stack' : ''}`
           : 'Deconvolution off · default stretch'}</small>
       </summary>
       <div className="stack-stretch-body">

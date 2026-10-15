@@ -104,6 +104,15 @@ pub struct AutomationPolicy {
     /// Days back a new channel's frames may reach; 0 takes any age.
     #[serde(default = "default_new_channel_window_days")]
     pub new_channel_window_days: u32,
+    /// When a stack refreshes, run the processing its previous revision
+    /// showed again on the new one. On by default, and independent of
+    /// `enabled`: a person's rebuild refreshes a stack too.
+    #[serde(default = "default_reapply_processing")]
+    pub reapply_processing: bool,
+}
+
+fn default_reapply_processing() -> bool {
+    true
 }
 
 impl Default for AutomationPolicy {
@@ -114,13 +123,20 @@ impl Default for AutomationPolicy {
             grade_delay_minutes: DEFAULT_GRADE_DELAY_MINUTES,
             build_new_channels: false,
             new_channel_window_days: DEFAULT_NEW_CHANNEL_WINDOW_DAYS,
+            reapply_processing: true,
         }
     }
 }
 
+/// Tests share the process-wide policy, re-applying processing included, so
+/// they take turns with it.
+#[cfg(test)]
+pub(super) static POLICY_LOCK: Mutex<()> = Mutex::new(());
+
 /// Apply a policy for every refresh this process schedules from now on.
 pub fn configure(policy: AutomationPolicy) {
     ENABLED.store(policy.enabled, Ordering::Relaxed);
+    super::reapply::configure(policy.reapply_processing);
     BUILD_NEW_CHANNELS.store(policy.build_new_channels, Ordering::Relaxed);
     NEW_CHANNEL_WINDOW_DAYS.store(
         policy
@@ -159,6 +175,7 @@ pub fn policy() -> AutomationPolicy {
         grade_delay_minutes: GRADE_DELAY_MINUTES.load(Ordering::Relaxed),
         build_new_channels: BUILD_NEW_CHANNELS.load(Ordering::Relaxed),
         new_channel_window_days: NEW_CHANNEL_WINDOW_DAYS.load(Ordering::Relaxed),
+        reapply_processing: super::reapply::enabled(),
     }
 }
 
@@ -431,10 +448,13 @@ pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
             if !state.shutdown.sleep(TICK).await {
                 return;
             }
-            if !ENABLED.load(Ordering::Relaxed) {
-                continue;
+            // Refreshes first: a build they start keeps re-applies waiting.
+            if ENABLED.load(Ordering::Relaxed) {
+                tick(&state).await;
             }
-            tick(&state).await;
+            // Re-applying processing follows a person's rebuilds too, so it
+            // looks whether automatic refreshes are on or not.
+            super::reapply::start_due(Arc::clone(&state)).await;
         }
     })
 }
@@ -449,8 +469,10 @@ async fn tick(state: &Arc<AppState>) {
         return;
     }
     // One stacking worker, and the user comes first on it: while a build
-    // runs, or interactive work is in flight, everything due waits.
-    if state.interactive_job_active() || !state.stack_previews.active().is_empty() {
+    // runs, or interactive work is in flight, everything due waits. A
+    // re-apply of processing does not hold a refresh off: the refresh may
+    // bring a newer stack, which the re-apply would only be redone for.
+    if state.interactive_job_active() || holds_off_refreshes(&state.stack_previews) {
         for (key, pending) in due {
             state.auto_stacks.postpone(key, pending, BUSY_RETRY, now);
         }
@@ -474,6 +496,12 @@ async fn tick(state: &Arc<AppState>) {
         for project_id in projects {
             match refresh_project(state, &ctx, project_id, pending.reason).await {
                 Ok(RefreshOutcome::Started) => {
+                    // The build goes ahead of a re-apply holding the worker,
+                    // which waits for its turn again. If the build makes a
+                    // newer stack, the re-apply moves on to it; nothing in
+                    // a re-apply touches a refresh, so the two cannot chase
+                    // each other.
+                    state.stack_previews.yield_automatic_processing();
                     // The worker is taken; the rest of this database and
                     // every other due key wait for the next free moment,
                     // keeping their history so the cap still holds.
@@ -518,6 +546,15 @@ async fn tick(state: &Arc<AppState>) {
             }
         }
     }
+}
+
+/// Whether queued or running work keeps due refreshes waiting: anything but
+/// a re-apply of processing.
+pub(super) fn holds_off_refreshes(manager: &super::StackPreviewManager) -> bool {
+    manager
+        .active()
+        .into_iter()
+        .any(|entry| !(entry.kind == super::StackActivityKind::Processing && entry.automatic))
 }
 
 enum RefreshOutcome {
@@ -681,7 +718,7 @@ async fn refresh_project(
             let state = Arc::clone(state);
             let ctx = Arc::clone(ctx);
             let _ = tokio::task::spawn_blocking(move || {
-                if let Err(error) = state.stack_previews.persist_latest(&ctx, &existing) {
+                if let Err(error) = super::persist_latest_and_reapply(&state, &ctx, &existing) {
                     tracing::warn!("could not point the card back at a finished build: {error}");
                 }
                 compose_colors_after(&state, &ctx, &existing);
@@ -1166,8 +1203,7 @@ mod tests {
         }
     }
 
-    /// Tests share the process-wide policy, so they take turns with it.
-    static POLICY_LOCK: Mutex<()> = Mutex::new(());
+    use super::POLICY_LOCK;
 
     fn enabled(arrival: u32, grade: u32) -> std::sync::MutexGuard<'static, ()> {
         let guard = POLICY_LOCK
@@ -1179,6 +1215,7 @@ mod tests {
             grade_delay_minutes: grade,
             build_new_channels: false,
             new_channel_window_days: DEFAULT_NEW_CHANNEL_WINDOW_DAYS,
+            reapply_processing: true,
         });
         guard
     }

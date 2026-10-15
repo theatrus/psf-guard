@@ -29,6 +29,7 @@ import { colorSourceKey } from './stackColorSources';
 import { defaultColorProcessing } from './stackColorProcessing';
 import StackStretchControls from './StackStretchControls';
 import { isSkyOriented } from './stackOrientation';
+import { carriedLabel } from './stackProcessingLabel';
 import { useAccess } from '../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
 import {
@@ -661,6 +662,12 @@ export default function StackPreviewPanel({
         dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision, signal
       ),
       retry: false,
+      // A refreshed stack shows its previous result while the server
+      // processes it again: look again until its own lands.
+      refetchInterval: (query: { state: { data?: StackStretchPreview | null } }) => {
+        const reprocessing = query.state.data?.reprocessing;
+        return reprocessing && reprocessing.state !== 'failed' ? 3000 : false;
+      },
     })),
   });
   const processingByArtifact = new Map(processingArtifacts.map((artifact, index) =>
@@ -1215,6 +1222,18 @@ export default function StackPreviewPanel({
                           </div>
                         )}
                       </div>
+                    )}
+                    {artifact && appliedStretch?.reprocessing && (
+                      <p
+                        className="stack-preview-carried"
+                        role={appliedStretch.reprocessing.state === 'failed' ? 'alert' : 'status'}
+                        data-carried-state={appliedStretch.reprocessing.state}
+                      >
+                        {carriedLabel(
+                          appliedStretch.reprocessing,
+                          active.find((entry) => entry.job_id === appliedStretch.reprocessing?.run_id)
+                        )}
+                      </p>
                     )}
                     {artifact && stretchKey && (
                       <>

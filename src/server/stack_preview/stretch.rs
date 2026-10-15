@@ -126,6 +126,11 @@ pub struct StackStretchPreview {
     pub stars_original_preview_url: Option<String>,
     #[serde(default)]
     pub stars_fits_url: Option<String>,
+    /// Present when this result belongs to the stack's previous revision and
+    /// is shown while the server runs the same processing on the new one.
+    /// Never stored in a manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reprocessing: Option<Reprocessing>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -533,6 +538,61 @@ struct ProcessingSelection {
     desired: Option<String>,
     #[serde(default)]
     source: Option<ProcessingSource>,
+    /// The previous revision's processing, carried to this one when its
+    /// stack refreshed. Its result shows until the server has run the same
+    /// request here; once a revision has carried, it never carries again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    carried: Option<CarriedProcessing>,
+}
+
+/// Where a carried re-apply stands, as the selection file keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum CarryState {
+    /// Settling, queued, or running.
+    Waiting,
+    /// The re-apply failed; the previous result stays, with the reason.
+    Failed,
+    /// Turned off, taken out of the line, or replaced by a person's own
+    /// processing. Nothing carried shows.
+    Stopped,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CarriedProcessing {
+    /// The previous revision's result, shown meanwhile.
+    from_stretch_id: String,
+    from_revision: String,
+    state: CarryState,
+    /// The re-apply's run, once it is queued.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// How a carried result's re-apply stands, for the card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReprocessingState {
+    /// Waiting for the stack's refreshes to settle and the worker to free.
+    Waiting,
+    Queued,
+    Running,
+    Failed,
+}
+
+/// Set on a processing result that belongs to the previous revision of the
+/// stack, shown while the server runs the same processing on the new one.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Reprocessing {
+    pub state: ReprocessingState,
+    /// The revision the shown result was made from.
+    pub from_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -561,19 +621,25 @@ fn read_selection(path: &FsPath) -> Option<ProcessingSelection> {
 
 #[cfg(test)]
 fn request_selection(path: &FsPath, generation: &str) -> Result<(), String> {
-    request_selection_with_source(path, generation, None)
+    request_selection_with_source(path, generation, None, false)
 }
 
+/// A new request for this revision. A person's own replaces anything carried
+/// from the previous revision; the server's re-apply keeps it.
 fn request_selection_with_source(
     path: &FsPath,
     generation: &str,
     source: Option<ProcessingSource>,
+    keep_carried: bool,
 ) -> Result<(), String> {
     let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
     let mut selection = read_selection(path).unwrap_or_default();
     selection.requested = generation.into();
     selection.desired = None;
     selection.source = source;
+    if !keep_carried {
+        selection.carried = None;
+    }
     write_json_atomic(path, &selection)
 }
 
@@ -630,7 +696,25 @@ pub(super) fn clear_selected_processing(
     let _guard = SELECTION_LOCK
         .lock()
         .map_err(|error| AppError::InternalError(error.to_string()))?;
-    match std::fs::remove_file(selection_path(stack_root, source_key, source_revision)) {
+    let path = selection_path(stack_root, source_key, source_revision);
+    // A revision that carried keeps a stopped mark, so it never carries again.
+    if let Some(selection) = read_selection(&path)
+        && let Some(mut carried) = selection.carried
+    {
+        carried.state = CarryState::Stopped;
+        return write_json_atomic(
+            &path,
+            &ProcessingSelection {
+                selected: None,
+                requested: super::new_artifact_revision(),
+                desired: None,
+                source: selection.source,
+                carried: Some(carried),
+            },
+        )
+        .map_err(AppError::InternalError);
+    }
+    match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(AppError::InternalError(format!(
@@ -675,8 +759,14 @@ pub(super) fn kept_processing(
                 continue;
             }
             let selection = read_selection(&path).ok_or(path)?;
+            // A result carried to a newer revision shows there until that
+            // revision has its own.
+            let carried = selection
+                .carried
+                .filter(|carried| carried.state != CarryState::Stopped)
+                .map(|carried| carried.from_stretch_id);
             stretches.extend(
-                [selection.selected, selection.desired]
+                [selection.selected, selection.desired, carried]
                     .into_iter()
                     .flatten()
                     .filter(|id| validate_job_id(id).is_ok()),
@@ -724,7 +814,14 @@ pub(super) fn selected_rc_astro_ids(
             }
             Some(selection)
         })
-        .filter_map(|selection| selection.selected)
+        .flat_map(|selection| {
+            let carried = selection
+                .carried
+                .filter(|carried| carried.state != CarryState::Stopped)
+                .map(|carried| carried.from_stretch_id);
+            [selection.selected, carried]
+        })
+        .flatten()
         .filter(|id| validate_job_id(id).is_ok())
         .filter_map(|id| read_cached_manifest(stack_root, &id))
         .filter_map(|preview| preview.rc_astro_id)
@@ -944,6 +1041,7 @@ pub(super) async fn apply_to_fits(
                 key: source.key.clone(),
                 revision: source.revision.clone(),
             }),
+            false,
         )
         .map_err(AppError::InternalError)?;
     }
@@ -952,6 +1050,9 @@ pub(super) async fn apply_to_fits(
     if let Some(generation) = &selection_generation {
         bind_selection(&selection_path, generation, &stretch_id)
             .map_err(AppError::InternalError)?;
+        // A person's own processing replaces a re-apply the server queued
+        // for this stack; the same request takes the run over instead.
+        super::reapply::replaced_by_person(&state, &source, Some(&stretch_id));
     }
     if let Some(mut cached) = read_cached_manifest(&stack_root, &stretch_id) {
         if cached.request.is_none() {
@@ -1003,6 +1104,7 @@ pub(super) async fn apply_to_fits(
         revision: source.revision.clone(),
         run_id: stretch_id.clone(),
         request: Box::new(prepared.request()),
+        automatic: false,
         attempts: 0,
         running: false,
     };
@@ -1116,6 +1218,21 @@ pub(super) async fn restore_run(
     state: &Arc<AppState>,
     origin: super::journal::JournaledStackJob,
 ) -> Result<(), super::journal::NotRestored> {
+    let result = restore_processing(state, origin.clone()).await;
+    // A re-apply that does not come back is settled as failed, so its
+    // card stops waiting and no recovery revives it.
+    if origin.automatic()
+        && let Err(super::journal::NotRestored::Skip(reason)) = &result
+    {
+        super::reapply::give_up(state, &origin, reason);
+    }
+    result
+}
+
+async fn restore_processing(
+    state: &Arc<AppState>,
+    origin: super::journal::JournaledStackJob,
+) -> Result<(), super::journal::NotRestored> {
     use super::journal::{JournaledStackJob, NotRestored};
     let JournaledStackJob::Processing {
         database_id,
@@ -1125,6 +1242,7 @@ pub(super) async fn restore_run(
         revision,
         run_id,
         request,
+        automatic,
         attempts,
         running,
     } = origin
@@ -1153,6 +1271,13 @@ pub(super) async fn restore_run(
     if source.revision != revision {
         return Err(NotRestored::Skip(format!(
             "its stack {} was rebuilt",
+            short_id(&job_id)
+        )));
+    }
+    // A re-apply only ever runs on the newest revision of its channel.
+    if automatic && !super::reapply::is_latest(&ctx, project_id, &source) {
+        return Err(NotRestored::Skip(format!(
+            "a newer stack replaced {}",
             short_id(&job_id)
         )));
     }
@@ -1187,9 +1312,20 @@ pub(super) async fn restore_run(
         revision,
         run_id: stretch_id.clone(),
         request: Box::new(prepared.request()),
+        automatic,
         attempts,
         running,
     };
+    if automatic {
+        super::reapply::restored(
+            state,
+            &ctx.id,
+            project_id,
+            &source,
+            prepared.request(),
+            &stretch_id,
+        );
+    }
     tracing::info!(
         "Processing {} ({} on {}) is back in the line after the restart",
         short_id(&stretch_id),
@@ -1209,6 +1345,339 @@ pub(super) async fn restore_run(
         origin,
     );
     Ok(())
+}
+
+/// How starting a re-apply went.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ReapplyStart {
+    /// Queued as this run.
+    Queued(String),
+    /// The result already existed and is now the revision's selection.
+    Done,
+    /// No longer wanted: a person applied or reverted processing, or a newer
+    /// stack replaced this one, while the tools were probed.
+    Withdrawn,
+}
+
+/// Queue a re-apply: the request the previous revision showed, run on the
+/// new revision as automatic work in the build line. `still_wanted` is asked
+/// again once the tools are probed, under the selection lock, together with
+/// whether the revision's carry still waits: whatever a person did
+/// meanwhile wins.
+pub(super) async fn start_reapply(
+    state: &Arc<AppState>,
+    ctx: &super::DatabaseContext,
+    job_id: &str,
+    group_index: usize,
+    revision: &str,
+    request: StackViewProcessingRequest,
+    still_wanted: &(dyn Fn() -> bool + Send + Sync),
+) -> Result<ReapplyStart, String> {
+    let source = super::stack_processing_source(state, ctx, job_id, group_index)
+        .map_err(|error| format!("its stack is not readable: {error:?}"))?;
+    if source.revision != revision {
+        return Err("the stack was rebuilt meanwhile".into());
+    }
+    validate_request(&request)?;
+    let prepared = prepare_run(&ctx.id, &source.key, &source.revision, request)
+        .await
+        .map_err(|error| match error {
+            AppError::BadRequest(message) | AppError::InternalError(message) => message,
+            other => format!("{other:?}"),
+        })?;
+    let stretch_id = prepared.stretch_id.clone();
+    let selection_path = selection_path(&ctx.stack_root, &source.key, &source.revision);
+    // Asked for on this revision, as a person's Apply would be, so the run
+    // becomes the selection when it lands; the carried result stays until
+    // then.
+    if !claim_carry(
+        &selection_path,
+        &super::new_artifact_revision(),
+        ProcessingSource {
+            key: source.key.clone(),
+            revision: source.revision.clone(),
+        },
+        &stretch_id,
+        still_wanted,
+    )? {
+        return Ok(ReapplyStart::Withdrawn);
+    }
+    if read_cached_manifest(&ctx.stack_root, &stretch_id).is_some() {
+        complete_selection(&selection_path, &stretch_id)?;
+        update_carry(&selection_path, |_| ())?;
+        return Ok(ReapplyStart::Done);
+    }
+    let Some(token) = try_begin_in_flight(&stretch_id) else {
+        // A person's run of this very request is under way: it is the
+        // re-apply.
+        return Ok(ReapplyStart::Queued(stretch_id));
+    };
+    let origin = super::journal::JournaledStackJob::Processing {
+        database_id: ctx.id.clone(),
+        project_id: source.scope.project_id,
+        job_id: source.job_id.clone(),
+        group_index: source.group_index,
+        revision: source.revision.clone(),
+        run_id: stretch_id.clone(),
+        request: Box::new(prepared.request()),
+        automatic: true,
+        attempts: 0,
+        running: false,
+    };
+    tracing::info!(
+        "Processing {} ({} on {}, db={}) re-applies the previous stack's processing",
+        short_id(&stretch_id),
+        prepared.operation(),
+        source.scope.label(),
+        ctx.id
+    );
+    start_run(
+        state,
+        ctx.id.clone(),
+        ctx.stack_root.clone(),
+        source,
+        selection_path,
+        prepared,
+        token,
+        origin,
+    );
+    Ok(ReapplyStart::Queued(stretch_id))
+}
+
+/// Claim a revision's carried re-apply for one run, in one go under the
+/// selection lock: only while nothing is selected, the carry still waits, and
+/// the caller still wants it. A person's Apply clears the carry and a Revert
+/// stops it, so either one made meanwhile is kept.
+fn claim_carry(
+    selection_path: &FsPath,
+    generation: &str,
+    source: ProcessingSource,
+    stretch_id: &str,
+    still_wanted: &(dyn Fn() -> bool + Send + Sync),
+) -> Result<bool, String> {
+    let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
+    let Some(mut selection) = read_selection(selection_path) else {
+        return Ok(false);
+    };
+    let waiting = selection.selected.is_none()
+        && selection
+            .carried
+            .as_ref()
+            .is_some_and(|carried| carried.state == CarryState::Waiting);
+    if !waiting || !still_wanted() {
+        return Ok(false);
+    }
+    selection.requested = generation.into();
+    selection.desired = Some(stretch_id.into());
+    selection.source = Some(source);
+    if let Some(carried) = selection.carried.as_mut() {
+        carried.run_id = Some(stretch_id.into());
+    }
+    write_json_atomic(selection_path, &selection)?;
+    Ok(true)
+}
+
+/// Carry the processing a stack's previous revision shows to its new
+/// revision, unless the new revision already has processing of its own or
+/// has carried once before. Returns the request to run again and the result
+/// shown meanwhile.
+pub(super) fn carry_processing(
+    stack_root: &FsPath,
+    previous_key: &str,
+    previous_revision: &str,
+    current_key: &str,
+    current_revision: &str,
+) -> Result<Option<(StackViewProcessingRequest, String)>, String> {
+    let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
+    let current_path = selection_path(stack_root, current_key, current_revision);
+    if let Some(current) = read_selection(&current_path)
+        && (current.selected.is_some()
+            || !current.requested.is_empty()
+            || current.carried.is_some())
+    {
+        return Ok(None);
+    }
+    let Some(previous) =
+        read_selection(&selection_path(stack_root, previous_key, previous_revision))
+    else {
+        return Ok(None);
+    };
+    // What the previous card shows: its own result, or one it carried and
+    // has not replaced yet.
+    let shown = previous.selected.or_else(|| {
+        previous
+            .carried
+            .filter(|carried| carried.state != CarryState::Stopped)
+            .map(|carried| carried.from_stretch_id)
+    });
+    let Some(shown) = shown.filter(|id| validate_job_id(id).is_ok()) else {
+        return Ok(None);
+    };
+    let Some(request) = read_cached_manifest(stack_root, &shown).and_then(|shown| shown.request)
+    else {
+        return Ok(None);
+    };
+    write_json_atomic(
+        &current_path,
+        &ProcessingSelection {
+            selected: None,
+            requested: String::new(),
+            desired: None,
+            source: Some(ProcessingSource {
+                key: current_key.into(),
+                revision: current_revision.into(),
+            }),
+            carried: Some(CarriedProcessing {
+                from_stretch_id: shown.clone(),
+                from_revision: previous_revision.into(),
+                state: CarryState::Waiting,
+                run_id: None,
+                error: None,
+            }),
+        },
+    )?;
+    Ok(Some((request, shown)))
+}
+
+/// Change what a revision's carried result says. Nothing to change is no
+/// error.
+fn update_carry(
+    selection_path: &FsPath,
+    change: impl FnOnce(&mut CarriedProcessing),
+) -> Result<(), String> {
+    let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
+    let Some(mut selection) = read_selection(selection_path) else {
+        return Ok(());
+    };
+    let Some(carried) = selection.carried.as_mut() else {
+        return Ok(());
+    };
+    change(carried);
+    // Once the revision shows its own result, nothing carried is left.
+    if selection.selected.is_some() {
+        selection.carried = None;
+    }
+    write_json_atomic(selection_path, &selection)
+}
+
+/// The re-apply landed: the revision shows its own result now.
+pub(super) fn carry_published(
+    stack_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+) -> Result<(), String> {
+    update_carry(
+        &selection_path(stack_root, source_key, source_revision),
+        |_| (),
+    )
+}
+
+/// The re-apply's run stepped aside: it waits again, with no run.
+pub(super) fn clear_carry_run(
+    stack_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+) -> Result<(), String> {
+    update_carry(
+        &selection_path(stack_root, source_key, source_revision),
+        |carried| carried.run_id = None,
+    )
+}
+
+/// Settle a revision's carried re-apply: failed with a reason, or stopped.
+pub(super) fn end_carry(
+    stack_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+    state: CarryState,
+    error: Option<String>,
+) -> Result<(), String> {
+    update_carry(
+        &selection_path(stack_root, source_key, source_revision),
+        |carried| {
+            carried.state = state;
+            carried.error = error;
+        },
+    )
+}
+
+/// A revision whose processing is still carried from the previous one and
+/// waiting for its re-apply, as a restarted server finds it on disk.
+pub(super) struct WaitingCarry {
+    pub key: String,
+    pub revision: String,
+    pub request: StackViewProcessingRequest,
+}
+
+pub(super) fn waiting_carries(stack_root: &FsPath) -> Vec<WaitingCarry> {
+    let Ok(_guard) = SELECTION_LOCK.lock() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(crate::server::storage::stack_processing(stack_root))
+    else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| read_selection(&entry.path()))
+        .filter(|selection| selection.selected.is_none())
+        .filter_map(|selection| {
+            let carried = selection.carried?;
+            let source = selection.source?;
+            (carried.state == CarryState::Waiting).then_some(())?;
+            let request = read_cached_manifest(stack_root, &carried.from_stretch_id)?.request?;
+            Some(WaitingCarry {
+                key: source.key,
+                revision: source.revision,
+                request,
+            })
+        })
+        .collect()
+}
+
+/// The processing a revision shows: its own, or the previous revision's
+/// while the server runs it again here, marked as such.
+pub(super) fn selected_or_carried(
+    manager: &super::StackPreviewManager,
+    stack_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+) -> Result<Option<StackStretchPreview>, AppError> {
+    if let Some(selected) = selected_processing(stack_root, source_key, source_revision)? {
+        return Ok(Some(selected));
+    }
+    let carried = {
+        let _guard = SELECTION_LOCK
+            .lock()
+            .map_err(|error| AppError::InternalError(error.to_string()))?;
+        read_selection(&selection_path(stack_root, source_key, source_revision))
+            .and_then(|selection| selection.carried)
+    };
+    let Some(carried) = carried.filter(|carried| carried.state != CarryState::Stopped) else {
+        return Ok(None);
+    };
+    let Some(mut shown) = read_cached_manifest(stack_root, &carried.from_stretch_id) else {
+        return Ok(None);
+    };
+    let state = match carried.state {
+        CarryState::Failed => ReprocessingState::Failed,
+        _ => match carried
+            .run_id
+            .as_deref()
+            .and_then(|run_id| manager.processing_state(run_id))
+        {
+            Some(super::StackJobState::Running) => ReprocessingState::Running,
+            Some(super::StackJobState::Queued) => ReprocessingState::Queued,
+            _ => ReprocessingState::Waiting,
+        },
+    };
+    shown.reprocessing = Some(Reprocessing {
+        state,
+        from_revision: carried.from_revision,
+        run_id: carried.run_id,
+        error: carried.error,
+    });
+    Ok(Some(shown))
 }
 
 /// The first twelve characters of a run id, enough to tell runs apart in
@@ -1325,19 +1794,29 @@ async fn compute_stretch_variant(
         .unwrap_or_else(|| "processing".into());
     // `by_stop`: the failure came from a stop. One a server stop caused is
     // no failure: the run comes back from the journal, and a page still
-    // polling must not hear that it failed.
+    // polling must not hear that it failed. A re-apply the server queued
+    // has nobody polling: its card hears through its selection instead.
     let park_failure = |message: String, by_stop: bool| {
-        if by_stop && state.shutdown.is_stopping() {
+        let outcome = if by_stop && state.shutdown.is_stopping() {
             tracing::info!(
                 "Processing {short} ({summary}) stopped for the server stop; it resumes after \
                  the restart"
             );
-            return;
-        }
-        tracing::warn!("Stack stretch {stretch_id} failed: {message}");
-        if let Ok(mut failures) = FAILURES.lock() {
-            failures.insert(stretch_id.clone(), message);
-        }
+            super::reapply::RunOutcome::Interrupted
+        } else {
+            tracing::warn!("Stack stretch {stretch_id} failed: {message}");
+            if !state.stack_previews.is_automatic_processing(&stretch_id)
+                && let Ok(mut failures) = FAILURES.lock()
+            {
+                failures.insert(stretch_id.clone(), message.clone());
+            }
+            if by_stop {
+                super::reapply::RunOutcome::Stopped
+            } else {
+                super::reapply::RunOutcome::Failed(message)
+            }
+        };
+        super::reapply::run_finished(&state, &stretch_id, outcome);
     };
     let queued_at = std::time::Instant::now();
     let permit = state.stack_previews.wait_turn(&stretch_id, &cancel).await;
@@ -1360,9 +1839,18 @@ async fn compute_stretch_variant(
             return None;
         }
         state.stack_previews.processing_completed(&stretch_id);
+        super::reapply::run_finished(&state, &stretch_id, super::reapply::RunOutcome::Published);
         return Some(cached);
     }
-    let guard = state.begin_interactive_job();
+    // A person waiting on it outranks background work; a re-apply is
+    // background work itself.
+    let automatic = state.stack_previews.is_automatic_processing(&stretch_id);
+    let guard = (!automatic).then(|| state.begin_interactive_job());
+    let priority = if automatic {
+        crate::concurrency::Priority::Background
+    } else {
+        crate::concurrency::Priority::Interactive
+    };
     let stop = Arc::new(RunStop {
         cancel,
         shutdown: Arc::clone(&state.shutdown),
@@ -1388,6 +1876,7 @@ async fn compute_stretch_variant(
             identity.rc_astro_chain.as_deref(),
             rc_astro_schemas,
             &stop,
+            priority,
         )
         .map_err(|message| stop.explain(message))?;
         // Stopped by a person while it rendered: publish nothing they asked
@@ -1416,6 +1905,11 @@ async fn compute_stretch_variant(
                 started.elapsed().as_secs_f64()
             );
             state.stack_previews.processing_completed(&stretch_id);
+            super::reapply::run_finished(
+                &state,
+                &stretch_id,
+                super::reapply::RunOutcome::Published,
+            );
             Some(response)
         }
         Ok(Err(message)) => {
@@ -1474,6 +1968,7 @@ fn build_stretch_preview(
         stars_fits_url: has_stars.then(|| {
             format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/stars-fits")
         }),
+        reprocessing: None,
     }
 }
 
@@ -1502,6 +1997,7 @@ fn render_fits_variant(
     rc_astro_chain: Option<&[String]>,
     rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
     stop: &RunStop,
+    priority: crate::concurrency::Priority,
 ) -> Result<RenderedVariant, String> {
     report_stage(stretch_id, "Reading the stack");
     let frame =
@@ -1522,13 +2018,9 @@ fn render_fits_variant(
             estimate / (1024 * 1024)
         ));
     }
-    let budget = crate::concurrency::plan_workers(
-        None,
-        &policy,
-        crate::concurrency::Priority::Interactive,
-        Some(frame.image.pixel_count()),
-    );
-    let lease = state.lease_workers(crate::concurrency::Priority::Interactive, budget.workers);
+    let budget =
+        crate::concurrency::plan_workers(None, &policy, priority, Some(frame.image.pixel_count()));
+    let lease = state.lease_workers(priority, budget.workers);
     let pool = crate::concurrency::ComputePool::take("stack-stretch", lease.workers)
         .map_err(|error| error.to_string())?;
     tracing::info!(
@@ -2225,6 +2717,7 @@ mod tests {
                 key,
                 revision: "rev1".into(),
             }),
+            false,
         )
         .unwrap();
         bind_selection(&path, "generation", &stretch_id).unwrap();

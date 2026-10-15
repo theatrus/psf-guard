@@ -963,6 +963,75 @@ test('keeps a running stack visible in the header and re-attaches the panel', as
   await expect(queue).toContainText('Stacking');
 });
 
+test('re-applies processing to a rebuilt stack, showing the previous result meanwhile', async ({
+  page,
+}, testInfo) => {
+  // Two real builds of the three-frame fixture and two real processing runs.
+  test.setTimeout(480_000);
+  await page.setViewportSize({ width: 1440, height: 1600 });
+  await page.route('**/images/*/preview?*', (route) => route.abort());
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=1`);
+  const panel = page.locator('.stack-preview-panel');
+  await panel.getByRole('button', { name: 'Build channel', exact: true }).click();
+  const results = panel.locator('.stack-preview-results');
+  await expect(results).toHaveAttribute('data-job-state', 'completed', { timeout: 210_000 });
+
+  // A person processes the stack.
+  const controls = panel.locator('.stack-preview-card .stack-stretch-controls');
+  await controls.locator('summary').click();
+  await controls.getByRole('checkbox', { name: 'Deconvolution' }).check();
+  await controls.getByRole('spinbutton', { name: 'Alpha M44 B Target median' }).fill('0.3');
+  await controls.getByRole('button', { name: 'Apply processing' }).click();
+  await expect(controls.locator('summary')).toContainText('3.1px deconv · Auto MTF applied', {
+    timeout: 60_000,
+  });
+  const preview = panel.getByRole('img', { name: /stack preview/i });
+  const processedSrc = await preview.getAttribute('src');
+  expect(processedSrc).toMatch(/\/stack-previews\/stretch\/[a-f0-9]{64}\/preview$/);
+
+  // Once the card has shown the carried result, hold its next looks until
+  // this test has seen it: a fast re-apply could otherwise land first.
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  let carriedSeen = false;
+  await page.route(/\/stack-previews\/[0-9a-f]{64}\/0\/stretch\?/, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    if (body.data?.reprocessing) {
+      carriedSeen = true;
+    } else if (carriedSeen) {
+      await released;
+    }
+    return route.fulfill({ response, json: body });
+  });
+
+  // The stack is rebuilt: a new revision, with no processing of its own yet.
+  await panel.getByRole('button', { name: 'Rebuild channel', exact: true }).click();
+  await expect(results).toHaveAttribute('data-job-state', 'completed', { timeout: 210_000 });
+  const carried = panel.locator('.stack-preview-carried');
+  await expect(carried).toContainText('From the previous stack · reprocessing', { timeout: 30_000 });
+  await expect(preview).toHaveAttribute('src', processedSrc!);
+  await expect(controls.locator('summary')).toContainText('applied to the previous stack');
+  await panel.locator('.stack-preview-card').screenshot({
+    path: testInfo.outputPath('reapply-carried.png'),
+  });
+
+  // The server re-applies it on its own and the card swaps in the result.
+  release();
+  await expect(carried).toHaveCount(0, { timeout: 60_000 });
+  await expect(preview).toHaveAttribute('src', /\/stack-previews\/stretch\/[a-f0-9]{64}\/preview$/);
+  expect(await preview.getAttribute('src')).not.toBe(processedSrc);
+  await expect(controls.locator('summary')).toContainText('3.1px deconv · Auto MTF applied');
+  await expect(controls.locator('summary')).not.toContainText('previous stack');
+
+  // A reload restores the new stack's own processing.
+  await page.reload();
+  await expect(page.locator('.stack-preview-card .stack-stretch-controls summary'))
+    .toContainText('3.1px deconv · Auto MTF applied');
+  await expect(page.locator('.stack-preview-carried')).toHaveCount(0);
+});
+
 test('says what a processing run waits for, then its progress, and lists it in the header', async ({
   page,
 }, testInfo) => {

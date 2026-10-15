@@ -1188,6 +1188,47 @@ restart and shows the run again once the server is back. Because the tool
 in hand is lost, a stop counts as a cut-off: a run cut off by two restarts
 in a row is not started a third time, and the log says so.
 
+### Re-apply processing when a stack refreshes
+
+Processing belongs to one revision of a stack. When the stack is rebuilt,
+by an automatic refresh or by **Rebuild**, the new revision would start
+with the default stretch. With **Re-apply processing when a stack
+refreshes** on (Settings → Stacking → Stack previews → Processing; on by
+default), PSF Guard runs the processing the card showed again on the new
+stack, on its own and with no page open:
+
+- It is queued as an automatic processing run, marked `automatic` in the
+  header's background jobs. It waits until no refresh of its project is
+  still settling, using the same debounce as automatic refreshes, so a burst
+  of frames does not start RC-Astro after every build. It then waits for
+  the worker to be free of everything else: anything you start and every
+  stack build go first. Like an automatic build, it steps aside when you
+  start work, and comes back once the worker is free. A running re-apply
+  also steps aside for an automatic refresh that is due, since the refresh
+  may bring a newer stack anyway.
+- Only the channel's newest stack is processed. A newer stack arriving while
+  a re-apply waits or runs drops it, and a running RC-Astro tool is killed;
+  RC-Astro steps cached for the old stack were made from other pixels, so
+  they are not reused.
+- Meanwhile the card shows the previous stack's processed result, marked
+  `From the previous stack · reprocessing`, with the run's status from the
+  queue. When the run lands, the new result replaces it and becomes the
+  card's processing, as if you had applied it; a reload shows it.
+- If it fails, the log says why, the card keeps the previous result and
+  says `reprocessing failed` with the reason, and that stack is not tried
+  again on its own.
+- Your own **Apply processing** or **Revert processing** on the new stack
+  replaces the re-apply. The same settings take the queued run over as
+  yours.
+- Turning the setting off drops re-applies that have not started; a running
+  one finishes, and one that steps aside after that is dropped too.
+
+Re-applies survive a restart: queued and running ones are in the job
+journal like other processing runs, and one still waiting for its project to
+settle is remembered by the new stack's processing selection. One cut off by
+two restarts in a row, or that cannot be put back, is given up for good: its
+card says why, as for a failure.
+
 ## Named processing setups
 
 Both processing editors can save their parameters under a name and load them
@@ -1576,10 +1617,11 @@ Project processing settings use `{ "split_exposure_groups": false }`. Writes
 require editor access. `process_folder` is one name below the database's
 process directory, cleaned when masters are saved. The stacking settings
 carry `automatic_previews`, `arrival_delay_minutes`, `grade_delay_minutes`,
-`build_new_channels`, and `new_channel_window_days` (0 for any age, up to
-3650), with `default_new_channel_window_days` in the response; a PUT may omit
-a delay, the new-channel switch, or the window to keep it, and needs editor access like the other
-server-wide settings. This is a catalog
+`build_new_channels`, `new_channel_window_days` (0 for any age, up to
+3650), and `reapply_processing` (true by default), with
+`default_new_channel_window_days` in the response; a PUT may omit a delay,
+the new-channel switch, the window, or `reapply_processing` to keep it, and
+needs editor access like the other server-wide settings. This is a catalog
 setting, not a per-build request flag. Image and mono stack-group responses
 include nullable `exposure_group` metadata with an opaque `key`, a display
 `label`, and `min_seconds`/`max_seconds`. Unknown exposure has null bounds.
@@ -1624,7 +1666,12 @@ of M44 · Ha to finish", "waiting_for": "the stack build of M44 · Ha",
 steps that cannot say. A run a person stopped answers `400` with
 `Processing was stopped` on the next poll. Cached
 responses include `request`, the full stretch/deconvolution/RC-Astro settings
-needed to restore the editor.
+needed to restore the editor. While a refreshed stack's processing is being
+re-applied, GET returns the previous stack's result with `reprocessing`:
+`{ "state": "waiting" | "queued" | "running" | "failed", "from_revision": …,
+"run_id": …, "error": … }`; `run_id` is the run's `job_id` in
+`GET /api/stack-activity`. A result the stack has for itself has no
+`reprocessing`.
 
 Named processing setups are global rather than per-database:
 

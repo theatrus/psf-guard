@@ -372,3 +372,13 @@
   force and warn about frames an earlier export left in the folder. An
   older PSF Guard that saves its settings drops the rigs' values and the new
   settings, so set them again after a downgrade.
+- A rebuilt stack, whether an automatic refresh or **Rebuild**, gets the
+  processing its card showed: the same stretch, deconvolution and RC-Astro
+  tools run again on the new stack once the refresh settles, as automatic
+  work behind anything you start, with no page open. Until then the card
+  shows the previous result, marked "From the previous stack ·
+  reprocessing" with the run's progress, and the header lists the run as
+  automatic. Only the newest stack is processed, and one that fails keeps
+  the previous result, says why, and is not tried again. **Re-apply
+  processing when a stack refreshes**, under Settings → Stacking, is on by
+  default.

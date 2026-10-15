@@ -65,6 +65,7 @@ describe('StackAutomationSettings', () => {
         grade_delay_minutes: 15,
         build_new_channels: false,
         new_channel_window_days: 7,
+        reapply_processing: true,
       })
     );
     // The response is the new truth: the delays become editable.
@@ -94,6 +95,7 @@ describe('StackAutomationSettings', () => {
         grade_delay_minutes: 30,
         build_new_channels: false,
         new_channel_window_days: 7,
+        reapply_processing: true,
       })
     );
     await waitFor(() => expect(grade).toHaveValue(30));
@@ -126,6 +128,7 @@ describe('StackAutomationSettings', () => {
         grade_delay_minutes: 15,
         build_new_channels: false,
         new_channel_window_days: 7,
+        reapply_processing: true,
       })
     );
   });
@@ -150,6 +153,7 @@ describe('StackAutomationSettings', () => {
         grade_delay_minutes: 15,
         build_new_channels: true,
         new_channel_window_days: 7,
+        reapply_processing: true,
       })
     );
     await waitFor(() => expect(option).toBeChecked());
@@ -186,5 +190,41 @@ describe('StackAutomationSettings', () => {
     fireEvent.click(anyAge);
     await waitFor(() => expect(saved).toHaveLength(3));
     expect(saved[2]).toMatchObject({ new_channel_window_days: 30 });
+  });
+
+  it('re-applies processing to refreshed stacks unless switched off, even with refreshes off', async () => {
+    let saved: Record<string, unknown> | null = null;
+    let reapply = true;
+    const answer = () =>
+      HttpResponse.json({ ...current(false), data: { ...current(false).data, reapply_processing: reapply } });
+    server.use(
+      http.get('/api/settings/stacking', answer),
+      http.put('/api/settings/stacking', async ({ request }) => {
+        saved = (await request.json()) as Record<string, unknown>;
+        reapply = saved.reapply_processing as boolean;
+        return answer();
+      })
+    );
+    render(<StackAutomationSettings />, { wrapper: wrapper() });
+    const toggle = await screen.findByRole('checkbox', {
+      name: /Re-apply processing when a stack refreshes/,
+    });
+    // A person's rebuild refreshes a stack too, so it does not wait on the
+    // automatic refresh switch.
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeEnabled();
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(saved).toMatchObject({ automatic_previews: false, reapply_processing: false })
+    );
+    await waitFor(() => expect(toggle).not.toBeChecked());
+  });
+
+  it('shows re-applying on for a server that has no such setting yet', async () => {
+    server.use(http.get('/api/settings/stacking', () => HttpResponse.json(current(true))));
+    render(<StackAutomationSettings />, { wrapper: wrapper() });
+    expect(
+      await screen.findByRole('checkbox', { name: /Re-apply processing when a stack refreshes/ })
+    ).toBeChecked();
   });
 });

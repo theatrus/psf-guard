@@ -5,9 +5,10 @@ import type { StackAutomationSettings as Settings } from '../api/types';
 
 /**
  * Server-wide automatic stack previews: whether remembered previews rebuild
- * on their own when frames arrive or grades change, and how long each kind of
- * change settles first. Persisted in the registry and applied at once: the
- * switch saves as soon as it is flipped, a delay when you leave the field.
+ * on their own when frames arrive or grades change, how long each kind of
+ * change settles first, and whether a refreshed stack gets its processing
+ * again. Persisted in the registry and applied at once: a switch saves as
+ * soon as it is flipped, a delay when you leave the field.
  */
 export default function StackAutomationSettings() {
   const queryClient = useQueryClient();
@@ -42,6 +43,7 @@ export default function StackAutomationSettings() {
       grade_delay_minutes: number;
       build_new_channels: boolean;
       new_channel_window_days: number;
+      reapply_processing: boolean;
     }) => apiClient.updateStackAutomationSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['stack-automation-settings'], updated);
@@ -68,6 +70,9 @@ export default function StackAutomationSettings() {
   const arrival = validMinutes(arrivalDraft);
   const grade = validMinutes(gradeDraft);
   const anyAge = current.new_channel_window_days === 0;
+  // On unless the server says otherwise; an older server has no such
+  // setting.
+  const reapply = current.reapply_processing ?? true;
   const windowDays = (() => {
     const days = windowDraft.trim() === '' ? NaN : Number(windowDraft);
     return Number.isInteger(days) && days >= 1 && days <= 3650 ? days : null;
@@ -82,6 +87,7 @@ export default function StackAutomationSettings() {
         | 'grade_delay_minutes'
         | 'build_new_channels'
         | 'new_channel_window_days'
+        | 'reapply_processing'
       >
     >
   ) =>
@@ -91,6 +97,7 @@ export default function StackAutomationSettings() {
       grade_delay_minutes: current.grade_delay_minutes,
       build_new_channels: current.build_new_channels,
       new_channel_window_days: current.new_channel_window_days,
+      reapply_processing: reapply,
       ...next,
     });
   const commitWindow = () => {
@@ -253,6 +260,30 @@ export default function StackAutomationSettings() {
             Enter whole minutes between 1 and {current.max_delay_minutes}.
           </p>
         )}
+      </fieldset>
+      <fieldset
+        className="calibration-settings-group calibration-matching-group"
+        disabled={save.isPending}
+      >
+        <legend>Processing</legend>
+        <label className="review-preference">
+          <input
+            type="checkbox"
+            checked={reapply}
+            onChange={(event) => persist({ reapply_processing: event.target.checked })}
+          />
+          <span>
+            Re-apply processing when a stack refreshes
+            <small>
+              When a stack is rebuilt, by an automatic refresh or by you, the
+              processing its card showed (stretch, deconvolution and RC-Astro
+              tools) runs again on the new stack once the refresh settles,
+              behind anything you start. The card shows the previous result
+              until the new one is ready. Turning this off drops re-applies
+              that have not started.
+            </small>
+          </span>
+        </label>
       </fieldset>
       {save.isError && (
         <p className="error-text" role="alert">{(save.error as Error).message}</p>

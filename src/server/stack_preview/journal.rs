@@ -74,6 +74,10 @@ pub enum JournaledStackJob {
         /// The run's id: the stretch id the browser polls with.
         run_id: String,
         request: Box<super::stretch::StackViewProcessingRequest>,
+        /// Re-applied by the server after the stack refreshed, not asked
+        /// for by a person.
+        #[serde(default)]
+        automatic: bool,
         #[serde(default)]
         attempts: u32,
         #[serde(default)]
@@ -137,11 +141,11 @@ impl JournaledStackJob {
         }
     }
 
-    /// A processing run is always a person's.
     pub fn set_automatic(&mut self, value: bool) {
         match self {
-            Self::Mono { automatic, .. } | Self::Color { automatic, .. } => *automatic = value,
-            Self::Processing { .. } => {}
+            Self::Mono { automatic, .. }
+            | Self::Color { automatic, .. }
+            | Self::Processing { automatic, .. } => *automatic = value,
         }
     }
 
@@ -153,10 +157,11 @@ impl JournaledStackJob {
         }
     }
 
-    fn automatic(&self) -> bool {
+    pub(super) fn automatic(&self) -> bool {
         match self {
-            Self::Mono { automatic, .. } | Self::Color { automatic, .. } => *automatic,
-            Self::Processing { .. } => false,
+            Self::Mono { automatic, .. }
+            | Self::Color { automatic, .. }
+            | Self::Processing { automatic, .. } => *automatic,
         }
     }
 
@@ -430,6 +435,12 @@ pub(super) fn restored() -> bool {
     RESTORED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// For tests that start work without a journal restore first.
+#[cfg(test)]
+pub(super) fn mark_restored() {
+    RESTORED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Put back what the journal kept: stack builds first, in their order, then
 /// settling refreshes, then the WBPP line. The scheduler waits until this is
 /// done, so no refresh slips in ahead of a build that was waiting.
@@ -445,10 +456,19 @@ pub async fn restore(state: &Arc<AppState>) {
         let mut restored_a_persons_build = false;
         for job in journal.stack {
             let noun = job.noun();
-            let Some(job) = job.after_restart() else {
+            let Some(job) = job.clone().after_restart() else {
                 tracing::warn!(
                     "A {noun} cut off by {MAX_ATTEMPTS} restarts in a row is not started again"
                 );
+                // A re-apply given up on here must not come back through
+                // the carry its stack's selection remembers.
+                if job.automatic() {
+                    super::reapply::give_up(
+                        state,
+                        &job,
+                        &format!("it was cut off by {MAX_ATTEMPTS} restarts in a row"),
+                    );
+                }
                 continue;
             };
             let automatic = job.automatic();
@@ -481,6 +501,12 @@ pub async fn restore(state: &Arc<AppState>) {
     }
     super::automatic::mark_ready();
     RESTORED.store(true, std::sync::atomic::Ordering::Relaxed);
+    // Re-applies that were still settling come back from the selections
+    // that remember them.
+    {
+        let state = Arc::clone(state);
+        let _ = tokio::task::spawn_blocking(move || super::reapply::recover(&state)).await;
+    }
     if !DEFERRED.lock().unwrap().is_empty() {
         let state = Arc::clone(state);
         tokio::spawn(async move { retry_deferred(state).await });
@@ -636,6 +662,7 @@ mod tests {
                 }))
                 .unwrap(),
             ),
+            automatic: false,
             attempts,
             running,
         }
@@ -645,10 +672,18 @@ mod tests {
     fn processing_runs_round_trip_in_the_line_beside_builds() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reg.jobs.json");
-        // The one running first, then the line: a build and a waiting run.
+        // The one running first, then the line: a build, a waiting run, and
+        // a re-apply the server queued after a refresh.
+        let mut reapply = processing(false, 0);
+        reapply.set_automatic(true);
         let journal = Journal {
             schema_version: SCHEMA_VERSION,
-            stack: vec![processing(true, 1), mono(false, 0), processing(false, 0)],
+            stack: vec![
+                processing(true, 1),
+                mono(false, 0),
+                processing(false, 0),
+                reapply,
+            ],
             ..Default::default()
         };
         write(&path, &journal).unwrap();
@@ -711,11 +746,17 @@ mod tests {
             processing(false, MAX_ATTEMPTS).after_restart(),
             Some(processing(false, MAX_ATTEMPTS))
         );
-        // It is a person's, whatever the automatic flag says.
+        // A person's, unless the server re-applied it; one written before
+        // re-applies were journaled reads as a person's.
         let mut run = processing(false, 0);
-        run.set_automatic(true);
         assert!(!run.automatic());
+        run.set_automatic(true);
+        assert!(run.automatic());
         assert!(run.is_processing());
+        let mut old = serde_json::to_value(processing(false, 0)).unwrap();
+        old.as_object_mut().unwrap().remove("automatic");
+        let old: JournaledStackJob = serde_json::from_value(old).unwrap();
+        assert!(!old.automatic());
     }
 
     #[test]
