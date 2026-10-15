@@ -90,7 +90,8 @@ fn settings_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn light(dir: &Path, captured: &str, rotation: f64) -> FrameMeta {
-    let path = dir.join(format!("light-{captured}.fits"));
+    // Windows refuses `:` in file names, so the capture time loses it here.
+    let path = dir.join(format!("light-{}.fits", captured.replace(':', "")));
     let angle = format!("ROTATANG= {rotation:20.1}");
     write_frame_with(&path, "LIGHT", SIZE, captured, &[angle.as_str()], |_, _| {
         1_000.0
