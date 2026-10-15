@@ -95,7 +95,7 @@ export function usePageDrafts(): Drafts {
     const run = (async () => {
       const pending = Object.values(live.current).filter(section => section.unsaved || section.pending).sort((left, right) => left.order - right.order);
       for (const section of pending) {
-        let saved: boolean | string = false;
+        let saved: boolean | string;
         try { saved = await section.save(); } catch (error) { saved = error instanceof Error ? error.message : false; }
         if (saved !== true) return { label: section.label, reason: typeof saved === 'string' ? saved : null };
       }

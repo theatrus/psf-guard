@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
@@ -34,7 +35,10 @@ function wrapper(route: string) {
     return (
       <QueryClientProvider client={queryClient}>
         <MemoryRouter initialEntries={[route]}>
-          {children}
+          <Routes>
+            <Route path="/grid" element={children} />
+            <Route path="/detail/:imageId" element={null} />
+          </Routes>
           <Where />
         </MemoryRouter>
       </QueryClientProvider>
@@ -94,7 +98,8 @@ describe('GroupedImageGrid calibration marks', () => {
     serve();
     render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1&calib=poor') });
     await waitFor(() => expect(screen.getByText(/1 of 3 images/)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Open its calibration/ }));
+    await userEvent.click(screen.getByRole('button', { name: /Open its calibration/ }));
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/detail/8'));
     const where = new URL(screen.getByTestId('where').textContent!, 'http://x');
     expect(where.pathname).toBe('/detail/8');
     expect(where.searchParams.get('calibFocus')).toBe('cannot_calibrate');

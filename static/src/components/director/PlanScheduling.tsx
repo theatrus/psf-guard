@@ -73,7 +73,7 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
     save: async () => {
       if (!stored.data) return false;
       // Saving now would undo the other limits without a look at them.
-      if (changedElsewhere) return 'the limits changed elsewhere; reload them first';
+      if (stale || changedElsewhere) return 'the limits changed elsewhere; reload them first';
       try { await save.mutateAsync({ ...stored.data, scheduling: compactOverrides(draft) }); } catch (error) { return message(error); }
       return true;
     },

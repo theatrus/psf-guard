@@ -70,7 +70,7 @@ npm run build
 npm run test:release
 ```
 
-Use Node 24, which is the version in CI. Parse `.github/workflows/ci.yml` and
+Use Node 24.15 or newer in the 24.x LTS line, as in CI. Parse `.github/workflows/ci.yml` and
 `.github/workflows/release.yml`, then run `git diff --check`. Build a local
 Tauri bundle when app, updater, packaging, or signing code changed.
 

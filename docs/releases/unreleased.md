@@ -86,7 +86,9 @@
   they waited for the next server start. The calibration library shows each
   measured dark's level and spread, in ADU.
 - Every stack and master rebuilds once, the first time each is used, after
-  the move to Seiza 0.29.
+  the move to Seiza 0.31 and stacking 0.34. Astrometry, satellite, stretch,
+  and background cache metadata now follows the installed engine versions,
+  so later dependency updates also invalidate affected cached results.
 - Automatic import no longer creates projects on its own. Frames for targets
   the catalog does not have wait, and the database's status line offers
   **Review** to preview and import them; **New targets** in its settings
@@ -101,6 +103,8 @@
 - Planning no longer says **PSF Guard was updated** after every reload. A
   survey image the browser had kept from before an update carried the old
   build, and the page took it for news of a newer one.
+- A scheduling save that conflicts with another edit blocks another save
+  until you reload the limits, including while the latest limits are loading.
 - Changing a filter's template in a plan before its first activation no longer
   leaves the old exposure plan running in Target Scheduler beside the new one.
   Activation turns off a plan on the target that takes the same frames at

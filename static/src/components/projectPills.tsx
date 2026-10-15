@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { ProjectCalibrationHealthSummary } from '../api/types';
 import type { LibraryDensity } from '../hooks/useDisplayPreferences';
 import { ago, percentDone, stateLabel } from './libraryFamilies';
+import { ROW_COLUMNS, type RowColumn } from './projectRowColumns';
 import './toolbar/toolbar.css';
 
 /** The pills the Library rows and the plan list share, so a project reads
@@ -106,10 +107,6 @@ export function DensityToggle({ density, onChange }: { density: LibraryDensity; 
 export function ProjectRow({ className, testId, children }: { className?: string; testId?: string; children: ReactNode }) {
   return <div className={['library-row', className].filter(Boolean).join(' ')} data-testid={testId ?? 'library-row'}>{children}</div>;
 }
-
-/** The Library's columns, in order. Overview.css gives each one a track. */
-export const ROW_COLUMNS = ['fold', 'name', 'db', 'state', 'progress', 'grades', 'dates', 'calibration', 'views', 'plan'] as const;
-export type RowColumn = typeof ROW_COLUMNS[number];
 
 /** A Library row's cells, one per column in column order. A row without a
  *  pill still gets the empty cell, so the pills after it keep their x. */

@@ -54,7 +54,7 @@ async function dragMap(page: Page, dx: number, dy: number) {
 
 test('the sky page maps every target, tells its story on hover, and opens it in Images', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Sky' }).click();
+  await page.getByRole('button', { name: 'Sky', exact: true }).click();
   await expect(page).toHaveURL(/#\/sky/);
 
   const hero = page.locator('.sky-hero');
@@ -142,7 +142,7 @@ test('the sky remembers its turn and zoom while you are away in another view', a
 
   await page.getByRole('button', { name: 'Library', exact: true }).click();
   await expect(page).toHaveURL(/#\/(\?|$)/);
-  await page.getByRole('button', { name: 'Sky' }).click();
+  await page.getByRole('button', { name: 'Sky', exact: true }).click();
   await expect(page.locator('.sky-map')).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('.sky-map')).toHaveAttribute('data-zoom', '1.60');
   await expect(page.locator('.sky-map')).toHaveAttribute('aria-label', /galactic/);

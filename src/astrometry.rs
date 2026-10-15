@@ -10,8 +10,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-pub const SEIZA_VERSION: &str = "0.12.2";
-pub const SEIZA_FITS_VERSION: &str = "0.2.1";
+pub const SEIZA_VERSION: &str = env!("PSF_GUARD_SEIZA_VERSION");
+pub const SEIZA_FITS_VERSION: &str = env!("PSF_GUARD_SEIZA_FITS_VERSION");
 
 pub type AstrometryResourcePath = Result<Option<PathBuf>, seiza::data_paths::DataPathError>;
 
@@ -2913,6 +2913,10 @@ mod tests {
         assert!(solver_versions_match(&provenance));
 
         provenance.seiza_fits_version.clear();
+        assert!(!solver_versions_match(&provenance));
+
+        provenance.seiza_fits_version = SEIZA_FITS_VERSION.to_string();
+        provenance.seiza_version = "0.12.2".to_string();
         assert!(!solver_versions_match(&provenance));
     }
 

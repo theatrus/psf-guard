@@ -15,7 +15,8 @@ test.beforeEach(async ({ request }) => {
   slugCounter += 1;
   const entry = await registerFixtureDb(request, {
     name: `Imaging Rig e2e ${slugCounter}`,
-    slug: `imaging-rig-e2e-${slugCounter}`,
+    // A replacement Playwright worker must not reuse a failed worker's cache.
+    slug: `imaging-rig-e2e-${process.pid}-${slugCounter}`,
   });
   dbId = entry.id;
   await waitForCacheReady(request, dbId);
@@ -506,6 +507,12 @@ test('detail view keeps the viewport anchored while swapping to original resolut
 }) => {
   test.setTimeout(90_000);
 
+  // Keep the original warm-up behind the initial bitmap load. On a cold
+  // cache the original can otherwise finish before the large preview.
+  let startOriginalRequest!: () => void;
+  const startOriginalPromise = new Promise<void>((resolve) => {
+    startOriginalRequest = resolve;
+  });
   let releaseOriginalResponse!: () => void;
   let markOriginalHeld!: () => void;
   const releasePromise = new Promise<void>((resolve) => {
@@ -523,8 +530,9 @@ test('detail view keeps the viewport anchored while swapping to original resolut
       return;
     }
 
+    await startOriginalPromise;
     const response = await route.fetch();
-    if (response.status() === 200 && !originalHeld) {
+    if (route.request().resourceType() === 'image' && response.status() === 200 && !originalHeld) {
       originalHeld = true;
       markOriginalHeld();
       await releasePromise;
@@ -558,6 +566,7 @@ test('detail view keeps the viewport anchored while swapping to original resolut
 
     const before = await readDetailViewportAnchor(page);
     expect(before.src).toContain('size=large');
+    startOriginalRequest();
 
     await Promise.race([
       originalHeldPromise,
@@ -597,15 +606,24 @@ test('detail view keeps the viewport anchored while swapping to original resolut
     expect(Math.abs(after.centerRatioX - before.centerRatioX)).toBeLessThan(0.02);
     expect(Math.abs(after.centerRatioY - before.centerRatioY)).toBeLessThan(0.02);
   } finally {
+    startOriginalRequest();
     releaseOriginalResponse();
-    await page.unroute('**/images/1/preview**');
+    await page.unrouteAll({ behavior: 'wait' });
   }
 });
 
 test('detail view preserves zoom and pan exactly across arrow-key navigation', async ({
   page,
+  request,
 }) => {
   test.setTimeout(90_000);
+
+  // Exercise equal-size bitmap navigation with both large previews ready.
+  // A cold initial load can choose the original before the first fit settles.
+  await Promise.all([1, 2].map((id) => expect.poll(async () => {
+    const response = await request.get(`/api/db/${encodeURIComponent(dbId)}/images/${id}/preview?size=large&color=true`);
+    return response.status();
+  }, { timeout: 45_000 }).toBe(200)));
 
   await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
 
@@ -786,9 +804,20 @@ test('detail view shows the image after the 202-generating path reloads with a c
   // then actually reveal the image. Regression test: the `v=` reload used to
   // fail the "is this src current?" identity check (busted URL vs pristine
   // URL) and the loaded image stayed at opacity 0 with no overlay.
+  // Hold the original warm-up so it cannot replace the large preview before
+  // this test observes the cache-busted bitmap.
+  let releaseOriginal!: () => void;
+  const originalReleased = new Promise<void>((resolve) => {
+    releaseOriginal = resolve;
+  });
   let served202 = false;
   await page.route('**/images/1/preview**', async (route) => {
     const url = new URL(route.request().url());
+    if (url.searchParams.get('size') === 'original') {
+      await originalReleased;
+      await route.continue();
+      return;
+    }
     if (
       url.searchParams.get('size') !== 'large' ||
       url.searchParams.has('v') ||
@@ -831,8 +860,9 @@ test('detail view shows the image after the 202-generating path reloads with a c
       timeout: 10_000,
     });
   } finally {
+    releaseOriginal();
     if (!page.isClosed()) {
-      await page.unroute('**/images/1/preview**');
+      await page.unrouteAll({ behavior: 'wait' });
     }
   }
 });

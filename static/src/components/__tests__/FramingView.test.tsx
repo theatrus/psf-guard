@@ -126,13 +126,16 @@ describe('Framing view', () => {
     // waits a second by design, so give a loaded test runner room.
     await waitFor(() => expect(cutouts.length).toBeGreaterThanOrEqual(2), { timeout: 8000 });
     await waitFor(() => expect(document.querySelector('.framing-stage [data-testid="framing-sky"]')).toHaveAttribute('href', 'blob:stage'), { timeout: 4000 });
-    // The sky is fetched as a tile a little wider than the view, at the stage's pixel density.
-    const first = cutouts.find(query => query.includes('survey=dss2_color'))!;
-    expect(first).toContain('width=2048');
-    expect(first).toContain('height=1536');
-    const askedFov = Number(first.match(/fov=([0-9.]+)/)![1]);
-    const viewFov = Number((screen.getByLabelText('View width degrees') as HTMLInputElement).value);
-    expect(askedFov).toBeCloseTo(viewFov * 1.3, 1);
+    // Rig data can widen the view after the initial sky request. Its current
+    // tile is a little wider than that view, at the stage's pixel density.
+    await waitFor(() => {
+      const latest = cutouts.filter(query => query.includes('survey=dss2_color')).at(-1)!;
+      expect(latest).toContain('width=2048');
+      expect(latest).toContain('height=1536');
+      const askedFov = Number(latest.match(/fov=([0-9.]+)/)![1]);
+      const viewFov = Number((screen.getByLabelText('View width degrees') as HTMLInputElement).value);
+      expect(askedFov).toBeCloseTo(viewFov * 1.3, 1);
+    });
 
     fireEvent.change(screen.getByLabelText('Mosaic rows'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('Panel overlap percent'), { target: { value: '15' } });
