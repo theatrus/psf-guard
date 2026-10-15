@@ -1,6 +1,7 @@
 //! Revisit admitted frames without repeating their registration decisions.
 
 use super::{resume, PreparedGroup, SessionCosmetics};
+use seiza_calibration::MatchTolerances;
 use seiza_stacking::{
     BatchStackOptions, BatchStackPass, BatchStackResult, CalibrationMasters, FitsFrame,
     ImpulseFilterOptions, LinearImage, ReferenceRegion, RegisteredFrameMapping,
@@ -48,6 +49,7 @@ pub(super) fn integrate(
         let image = prepare_registered_frame(
             frame,
             masters,
+            &plan.sessions[session].match_tolerances,
             cosmetic,
             mapping,
             method.seiza_interpolation(),
@@ -90,13 +92,15 @@ fn replay_weights(
 fn prepare_registered_frame(
     mut frame: FitsFrame,
     masters: Option<&CalibrationMasters>,
+    gate: &MatchTolerances,
     cosmetic: Option<ImpulseFilterOptions>,
     mapping: &RegisteredFrameMapping,
     interpolation: seiza_stacking::Interpolation,
 ) -> seiza_stacking::Result<LinearImage> {
     if let Some(masters) = masters {
-        // Under the light's rig's tolerances, which the masters carry.
-        masters.validate_light_frame(&frame)?;
+        // Under the gate its session's lights were admitted under: their
+        // rig's tolerances, the ones its masters were matched by.
+        masters.validate_light_frame_with(&frame, gate)?;
         masters.apply(&mut frame.image, frame.exposure_seconds, frame.bayer)?;
     }
     if let Some(cosmetic) = cosmetic {
@@ -152,6 +156,7 @@ mod tests {
         let corrected = prepare_registered_frame(
             frame(raw.clone()),
             Some(&masters),
+            &MatchTolerances::default(),
             Some(ImpulseFilterOptions::default()),
             &mapping,
             Interpolation::Bilinear,
@@ -161,6 +166,7 @@ mod tests {
         let calibrated = prepare_registered_frame(
             frame(raw.clone()),
             Some(&masters),
+            &MatchTolerances::default(),
             None,
             &mapping,
             Interpolation::Bilinear,
@@ -170,6 +176,7 @@ mod tests {
         let bypassed = prepare_registered_frame(
             frame(raw.clone()),
             None,
+            &MatchTolerances::default(),
             None,
             &mapping,
             Interpolation::Bilinear,
@@ -191,9 +198,15 @@ mod tests {
             NormalizationMap::identity(&raw),
         )
         .unwrap();
-        let registered =
-            prepare_registered_frame(frame(raw), None, None, &mapping, Interpolation::Bilinear)
-                .unwrap();
+        let registered = prepare_registered_frame(
+            frame(raw),
+            None,
+            &MatchTolerances::default(),
+            None,
+            &mapping,
+            Interpolation::Bilinear,
+        )
+        .unwrap();
         assert!(registered
             .data
             .chunks(9)
@@ -280,6 +293,7 @@ mod tests {
         let prepared = prepare_registered_frame(
             reference.clone(),
             Some(&masters),
+            &MatchTolerances::default(),
             cosmetic,
             &live.reference_mapping(),
             Interpolation::Bilinear,
@@ -290,6 +304,7 @@ mod tests {
         let uncorrected = prepare_registered_frame(
             reference,
             Some(&masters),
+            &MatchTolerances::default(),
             None,
             &live.reference_mapping(),
             Interpolation::Bilinear,
@@ -313,6 +328,7 @@ mod tests {
         let registered = prepare_registered_frame(
             source,
             Some(&masters),
+            &MatchTolerances::default(),
             cosmetic,
             &diagnostics.mapping,
             Interpolation::Bilinear,
@@ -619,15 +635,47 @@ mod tests {
         assert_eq!(applied.state, "applied", "{applied:?}");
         assert!(applied.flat_master.is_some(), "{applied:?}");
 
-        let frame = crate::image_io::open_linear_frame(&light).unwrap();
-        let raw = frame.image.clone();
-        prepare_registered_frame(
-            frame,
-            Some(&masters),
-            None,
-            &RegisteredFrameMapping::identity(&raw),
-            Interpolation::Bilinear,
-        )
-        .expect("the final pass calibrates the light with the flat its rig matched");
+        // The gate is the light's rig's: the tolerances its flat was matched by.
+        let gate = crate::calibration::light_match_tolerances_at(&light);
+        assert_eq!(gate.focal_length_mm, 5.0);
+        let replay = |gate: &MatchTolerances| {
+            let frame = crate::image_io::open_linear_frame(&light).unwrap();
+            let raw = frame.image.clone();
+            prepare_registered_frame(
+                frame,
+                Some(&masters),
+                gate,
+                None,
+                &RegisteredFrameMapping::identity(&raw),
+                Interpolation::Bilinear,
+            )
+        };
+        replay(&gate).expect("the final pass calibrates the light with the flat its rig matched");
+        // Seiza's default gate would refuse it, which is what the gate is for.
+        let refused = replay(&MatchTolerances::default()).unwrap_err().to_string();
+        assert!(refused.contains("focal length"), "{refused}");
+
+        // The live pass judges the light as its reference under the same
+        // gate: the masters pass, and only this tiny starless frame's
+        // registration stops it. Under the default gate the masters are
+        // refused first.
+        let open = |gate: MatchTolerances| {
+            LiveStacker::new(
+                crate::image_io::open_linear_frame(&light).unwrap(),
+                masters.clone(),
+                StackOptions {
+                    match_tolerances: gate,
+                    ..StackOptions::default()
+                },
+            )
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default()
+        };
+        let opened = open(gate);
+        assert!(!opened.contains("focal length"), "{opened}");
+        assert!(opened.contains("usable stars"), "{opened}");
+        let refused = open(MatchTolerances::default());
+        assert!(refused.contains("focal length"), "{refused}");
     }
 }

@@ -3985,12 +3985,6 @@ fn resolve_or_build_masters_pinned(
         )
         .context("loading matched calibration masters")?
     };
-    // Judge each light the masters calibrate by its rig's tolerances, as
-    // matching did: the live pass, the final pass and replay all read them
-    // from the masters.
-    let masters = masters
-        .with_match_tolerances(selected.rules.tolerances())
-        .context("refusing this rig's calibration tolerances")?;
     applied.estimated_pedestal_adu = estimated_pedestal;
     if let Some(pedestal) = estimated_pedestal {
         let hint_note = match header_pedestal_hint(&light) {
@@ -4158,6 +4152,25 @@ fn masters_signature(applied: &AppliedCalibration) -> String {
 pub struct CalibrationSession {
     pub masters: seiza_stacking::CalibrationMasters,
     pub applied: AppliedCalibration,
+    /// The gate a stack judges this session's lights against its masters
+    /// under: their rig's tolerances, the ones the masters were matched by.
+    /// Every light of a session shares a rig's matching settings, since the
+    /// session key takes them.
+    pub match_tolerances: seiza_calibration::MatchTolerances,
+}
+
+/// The tolerances a stack judges a light against its masters under: those
+/// of the light's rig, the same its masters were matched by. A stack sets
+/// them as its gate before pushing the light
+/// ([`seiza_stacking::LiveStacker::set_match_tolerances`]), and a host's own
+/// pass checks with them ([`seiza_stacking::CalibrationMasters::validate_light_frame_with`]).
+pub fn light_match_tolerances(light: &FrameMeta) -> seiza_calibration::MatchTolerances {
+    rules_for_light(light).tolerances()
+}
+
+/// [`light_match_tolerances`] for a light on disk, read header-only.
+pub fn light_match_tolerances_at(path: &Path) -> seiza_calibration::MatchTolerances {
+    light_match_tolerances(&crate::commands::import::headers::read_frame_meta(path))
 }
 
 /// How a stack group's lights calibrate: each light is assigned to a
@@ -4194,9 +4207,11 @@ impl CalibrationPlan {
     ) -> Self {
         Self {
             assignments: vec![0; lights],
+            // No masters to judge a light against: the gate is moot.
             sessions: vec![CalibrationSession {
                 masters,
                 applied: applied.clone(),
+                match_tolerances: seiza_calibration::MatchTolerances::default(),
             }],
             applied,
         }
@@ -4474,7 +4489,11 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
                 watch: watch.clone(),
             },
         )?;
-        sessions.push(CalibrationSession { masters, applied });
+        sessions.push(CalibrationSession {
+            masters,
+            applied,
+            match_tolerances: light_match_tolerances_at(&lights[0]),
+        });
     }
 
     let applied = if sessions.len() == 1 {

@@ -681,6 +681,18 @@ fn master_progress_label(progress: &crate::calibration::MasterBuildProgress) -> 
     label
 }
 
+/// Calibrate the lights pushed next with a session's masters, judged under
+/// its gate: the rig tolerances its masters were matched by. The gate goes
+/// first, so the masters are never weighed under another session's.
+/// Frames already admitted keep the gate they were admitted under.
+pub(crate) fn use_session(
+    stacker: &mut seiza_stacking::LiveStacker,
+    session: &crate::calibration::CalibrationSession,
+) -> seiza_stacking::Result<()> {
+    stacker.set_match_tolerances(session.match_tolerances)?;
+    stacker.set_calibration(session.masters.clone())
+}
+
 fn group_work(group: &StackGroupStatus, reintegrates: bool) -> (usize, usize) {
     let live = group.eligible_frames;
     let estimate = if reintegrates && live >= 3 {
@@ -4009,7 +4021,10 @@ fn run_group(
                 // cannot reject them statistically. The spatial impulse
                 // filter is the remaining defense; when any session has a
                 // dark, the dark does the job with real measurements.
-                let options = method.stack_options(cosmetic);
+                let mut options = method.stack_options(cosmetic);
+                // The reference is judged against its session's masters
+                // under that session's gate, its rig's tolerances.
+                options.match_tolerances = plan.sessions[plan.assignments[0]].match_tolerances;
                 // The reference calibrates with its own session's masters;
                 // later sessions swap theirs in per batch.
                 //
@@ -4253,7 +4268,7 @@ fn run_group(
         {
             calibration_bypassed = bypassed;
         } else if let Err(error) =
-            pool.install(|| stacker.set_calibration(plan.sessions[session].masters.clone()))
+            pool.install(|| use_session(&mut stacker, &plan.sessions[session]))
         {
             if group.calibration == crate::calibration::CalibrationMode::On {
                 return Err(error.to_string());

@@ -417,6 +417,7 @@ mod tests {
             )
             .unwrap(),
             applied: AppliedCalibration::default(),
+            match_tolerances: seiza_calibration::MatchTolerances::default(),
         }
     }
 
