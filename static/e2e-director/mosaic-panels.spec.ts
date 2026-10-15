@@ -85,30 +85,30 @@ test('a shot target stays put while panels are added round it, and activates as 
     await expect(page.getByLabel('p4 turn degrees')).toHaveValue('10');
     await expect(page.getByTestId('framing-chosen-angle')).toContainText('turned +10.0° from the framing');
 
-    // Save, then send to the rigs: three new targets beside the untouched one.
+    // Save, then activate: three new targets beside the untouched one.
     const saveBar = page.getByRole('region', { name: 'Unsaved changes' });
     await saveBar.getByRole('button', { name: 'Save changes' }).click();
     await expect(saveBar).toContainText('All changes saved');
-    await page.getByRole('region', { name: 'Rigs behind' }).getByRole('button', { name: /^Send to rigs/ }).click();
-    const dialog = page.getByRole('dialog', { name: 'Send to the rigs' });
+    await page.getByRole('region', { name: 'Needs activating' }).getByRole('button', { name: /^Activate/ }).click();
+    const dialog = page.getByRole('dialog', { name: 'Activate on the rigs' });
     // The preview appears without a click.
-    await expect(dialog.getByLabel('Send to Askar data')).toContainText('Heart Nebula p2');
+    await expect(dialog.getByLabel('Askar data activation')).toContainText('Heart Nebula p2');
     // Each panel says the angle it is shot at, and nothing about how the rig gets there.
-    await expect(dialog.getByLabel('Send to Askar data')).toContainText('turned +10.0°');
-    await expect(dialog.getByLabel('Send to Askar data')).not.toContainText('by hand');
+    await expect(dialog.getByLabel('Askar data activation')).toContainText('turned +10.0°');
+    await expect(dialog.getByLabel('Askar data activation')).not.toContainText('by hand');
     await expect(dialog.getByRole('status')).toHaveText('Preview ready');
-    // N.I.N.A. changes a row after the preview read its copy: Send checks the
-    // database itself, writes nothing, says so and previews once more.
+    // N.I.N.A. changes a row after the preview read its copy: Activate checks
+    // the database itself, writes nothing, says so and previews once more.
     const nina = new Database(dbPath);
     nina.prepare('UPDATE exposureplan SET desired = 7 WHERE Id = 1').run();
     nina.close();
-    await dialog.getByRole('button', { name: 'Send', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Activate', exact: true }).click();
     const refused = dialog.getByRole('alert').filter({ hasText: 'Changed since the preview' });
     await expect(refused).toContainText("Askar data's rows. Nothing was written.");
-    await expect(refused).toContainText('This preview is new; check it, then send.');
-    await expect(dialog.getByLabel('Send to Askar data')).toContainText('desired 7 →');
-    await dialog.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(dialog.getByText(/^Sent/).first()).toBeVisible();
+    await expect(refused).toContainText('This preview is new; check it, then activate.');
+    await expect(dialog.getByLabel('Askar data activation')).toContainText('desired 7 →');
+    await dialog.getByRole('button', { name: 'Activate', exact: true }).click();
+    await expect(dialog.getByText(/^Activated/).first()).toBeVisible();
 
     const after = new Database(dbPath, { readonly: true });
     try {

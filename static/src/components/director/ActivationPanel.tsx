@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Download, Power, RefreshCw, Save, Send, Telescope, TriangleAlert } from 'lucide-react';
+import { Check, Download, Power, RefreshCw, Save, Telescope, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
@@ -60,7 +60,7 @@ interface Take {
   result?: DirectorTakenValues;
 }
 
-/** What the last preview or send did in one rig's database: a line of
+/** What the last preview or apply did in one rig's database: a line of
  *  counts, its warnings, what Target Scheduler shoots afterwards, what it
  *  turns off and on, where its rows go, and every other row it touches.
  *  Where a preview would overwrite Target Scheduler's rows, the plan can
@@ -71,9 +71,9 @@ export function RigActivation({ rig, applied, take, objectiveLabel = () => '' }:
     .map(({ kind, label }) => `${label}: ${counts(rig.changes, kind)}`);
   const off = turnedOff(rig.changes);
   const on = (rig.shoots ?? []).filter(shot => shot.turned_on).length;
-  return <div className="activation-rig" aria-label={`Send to ${rig.catalog_name}`}>
+  return <div className="activation-rig" aria-label={`${rig.catalog_name} activation`}>
     <p className="activation-rig-summary">
-      <strong>{applied ? 'Sent' : 'Preview'}</strong>{rig.applied && <> <Check size={14} aria-label="sent" /></>}
+      <strong>{applied ? 'Activated' : 'Preview'}</strong>{rig.applied && <> <Check size={14} aria-label="activated" /></>}
       {off && <strong className="activation-off-count"> · {applied ? 'Turned off' : 'Turns off'} {off}</strong>}
       {on > 0 && <strong> · {applied ? 'Turned on' : 'Turns on'} {on} plan{on === 1 ? '' : 's'}</strong>}
       {summary.length > 0 ? ` · ${summary.join(' · ')}` : ''}
@@ -110,7 +110,7 @@ function templateText(shot: DirectorActivationShot): string {
 function Shoots({ rig, applied, objectiveLabel }: { rig: ReportRig; applied: boolean; objectiveLabel: (id: string) => string }) {
   if (!rig.shoots) return null;
   return <div className="activation-shoots" role="note" aria-label={`Shoots in ${rig.catalog_name}`}>
-    <h4><Telescope size={14} aria-hidden="true" />{applied ? 'Target Scheduler now shoots' : 'Once sent, Target Scheduler shoots'}</h4>
+    <h4><Telescope size={14} aria-hidden="true" />{applied ? 'Target Scheduler now shoots' : 'After activation, Target Scheduler shoots'}</h4>
     {rig.shoots.length === 0 ? <p className="director-muted">Nothing in this project</p> : <ul>{rig.shoots.map(shot => {
       const summed = shot.objectives.length > 1 ? shot.objectives.map(objectiveLabel).filter(Boolean) : [];
       return <li key={shot.plan}>
@@ -179,21 +179,21 @@ function describePush(push: DirectorActivationPush | null, applied: boolean): st
   return applied ? `Push to ${push.peer_name} pending` : `Will push to ${push.peer_name}`;
 }
 
-/** Send the framing and plan into each participating rig's database. The
+/** Activate the framing and plan in each participating rig's database. The
  *  preview runs by itself, on opening and whenever what it reads changes:
  *  the server works it out on a copy of each rig's planning tables, so it
- *  writes nothing and takes no lock. Send runs it again on the databases
+ *  writes nothing and takes no lock. Activate runs it again on the databases
  *  themselves and writes only when that matches. Each rig's part of the
  *  result is shown with that rig (`onReport`); rigs not in `shownElsewhere`
  *  are listed here. `onFraming` opens the Framing tab, for a plan that
- *  needs a framing before it can be sent. */
+ *  needs a framing before it can be activated. */
 export default function ActivationPanel({ projectId, onReport, shownElsewhere, onFraming }: {
   projectId: string;
   onReport?: (report: DirectorActivationReport | null) => void;
   shownElsewhere?: ReadonlySet<string>;
   onFraming?: () => void;
 }) {
-  // The page's unsaved edits: sending writes what is saved, so the dialog
+  // The page's unsaved edits: activation writes what is saved, so the dialog
   // asks to save them first rather than preview a plan about to change.
   // Saving is a change of its own, so it never happens unasked.
   const drafts = useDrafts();
@@ -219,7 +219,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
       if (failed) throw new Error(`${describeFailure(failed)} Fix it, then try again.`);
     },
   });
-  // What the page reads about the rigs changes with a send, whether or not
+  // What the page reads about the rigs changes with an activation, whether or not
   // the dialog is still open when it lands, so these refresh here and not
   // in a callback that closing the dialog would drop.
   const apply = useMutation({
@@ -238,7 +238,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
   });
   // Everything the preview reads that this page sees change: the saved plan
   // and framing, and the collaboration work chosen here. The rig databases
-  // can change too; Send catches that and previews again.
+  // can change too; Activate catches that and previews again.
   const inputs = JSON.stringify([planRevision ?? null, framingRevision ?? null, visits]);
   const preview = useAutoPreview<DirectorActivationReport>({
     key: inputs,
@@ -251,12 +251,12 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
     }),
   });
   const report = unsavedPlan ? null : preview.result;
-  // The server cannot send this plan yet, and says what to do first.
+  // The server cannot activate this plan yet, and says what to do first.
   const notReady = notReadyReason(preview.error);
-  // A Send refused because something changed since the preview: the
-  // preview it was refused for, and what Send found on the rigs.
+  // An activation refused because something changed since the preview:
+  // the preview it was refused for, and what Activate found on the rigs.
   const [refused, setRefused] = useState<{ shown: DirectorActivationReport; found: DirectorActivationReport | null } | null>(null);
-  // Until a new preview lands, Send stays off.
+  // Until a new preview lands, Activate stays off.
   const reconciling = !!refused && preview.result === refused.shown;
   const [taken, setTaken] = useState<Record<string, DirectorTakenValues>>({});
   const [tookStale, setTookStale] = useState(false);
@@ -281,7 +281,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
       onSuccess: applied => preview.replace(applied),
       onError: error => {
         if (httpStatus(error) !== 409) return;
-        // What Send found on the rig databases themselves.
+        // What Activate found on the rig databases themselves.
         const found = (answerOf(error)?.data?.data as DirectorActivationReport | null | undefined) ?? null;
         setRefused({ shown, found });
         setAgain(count => count + 1);
@@ -300,17 +300,17 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
       onError: error => { if (httpStatus(error) === 409) { setTookStale(true); setAgain(count => count + 1); } },
     });
   };
-  // Sending the last send again to the remote sites that lack it.
+  // Sending the last activation again to the remote sites that lack it.
   const push = useSendAgain(projectId);
   const pushed = push.data;
   const run = (action: () => void) => { if (busy.current) return; busy.current = true; try { action(); } finally { busy.current = false; } };
   useEffect(() => { onReport?.(report); }, [report, onReport]);
-  // Send takes its own button away; the result takes focus in its place.
+  // Activate takes its own button away; the result takes focus in its place.
   const outcome = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
     if (report?.applied && (!document.activeElement || document.activeElement === document.body)) outcome.current?.focus();
   }, [report]);
-  // Save and send… goes with the note it sits in; the status line, which
+  // Save and activate… goes with the note it sits in; the status line, which
   // says the preview is on its way, takes focus so it stays in the dialog.
   const statusLine = useRef<HTMLParagraphElement>(null);
   const wasUnsaved = useRef(unsavedPlan);
@@ -328,39 +328,40 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
   // preview, so "Previewing…" is said too.
   const announcement = !previewing ? ''
     : preview.loading ? 'Previewing…'
-    : notReady ? `Not ready to send: ${notReady}`
+    : notReady ? `Not ready to activate: ${notReady}`
     : preview.error ? 'Preview failed'
-    : report?.applied ? 'Sent'
+    : report?.applied ? 'Activated'
     : preview.fresh ? 'Preview ready' : '';
-  // Why Send is off, said beside it and read with it.
+  // Why Activate is off, said beside it and read with it.
   const sendWait = !manageable ? 'This server cannot change rig databases.'
-    : notReady ? 'Nothing to send until then.'
+    : notReady ? 'Nothing to activate until then.'
     : preview.loading || reconciling ? 'Waiting for the preview.'
-    : preview.error ? 'No preview to send.'
+    : preview.error ? 'No preview to activate.'
     : nothingToWrite ? 'No rig database can take this plan yet.'
     : '';
   const changed = refused && (refused.found ?? (!reconciling ? preview.result : null));
-  return <section className="activation" aria-label="Send to the rigs">
+  return <section className="activation" aria-label="Activation">
     <CollaborationActivation projectId={projectId} value={visits} disabled={writing || !canWrite} onChange={setVisits} />
-    {last.data && <p className="director-muted">Last sent {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
+    {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
     {last.data && (behind.length > 0 || unsent.length > 0) && <p className="activation-behind" role="note">{notSynced}</p>}
     {unsent.length > 0 && <div className="activation-unsent" role="note" aria-label="Not sent to remote sites">
       <ul>{unsent.map(site => <li key={site.rig_id}>
         {site.rig_name}: not sent to {site.peer_name}{site.error && <span className="director-error">: {site.error}</span>}
         {site.attempted_at_ms !== undefined && <span className="director-muted"> · tried {new Date(site.attempted_at_ms).toLocaleString()}</span>}
       </li>)}</ul>
-      {canWrite && <button type="button" disabled={writing || !manageable} title={manageable ? 'Send these sites the rows they lack' : 'This server cannot change rig databases'} onClick={() => run(() => push.mutate())}>
+      {canWrite && <button type="button" disabled={writing || !manageable} title={manageable ? 'Send the last activation\'s rows to these sites again' : 'This server cannot change rig databases'} onClick={() => run(() => push.mutate())}>
         <RefreshCw size={16} />{push.isPending ? 'Sending…' : sendLabel(unsent)}
       </button>}
     </div>}
-    {last.data && behind.length === 0 && unsent.length === 0 && !checking && !unsavedPlan && planRevision !== undefined && (unchecked
+    {/* Once activated here, the status line says so; the state need not too. */}
+    {last.data && behind.length === 0 && unsent.length === 0 && !checking && !unsavedPlan && !report?.applied && planRevision !== undefined && (unchecked
       ? <p className="director-muted" title={unchecked.title}>{unchecked.text}</p>
-      : <p className="director-muted">On the rigs</p>)}
-    {!last.data && last.isSuccess && !notReady && <p className="director-muted">{matches ? 'On the rigs' : notSynced}</p>}
+      : <p className="director-muted">Activated</p>)}
+    {!last.data && last.isSuccess && !notReady && <p className="director-muted">{matches ? 'Activated' : notSynced}</p>}
     {canWrite && unsavedPlan && <div className="activation-unsaved" role="note" aria-label="Unsaved changes">
-      <p>Unsaved changes in {unsavedLabels.join(', ')}. The rigs get the saved plan, so save first; the preview follows.</p>
+      <p>Unsaved changes in {unsavedLabels.join(', ')}. Activation writes the saved plan, so save first; the preview follows.</p>
       <div className="director-actions">
-        <button type="button" disabled={writing} onClick={() => run(() => save.mutate())}><Save size={16} />{save.isPending ? 'Saving…' : 'Save and send…'}</button>
+        <button type="button" disabled={writing} onClick={() => run(() => save.mutate())}><Save size={16} />{save.isPending ? 'Saving…' : 'Save and activate…'}</button>
       </div>
     </div>}
     <div className="activation-status">
@@ -372,10 +373,10 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
     {refused && <p className="activation-changed" role="alert">{changed
       ? `Changed since the preview: ${describeChange(refused.shown, changed).replace(/\.$/, '')}. Nothing was written. `
       : 'Changed since the preview. Nothing was written. '}
-      {reconciling ? 'Previewing again…' : 'This preview is new; check it, then send.'}</p>}
+      {reconciling ? 'Previewing again…' : 'This preview is new; check it, then activate.'}</p>}
     {tookStale && <p className="activation-changed" role="alert">The saved plan changed since this preview, so nothing was taken. The preview has run again.</p>}
     {report && <div className="activation-report" role="region" aria-label="Preview" aria-busy={preview.loading || reconciling}>
-      <p tabIndex={-1} ref={outcome}><strong>{report.applied ? 'Sent' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Revision ${report.activation_revision} on the rigs.`}</p>
+      <p tabIndex={-1} ref={outcome}><strong>{report.applied ? 'Activated' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Revision ${report.activation_revision} on the rigs.`}</p>
       {report.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
       {report.rigs.filter(rig => !shownElsewhere?.has(rig.rig.id)).map(rig => <div key={rig.rig.id}>
         <h4 className="activation-rig-name">{rig.catalog_name}</h4>
@@ -387,15 +388,15 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
       </div>)}
     </div>}
     {pushed && <div className="activation-report" aria-label="Push result">
-      <p><strong>Sent again</strong>: revision {pushed.activation_revision}.</p>
+      <p><strong>Sent again</strong>: activation revision {pushed.activation_revision}.</p>
       {pushed.warnings.map(warning => <p key={warning} className="director-muted">{warning}</p>)}
       <ul>{pushed.rigs.map(rig => <li key={rig.rig.id} className={rig.push.error ? 'director-error' : undefined}>{rig.catalog_name}: {describePush(rig.push, true)}</li>)}</ul>
     </div>}
     {previewing && !report?.applied && <div className="director-actions">
       <button type="button" disabled={!preview.fresh || reconciling || writing || !!sendWait}
-        aria-describedby={sendWait ? `${ids}-send-wait` : undefined}
-        onClick={() => run(send)}><Send size={16} />{apply.isPending ? 'Sending…' : 'Send'}</button>
-      {sendWait && <span id={`${ids}-send-wait`} className="director-muted">{sendWait}</span>}
+        aria-describedby={sendWait ? `${ids}-activate-wait` : undefined}
+        onClick={() => run(send)}><Check size={16} />{apply.isPending ? 'Activating…' : 'Activate'}</button>
+      {sendWait && <span id={`${ids}-activate-wait`} className="director-muted">{sendWait}</span>}
     </div>}
     {!canWrite && <p className="director-muted">Read only</p>}
     {canWrite && !manageable && <p className="director-muted">Preview only: this server cannot change rig databases</p>}

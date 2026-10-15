@@ -2282,7 +2282,7 @@ async fn the_check_lists_a_replaced_plan_left_on_under_an_up_to_date_record() {
     assert_eq!(actions(&after, "project"), ["unchanged"], "{after}");
 }
 
-/// Opening a plan runs the check, and opening its send dialog runs a
+/// Opening a plan runs the check, and opening its activation dialog runs a
 /// preview, so neither may queue for the turn at the rig databases that
 /// discovery, adoption and activations take: both answer while that turn
 /// is held, and an apply, which writes, still waits.
@@ -2324,13 +2324,13 @@ async fn the_check_and_the_preview_answer_while_another_job_holds_the_rig_databa
     activate_now(&a.f, a.project, "after the turn").await;
 }
 
-/// Send reconciles: it runs the preview again on the rig database itself,
+/// Activate reconciles: it runs the preview again on the rig database itself,
 /// under its write lock, and writes only when that reaches the digest the
 /// preview on the copy showed. A row N.I.N.A. changed after the preview
-/// read its copy refuses the send with what Apply found, nothing written,
-/// and the next preview reaches the same digest, so the send goes through.
+/// read its copy refuses the activation with what Apply found, nothing written,
+/// and the next preview reaches the same digest, so the activation goes through.
 #[tokio::test]
-async fn send_refuses_with_what_it_found_when_a_rig_changed_after_the_preview() {
+async fn activate_refuses_with_what_it_found_when_a_rig_changed_after_the_preview() {
     let a = activated().await;
     activate_now(&a.f, a.project, "first").await;
     edit_plan(&a.f, a.project, |plan| {
@@ -2364,7 +2364,7 @@ async fn send_refuses_with_what_it_found_when_a_rig_changed_after_the_preview() 
         refused["error"]
             .as_str()
             .unwrap()
-            .contains("nothing was written"),
+            .contains("nothing was activated"),
         "{refused}"
     );
     assert_eq!(refused["data"]["applied"], false);
@@ -2397,10 +2397,10 @@ async fn send_refuses_with_what_it_found_when_a_rig_changed_after_the_preview() 
     assert_ne!(desired(), "5,5");
 }
 
-/// The send dialog previews by itself, so a preview runs on a copy of the
+/// The activation dialog previews by itself, so a preview runs on a copy of the
 /// rig's planning tables: it answers while N.I.N.A. holds the database's
 /// write lock and writes nothing. Its digest is the one Apply reaches on
-/// the database itself, so the send goes through once the lock is gone.
+/// the database itself, so the activation goes through once the lock is gone.
 #[tokio::test]
 async fn a_preview_reads_a_copy_and_its_digest_applies_on_the_database() {
     let a = activated().await;
@@ -2445,7 +2445,7 @@ async fn a_preview_reads_a_copy_and_its_digest_applies_on_the_database() {
     .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     assert_eq!(count("SELECT count(*) FROM project"), 1);
-    // After the send, a preview of the same plan on the copy is what the
+    // After the activation, a preview of the same plan on the copy is what the
     // database now holds.
     let (_, again) = call(&a.f.app, "POST", &preview_path, json!({}), None).await;
     assert!(plan_writes(&again["data"]).is_empty(), "{again}");
@@ -3183,7 +3183,7 @@ async fn a_band_off_in_target_scheduler_is_turned_off_and_a_draft_is_named() {
     );
     assert_eq!(
         taken["data"]["left"],
-        json!(["Project: a Draft in Target Scheduler; sending to the rigs makes it Active"]),
+        json!(["Project: a Draft in Target Scheduler; an activation makes it Active"]),
         "{taken}"
     );
     let plan = {

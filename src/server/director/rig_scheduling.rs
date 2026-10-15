@@ -178,7 +178,7 @@ async fn run(
                             Err(_) => {
                                 let name = store.project(project)?.map_or_else(String::new, |p| p.name);
                                 warnings.push(format!(
-                                    "Plan {name}: its collaboration assignment could not be read, so its project is left as it is; sending to the rigs sets its limits."
+                                    "Plan {name}: its collaboration assignment could not be read, so its project is left as it is; activation sets its limits."
                                 ));
                                 skipped.insert(mapping.source_project_guid);
                                 continue;

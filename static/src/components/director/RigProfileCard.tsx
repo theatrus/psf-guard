@@ -212,7 +212,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       {rigId && <RigSchedulingApply rigId={rigId} unsaved={schedulingChanged} />}
       <fieldset disabled={disabled}>
         <legend>Remote site</legend>
-        <p className="director-muted">When this rig's real database lives on another PSF Guard, pick that peer. Sending to the rigs writes the plan into the copy here, then pushes the same rows there through Sync.</p>
+        <p className="director-muted">When this rig's real database lives on another PSF Guard, pick that peer. Activation writes the plan into the copy here, then pushes the same rows there through Sync.</p>
         <label className="rig-profile-field" htmlFor={`${slug}-peer`}><span>Plans push to</span>
           <span className="rig-profile-input">
             <select id={`${slug}-peer`} aria-label="Plans push to" value={form.peerId} onChange={event => update({ peerId: event.target.value })}>

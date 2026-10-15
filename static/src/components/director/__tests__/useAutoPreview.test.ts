@@ -44,7 +44,7 @@ describe('useAutoPreview', () => {
       rerender({ inputs, enabled: true });
       await act(async () => { await vi.advanceTimersByTimeAsync(100); });
     }
-    // Outdated at once: Send must wait.
+    // Outdated at once: Activate must wait.
     expect(result.current.fresh).toBe(false);
     expect(result.current.loading).toBe(true);
     expect(api.calls).toHaveLength(1);
@@ -123,13 +123,13 @@ describe('useAutoPreview', () => {
     await act(async () => { result.current.refresh(); });
     await act(async () => { api.calls[1].resolve('preview a'); });
     expect(result.current).toMatchObject({ result: 'preview a', fresh: true, error: null });
-    act(() => { result.current.replace('sent a'); });
+    act(() => { result.current.replace('activated a'); });
     // Switching off and on, as an Apply does, does not replace it.
     rerender({ inputs: 'a', enabled: false });
     rerender({ inputs: 'a', enabled: true });
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(api.calls).toHaveLength(2);
-    expect(result.current).toMatchObject({ result: 'sent a', fresh: true });
+    expect(result.current).toMatchObject({ result: 'activated a', fresh: true });
   });
 
   it('previews nothing while off', async () => {

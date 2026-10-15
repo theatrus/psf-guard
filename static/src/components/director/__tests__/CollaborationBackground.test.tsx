@@ -54,11 +54,11 @@ describe('Automatic collaboration work', () => {
     expect(screen.queryByRole('combobox', { name: 'Rig database' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Refresh interval (minutes)')).not.toBeInTheDocument();
     expect(screen.getByLabelText('M31')).not.toBeChecked();
-    expect(screen.getByLabelText('Send to the rig database')).not.toBeChecked();
+    expect(screen.getByLabelText('Activate on the rig')).not.toBeChecked();
     await userEvent.click(screen.getByLabelText('Pull tonight automatically'));
     expect(screen.getByRole('button', { name: 'Save automation' })).toBeDisabled();
     await userEvent.click(screen.getByLabelText('M31'));
-    await userEvent.click(screen.getByLabelText('Send to the rig database'));
+    await userEvent.click(screen.getByLabelText('Activate on the rig'));
     await userEvent.click(screen.getByLabelText('Submit contribution reports automatically'));
     await userEvent.click(screen.getByRole('button', { name: 'Save automation' }));
     await waitFor(() => expect(requests.at(-1)).toEqual({ operation: 'background_configure', expected: null, policy: { enabled: true, catalog_id: 'catalog', project_ids: ['000000000002'], interval_minutes: 15, activate: true, automatic_reports: true } }));

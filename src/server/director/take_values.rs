@@ -478,13 +478,11 @@ fn merge(plan: &PlanDraft, framing: Option<&FramingDraft>, rig: Uuid, read: Read
         ));
     }
     if read.draft_project {
-        left.push(
-            "Project: a Draft in Target Scheduler; sending to the rigs makes it Active".into(),
-        );
+        left.push("Project: a Draft in Target Scheduler; an activation makes it Active".into());
     }
     if read.targets_off > 0 {
         left.push(format!(
-            "{} target{} off in Target Scheduler; sending to the rigs turns {} on",
+            "{} target{} off in Target Scheduler; an activation turns {} on",
             read.targets_off,
             if read.targets_off == 1 { "" } else { "s" },
             if read.targets_off == 1 { "it" } else { "them" }

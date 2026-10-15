@@ -22,17 +22,17 @@ export function isArchivedPlan(row: DirectorPlanRow): boolean {
 /** The stage in a word or two, for a compact row; the full line sits in
  *  the row's title. */
 export function stageShort(row: DirectorPlanRow): string {
-  if (row.activation) return 'On the rigs';
+  if (row.activation) return 'Activated';
   if (row.plan && row.plan.objectives > 0) return 'Planned';
   if (row.framing?.source === 'catalog') return 'Framed in Target Scheduler';
   if (row.framing) return 'Framed';
   return row.links.length ? 'No target yet' : 'Not linked';
 }
 
-/** Where the plan stands, from sent to the rigs back to unlinked. */
+/** Where the plan stands, from activated back to unlinked. */
 export function stage(row: DirectorPlanRow): string {
-  if (row.activation) return `Sent to ${plural(row.activation.rigs, 'rig')} on ${new Date(row.activation.applied_at_ms).toLocaleDateString()}, revision ${row.activation.revision}`;
-  if (row.plan && row.plan.objectives > 0) return `Planned: ${plural(row.plan.objectives, 'objective')}, ${plural(row.plan.rigs, 'rig')}, not sent to the rigs`;
+  if (row.activation) return `Activated rev ${row.activation.revision} on ${new Date(row.activation.applied_at_ms).toLocaleDateString()}, ${plural(row.activation.rigs, 'rig')}`;
+  if (row.plan && row.plan.objectives > 0) return `Planned: ${plural(row.plan.objectives, 'objective')}, ${plural(row.plan.rigs, 'rig')}, not activated`;
   if (row.framing?.source === 'catalog') return `Framed in Target Scheduler: ${row.framing.target_name || 'target'}${row.framing.panels > 1 ? `, ${row.framing.panels} targets` : ''}; open to plan it in Director`;
   if (row.framing) return `Framed: ${row.framing.target_name || 'target'}, ${plural(row.framing.panels, 'panel')}`;
   return row.links.length ? 'Linked; its database has no target with coordinates yet' : 'Not linked to any database';

@@ -183,7 +183,7 @@ impl IntoResponse for ActivationError {
                     success: false,
                     data: Some(*report),
                     error: Some(
-                        "The plan or a rig database changed since the preview; nothing was written. Preview again."
+                        "The plan or a rig database changed since the preview; nothing was activated. Preview again."
                             .into(),
                     ),
                     status: None,
@@ -429,7 +429,7 @@ pub(super) async fn background_apply(
         Ok(true)
     } else {
         Err(ActivationError::NotReady(
-            "Sending could not reach this rig; preview the send to the rigs and try again.",
+            "Activation could not reach this rig; preview the activation and try again.",
         ))
     }
 }
@@ -459,7 +459,7 @@ async fn execute_guarded(
     // A check or a preview runs on an in-memory copy of each rig's planning
     // tables, taken in one read transaction, and writes nothing, so it skips
     // the turn at the rig databases that discovery, adoption and activations
-    // queue for: opening a plan or its send dialog never waits behind them,
+    // queue for: opening a plan or its activation dialog never waits behind them,
     // nor they behind it. The copy cannot hold half of an activation, which
     // commits each rig database in one transaction; the pooled reader below
     // bounds how many run. Applies write, so they still take the turn.
@@ -486,7 +486,7 @@ async fn execute_guarded(
         } else { visits };
         if is_collaboration && visits.is_empty() {
             return Err(ActivationError::NotReady(
-                "This collaboration import is an inactive draft. Choose its assignments before sending it to the rigs.",
+                "This collaboration import is an inactive draft. Choose its assignments for activation first.",
             ));
         }
         if !is_collaboration && !visits.is_empty() { return Err(Error::Invalid.into()); }
@@ -529,7 +529,7 @@ async fn execute_guarded(
                 || plan.contributions.iter().any(|c| c.rig_id != rig)
                 || previous.as_ref().is_some_and(|a| a.rigs.iter().any(|r| r.rig_id != rig) || a.inactive_rigs.iter().any(|r| r.rig_id != rig)))
         {
-            return Err(ActivationError::NotReady("Configure this rig's recipes in Planning; shared multi-rig plans are sent to the rigs by hand."));
+            return Err(ActivationError::NotReady("Configure this rig's recipes in Planning; shared multi-rig plans need a manual activation."));
         }
         // Contributions turned off on a rig that stays on: their rows are
         // turned off. A rig with all of them off has its project set
@@ -1070,7 +1070,7 @@ async fn execute_guarded(
             whole.pushes = pushes_of(&whole, &written, &remote, previous.as_ref());
             if whole.validate().is_err() {
                 return Err(ActivationError::NotReady(
-                    "This send is too large to record; nothing was written. Split the plan or turn some rigs off.",
+                    "This activation is too large to record; nothing was written. Split the plan or turn some rigs off.",
                 ));
             }
             // Each rig database commits on its own. One that fails is said
@@ -1112,7 +1112,7 @@ async fn execute_guarded(
             }
             if !failed.is_empty() {
                 let names: Vec<&str> = reports.iter().filter(|r| failed.contains(&r.rig.id)).map(|r| r.catalog_name.as_str()).collect();
-                warnings.push(format!("Not applied to {}; the other rigs were. Send the plan to the rigs again to finish.", names.join(", ")));
+                warnings.push(format!("Not applied to {}; the other rigs were. Activate the plan again to finish.", names.join(", ")));
             }
             let inactive: Vec<InactiveRig> = inactive
                 .into_iter()
@@ -1151,7 +1151,7 @@ async fn execute_guarded(
                         return ActivationError::from(error);
                     }
                     ActivationError::NotReady(
-                        "The rig databases were written but the send could not be recorded; send the plan to the rigs again.",
+                        "The rig databases were written but the activation could not be recorded; activate the plan again.",
                     )
                 })?;
                 let mut warnings = Vec::new();
@@ -1227,7 +1227,7 @@ pub(super) fn open_rig(path: &str) -> Result<Connection, String> {
 /// A rig database for an activation, or for a check or a preview a copy of
 /// its planning tables. A preview first opens the file for writing, as
 /// Apply will, without taking its lock: a database Apply could not open is
-/// said in the preview, so the two agree and Send is not refused for it.
+/// said in the preview, so the two agree and Activate is not refused for it.
 fn open_rig_for(path: &str, on_copy: bool, probe_write: bool) -> Result<Connection, String> {
     if !on_copy {
         return open_rig(path);
@@ -1444,9 +1444,9 @@ pub(super) async fn push(
         .clone()
         .with_reader(move |store| {
             let project = store.project(id)?.ok_or(Error::Missing)?;
-            let activation = store.activation(id)?.ok_or(ActivationError::NotReady(
-                "Send the plan to the rigs first.",
-            ))?;
+            let activation = store
+                .activation(id)?
+                .ok_or(ActivationError::NotReady("Activate the plan first."))?;
             let mut targets: Vec<(NamedIdentity, Arc<DatabaseContext>, String)> = Vec::new();
             let found = identified_catalogs(&catalogs, instance);
             let mut warnings = found.duplicates.clone();
@@ -1529,7 +1529,7 @@ pub(super) async fn push(
     }
     if rigs.is_empty() && warnings.is_empty() {
         warnings.push(
-            "No rig in the last send pushes to a remote site; name a peer under Rigs, Setup."
+            "No rig in this activation pushes to a remote site; name a peer under Rigs, Setup."
                 .into(),
         );
     }
@@ -1712,7 +1712,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     },
                     name: project_name.clone(),
                     detail: if notes.is_empty() {
-                        "Director's project from the last send".into()
+                        "Director's project from the last activation".into()
                     } else {
                         notes.join("; ")
                     },
@@ -1725,7 +1725,8 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                     kind: "project",
                     action: "create",
                     name: project_name.clone(),
-                    detail: "the project row from the last send was gone; created again".into(),
+                    detail: "the project row from the last activation was gone; created again"
+                        .into(),
                 });
                 guid
             }
@@ -3146,7 +3147,7 @@ fn bad_guid(value: &str) -> RigError {
 /// GUIDs instead, which also keeps Director from making a twin of the row.
 fn missing_guid(what: &str) -> RigError {
     RigError::Skip(format!(
-        "{what} has no GUID yet. Fill in GUIDs for this database under Settings, Databases, then send the plan to the rigs again."
+        "{what} has no GUID yet. Fill in GUIDs for this database under Settings, Databases, then activate the plan again."
     ))
 }
 

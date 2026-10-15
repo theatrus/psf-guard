@@ -29,6 +29,18 @@
   it found and previews again. A plan that cannot be sent yet says what to
   do first instead of offering a send. Unsaved plan edits are never saved
   unasked: the dialog offers **Save and send…**.
+- A Director plan's status now reads **Activated** or **Needs activating**
+  instead of Synced or Not synced, so it is not mistaken for the catalog
+  Sync, and the Library badge says **Activated on N rigs** rather than
+  Active, Target Scheduler's own project state. The **Activate on the
+  rigs** dialog previews by itself when it opens and again whenever its
+  inputs change, so there is no Preview button to press. The preview reads
+  a copy of each rig's planning tables, so it never waits for N.I.N.A. or
+  holds a rig database's lock; **Activate** checks the databases themselves
+  and writes only when they match, and when they do not, it says what
+  changed and previews again. A plan that cannot be activated yet says
+  what to do first instead of offering **Activate…**. Unsaved plan edits
+  are never saved unasked: the dialog offers **Save and activate…**.
 - **Settings › Server** can fix the desktop app's localhost port, so browser,
   API, and agent connections keep the same address across restarts. A port
   conflict shows the error and Server settings so you can choose another
@@ -175,31 +187,30 @@
   build, and the page took it for news of a newer one.
 - A scheduling save that conflicts with another edit blocks another save
   until you reload the limits, including while the latest limits are loading.
-- Changing a filter's template in a plan before it is first sent to the rigs
-  no longer leaves the old exposure plan running in Target Scheduler beside
-  the new one. Sending turns off a plan on the target that takes the same
-  frames at another length, the preview lists it as replaced, and the plan
-  asks to be sent until it is.
-- A plan asks to be sent to the rigs again whenever sending would change a
-  rig's Target Scheduler rows, not only after a save: rows changed in
-  N.I.N.A., or an old plan another length replaced that is still on. The
-  plan's summary says **On the rigs** or **Rigs behind** (why is in the
-  tooltip and in the bar at the top), or **Couldn't check the rigs** when
-  they cannot be read, with a separate **Send to rigs…** button. The bar's
-  button says **Send to rigs again…** once the plan has been sent. An exposure plan the preview updates
+- Changing a filter's template in a plan before its first activation no longer
+  leaves the old exposure plan running in Target Scheduler beside the new one.
+  Activation turns off a plan on the target that takes the same frames at
+  another length, the preview lists it as replaced, and the plan asks to be
+  activated until it is.
+- A plan asks to be activated again whenever activation would change a rig's
+  Target Scheduler rows, not only after a save: rows changed in N.I.N.A., or
+  an old plan another length replaced that is still on. The plan's summary
+  says **Activated** or **Needs activating** (why is in the tooltip and in the bar at
+  the top), or **Couldn't check the rigs** when they cannot be read, with a
+  separate **Activate…** button. The bar's button says **Activate again…**
+  once the plan has been activated. An exposure plan the preview updates
   says what changes, such as `desired 100 → 150`.
 - The plan now decides which Target Scheduler exposure plans run in each
-  rig's project. Sending it to the rigs switches on every plan the plan has, and
+  rig's project. Activation switches on every plan the plan has, and
   switches off every other plan in the project, frames and counts kept,
   including filters the plan doesn't shoot at all. Two objectives that come
   to the same target, template and exposure share one Target Scheduler plan
   asking for the sum of their frames; progress shows it under each, marked
   shared, and counts it once.
-- The send preview starts with what Target Scheduler will shoot
+- The activation preview starts with what Target Scheduler will shoot
   afterwards, then what it turns off and why, then what it turns back on,
-  and shows the same after **Send**. The count of turn-offs is in the rig's
-  line and in the bar ("The rigs are behind the saved plan: turns off 1 plan
-  in ultracat131").
+  and shows the same after **Activate**. The count of turn-offs is in the rig's
+  line and in the bar ("Needs activating: turns off 1 plan in ultracat131").
 - To keep a plan made in N.I.N.A., **Take Target Scheduler's values**: it
   now brings each exposure length in as its own objective, so a 30 s L plan
   beside the plan's 300 s one becomes an "Unsaturated stars" objective and
@@ -342,13 +353,13 @@
   server to finish its work, so the job queue it saves is not lost. If that
   work is still running after two minutes, the log lists it and the whole
   app restarts instead.
-- A plan whose remote rig's site missed the last send now reads **Rigs
-  behind**: "observatory-pi hasn't received the last send" in the summary
-  and the bar, and "behind · not sent to observatory-pi" on the rig's line.
-  The bar and the send dialog offer **Send to observatory-pi again**, with
-  the error and when it was tried, and show no button when every site has
-  it. Once the site answers a connection test, a sync or another push, the
-  server sends the plan there on its own.
+- A plan whose remote rig's site missed the last activation now reads
+  **Needs activating**: "observatory-pi hasn't received this activation" in the summary
+  and the bar, and "not sent to observatory-pi" on the rig's line. The bar
+  and the activation dialog offer **Send to observatory-pi again**, with the
+  error and when it was tried, and show no button when every site has it.
+  Once the site answers a connection test, a sync or another push, the
+  server sends the activation there on its own.
 - The Library's compact rows line up in columns: database, state, progress,
   grade counts, dates, calibration, **Sequence** and **Stacks**, and ⚙ each
   sit at the same place on every row, and a project without a pill leaves

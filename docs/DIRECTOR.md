@@ -7,7 +7,7 @@ Director stays the name of the plugin, the protocol and the API. This API
 manages global project, site and rig identities in a separate meta database.
 
 Target Scheduler with PSF Guard Sync is the main way to run a rig today.
-Sending to the rigs writes ordinary Target Scheduler projects, and Sync carries them to
+Activation writes ordinary Target Scheduler projects, and Sync carries them to
 N.I.N.A. Pairing a rig with the N.I.N.A. Director plugin is an early beta: a
 paired plugin pulls its program, checks in captures and reports live status.
 The app marks what the plugin drives **Early beta**: the **Live** table, the
@@ -64,7 +64,7 @@ back off and retry. A database lock retries the saved assignment locally rather
 than fetching it again or skipping the night. **Refresh now** explicitly reruns
 the saved automation,
 including reports when enabled. It never joins projects for you.
-**Send to the rig database** also sends safe assignments to that one database.
+**Activate on the rig** also applies safe assignments to that rig's database.
 For a new untouched draft, Director uses a unique matching filter/binning
 template, preferring the assigned exposure when several templates match. It
 preserves the template's gain, offset and Moon policy. Ambiguous recipes need
@@ -80,8 +80,8 @@ back off; reconnect after a rejected credential. A server restart restores the
 saved policy and nightly checkpoint; detailed run counts are process-local.
 
 Open that project's plan workspace, add one enabled rig recipe for each assigned
-filter at its assigned exposure length, then select the rig's assignment in
-**Send to rigs…**. The preview and **Send** use the assignment's exact panels, camera
+filter at its assigned exposure length, then select the rig's assignment under
+**Activation**. Preview and Apply use the assignment's exact panels, camera
 angles and frame counts, not an edited rectangular mosaic. This writes ordinary
 Target Scheduler projects and exposure plans; use the existing database sync to
 send them to NINA. Local priorities, scheduling limits and grading retries
@@ -114,7 +114,7 @@ submitted by the manual view. **Review images** checks
 GUIDs, saved files, exposures, fresh pixel solves and shared measured coverage.
 Set **Observing night** to the night the selected images were captured, even if
 the assignment was issued earlier. Candidates include a time-zone margin, so
-review which images belong to that night. Targets sent to the rigs associate captures
+review which images belong to that night. Activated targets associate captures
 by stable target GUID, filter and assignment cutover time; delayed database sync
 does not change their original task or revision. **Queue finalized contribution**
 freezes the reviewed evidence. The review shows exposure, scale, focal length,
@@ -228,7 +228,7 @@ Target Scheduler's default. `GET /rigs/{rig}/preferences?project_id=...`
 returns the resolved values in `scheduling.values` and, in
 `scheduling.sources`, the scope each came from.
 
-Sending to the rigs writes the resolved limits into each rig's Target Scheduler
+Activation writes the resolved limits into each rig's Target Scheduler
 project, so they hold when Target Scheduler runs the rig without Director. A
 project the activation creates takes every limit; an existing one takes only
 the limits some scope sets, so a value edited by hand in Target Scheduler that
@@ -330,7 +330,7 @@ switching are not exposed. Catalog adoption requires the explicit workflow below
 Plans live in the Library and the header; there is no separate list page.
 The **Library** lists every project that has frames, and a plan shot by
 several rigs is an outer pill there with a row per rig. The outer pill
-carries the plan's stage (Framed, Planned, or On N rigs) and a
+carries the plan's stage (Framed, Planned, or Activated on N rigs) and a
 **Planning** button (⚙ on a compact row) that opens the plan's **workspace**; a project shot by one
 rig has that button on its own row and card, and the rows and cards inside
 a family leave it to the outer pill. A state change locks that row's select
@@ -414,7 +414,7 @@ another tab. **Exposures** holds the objectives and, for
 each rig shooting the plan, its template, exposure and frames per objective.
 Each row also shows the rig's progress, accepted frames against what its
 Target Scheduler exposure plans ask for, with the frames taken and rejected
-beneath, and a status: **Off**, **Not sent**, **Done**, or the project's
+beneath, and a status: **Off**, **Not activated**, **Done**, or the project's
 state in Target Scheduler. The top row sums the rig: the plan's frames and
 hours, its progress over every objective, and its status. An exposure plan
 counts toward the objectives its activation wrote it for; one that sums
@@ -425,9 +425,9 @@ plan left at the template's default runs at that default), else the one
 with its template, else the one with its filter's band.
 `GET /projects/{id}/plan/progress` returns the counts.
 **Rigs** lists each rig with its database's project and whether it is
-**on the rig** (its rows hold the saved plan) or **behind**, and why: not
-sent yet, or its rows differ from the plan. **Add a rig** offers every
-rig with a new project, which sending to the rigs creates in its database, and every
+**activated** (its rows hold the saved plan) or **behind**, and why: not
+activated yet, or its rows differ from the plan. **Add a rig** offers every
+rig with a new project, which activation creates in its database, and every
 project another plan holds in a database this plan has none in. A rig joins with a template for each
 objective, from its database or the library; one with no template for any
 objective's band says so and stays out. A library template the database
@@ -446,27 +446,25 @@ Edits wait for the save bar. A copy saved elsewhere, or a plan an attach
 brings in, never replaces unsaved edits: the tab says the plan changed and
 offers **Reload**, and the save bar will not save over it.
 
-Sending to the rigs is no tab. The words avoid Target Scheduler's own
-project Active flag, which a send also sets, and the catalog Sync. Once
-every edit is saved, a bar at the top asks for a send while the rig
-databases lack the saved plan or framing, a rig that shoots the plan has
-none of it (the last send skipped it, or it joined since), or a rig's rows
-differ from the plan though the last send had it (N.I.N.A. changed them, or
-an old plan another length replaced is still on). Its **Send to rigs…**
-button, **Send to rigs again…** once the plan has been sent, opens the
-**Send to the rigs** dialog over the page. Its message says why the rigs are
-behind, such as "The rigs are behind the saved plan: ultracat131 differs
-from the plan". While a remote rig's site lacks the last send, the bar says
-so and offers to send it there, with **Send to rigs…** beside it; see
-[Rigs at another site](#rigs-at-another-site). The summary ends with a
-short label, **On the rigs** or **Rigs behind** with the reason in its
-tooltip, and a **Send to rigs…** button beside it opens the same dialog at
-any time. When the last send had the saved plan, framing and rigs, the
-label says **On the rigs** at once while the [check](#sending-to-the-rigs) runs, and
+Activation is no tab. Once every edit is saved, a bar at the top asks for an
+activation while the rig databases lack the saved plan or framing, a rig
+that shoots the plan has none of it (the last activation skipped it, or it
+joined since), or a rig's rows differ from the plan though the last
+activation had it (N.I.N.A. changed them, or an old plan another length
+replaced is still on). Its **Activate…** button, **Activate again…** once
+the plan has been activated, opens the **Activate on the rigs** dialog over the page. Its
+message says why, such as "Needs activating: ultracat131 differs from the
+plan". While a remote rig's site lacks the last
+activation, the bar says so and offers to send it there, with **Activate…**
+beside it; see [Rigs at another site](#rigs-at-another-site). The summary
+ends with a short label, **Activated** or **Needs activating** with the reason in its
+tooltip, and an **Activate…** button beside it opens the same dialog at any
+time. When the last activation had the saved plan, framing and rigs, the
+label says **Activated** at once while the [check](#activation) runs, and
 changes only if the check finds rows to write. Otherwise it says
 **Checking the rigs…** until the check answers. When the check fails, or
 cannot read a rig's database, the label says **Couldn't check the rigs**
-(or the rig), with the reason in its tooltip, and no bar asks. The send dialog's status line says
+(or the rig), with the reason in its tooltip, and no bar asks. The activation dialog's status line says
 the same. On a server that does not write rig databases the summary
 says **Drafts only** and no bar asks. Older links to the Plan, Rig
 databases or Activate tabs open Exposures or Rigs. A plan with no linked database yet starts its framing
@@ -495,13 +493,13 @@ exposure plans become the plan (one objective per bandpass with the frames
 a panel wants, bound to the template each plan uses at its exposure). A
 second exposure length on the same filter does not add an objective, on
 the import or when a following plan is read again: Planning never grows
-objectives on its own. The send preview then lists that plan under **Turns off**,
+objectives on its own. Activation then lists that plan under **Turns off**,
 and **Take Target Scheduler's values** brings it in as an objective of its
 own.
 Director plans one target or one mosaic per project. A project whose targets
 are separate, not panels of one grid, is drafted as its first target with
 that target's own exposure plans, and the listing says so; Target Scheduler
-keeps running the others. Sending leaves a rig to Target Scheduler, with
+keeps running the others. Activation leaves a rig to Target Scheduler, with
 a warning, when its linked project holds more targets than the plan frames
 there, so no target's exposure plans are taken over while others stay
 unplanned. New
@@ -846,7 +844,7 @@ reported by the plugin. The field of view and pixel scale update as you type.
 **Remote site** picks the Sync peer that holds the rig's real database when
 the rig runs on another PSF Guard. The database registered here is then a
 copy pulled from that peer, and activation pushes the plan back to it; see
-[Sending to the rigs](#sending-to-the-rigs). Leave it at **This server only** for a rig whose
+[Activation](#activation). Leave it at **This server only** for a rig whose
 N.I.N.A. writes into this server's database.
 
 Optics hold the unbinned sensor size in pixels, pixel pitch in micrometres,
@@ -1263,13 +1261,9 @@ revision they were read at; **Copy from** lists a rig's own templates and
 copies any of them into the library, skipping ones already there. Removing
 a template leaves plans that chose it with their copy of its settings.
 
-## Sending to the rigs
+## Activation
 
-The app says **Send to rigs**; the code, the API and the MCP tools call it
-*activation* (`/activation/preview`, `/activation/apply`,
-`preview_activation`, `apply_activation`).
-
-### The Send to the rigs dialog
+### The activation dialog
 
 The preview builds itself. Opening the dialog starts it, and it runs again
 300 ms after an input stops changing: the collaboration assignments chosen
@@ -1277,40 +1271,40 @@ in the dialog, or a newer saved plan or framing. Only one preview runs at a
 time; an answer for inputs that have since changed is dropped, and nothing
 polls. The preview is busy while it runs and stays in place, dimmed, and a
 status line says **Previewing…**, **Preview ready** or **Preview failed**,
-with **Refresh** to try a failed one again. Beside a disabled **Send**, a
-line says why it waits.
+with **Refresh** to try a failed one again. Beside a disabled **Activate**,
+a line says why it waits.
 
-A plan the server cannot send yet (no framing saved, or no panel rig or
+A plan the server cannot activate yet (no framing saved, or no panel rig or
 panel size) is not a failure: the status line says what to do first, with
 **Open Framing** when the framing is what it lacks, and no Refresh. The
-header then says **Can't send yet** with the same reason in place of
-**Send to rigs…**, and the bar at the top does not ask.
+header then says **Can't activate yet** with the same reason in place of
+**Activate…**, and the bar at the top does not ask.
 
-**Send** writes the rig databases. It is enabled only while the preview on
-screen is for the current inputs. It runs the same work again on each rig
-database itself, holding the database's write lock from its first read to
-its commit, and commits only when that reaches the preview's digest. When
-something changed between the preview and Send, nothing is written: the
-server answers `409` with what it found, and the dialog says what differs,
-such as "Changed since the preview: the saved plan (revision 3 → 4) and
-ultracat131's rows", or a rig's own reason, such as a database that stayed
-locked. It then previews once more by itself; **Send** stays off until that
-preview lands. Closing the dialog while **Send** runs still refreshes the
-header, the bar and the Library when it lands.
-
-The preview reads the saved plan, so unsaved edits come first. The dialog
-never saves them unasked: it says which sections have unsaved changes and
-offers **Save and send…**, which saves them; the preview then follows and
-**Send** waits for it.
-
-A preview runs on an in-memory copy of each rig's planning tables, as the
+The preview runs on an in-memory copy of each rig's planning tables, as the
 header's check does, so it never waits for N.I.N.A. or holds a rig
 database's lock, and never queues behind discovery or adoption. It first
-opens the file for writing, without locking it, so a database **Send**
+opens the file for writing, without locking it, so a database **Activate**
 could not write is said in the preview too. A busy metadata store (`503`)
 gets one more try after a moment.
 
-### What sending does
+**Activate** writes the rig databases. It is enabled only while the preview
+on screen is for the current inputs. It runs the same work again on each rig
+database itself, holding the database's write lock from its first read to
+its commit, and commits only when that reaches the preview's digest. When
+something changed between the preview and **Activate**, nothing is written:
+the dialog says what differs, such as "Changed since the preview: the saved
+plan (revision 3 → 4) and ultracat131's rows", or a rig's own reason, such
+as a database that stayed locked. It then previews once more by itself;
+**Activate** stays off until that preview lands. Closing the dialog while
+**Activate** runs still refreshes the header, the bar and the Library when
+it lands.
+
+The preview reads the saved plan, so unsaved edits come first. The dialog
+never saves them unasked: it says which sections have unsaved changes and
+offers **Save and activate…**, which saves them; the preview then follows
+and **Activate** waits for it.
+
+### What activation does
 
 The plan decides which Target Scheduler exposure plans run in each rig's
 linked project:
@@ -1335,17 +1329,17 @@ linked project:
    **Take Target Scheduler's values** first, which brings it into the plan,
    or add it to the plan.
 5. **The preview says what happens and the end result.** Each rig's block
-   starts with **Once sent, Target Scheduler shoots**: every plan that
+   starts with **After activation, Target Scheduler shoots**: every plan that
    will run, with its target, template, length, frames asked for and taken,
    and the objectives a summed one serves. Then **Turns off**, each plan with
    its frames and why ("not in the plan", "replaced by Ha · 300 s"), and
-   **Turns on**, plans that were off and come back. After **Send** the same
-   blocks show what was done. A rig is **on the rig** only when the plans
+   **Turns on**, plans that were off and come back. After **Activate** the
+   same blocks show what was done. A rig is **activated** only when the plans
    running there are exactly what the plan would write.
 
 ### What it writes
 
-Sending pushes the framing and plan into each participating
+**Activation**, below Plan, pushes the framing and plan into each participating
 rig's database, the same rows Target Scheduler and the Director plugin read:
 
 - one Target Scheduler project per rig, named after the global project, in
@@ -1408,8 +1402,8 @@ What a preview turns off is never folded away: the **Turns off** block is
 open and in the warning colour, with "To keep one, take Target Scheduler's
 values or add it to the plan." The rig's line counts it ("Turns off 1 plan",
 "Turns on 1 plan"), and when turning plans off is all an activation would
-do there, the bar says so: "The rigs are behind the saved plan: turns off 1
-plan in ultracat131".
+do there, the bar says so: "Needs activating: turns off 1 plan in
+ultracat131".
 
 A plan an earlier activation made that nothing plans now is turned off
 (`disable`, `enabled = 0`), so Target Scheduler stops taking it: its
@@ -1474,9 +1468,9 @@ in-memory copy of each rig's planning tables (`GET /activation/check`), so
 it never locks N.I.N.A.'s database. It runs the check whenever the plan
 shoots something, whatever the activation record says: the record can lag
 rows that already match, and rows can differ under a record that has the
-saved plan. A rig whose rows would all read `unchanged` is on the rig: the
+saved plan. A rig whose rows would all read `unchanged` is activated: the
 plans running there are exactly what the plan would write. Any other action
-asks for a send. An `update` of an
+asks for an activation. An `update` of an
 exposure plan says what changes, such as `desired 100 → 150` or
 `exposure 120 s → 300 s`. The check writes nothing, so it does not wait
 for the turn at the rig databases that discovery, adoption, previews and
@@ -1508,15 +1502,15 @@ framing that rigs shoot, a rig's own panels under its name (a warning, never
 a refusal), and gives
 any reason a rig is skipped: no registered database on this server, a Target
 Scheduler schema older than 22, a database with no N.I.N.A. profile yet, or
-one that cannot be opened or written. On **Send**, each rig database waits
+one that cannot be opened or written. On **Activate**, each rig database waits
 up to a minute for its write lock, as every other writer on the server does,
 since N.I.N.A. and a directory refresh can hold the file that long; the
 preview, on its copy, never waits. A plan saved
 before duplicates were refused may hold two contributions for one rig and
 objective; the first counts.
-**Send** carries the preview digest and is refused when the framing, plan or
-database changed in between: it answers `409` with the report it reached on
-the databases themselves, and the dialog then previews again by itself. The
+**Activate** carries the preview digest and is refused when the framing, plan
+or database changed in between: it answers `409` with the report it reached
+on the databases themselves, and the dialog previews again by itself. The
 activation record is checked before any rig
 database commits, so a record too large to keep refuses the Apply with
 nothing written. Each rig database then commits on its own: one whose commit
@@ -1536,7 +1530,7 @@ database that N.I.N.A. and Target Scheduler write. To plan for it from here:
    and pull its catalog into a database on this server. That copy is the rig
    here: it is adopted like any other and holds the rig's profile.
 2. Open **Rigs, Setup** for the copy and set **Remote site** to the peer.
-3. Send to the rigs as usual. **Send** writes the rows into the copy, then sends the
+3. Activate as usual. Apply writes the rows into the copy, then sends the
    planning tables (projects, targets, exposure plans, templates and rule
    weights) to the peer through Sync's planning push, previewed and applied on
    the peer in one step. Captures and grades never travel this way.
@@ -1548,12 +1542,12 @@ push (`pushes`): the peer, whether it applied the rows, when it was last
 tried and why it failed. Apply writes each one as waiting before it pushes,
 so a push cut short still counts as not sent.
 
-A remote rig whose site has not had the last send (the site was
-offline at Send, the push failed, or it has not run yet) leaves the rigs
-**behind**, even when the rows here match the plan: "A remote site is
-behind: observatory-pi hasn't received the last send" in the summary's
-tooltip and the bar, and "behind · not sent to observatory-pi" on the rig's
-line under Rigs. The bar and the send dialog then offer **Send to observatory-pi again** (no
+A remote rig whose site has not had the last activation (the site was
+offline at Apply, the push failed, or it has not run yet) **needs
+activating**, even when the rows here match the plan: "observatory-pi hasn't
+received this activation" in the summary's tooltip and the bar, and "behind ·
+not sent to observatory-pi" on the rig's line under Rigs. The bar
+and the activation dialog then offer **Send to observatory-pi again** (no
 "again" before a first try); the dialog lists each such rig with the error
 and when it was tried. Neither shows the button when no rig is remote or
 every site has the activation. A push to a peer since removed from the

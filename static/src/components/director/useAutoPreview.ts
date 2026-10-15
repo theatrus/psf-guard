@@ -14,7 +14,7 @@ export interface AutoPreview<T> {
   /** A request is in flight or waiting out the debounce. */
   loading: boolean;
   /** Run again now for the current inputs: a retry, or after something the
-   *  key cannot see changed (the rig rows under a refused send). */
+   *  key cannot see changed (the rig rows under a refused activation). */
   refresh: () => void;
   /** Put a result in place for the current inputs, as an applied report. */
   replace: (result: T) => void;

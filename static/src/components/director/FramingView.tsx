@@ -1566,7 +1566,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
             {stackChoices.map(stack => <option key={stack.key} value={stack.key}>{stackName(stack)}</option>)}
           </select>
         </div>}
-        {mosaic.data.framing_stale && <p className="director-muted">The framing changed since it was last sent to the rigs. Stacks sit where their solves put them; the rectangles are the new plan.</p>}
+        {mosaic.data.framing_stale && <p className="director-muted">The framing changed since the last activation. Stacks sit where their solves put them; the rectangles are the new plan.</p>}
         {mosaic.data.warnings.map(warning => <p key={warning} className="director-muted">{warning}</p>)}
         <ul>{mosaic.data.panels.map(panel => <li key={`${panel.rig.id}-${panel.panel_id}`}>{describeStack(panel, stackChoice, stackChoiceName ? stackName(stackChoiceName) : '', mosaic.data!.activation_revision !== null)}</li>)}</ul>
       </div>}

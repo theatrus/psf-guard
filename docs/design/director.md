@@ -1376,10 +1376,7 @@ deleted from a database N.I.N.A. shares.
 
 **What "matches" means on a Target Scheduler rig.** A plan matches when
 activating it would write nothing to Target Scheduler, judged by the same
-comparison activation makes, so "Matches" and "Send to rigs" cannot
-disagree. The app calls activation **Send to rigs** and a rig that holds the
-saved plan **On the rigs**, so neither reads as Target Scheduler's project
-Active flag or as the catalog Sync.
+comparison activation makes, so "Matches" and "Activate" cannot disagree.
 
 | What | Compared | Tolerance |
 | --- | --- | --- |

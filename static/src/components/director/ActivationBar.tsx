@@ -23,7 +23,7 @@ export default function ActivationBar({ projectId, drafts, canWrite, open, onOpe
   const { activate, send } = useActivationBar(projectId, canWrite, drafts.unsaved.length);
   const sendAgain = useSendAgain(projectId);
   return <>
-    {(activate || send) && <div className="draft-bar is-due" role="region" aria-label="Rigs behind">
+    {(activate || send) && <div className="draft-bar is-due" role="region" aria-label="Needs activating">
       <p className="draft-bar-message">{activate ? notSynced : notSent}</p>
       <div className="draft-bar-actions">
         {send && <button type="button" className={activate ? undefined : 'is-primary'} disabled={sendAgain.isPending}
@@ -31,10 +31,10 @@ export default function ActivationBar({ projectId, drafts, canWrite, open, onOpe
           <RefreshCw size={16} />{sendAgain.isPending ? 'Sending…' : sendLabel(unsent)}
         </button>}
         {/* The summary's button hides while the bar is up, so the bar opens the dialog either way. */}
-        <button type="button" className={activate ? 'is-primary' : undefined} onClick={onOpen}><Send size={16} />{activate && last.data ? 'Send to rigs again…' : 'Send to rigs…'}</button>
+        <button type="button" className={activate ? 'is-primary' : undefined} onClick={onOpen}><Send size={16} />{activate && last.data ? 'Activate again…' : 'Activate…'}</button>
       </div>
     </div>}
-    <Dialog open={open} title="Send to the rigs" onClose={onClose} className="activation-dialog">
+    <Dialog open={open} title="Activate on the rigs" onClose={onClose} className="activation-dialog">
       {/* The dialog sits outside the page; this keeps the page's styles. */}
       <div className="director-page director-embedded"><ActivationPanel projectId={projectId} onFraming={onFraming} /></div>
     </Dialog>

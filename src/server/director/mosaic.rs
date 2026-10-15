@@ -449,7 +449,7 @@ pub(super) fn collect_for(
     }
     if panels.is_empty() && activation.is_none() {
         warnings.push(
-            "Link a Target Scheduler project or send the plan to the rigs; stacks appear once the rigs have shot their panels."
+            "Link a Target Scheduler project or activate the plan; stacks appear once the rigs have shot their panels."
                 .into(),
         );
     }
