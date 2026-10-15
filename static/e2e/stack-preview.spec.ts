@@ -1,10 +1,36 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { StackCalibrationMasters } from '../src/api/types';
 import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
 
 let dbId: string;
+
+/**
+ * Rebuild the panel's one channel and wait until that run has finished.
+ * Until the new run's status reaches the page, the results still read the
+ * last run's `completed`, so waiting on the page alone can return before
+ * the rebuild has begun. The run is followed through the API instead.
+ */
+async function rebuildChannel(page: Page, panel: Locator): Promise<void> {
+  const started = page.waitForResponse((response) =>
+    response.request().method() === 'POST'
+    && /\/projects\/\d+\/stack-previews(\/channels)?$/.test(new URL(response.url()).pathname));
+  await panel.getByRole('button', { name: 'Rebuild channel', exact: true }).click();
+  const body = await (await started).json();
+  const [job] = Array.isArray(body.data) ? body.data : [body.data];
+  expect(job?.job_id, JSON.stringify(body)).toBeTruthy();
+  const url = `/api/db/${encodeURIComponent(dbId)}/projects/${job.project_id}/stack-previews/${encodeURIComponent(job.job_id)}`;
+  await expect
+    .poll(async () => (await (await page.request.get(url)).json()).data?.state, {
+      timeout: 210_000,
+      intervals: [250, 500, 1_000, 2_000],
+    })
+    .toBe('completed');
+  await expect(panel.locator('.stack-preview-results')).toHaveAttribute('data-job-state', 'completed', {
+    timeout: 30_000,
+  });
+}
 
 function fitsIntegerCard(keyword: string, value: number): string {
   return `${keyword.padEnd(8)}= ${value.toString().padStart(20)}`.padEnd(80);
@@ -825,14 +851,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const cachedSrc = await page.locator('.stack-preview-panel')
     .getByRole('img', { name: /stack preview/i })
     .getAttribute('src');
-  await page.locator('.stack-preview-panel')
-    .getByRole('button', { name: 'Rebuild channel', exact: true })
-    .click();
-  await expect(page.locator('.stack-preview-results')).toHaveAttribute(
-    'data-job-state',
-    'completed',
-    { timeout: 210_000 }
-  );
+  await rebuildChannel(page, page.locator('.stack-preview-panel'));
   const rebuiltSrc = await page.locator('.stack-preview-panel')
     .getByRole('img', { name: /stack preview/i })
     .getAttribute('src');
@@ -1012,8 +1031,7 @@ test('re-applies processing to a rebuilt stack, showing the previous result mean
   });
 
   // The stack is rebuilt: a new revision, with no processing of its own yet.
-  await panel.getByRole('button', { name: 'Rebuild channel', exact: true }).click();
-  await expect(results).toHaveAttribute('data-job-state', 'completed', { timeout: 210_000 });
+  await rebuildChannel(page, panel);
   const carried = panel.locator('.stack-preview-carried');
   await expect(carried).toContainText('From the previous stack · reprocessing', { timeout: 30_000 });
   await expect(preview).toHaveAttribute('src', processedSrc!);

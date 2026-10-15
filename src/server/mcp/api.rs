@@ -387,6 +387,10 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "Recorded calibration masters: sources, statistics, projects using them",
     ),
     (
+        "/db/{db}/calibrations/duplicates",
+        "Calibration exposures recorded more than once, and what a repair would merge",
+    ),
+    (
         "/db/{db}/calibration-health",
         "Each project's calibration health: poor or check, with light counts",
     ),

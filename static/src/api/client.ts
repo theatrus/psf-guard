@@ -133,6 +133,8 @@ import type { GuidFillReport, GuidReport,
   CatalogInstallStatus,
   CalibrationLibrarySummary,
   CalibrationMutationOutcome,
+  CalibrationDuplicateReport,
+  CalibrationRepairOutcome,
   CalibrationFrameDetail,
   CalibrationFramePage,
   CalibrationFrameSize,
@@ -1802,6 +1804,28 @@ export const apiClient = {
       dbPath(dbId, `/calibrations/frames/${encodeURIComponent(frameUuid)}`)
     );
     if (!data.data) throw new Error(data.error || 'Failed to forget calibration frame');
+    return data.data;
+  },
+
+  /** Exposures the library records more than once, and the repair that
+   *  would merge them. */
+  getCalibrationDuplicates: async (dbId: string): Promise<CalibrationDuplicateReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<CalibrationDuplicateReport>>(
+      dbPath(dbId, '/calibrations/duplicates')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read calibration duplicates');
+    return data.data;
+  },
+
+  /** Apply the previewed repair; refused when the library has changed. */
+  repairCalibrationDuplicates: async (dbId: string, token: string): Promise<CalibrationRepairOutcome> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<CalibrationRepairOutcome>>(
+      dbPath(dbId, '/calibrations/duplicates/repair'),
+      { token }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to repair calibration duplicates');
     return data.data;
   },
 

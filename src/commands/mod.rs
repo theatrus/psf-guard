@@ -3,6 +3,7 @@ pub mod annotate_stars;
 pub mod annotate_stars_common;
 pub mod benchmark_detection;
 pub mod benchmark_psf;
+pub mod calibration_repair;
 pub mod dump_grading;
 pub mod export;
 pub mod filter_rejected;

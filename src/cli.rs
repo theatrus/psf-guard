@@ -1202,6 +1202,12 @@ pub enum Commands {
         action: UserCommand,
     },
 
+    /// Maintain a database's calibration library.
+    Calibration {
+        #[command(subcommand)]
+        action: CalibrationCommand,
+    },
+
     /// N.I.N.A.'s offline sky maps for the Director framing view: download a
     /// whole-sky set from nighttime-imaging.eu, or point at one already on
     /// disk, and the framing view offers it as a survey layer with no network.
@@ -1302,6 +1308,29 @@ pub enum Commands {
         /// `psf-guard users add`.
         #[arg(long)]
         allow_anonymous_access: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CalibrationCommand {
+    /// Merge calibration rows that record one exposure more than once: a
+    /// copy left behind by a filer, or a second copy in another scanned
+    /// folder. The oldest row of each exposure stays and moves to a live
+    /// copy when its own file is gone; masters built from a merged row are
+    /// built again. Files are never moved or deleted.
+    RepairDuplicates {
+        /// The scheduler database.
+        db: String,
+
+        /// Report what would change without writing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Read recorded paths under FROM at TO instead, for a dry run
+        /// against a catalog copied from another machine
+        /// (`/mnt/share=/Volumes/share`).
+        #[arg(long, value_name = "FROM=TO", requires = "dry_run")]
+        map_prefix: Option<String>,
     },
 }
 

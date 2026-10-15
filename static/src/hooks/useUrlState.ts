@@ -216,6 +216,7 @@ export const CALIBRATION_PARAMS = [
   'calGrade',
   'calKept',
   'calMissing',
+  'calDupes',
   'calSort',
   'calPage',
   'calSession',

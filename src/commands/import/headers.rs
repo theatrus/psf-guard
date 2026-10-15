@@ -182,7 +182,14 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
     meta.date_obs = text(&["DATE-OBS", "DATE-LOC"]);
     meta.date_local = text(&["DATE-LOC"]);
     meta.date_obs_utc = text(&["DATE-OBS"]);
-    meta.timestamp = meta.date_obs.as_deref().and_then(parse_fits_datetime);
+    // A header with no date text a scan can read may still carry the start
+    // as a Modified Julian Date, as some capture and stacking software
+    // writes it.
+    meta.timestamp = meta
+        .date_obs
+        .as_deref()
+        .and_then(parse_fits_datetime)
+        .or_else(|| f64_of(&["MJD-OBS"]).and_then(mjd_to_unix));
     meta.exposure_s = f64_of(&["EXPTIME", "EXPOSURE"]).filter(|v| *v > 0.0);
     meta.gain = i64_of(&["GAIN"]);
     meta.offset = i64_of(&["OFFSET"]);
@@ -228,13 +235,21 @@ fn value_text(value: &HeaderValue) -> Option<&str> {
 /// N.I.N.A. writes DATE-OBS).
 pub(crate) fn parse_fits_datetime(s: &str) -> Option<i64> {
     let s = s.trim();
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-        return Some(dt.and_utc().timestamp());
+    for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, format) {
+            return Some(dt.and_utc().timestamp());
+        }
     }
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
         return Some(dt.timestamp());
     }
     None
+}
+
+/// Epoch seconds of a Modified Julian Date (MJD-OBS), to the second.
+fn mjd_to_unix(mjd: f64) -> Option<i64> {
+    const UNIX_EPOCH_MJD: f64 = 40_587.0;
+    (mjd.is_finite() && mjd > 0.0).then(|| ((mjd - UNIX_EPOCH_MJD) * 86_400.0).round() as i64)
 }
 
 #[cfg(test)]
@@ -343,5 +358,24 @@ mod tests {
         assert!(parse_fits_datetime("2026-07-01T05:40:25.6971960").is_some());
         assert!(parse_fits_datetime("2024-01-15T22:00:00Z").is_some());
         assert!(parse_fits_datetime("not a date").is_none());
+        // Some software writes a space between the date and the time.
+        assert_eq!(
+            parse_fits_datetime("2024-01-15 22:00:00"),
+            parse_fits_datetime("2024-01-15T22:00:00")
+        );
+        // A date alone is no capture time.
+        assert!(parse_fits_datetime("2024-01-15").is_none());
+    }
+
+    #[test]
+    fn a_header_without_a_date_text_is_dated_by_mjd_obs() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("master.fits");
+        write_fits(
+            &path,
+            &["IMAGETYP= 'DARK'", "MJD-OBS =     60324.9166666667"],
+        );
+        let meta = read_frame_meta(&path);
+        assert_eq!(meta.timestamp, parse_fits_datetime("2024-01-15T22:00:00"));
     }
 }

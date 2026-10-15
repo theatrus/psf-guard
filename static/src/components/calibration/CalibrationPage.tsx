@@ -8,6 +8,7 @@ import { useDbProjectTarget } from '../../hooks/useUrlState';
 import { useAllDatabases, useMergedProjects } from '../../hooks/useDatabases';
 import SchedulerFlatHistory from '../SchedulerFlatHistory';
 import PillSelect from '../toolbar/PillSelect';
+import CalibrationDuplicates from './CalibrationDuplicates';
 import CalibrationFilters from './CalibrationFilters';
 import CalibrationFramePanel from './CalibrationFramePanel';
 import CalibrationFrameStrip from './CalibrationFrameStrip';
@@ -133,6 +134,14 @@ function CalibrationLibrary({
     queryKey: ['db', dbId, 'calibrations'],
     queryFn: () => apiClient.getCalibrationLibrary(dbId),
   });
+  // Repairing duplicates rewrites the library wholesale, so it waits for
+  // the database-management gate as well.
+  const serverInfo = useQuery({
+    queryKey: ['serverInfo'],
+    queryFn: apiClient.getServerInfo,
+    staleTime: 5 * 60 * 1000,
+  });
+  const managementAllowed = serverInfo.data?.allow_database_management ?? false;
 
   if (state.tab === 'scheduler') {
     return <SchedulerFlatHistory dbId={dbId} canManage={canManage} />;
@@ -148,7 +157,16 @@ function CalibrationLibrary({
       {!canManage && (
         <p className="calibration-notice">Your account can view frames, not change them.</p>
       )}
-      {summary.data && summary.data.frame_count === 0 ? (
+      {state.filters.duplicates ? (
+        <>
+          <CalibrationFilters filters={state.filters} facets={undefined} rigs={summary.data?.rigs ?? []}
+            onChange={state.setFilters} onClear={state.clearFilters} />
+          <CalibrationDuplicates dbId={dbId} filters={state.filters}
+            canRepair={canManage && managementAllowed}
+            repairNote={!canManage ? null
+              : 'Repairing duplicates needs database management: the desktop app, or a server started with --allow-database-management.'} />
+        </>
+      ) : summary.data && summary.data.frame_count === 0 ? (
         <p className="calibration-empty">
           No calibration frames yet. Add their folders to this database in Settings, then import.
         </p>

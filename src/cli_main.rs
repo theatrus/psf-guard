@@ -1570,6 +1570,19 @@ pub fn main() -> Result<()> {
         Commands::Users { action } => {
             crate::commands::users::manage_users(action)?;
         }
+        Commands::Calibration { action } => match action {
+            crate::cli::CalibrationCommand::RepairDuplicates {
+                db,
+                dry_run,
+                map_prefix,
+            } => {
+                crate::commands::calibration_repair::repair_duplicates(
+                    Path::new(&db),
+                    dry_run,
+                    map_prefix.as_deref(),
+                )?;
+            }
+        },
         Commands::SkyMaps { action } => {
             crate::commands::sky_maps::run(action)?;
         }

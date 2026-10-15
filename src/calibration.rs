@@ -19,6 +19,7 @@ pub mod browse;
 mod health;
 mod quality;
 pub mod rules;
+mod twins;
 pub use health::{
     current_keys as health_keys, project_file_digests as health_file_digests, project_health,
     project_lights, summarize as summarize_health, HealthCode, HealthFinding, HealthLevel,
@@ -30,6 +31,11 @@ pub use rules::{
     RuleValues, Rules,
 };
 use std::sync::Arc;
+pub use twins::{
+    apply_repair as apply_duplicate_repair, duplicate_snapshot,
+    plan_repair as plan_duplicate_repair, DuplicateReport, DuplicateSnapshot, FileAccess,
+    InvalidatedMaster, RepairError, RepairOutcome, TwinGroup, TwinMember,
+};
 /// Synthetic frames for tests elsewhere in the crate.
 #[cfg(test)]
 pub(crate) mod test_frames {
@@ -295,6 +301,9 @@ pub struct CalibrationImportOutcome {
     pub imported: usize,
     pub updated: usize,
     pub skipped_existing: usize,
+    /// Of those skipped, files that are a second copy of a frame the catalog
+    /// records at another path.
+    pub twins: usize,
     pub bias: usize,
     pub dark: usize,
     pub dark_flat: usize,
@@ -388,6 +397,8 @@ pub struct CalibrationSyncCounts {
     pub inserted: usize,
     pub updated: usize,
     pub unchanged: usize,
+    /// Source rows left out: frames a repair here merged into another row.
+    pub skipped: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -400,6 +411,10 @@ pub struct CalibrationSyncOutcome {
     /// The choices among those rows that a sync changes. Each one changes
     /// which frames the destination's masters are built from.
     pub choices: CalibrationChoiceCounts,
+    /// Rows the destination held that the source's repair had merged, now
+    /// merged here too, and the masters built from them that go.
+    pub merged_rows: usize,
+    pub merged_masters: usize,
 }
 
 /// Frames whose keep-out or use-anyway choice a sync sets or clears.
@@ -1252,6 +1267,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
     .context("creating PSF Guard calibration tables")?;
     conn.execute_batch(quality::QUALITY_TABLE_SQL)
         .context("creating PSF Guard calibration tables")?;
+    conn.execute_batch(twins::TWIN_TABLE_SQL)
+        .context("creating PSF Guard calibration tables")?;
     // A catalog that has just had its tables created is already at the
     // current version; one that had them from an older build is stamped with
     // whatever it was, and the ladder below carries it up.
@@ -1287,6 +1304,8 @@ pub fn import_calibration_frames(
     ensure_schema(tx)?;
     let now = chrono::Utc::now().timestamp();
     let mut outcome = CalibrationImportOutcome::default();
+    let files = twins::FileAccess::disk();
+    twins::prune_twins(tx)?;
 
     for frame in frames {
         let Some(kind) = kind_from_meta(frame) else {
@@ -1312,35 +1331,51 @@ pub fn import_calibration_frames(
             count_kind(&mut outcome, kind);
             continue;
         }
-        // A frame at a new path may be a frame the catalog already knows,
-        // moved: the filer takes calibration frames out of the drop zone
-        // nightly. The row from before the move keeps its identity — its
-        // uuid, its validity mark, the masters built from it — and only
-        // learns the new path, rather than gaining a twin whose old path
-        // resolves to the same file at stack time.
-        let moved_from = if existing.is_none() {
-            moved_calibration_row(tx, kind, frame, &frame.path)?
-        } else {
-            None
-        };
-        if let Some(previous_id) = moved_from {
-            tx.execute(
-                "UPDATE psf_guard_calibration_frame
-                 SET source_path = ?1, source_fingerprint = ?2, file_size = ?3,
-                     file_mtime_ns = ?4, updated_at = ?5
-                 WHERE id = ?6",
-                params![
-                    source_path,
-                    fingerprint,
-                    file_size,
-                    file_mtime_ns,
-                    now,
-                    previous_id
-                ],
-            )?;
-            outcome.updated += 1;
-            count_kind(&mut outcome, kind);
-            continue;
+        let mut moved = false;
+        // A frame at a new path may be a frame the catalog already knows:
+        // the filer copies calibration frames out of the drop zone nightly
+        // and deletes the originals a day later, and a person may keep a
+        // second copy in another scanned folder. While the recorded file is
+        // still there, the new file is remembered as its twin and nothing
+        // else changes. Once it is gone, the row learns the new path and
+        // keeps its identity — its uuid, its grade, its validity mark, the
+        // masters built from it — rather than gaining a twin of its own.
+        if existing.is_none() {
+            if let Some(twin) = twins::recorded_twin(tx, &source_path)? {
+                if twin.source_fingerprint == fingerprint && files.exists(Path::new(&twin.row_path))
+                {
+                    outcome.skipped_existing += 1;
+                    outcome.twins += 1;
+                    count_kind(&mut outcome, kind);
+                    continue;
+                }
+                twins::forget_twin(tx, &source_path)?;
+            }
+            let settings = twins::HeaderSettings::of_frame(frame);
+            let recorded =
+                match twins::ExposureKey::new(kind, frame.timestamp, &frame.path, &rig_uuid) {
+                    Some(key) => twins::recorded_copy(tx, &key, &settings, &frame.path, &files)?,
+                    None => None,
+                };
+            match recorded {
+                Some(twins::RecordedCopy::Live { frame_uuid }) => {
+                    twins::record_twin(tx, &source_path, &frame_uuid, &fingerprint, now)?;
+                    outcome.skipped_existing += 1;
+                    outcome.twins += 1;
+                    count_kind(&mut outcome, kind);
+                    continue;
+                }
+                Some(twins::RecordedCopy::Moved { id }) => {
+                    // The row takes the path; the write below gives it this
+                    // file's header and fingerprint.
+                    tx.execute(
+                        "UPDATE psf_guard_calibration_frame SET source_path = ?1 WHERE id = ?2",
+                        params![source_path, id],
+                    )?;
+                    moved = true;
+                }
+                None => {}
+            }
         }
         let frame_uuid = existing
             .as_ref()
@@ -1419,7 +1454,7 @@ pub fn import_calibration_frames(
                 frame.processed,
             ],
         )?;
-        if existing.is_some() {
+        if existing.is_some() || moved {
             outcome.updated += 1;
         } else {
             outcome.imported += 1;
@@ -1710,67 +1745,7 @@ pub fn forget_frames(
         return Ok(CalibrationMutationOutcome::default());
     }
 
-    #[derive(Debug)]
-    struct MasterLink {
-        uuid: String,
-        sources: Vec<String>,
-        bias: Option<String>,
-        dark: Option<String>,
-    }
-    let raw_links = {
-        let mut statement = transaction.prepare(
-            "SELECT master_uuid, source_frame_uuids, bias_master_uuid, dark_master_uuid
-             FROM psf_guard_calibration_master",
-        )?;
-        statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    let links = raw_links
-        .into_iter()
-        .map(|(uuid, sources_json, bias, dark)| {
-            Ok(MasterLink {
-                uuid,
-                sources: serde_json::from_str(&sources_json)
-                    .context("reading calibration master source provenance")?,
-                bias,
-                dark,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut invalid = links
-        .iter()
-        .filter(|master| {
-            master
-                .sources
-                .iter()
-                .any(|source| uuid_set.contains(source.as_str()))
-        })
-        .map(|master| master.uuid.clone())
-        .collect::<std::collections::HashSet<_>>();
-    loop {
-        let before = invalid.len();
-        for master in &links {
-            if master
-                .bias
-                .iter()
-                .chain(master.dark.iter())
-                .any(|dependency| invalid.contains(dependency))
-            {
-                invalid.insert(master.uuid.clone());
-            }
-        }
-        if invalid.len() == before {
-            break;
-        }
-    }
+    let invalid = twins::masters_citing(&transaction, &uuid_set)?;
     for master_uuid in &invalid {
         transaction.execute(
             "DELETE FROM psf_guard_calibration_master WHERE master_uuid = ?1",
@@ -1786,6 +1761,8 @@ pub fn forget_frames(
         }
     }
     quality::forget(&transaction, frame_uuids)?;
+    twins::forget_twins_of(&transaction, frame_uuids)?;
+    twins::forget_merges_of(&transaction, frame_uuids)?;
     transaction.commit()?;
     Ok(CalibrationMutationOutcome {
         frames_removed,
@@ -1817,30 +1794,66 @@ pub fn sync_library(
         return Ok(CalibrationSyncOutcome::default());
     }
     ensure_schema(destination)?;
-    let rigs = sync_table_by_key(source, destination, "psf_guard_rig", "rig_uuid")?;
-    let rig_bindings =
-        sync_table_by_key(source, destination, "psf_guard_rig_binding", "binding_uuid")?;
+    let rigs = sync_table_by_key(source, destination, "psf_guard_rig", "rig_uuid", None)?;
+    let rig_bindings = sync_table_by_key(
+        source,
+        destination,
+        "psf_guard_rig_binding",
+        "binding_uuid",
+        None,
+    )?;
+    // A repair on either side merged rows away. Its records travel, so a
+    // merged row is never inserted again, the row it went into keeps the
+    // file the repair chose, and a merged row this side still holds is
+    // merged here as well.
+    twins::sync_merges(source, destination)?;
+    let merged = twins::merge_map(destination)?;
+    let rules = FrameSyncRules {
+        keepers: merged.values().cloned().collect(),
+        merged: merged.clone(),
+    };
     let frames = sync_table_by_key(
         source,
         destination,
         "psf_guard_calibration_frame",
         "frame_uuid",
+        Some(&rules),
     )?;
-    let (quality, choices) = quality::sync_quality(source, destination)?;
+    let folded = twins::fold_merged(destination, &merged)?;
+    let (quality, choices) = quality::sync_quality(source, destination, &merged)?;
     Ok(CalibrationSyncOutcome {
         rigs,
         rig_bindings,
         frames,
         quality,
         choices,
+        merged_rows: folded.rows,
+        merged_masters: folded.masters,
     })
 }
+
+/// How a sync treats calibration frames a repair merged.
+struct FrameSyncRules {
+    /// Merged uuids and the row each went into: never inserted again.
+    merged: HashMap<String, String>,
+    /// Rows merges went into: they keep the file the repair chose.
+    keepers: HashSet<String>,
+}
+
+/// The columns that say where a frame's file is, and which file.
+const LOCATION_COLUMNS: &[&str] = &[
+    "source_path",
+    "source_fingerprint",
+    "file_size",
+    "file_mtime_ns",
+];
 
 fn sync_table_by_key(
     source: &Connection,
     destination: &Transaction<'_>,
     table: &str,
     key: &str,
+    frames: Option<&FrameSyncRules>,
 ) -> Result<CalibrationSyncCounts> {
     let columns = table_column_names(source, table)?;
     let destination_columns = table_column_names(destination, table)?;
@@ -1866,12 +1879,17 @@ fn sync_table_by_key(
     let mut source_rows = source_statement.query([])?;
     let mut counts = CalibrationSyncCounts::default();
     while let Some(row) = source_rows.next()? {
-        let values = (0..columns.len())
+        let mut values = (0..columns.len())
             .map(|index| row.get::<_, Value>(index))
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let Value::Text(key_value) = &values[key_position] else {
+        let Value::Text(key_value) = values[key_position].clone() else {
             continue;
         };
+        let key_value = &key_value;
+        if frames.is_some_and(|rules| rules.merged.contains_key(key_value)) {
+            counts.skipped += 1;
+            continue;
+        }
         let existing = destination
             .query_row(
                 &format!("SELECT {quoted} FROM {table} WHERE \"{key}\" = ?1"),
@@ -1883,6 +1901,18 @@ fn sync_table_by_key(
                 },
             )
             .optional()?;
+        if let (Some(rules), Some(current)) = (frames, existing.as_ref())
+            && rules.keepers.contains(key_value)
+        {
+            for (index, column) in columns.iter().enumerate() {
+                if LOCATION_COLUMNS
+                    .iter()
+                    .any(|location| column.eq_ignore_ascii_case(location))
+                {
+                    values[index] = current[index].clone();
+                }
+            }
+        }
         if existing.as_ref().is_some_and(|current| current == &values) {
             counts.unchanged += 1;
             continue;
@@ -6095,6 +6125,52 @@ fn record_master(
     master: RecordedMaster,
     inputs: MasterInputs<'_>,
 ) -> Result<()> {
+    // A repair or a forget may have removed a source row, or a master this
+    // one is built on, while it was being built — from another process, the
+    // command line, too. A record citing a row that is gone would never be
+    // found again, and would keep the rows' masters from being rebuilt
+    // whole, so the master is left unrecorded and is built afresh.
+    let gone = frames
+        .iter()
+        .map(|frame| frame.frame_uuid.as_str())
+        .filter(|uuid| {
+            !conn
+                .query_row(
+                    "SELECT 1 FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+                    [uuid],
+                    |_| Ok(()),
+                )
+                .optional()
+                .ok()
+                .flatten()
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+    let dependency_gone = [inputs.bias_dependency, inputs.dark_dependency]
+        .into_iter()
+        .flatten()
+        .any(|dependency| {
+            !conn
+                .query_row(
+                    "SELECT 1 FROM psf_guard_calibration_master WHERE master_uuid = ?1",
+                    [&dependency.master_uuid],
+                    |_| Ok(()),
+                )
+                .optional()
+                .ok()
+                .flatten()
+                .is_some()
+        });
+    if !gone.is_empty() || dependency_gone {
+        tracing::warn!(
+            "not recording the {} master at {}: its inputs changed while it was built ({} frame row(s) gone{})",
+            kind.as_str(),
+            path.display(),
+            gone.len(),
+            if dependency_gone { ", a master it used gone" } else { "" }
+        );
+        return Ok(());
+    }
     let master_kind = kind.as_str();
     let master_uuid = stable_uuid(&format!("{}:{source_hash}", kind.as_str()));
     let frame_uuids = serde_json::to_string(
@@ -6157,43 +6233,6 @@ fn record_master(
         ],
     )?;
     Ok(())
-}
-
-/// The row of a frame that has moved to `new_path`, if the catalog has one:
-/// same kind, same file name, same capture time, and a recorded path whose
-/// file is no longer there. A row whose file still exists is a different
-/// frame that happens to share a name, and is left alone.
-fn moved_calibration_row(
-    conn: &Connection,
-    kind: CalibrationKind,
-    frame: &FrameMeta,
-    new_path: &Path,
-) -> Result<Option<i64>> {
-    let Some(name) = new_path.file_name().and_then(|name| name.to_str()) else {
-        return Ok(None);
-    };
-    // `IS`, not `=`: a frame whose header carries no date has a NULL capture
-    // time on both sides, and the file name and missing file still identify
-    // the move.
-    let mut statement = conn.prepare(
-        "SELECT id, source_path FROM psf_guard_calibration_frame
-         WHERE kind = ?1 AND captured_at IS ?2 AND source_path <> ?3
-         ORDER BY id",
-    )?;
-    let candidates = statement
-        .query_map(
-            params![kind.as_str(), frame.timestamp, canonical_text(new_path)],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(candidates.into_iter().find_map(|(id, path)| {
-        let path = Path::new(&path);
-        let same_name = path
-            .file_name()
-            .and_then(|other| other.to_str())
-            .is_some_and(|other| other.eq_ignore_ascii_case(name));
-        (same_name && !path.is_file()).then_some(id)
-    }))
 }
 
 /// One rig of a catalog, for choosing which rig's calibration settings to
@@ -6423,7 +6462,10 @@ pub(crate) fn known_calibration_fingerprints(
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
-    Ok(rows.flatten().collect())
+    let mut known = rows.flatten().collect::<HashMap<_, _>>();
+    // Second copies of recorded frames, while the recorded file is there.
+    known.extend(twins::skippable_twins(conn)?);
+    Ok(known)
 }
 
 /// The path key and fingerprint `import_calibration_frames` would record for
@@ -10238,7 +10280,11 @@ pub(crate) mod tests {
         write_test_fits(&incoming.join(name), "BIAS", 100);
 
         let mut conn = Connection::open_in_memory().unwrap();
-        let first = crate::commands::import::headers::read_frame_meta(&incoming.join(name));
+        // As its DATE-OBS would date it: a missing file is only followed
+        // for a dated frame (see `calibration::twins`).
+        let captured_at = Some(1_756_156_528);
+        let mut first = crate::commands::import::headers::read_frame_meta(&incoming.join(name));
+        first.timestamp = captured_at;
         {
             let tx = conn.transaction().unwrap();
             let outcome = import_calibration_frames(&tx, &[first], Some("profile")).unwrap();
@@ -10254,7 +10300,8 @@ pub(crate) mod tests {
             .unwrap();
 
         std::fs::rename(incoming.join(name), filed.join(name)).unwrap();
-        let moved = crate::commands::import::headers::read_frame_meta(&filed.join(name));
+        let mut moved = crate::commands::import::headers::read_frame_meta(&filed.join(name));
+        moved.timestamp = captured_at;
         {
             let tx = conn.transaction().unwrap();
             let outcome = import_calibration_frames(&tx, &[moved], Some("profile")).unwrap();

@@ -4,6 +4,16 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- A calibration frame that is on disk twice, such as a copy a filer has not
+  yet cleaned out of the drop folder, is catalogued once. When the original
+  goes, its row moves to the copy and keeps its grade and marks, instead of
+  staying behind as a missing file. The Calibration page's **Duplicates**
+  filter lists exposures an older import recorded twice, and **Repair
+  duplicates…** previews and then merges them into one row each and rebuilds
+  the masters built from them. A later pull from a catalog that still has
+  the duplicates does not bring them back. No file is moved or deleted.
+  `psf-guard calibration repair-duplicates <db> --dry-run` does the same from
+  the command line.
 - The thumbnail size slider in Images and Sequence counts every step of a
   quick run of arrow keys. On a busy page it used to snap back between
   steps, so some were lost.

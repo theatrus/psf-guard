@@ -2822,6 +2822,64 @@ export interface CalibrationMutationOutcome {
   masters_removed: number;
 }
 
+/** One catalog row of an exposure the library records more than once. */
+export interface CalibrationTwinMember {
+  frame_uuid: string;
+  source_path: string;
+  /** Whether its file is on disk. */
+  exists: boolean;
+  /** Whether it is the row a repair keeps. */
+  keep: boolean;
+}
+
+/** Rows that record one exposure, and what a repair makes of them. */
+export interface CalibrationTwinGroup {
+  kind: CalibrationKind;
+  captured_at: number | null;
+  file_name: string;
+  rig_uuid: string;
+  rig_name: string | null;
+  /** The uuid of the row kept: the oldest. */
+  keep: string;
+  /** Its file after the repair. */
+  path: string;
+  /** Whether the kept row moves to a twin's file, its own being gone. */
+  repointed: boolean;
+  /** Whether more than one of the files is on disk. */
+  physical: boolean;
+  members: CalibrationTwinMember[];
+}
+
+export interface CalibrationInvalidatedMaster {
+  master_uuid: string;
+  kind: CalibrationKind;
+  source_count: number;
+  created_at: number;
+  /** Cites a merged row itself, rather than a master that does. */
+  direct: boolean;
+  /** Took more than one copy of an exposure. */
+  doubled: boolean;
+}
+
+/** The Duplicates filter's groups and the repair they preview. */
+export interface CalibrationDuplicateReport {
+  groups: CalibrationTwinGroup[];
+  rows_removed: number;
+  missing_rows: number;
+  physical_rows: number;
+  repointed: number;
+  masters: CalibrationInvalidatedMaster[];
+  /** Names this plan; Apply is refused once the library plans otherwise. */
+  token: string;
+}
+
+export interface CalibrationRepairOutcome {
+  groups: number;
+  rows_removed: number;
+  repointed: number;
+  masters_removed: number;
+}
+
 /** Progress of the singleton per-DB import job (poll ~1s while running). */
 export interface ImportJobProgress {
   running: boolean;
