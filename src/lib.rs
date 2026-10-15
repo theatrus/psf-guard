@@ -14,6 +14,8 @@ pub mod db;
 pub mod db_registry;
 pub mod debug;
 pub mod desktop_log;
+#[cfg(any(feature = "tauri", test))]
+mod desktop_server;
 pub mod directory_tree;
 pub mod ephemeris;
 pub mod frame_derivatives;

@@ -1,5 +1,6 @@
 use crate::cli::PregenerationConfig;
 use crate::db_registry::{DbEntry, DbRegistry};
+use crate::desktop_server::Settings as DesktopSettings;
 use crate::server::shutdown::Shutdown;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,11 +15,18 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 struct TauriServerConfig {
     static_dir: Option<String>,
     pregeneration: PregenerationConfig,
+    storage: crate::server::storage::StorageConfig,
 }
 
 #[derive(Clone)]
 struct ServerState {
-    url: Arc<Mutex<String>>,
+    status: Arc<Mutex<DesktopServerStatus>>,
+    /// Keep the binding while a fixed-port server drains and restarts, so
+    /// another process cannot take the port between server instances.
+    listener: Arc<Mutex<Option<std::net::TcpListener>>>,
+    /// Serialize settings saves and restarts; two restarts must never launch
+    /// servers which write the same job journal at once.
+    lifecycle: Arc<tokio::sync::Mutex<()>>,
     /// The registry file. Commands read it from disk each time: Settings
     /// save through the local server, so no in-memory copy stays current.
     registry_path: Arc<Mutex<PathBuf>>,
@@ -30,11 +38,164 @@ struct ServerState {
     server_stop: Arc<Mutex<Option<Arc<Shutdown>>>>,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize)]
+struct DesktopServerStatus {
+    server_port: Option<u16>,
+    active_server_port: Option<u16>,
+    server_url: Option<String>,
+    starting: bool,
+    error: Option<String>,
+}
+
+struct ReadyListener {
+    listener: std::net::TcpListener,
+    ready: oneshot::Sender<()>,
+}
+
 /// How long a restart waits for the old server's work. Past this, a job is
 /// most likely stuck, as on a share that stopped answering.
 const RESTART_WAIT: Duration = Duration::from_secs(120);
 
 impl ServerState {
+    fn note_error(&self, error: &str) {
+        let mut status = self.status.lock().unwrap();
+        status.server_url = None;
+        status.starting = false;
+        status.error = Some(error.to_string());
+        self.listener.lock().unwrap().take();
+    }
+
+    fn reserved_port(&self) -> Option<u16> {
+        self.listener
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|listener| listener.local_addr().ok())
+            .map(|address| address.port())
+    }
+
+    async fn save_port(&self, port: Option<u16>) -> Result<DesktopServerStatus, String> {
+        let _guard = self.lifecycle.lock().await;
+        let settings = DesktopSettings { server_port: port };
+        settings.validate().map_err(|e| e.to_string())?;
+        // A refused save leaves both the saved preference and running server intact.
+        if port.is_some() && port != self.reserved_port() {
+            settings.bind().map_err(|e| format!("{e:#}"))?;
+        }
+        settings
+            .save(&DesktopSettings::path(&registry_path(self)?))
+            .map_err(|e| format!("Could not save desktop settings: {e:#}"))?;
+        self.status.lock().unwrap().server_port = port;
+        Ok(self.status.lock().unwrap().clone())
+    }
+
+    async fn start_server(
+        &self,
+        listener: std::net::TcpListener,
+        registry: DbRegistry,
+        base: TauriServerConfig,
+    ) -> Result<String, String> {
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let server_listener = listener.try_clone().map_err(|e| e.to_string())?;
+        *self.listener.lock().unwrap() = Some(listener);
+        let url = format!("http://127.0.0.1:{port}");
+        {
+            let mut status = self.status.lock().unwrap();
+            status.server_url = None;
+            status.starting = true;
+            status.error = None;
+        }
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let stop = Shutdown::new();
+        *self.server_shutdown.lock().unwrap() = Some(shutdown_tx);
+        *self.server_stop.lock().unwrap() = Some(Arc::clone(&stop));
+        let state = self.clone();
+        let registry_path = registry_path(self)?;
+        let task = tokio::spawn(async move {
+            if let Err(error) = start_server_for_tauri(
+                ReadyListener {
+                    listener: server_listener,
+                    ready: ready_tx,
+                },
+                registry.databases,
+                registry.astrometry,
+                base,
+                registry_path,
+                shutdown_rx,
+                stop,
+            )
+            .await
+            {
+                let message = format!("Could not start the desktop server: {error:#}");
+                tracing::error!("{message}");
+                state.note_error(&message);
+            } else {
+                state.status.lock().unwrap().server_url = None;
+            }
+        });
+        *self.server_task.lock().unwrap() = Some(task);
+        if ready_rx.await.is_err() {
+            // The ready sender is dropped as initialization unwinds. Wait for
+            // the task to record the actual error before reporting it to UI.
+            let task = self.server_task.lock().unwrap().take();
+            if let Some(task) = task
+                && let Err(error) = task.await
+            {
+                self.note_error(&format!(
+                    "The desktop server stopped during startup: {error}"
+                ));
+            }
+            let error = self
+                .status
+                .lock()
+                .unwrap()
+                .error
+                .clone()
+                .unwrap_or_else(|| "The desktop server stopped before it was ready.".to_string());
+            self.note_error(&error);
+            return Err(error);
+        }
+        let mut status = self.status.lock().unwrap();
+        if let Some(error) = &status.error {
+            return Err(error.clone());
+        }
+        status.server_url = Some(url.clone());
+        status.active_server_port = status.server_port;
+        status.starting = false;
+        Ok(url)
+    }
+
+    async fn restart(&self, base: TauriServerConfig) -> Result<String, String> {
+        let _guard = self.lifecycle.lock().await;
+        let registry = load_registry(self)?;
+        let settings = DesktopSettings::load(&DesktopSettings::path(&registry_path(self)?))
+            .map_err(|e| format!("{e:#}"))?;
+        // Reuse the reserved socket at the same fixed port. Reserve a
+        // different port before stopping the working server.
+        let retained = if settings.server_port.is_some() {
+            self.listener
+                .lock()
+                .unwrap()
+                .as_ref()
+                .filter(|listener| {
+                    listener.local_addr().ok().map(|address| address.port()) == settings.server_port
+                })
+                .map(std::net::TcpListener::try_clone)
+                .transpose()
+                .map_err(|e| format!("Could not retain the desktop server socket: {e}"))?
+        } else {
+            None
+        };
+        let listener = match retained {
+            Some(listener) => listener,
+            None => settings.bind().map_err(|e| format!("{e:#}"))?,
+        };
+        self.stop_server(RESTART_WAIT).await?;
+        self.status.lock().unwrap().server_port = settings.server_port;
+        self.start_server(listener, registry, base).await
+    }
+
     /// Stop the running server and wait, up to `wait`, until it has ended.
     /// A stop lets work in hand reach a safe point, then writes the job
     /// journal; the next server reads that file when it starts and writes
@@ -103,52 +264,55 @@ pub fn main() {
     let server_config = TauriServerConfig {
         static_dir: None,
         pregeneration: PregenerationConfig::default(),
+        storage: crate::server::storage::StorageConfig::defaulting_to(
+            dirs::cache_dir()
+                .unwrap_or_else(|| std::env::temp_dir().join("psf-guard-cache"))
+                .join("psf-guard"),
+        ),
     };
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
-    let server_port = find_free_port().expect("Could not find free port");
-    let server_url = format!("http://localhost:{}", server_port);
-    println!("Starting PSF Guard server on {}", server_url);
-
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    let server_databases = initial_registry.databases.clone();
-    let server_astrometry = initial_registry.astrometry.clone();
-    let server_config_for_task = server_config.clone();
-    let registry_path_for_task = registry_path.clone();
-    let server_stop = Shutdown::new();
-    let stop_for_task = Arc::clone(&server_stop);
-    let server_task = rt.spawn(async move {
-        if let Err(e) = start_server_for_tauri(
-            server_port,
-            server_databases,
-            server_astrometry,
-            server_config_for_task,
-            registry_path_for_task,
-            shutdown_rx,
-            stop_for_task,
-        )
-        .await
-        {
-            eprintln!("Server error: {}", e);
+    let state = ServerState {
+        status: Arc::new(Mutex::new(DesktopServerStatus {
+            starting: true,
+            ..Default::default()
+        })),
+        listener: Arc::new(Mutex::new(None)),
+        lifecycle: Arc::new(tokio::sync::Mutex::new(())),
+        registry_path: Arc::new(Mutex::new(registry_path.clone())),
+        server_shutdown: Arc::new(Mutex::new(None)),
+        server_task: Arc::new(Mutex::new(None)),
+        server_stop: Arc::new(Mutex::new(None)),
+    };
+    let settings = DesktopSettings::load(&DesktopSettings::path(&registry_path));
+    match settings.and_then(|settings| {
+        state.status.lock().unwrap().server_port = settings.server_port;
+        settings.bind()
+    }) {
+        Ok(listener) => {
+            let state = state.clone();
+            let base = server_config.clone();
+            rt.spawn(async move {
+                let _guard = state.lifecycle.lock().await;
+                if let Err(error) = state.start_server(listener, initial_registry, base).await {
+                    state.note_error(&error);
+                }
+            });
         }
-    });
+        Err(error) => state.note_error(&format!("{error:#}")),
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(ServerState {
-            url: Arc::new(Mutex::new(server_url)),
-            registry_path: Arc::new(Mutex::new(registry_path)),
-            server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
-            server_task: Arc::new(Mutex::new(Some(server_task))),
-            server_stop: Arc::new(Mutex::new(Some(server_stop))),
-        })
+        .manage(state)
         .manage(server_config)
         .invoke_handler(tauri::generate_handler![
             get_server_url,
+            get_desktop_server_settings,
+            set_desktop_server_port,
             pick_database_file,
             pick_folder,
             get_default_nina_database_path,
@@ -265,8 +429,27 @@ fn folder_command(_dir: &Path) -> Result<Command, String> {
 }
 
 #[tauri::command]
-fn get_server_url(state: tauri::State<ServerState>) -> String {
-    state.url.lock().unwrap().clone()
+fn get_server_url(state: tauri::State<ServerState>) -> Result<String, String> {
+    let status = state.status.lock().unwrap();
+    status.server_url.clone().ok_or_else(|| {
+        status
+            .error
+            .clone()
+            .unwrap_or_else(|| "The desktop server is still starting.".to_string())
+    })
+}
+
+#[tauri::command]
+fn get_desktop_server_settings(state: tauri::State<ServerState>) -> DesktopServerStatus {
+    state.status.lock().unwrap().clone()
+}
+
+#[tauri::command]
+async fn set_desktop_server_port(
+    state: tauri::State<'_, ServerState>,
+    port: Option<u16>,
+) -> Result<DesktopServerStatus, String> {
+    state.save_port(port).await
 }
 
 /// Wait for a dialog's answer: the plugin calls back on its own thread.
@@ -365,17 +548,8 @@ fn get_nina_database_path() -> Option<String> {
     None
 }
 
-fn find_free_port() -> anyhow::Result<u16> {
-    use std::net::{SocketAddr, TcpListener};
-
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))?;
-    let port = listener.local_addr()?.port();
-    drop(listener);
-    Ok(port)
-}
-
 async fn start_server_for_tauri(
-    port: u16,
+    socket: ReadyListener,
     databases: Vec<DbEntry>,
     astrometry_config: Option<crate::astrometry::AstrometryConfig>,
     server_config: TauriServerConfig,
@@ -383,12 +557,8 @@ async fn start_server_for_tauri(
     shutdown_rx: oneshot::Receiver<()>,
     stop: Arc<Shutdown>,
 ) -> anyhow::Result<()> {
-    // No config file: Settings choose every folder, and the cache defaults
-    // to the platform cache folder.
-    let default_cache = dirs::cache_dir()
-        .unwrap_or_else(|| std::env::temp_dir().join("psf-guard-cache"))
-        .join("psf-guard");
-
+    let port = socket.listener.local_addr()?.port();
+    let listener = tokio::net::TcpListener::from_std(socket.listener)?;
     if databases.is_empty() {
         println!("No databases configured — open settings to add one.");
     } else {
@@ -411,7 +581,7 @@ async fn start_server_for_tauri(
     let server_config = crate::server::ServerConfig {
         databases,
         static_dir: server_config.static_dir,
-        storage: crate::server::storage::StorageConfig::defaulting_to(default_cache),
+        storage: server_config.storage,
         host,
         port,
         pregeneration_config: server_config.pregeneration,
@@ -436,7 +606,7 @@ async fn start_server_for_tauri(
         shutdown: Some(stop),
     };
 
-    crate::server::run_server_with_shutdown(server_config, shutdown_rx).await
+    crate::server::run_server_on_listener(server_config, shutdown_rx, listener, socket.ready).await
 }
 
 // ── Tauri commands operating on the registry ──────────────────────────────────
@@ -553,58 +723,12 @@ async fn restart_application(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn restart_server(
-    _app: tauri::AppHandle,
     state: tauri::State<'_, ServerState>,
     base: tauri::State<'_, TauriServerConfig>,
 ) -> Result<String, String> {
     tracing::info!("🔄 Server restart requested");
 
-    // Settings save through the server, which writes the file.
-    let registry_path = registry_path(&state)?;
-    let registry = load_registry(&state)?;
-    let (databases, astrometry_config) = (registry.databases, registry.astrometry);
-
-    // The old server's last journal write would otherwise replace the new
-    // server's queue. Should it not finish in time, the error goes back to
-    // Settings, which restarts the whole app instead.
-    state.stop_server(RESTART_WAIT).await?;
-
-    let server_port = find_free_port().map_err(|e| format!("Could not find free port: {}", e))?;
-    let server_url = format!("http://localhost:{}", server_port);
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    {
-        let mut url_guard = state.url.lock().unwrap();
-        *url_guard = server_url.clone();
-    }
-    {
-        let mut shutdown_guard = state.server_shutdown.lock().unwrap();
-        *shutdown_guard = Some(shutdown_tx);
-    }
-
-    tracing::info!("🚀 Starting new server on {}", server_url);
-
-    let base_clone = base.inner().clone();
-    let stop = Shutdown::new();
-    *state.server_stop.lock().unwrap() = Some(Arc::clone(&stop));
-    let task = tokio::spawn(async move {
-        if let Err(e) = start_server_for_tauri(
-            server_port,
-            databases,
-            astrometry_config,
-            base_clone,
-            registry_path,
-            shutdown_rx,
-            stop,
-        )
-        .await
-        {
-            eprintln!("Server restart error: {}", e);
-        }
-    });
-    *state.server_task.lock().unwrap() = Some(task);
-
-    Ok(format!("Server restarted successfully on {}", server_url))
+    state.restart(base.inner().clone()).await
 }
 
 #[tauri::command]
@@ -654,6 +778,140 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fixed_port_restarts_keep_the_http_api_and_mcp_together() {
+        let dir = tempdir().unwrap();
+        let registry_path = dir.path().join("config.json");
+        let registry = DbRegistry::default();
+        registry.save(&registry_path).unwrap();
+        let listener = DesktopSettings::default().bind().unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state = ServerState {
+            status: Arc::new(Mutex::new(DesktopServerStatus::default())),
+            listener: Arc::new(Mutex::new(None)),
+            lifecycle: Arc::new(tokio::sync::Mutex::new(())),
+            registry_path: Arc::new(Mutex::new(registry_path.clone())),
+            server_shutdown: Arc::new(Mutex::new(None)),
+            server_task: Arc::new(Mutex::new(None)),
+            server_stop: Arc::new(Mutex::new(None)),
+        };
+        let base = TauriServerConfig {
+            static_dir: None,
+            pregeneration: PregenerationConfig::default(),
+            storage: crate::server::storage::StorageConfig::defaulting_to(dir.path().join("cache")),
+        };
+        let url = state
+            .start_server(listener, registry, base.clone())
+            .await
+            .unwrap();
+        state.save_port(Some(port)).await.unwrap();
+        assert_eq!(
+            DesktopSettings::load(&DesktopSettings::path(&registry_path))
+                .unwrap()
+                .server_port,
+            Some(port)
+        );
+
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        for restart in [false, true] {
+            if restart {
+                assert_eq!(state.restart(base.clone()).await.unwrap(), url);
+            }
+            assert_eq!(
+                client
+                    .get(format!("{url}/api/info"))
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                200
+            );
+            assert_eq!(
+                client.get(format!("{url}/")).send().await.unwrap().status(),
+                200
+            );
+            let reply: serde_json::Value = client
+                .post(format!("{url}/api/mcp"))
+                .header("accept", "application/json, text/event-stream")
+                .header("mcp-protocol-version", "2025-06-18")
+                .json(
+                    &serde_json::json!({"jsonrpc":"2.0", "id":1, "method":"tools/call",
+                    "params":{"name":"list_databases", "arguments":{}}}),
+                )
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            assert_ne!(reply["result"]["isError"], true, "{reply}");
+            assert!(reply["result"]["content"].is_array(), "{reply}");
+        }
+
+        state.stop_server(RESTART_WAIT).await.unwrap();
+        assert!(
+            DesktopSettings {
+                server_port: Some(port)
+            }
+            .bind()
+            .is_err(),
+            "the fixed socket stays reserved even after the old server ends"
+        );
+        assert_eq!(state.restart(base.clone()).await.unwrap(), url);
+
+        // Occupied-port saves do not alter the persisted choice or stop the
+        // working server. A port taken after a save is checked again on restart.
+        let occupied = DesktopSettings::default().bind().unwrap();
+        let occupied_port = occupied.local_addr().unwrap().port();
+        assert!(state
+            .save_port(Some(occupied_port))
+            .await
+            .unwrap_err()
+            .contains("in use"));
+        assert_eq!(
+            DesktopSettings::load(&DesktopSettings::path(&registry_path))
+                .unwrap()
+                .server_port,
+            Some(port)
+        );
+        DesktopSettings {
+            server_port: Some(occupied_port),
+        }
+        .save(&DesktopSettings::path(&registry_path))
+        .unwrap();
+        assert!(state
+            .restart(base.clone())
+            .await
+            .unwrap_err()
+            .contains("in use"));
+        assert_eq!(state.reserved_port(), Some(port));
+        assert_eq!(
+            client
+                .get(format!("{url}/api/info"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+
+        // Returning to Automatic still waits for a new owned socket and ready API.
+        state.save_port(None).await.unwrap();
+        let automatic_url = state.restart(base).await.unwrap();
+        assert_eq!(
+            client
+                .get(format!("{automatic_url}/api/info"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+        state.stop_server(RESTART_WAIT).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn a_restart_waits_for_the_old_server_to_finish() {
         // A server that takes a while to drain after the signal, then
         // writes its journal.
@@ -666,7 +924,9 @@ mod tests {
             written.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         let state = ServerState {
-            url: Arc::new(Mutex::new(String::new())),
+            status: Arc::new(Mutex::new(DesktopServerStatus::default())),
+            listener: Arc::new(Mutex::new(None)),
+            lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             registry_path: Arc::new(Mutex::new(PathBuf::new())),
             server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
             server_task: Arc::new(Mutex::new(Some(task))),
@@ -695,7 +955,9 @@ mod tests {
             std::future::pending::<()>().await;
         });
         let state = ServerState {
-            url: Arc::new(Mutex::new(String::new())),
+            status: Arc::new(Mutex::new(DesktopServerStatus::default())),
+            listener: Arc::new(Mutex::new(None)),
+            lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             registry_path: Arc::new(Mutex::new(PathBuf::new())),
             server_shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
             server_task: Arc::new(Mutex::new(Some(task))),

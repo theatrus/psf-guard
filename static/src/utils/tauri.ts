@@ -21,7 +21,7 @@ export const isTauriApp = (): boolean => {
 
 /**
  * Call a desktop command, or settle for `fallback` outside the desktop app or
- * when the command fails. Every helper below goes through here.
+ * when an optional command fails.
  */
 async function invokeOr<T>(command: string, fallback: T, args?: Record<string, unknown>): Promise<T> {
   if (!isTauriApp()) return fallback;
@@ -39,7 +39,32 @@ const FAILED = Symbol('failed');
 
 // The server URL in the desktop app; relative URLs (current origin) in a browser.
 export const getServerUrl = async (): Promise<string> =>
-  isTauriApp() ? invokeOr('get_server_url', 'http://localhost:3030') : '';
+  isTauriApp() ? desktopInvoke<string>('get_server_url') : '';
+
+// Server failures must reach the UI. A guessed URL could belong to another
+// process when the chosen port is occupied.
+async function desktopInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<T>(command, args);
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+}
+
+export interface DesktopServerStatus {
+  server_port: number | null;
+  active_server_port: number | null;
+  server_url: string | null;
+  starting: boolean;
+  error: string | null;
+}
+
+export const desktopServer = {
+  getSettings: (): Promise<DesktopServerStatus> => desktopInvoke('get_desktop_server_settings'),
+  savePort: (port: number | null): Promise<DesktopServerStatus> =>
+    desktopInvoke('set_desktop_server_port', { port }),
+};
 
 // Initialize the base URL for API calls
 export const initializeApiBaseUrl = async (): Promise<string> => {
@@ -155,8 +180,7 @@ export const tauriConfig = {
     (await invokeOr<unknown>('restart_application', FAILED)) !== FAILED,
 
   // Restart only the server (faster than the whole app; moves no files).
-  restartServer: async (): Promise<boolean> =>
-    (await invokeOr<unknown>('restart_server', FAILED)) !== FAILED,
+  restartServer: (): Promise<string> => desktopInvoke('restart_server'),
 
   isConfigurationValid: (): Promise<boolean> => invokeOr('is_configuration_valid', false),
 };

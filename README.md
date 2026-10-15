@@ -314,6 +314,16 @@ It holds what the server would print to a console, including each frame a
 stack leaves out or rejects and why. `RUST_LOG` sets the level; the default
 is info.
 
+**Settings › Server** can give the desktop app a fixed localhost port
+(1024–65535). Choose **Fixed port**, enter the number, save it, then restart
+the server from that panel. Browser access, the API, and MCP all use this
+address. **Automatic**, the default, chooses a free port on each start.
+If a fixed port is occupied, the app shows the conflict and the same Server
+controls so you can change it; it never silently switches ports. The
+preference is saved in `desktop.json` beside the database registry. It applies
+only to the desktop app; `psf-guard server` still takes `--port` or
+`[server].port` in its TOML configuration.
+
 The remaining install options serve the UI on another machine or provide
 command-line tools. Desktop review does not require them.
 

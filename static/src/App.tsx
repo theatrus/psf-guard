@@ -17,6 +17,7 @@ import SiteBanner from './components/SiteBanner';
 import UpdateNotice from './components/UpdateNotice';
 import BuildRefresh from './components/BuildRefresh';
 import TauriSettings from './components/TauriSettings';
+import { DesktopServerGate } from './components/DesktopServerSettings';
 import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget } from './hooks/useUrlState';
 import { scopeForView } from './utils/viewScope';
 import { isTauriApp, tauriConfig } from './utils/tauri';
@@ -292,8 +293,10 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AuthGate>
-      <AppContent />
-    </AuthGate>
+    <DesktopServerGate>
+      <AuthGate>
+        <AppContent />
+      </AuthGate>
+    </DesktopServerGate>
   );
 }

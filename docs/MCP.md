@@ -54,6 +54,14 @@ A loopback server with no accounts, which is what the desktop app and
 claude mcp add --transport http psf-guard http://127.0.0.1:3000/api/mcp
 ```
 
+In the desktop app, choose **Settings › Server › Fixed port**, save it, and
+restart the server to keep this URL across restarts. This sets the port for
+the whole desktop HTTP server, including browser access and every API, as
+well as MCP. **Agents** links to the same Server controls. If the port is in
+use on a later start, the app reports the conflict and lets you change it
+instead of choosing another port. The CLI server already supports `--port`
+and `[server].port` in its TOML configuration.
+
 A network server with no accounts answers 401 here as it does everywhere
 else. See [server authentication](AUTHENTICATION.md).
 
