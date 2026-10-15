@@ -60,7 +60,7 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
           {[...choices].map(([id, name]) => <label className="collaboration-project-choice" key={id}><input type="checkbox" checked={projects.includes(id)} onChange={e => change(() => setProjects(all => e.target.checked ? [...all, id] : all.filter(p => p !== id)))} />{name}</label>)}
           {choices.size === 0 && <p>No joined or imported projects</p>}
         </fieldset>
-        <label className="collaboration-automation-option"><input type="checkbox" checked={activate} onChange={e => change(() => setActivate(e.target.checked))} />Activate in rig database</label>
+        <label className="collaboration-automation-option"><input type="checkbox" checked={activate} onChange={e => change(() => setActivate(e.target.checked))} />Send to the rig database</label>
         <label className="collaboration-automation-option"><input type="checkbox" checked={reports} onChange={e => change(() => setReports(e.target.checked))} />Submit contribution reports automatically</label>
         <div className="director-actions">
           <button type="submit" disabled={!dirty || ((enabled || reports) && !valid)}><Save size={16} />Save automation</button>
@@ -74,7 +74,7 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
     {status && <div role="status">
       <p>{status.running ? 'Pulling tonight\'s work...' : saved?.enabled ? connected ? 'Automatic refresh enabled' : 'Automatic refresh paused' : 'Automatic refresh off'}</p>
       <p>Last success: {time(status.last_success_ms)}. Next refresh: {saved?.enabled ? connected ? time(status.next_run_ms) : 'Paused' : 'Off'}.</p>
-      {status.result && <p>{status.result.night}: {status.result.imported} imported, {status.result.unchanged} unchanged, {status.result.activated} activated</p>}
+      {status.result && <p>{status.result.night}: {status.result.imported} imported, {status.result.unchanged} unchanged, {status.result.activated} sent to the rig</p>}
       {saved?.automatic_reports && <p>Automatic reports: {!connected ? 'Paused' : status.reports ? `${status.reports.queued} queued, ${status.reports.delivered} delivered, ${status.reports.accepted ?? 0} accepted, ${status.reports.rejected ?? 0} rejected, ${status.reports.held} held` : 'Awaiting first pass'}</p>}
       {saved?.automatic_reports && status.reports?.deferred && <p>More contribution evidence pending; continuing next batch.</p>}
     </div>}

@@ -50,21 +50,21 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false });
   const framing = savedFraming.data?.draft;
   const objectives = savedPlan.data?.plan?.objectives ?? [];
-  // Rows that already match count as synced, recorded or not. Not "Active":
+  // Rows that already match count as on the rigs, recorded or not. Not "Active":
   // that is a Target Scheduler project state, which the project in each
   // database keeps whatever this says. The pill stays short; why is in its
   // tooltip. A current record answers at once; where it cannot, the rows
   // are read first, rather than say one thing and then another. A remote
-  // site that lacks the last activation is not synced, whatever the rows
-  // here hold.
-  const synced = { tone: 'ok', text: 'Synced', title: 'The rigs hold the saved plan' } as const;
+  // site that lacks the last send leaves the rigs behind, whatever the rows
+  // here hold. Not "Synced" either: that is the catalog Sync.
+  const synced = { tone: 'ok', text: 'On the rigs', title: 'The rigs hold the saved plan' } as const;
   const activation: { tone?: 'ok' | 'behind'; text: string; title?: string } | null = checking ? { text: 'Checking the rigs…' }
     : matches && unsent.length === 0 ? synced
     : last.data
-      ? behind.length > 0 || unsent.length > 0 ? { tone: 'behind', text: 'Not synced', title: notSynced }
+      ? behind.length > 0 || unsent.length > 0 ? { tone: 'behind', text: 'Rigs behind', title: notSynced }
         : unchecked ? { tone: 'behind', ...unchecked }
         : synced
-      : last.isSuccess ? { tone: 'behind', text: 'Not synced', title: notSynced } : null;
+      : last.isSuccess ? { tone: 'behind', text: 'Rigs behind', title: notSynced } : null;
   return <div className="workspace-summary" aria-label="Plan summary" role="region">
     <div className="workspace-summary-head">
       <Link className="workspace-pill workspace-back" to={`/?${back}`}><ArrowLeft size={14} />Library</Link>
@@ -77,7 +77,7 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
           {activation.tone === 'behind' && <TriangleAlert size={14} aria-hidden="true" />}
           {activation.text}
         </span>
-        {onActivation && <button type="button" className="workspace-activate" title="Preview an activation" onClick={onActivation}><Send size={14} aria-hidden="true" />Activate…</button>}
+        {onActivation && <button type="button" className="workspace-activate" title="Preview what sending writes to the rigs" onClick={onActivation}><Send size={14} aria-hidden="true" />Send to rigs…</button>}
       </span>}
     </div>
     <div className="workspace-summary-line">

@@ -299,7 +299,7 @@ pub(super) fn assemble(
     let now = now_ms();
     if built.goals.is_empty() {
         return Err(PullError::NotReady(format!(
-            "No executable activated plan for this rig. {}",
+            "No plan sent to this rig can run. {}",
             built.omitted.join("; ")
         )));
     }
@@ -438,7 +438,7 @@ pub(super) fn assemble(
     .map_err(|error| {
         tracing::warn!(?error, "Program from activation did not bind");
         PullError::NotReady(format!(
-            "The activated plan does not form a valid program for this rig ({error:?}); review the plan and the rig's templates."
+            "The plan sent to this rig does not form a valid program for this rig ({error:?}); review the plan and the rig's templates."
         ))
     })?;
     Ok(Envelope {
@@ -585,7 +585,7 @@ fn build(
             };
             let Some(row) = row else {
                 built.omitted.push(format!(
-                    "{}: exposure plan {} is missing, inactive, or no longer belongs to its activated target and project",
+                    "{}: exposure plan {} is missing, inactive, or no longer belongs to the target and project sent to this rig",
                     project.name, activated.exposureplan_guid
                 ));
                 continue;

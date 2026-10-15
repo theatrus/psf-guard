@@ -1009,7 +1009,7 @@ export default function Overview() {
                         <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} sequence`} title="Sequence analysis" onClick={() => openProjectView('sequence', project, projectTargets)}>Sequence</button>
                         <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} stacks`} title="Stack previews" onClick={() => openProjectView('stacks', project, projectTargets)}>Stacks</button>
                       </>,
-                      plan: plans.enabled && !inFamily && <button type="button" className="library-planning" title="Open this project's plan: framing, rigs and activation" aria-label={`Open the ${project.display_name} plan`} onClick={() => openPlan(project, plan)}>⚙</button>,
+                      plan: plans.enabled && !inFamily && <button type="button" className="library-planning" title="Open this project's plan: framing, rigs and sending to the rigs" aria-label={`Open the ${project.display_name} plan`} onClick={() => openPlan(project, plan)}>⚙</button>,
                     }} />
                   </div>
                 );
@@ -1089,7 +1089,7 @@ export default function Overview() {
                           type="button"
                           className="project-settings-button"
                           aria-label={`Open the ${project.display_name} plan`}
-                          title="Open this project's plan: framing, rigs, activation, and its Target Scheduler targets and exposures"
+                          title="Open this project's plan: framing, rigs, sending to the rigs, and its Target Scheduler targets and exposures"
                           onClick={(e) => {
                             e.stopPropagation();
                             openPlan(project, plan);
@@ -1663,11 +1663,11 @@ export default function Overview() {
                     </>,
                     db: <DbPill name={rigNames} title={rigNames} />,
                     state: familyPlan?.activation
-                      ? <span className="director-stage-badge">Active on {familyPlan.activation.rigs} rig{familyPlan.activation.rigs === 1 ? '' : 's'}</span>
+                      ? <span className="director-stage-badge">On {familyPlan.activation.rigs} rig{familyPlan.activation.rigs === 1 ? '' : 's'}</span>
                       : familyPlan && (familyPlan.framing || familyPlan.plan) && <span className="library-pill library-pill-stage" title={stage(familyPlan)}>{stageShort(familyPlan)}</span>,
                     progress: <ProgressPill accepted={family.accepted} desired={family.desired} totalImages={family.totalImages} title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`} />,
                     dates: family.latest !== null && <DatesPill earliest={family.earliest} latest={family.latest} nowMs={relativeNow} title={`Across the rigs: ${formatDateRange({ earliest: family.earliest ?? undefined, latest: family.latest })}`} />,
-                    plan: plans.enabled && <button type="button" className="library-planning" title="Open this plan: framing, rigs and activation" aria-label={`Open the ${family.name} plan`} onClick={() => openPlan(planMember, familyPlan)}>⚙</button>,
+                    plan: plans.enabled && <button type="button" className="library-planning" title="Open this plan: framing, rigs and sending to the rigs" aria-label={`Open the ${family.name} plan`} onClick={() => openPlan(planMember, familyPlan)}>⚙</button>,
                   }} />
                 </div>
                 <div className="library-family-members">{family.members.map(renderProject)}</div>

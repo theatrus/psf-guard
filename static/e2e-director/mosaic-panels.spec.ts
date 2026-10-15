@@ -85,19 +85,19 @@ test('a shot target stays put while panels are added round it, and activates as 
     await expect(page.getByLabel('p4 turn degrees')).toHaveValue('10');
     await expect(page.getByTestId('framing-chosen-angle')).toContainText('turned +10.0° from the framing');
 
-    // Save, then activate: three new targets beside the untouched one.
+    // Save, then send to the rigs: three new targets beside the untouched one.
     const saveBar = page.getByRole('region', { name: 'Unsaved changes' });
     await saveBar.getByRole('button', { name: 'Save changes' }).click();
     await expect(saveBar).toContainText('All changes saved');
-    await page.getByRole('region', { name: 'Activation due' }).getByRole('button', { name: /^Activate/ }).click();
-    const dialog = page.getByRole('dialog', { name: 'Activate on the rigs' });
-    await dialog.getByRole('button', { name: 'Preview' }).click();
-    await expect(dialog.getByLabel('Askar data activation')).toContainText('Heart Nebula p2');
+    await page.getByRole('region', { name: 'Rigs behind' }).getByRole('button', { name: /^Send to rigs/ }).click();
+    const dialog = page.getByRole('dialog', { name: 'Send to the rigs' });
+    // The preview appears without a click.
+    await expect(dialog.getByLabel('Send to Askar data')).toContainText('Heart Nebula p2');
     // Each panel says the angle it is shot at, and nothing about how the rig gets there.
-    await expect(dialog.getByLabel('Askar data activation')).toContainText('turned +10.0°');
-    await expect(dialog.getByLabel('Askar data activation')).not.toContainText('by hand');
-    await dialog.getByRole('button', { name: 'Apply' }).click();
-    await expect(dialog.getByText(/^Applied/).first()).toBeVisible();
+    await expect(dialog.getByLabel('Send to Askar data')).toContainText('turned +10.0°');
+    await expect(dialog.getByLabel('Send to Askar data')).not.toContainText('by hand');
+    await dialog.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(dialog.getByText(/^Sent/).first()).toBeVisible();
 
     const after = new Database(dbPath, { readonly: true });
     try {

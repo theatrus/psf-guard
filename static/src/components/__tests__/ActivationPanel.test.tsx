@@ -39,6 +39,10 @@ function fixture(conflict = false, activated = false, pushes: DirectorActivation
       ? { project_id: 'project', revision: 2, framing_revision: 2, plan_revision: 3, coordinator_instance_id: 'c', applied_at_ms: 1_700_000_000_000, rigs: [],
         ...((pushCount > 0 ? afterPush : pushes).length > 0 ? { pushes: pushCount > 0 ? afterPush : pushes } : {}) } : null }))),
     http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([{ rig: { id: desert, name: 'Desert', revision: 1 }, catalog_slug: 'desert', catalog_name: 'Desert copy' }]))),
+    http.get('/api/director/v1/projects/project/plan', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 },
+      plan: { project_id: 'project', revision: 3, updated_at_ms: 1, objectives: [], contributions: [] } }))),
+    http.get('/api/director/v1/projects/project/framing', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 },
+      draft: { project_id: 'project', revision: 2, layout_revision: 2 } }))),
     http.post('/api/director/v1/projects/project/activation/push', () => { pushCount++; return HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 }, activation_revision: 2, warnings: [],
       rigs: [{ rig: { id: desert, name: 'Desert', revision: 1 }, catalog_name: 'Desert copy', push: { peer_id: 'obs', peer_name: 'observatory-pi', applied: false, summary: {}, error: 'peer refused the key' } }] })); }),
     http.post('/api/director/v1/projects/project/activation/preview', () => { previews++; return HttpResponse.json(ok(report(false))); }),
@@ -68,9 +72,15 @@ function mount(canWrite = true, plan: { unsavedPlan?: boolean; savePlan?: () => 
   const node = plan.savePlan ? <Page unsaved={!!plan.unsavedPlan} save={plan.savePlan} /> : <ActivationPanel projectId="project" />;
   return render(node, { wrapper: Wrapper });
 }
+/** Send once the preview is current: the button waits for it. */
+async function send() {
+  const button = await screen.findByRole('button', { name: 'Send' });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(button);
+}
 
 describe('Activation panel', () => {
-  it('activates an assignment with no deadline and invalidates a preview when assignment changes', async () => {
+  it('sends an assignment with no deadline, and previews again when the assignment changes', async () => {
     const { applies }=fixture();
     let requested: unknown;
     server.use(http.get('/api/director/v1/projects/project/activation/collaboration',()=>HttpResponse.json(ok({imports:[
@@ -79,34 +89,40 @@ describe('Activation panel', () => {
     mount();
     const assignment=await screen.findByRole('checkbox',{name:/RedCat.*2026-10-05/});
     expect(within(screen.getByRole('group',{name:/Collaboration assignments/})).getByText('Early beta')).toHaveAttribute('title',expect.stringContaining('Collaboration'));
+    // The dialog previewed on opening, without the assignment.
+    await waitFor(()=>expect(requested).toEqual({}));
     fireEvent.click(assignment);
     expect(screen.queryByLabelText(/window end/i)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button',{name:'Preview'}));
-    await screen.findByRole('button',{name:'Apply'});
-    expect(requested).toEqual({collaboration:[{import_id:'assignment',source_digest:'a'.repeat(64)}]});
+    // The change outdates the preview at once; a new one follows by itself.
+    expect(screen.getByRole('button',{name:'Send'})).toBeDisabled();
+    await waitFor(()=>expect(requested).toEqual({collaboration:[{import_id:'assignment',source_digest:'a'.repeat(64)}]}));
     fireEvent.click(assignment);
-    expect(screen.queryByRole('button',{name:'Apply'})).not.toBeInTheDocument();
+    expect(screen.getByRole('button',{name:'Send'})).toBeDisabled();
+    await waitFor(()=>expect(requested).toEqual({}));
     fireEvent.click(assignment);
-    fireEvent.click(screen.getByRole('button',{name:'Preview'}));
-    fireEvent.click(await screen.findByRole('button',{name:'Apply'}));
+    await waitFor(()=>expect(requested).toEqual({collaboration:[{import_id:'assignment',source_digest:'a'.repeat(64)}]}));
+    await send();
     await waitFor(()=>expect(applies).toEqual([{preview_digest:'d'.repeat(64),collaboration:[{import_id:'assignment',source_digest:'a'.repeat(64)}]}]));
   });
 
-  it('previews per rig, applies with the preview digest, and reports what landed', async () => {
-    const { applies } = fixture(); mount();
-    expect(screen.queryByRole('button', { name: /^Apply$/ })).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
+  it('previews per rig on opening, sends with the preview digest, and reports what landed', async () => {
+    const { applies, previewCount } = fixture(); mount();
+    // Nothing to send until the preview is in.
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /preview/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Preview ready'));
+    expect(previewCount()).toBe(1);
     // Rigs no block shows elsewhere are listed here, each with its counts.
-    const redcat = await screen.findByLabelText('RedCat 61 activation');
+    const redcat = await screen.findByLabelText('Send to RedCat 61');
     expect(redcat).toHaveTextContent('Preview · Project: 1 new · Targets: 2 new · Exposure plans: 2 new');
     expect(screen.getByText(/push it through Sync later/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Desert copy activation')).toHaveTextContent('Will push to Observatory');
-    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByLabelText('Send to Desert copy')).toHaveTextContent('Will push to Observatory');
+    await send();
     expect(await screen.findByText('Pushed to Observatory', { exact: false })).toBeInTheDocument();
-    expect(screen.getByLabelText('RedCat 61 activation')).toHaveTextContent('Applied');
+    expect(screen.getByLabelText('Send to RedCat 61')).toHaveTextContent('Sent');
     expect(applies).toEqual([{ preview_digest: 'd'.repeat(64) }]);
-    expect(screen.getByText(/Activation revision 1/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Revision 1 on the rigs/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
   });
 
   it('says which existing rows are taken over and which plans are left as they are', async () => {
@@ -121,8 +137,7 @@ describe('Activation panel', () => {
       { kind: 'plan', action: 'disable', name: 'IC 1805 r1c1 · Ha 300 · 120 s', detail: 'plan #14 (3 of 72 frames taken), replaced by IC 1805 r1c1 · Ha 300 · 300 s' },
     ] }] };
     server.use(http.post('/api/director/v1/projects/project/activation/preview', () => HttpResponse.json(ok(takeover))));
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
-    const rigSummary = await screen.findByLabelText('RedCat 61 activation');
+    const rigSummary = await screen.findByLabelText('Send to RedCat 61');
     expect(rigSummary).toHaveTextContent('Preview · Turns off 1 plan · Project: 1 updated');
     expect(rigSummary).toHaveTextContent('Targets: 1 taken over');
     expect(rigSummary).toHaveTextContent('Exposure plans: 1 new, 1 taken over, 1 turned off, 1 left as is');
@@ -152,14 +167,13 @@ describe('Activation panel', () => {
       http.post('/api/director/v1/projects/project/activation/preview', () => HttpResponse.json(ok(offOnly(false)))),
       http.post('/api/director/v1/projects/project/activation/apply', () => HttpResponse.json(ok({ ...offOnly(true), activation_revision: 2 }))),
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
-    const rigSummary = await screen.findByLabelText('RedCat 61 activation');
+    const rigSummary = await screen.findByLabelText('Send to RedCat 61');
     expect(rigSummary).toHaveTextContent('Preview · Turns off 2 plans');
     expect(within(rigSummary).getByRole('note', { name: 'Turned off in RedCat 61' })).toHaveTextContent('Heart · G_120 · 120 s plan #34');
     expect(screen.getByText('What changes in RedCat 61').closest('details')).not.toHaveAttribute('open');
-    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await send();
     // The preview's note stays until the applied record arrives.
-    await waitFor(() => expect(screen.getByLabelText('RedCat 61 activation')).toHaveTextContent('Applied · Turned off 2 plans'));
+    await waitFor(() => expect(screen.getByLabelText('Send to RedCat 61')).toHaveTextContent('Sent · Turned off 2 plans'));
     const applied = screen.getByRole('note', { name: 'Turned off in RedCat 61' });
     expect(applied).toHaveTextContent('Turned off');
     expect(applied).not.toHaveTextContent('To keep one');
@@ -186,11 +200,10 @@ describe('Activation panel', () => {
       http.post('/api/director/v1/projects/project/activation/preview', () => HttpResponse.json(ok(result(false)))),
       http.post('/api/director/v1/projects/project/activation/apply', () => HttpResponse.json(ok({ ...result(true), activation_revision: 2 }))),
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
-    const rigBlock = await screen.findByLabelText('RedCat 61 activation');
+    const rigBlock = await screen.findByLabelText('Send to RedCat 61');
     expect(rigBlock).toHaveTextContent('Preview · Turns off 1 plan · Turns on 1 plan');
     const shoots = within(rigBlock).getByRole('note', { name: 'Shoots in RedCat 61' });
-    expect(shoots).toHaveTextContent('After activation, Target Scheduler shoots');
+    expect(shoots).toHaveTextContent('Once sent, Target Scheduler shoots');
     await waitFor(() => expect(shoots).toHaveTextContent('Heart r1c1 · 300 s Ha 300 (Ha, gain 100, offset 30) · 102 frames, 12 taken · summed from H-alpha · Faint detail and H-alpha · Unsaturated stars'));
     expect(shoots).toHaveTextContent('Heart r2c1 · 300 s OIII 300 (OIII) · 72 frames, 3 taken');
     const off = within(rigBlock).getByRole('note', { name: 'Turned off in RedCat 61' });
@@ -203,26 +216,47 @@ describe('Activation panel', () => {
     // In that order, all before the folded list.
     const details = screen.getByText('What changes in RedCat 61').closest('details')!;
     for (const [before, after] of [[shoots, off], [off, on], [on, details]]) expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await send();
     expect(await screen.findByText('Target Scheduler now shoots')).toBeInTheDocument();
     expect(screen.getByRole('note', { name: 'Turned off in RedCat 61' })).toHaveTextContent('Turned off');
     expect(screen.getByRole('note', { name: 'Turned on in RedCat 61' })).toHaveTextContent('Turned on');
-    expect(screen.getByLabelText('RedCat 61 activation')).toHaveTextContent('Applied · Turned off 1 plan · Turned on 1 plan');
+    expect(screen.getByLabelText('Send to RedCat 61')).toHaveTextContent('Sent · Turned off 1 plan · Turned on 1 plan');
   });
-  it('drops a stale preview when apply is refused', async () => {
-    const { previewCount } = fixture(true); mount();
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Preview again.');
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument());
-    expect(previewCount()).toBe(1);
+  it('previews again by itself when Send is refused, and says what changed', async () => {
+    fixture(); mount();
+    // Someone saved the plan elsewhere meanwhile: Send is refused once, and
+    // the next preview has the new plan.
+    const applies: string[] = [];
+    let previews = 0;
+    server.use(http.post('/api/director/v1/projects/project/activation/apply', async ({ request }) => {
+      applies.push((await request.json() as { preview_digest: string }).preview_digest);
+      return applies.length === 1
+        ? HttpResponse.json({ success: false, data: null, error: 'Director record conflicts with stored content; reload before retrying' }, { status: 409 })
+        : HttpResponse.json(ok(report(true)));
+    }), http.post('/api/director/v1/projects/project/activation/preview', () => {
+      previews++;
+      const changed = report(false);
+      return HttpResponse.json(ok(previews === 1 ? changed : { ...changed, plan_revision: 4, preview_digest: 'e'.repeat(64),
+        rigs: [{ ...changed.rigs[0], changes: [...changed.rigs[0].changes, { kind: 'plan', action: 'create', name: 'Heart r1c1 · OIII 300', detail: '72 frames of 300 s' }] }, ...changed.rigs.slice(1)] }));
+    }));
+    await send();
+    const note = await screen.findByText(/^Changed since the preview: the saved plan \(revision 3 → 4\) and RedCat 61's rows\./);
+    expect(note).toHaveTextContent('This preview is new; check it, then send.');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Send to RedCat 61')).toHaveTextContent('Exposure plans: 3 new');
+    expect(previews).toBe(2);
+    // Sending again uses the new preview.
+    await send();
+    await waitFor(() => expect(applies).toEqual(['d'.repeat(64), 'e'.repeat(64)]));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Sent'));
+    expect(previews).toBe(2);
   });
 
   it('offers to send the last activation only to a site that has not had it, with why and when', async () => {
     const { pushCount } = fixture(false, true, [sitePush(false, 'connection refused')], [sitePush(false, 'peer refused the key')]); mount();
     const unsent = await screen.findByRole('note', { name: 'Not sent to remote sites' });
     await waitFor(() => expect(unsent).toHaveTextContent('Desert copy: not sent to observatory-pi: connection refused · tried'));
-    expect(screen.getByText(/^Not synced: observatory-pi hasn't received this activation/)).toBeInTheDocument();
+    expect(screen.getByText(/^A remote site is behind: observatory-pi hasn't received the last send/)).toBeInTheDocument();
     fireEvent.click(within(unsent).getByRole('button', { name: 'Send to observatory-pi again' }));
     expect(await screen.findByText(/Sent again/)).toBeInTheDocument();
     expect(screen.getByText('Desert copy: Push to observatory-pi failed: peer refused the key')).toBeInTheDocument();
@@ -238,13 +272,13 @@ describe('Activation panel', () => {
   });
   it('offers no send when no rig is remote, or every site has the activation', async () => {
     fixture(false, true); const first = mount();
-    expect(await screen.findByText(/^Last activated /)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^(Send|Push)/ })).not.toBeInTheDocument();
+    expect(await screen.findByText(/^Last sent /)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Send to|Push)/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('note', { name: 'Not sent to remote sites' })).not.toBeInTheDocument();
     first.unmount();
     fixture(false, true, [sitePush(true)]); mount();
-    expect(await screen.findByText(/^Last activated /)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^(Send|Push)/ })).not.toBeInTheDocument();
+    expect(await screen.findByText(/^Last sent /)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^(Send to|Push)/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/hasn't received/)).not.toBeInTheDocument();
   });
 
@@ -269,55 +303,94 @@ describe('Activation panel', () => {
         plan: { project_id: 'project', revision: 3, updated_at_ms: 1, objectives: [], contributions: [] } }))),
       http.get('/api/director/v1/projects/project/framing', () => HttpResponse.json(ok({ project: { id: 'project', name: 'Heart', revision: 1 },
         draft: { project_id: 'project', revision: 2, layout_revision: 2 } }))),
-      http.post('/api/director/v1/projects/project/activation/preview', () => { previews++; return HttpResponse.json(ok(differing(previews > 1))); }),
+      http.post('/api/director/v1/projects/project/activation/preview', () => { previews++; return HttpResponse.json(ok(differing(takes.length > 0))); }),
       http.post('/api/director/v1/projects/project/plan/take-target-scheduler', async ({ request }) => {
         takes.push(await request.json());
         return HttpResponse.json(ok({ plan_revision: 4, framing_revision: 2, taken: ['Ha: 90 frames'],
-          left: ['Project: a Draft in Target Scheduler; an activation makes it Active'] }));
+          left: ['Project: a Draft in Target Scheduler; sending to the rigs makes it Active'] }));
       }),
     );
     mount();
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     const take = await screen.findByRole('button', { name: "Take Target Scheduler's values" });
     expect(screen.getAllByRole('button', { name: "Take Target Scheduler's values" })).toHaveLength(1);
     await waitFor(() => expect(take).toBeEnabled());
+    const before = previews;
     fireEvent.click(take);
     expect(await screen.findByText('Ha: 90 frames')).toBeInTheDocument();
-    expect(screen.getByText('Project: a Draft in Target Scheduler; an activation makes it Active')).toBeInTheDocument();
+    expect(screen.getByText('Project: a Draft in Target Scheduler; sending to the rigs makes it Active')).toBeInTheDocument();
     expect(takes).toEqual([{ rig_id: rig.id, plan_revision: 3, framing_revision: 2 }]);
     // The preview runs again on what is saved now, and has nothing to take.
-    await waitFor(() => expect(previews).toBe(2));
+    await waitFor(() => expect(previews).toBeGreaterThan(before));
     await waitFor(() => expect(screen.queryByRole('button', { name: "Take Target Scheduler's values" })).not.toBeInTheDocument());
   });
 
-  it('offers nothing to a read-only account', async () => {
-    fixture(); mount(false);
+  it('offers nothing to a read-only account, and previews nothing for it', async () => {
+    const { previewCount } = fixture(); mount(false);
     expect(await screen.findByText('Read only')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(previewCount()).toBe(0);
   });
-  it('saves unsaved plan edits before previewing, and hides Apply until it does', async () => {
-    // Activation writes the saved plan: a goal raised in the editor but not
-    // saved would otherwise be applied as it was before, and look lost.
+  it('asks to save unsaved edits first, never saves unasked, and previews once they are saved', async () => {
+    // Sending writes the saved plan: a goal raised in the editor but not
+    // saved would otherwise be sent as it was before, and look lost.
     const { previewCount } = fixture();
-    const order: string[] = [];
-    const savePlan = vi.fn(async () => { order.push(`save at ${previewCount()} previews`); return true; });
+    const savePlan = vi.fn(async () => true);
     const view = mount(true, { unsavedPlan: true, savePlan });
-    expect(await screen.findByRole('note')).toHaveTextContent('Unsaved changes in Plan');
-    fireEvent.click(screen.getByRole('button', { name: 'Save and preview' }));
-    await waitFor(() => expect(previewCount()).toBe(1));
-    expect(order).toEqual(['save at 0 previews']);
-
-    // An edit after the preview: the preview is of the plan before it.
-    expect(screen.queryByRole('button', { name: /^Apply$/ })).not.toBeInTheDocument();
+    const note = await screen.findByRole('note', { name: 'Unsaved changes' });
+    expect(note).toHaveTextContent('Unsaved changes in Plan. The rigs get the saved plan, so save first; the preview follows.');
+    // No preview of a plan about to change, and nothing to send.
+    await new Promise(resolve => setTimeout(resolve, 400));
+    expect(previewCount()).toBe(0);
+    expect(savePlan).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+    fireEvent.click(within(note).getByRole('button', { name: 'Save and send…' }));
+    await waitFor(() => expect(savePlan).toHaveBeenCalledTimes(1));
+    expect(previewCount()).toBe(0);
+    // Saved: the page's draft clears, and the preview follows by itself.
     view.rerender(<Page unsaved={false} save={savePlan} />);
-    expect(await screen.findByRole('button', { name: /^Apply$/ })).toBeInTheDocument();
+    await waitFor(() => expect(previewCount()).toBe(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    expect(screen.queryByRole('note', { name: 'Unsaved changes' })).not.toBeInTheDocument();
   });
 
   it('does not preview a plan that could not be saved', async () => {
     const { previewCount } = fixture();
     mount(true, { unsavedPlan: true, savePlan: async () => false });
-    fireEvent.click(await screen.findByRole('button', { name: 'Save and preview' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save and send…' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('was not saved');
     expect(previewCount()).toBe(0);
+  });
+
+  it('says a failed preview, and retries it on Refresh', async () => {
+    fixture(); mount();
+    let fail = true;
+    server.use(http.post('/api/director/v1/projects/project/activation/preview', () => fail
+      ? HttpResponse.json({ success: false, data: null, error: 'RedCat 61 is locked' }, { status: 503 })
+      : HttpResponse.json(ok(report(false)))));
+    expect(await screen.findByRole('alert')).toHaveTextContent('RedCat 61 is locked');
+    expect(screen.getByRole('status')).toHaveTextContent('Preview failed');
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.getByRole('region', { name: 'Send to the rigs' })).toHaveAttribute('aria-busy', 'false');
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Preview ready'));
+    expect(screen.queryByRole('button', { name: 'Refresh' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
+  it('marks the region busy while a preview runs', async () => {
+    fixture(); mount();
+    let release: () => void = () => {};
+    server.use(http.post('/api/director/v1/projects/project/activation/preview', async () => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return HttpResponse.json(ok(report(false)));
+    }));
+    const region = screen.getByRole('region', { name: 'Send to the rigs' });
+    await waitFor(() => expect(region).toHaveAttribute('aria-busy', 'true'));
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    release();
+    await waitFor(() => expect(region).toHaveAttribute('aria-busy', 'false'));
+    expect(screen.getByRole('status')).toHaveTextContent('Preview ready');
   });
 });

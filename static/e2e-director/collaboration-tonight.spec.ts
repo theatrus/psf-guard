@@ -101,11 +101,11 @@ test('pull tonight, review and activate allowed work in the background', async (
     await panel.getByRole('tab', { name: 'Automation' }).click();
     await panel.getByLabel('Pull tonight automatically').check();
     await panel.getByLabel('M31 halo in narrowband', { exact: true }).check();
-    await panel.getByLabel('Activate in rig database').check();
+    await panel.getByLabel('Send to the rig database').check();
     await panel.getByRole('button', { name: 'Save automation' }).click();
     await expect(panel.getByRole('button', { name: 'Refresh now' })).toBeEnabled();
     await panel.getByRole('button', { name: 'Refresh now' }).click();
-    await expect(panel).toContainText('1 activated');
+    await expect(panel).toContainText('1 sent to the rig');
     expect(database.prepare('SELECT COUNT(*) AS count, MIN(desired) AS desired FROM exposureplan').get()).toEqual({ count: 6, desired: 11 });
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });

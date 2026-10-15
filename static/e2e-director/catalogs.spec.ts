@@ -116,13 +116,19 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(tab('Rigs')).toContainText('●');
     await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
     await expect(limits.getByRole('row', { name: /^Minimum altitude/ })).toContainText('30°from this plan');
-    // Activation is no tab: with the plan not yet on the rigs, the bar at
-    // the top asks for it, and the summary leaves that to the bar.
-    await expect(page.getByRole('tab', { name: /^Activate/ })).toHaveCount(0);
+    // Sending to the rigs is no tab: with the plan not yet on the rigs, the
+    // bar at the top asks for it, and the summary leaves that to the bar.
+    await expect(page.getByRole('tab', { name: /^(Activate|Send)/ })).toHaveCount(0);
     await expect(page.getByTestId('summary-activation')).toHaveCount(0);
-    await page.getByRole('region', { name: 'Activation due' }).getByRole('button', { name: 'Activate…' }).click();
-    const activation = page.getByRole('dialog', { name: 'Activate on the rigs' });
-    await expect(activation.getByRole('region', { name: 'Activation' })).toBeVisible();
+    await page.getByRole('region', { name: 'Rigs behind' }).getByRole('button', { name: 'Send to rigs…' }).click();
+    const activation = page.getByRole('dialog', { name: 'Send to the rigs' });
+    await expect(activation.getByRole('region', { name: 'Send to the rigs' })).toBeVisible();
+    // The preview runs by itself, nothing to press. This plan has no panel
+    // size yet, so it says what to do first.
+    await expect(activation.getByRole('status')).toHaveText('Preview failed');
+    await expect(activation.getByRole('alert')).toHaveText('Choose a panel rig or enter a panel size in Framing first.');
+    await expect(activation.getByRole('button', { name: 'Refresh' })).toBeVisible();
+    await expect(activation.getByRole('button', { name: /preview/i })).toHaveCount(0);
     await activation.getByRole('button', { name: /close/i }).click();
     await tab('Priority and defaults').click();
     const preferences = page.getByRole('region', { name: 'Project priority' });

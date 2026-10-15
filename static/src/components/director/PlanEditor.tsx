@@ -328,7 +328,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
               }}>
                 <option value="">Skip on this rig</option>
                 {matching.length > 0 && <optgroup label="In this database">{matching.map(t => <option key={t.id} value={`db:${t.id}`}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}</optgroup>}
-                {shared.length > 0 && <optgroup label="Library, written on activation">{shared.map(t => <option key={t.id} value={`lib:${t.id}`}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}</optgroup>}
+                {shared.length > 0 && <optgroup label="Library, written when sent">{shared.map(t => <option key={t.id} value={`lib:${t.id}`}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}</optgroup>}
                 {contribution && templateValue(contribution, library).startsWith('lib:') && !listed.some(t => t.id === contribution.template.template_guid) && <option value={templateValue(contribution, library)}>{contribution.template.name} (library, since removed)</option>}
               </select>;
             })()}</td>

@@ -128,7 +128,7 @@ read, below `/api`, as you.
 | `save_plan`, `save_framing` | Save the whole plan or framing object, changed, at the revision you read | yes |
 | `take_plan_from_target_scheduler` | Take a plan's values from what a rig's Target Scheduler database holds | yes |
 | `check_feasibility` | When the target is observable from each rig's site over the coming nights | yes |
-| `preview_activation` | Exactly what activating a plan would write to each rig, with a `preview_digest` | yes |
+| `preview_activation` | Exactly what activating a plan (the app's **Send to rigs**) would write to each rig, with a `preview_digest` | yes |
 | `apply_activation` | Write that preview to the rigs; refuses if anything changed since | yes, plus management |
 | `push_activation` | Send an activated plan to remote rigs | yes, plus management |
 | `apply_rig_scheduling` | Write a rig's scheduling limits, with the digest `get_rig_scheduling` gave | yes, plus management |

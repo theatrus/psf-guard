@@ -1308,7 +1308,7 @@ fn assemble(
                 rigs: a.rigs.len() as u32,
             }),
             Err(error) => {
-                warnings.push(unreadable("last activation", error));
+                warnings.push(unreadable("last send to the rigs", error));
                 None
             }
         };

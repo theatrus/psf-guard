@@ -3046,7 +3046,7 @@ async fn a_band_off_in_target_scheduler_is_turned_off_and_a_draft_is_named() {
     );
     assert_eq!(
         taken["data"]["left"],
-        json!(["Project: a Draft in Target Scheduler; an activation makes it Active"]),
+        json!(["Project: a Draft in Target Scheduler; sending to the rigs makes it Active"]),
         "{taken}"
     );
     let plan = {

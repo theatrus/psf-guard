@@ -118,7 +118,7 @@ pub(super) fn current(
                     .is_some()
             {
                 return Err(not_ready(
-                    "Rig assignment identity is ambiguous; review Activation.",
+                    "Rig assignment identity is ambiguous; review Send to rigs.",
                 ));
             }
         }
@@ -247,7 +247,7 @@ impl Admitted {
              WHERE t.project_guid=?1 AND c.import_id=?2 AND c.source_digest=?3 LIMIT 1",
             params![project,self.visit.import_id.to_string(),self.visit.source_digest], |r| r.get(0)).optional()?;
         if previous.flatten().is_some() {
-            return Err(activation::RigError::Skip("This assignment was superseded. Pull and review current work before activating it.".into()));
+            return Err(activation::RigError::Skip("This assignment was superseded. Pull and review current work before sending it to the rigs.".into()));
         }
         tx.execute("UPDATE psf_guard_collaboration_plan SET end_at_ms=?2 WHERE end_at_ms IS NULL
             AND target_guid IN (SELECT target_guid FROM psf_guard_director_target WHERE project_guid=?1)

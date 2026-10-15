@@ -288,7 +288,7 @@ export function panelFactor(contribution: DirectorContribution, panels: string[]
 /** Target Scheduler's project states, by number. */
 export const PROJECT_STATES = ['Draft', 'Active', 'Inactive', 'Closed'];
 
-const projectState = (rig: DirectorRigProgress) => rig.project ? PROJECT_STATES[rig.project.state] ?? `State ${rig.project.state}` : 'Not activated';
+const projectState = (rig: DirectorRigProgress) => rig.project ? PROJECT_STATES[rig.project.state] ?? `State ${rig.project.state}` : 'Not sent';
 const finished = (frames: { desired: number; accepted: number }) => frames.desired > 0 && frames.accepted >= frames.desired;
 
 /** Where one rig's part of an objective stands: switched off, not yet in
@@ -296,14 +296,14 @@ const finished = (frames: { desired: number; accepted: number }) => frames.desir
 export function partStatus(contribution: DirectorContribution | null, rig: DirectorRigProgress | undefined, objective: DirectorObjectiveProgress | undefined): string {
   if (!contribution || !rig) return '';
   if (!contribution.enabled) return 'Off';
-  if (!rig.project || !objective || objective.exposure_plans === 0) return 'Not activated';
+  if (!rig.project || !objective || objective.exposure_plans === 0) return 'Not sent';
   return finished(objective.frames) ? 'Done' : projectState(rig);
 }
 
 /** Where a rig stands on the whole plan. */
 export function rigStatus(rig: DirectorRigProgress | undefined): string {
   if (!rig) return '';
-  if (!rig.project) return 'Not activated';
+  if (!rig.project) return 'Not sent';
   const parts = rig.objectives.filter(objective => objective.exposure_plans > 0);
   return parts.length > 0 && parts.every(objective => finished(objective.frames)) ? 'Done' : projectState(rig);
 }

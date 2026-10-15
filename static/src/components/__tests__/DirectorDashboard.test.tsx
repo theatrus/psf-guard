@@ -61,7 +61,7 @@ describe('Director live dashboard', () => {
     expect(screen.getByText('Never seen')).toBeInTheDocument();
     expect(screen.getByText('No report yet')).toBeInTheDocument();
     expect(screen.getAllByText('never')).toHaveLength(5);
-    expect(screen.getAllByText('nothing activated')).toHaveLength(2);
+    expect(screen.getAllByText('nothing sent')).toHaveLength(2);
   });
 
   it('marks live status as the Director plugin early beta, and names Target Scheduler as the main path', async () => {

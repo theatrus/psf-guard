@@ -54,7 +54,7 @@ export default function DirectorDashboard() {
           <td><span className="director-cell-label">Program pull</span>{age(view.contacts.program_pull?.at_ms)}{view.contacts.program_pull?.detail && <span className="director-muted"> rev {view.contacts.program_pull.detail.slice(0, 8)}</span>}</td>
           <td><span className="director-cell-label">Check-in</span>{age(view.contacts.check_in?.at_ms)}{view.pending_receipts > 0 && <span className="director-muted"> {view.pending_receipts} saved, ungraded</span>}</td>
           <td><span className="director-cell-label">Status report</span>{age(view.contacts.status?.at_ms)}</td>
-          <td><span className="director-cell-label">Assigned</span>{view.assignments.length === 0 ? <span className="director-muted">nothing activated</span>
+          <td><span className="director-cell-label">Assigned</span>{view.assignments.length === 0 ? <span className="director-muted">nothing sent</span>
             : view.assignments.map((assignment, index) => <span key={assignment.project.id}>{index > 0 && ', '}<Link to={workspaceHref(assignment.project.id)}>{assignment.project.name}</Link></span>)}</td>
         </tr>;
       })}</tbody>

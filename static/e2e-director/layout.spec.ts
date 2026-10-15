@@ -192,10 +192,9 @@ test('planning tabs lay out without overlaps or clipping', async ({ page, reques
     // The activation preview, over the page.
     page.once('dialog', confirm => void confirm.accept());
     await saveBar.getByRole('button', { name: 'Discard changes' }).click();
-    await page.getByRole('region', { name: 'Activation due' }).getByRole('button', { name: 'Activate…' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Activate on the rigs' });
-    await dialog.getByRole('button', { name: 'Preview' }).click();
-    await expect(dialog.getByLabel('RedCat data activation')).toBeVisible();
+    await page.getByRole('region', { name: 'Rigs behind' }).getByRole('button', { name: 'Send to rigs…' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Send to the rigs' });
+    await expect(dialog.getByLabel('Send to RedCat data')).toBeVisible();
     for (const [width, height] of sizes) {
       await page.setViewportSize({ width, height });
       await page.waitForTimeout(300);

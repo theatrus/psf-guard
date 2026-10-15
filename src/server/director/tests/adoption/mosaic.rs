@@ -102,7 +102,7 @@ async fn mosaic_places_each_panels_stack_by_its_solve_and_names_the_rest() {
     assert!(empty["data"]["warnings"][0]
         .as_str()
         .unwrap()
-        .contains("activate the plan"));
+        .contains("send the plan to the rigs"));
 
     let (_, preview) = call(
         &a.f.app,

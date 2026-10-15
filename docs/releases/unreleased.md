@@ -17,6 +17,14 @@
   that name no profile. Two projects with one name stay in separate Project
   groups. Links to groups from before still open them, and the image
   detail's next and previous walk the same nights as the grid.
+- Director's **Activate…** is now **Send to rigs…**, and the plan's state
+  reads **On the rigs** or **Rigs behind** instead of Synced or Not synced,
+  so neither is mistaken for Target Scheduler's project Active flag or the
+  catalog Sync. The **Send to the rigs** dialog previews by itself when it
+  opens and again whenever its inputs change, so there is no Preview button
+  to press; **Send** waits for a current preview. A send refused because
+  something changed previews again and says what changed. Unsaved plan edits
+  are never saved unasked: the dialog offers **Save and send…**.
 - **Settings › Server** can fix the desktop app's localhost port, so browser,
   API, and agent connections keep the same address across restarts. A port
   conflict shows the error and Server settings so you can choose another

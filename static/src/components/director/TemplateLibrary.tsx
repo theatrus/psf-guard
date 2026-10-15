@@ -87,7 +87,7 @@ export default function TemplateLibrary() {
           </select></label>}
       </div>}
     </div>
-    <p className="director-muted">Settings any rig can shoot with. A plan may bind a rig to one of these when its own database has no template for the band; activation writes the template into that database under the library's identity, so every rig ends up with the same one.</p>
+    <p className="director-muted">Settings any rig can shoot with. A plan may bind a rig to one of these when its own database has no template for the band; sending to the rigs writes the template into that database under the library's identity, so every rig ends up with the same one.</p>
     {library.isError && <p className="director-error" role="alert">{message(library.error)} <button type="button" onClick={() => void library.refetch()}>Retry</button></p>}
     {copyFrom && <div className="template-copy-list" role="group" aria-label="Templates to copy">
       {source >= 0 && rigTemplates[source]?.isPending && <p role="status">Loading templates...</p>}

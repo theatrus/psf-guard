@@ -598,7 +598,7 @@ export const apiClient = {
   getDirectorActivation: async (projectId: string): Promise<DirectorActivation | null> => {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<{ activation: DirectorActivation | null }>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation`);
-    if (!data.data) throw new Error(data.error || 'Failed to load activation');
+    if (!data.data) throw new Error(data.error || 'Failed to load the last send to the rigs');
     return data.data.activation;
   },
 
@@ -607,7 +607,7 @@ export const apiClient = {
   checkDirectorActivation: async (projectId: string): Promise<DirectorActivationReport> => {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/check`);
-    if (!data.data) throw new Error(data.error || 'Failed to check activation');
+    if (!data.data) throw new Error(data.error || 'Failed to check the rigs');
     return data.data;
   },
 
@@ -646,14 +646,14 @@ export const apiClient = {
   previewDirectorActivation: async (projectId: string, collaboration?: import('./collaborationTypes').CollaborationVisit[]): Promise<DirectorActivationReport> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/preview`, collaboration?.length ? { collaboration } : {});
-    if (!data.data) throw new Error(data.error || 'Failed to preview activation');
+    if (!data.data) throw new Error(data.error || 'Failed to preview sending to the rigs');
     return data.data;
   },
 
   applyDirectorActivation: async (projectId: string, preview_digest: string, collaboration?: import('./collaborationTypes').CollaborationVisit[]): Promise<DirectorActivationReport> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorActivationReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/apply`, { preview_digest, ...(collaboration?.length ? { collaboration } : {}) });
-    if (!data.data) throw new Error(data.error || 'Failed to apply activation');
+    if (!data.data) throw new Error(data.error || 'Failed to send to the rigs');
     return data.data;
   },
 
@@ -667,7 +667,7 @@ export const apiClient = {
   pushDirectorActivation: async (projectId: string): Promise<DirectorActivationPushReport> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorActivationPushReport>>(`/director/v1/projects/${encodeURIComponent(projectId)}/activation/push`, {});
-    if (!data.data) throw new Error(data.error || 'Failed to push the activation');
+    if (!data.data) throw new Error(data.error || 'Failed to send to the remote sites');
     return data.data;
   },
 

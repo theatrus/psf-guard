@@ -126,7 +126,7 @@ describe('Plan editor', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /C925 data/ }));
     const control = await screen.findByLabelText('C925 data template for H-alpha');
     expect(control).toHaveValue('lib:11111111-1111-4111-8111-111111111111');
-    expect(screen.getByRole('group', { name: 'Library, written on activation' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Library, written when sent' })).toBeInTheDocument();
     expect(screen.getByLabelText('C925 data exposure for H-alpha')).toHaveValue(600);
     fireEvent.click(screen.getByRole('button', { name: 'Save plan' }));
     await waitFor(() => expect(saves).toHaveLength(1));
@@ -164,7 +164,7 @@ describe('Plan editor', () => {
     expect(within(ha).getByRole('option', { name: /Ha 600 shared/ })).toBeInTheDocument();
     const lum = screen.getByLabelText('RedCat 61 template for Luminance');
     expect(lum).toHaveValue('db:3');
-    expect(within(lum).queryByRole('group', { name: 'Library, written on activation' })).not.toBeInTheDocument();
+    expect(within(lum).queryByRole('group', { name: 'Library, written when sent' })).not.toBeInTheDocument();
     // The rig keeps its exposure, and the binding alone is nothing to save.
     expect(screen.getByLabelText('RedCat 61 exposure for H-alpha')).toHaveValue(240);
     await waitFor(() => expect(drafts.current?.sections.map(section => section.id)).toEqual(['plan']));

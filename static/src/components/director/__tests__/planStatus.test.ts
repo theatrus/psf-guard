@@ -13,8 +13,8 @@ describe('where a rig and its parts stand', () => {
   it('names a part off, not yet in Target Scheduler, done, or its project state', () => {
     const active = rig(1, [[10, 4, 1], [10, 10, 1], [0, 0, 0]]);
     expect(partStatus({ ...contribution, enabled: false }, active, active.objectives[0])).toBe('Off');
-    expect(partStatus(contribution, rig(null, []), undefined)).toBe('Not activated');
-    expect(partStatus(contribution, active, active.objectives[2])).toBe('Not activated');
+    expect(partStatus(contribution, rig(null, []), undefined)).toBe('Not sent');
+    expect(partStatus(contribution, active, active.objectives[2])).toBe('Not sent');
     expect(partStatus(contribution, active, active.objectives[1])).toBe('Done');
     expect(partStatus(contribution, active, active.objectives[0])).toBe('Active');
     expect(partStatus(contribution, rig(2, [[10, 4, 1]]), rig(2, [[10, 4, 1]]).objectives[0])).toBe('Inactive');
@@ -23,7 +23,7 @@ describe('where a rig and its parts stand', () => {
 
   it('calls a rig done only when every written part is', () => {
     expect(rigStatus(undefined)).toBe('');
-    expect(rigStatus(rig(null, []))).toBe('Not activated');
+    expect(rigStatus(rig(null, []))).toBe('Not sent');
     expect(rigStatus(rig(1, [[10, 10, 1], [0, 0, 0]]))).toBe('Done');
     expect(rigStatus(rig(1, [[10, 10, 1], [10, 2, 1]]))).toBe('Active');
     expect(rigStatus(rig(3, []))).toBe('Closed');

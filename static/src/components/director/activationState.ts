@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../../api/client';
-import type { DirectorActivationChange, DirectorActivationRemotePush, DirectorActivationRig } from '../../api/directorTypes';
+import type { DirectorActivationChange, DirectorActivationRemotePush, DirectorActivationReport, DirectorActivationRig } from '../../api/directorTypes';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { shootingRigs } from './planModel';
 import { retryWhenBusy } from './retry';
@@ -36,6 +36,23 @@ export function turnedOff(changes: DirectorActivationChange[]): string {
     off.some(change => change.kind === 'project') ? 'the project' : '',
     plans > 0 ? `${plans} plan${plans === 1 ? '' : 's'}` : '',
   ].filter(Boolean));
+}
+
+/** What a refused send found different: the saved plan or framing, and the
+ *  rigs whose rows the new preview writes otherwise. */
+export function describeChange(before: DirectorActivationReport, after: DirectorActivationReport): string {
+  const parts: string[] = [];
+  if (before.plan_revision !== after.plan_revision) parts.push(`the saved plan (revision ${before.plan_revision} → ${after.plan_revision})`);
+  if (before.framing_revision !== after.framing_revision) parts.push(`the framing (revision ${before.framing_revision} → ${after.framing_revision})`);
+  const rows = (rig: DirectorActivationRig | undefined) => JSON.stringify(rig ? [rig.changes, rig.warnings, rig.shoots ?? null] : null);
+  const ids = new Set([...before.rigs, ...after.rigs].map(rig => rig.rig.id));
+  const rigs = [...ids].flatMap(id => {
+    const was = before.rigs.find(rig => rig.rig.id === id);
+    const now = after.rigs.find(rig => rig.rig.id === id);
+    return rows(was) === rows(now) ? [] : [`${(now ?? was)!.catalog_name}'s rows`];
+  });
+  parts.push(...rigs);
+  return parts.length > 0 ? listed(parts) : 'something the preview cannot show';
 }
 
 /** Whether every row activation would write in this rig turns one off. */
@@ -105,20 +122,21 @@ export function useActivationState(projectId: string) {
   const unsent: UnsentPush[] = (last.data?.pushes ?? []).filter(push => !push.applied)
     .map(push => ({ ...push, rig_name: profiles.data?.find(rig => rig.rig.id === push.rig_id)?.catalog_name ?? 'a rig' }));
   const sites = sitesOf(unsent);
-  const sentReason = `${listed(sites)} ${sites.length === 1 ? "hasn't" : "haven't"} received this activation`;
-  // Why the rigs are not synced, said once for the bar, the summary's
-  // tooltip and the activation panel.
-  const reasons = last.data ? [
-    !matches && parts.length > 0 && `saved ${listed(parts)} not activated yet`,
-    missing.length > 0 && `${listed(missing)} not activated yet`,
+  const sentReason = `${listed(sites)} ${sites.length === 1 ? "hasn't" : "haven't"} received the last send`;
+  // Why the rigs are behind, said once for the bar, the summary's tooltip
+  // and the send dialog.
+  const planReasons = [
+    !matches && parts.length > 0 && `saved ${listed(parts)} not sent yet`,
+    missing.length > 0 && `${listed(missing)} not sent yet`,
     differing.length > 0 && `${listed(differing)} ${differing.length === 1 ? 'differs' : 'differ'} from the plan`,
     ...turningOff,
-    sites.length > 0 && sentReason,
-  ].filter(Boolean).join('; ') : 'not activated yet';
-  const notSynced = `Not synced: ${reasons}`;
-  // Only the sites that lack the last activation, for a bar that asks for
+  ].filter(Boolean);
+  // Only the sites that lack the last send, for a bar that asks for
   // nothing else.
-  const notSent = `Not synced: ${sentReason}`;
+  const notSent = `${sites.length === 1 ? 'A remote site is' : 'Remote sites are'} behind: ${sentReason}`;
+  const notSynced = !last.data ? 'Not sent to the rigs yet'
+    : planReasons.length === 0 && sites.length > 0 ? notSent
+    : `The rigs are behind the saved plan: ${[...planReasons, sites.length > 0 && sentReason].filter(Boolean).join('; ')}`;
   // A check that failed, or a rig it could not read (its database locked,
   // unreadable or not on this server, or a row it refuses): said, never
   // asked about, with the reason in `title`.
@@ -127,18 +145,18 @@ export function useActivationState(projectId: string) {
     : check.isError ? { text: "Couldn't check the rigs", title: failure(check.error) }
     : skipped.length > 0 ? { text: `Couldn't check ${listed(skipped.map(rig => rig.catalog_name || rig.rig.name))}`, title: skipped.flatMap(rig => rig.warnings).join(' ') }
     : null;
-  /** One rig's line on the Rigs tab: synced or not, and why. */
+  /** One rig's line on the Rigs tab: whether it holds the saved plan, and why not. */
   const rigSync = (rigId: string): { text: string; title?: string } => {
     const unread = skipped.find(rig => rig.rig.id === rigId);
     const report = check.data?.rigs.find(rig => rig.rig.id === rigId);
     // Rows that match here still wait for a site that lacks them.
     const waiting = unsent.find(push => push.rig_id === rigId);
-    const synced = waiting ? { text: `not synced · not sent to ${waiting.peer_name}`, title: waiting.error } : { text: 'synced' };
+    const synced = waiting ? { text: `behind · not sent to ${waiting.peer_name}`, title: waiting.error } : { text: 'on the rig' };
     if (holding.has(rigId)) return synced;
     if (unread) return { text: "couldn't check", title: unread.warnings.join(' ') };
-    if (!activated.has(rigId)) return { text: 'not synced · not activated yet' };
-    if (report && changed.has(rigId)) return { text: onlyTurnsOff(report) ? `not synced · turns off ${turnedOff(report.changes)}` : 'not synced · differs from the plan' };
-    if (parts.length > 0) return { text: `not synced · saved ${listed(parts)} not activated yet` };
+    if (!activated.has(rigId)) return { text: 'behind · not sent yet' };
+    if (report && changed.has(rigId)) return { text: onlyTurnsOff(report) ? `behind · sending turns off ${turnedOff(report.changes)}` : 'behind · differs from the plan' };
+    if (parts.length > 0) return { text: `behind · saved ${listed(parts)} not sent yet` };
     return synced;
   };
   return { last, savedPlan, savedFraming, planRevision, framingRevision, behind, notSynced, notSent, unsent, matches, checking, unchecked, rigSync };

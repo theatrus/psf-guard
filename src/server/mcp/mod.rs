@@ -1296,7 +1296,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "A plan's activation: what was last written to the rigs' Target Scheduler databases, and whether the plan has changed since."
+        description = "A plan's activation, which the app calls Send to rigs: what was last written to the rigs' Target Scheduler databases, and whether the plan has changed since."
     )]
     async fn get_activation(
         &self,
@@ -1483,7 +1483,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Preview activating a plan: exactly what would be written to each rig's Target Scheduler database (projects, targets, exposure plans, templates, limits) and a `preview_digest`. Every target gets its panel's own rotation (the framing's angle, plus the panel's turn, plus north's lean at its center) whatever turns the rig's camera; reaching it is the rig's business. Writes nothing. apply_activation takes the digest."
+        description = "Preview activating a plan (the app's Send to rigs): exactly what would be written to each rig's Target Scheduler database (projects, targets, exposure plans, templates, limits) and a `preview_digest`. Every target gets its panel's own rotation (the framing's angle, plus the panel's turn, plus north's lean at its center) whatever turns the rig's camera; reaching it is the rig's business. Writes nothing. apply_activation takes the digest."
     )]
     async fn preview_activation(
         &self,
@@ -1499,7 +1499,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Activate a plan: write what preview_activation showed into the rigs' Target Scheduler databases. Needs the preview's `preview_digest`; if anything changed since, it refuses and you preview again. Needs write access and database management, as in the app."
+        description = "Activate a plan, as the app's Send does: write what preview_activation showed into the rigs' Target Scheduler databases. Needs the preview's `preview_digest`; if anything changed since, it refuses and you preview again. Needs write access and database management, as in the app."
     )]
     async fn apply_activation(
         &self,
@@ -1518,7 +1518,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Send an activated plan to rigs on other machines (remote rigs paired for sync), as the app's Push does. Reports each rig's outcome. Needs write access and database management."
+        description = "Send an activated plan to rigs on other machines (remote rigs paired for sync), as the app's \"Send to <site> again\" does. Reports each rig's outcome. Needs write access and database management."
     )]
     async fn push_activation(
         &self,

@@ -628,7 +628,7 @@ async fn apply_night(
                     result.held.push(format!("{}: {message}", share.task_id))
                 }
                 Err(_) => result.held.push(format!(
-                    "{}: activation failed; review the plan",
+                    "{}: sending to the rig failed; review the plan",
                     share.task_id
                 )),
             }

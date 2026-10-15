@@ -265,8 +265,8 @@ and applies its digest to exactly the selected rig/catalog. A pristine draft can
 take unique local template recipes matching filter/binning, preferring the
 assigned exposure. Saved exposure defaults must agree with the assignment;
 template camera and Moon settings are retained. Ambiguity needs manual Planning;
-saved recipes are never reconstructed, and shared multi-rig changes require
-manual Activation. The
+saved recipes are never reconstructed, and shared multi-rig changes are
+sent to the rigs by hand (**Send to rigs…**). The
 existing assignment provenance prevents duplicate activation or quota refills.
 Automatic activation writes only the selected local database: it does not use
 the full-catalog remote-peer push, which could publish unrelated projects.
