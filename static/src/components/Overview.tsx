@@ -1663,7 +1663,7 @@ export default function Overview() {
                     </>,
                     db: <DbPill name={rigNames} title={rigNames} />,
                     state: familyPlan?.activation
-                      ? <span className="director-stage-badge">Active on {familyPlan.activation.rigs} rig{familyPlan.activation.rigs === 1 ? '' : 's'}</span>
+                      ? <span className="director-stage-badge">Activated on {familyPlan.activation.rigs} rig{familyPlan.activation.rigs === 1 ? '' : 's'}</span>
                       : familyPlan && (familyPlan.framing || familyPlan.plan) && <span className="library-pill library-pill-stage" title={stage(familyPlan)}>{stageShort(familyPlan)}</span>,
                     progress: <ProgressPill accepted={family.accepted} desired={family.desired} totalImages={family.totalImages} title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`} />,
                     dates: family.latest !== null && <DatesPill earliest={family.earliest} latest={family.latest} nowMs={relativeNow} title={`Across the rigs: ${formatDateRange({ earliest: family.earliest ?? undefined, latest: family.latest })}`} />,

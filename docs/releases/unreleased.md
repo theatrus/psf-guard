@@ -17,6 +17,18 @@
   that name no profile. Two projects with one name stay in separate Project
   groups. Links to groups from before still open them, and the image
   detail's next and previous walk the same nights as the grid.
+- A Director plan's status now reads **Activated** or **Needs activating**
+  instead of Synced or Not synced, so it is not mistaken for the catalog
+  Sync, and the Library badge says **Activated on N rigs** rather than
+  Active, Target Scheduler's own project state. The **Activate on the
+  rigs** dialog previews by itself when it opens and again whenever its
+  inputs change, so there is no Preview button to press. The preview reads
+  a copy of each rig's planning tables, so it never waits for N.I.N.A. or
+  holds a rig database's lock; **Activate** checks the databases themselves
+  and writes only when they match, and when they do not, it says what
+  changed and previews again. A plan that cannot be activated yet says
+  what to do first instead of offering **Activate…**. Unsaved plan edits
+  are never saved unasked: the dialog offers **Save and activate…**.
 - **Settings › Server** can fix the desktop app's localhost port, so browser,
   API, and agent connections keep the same address across restarts. A port
   conflict shows the error and Server settings so you can choose another
@@ -171,7 +183,7 @@
 - A plan asks to be activated again whenever activation would change a rig's
   Target Scheduler rows, not only after a save: rows changed in N.I.N.A., or
   an old plan another length replaced that is still on. The plan's summary
-  says **Synced** or **Not synced** (why is in the tooltip and in the bar at
+  says **Activated** or **Needs activating** (why is in the tooltip and in the bar at
   the top), or **Couldn't check the rigs** when they cannot be read, with a
   separate **Activate…** button. The bar's button says **Activate again…**
   once the plan has been activated. An exposure plan the preview updates
@@ -185,8 +197,8 @@
   shared, and counts it once.
 - The activation preview starts with what Target Scheduler will shoot
   afterwards, then what it turns off and why, then what it turns back on,
-  and shows the same after Apply. The count of turn-offs is in the rig's
-  line and in the bar ("Not synced: turns off 1 plan in ultracat131").
+  and shows the same after **Activate**. The count of turn-offs is in the rig's
+  line and in the bar ("Needs activating: turns off 1 plan in ultracat131").
 - To keep a plan made in N.I.N.A., **Take Target Scheduler's values**: it
   now brings each exposure length in as its own objective, so a 30 s L plan
   beside the plan's 300 s one becomes an "Unsaturated stars" objective and
@@ -329,8 +341,8 @@
   server to finish its work, so the job queue it saves is not lost. If that
   work is still running after two minutes, the log lists it and the whole
   app restarts instead.
-- A plan whose remote rig's site missed the last activation now reads **Not
-  synced**: "observatory-pi hasn't received this activation" in the summary
+- A plan whose remote rig's site missed the last activation now reads
+  **Needs activating**: "observatory-pi hasn't received this activation" in the summary
   and the bar, and "not sent to observatory-pi" on the rig's line. The bar
   and the activation dialog offer **Send to observatory-pi again**, with the
   error and when it was tried, and show no button when every site has it.

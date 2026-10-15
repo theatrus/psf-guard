@@ -101,7 +101,7 @@ test('pull tonight, review and activate allowed work in the background', async (
     await panel.getByRole('tab', { name: 'Automation' }).click();
     await panel.getByLabel('Pull tonight automatically').check();
     await panel.getByLabel('M31 halo in narrowband', { exact: true }).check();
-    await panel.getByLabel('Activate in rig database').check();
+    await panel.getByLabel('Activate on the rig').check();
     await panel.getByRole('button', { name: 'Save automation' }).click();
     await expect(panel.getByRole('button', { name: 'Refresh now' })).toBeEnabled();
     await panel.getByRole('button', { name: 'Refresh now' }).click();

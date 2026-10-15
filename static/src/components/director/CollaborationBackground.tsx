@@ -60,7 +60,7 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
           {[...choices].map(([id, name]) => <label className="collaboration-project-choice" key={id}><input type="checkbox" checked={projects.includes(id)} onChange={e => change(() => setProjects(all => e.target.checked ? [...all, id] : all.filter(p => p !== id)))} />{name}</label>)}
           {choices.size === 0 && <p>No joined or imported projects</p>}
         </fieldset>
-        <label className="collaboration-automation-option"><input type="checkbox" checked={activate} onChange={e => change(() => setActivate(e.target.checked))} />Activate in rig database</label>
+        <label className="collaboration-automation-option"><input type="checkbox" checked={activate} onChange={e => change(() => setActivate(e.target.checked))} />Activate on the rig</label>
         <label className="collaboration-automation-option"><input type="checkbox" checked={reports} onChange={e => change(() => setReports(e.target.checked))} />Submit contribution reports automatically</label>
         <div className="director-actions">
           <button type="submit" disabled={!dirty || ((enabled || reports) && !valid)}><Save size={16} />Save automation</button>

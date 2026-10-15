@@ -133,7 +133,8 @@ export default function ProjectWorkspace({ instanceId, projectId }: { instanceId
   return <DraftProvider drafts={drafts}><section aria-label="Project planning" className="director-workspace" ref={section}>
     <div className="workspace-top" ref={measureTop}>
       <SaveBar drafts={drafts} canWrite={canWrite} pageKeys={PAGE_KEYS} />
-      <ActivationBar projectId={projectId} drafts={drafts} canWrite={canWrite} open={activating} onOpen={() => setActivating(true)} onClose={closeActivation} />
+      <ActivationBar projectId={projectId} drafts={drafts} canWrite={canWrite} open={activating} onOpen={() => setActivating(true)} onClose={closeActivation}
+        onFraming={() => { setActivating(false); chooseTab('framing'); }} />
       <WorkspaceSummary projectId={projectId} projectName={row.project.name} back={back.toString()} rigs={summaryRigs} onActivation={() => setActivating(true)} hideActivation={activationDue} />
       <div className="workspace-tabs" role="tablist" aria-label="Plan sections" onKeyDown={onTabKey}>
         {TABS.map(entry => <button key={entry.id} type="button" role="tab" id={`workspace-tab-${entry.id}`} aria-selected={entry.id === tab} aria-controls={`workspace-panel-${entry.id}`}

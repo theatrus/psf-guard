@@ -266,7 +266,7 @@ take unique local template recipes matching filter/binning, preferring the
 assigned exposure. Saved exposure defaults must agree with the assignment;
 template camera and Moon settings are retained. Ambiguity needs manual Planning;
 saved recipes are never reconstructed, and shared multi-rig changes require
-manual Activation. The
+a manual activation. The
 existing assignment provenance prevents duplicate activation or quota refills.
 Automatic activation writes only the selected local database: it does not use
 the full-catalog remote-peer push, which could publish unrelated projects.

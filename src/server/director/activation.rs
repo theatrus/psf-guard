@@ -148,6 +148,10 @@ pub(super) struct Last {
 pub(super) enum ActivationError {
     Api(Error),
     NotReady(&'static str),
+    /// Apply ran on the rig databases themselves and reached another digest
+    /// than the preview's: nothing was written. The report is what Apply
+    /// found, so the caller can say what changed.
+    Changed(Box<Report>),
 }
 impl From<Error> for ActivationError {
     fn from(error: Error) -> Self {
@@ -171,6 +175,19 @@ impl IntoResponse for ActivationError {
             Self::NotReady(message) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(ApiResponse::<()>::error(message.into())),
+            )
+                .into_response(),
+            Self::Changed(report) => (
+                StatusCode::CONFLICT,
+                Json(ApiResponse {
+                    success: false,
+                    data: Some(*report),
+                    error: Some(
+                        "The plan or a rig database changed since the preview; nothing was activated. Preview again."
+                            .into(),
+                    ),
+                    status: None,
+                }),
             )
                 .into_response(),
         }
@@ -214,18 +231,24 @@ pub(super) async fn preview(
     request: Option<Json<Preview>>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
     let request = request.map(|Json(request)| request).unwrap_or_default();
-    execute(state, id, None, false, request.collaboration).await
+    // On a copy of each rig's planning tables, as the check runs: the
+    // dialog previews by itself whenever its inputs change, so a preview
+    // must not take the rig databases' turn or N.I.N.A.'s write lock. The
+    // copy holds every table an activation reads, so Apply, run on the
+    // database itself, reaches the same digest unless a rig changed since.
+    execute(state, id, None, true, false, request.collaboration).await
 }
 
 /// What an activation would change, worked out on a copy of each rig
 /// database's planning tables. The page asks for an activation only while a
 /// rig lacks the saved plan: a plan taken in from Target Scheduler, or rows
 /// that came by Sync, already match. The copy never takes N.I.N.A.'s lock.
+/// A collaboration plan is checked with the assignments it last took.
 pub(super) async fn check(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
-    execute(state, id, None, true, vec![]).await
+    execute(state, id, None, true, true, vec![]).await
 }
 
 pub(super) async fn apply(
@@ -245,6 +268,7 @@ pub(super) async fn apply(
         state,
         id,
         Some(request.preview_digest),
+        false,
         false,
         request.collaboration,
     )
@@ -333,9 +357,10 @@ async fn execute(
     id: Uuid,
     expected: Option<String>,
     on_copy: bool,
+    checking: bool,
     visits: Vec<collaboration_activation::Visit>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
-    execute_guarded(state, id, expected, on_copy, visits, None).await
+    execute_guarded(state, id, expected, on_copy, checking, visits, None).await
 }
 
 /// Background consent is limited to one rig/catalog. Never apply another
@@ -380,6 +405,7 @@ pub(super) async fn background_apply(
         id,
         None,
         true,
+        false,
         vec![visit.clone()],
         Some((rig, catalog)),
     )
@@ -389,6 +415,7 @@ pub(super) async fn background_apply(
         state,
         id,
         Some(preview.preview_digest),
+        false,
         false,
         vec![visit],
         Some((rig, catalog)),
@@ -402,7 +429,7 @@ pub(super) async fn background_apply(
         Ok(true)
     } else {
         Err(ActivationError::NotReady(
-            "Activation could not reach this rig; review Activation and retry.",
+            "Activation could not reach this rig; preview the activation and try again.",
         ))
     }
 }
@@ -412,6 +439,7 @@ async fn execute_guarded(
     id: Uuid,
     expected: Option<String>,
     on_copy: bool,
+    checking: bool,
     visits: Vec<collaboration_activation::Visit>,
     guard: Option<(Uuid, Uuid)>,
 ) -> Result<Json<ApiResponse<Report>>, ActivationError> {
@@ -428,14 +456,13 @@ async fn execute_guarded(
         .values()
         .cloned()
         .collect();
-    // A check runs on an in-memory copy of each rig's planning tables, taken
-    // in one read transaction, and writes nothing, so it skips the turn at
-    // the rig databases that discovery, adoption and activations queue for:
-    // opening a plan never waits behind them, nor they behind it. The copy
-    // cannot hold half of an activation, which commits each rig database in
-    // one transaction; the pooled reader below bounds how many checks run.
-    // Previews write and roll back, and applies write, so both still take
-    // the turn.
+    // A check or a preview runs on an in-memory copy of each rig's planning
+    // tables, taken in one read transaction, and writes nothing, so it skips
+    // the turn at the rig databases that discovery, adoption and activations
+    // queue for: opening a plan or its activation dialog never waits behind them,
+    // nor they behind it. The copy cannot hold half of an activation, which
+    // commits each rig database in one transaction; the pooled reader below
+    // bounds how many run. Applies write, so they still take the turn.
     let catalog_permit = if on_copy && expected.is_none() {
         None
     } else {
@@ -453,12 +480,13 @@ async fn execute_guarded(
         let applying = expected.is_some();
         let project = store.project(id)?.ok_or(Error::Missing)?;
         let is_collaboration = store.collaboration_requires_admission(id)?;
-        let visits = if is_collaboration && on_copy && visits.is_empty() {
+        // The page's status check reads the assignments the plan last took.
+        let visits = if is_collaboration && checking && visits.is_empty() {
             collaboration_activation::current(store, id, service.instance_id, &catalogs)?
         } else { visits };
         if is_collaboration && visits.is_empty() {
             return Err(ActivationError::NotReady(
-                "This collaboration import is an inactive draft. Select its assignments in Activation first.",
+                "This collaboration import is an inactive draft. Choose its assignments for activation first.",
             ));
         }
         if !is_collaboration && !visits.is_empty() { return Err(Error::Invalid.into()); }
@@ -501,7 +529,7 @@ async fn execute_guarded(
                 || plan.contributions.iter().any(|c| c.rig_id != rig)
                 || previous.as_ref().is_some_and(|a| a.rigs.iter().any(|r| r.rig_id != rig) || a.inactive_rigs.iter().any(|r| r.rig_id != rig)))
         {
-            return Err(ActivationError::NotReady("Configure this rig's recipes in Planning; shared multi-rig plans require manual Activation."));
+            return Err(ActivationError::NotReady("Configure this rig's recipes in Planning; shared multi-rig plans need a manual activation."));
         }
         // Contributions turned off on a rig that stays on: their rows are
         // turned off. A rig with all of them off has its project set
@@ -700,7 +728,7 @@ async fn execute_guarded(
             };
             // A preview performs the same writes and rolls them back, so the
             // connection is read-write either way; nothing lands without Apply.
-            let mut connection = match open_rig_for(&catalog.context.database_path, on_copy) {
+            let mut connection = match open_rig_for(&catalog.context.database_path, on_copy, !checking) {
                 Ok(connection) => connection,
                 Err(reason) => {
                     if guard.is_some() {
@@ -875,7 +903,7 @@ async fn execute_guarded(
             };
             // A database that cannot be opened or locked now keeps what the
             // last activation knew, so a later one can finish the job.
-            let mut connection = match open_rig_for(&catalog.context.database_path, on_copy) {
+            let mut connection = match open_rig_for(&catalog.context.database_path, on_copy, !checking) {
                 Ok(connection) => connection,
                 Err(reason) => {
                     warnings.push(reason);
@@ -982,8 +1010,21 @@ async fn execute_guarded(
         ))
         .map_err(|_| Error::Internal)?;
         let digest = catalog_discovery::digest(&bytes);
+        // Apply holds every rig database's write lock from its first read
+        // to its commit, so what it compares here is what it would write.
+        // A different digest writes nothing and says what Apply found.
         if expected.as_ref().is_some_and(|value| value != &digest) {
-            return Err(Error::Conflict.into());
+            return Err(ActivationError::Changed(Box::new(Report {
+                project,
+                framing_revision: framing.revision,
+                plan_revision: plan.revision,
+                panels: panels.len(),
+                rigs: reports,
+                warnings,
+                preview_digest: digest,
+                applied: false,
+                activation_revision: None,
+            })));
         }
         let mut to_record = None;
         if applying {
@@ -1071,7 +1112,7 @@ async fn execute_guarded(
             }
             if !failed.is_empty() {
                 let names: Vec<&str> = reports.iter().filter(|r| failed.contains(&r.rig.id)).map(|r| r.catalog_name.as_str()).collect();
-                warnings.push(format!("Not applied to {}; the other rigs were. Activate again to finish.", names.join(", ")));
+                warnings.push(format!("Not applied to {}; the other rigs were. Activate the plan again to finish.", names.join(", ")));
             }
             let inactive: Vec<InactiveRig> = inactive
                 .into_iter()
@@ -1110,7 +1151,7 @@ async fn execute_guarded(
                         return ActivationError::from(error);
                     }
                     ActivationError::NotReady(
-                        "The rig databases were written but the activation could not be recorded; activate again.",
+                        "The rig databases were written but the activation could not be recorded; activate the plan again.",
                     )
                 })?;
                 let mut warnings = Vec::new();
@@ -1183,14 +1224,30 @@ pub(super) fn open_rig(path: &str) -> Result<Connection, String> {
     Ok(connection)
 }
 
-/// A rig database for an activation, or for a check a copy of its planning
-/// tables.
-fn open_rig_for(path: &str, on_copy: bool) -> Result<Connection, String> {
-    if on_copy {
-        planning_copy(path)
-    } else {
-        open_rig(path)
+/// A rig database for an activation, or for a check or a preview a copy of
+/// its planning tables. A preview first opens the file for writing, as
+/// Apply will, without taking its lock: a database Apply could not open is
+/// said in the preview, so the two agree and Activate is not refused for it.
+fn open_rig_for(path: &str, on_copy: bool, probe_write: bool) -> Result<Connection, String> {
+    if !on_copy {
+        return open_rig(path);
     }
+    if probe_write {
+        let connection = open_rig(path)?;
+        // SQLite opens a write-protected file read-only without a word; Apply
+        // then fails at its first write, and says so in these words.
+        if connection.is_readonly(rusqlite::MAIN_DB).unwrap_or(false) {
+            let refused = rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_READONLY),
+                Some("attempt to write a readonly database".into()),
+            );
+            let RigError::Skip(reason) = RigError::from(refused) else {
+                unreachable!("a SQLite error always skips the rig");
+            };
+            return Err(reason);
+        }
+    }
+    planning_copy(path)
 }
 
 /// Each remote rig this apply writes waits for its push, which runs once
@@ -1389,7 +1446,7 @@ pub(super) async fn push(
             let project = store.project(id)?.ok_or(Error::Missing)?;
             let activation = store
                 .activation(id)?
-                .ok_or(ActivationError::NotReady("Apply an activation first."))?;
+                .ok_or(ActivationError::NotReady("Activate the plan first."))?;
             let mut targets: Vec<(NamedIdentity, Arc<DatabaseContext>, String)> = Vec::new();
             let found = identified_catalogs(&catalogs, instance);
             let mut warnings = found.duplicates.clone();
@@ -3090,7 +3147,7 @@ fn bad_guid(value: &str) -> RigError {
 /// GUIDs instead, which also keeps Director from making a twin of the row.
 fn missing_guid(what: &str) -> RigError {
     RigError::Skip(format!(
-        "{what} has no GUID yet. Fill in GUIDs for this database under Settings, Databases, then activate again."
+        "{what} has no GUID yet. Fill in GUIDs for this database under Settings, Databases, then activate the plan again."
     ))
 }
 

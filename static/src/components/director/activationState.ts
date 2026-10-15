@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../../api/client';
-import type { DirectorActivationChange, DirectorActivationRemotePush, DirectorActivationRig } from '../../api/directorTypes';
+import type { DirectorActivationChange, DirectorActivationRemotePush, DirectorActivationReport, DirectorActivationRig } from '../../api/directorTypes';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
 import { shootingRigs } from './planModel';
 import { retryWhenBusy } from './retry';
@@ -38,11 +38,52 @@ export function turnedOff(changes: DirectorActivationChange[]): string {
   ].filter(Boolean));
 }
 
+/** What a refused activation found different: the saved plan or framing,
+ *  and the rigs whose rows the new preview writes otherwise. */
+export function describeChange(before: DirectorActivationReport, after: DirectorActivationReport): string {
+  const parts: string[] = [];
+  if (before.plan_revision !== after.plan_revision) parts.push(`the saved plan (revision ${before.plan_revision} → ${after.plan_revision})`);
+  if (before.framing_revision !== after.framing_revision) parts.push(`the framing (revision ${before.framing_revision} → ${after.framing_revision})`);
+  // What an activation writes, as the server's digest reads it: a frame
+  // taken since changes a count the preview quotes, never what is written.
+  const rows = (rig: DirectorActivationRig | undefined) => JSON.stringify(rig
+    ? rig.changes.map(change => [change.kind, change.action, change.name, withoutFrameCounts(change.detail)])
+    : null);
+  const ids = new Set([...before.rigs, ...after.rigs].map(rig => rig.rig.id));
+  for (const id of ids) {
+    const was = before.rigs.find(rig => rig.rig.id === id);
+    const now = after.rigs.find(rig => rig.rig.id === id);
+    const name = (now ?? was)!.catalog_name;
+    // A rig the activation found locked or unwritable says why, in its words.
+    const said = (now?.warnings ?? []).filter(warning => !(was?.warnings ?? []).includes(warning));
+    if (said.length > 0) parts.push(`${name}: ${said.join(' ')}`);
+    else if (rows(was) !== rows(now)) parts.push(`${name}'s rows`);
+  }
+  return parts.length > 0 ? listed(parts) : 'something the preview cannot show';
+}
+
+/** A change's detail without the "(12 of 60 frames taken)" a new frame moves. */
+const withoutFrameCounts = (detail: string) => detail.replace(/\([^()]*frames taken\)/g, '');
+
 /** Whether every row activation would write in this rig turns one off. */
 const onlyTurnsOff = (rig: DirectorActivationRig) => rig.changes.every(change => change.action === 'unchanged' || change.action === 'keep' || change.action === 'disable');
 
 const failure = (error: unknown) => isAxiosError(error) ? error.response?.data?.error || error.message
   : error instanceof Error ? error.message : 'The check failed';
+
+/** What the server needs before it can activate this plan at all (its 422
+ *  answer: "Save a framing first."), or null when it can. */
+export function notReadyReason(error: unknown): string | null {
+  const answer = answerOf(error);
+  return answer?.status === 422 ? answer.data?.error || failure(error) : null;
+}
+
+/** The server's answer behind a failed request, whether the API client
+ *  passed the request's error on or wrapped it. */
+export function answerOf(error: unknown): { status: number; data?: { error?: string | null; data?: unknown } } | undefined {
+  const cause = isAxiosError(error) ? error : error instanceof Error && isAxiosError(error.cause) ? error.cause : undefined;
+  return cause?.response;
+}
 
 /** What the rig databases hold against what is saved here: the last
  *  activation, which saved parts (plan, framing) it has not sent yet, which
@@ -106,42 +147,45 @@ export function useActivationState(projectId: string) {
     .map(push => ({ ...push, rig_name: profiles.data?.find(rig => rig.rig.id === push.rig_id)?.catalog_name ?? 'a rig' }));
   const sites = sitesOf(unsent);
   const sentReason = `${listed(sites)} ${sites.length === 1 ? "hasn't" : "haven't"} received this activation`;
-  // Why the rigs are not synced, said once for the bar, the summary's
-  // tooltip and the activation panel.
-  const reasons = last.data ? [
+  // Why the plan needs activating, said once for the bar, the summary's
+  // tooltip and the activation dialog.
+  const planReasons = [
     !matches && parts.length > 0 && `saved ${listed(parts)} not activated yet`,
     missing.length > 0 && `${listed(missing)} not activated yet`,
     differing.length > 0 && `${listed(differing)} ${differing.length === 1 ? 'differs' : 'differ'} from the plan`,
     ...turningOff,
-    sites.length > 0 && sentReason,
-  ].filter(Boolean).join('; ') : 'not activated yet';
-  const notSynced = `Not synced: ${reasons}`;
+  ].filter(Boolean);
   // Only the sites that lack the last activation, for a bar that asks for
   // nothing else.
-  const notSent = `Not synced: ${sentReason}`;
+  const notSent = sentReason;
+  const notSynced = !last.data ? 'Not activated yet'
+    : planReasons.length === 0 && sites.length > 0 ? notSent
+    : `Needs activating: ${[...planReasons, sites.length > 0 && sentReason].filter(Boolean).join('; ')}`;
   // A check that failed, or a rig it could not read (its database locked,
   // unreadable or not on this server, or a row it refuses): said, never
   // asked about, with the reason in `title`.
   const skipped = (check.data?.rigs ?? []).filter(rig => rig.changes.length === 0);
-  const unchecked = !needsCheck || matches ? null
+  // The plan cannot be activated yet: the check says what to do first.
+  const notReady = check.isError ? notReadyReason(check.error) : null;
+  const unchecked = !needsCheck || matches || notReady ? null
     : check.isError ? { text: "Couldn't check the rigs", title: failure(check.error) }
     : skipped.length > 0 ? { text: `Couldn't check ${listed(skipped.map(rig => rig.catalog_name || rig.rig.name))}`, title: skipped.flatMap(rig => rig.warnings).join(' ') }
     : null;
-  /** One rig's line on the Rigs tab: synced or not, and why. */
+  /** One rig's line on the Rigs tab: activated or not, and why. */
   const rigSync = (rigId: string): { text: string; title?: string } => {
     const unread = skipped.find(rig => rig.rig.id === rigId);
     const report = check.data?.rigs.find(rig => rig.rig.id === rigId);
     // Rows that match here still wait for a site that lacks them.
     const waiting = unsent.find(push => push.rig_id === rigId);
-    const synced = waiting ? { text: `not synced · not sent to ${waiting.peer_name}`, title: waiting.error } : { text: 'synced' };
+    const synced = waiting ? { text: `behind · not sent to ${waiting.peer_name}`, title: waiting.error } : { text: 'activated' };
     if (holding.has(rigId)) return synced;
     if (unread) return { text: "couldn't check", title: unread.warnings.join(' ') };
-    if (!activated.has(rigId)) return { text: 'not synced · not activated yet' };
-    if (report && changed.has(rigId)) return { text: onlyTurnsOff(report) ? `not synced · turns off ${turnedOff(report.changes)}` : 'not synced · differs from the plan' };
-    if (parts.length > 0) return { text: `not synced · saved ${listed(parts)} not activated yet` };
+    if (!activated.has(rigId)) return { text: 'behind · not activated yet' };
+    if (report && changed.has(rigId)) return { text: onlyTurnsOff(report) ? `behind · activation turns off ${turnedOff(report.changes)}` : 'behind · differs from the plan' };
+    if (parts.length > 0) return { text: `behind · saved ${listed(parts)} not activated yet` };
     return synced;
   };
-  return { last, savedPlan, savedFraming, planRevision, framingRevision, behind, notSynced, notSent, unsent, matches, checking, unchecked, rigSync };
+  return { last, savedPlan, savedFraming, planRevision, framingRevision, behind, notSynced, notSent, unsent, matches, checking, unchecked, notReady, rigSync };
 }
 
 /** Send the last activation again to the remote sites that lack it. The
@@ -164,12 +208,13 @@ export function useSendAgain(projectId: string) {
  *  ask and then take it back; where it can, it asks once the check finds
  *  rows to write. */
 export function useActivationBar(projectId: string, canWrite: boolean, unsaved: number): { activate: boolean; send: boolean } {
-  const { last, savedPlan, behind, matches, checking, unsent } = useActivationState(projectId);
+  const { last, savedPlan, behind, matches, checking, unsent, notReady } = useActivationState(projectId);
   const status = useDirectorStatus();
   const shoots = shootingRigs(savedPlan.data?.plan).length > 0;
   const ready = canWrite && !!status.data?.database_management && unsaved === 0 && last.isSuccess;
   return {
-    activate: ready && shoots && (!last.data || behind.length > 0) && !matches && !checking,
+    // Never for a plan the server would refuse: the summary says what to do.
+    activate: ready && shoots && (!last.data || behind.length > 0) && !matches && !checking && !notReady,
     send: ready && unsent.length > 0,
   };
 }

@@ -116,14 +116,14 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(tab('Rigs')).toContainText('●');
     await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
     await expect(limits.getByRole('row', { name: /^Minimum altitude/ })).toContainText('30°from this plan');
-    // Activation is no tab: with the plan not yet on the rigs, the bar at
-    // the top asks for it, and the summary leaves that to the bar.
+    // Activation is no tab. This plan, adopted from catalogs, has no panel
+    // rig or panel size yet, so the server cannot activate it: the summary
+    // says what to do first instead of offering an activation, and no bar asks.
     await expect(page.getByRole('tab', { name: /^Activate/ })).toHaveCount(0);
-    await expect(page.getByTestId('summary-activation')).toHaveCount(0);
-    await page.getByRole('region', { name: 'Activation due' }).getByRole('button', { name: 'Activate…' }).click();
-    const activation = page.getByRole('dialog', { name: 'Activate on the rigs' });
-    await expect(activation.getByRole('region', { name: 'Activation' })).toBeVisible();
-    await activation.getByRole('button', { name: /close/i }).click();
+    await expect(page.getByTestId('summary-activation')).toHaveText("Can't activate yet");
+    await expect(page.getByTestId('summary-not-ready')).toHaveText('Choose a panel rig or enter a panel size in Framing first.');
+    await expect(page.getByRole('button', { name: /^Activate/ })).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Needs activating' })).toHaveCount(0);
     await tab('Priority and defaults').click();
     const preferences = page.getByRole('region', { name: 'Project priority' });
     await preferences.getByRole('button', { name: 'Move Andromeda older setup up' }).click();

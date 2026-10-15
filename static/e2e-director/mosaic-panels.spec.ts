@@ -89,15 +89,26 @@ test('a shot target stays put while panels are added round it, and activates as 
     const saveBar = page.getByRole('region', { name: 'Unsaved changes' });
     await saveBar.getByRole('button', { name: 'Save changes' }).click();
     await expect(saveBar).toContainText('All changes saved');
-    await page.getByRole('region', { name: 'Activation due' }).getByRole('button', { name: /^Activate/ }).click();
+    await page.getByRole('region', { name: 'Needs activating' }).getByRole('button', { name: /^Activate/ }).click();
     const dialog = page.getByRole('dialog', { name: 'Activate on the rigs' });
-    await dialog.getByRole('button', { name: 'Preview' }).click();
+    // The preview appears without a click.
     await expect(dialog.getByLabel('Askar data activation')).toContainText('Heart Nebula p2');
     // Each panel says the angle it is shot at, and nothing about how the rig gets there.
     await expect(dialog.getByLabel('Askar data activation')).toContainText('turned +10.0°');
     await expect(dialog.getByLabel('Askar data activation')).not.toContainText('by hand');
-    await dialog.getByRole('button', { name: 'Apply' }).click();
-    await expect(dialog.getByText(/^Applied/).first()).toBeVisible();
+    await expect(dialog.getByRole('status')).toHaveText('Preview ready');
+    // N.I.N.A. changes a row after the preview read its copy: Activate checks
+    // the database itself, writes nothing, says so and previews once more.
+    const nina = new Database(dbPath);
+    nina.prepare('UPDATE exposureplan SET desired = 7 WHERE Id = 1').run();
+    nina.close();
+    await dialog.getByRole('button', { name: 'Activate', exact: true }).click();
+    const refused = dialog.getByRole('alert').filter({ hasText: 'Changed since the preview' });
+    await expect(refused).toContainText("Askar data's rows. Nothing was written.");
+    await expect(refused).toContainText('This preview is new; check it, then activate.');
+    await expect(dialog.getByLabel('Askar data activation')).toContainText('desired 7 →');
+    await dialog.getByRole('button', { name: 'Activate', exact: true }).click();
+    await expect(dialog.getByText(/^Activated/).first()).toBeVisible();
 
     const after = new Database(dbPath, { readonly: true });
     try {

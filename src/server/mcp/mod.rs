@@ -1518,7 +1518,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Send an activated plan to rigs on other machines (remote rigs paired for sync), as the app's Push does. Reports each rig's outcome. Needs write access and database management."
+        description = "Send an activated plan to rigs on other machines (remote rigs paired for sync). Reports each rig's outcome. Needs write access and database management."
     )]
     async fn push_activation(
         &self,

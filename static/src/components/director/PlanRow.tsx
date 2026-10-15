@@ -20,7 +20,7 @@ export default function PlanRow({ row, href, canWrite, editing, onRename }: Plan
   return <ProjectRow className="director-plan-row" testId="plan-row">
     <Link className="library-name plan-row-name" to={href} aria-label={`Open ${name}`}>{name}</Link>
     {row.activation
-      ? <span className="director-stage-badge">Active on {row.activation.rigs} rig{row.activation.rigs === 1 ? '' : 's'}</span>
+      ? <span className="director-stage-badge">Activated on {row.activation.rigs} rig{row.activation.rigs === 1 ? '' : 's'}</span>
       : (row.framing || row.plan) && <span className="library-pill library-pill-stage" title={stage(row)}>{stageShort(row)}</span>}
     {row.links.length > 1 && <FamilyPill rigs={row.links.length} />}
     {row.links.length === 0

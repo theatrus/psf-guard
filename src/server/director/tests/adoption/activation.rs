@@ -2282,11 +2282,12 @@ async fn the_check_lists_a_replaced_plan_left_on_under_an_up_to_date_record() {
     assert_eq!(actions(&after, "project"), ["unchanged"], "{after}");
 }
 
-/// Opening a plan runs the check, so it must not queue for the turn at the
-/// rig databases that discovery, adoption and activations take: it answers
-/// while that turn is held, and a preview, which writes, still waits.
+/// Opening a plan runs the check, and opening its activation dialog runs a
+/// preview, so neither may queue for the turn at the rig databases that
+/// discovery, adoption and activations take: both answer while that turn
+/// is held, and an apply, which writes, still waits.
 #[tokio::test]
-async fn the_check_answers_while_another_job_holds_the_rig_databases() {
+async fn the_check_and_the_preview_answer_while_another_job_holds_the_rig_databases() {
     let a = activated().await;
     activate_now(&a.f, a.project, "first").await;
     let turn =
@@ -2309,9 +2310,145 @@ async fn the_check_answers_while_another_job_holds_the_rig_databases() {
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{preview}");
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{applied}");
     drop(turn);
     activate_now(&a.f, a.project, "after the turn").await;
+}
+
+/// Activate reconciles: it runs the preview again on the rig database itself,
+/// under its write lock, and writes only when that reaches the digest the
+/// preview on the copy showed. A row N.I.N.A. changed after the preview
+/// read its copy refuses the activation with what Apply found, nothing written,
+/// and the next preview reaches the same digest, so the activation goes through.
+#[tokio::test]
+async fn activate_refuses_with_what_it_found_when_a_rig_changed_after_the_preview() {
+    let a = activated().await;
+    activate_now(&a.f, a.project, "first").await;
+    edit_plan(&a.f, a.project, |plan| {
+        plan.objectives[0].goal = Goal::Frames { value: 99 };
+    });
+    let preview_path = format!("/projects/{}/activation/preview", a.project);
+    let apply_path = format!("/projects/{}/activation/apply", a.project);
+    let (status, preview) = call(&a.f.app, "POST", &preview_path, json!({}), None).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    a.db.execute("UPDATE exposureplan SET desired = 5", [])
+        .unwrap();
+    let desired = || {
+        a.db.query_row(
+            "SELECT group_concat(desired) FROM exposureplan",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap()
+    };
+    let (status, refused) = call(
+        &a.f.app,
+        "POST",
+        &apply_path,
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["success"], false);
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("nothing was activated"),
+        "{refused}"
+    );
+    assert_eq!(refused["data"]["applied"], false);
+    assert_ne!(
+        refused["data"]["preview_digest"],
+        preview["data"]["preview_digest"]
+    );
+    assert!(
+        plan_writes(&refused["data"])
+            .iter()
+            .any(|line| line.contains("desired 5 →")),
+        "{refused}"
+    );
+    assert_eq!(desired(), "5,5", "nothing written");
+    let (status, again) = call(&a.f.app, "POST", &preview_path, json!({}), None).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(
+        again["data"]["preview_digest"],
+        refused["data"]["preview_digest"]
+    );
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &apply_path,
+        json!({"preview_digest": again["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_ne!(desired(), "5,5");
+}
+
+/// The activation dialog previews by itself, so a preview runs on a copy of the
+/// rig's planning tables: it answers while N.I.N.A. holds the database's
+/// write lock and writes nothing. Its digest is the one Apply reaches on
+/// the database itself, so the activation goes through once the lock is gone.
+#[tokio::test]
+async fn a_preview_reads_a_copy_and_its_digest_applies_on_the_database() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    let preview_path = format!("/projects/{}/activation/preview", a.project);
+    let nina = Connection::open(a.f._dir.path().join("rig.sqlite")).unwrap();
+    nina.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let started = std::time::Instant::now();
+    let (status, preview) = call(&a.f.app, "POST", &preview_path, json!({}), None).await;
+    nina.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "the preview waited for the lock"
+    );
+    assert!(
+        preview["data"]["rigs"][0]["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|w| !w.as_str().unwrap().contains("locked")),
+        "{preview}"
+    );
+    assert_eq!(actions(&preview["data"], "project"), ["create"]);
+    assert_eq!(count("SELECT count(*) FROM project"), 0);
+    assert_eq!(
+        count("SELECT count(*) FROM sqlite_master WHERE name LIKE 'psf_guard_director_%'"),
+        0
+    );
+    // The check, on the same copy, agrees.
+    assert_eq!(
+        check_now(&a.f, a.project).await["preview_digest"],
+        preview["data"]["preview_digest"]
+    );
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(count("SELECT count(*) FROM project"), 1);
+    // After the activation, a preview of the same plan on the copy is what the
+    // database now holds.
+    let (_, again) = call(&a.f.app, "POST", &preview_path, json!({}), None).await;
+    assert!(plan_writes(&again["data"]).is_empty(), "{again}");
 }
 
 /// A plan activation owns follows its objective to another length in place,
