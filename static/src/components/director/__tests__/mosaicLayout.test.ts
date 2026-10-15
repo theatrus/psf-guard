@@ -466,7 +466,9 @@ describe('coverage across framings', () => {
       return { center, positionAngle: 20, panel: { width_degrees: 0.5, height_degrees: 0.4 }, layout: layout(panels, 15) };
     };
     // The fastest of several reads of fresh layouts, so neither a cache nor
-    // a busy machine decides it.
+    // a busy machine decides it. About 15 ms on an idle desktop; twice the
+    // 256-panel budget, and room for a slow runner, still catches reading
+    // every pair of 512 panels, which takes seconds.
     let fastest = Infinity;
     for (let i = 0; i < 7; i += 1) {
       // Side by side, the second turned 15° and over the first one's edge.
@@ -475,7 +477,7 @@ describe('coverage across framings', () => {
       readCoverage(framings);
       fastest = Math.min(fastest, performance.now() - started);
     }
-    expect(fastest).toBeLessThan(40);
+    expect(fastest).toBeLessThan(120);
   });
 
   it('gives the active framing its own issues by id and the others\' panels by label', () => {
