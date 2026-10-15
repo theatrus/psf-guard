@@ -115,10 +115,12 @@
   chosen, and **Flats from across a change** flags a light that had to
   take flats from the other side, or was shot during the change. Nights
   measured alike now mix without the **mixed flats** Check. The
-  Calibration page's new **Flat groups** tab shows each rig's changes and
-  each filter's groups, why they split, and the two nights' ratio. Three
-  settings under **Settings › Calibration › Flat groups** set the limits
-  or turn it off. `psf-guard flat-groups` measures a copy of a catalog
+  Calibration page's **Frames** view marks each flat session with its
+  group, draws each split and each camera-side change between the
+  sessions with why it happened, and compares the two nights' flats. Its
+  **Edit limits** opens the three settings under **Settings ›
+  Calibration › Flat groups**, which set the limits or turn it off. A new
+  **Angle** filter narrows Frames to one rotator angle. `psf-guard flat-groups` measures a copy of a catalog
   from the command line. Exports and WBPP runs place the same flats, give
   lights of one night that need different flats a session each, and name
   the lights WBPP cannot calibrate as a stack would.

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { CalibrationRuleField, CalibrationRuleValue, CalibrationRuleValues } from '../api/types';
@@ -6,6 +6,7 @@ import {
   RULE_GROUPS,
   describeRuleValue,
   draftOf,
+  focusRuleRow,
   parseDraft,
   sameRuleValue,
   type RuleDraft,
@@ -50,7 +51,7 @@ function defaultNote(field: CalibrationRuleField): string {
  * where calibration frames grade suspect or poor. A rig can set any of them
  * for itself (see `CalibrationRigSettings`).
  */
-export default function CalibrationMatchingSettings() {
+export default function CalibrationMatchingSettings({ focusField = null }: { focusField?: string | null }) {
   const queryClient = useQueryClient();
   const settings = useQuery({
     queryKey: ['calibration-settings'],
@@ -58,6 +59,20 @@ export default function CalibrationMatchingSettings() {
     // Another tab or editor may have changed them; read them afresh on opening.
     staleTime: 0,
   });
+
+  // Arriving for one setting, as Calibration's Edit limits asks: bring it
+  // into view and focus it once it is drawn, once per arrival.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const focused = useRef<string | null>(null);
+  const drawn = !!settings.data?.fields;
+  useEffect(() => {
+    if (!focusField) {
+      focused.current = null;
+      return;
+    }
+    if (!drawn || focused.current === focusField) return;
+    if (focusRuleRow(rootRef.current, focusField)) focused.current = focusField;
+  }, [drawn, focusField]);
 
   const fields = useMemo(() => settings.data?.fields ?? [], [settings.data]);
   const rules: CalibrationRuleValues = useMemo(() => settings.data?.rules ?? {}, [settings.data]);
@@ -157,7 +172,7 @@ export default function CalibrationMatchingSettings() {
     );
 
   return (
-    <div className="calibration-matching-settings">
+    <div className="calibration-matching-settings" ref={rootRef}>
       <h3>Calibration</h3>
       <p className="review-preferences-note">
         Every database on this server, and every rig without a value of its own (see Rigs below).

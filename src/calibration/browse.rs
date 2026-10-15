@@ -34,6 +34,9 @@ pub const MIN_COMPARE_FLATS: usize = 3;
 const DETAIL_FEATURES: usize = 400;
 /// Exposures within this many seconds are one exposure, as for matching.
 const EXPOSURE_TOLERANCE_S: f64 = 0.05;
+/// Rotator angles within this many degrees are one angle, as a flat
+/// group's sessions are.
+const ROTATION_TOLERANCE_DEG: f64 = crate::calibration::flat_groups::model::ROTATION_CLUSTER_DEG;
 
 /// What a list keeps: every field is optional, and each one given narrows
 /// the list further.
@@ -53,6 +56,9 @@ pub struct FrameFilter {
     pub grade: Option<GradeFilter>,
     /// `true` keeps the frames left out of masters, `false` the rest.
     pub kept_out: Option<bool>,
+    /// A rotator angle in degrees, matched within
+    /// [`ROTATION_TOLERANCE_DEG`]; frames without one are left out.
+    pub rotation: Option<f64>,
     pub session: Option<String>,
 }
 
@@ -137,6 +143,8 @@ pub struct LibraryFacets {
     pub last_night: Option<String>,
     pub temp_min_c: Option<f64>,
     pub temp_max_c: Option<f64>,
+    /// The flats' rotator angles, whole degrees, one per angle.
+    pub rotations: Vec<f64>,
 }
 
 /// One page of sessions, newest night first.
@@ -360,6 +368,13 @@ impl FrameFilter {
         {
             return false;
         }
+        if let Some(wanted) = self.rotation
+            && !frame
+                .rotation
+                .is_some_and(|angle| rotation_gap(angle, wanted) <= ROTATION_TOLERANCE_DEG)
+        {
+            return false;
+        }
         if let Some(wanted) = self.exposure
             && !frame
                 .exposure_s
@@ -406,6 +421,12 @@ impl FrameFilter {
         }
         true
     }
+}
+
+/// The angle between two rotator positions, at most 180°.
+fn rotation_gap(left: f64, right: f64) -> f64 {
+    let gap = (left - right).rem_euclid(360.0);
+    gap.min(360.0 - gap)
 }
 
 fn grade_rank(frame: &CalibrationFrameSummary) -> u8 {
@@ -650,7 +671,13 @@ fn facets(frames: &[BrowsedFrame]) -> LibraryFacets {
     let mut exposures = BTreeSet::new();
     let mut nights = BTreeSet::new();
     let mut temps = (None, None);
+    let mut angles = BTreeSet::new();
     for row in frames {
+        if row.frame.kind == CalibrationKind::Flat
+            && let Some(angle) = row.frame.rotation.filter(|value| value.is_finite())
+        {
+            angles.insert(angle.rem_euclid(360.0).round() as i64 % 360);
+        }
         if let Some(filter) = row.frame.filter.as_deref().map(str::trim)
             && !filter.is_empty()
         {
@@ -675,7 +702,27 @@ fn facets(frames: &[BrowsedFrame]) -> LibraryFacets {
         last_night: nights.last().cloned(),
         temp_min_c: temps.0,
         temp_max_c: temps.1,
+        rotations: one_per_angle(angles),
     }
+}
+
+/// Whole degrees in order, each within [`ROTATION_TOLERANCE_DEG`] of the
+/// one kept before it dropped, so a rotator's drift makes no new angle.
+fn one_per_angle(angles: BTreeSet<i64>) -> Vec<f64> {
+    let mut kept: Vec<f64> = Vec::new();
+    for angle in angles.into_iter().map(|angle| angle as f64) {
+        if kept
+            .last()
+            .is_none_or(|last| rotation_gap(*last, angle) > ROTATION_TOLERANCE_DEG)
+        {
+            kept.push(angle);
+        }
+    }
+    // 359° and 1° are one angle.
+    if kept.len() > 1 && rotation_gap(kept[0], kept[kept.len() - 1]) <= ROTATION_TOLERANCE_DEG {
+        kept.pop();
+    }
+    kept
 }
 
 fn rig_names(conn: &Connection) -> Result<HashMap<String, String>> {
@@ -1142,6 +1189,7 @@ mod tests {
         let mut frame = summary(CalibrationKind::Dark);
         frame.quality.grade = Some("poor".into());
         frame.kept_out = Some("noise".into());
+        frame.rotation = Some(359.2);
         let row = assign_sessions(vec![frame], 12 * 3600).remove(0);
         let keeps = |filter: FrameFilter| filter.keeps(&row);
         assert!(keeps(FrameFilter::default()));
@@ -1156,7 +1204,13 @@ mod tests {
             kept_out: Some(true),
             filter: Some("HA".into()),
             rig: Some("rig".into()),
+            // Across north: 359.2° is 1.6° from 0.8°.
+            rotation: Some(0.8),
             session: Some(row.session.clone()),
+        }));
+        assert!(!keeps(FrameFilter {
+            rotation: Some(3.2),
+            ..Default::default()
         }));
         assert!(!keeps(FrameFilter {
             kind: Some(CalibrationKind::Flat),
@@ -1182,6 +1236,28 @@ mod tests {
             kept_out: Some(false),
             ..Default::default()
         }));
+    }
+
+    #[test]
+    fn the_angle_facet_holds_one_value_per_angle() {
+        let at = |angle: f64, kind: CalibrationKind| {
+            let mut frame = summary(kind);
+            frame.rotation = Some(angle);
+            frame
+        };
+        let rows = assign_sessions(
+            vec![
+                at(0.6, CalibrationKind::Flat),
+                at(2.4, CalibrationKind::Flat),
+                at(113.8, CalibrationKind::Flat),
+                // Across north from 0.6°.
+                at(359.4, CalibrationKind::Flat),
+                // A dark's angle is no flat's.
+                at(200.0, CalibrationKind::Dark),
+            ],
+            12 * 3600,
+        );
+        assert_eq!(facets(&rows).rotations, vec![1.0, 114.0]);
     }
 
     #[test]

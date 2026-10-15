@@ -16,6 +16,7 @@ import WbppOptionsFields from './WbppOptionsFields';
 import { describePixInsight, formatFree } from '../utils/pixinsight';
 import './WbppRunDialog.css';
 import PathField from './PathField';
+import { plural } from './calibration/flatGroupLabels';
 
 /** The project or target to stack. */
 export interface WbppRunRequest {
@@ -410,7 +411,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             <p className="wbpp-run-muted" data-testid="wbpp-run-flat-changes">
               Flats chosen around measured changes: {progress.flat_changes?.join('; ')}.
               {(progress.flat_warnings ?? 0) > 0 &&
-                ` ${progress.flat_warnings} light(s) take flats from across a change, which WBPP may not calibrate as a PSF Guard stack would; the runner's notes list them.`}
+                ` ${plural(progress.flat_warnings ?? 0, 'light takes', 'lights take')} flats from across a change, which WBPP may not calibrate as a PSF Guard stack would; the runner's notes list them.`}
             </p>
           )}
           {(progress.calibration_settings?.length ?? 0) > 0 && (

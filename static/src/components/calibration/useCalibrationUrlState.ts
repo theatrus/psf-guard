@@ -9,7 +9,10 @@ import type {
   CalibrationListFilters,
 } from '../../api/types';
 
-export type CalibrationTab = 'frames' | 'groups' | 'masters' | 'scheduler';
+export type CalibrationTab = 'frames' | 'masters' | 'scheduler';
+
+/** The tab flat groups once had. Its links open Frames, on flats. */
+const OLD_GROUPS_TAB = 'groups';
 
 const KINDS: CalibrationKind[] = ['bias', 'dark', 'dark_flat', 'flat'];
 const GRADES: CalibrationGradeFilter[] = ['ok', 'suspect', 'poor', 'ungraded'];
@@ -46,6 +49,8 @@ export interface CalibrationFilterState {
   missing?: boolean;
   /** Show exposures recorded more than once instead of sessions. */
   duplicates?: boolean;
+  /** A rotator angle in degrees: flats at that angle. */
+  rotation?: number;
   sort?: CalibrationFrameSort;
 }
 
@@ -62,6 +67,7 @@ const FILTER_KEYS: Record<keyof CalibrationFilterState, (typeof CALIBRATION_PARA
   keptOut: 'calKept',
   missing: 'calMissing',
   duplicates: 'calDupes',
+  rotation: 'calRotation',
   sort: 'calSort',
 };
 
@@ -79,6 +85,7 @@ export function listFilters(state: CalibrationFilterState): CalibrationListFilte
     grade: state.grade,
     kept_out: state.keptOut,
     missing: state.missing || undefined,
+    rotation: state.rotation,
   };
   return Object.fromEntries(
     Object.entries(filters).filter(([, value]) => value !== undefined)
@@ -93,7 +100,10 @@ export function listFilters(state: CalibrationFilterState): CalibrationListFilte
 export function useCalibrationUrlState() {
   const { getParam, updateParams } = useUrlParams();
 
-  const tab: CalibrationTab = oneOf(getParam('calTab'), ['frames', 'groups', 'masters', 'scheduler'] as const) ?? 'frames';
+  const tab: CalibrationTab = oneOf(getParam('calTab'), ['frames', 'masters', 'scheduler'] as const) ?? 'frames';
+  // A link to the old Flat groups tab: Frames, narrowed to flats. Its rig,
+  // filter, angle and pair are Frames' own params, so they carry over.
+  const oldGroupsLink = getParam('calTab') === OLD_GROUPS_TAB;
   const rig = getParam('calRig') || undefined;
   const kind = oneOf(getParam('calKind'), KINDS);
   const filter = getParam('calFilter') || undefined;
@@ -107,10 +117,11 @@ export function useCalibrationUrlState() {
   const keptOut = kept === 'true' ? true : kept === 'false' ? false : undefined;
   const missing = getParam('calMissing') === 'true' || undefined;
   const duplicates = getParam('calDupes') === 'true' || undefined;
+  const rotation = number(getParam('calRotation'));
   const sort = oneOf(getParam('calSort'), SORTS);
   const filters = useMemo<CalibrationFilterState>(
-    () => ({ rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, sort }),
-    [rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, sort]
+    () => ({ rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, rotation, sort }),
+    [rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, rotation, sort]
   );
   const page = Math.max(0, Math.floor(number(getParam('calPage')) ?? 0));
   const session = getParam('calSession');
@@ -119,8 +130,7 @@ export function useCalibrationUrlState() {
   const stretch: CalibrationFrameStretch = oneOf(getParam('calStretch'), STRETCHES) ?? 'normal';
   const full = getParam('calFull') === '1';
   const master = getParam('calMaster');
-  // Flat groups: the angle shown, and the two sessions set side by side.
-  const rotation = number(getParam('calRotation'));
+  // Two flat sessions set side by side.
   const earlier = getParam('calEarlier');
   const later = getParam('calLater');
   const ratio = useMemo(() => (earlier && later ? { earlier, later } : null), [earlier, later]);
@@ -163,13 +173,9 @@ export function useCalibrationUrlState() {
   );
   const setFull = useCallback((next: boolean) => updateParams({ calFull: next ? '1' : null }), [updateParams]);
   const openMaster = useCallback((id: string | null) => updateParams({ calMaster: id }), [updateParams]);
-  const setRotation = useCallback(
-    (next: number | undefined) => updateParams({ calRotation: next === undefined ? null : String(next) }),
-    [updateParams]
-  );
-  /** Flat groups' Clear: every rig, filter and angle again. */
-  const clearGroupFilters = useCallback(
-    (rig: string | null) => updateParams({ calRig: rig, calFilter: null, calRotation: null }),
+  /** Open an old Flat groups link as Frames on flats, in place. */
+  const openOldGroupsLink = useCallback(
+    () => updateParams({ calTab: null, calKind: 'flat' }),
     [updateParams]
   );
   /** Open the ratio picture of two flat sessions, or close it. */
@@ -189,7 +195,6 @@ export function useCalibrationUrlState() {
         calPage: null,
         calMaster: null,
         calView: null,
-        calRotation: null,
         calEarlier: null,
         calLater: null,
         ...Object.fromEntries(Object.values(FILTER_KEYS).map((key) => [key, null])),
@@ -219,8 +224,8 @@ export function useCalibrationUrlState() {
     stretch,
     full,
     master,
-    rotation,
     ratio,
+    oldGroupsLink,
     setTab,
     setFilters,
     clearFilters,
@@ -231,9 +236,8 @@ export function useCalibrationUrlState() {
     setStretch,
     setFull,
     openMaster,
-    setRotation,
-    clearGroupFilters,
     openRatio,
+    openOldGroupsLink,
     resetForDatabase,
     setDatabase,
   };

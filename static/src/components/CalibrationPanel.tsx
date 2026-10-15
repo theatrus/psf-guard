@@ -42,8 +42,11 @@ interface CalibrationPanelProps {
 const UNSETTLED_BASES = new Set(['no_same_side', 'undetermined']);
 
 /** A fraction as a percent with one decimal: `0.2%`. */
+/** A fraction in percent: two decimals below 1%, and `<0.01%` below that. */
 function fractionPercent(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
+  const percent = value * 100;
+  if (percent < 0.01) return '<0.01%';
+  return `${percent >= 1 ? percent.toFixed(1) : percent.toFixed(2)}%`;
 }
 
 /** Refusals shown before "N more". */

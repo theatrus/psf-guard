@@ -4,7 +4,7 @@ Status: **Built**. Still open: split and join by hand, moving
 `flat_groups::measure` into Seiza, gap lights (a light whose night has no
 flats between two groups that differ), and corrected flats in WBPP
 exports (§8).
-Last updated: 2026-10-14
+Last updated: 2026-10-15
 
 User-facing behaviour is in
 [Calibration libraries › Flat groups](../CALIBRATION_LIBRARY.md#flat-groups).
@@ -103,11 +103,15 @@ Set from every flat of two Starfront rigs (§7):
 ## 3. Groups and change events
 
 `model::Book::build` works everything out from the stored rows on each
-library load, memoized per catalog by a digest of the rows, the rules and
-the lights' times.
+library load, memoized per catalog by a digest of the rows, the rules, the
+profile-to-rig bindings and a summary of the lights taken inside SQLite
+(their count, last id, and the sums of their times and profile lengths),
+so matching one light does not read every light to find the book
+unchanged.
 
 - **Pairs.** Within a family, every pair within twice the flat session
-  window (the furthest one master can reach) and every pair of neighbours.
+  window (the furthest one master can reach), every pair of neighbours,
+  and every pair of next-but-one neighbours.
   Across rotation clusters of one filter, pairs shot within one window:
   these give the rig's **angle term**.
 - **Groups.** Agglomerative, in time order, complete linkage: the
@@ -117,6 +121,10 @@ the lights' times.
 - **Boundaries.** Between two groups: a window from the last flat before
   to the first flat after, the step's dust and broad, its spots, and a
   drift note when no single step crossed the limit.
+- **Outliers.** A group of one session between two groups whose facing
+  sessions measure alike is one odd night, such as a hazy dawn, not a
+  change: its two boundaries still split groups but make no event, so no
+  light is flagged or kept from flats for it.
 - **Events.** Boundaries of one rig whose windows overlap and whose spots
   coincide merge. The window is the overlap. An event seen in two filters
   or at two angles is **camera side** and applies to every light of the
@@ -131,7 +139,10 @@ the lights' times.
 1. **Time**: outside the window, the side is known.
 2. **Session**: lights of one profile with no gap over 3 hours form an
    imaging session; if the session reaches outside the window, the side is
-   that end's.
+   that end's. A session places only lights of the rigs its profile is
+   bound to (`psf_guard_rig_binding`; an unbound profile counts as the
+   library's only rig, when it has one): another rig imaging the same
+   night says nothing of this one.
 3. **Pixels**: the job reads the imaging sessions that lie wholly inside a
    window (`evidence.rs`). Per filter: the clipped median of up to 8
    lights, less the pedestal, divided by the nearest flat response with a
@@ -160,19 +171,30 @@ nearest-first ordering, for every event that applies to the light:
    known. When the dropped flats could never reach the light's master
    (the nearest flat is on its side with a second within one window, and
    every dropped flat is further than two windows away), the list stays
-   as it was, so the stack keeps its key.
+   as it was, so the stack keeps its key, and the dropped flats are held
+   back (`CalibrationSelection::flat_held_back`): no fallback may take
+   them, neither the next set when the nearest is unstable nor an
+   external master.
 2. None left at its angle: the nearest other angle on its side
    (`other_angle_flats`), when the rig's angle term is measured and within
    both limits.
-3. Otherwise, for a camera-side event: the light's own flats, carried
-   across by the change's map (`metric::change_map`), from the event's
-   boundary in the light's filter or its strongest member. The built master
-   is divided by the map for a light before the change and multiplied for
-   one after (`corrected_flat_master`), written as
-   `<master>-across-<key>.fits` with a `PSFGACRS` card, atomically.
+3. Otherwise, for a camera-side event whose two sessions' responses are
+   on disk: the light's own flats, carried across by the change's map
+   (`metric::change_map`), from the event's boundary in the light's filter
+   or its strongest member. The built master is divided by the map for a
+   light before the change and multiplied for one after
+   (`corrected_flat_master`), written as `<master>-across-<key>.fits` with
+   a `PSFGACRS` card, to a temporary file with the build counter and
+   renamed. A correction that then fails fails the light's masters rather
+   than serving the uncorrected master under the corrected key. The
+   master cleanup counts it as recorded and rebuildable while its source
+   master is.
 4. Otherwise keep the other side's flats and flag (`NoSameSide`).
 
-An undetermined light keeps the nearest flats and is flagged. The basis
+An undetermined light keeps the nearest flats and is flagged. A light
+undetermined for one change and placed for another keeps its Check, with
+the other change's choice (its flats, gate or correction) inside the
+undetermined basis (`FlatBasis::followed_by`). The basis
 travels on `CalibrationSelection::flat_basis` into the explanation
 (`chosen_by`, `basis`) and the health check.
 
@@ -261,6 +283,32 @@ on a map shot close in time to it; a map from Hα 19 days later left 0.75%.
   group, global or per rig, under PR #839's scheme. `time` restores the
   previous selection exactly.
 
+### 5.1 On the Calibration page
+
+Flat groups have no tab of their own. They show in **Frames**, where the
+sessions are laid out by night, whenever the list can hold flats
+(`docs/CALIBRATION_LIBRARY.md` › Flat groups in Frames). The view
+(`GET …/calibrations/flat-groups`) names, for each measured session and
+each unmeasured one, the Frames sessions that hold its flats
+(`sessions`), so the page joins the two by id rather than by night and
+angle; a flat-group session and a Frames session agree except where a
+rotator drifted across their different angle rules. Each rig names the
+flat-group settings it sets itself (`own_limits`), so **Edit limits**
+opens the rig's own value or the global one.
+
+- A **split** draws above the newest listed session of the older group,
+  found by group membership, so it sits right on any page of the list.
+- A **camera-side change** draws once, above the newest listed flat of
+  the rig shot before its window; its member splits do not draw again.
+  A filter-side change is a split.
+- The page polls the quality job's progress once, through
+  `useFlatGroups`, and reads the view again when a pass that worked on
+  flats ends.
+- `calRotation` is a Frames filter (`rotation` on the session and frame
+  routes, flats within `ROTATION_CLUSTER_DEG`); the facets list the
+  flats' angles. An old `calTab=groups` link becomes `calKind=flat` and
+  keeps its other params.
+
 ## 6. Storage, keys and work
 
 - **Tables**, created with the calibration tables and on open of a
@@ -274,7 +322,13 @@ on a map shot close in time to it; a map from Hα 19 days later left 0.75%.
   (× 32,768), written to a temporary file and renamed. Rows and planes of
   sessions no longer in use are removed at the end of a pass.
 - **Comparison key**: both response keys and the comparison algorithm
-  version.
+  version. A pass takes each session's pedestal again; when it moved, as
+  when a dark-flat arrived, the row keeps the new one and the session's
+  comparisons are made again. A correction's key carries both pedestals.
+- **Partial reads**: a session measured while some of its flats could not
+  be read is measured again on each pass until it combines all of them. A
+  session whose flats could not be combined at all stays recorded with its
+  error until its frames or the algorithm change its key.
 - **Evidence key**: the imaging session (its profile and first light),
   the event and the evidence algorithm version. A change's key is its rig
   and window, so new flats that narrow the window ask the lights again.
@@ -282,15 +336,19 @@ on a map shot close in time to it; a map from Hα 19 days later left 0.75%.
   corrected flat. Which flats a change leaves a light already shows in its
   candidate list.
 - **Health**: `library_digest` hashes the three tables;
-  `HEALTH_ALGORITHM_VERSION` is 3.
+  `HEALTH_ALGORITHM_VERSION` is 4.
 - **Stability check**: dips only; `FLAT_STABILITY_VERSION` 2, and
   judgements from version 1 are made again.
 - **Pictures**: the ratio picture goes through the preview queue
   (`GenKind::FlatRatio`), keyed by both responses, the stretch and the
   render version, and reports through the shared generation-status poll.
 - **Job**: a stage of the calibration quality job after grading, on the
-  background worker share, yielding to interactive work, committing as it
-  goes.
+  background worker share sized by the library's largest flat
+  (`plan_workers` with its samples), yielding to interactive work before
+  each read, comparison and evidence session, committing as it goes.
+- **Grouping by time** is the previous behaviour throughout: selection,
+  the mixed-flats Check and its wording, and export sessions (no
+  per-flat-set sessions).
 
 ## 7. Validation on real flats
 
@@ -341,8 +399,6 @@ Once the current calibration work lands:
 - **Split and join by hand**, synced as choices.
 - **Gap lights**: a light whose night has no flats, between groups that
   differ, takes the nearest by time without a word.
-- **Pedestal refresh**: a dark-flat imported after a session was measured
-  does not refresh that session's pedestal; it shifts the metrics by about
-  the pedestal over the level, near 2%.
+
 - **Corrected flats in WBPP exports**: export the corrected master itself
   once exports can build masters.

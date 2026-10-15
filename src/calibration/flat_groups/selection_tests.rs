@@ -317,3 +317,123 @@ fn grouping_by_time_leaves_selection_as_it_was() {
     assert_eq!(names(&selected.flat), ["after-ha-90"]);
     assert_eq!(selected.flat_basis, FlatBasis::Nearest);
 }
+
+/// One pass over a measured library, counting how often it yielded to
+/// interactive work.
+fn pass_counting_yields(conn: &Connection, dir: &Path) -> (super::job::PassOutcome, usize) {
+    let yields = std::sync::atomic::AtomicUsize::new(0);
+    let outcome = super::job::run(super::job::Pass {
+        conn,
+        dir,
+        keep_going: &|| true,
+        yield_now: &|| {
+            yields.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        },
+        progress: &mut |_, _, _| {},
+        find_light: &|_| None,
+        pool: None,
+    })
+    .unwrap();
+    (outcome, yields.into_inner())
+}
+
+#[test]
+fn comparing_yields_to_interactive_work() {
+    let temp = tempfile::tempdir().unwrap();
+    let (conn, dir) = measured_library(temp.path(), &[BEFORE_HA_0, AFTER_HA_0]);
+    // Every response is kept; only the comparison is to be made again.
+    conn.execute("DELETE FROM psf_guard_flat_comparison", [])
+        .unwrap();
+    let (outcome, yields) = pass_counting_yields(&conn, &dir);
+    assert_eq!(outcome.measured, 0);
+    assert_eq!(outcome.compared, 1);
+    assert!(yields >= 1, "the comparison went straight through");
+}
+
+#[test]
+fn a_session_measured_while_a_flat_was_away_is_measured_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let session = Session {
+        name: "four",
+        captured: "2026-09-10T14:00",
+        filter: "Ha",
+        rotation: 0.0,
+        dusty: false,
+    };
+    let mut frames = write_session(temp.path(), &session, 1);
+    // A fourth flat of the same morning.
+    let extra = Session {
+        name: "four-more",
+        captured: "2026-09-10T14:01",
+        ..session
+    };
+    frames.push(write_session(temp.path(), &extra, 2).remove(0));
+    let path = temp.path().join("catalog.sqlite");
+    let mut conn = Connection::open(&path).unwrap();
+    let tx = conn.transaction().unwrap();
+    import_calibration_frames(&tx, &frames, Some("profile")).unwrap();
+    tx.commit().unwrap();
+    super::store::add_tables(&conn).unwrap();
+    let dir = temp.path().join("responses");
+
+    // One flat is away, as on a share that dropped: three still measure.
+    let away = temp.path().join("four-more-0.fits");
+    let hidden = temp.path().join("four-more-0.away");
+    std::fs::rename(&away, &hidden).unwrap();
+    let (first, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(first.measured, 1);
+    let combined =
+        |conn: &Connection| -> usize { super::store::load_responses(conn).unwrap()[0].frames };
+    assert_eq!(combined(&conn), 3);
+
+    // Back: the session is measured again from all four.
+    std::fs::rename(&hidden, &away).unwrap();
+    let (second, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(second.measured, 1);
+    assert_eq!(combined(&conn), 4);
+    let (third, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(third.measured, 0, "complete now: not read again");
+}
+
+#[test]
+fn a_bias_that_arrives_later_is_taken_out_and_the_nights_compared_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let (conn, dir) = measured_library(temp.path(), &[BEFORE_HA_0, AFTER_HA_0]);
+    let pedestal = |conn: &Connection| -> Vec<Option<f64>> {
+        super::store::load_responses(conn)
+            .unwrap()
+            .iter()
+            .map(|row| row.pedestal_adu)
+            .collect()
+    };
+    assert_eq!(pedestal(&conn), [None, None]);
+
+    // Bias frames of the same camera, measured at 500 ADU.
+    let metas: Vec<FrameMeta> = (0..2)
+        .map(|index| {
+            let path = temp.path().join(format!("bias-{index}.fits"));
+            write_frame_with(&path, "BIAS", SIZE, "2026-09-10T13:00:0", &[], |_, _| 500.0);
+            read_frame_meta(&path)
+        })
+        .collect();
+    {
+        let tx = conn.unchecked_transaction().unwrap();
+        import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
+        tx.commit().unwrap();
+    }
+    conn.execute(
+        "INSERT INTO psf_guard_calibration_frame_quality (frame_uuid, measurement_json, updated_at)
+         SELECT frame_uuid, '{\"level\": 500.0}', 0 FROM psf_guard_calibration_frame
+         WHERE kind = 'bias'",
+        [],
+    )
+    .unwrap();
+
+    let (outcome, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(outcome.measured, 0, "no flat is read again");
+    assert_eq!(
+        outcome.compared, 1,
+        "the nights are compared with the bias out"
+    );
+    assert_eq!(pedestal(&conn), [Some(500.0), Some(500.0)]);
+}

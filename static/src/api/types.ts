@@ -2578,6 +2578,8 @@ export interface CalibrationFacets {
   last_night?: string | null;
   temp_min_c?: number | null;
   temp_max_c?: number | null;
+  /** The flats' rotator angles, whole degrees, one per angle. */
+  rotations?: number[];
 }
 
 export interface CalibrationSessionPage {
@@ -2606,6 +2608,8 @@ export interface CalibrationListFilters {
   grade?: CalibrationGradeFilter;
   kept_out?: boolean;
   missing?: boolean;
+  /** A rotator angle in degrees, matched within 2°. */
+  rotation?: number;
   session?: string;
   sort?: CalibrationFrameSort;
   page?: number;
@@ -3999,6 +4003,8 @@ export interface FlatGroupsRig {
   measured: boolean;
   dust_limit_pct: number;
   pattern_limit_pct: number;
+  /** The flat-group settings the rig sets for itself; the rest it inherits. */
+  own_limits?: string[];
   angle_term: FlatPairDifference | null;
   angle_pairs: number;
   /** Newest first. */
@@ -4018,6 +4024,8 @@ export interface FlatUnmeasuredSession {
   rotation: number | null;
   frames: number;
   reason: string;
+  /** The Calibration page's sessions that hold its flats. */
+  sessions?: string[];
 }
 
 /** A change seen across one rig's flats at once. */
@@ -4081,6 +4089,8 @@ export interface FlatSession {
   height: number | null;
   /** Against the session before it in its family. */
   previous: FlatPairDifference | null;
+  /** The Calibration page's sessions that hold its flats. */
+  sessions?: string[];
 }
 
 export interface FlatSplit {

@@ -44,6 +44,26 @@ pub(crate) fn measure_as(conn: &Connection, dust: impl Fn(&ResponseRow, &Respons
         )
         .unwrap();
     }
+    // A catalog on disk gets a plane for each response, flat, beside it,
+    // so a change's map can be made as after a real pass.
+    if let Some(catalog) = conn.path().filter(|path| !path.is_empty()) {
+        let dir = std::path::PathBuf::from(format!("{catalog}.responses"));
+        std::fs::create_dir_all(&dir).unwrap();
+        for row in store::load_responses(conn).unwrap() {
+            let (width, height) = (row.width.unwrap_or(1), row.height.unwrap_or(1));
+            let plane = super::metric::Plane {
+                width,
+                height,
+                data: vec![1.0; width * height],
+            };
+            std::fs::write(
+                super::response_path(&dir, &row.response_key),
+                super::metric::encode_plane(&plane),
+            )
+            .unwrap();
+        }
+        super::register_response_dir(std::path::Path::new(catalog), dir);
+    }
     let book = Book::build(
         store::load_responses(conn).unwrap(),
         Vec::new(),

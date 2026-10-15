@@ -30,6 +30,18 @@ export function nightRange(first: string, last: string): string {
   return first === last ? first : `${first} – ${last}`;
 }
 
+/** Two nights of one year without the year, `09-07 → 09-16`; one night alone. */
+export function nightSpan(first: string, last: string): string {
+  const short = first.slice(0, 4) === last.slice(0, 4) && /^\d{4}-/.test(first);
+  const trim = (night: string) => (short ? night.slice(5) : night);
+  return first === last ? trim(first) : `${trim(first)} → ${trim(last)}`;
+}
+
+/** A group as a session in the list names it: `Group 2 · 09-07 → 09-16, 2 nights`. */
+export function groupLabel(number: number, group: { first_night: string; last_night: string; sessions: unknown[] }): string {
+  return `Group ${number} · ${nightSpan(group.first_night, group.last_night)}, ${plural(group.sessions.length, 'night')}`;
+}
+
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${count} ${count === 1 ? one : many}`;
 }

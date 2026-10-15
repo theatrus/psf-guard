@@ -192,7 +192,7 @@ describe('CalibrationPanel', () => {
         master: { frames: 46, nights: 2 },
         used: [{ night: '2026-10-06', frames: 6 }, { night: '2026-10-01', frames: 40 }],
         matching_unused: [{ night: '2026-10-08', frames: 20 }],
-        alike: { nights: 2, dust: 0.0021, broad: 0.0064 },
+        alike: { nights: 2, dust: 0.00004, broad: 0.0064 },
         chosen_by: 'No flats from its side of the new dust; these are from before it',
         basis: { basis: 'no_same_side', event, placement: { by: 'time', side: 'after' } },
       })],
@@ -201,7 +201,7 @@ describe('CalibrationPanel', () => {
     expect(finding).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText(/A measured change, such as new dust, lies between this light and its flats/)).toBeInTheDocument();
     expect(screen.getByTestId('calibration-flat-alike'))
-      .toHaveTextContent('Measured alike: dust within 0.2%, pattern within 0.6% across 2 nights');
+      .toHaveTextContent('Measured alike: dust within <0.01%, pattern within 0.64% across 2 nights');
     const chosenBy = screen.getByTestId('calibration-flat-chosen-by');
     expect(chosenBy).toHaveTextContent('Chosen by');
     expect(chosenBy).toHaveTextContent('No flats from its side of the new dust');

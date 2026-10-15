@@ -198,6 +198,27 @@ pub(crate) fn retain_responses(conn: &Connection, keep: &[String]) -> Result<usi
     Ok(removed)
 }
 
+/// A session's pedestal changed, as when a dark-flat arrived after it was
+/// measured: keep the new one, and forget its comparisons, which were made
+/// with the old one taken out, so the next pass makes them again.
+pub(crate) fn set_pedestal(
+    conn: &Connection,
+    response_key: &str,
+    pedestal: Option<f64>,
+) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute(
+        "UPDATE psf_guard_flat_response SET pedestal_adu = ?2 WHERE response_key = ?1",
+        params![response_key, pedestal],
+    )?;
+    tx.execute(
+        "DELETE FROM psf_guard_flat_comparison WHERE earlier_key = ?1 OR later_key = ?1",
+        [response_key],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize)]
 struct Detail {
     spots: Vec<Spot>,

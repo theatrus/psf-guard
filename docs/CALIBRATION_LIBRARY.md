@@ -419,7 +419,9 @@ whose shadows sit at the same sensor position are one **change**. Dust on
 the camera side turns with the camera, so the same shadow shows in every
 filter and at every angle: a change seen in two filters or at two angles
 applies to every light of the rig. A change seen in one filter, as filter
-dust, applies to that filter only.
+dust, applies to that filter only. One night unlike the nights either side
+of it, which measure alike, as after a hazy dawn, keeps to a group of its
+own but is no change: no light is flagged or kept from flats for it.
 
 ### Which side a light is on
 
@@ -428,7 +430,8 @@ A light stands before or after a change:
 1. **By time**, when it was shot outside the change's window.
 2. **By its imaging session**, when it was shot inside the window but the
    continuous run of lights it belongs to (one N.I.N.A. profile, no gap of
-   three hours) reaches outside it.
+   three hours) reaches outside it. Only a run of the light's own rig
+   counts: another rig imaging the same night says nothing of it.
 3. **By its own pixels**, when the whole run lies inside the window. The
    stage takes the median of up to eight of the run's lights, divides it by
    a flat from one side, and fits what is left against the change's map.
@@ -465,21 +468,47 @@ cannot carry flats across a change, so such a light keeps its own
 session with the flats as shot and is named in the runner and the export
 summary; see [WBPP](WBPP.md#calibration-frames).
 
-### Flat groups tab
+### Flat groups in Frames
 
-The Calibration page's **Flat groups** tab shows each rig's limits, how
-much its flats depend on the rotator angle, its changes, newest first,
-and each filter and angle's groups with every session's difference from
-the night before. Each split says why it split, with the values and the
-limits. **Compare** opens the ratio of the two sessions, later ÷ earlier,
-at ±3%, ±1% or ±0.5%, with new shadows and departed ones circled. Stars
-draw at neutral grey. Sessions that could not be measured are listed with
-the reason, such as too few flats.
+Flat groups show where the flats are, in the Calibration page's
+**Frames** view, whenever the list can hold flats (**Type** is All or
+Flat):
+
+- Each flat session in the list carries its group, such as **Group 3 ·
+  09-07 → 09-16, 4 nights**, numbered from the oldest within its filter
+  and angle, with a coloured band down its row's edge. Neighbouring
+  groups take neighbouring colours. A session too small to measure, or
+  not measured yet, says so.
+- A **split** between two groups of one filter and angle is a line in the
+  list above the newest session of the older group. It names the filter
+  and angle and says why, with the values and the limits: *the light
+  pattern changed by 2.6% (limit 2%)*.
+- A **change** on the camera side reaches every filter and angle of the
+  rig, so it shows once, as one row above the newest flat shot before it:
+  what it is, its depth, the filters and angles it was seen in, and its
+  window. Its splits do not repeat in each filter.
+- **Compare**, on a split or a change, opens the ratio of the two
+  sessions above the session view: later ÷ earlier, at ±3%, ±1% or
+  ±0.5%, with new shadows and departed ones circled. Stars draw at
+  neutral grey. **Compare** again, or **Close**, closes it.
+- Above the list, a line for each rig in view gives its limits and how
+  much its flats depend on the rotator angle, counts the sessions not
+  measured, shows the background pass while it measures, and ends in
+  **Edit limits**. That opens **Settings › Calibration** on the dust
+  limit, or on **Group flats** while the rig groups by time: the rig's
+  own value when it sets one, else the global one.
+- The chosen flat session's title says which group it is in, its nights
+  and flats, and how it measured against the night before.
+
+**Angle** narrows the list to flats shot within 2° of one rotator angle.
+Like the other filters, the angle and the two sessions compared live in
+the address. A link to the old **Flat groups** tab opens Frames on flats
+with the same rig, filter, angle and comparison.
 
 ### Settings and checks
 
 Three settings sit under **Settings › Calibration › Flat groups**, global
-or per rig: **Group flats** (by measurement, or by time only as before),
+or per rig (**Edit limits** in Frames leads there): **Group flats** (by measurement, or by time only as before),
 **Dust that splits flats** and **Light pattern that splits flats**. They
 are matching settings: a change rebuilds the masters and stacks whose
 flats it changes.

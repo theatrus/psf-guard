@@ -245,8 +245,9 @@ fn dark_set_labels(
 /// Name the flat sets that cannot share their night's session. Lights of
 /// one night with different flats need a session each: the night with a
 /// short digest of the set's frames. A set carried across a measured change
-/// always gets its own, `<night>-across-<key>`, so its lights stand apart.
-/// Sets alone on their night keep the night.
+/// always gets its own, `<night>-across-<key>`, so its lights stand apart;
+/// with the digest too when one change carries several sets of the night
+/// across, as at two angles. Sets alone on their night keep the night.
 fn flat_set_labels<'a>(keys: impl Iterator<Item = &'a FlatSetKey>) -> HashMap<FlatSetKey, String> {
     use sha2::{Digest, Sha256};
     let mut by_night: std::collections::BTreeMap<
@@ -259,25 +260,36 @@ fn flat_set_labels<'a>(keys: impl Iterator<Item = &'a FlatSetKey>) -> HashMap<Fl
             .or_default()
             .insert(key);
     }
+    let digest = |set: &crate::calibration::FlatSet| -> String {
+        Sha256::digest(set.frame_uuids.join(",").as_bytes())
+            .iter()
+            .take(3)
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    };
     let mut labels = HashMap::new();
     for distinct in by_night.values() {
         let plain = distinct
             .iter()
             .filter(|key| key.2.correction.is_none())
             .count();
+        let mut across: HashMap<&str, usize> = HashMap::new();
+        for key in distinct {
+            if let Some(correction) = &key.2.correction {
+                *across.entry(correction.as_str()).or_default() += 1;
+            }
+        }
         for key in distinct {
             let set = &key.2;
             let label = match &set.correction {
+                Some(key) if across[key.as_str()] > 1 => format!(
+                    "{}-across-{}-{}",
+                    set.night,
+                    &key[..key.len().min(6)],
+                    digest(set)
+                ),
                 Some(key) => format!("{}-across-{}", set.night, &key[..key.len().min(6)]),
-                None if plain > 1 => {
-                    let digest = Sha256::digest(set.frame_uuids.join(",").as_bytes());
-                    let hex: String = digest
-                        .iter()
-                        .take(3)
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect();
-                    format!("{}-{hex}", set.night)
-                }
+                None if plain > 1 => format!("{}-{}", set.night, digest(set)),
                 None => continue,
             };
             labels.insert((*key).clone(), label);
@@ -521,7 +533,12 @@ pub fn plan_export(
                     }
                 }
             }
-            if let Some(set) = &calibration.flat_set {
+            // Grouping flats by time exports as it always did: every light
+            // of a night in that night's session.
+            if let Some(set) = &calibration.flat_set
+                && calibration.rules.flat_grouping
+                    == crate::calibration::rules::FlatGrouping::Measured
+            {
                 let key = (target_name.clone(), image.filter_name.clone(), set.clone());
                 for (offset, (kind, _, _)) in calibration.items.iter().enumerate() {
                     if *kind == crate::calibration::CalibrationKind::Flat {
@@ -971,6 +988,33 @@ mod tests {
     use super::*;
     use crate::ts_schema;
     use std::io::Write;
+
+    #[test]
+    fn two_sets_one_change_carries_across_in_a_night_get_a_session_each() {
+        let set = |uuids: &[&str], correction: Option<&str>| {
+            (
+                "M 31".to_string(),
+                "R".to_string(),
+                crate::calibration::FlatSet {
+                    night: "2026-09-18".into(),
+                    frame_uuids: uuids.iter().map(|uuid| uuid.to_string()).collect(),
+                    correction: correction.map(str::to_string),
+                },
+            )
+        };
+        // The same change carries the flats at 3° and at 114° across.
+        let at_3 = set(&["a", "b"], Some("0123456789abcdef"));
+        let at_114 = set(&["c", "d"], Some("0123456789abcdef"));
+        let labels = flat_set_labels([&at_3, &at_114].into_iter());
+        assert_ne!(labels[&at_3], labels[&at_114]);
+        assert!(
+            labels[&at_3].starts_with("2026-09-18-across-012345-"),
+            "{labels:?}"
+        );
+        // Alone, a carried set keeps the shorter name.
+        let labels = flat_set_labels([&at_3].into_iter());
+        assert_eq!(labels[&at_3], "2026-09-18-across-012345");
+    }
 
     fn fits_card(output: &mut Vec<u8>, value: &str) {
         let mut card = value.as_bytes().to_vec();
@@ -1576,7 +1620,13 @@ mod tests {
             /// The catalog's one accepted light carries `cards`.
             fn new(cards: &[&str]) -> Self {
                 let dir = tempfile::tempdir().unwrap();
-                let conn = seed(dir.path());
+                // On disk, as a server's catalog is, so flat grouping can
+                // keep its measurements beside it.
+                let catalog = dir.path().join("catalog.sqlite");
+                seed(dir.path())
+                    .execute("VACUUM INTO ?1", [catalog.to_string_lossy()])
+                    .unwrap();
+                let conn = Connection::open(&catalog).unwrap();
                 write_test_fits_with(&dir.path().join("acc_Ha_0001.fits"), "LIGHT", cards);
                 Self { dir, conn }
             }
@@ -1969,6 +2019,21 @@ mod tests {
             let out = tempfile::tempdir().unwrap();
             let summary = execute_plan(&plan, out.path(), false, true);
             assert_eq!(summary.flat_warnings, 1);
+            assert_eq!(plan.flat_choices[0].2.basis, "corrected");
+
+            // Without the change's measurements nothing can carry the
+            // flats across: the light is promised no correction, and is
+            // flagged for flats from the other side instead.
+            let catalog = library.conn.path().unwrap().to_string();
+            std::fs::remove_dir_all(format!("{catalog}.responses")).unwrap();
+            let plan = library.plan(false);
+            assert_eq!(plan.flat_choices[0].2.basis, "no_same_side", "{plan:?}");
+            assert!(plan.flat_choices[0].2.flagged);
+            let light = destinations(&plan)
+                .into_iter()
+                .find(|path| path.ends_with("acc_Ha_0001.fits"))
+                .unwrap();
+            assert!(!light.contains("-across-"), "{light}");
         }
 
         /// Two lights of one night that need different flats go to two
@@ -2013,6 +2078,25 @@ mod tests {
             assert!(first.starts_with("SESSION_2026-09-10-"), "{first}");
             assert_eq!(session_of("flat-0-0.fits"), first);
             assert_eq!(session_of("flat-90-0.fits"), second);
+
+            // Grouping flats by time exports as it always did: the night's
+            // one session.
+            let _rules = crate::calibration::tests::RulesInForce::global(&[(
+                "flat_grouping",
+                serde_json::json!("time"),
+            )]);
+            let placed = destinations(&library.plan(false));
+            let sessions: HashSet<String> = placed
+                .iter()
+                .filter(|path| path.contains("/SESSION_") || path.starts_with("flats/"))
+                .filter_map(|path| path.split('/').find(|part| part.starts_with("SESSION_")))
+                .map(str::to_string)
+                .collect();
+            assert_eq!(
+                sessions,
+                HashSet::from(["SESSION_2026-09-10".to_string()]),
+                "{placed:?}"
+            );
         }
 
         /// A longer flat session pools two evenings into one session when

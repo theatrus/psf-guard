@@ -52,6 +52,9 @@ pub struct SessionView {
     pub height: Option<usize>,
     /// Against the session before it in its family.
     pub previous: Option<PairView>,
+    /// The Calibration page's sessions that hold its flats, so the Frames
+    /// view can mark them with their group.
+    pub sessions: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -138,6 +141,8 @@ pub struct UnmeasuredView {
     pub rotation: Option<f64>,
     pub frames: usize,
     pub reason: String,
+    /// The Calibration page's sessions that hold its flats.
+    pub sessions: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,6 +153,9 @@ pub struct RigView {
     pub measured: bool,
     pub dust_limit_pct: f64,
     pub pattern_limit_pct: f64,
+    /// The flat-group settings this rig sets for itself; the rest it
+    /// inherits from the global ones.
+    pub own_limits: Vec<&'static str>,
     pub angle_term: Option<PairView>,
     pub angle_pairs: usize,
     /// Newest first.
@@ -163,8 +171,18 @@ pub struct FlatGroupsView {
     pub rigs: Vec<RigView>,
 }
 
-fn split_reason(book: &model::Book, boundary: &model::Boundary, limits: &model::Limits) -> String {
+fn split_reason(
+    book: &model::Book,
+    index: usize,
+    boundary: &model::Boundary,
+    limits: &model::Limits,
+) -> String {
     let night = |index: usize| book.sessions[index].row.night.clone();
+    if book.outliers.contains(&index) {
+        return "one night unlike the nights either side of it, which measure alike: no \
+                change, and no light is flagged for it"
+            .into();
+    }
     if let Some((a, b, distance)) = boundary.drift {
         return format!(
             "drifted: {} and {} differ by {:.1}× the limits, though each night is close to \
@@ -192,6 +210,29 @@ fn split_reason(book: &model::Book, boundary: &model::Boundary, limits: &model::
     }
 }
 
+/// The settings that decide how a rig's flats group.
+const LIMIT_KEYS: [&str; 3] = [
+    "flat_grouping",
+    "flat_split_dust_pct",
+    "flat_split_pattern_pct",
+];
+
+/// The browser's sessions holding `uuids`, in their order, each once.
+fn browser_sessions<'a>(
+    uuids: impl IntoIterator<Item = &'a String>,
+    session_of: &HashMap<&str, &str>,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for uuid in uuids {
+        if let Some(session) = session_of.get(uuid.as_str())
+            && !out.iter().any(|seen| seen == session)
+        {
+            out.push((*session).to_string());
+        }
+    }
+    out
+}
+
 fn read_only(path: &str) -> Result<rusqlite::Connection, AppError> {
     crate::server::database_context::open_scheduler_connection_with_flags(
         path,
@@ -213,6 +254,14 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
         .into_iter()
         .map(|rig| (rig.rig_uuid, rig.name))
         .collect();
+    // The Calibration page's own sessions, to point each measured one at.
+    let browsed = crate::calibration::browse::library_frames(conn)?;
+    let session_of: HashMap<&str, &str> = browsed
+        .frames
+        .iter()
+        .map(|row| (row.frame.frame_uuid.as_str(), row.session.as_str()))
+        .collect();
+    let rule_book = crate::calibration::rules::rule_book();
     let mut rigs: BTreeMap<String, RigView> = BTreeMap::new();
     let rig_view = |rig: &str, book: &model::Book| {
         let rules = crate::calibration::rules_for_rig(rig);
@@ -224,6 +273,10 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
             measured: limits.measured,
             dust_limit_pct: pct(limits.dust),
             pattern_limit_pct: pct(limits.broad),
+            own_limits: LIMIT_KEYS
+                .into_iter()
+                .filter(|key| rule_book.rig_sets(rig, key))
+                .collect(),
             angle_term: term.map(|t| PairView {
                 dust_pct: pct(t.dust),
                 broad_pct: pct(t.broad),
@@ -271,6 +324,7 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
                         dust_pct: pct(c.dust),
                         broad_pct: pct(c.broad),
                     }),
+                    sessions: browser_sessions(&session.row.frame_uuids, &session_of),
                 });
                 previous = Some(*index);
             }
@@ -303,7 +357,7 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
                     end: boundary.end,
                     dust_pct: boundary.dust.map(pct),
                     broad_pct: boundary.broad.map(pct),
-                    reason: split_reason(&book, boundary, &limits),
+                    reason: split_reason(&book, *b, boundary, &limits),
                     event_key: boundary_event.get(b).cloned(),
                     spots: boundary.spots.iter().take(12).map(SpotView::of).collect(),
                 }
@@ -372,6 +426,7 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
             } else {
                 "not measured yet".into()
             },
+            sessions: browser_sessions(plan.frames.iter().map(|f| &f.frame_uuid), &session_of),
         });
     }
     for rig in rigs.values_mut() {
@@ -601,4 +656,77 @@ pub fn status_job(
             stretch,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::calibration::test_frames::write_frame;
+    use crate::calibration::tests::{RulesInForce, POLICY_LOCK};
+
+    /// Two mornings of three flats each, measured 2% apart.
+    fn measured_catalog(dir: &std::path::Path) -> rusqlite::Connection {
+        let metas: Vec<_> = ["2026-09-10T14:0", "2026-09-14T14:0"]
+            .iter()
+            .flat_map(|morning| {
+                (0..3).map(move |index| {
+                    let path = dir.join(format!("{}-{index}.fits", &morning[..10]));
+                    write_frame(
+                        &path,
+                        "FLAT",
+                        (32, 32),
+                        &format!("{morning}{index}:00"),
+                        |_, _| 30_000.0,
+                    );
+                    crate::commands::import::headers::read_frame_meta(&path)
+                })
+            })
+            .collect();
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        crate::calibration::import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
+        tx.commit().unwrap();
+        flat_groups::testing::measure_as(&conn, |a, b| if a.night == b.night { 0.0 } else { 0.02 });
+        conn
+    }
+
+    #[test]
+    fn each_measured_session_names_the_browsers_session_and_the_rig_its_own_limits() {
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let conn = measured_catalog(temp.path());
+        let library = crate::calibration::browse::library_frames(&conn).unwrap();
+        let rig_uuid = library.frames[0].frame.rig_uuid.clone();
+
+        let view = build_view(&conn).unwrap();
+        let rig = &view.rigs[0];
+        assert!(rig.own_limits.is_empty());
+        let family = &rig.families[0];
+        assert_eq!(family.groups.len(), 2, "split at the dust");
+        for group in &family.groups {
+            for session in &group.sessions {
+                let expected: Vec<String> = library
+                    .frames
+                    .iter()
+                    .filter(|row| row.night.as_deref() == Some(session.night.as_str()))
+                    .map(|row| row.session.clone())
+                    .take(1)
+                    .collect();
+                assert_eq!(session.sessions, expected, "{}", session.night);
+            }
+        }
+
+        // A rig that sets its own dust limit says so.
+        let _rules = RulesInForce::with(
+            &[],
+            &[(
+                rig_uuid.as_str(),
+                "Scope",
+                &[("flat_split_dust_pct", serde_json::json!(3.0))],
+            )],
+        );
+        let view = build_view(&conn).unwrap();
+        assert_eq!(view.rigs[0].own_limits, vec!["flat_split_dust_pct"]);
+        assert_eq!(view.rigs[0].families[0].groups.len(), 1, "2% is within 3%");
+    }
 }

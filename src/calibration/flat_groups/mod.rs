@@ -27,7 +27,7 @@ use model::{AngleTerm, Book, Event, Placement, Side};
 use rusqlite::Connection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
@@ -77,8 +77,9 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
     if !store::tables_exist(conn) {
         return Ok(Arc::new(Book::default()));
     }
-    let lights = imaging_lights(conn)?;
+    let profile_rigs = ProfileRigs::read(conn);
     let mut hasher = Sha256::new();
+    profile_rigs.digest(&mut hasher);
     store::digest_rows(conn, &mut hasher)?;
     hasher.update(
         super::rules::rule_book()
@@ -86,11 +87,10 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
             .unwrap_or_default()
             .as_bytes(),
     );
-    for (id, profile, at) in &lights {
-        hasher.update(id.to_le_bytes());
-        hasher.update(profile.as_deref().unwrap_or("").as_bytes());
-        hasher.update(at.to_le_bytes());
-    }
+    // Lights are only added and removed, never shot again: their summary,
+    // taken inside SQLite, says whether imaging sessions could differ, so a
+    // match per light does not read every light to find the book unchanged.
+    hasher.update(lights_summary(conn).as_bytes());
     let digest: String = hasher
         .finalize()
         .iter()
@@ -105,17 +105,98 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
     {
         return Ok(Arc::clone(book));
     }
+    let lights = imaging_lights(conn)?;
     let book = Arc::new(Book::build(
         store::load_responses(conn)?,
         store::load_comparisons(conn)?,
         store::load_evidence(conn, evidence::EVIDENCE_ALGORITHM_VERSION)?,
-        model::imaging_sessions(lights),
+        model::imaging_sessions(lights, |profile| profile_rigs.rigs_of(profile)),
         rig_limits,
     ));
     MEMO.lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(catalog, (digest, Arc::clone(&book)));
     Ok(book)
+}
+
+/// Which rigs each N.I.N.A. profile shot with, from the library's
+/// bindings. A light's imaging session places only that rig's lights.
+struct ProfileRigs {
+    bound: BTreeMap<String, Vec<String>>,
+    /// The one rig of a library that has only one: it owns every light a
+    /// profile with no binding shot.
+    only: Option<String>,
+}
+
+impl ProfileRigs {
+    fn read(conn: &Connection) -> Self {
+        let mut bound: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        if let Ok(mut statement) =
+            conn.prepare("SELECT profile_id, rig_uuid FROM psf_guard_rig_binding ORDER BY rig_uuid")
+            && let Ok(rows) = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+        {
+            for (profile, rig) in rows.flatten() {
+                bound.entry(profile).or_default().push(rig);
+            }
+        }
+        let rigs: Vec<String> = conn
+            .prepare("SELECT rig_uuid FROM psf_guard_rig")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap_or_default();
+        Self {
+            bound,
+            only: (rigs.len() == 1).then(|| rigs[0].clone()),
+        }
+    }
+
+    fn rigs_of(&self, profile: Option<&str>) -> Vec<String> {
+        profile
+            .and_then(|profile| self.bound.get(profile).cloned())
+            .unwrap_or_else(|| self.only.iter().cloned().collect())
+    }
+
+    fn digest(&self, hasher: &mut Sha256) {
+        for (profile, rigs) in &self.bound {
+            hasher.update(profile.as_bytes());
+            for rig in rigs {
+                hasher.update(rig.as_bytes());
+            }
+        }
+        hasher.update(self.only.as_deref().unwrap_or("").as_bytes());
+    }
+}
+
+/// How many lights there are, the last one's id, and the sums of their
+/// capture times and profile lengths: what changes when any light that
+/// makes imaging sessions comes, goes or moves.
+fn lights_summary(conn: &Connection) -> String {
+    let has_profile = conn
+        .prepare("SELECT profileId FROM acquiredimage LIMIT 0")
+        .is_ok();
+    let sql = if has_profile {
+        "SELECT COUNT(*), COALESCE(MAX(Id), 0), TOTAL(acquireddate),
+                TOTAL(LENGTH(COALESCE(profileId, '')))
+         FROM acquiredimage WHERE acquireddate IS NOT NULL"
+    } else {
+        "SELECT COUNT(*), COALESCE(MAX(Id), 0), TOTAL(acquireddate), 0
+         FROM acquiredimage WHERE acquireddate IS NOT NULL"
+    };
+    conn.query_row(sql, [], |row| {
+        Ok(format!(
+            "{}:{}:{}:{}",
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, f64>(2)?,
+            row.get::<_, f64>(3)?
+        ))
+    })
+    .unwrap_or_default()
 }
 
 /// Every light's id, profile and capture time, for imaging sessions.
@@ -267,6 +348,11 @@ pub enum FlatBasis {
     Undetermined {
         event: EventNote,
         placement: Placement,
+        /// What another change it does stand clear of chose, such as
+        /// another angle's flats or a correction: its flats and gate are
+        /// that one's, and the light keeps its Check for this one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        then: Option<Box<FlatBasis>>,
     },
 }
 
@@ -311,6 +397,9 @@ impl FlatBasis {
                 rotation_tolerance_deg,
                 ..
             } => *rotation_tolerance_deg,
+            FlatBasis::Undetermined {
+                then: Some(then), ..
+            } => then.rotation_tolerance(),
             _ => None,
         }
     }
@@ -318,16 +407,68 @@ impl FlatBasis {
     pub fn correction(&self) -> Option<&FlatCorrection> {
         match self {
             FlatBasis::Corrected { correction, .. } => Some(correction),
+            FlatBasis::Undetermined {
+                then: Some(then), ..
+            } => then.correction(),
             _ => None,
+        }
+    }
+
+    /// `next`, chosen around a later change, in place of this basis. An
+    /// undetermined placement keeps its Check whatever comes after it: the
+    /// choice rides along inside it.
+    pub fn followed_by(self, next: FlatBasis) -> FlatBasis {
+        match (self, next) {
+            (
+                FlatBasis::Undetermined {
+                    event,
+                    placement,
+                    then,
+                },
+                next,
+            ) if !matches!(next, FlatBasis::Undetermined { .. }) => FlatBasis::Undetermined {
+                event,
+                placement,
+                then: Some(Box::new(match then {
+                    Some(earlier) => earlier.followed_by(next),
+                    None => next,
+                })),
+            },
+            // A second undetermined change, after another choice: the
+            // light is flagged, and keeps what was chosen.
+            (
+                earlier,
+                FlatBasis::Undetermined {
+                    event, placement, ..
+                },
+            ) => FlatBasis::Undetermined {
+                event,
+                placement,
+                then: match earlier {
+                    FlatBasis::Nearest => None,
+                    FlatBasis::Undetermined { then, .. } => then,
+                    other => Some(Box::new(other)),
+                },
+            },
+            (_, next) => next,
         }
     }
 }
 
-pub fn correction_key(before: &str, after: &str, side: Side) -> String {
+/// The key of one correction: both sessions, the side, and the pedestals
+/// taken out of them, since the map is made with those out.
+pub fn correction_key(
+    before: &str,
+    after: &str,
+    side: Side,
+    pedestals: (Option<f64>, Option<f64>),
+) -> String {
     let digest = Sha256::digest(
         format!(
-            "{}\u{1f}{before}\u{1f}{after}\u{1f}{side:?}",
-            metric::COMPARE_ALGORITHM_VERSION
+            "{}\u{1f}{before}\u{1f}{after}\u{1f}{side:?}\u{1f}{:?}\u{1f}{:?}",
+            metric::COMPARE_ALGORITHM_VERSION,
+            pedestals.0,
+            pedestals.1
         )
         .as_bytes(),
     );
@@ -393,7 +534,9 @@ fn scope(event: &EventNote) -> String {
 /// Why a light is flagged for its flats, or `None` when it is not.
 pub fn describe_flag(basis: &FlatBasis, rules: &super::Rules) -> Option<String> {
     match basis {
-        FlatBasis::Undetermined { event, placement } => {
+        FlatBasis::Undetermined {
+            event, placement, ..
+        } => {
             let pixels = match placement {
                 Placement::Undetermined {
                     pixels: Some(note), ..
@@ -505,8 +648,104 @@ pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String>
             describe_event(event, rules),
             placed(placement)
         )),
+        FlatBasis::Undetermined {
+            then: Some(then), ..
+        } => {
+            let flag = describe_flag(basis, rules);
+            match (flag, describe_basis(then, rules)) {
+                (Some(flag), Some(then)) => Some(format!("{flag}. {then}")),
+                (flag, then) => flag.or(then),
+            }
+        }
         FlatBasis::NoSameSide { .. } | FlatBasis::Undetermined { .. } => {
             describe_flag(basis, rules)
         }
+    }
+}
+
+#[cfg(test)]
+mod basis_tests {
+    use super::*;
+
+    fn note(key: &str) -> EventNote {
+        EventNote {
+            key: key.into(),
+            start: 0,
+            end: 1,
+            what: String::new(),
+            dust: 0.02,
+            broad: 0.0,
+            camera_side: true,
+            filters: Vec::new(),
+        }
+    }
+
+    fn undetermined(key: &str) -> FlatBasis {
+        FlatBasis::Undetermined {
+            event: note(key),
+            placement: Placement::Undetermined {
+                session: None,
+                pixels: None,
+            },
+            then: None,
+        }
+    }
+
+    fn other_angle(key: &str) -> FlatBasis {
+        FlatBasis::OtherAngle {
+            event: note(key),
+            placement: Placement::Time { side: Side::Before },
+            rotation: Some(3.2),
+            angle_term: AngleTerm::default(),
+            rotation_tolerance_deg: Some(112.6),
+        }
+    }
+
+    #[test]
+    fn an_undetermined_change_keeps_its_check_whatever_another_chooses() {
+        // Undetermined first, then another angle for a later change.
+        let basis = undetermined("a").followed_by(other_angle("b"));
+        assert!(basis.flags());
+        assert_eq!(basis.rotation_tolerance(), Some(112.6));
+        // Another angle first, then shot during a later change.
+        let basis = other_angle("a").followed_by(undetermined("b"));
+        assert!(basis.flags());
+        assert_eq!(basis.rotation_tolerance(), Some(112.6));
+        // Nothing undetermined: the later choice stands alone.
+        assert_eq!(
+            FlatBasis::Nearest.followed_by(other_angle("b")),
+            other_angle("b")
+        );
+    }
+}
+
+#[cfg(test)]
+mod memo_tests {
+    use super::*;
+
+    #[test]
+    fn the_book_is_built_again_only_when_a_light_or_a_row_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let conn = Connection::open(temp.path().join("catalog.sqlite")).unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        crate::calibration::ensure_schema(&conn).unwrap();
+        store::add_tables(&conn).unwrap();
+        let first = load_book(&conn).unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &load_book(&conn).unwrap()),
+            "nothing changed"
+        );
+        conn.execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+             gradingStatus, metadata) VALUES (1, 1, 1, 200, 'Ha', 0, '{}')",
+            [],
+        )
+        .unwrap();
+        let second = load_book(&conn).unwrap();
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "a new light can make a session"
+        );
+        assert!(Arc::ptr_eq(&second, &load_book(&conn).unwrap()));
     }
 }

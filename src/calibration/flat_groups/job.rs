@@ -307,17 +307,42 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         .collect();
     outcome.sessions = measurable.len();
     let mut current: Vec<String> = Vec::new();
+    // A session is done when its response is on disk from every flat it
+    // combines, or could not be combined at all. One built while some
+    // files were away is read again until they are back.
     let todo: Vec<(&SessionPlan, String)> = measurable
         .iter()
         .map(|plan| (*plan, plan.response_key()))
-        .filter(|(_, key)| {
+        .filter(|(plan, key)| {
             !known.get(key).is_some_and(|row| {
-                row.error.is_some() || super::response_path(pass.dir, key).is_file()
+                row.error.is_some()
+                    || (super::response_path(pass.dir, key).is_file()
+                        && row.frames >= plan.combined().len())
             })
         })
         .collect();
     for plan in &measurable {
-        current.push(plan.response_key());
+        let key = plan.response_key();
+        // A dark-flat or bias that arrived since: the pedestal comes off
+        // anew, and the comparisons made without it are made again.
+        if let Some(row) = known.get(&key) {
+            let first = &plan.frames[0];
+            let pedestal = pedestal_for(
+                &pedestal_table,
+                &plan.rig_uuid,
+                first.gain,
+                first.offset,
+                first.exposure_s,
+            );
+            let moved = match (row.pedestal_adu, pedestal) {
+                (Some(a), Some(b)) => (a - b).abs() > 0.5,
+                (a, b) => a.is_some() != b.is_some(),
+            };
+            if moved {
+                store::set_pedestal(conn, &key, pedestal)?;
+            }
+        }
+        current.push(key);
     }
     let total = todo.len();
     for (done, (plan, key)) in todo.iter().enumerate() {
@@ -411,6 +436,7 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
             return Ok(outcome);
         }
         (pass.progress)("comparing flat sessions", done, total);
+        (pass.yield_now)();
         let (sa, sb) = (&book.sessions[*a].row, &book.sessions[*b].row);
         let (Some(pa), Some(pb)) = (session_plane(pass.dir, sa), session_plane(pass.dir, sb))
         else {
@@ -433,6 +459,7 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
             return Ok(outcome);
         }
         (pass.progress)("reading lights shot during a change", done, total);
+        (pass.yield_now)();
         if let Some(row) =
             session_evidence(&pass, &book, *event_index, *session_index, &pedestal_table)?
         {

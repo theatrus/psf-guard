@@ -93,6 +93,9 @@ interface TauriSettingsProps {
   initialIntent?: SettingsIntent | null;
   /** With the `calibration` intent: the rig whose own settings to open. */
   initialRig?: SettingsRig | null;
+  /** With the `calibration` intent: the setting to bring into view and
+   *  focus, the rig's own when a rig is given, else the global one. */
+  initialField?: string | null;
 }
 
 /**
@@ -115,6 +118,7 @@ export default function TauriSettings({
   onClose,
   initialIntent = null,
   initialRig = null,
+  initialField = null,
 }: TauriSettingsProps) {
   const isTauri = isTauriApp();
   const access = useAccess();
@@ -1952,8 +1956,8 @@ export default function TauriSettings({
 
           {currentTab === 'calibration' && (
             <div className="settings-setups">
-              <CalibrationMatchingSettings />
-              <CalibrationRigSettings focusRig={initialRig} />
+              <CalibrationMatchingSettings focusField={initialRig ? null : initialField} />
+              <CalibrationRigSettings focusRig={initialRig} focusField={initialRig ? initialField : null} />
             </div>
           )}
 

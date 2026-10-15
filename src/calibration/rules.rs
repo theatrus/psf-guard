@@ -1327,6 +1327,13 @@ impl RuleBook {
         &self.global
     }
 
+    /// Whether a rig sets `key` for itself rather than inheriting it.
+    pub fn rig_sets(&self, rig_uuid: &str, key: &str) -> bool {
+        self.rigs
+            .get(rig_uuid)
+            .is_some_and(|layer| layer.values.contains_key(key))
+    }
+
     /// The rules every rig without settings of its own follows.
     pub fn global(&self) -> Arc<Rules> {
         Arc::clone(&self.global_rules)

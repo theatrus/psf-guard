@@ -207,6 +207,6 @@ describe('WbppRunDialog while another project runs', () => {
     );
     const line = await screen.findByTestId('wbpp-run-flat-changes');
     expect(line).toHaveTextContent('Flats chosen around measured changes: new dust: 1 shadow near (1423, 3545)');
-    expect(line).toHaveTextContent('3 light(s) take flats from across a change');
+    expect(line).toHaveTextContent('3 lights take flats from across a change');
   });
 });

@@ -152,6 +152,8 @@ pub struct Family {
 pub struct ImagingSession {
     pub key: String,
     pub profile: Option<String>,
+    /// The rigs its profile shot with: only their lights it can place.
+    pub rigs: Vec<String>,
     pub start: i64,
     pub end: i64,
     /// `acquiredimage` ids, in time order.
@@ -206,6 +208,10 @@ pub struct Book {
     pub families: Vec<Family>,
     pub boundaries: Vec<Boundary>,
     pub events: Vec<Event>,
+    /// Boundaries on either side of one night unlike the nights around it,
+    /// which measure alike with each other: a hazy dawn, not a change.
+    /// They split groups but make no event, so no light is flagged for them.
+    pub outliers: BTreeSet<usize>,
     pub angle_terms: HashMap<String, AngleTerm>,
     pub imaging: Vec<ImagingSession>,
     by_response: HashMap<String, usize>,
@@ -274,6 +280,7 @@ impl Book {
         }
         book.build_families();
         book.build_groups();
+        book.find_outliers();
         book.build_events();
         book.build_angle_terms();
         book
@@ -465,6 +472,33 @@ impl Book {
         })
     }
 
+    fn find_outliers(&mut self) {
+        let mut outliers = BTreeSet::new();
+        for family in &self.families {
+            let Some(limits) = self.limits(&family.rig_uuid) else {
+                continue;
+            };
+            for g in 1..family.groups.len().saturating_sub(1) {
+                if family.groups[g].len() != 1 {
+                    continue;
+                }
+                let (Some(before), Some(after)) =
+                    (family.groups[g - 1].last(), family.groups[g + 1].first())
+                else {
+                    continue;
+                };
+                if self
+                    .comparison(*before, *after)
+                    .is_some_and(|c| limits.distance(c) <= 1.0)
+                {
+                    outliers.insert(family.boundaries[g - 1]);
+                    outliers.insert(family.boundaries[g]);
+                }
+            }
+        }
+        self.outliers = outliers;
+    }
+
     fn build_events(&mut self) {
         // Union boundaries of one rig whose windows overlap and whose spots
         // coincide; the merged window is the overlap of all.
@@ -481,6 +515,9 @@ impl Book {
             self.boundaries.iter().map(|b| (b.start, b.end)).collect();
         for i in 0..self.boundaries.len() {
             for j in (i + 1)..self.boundaries.len() {
+                if self.outliers.contains(&i) || self.outliers.contains(&j) {
+                    continue;
+                }
                 let (a, b) = (&self.boundaries[i], &self.boundaries[j]);
                 let (fa, fb) = (&self.families[a.family], &self.families[b.family]);
                 if fa.rig_uuid != fb.rig_uuid || a.family == b.family {
@@ -500,7 +537,7 @@ impl Book {
             }
         }
         let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
-        for i in 0..self.boundaries.len() {
+        for i in (0..self.boundaries.len()).filter(|i| !self.outliers.contains(i)) {
             let root = find(&mut parent, i);
             members.entry(root).or_default().push(i);
         }
@@ -604,7 +641,9 @@ impl Book {
             };
             for (position, a) in family.sessions.iter().enumerate() {
                 for (other, b) in family.sessions.iter().enumerate().skip(position + 1) {
-                    if self.compared_pair(*a, *b, other == position + 1, &limits) {
+                    // Next-but-one too: a night unlike both of its
+                    // neighbours is only an outlier when they are alike.
+                    if self.compared_pair(*a, *b, other <= position + 2, &limits) {
                         pairs.insert((*a, *b));
                     }
                 }
@@ -650,19 +689,20 @@ impl Book {
         })
     }
 
-    /// The imaging session a light shot at `at` belongs to.
-    pub fn imaging_session(&self, at: i64) -> Option<&ImagingSession> {
-        self.imaging
-            .iter()
-            .find(|session| session.start <= at && at <= session.end)
+    /// The imaging session of `rig` a light shot at `at` belongs to.
+    /// Another rig's session, shot the same night, says nothing of it.
+    pub fn imaging_session(&self, rig: &str, at: i64) -> Option<&ImagingSession> {
+        self.imaging.iter().find(|session| {
+            session.start <= at && at <= session.end && session.rigs.iter().any(|r| r == rig)
+        })
     }
 
-    /// Where a light shot at `at` stands against an event.
+    /// Where a light of the event's rig shot at `at` stands against it.
     pub fn place(&self, event: &Event, at: i64) -> Placement {
         if let Some(side) = event.side_of(at) {
             return Placement::Time { side };
         }
-        let session = self.imaging_session(at);
+        let session = self.imaging_session(&event.rig_uuid, at);
         if let Some(session) = session {
             // A change does not land inside one continuous session.
             if session.start <= event.start {
@@ -769,7 +809,8 @@ impl Book {
                 continue;
             }
             for (session_index, session) in self.imaging.iter().enumerate() {
-                if session.start > event.start
+                if session.rigs.contains(&event.rig_uuid)
+                    && session.start > event.start
                     && session.end < event.end
                     && !self
                         .evidence
@@ -789,8 +830,12 @@ pub fn event_key(rig: &str, start: i64, end: i64) -> String {
     digest.iter().take(12).map(|b| format!("{b:02x}")).collect()
 }
 
-/// Continuous runs of lights per profile: `(id, profile, captured_at)`.
-pub fn imaging_sessions(mut lights: Vec<(i64, Option<String>, i64)>) -> Vec<ImagingSession> {
+/// Continuous runs of lights per profile: `(id, profile, captured_at)`,
+/// each with the rigs `rigs_of` its profile.
+pub fn imaging_sessions(
+    mut lights: Vec<(i64, Option<String>, i64)>,
+    rigs_of: impl Fn(Option<&str>) -> Vec<String>,
+) -> Vec<ImagingSession> {
     lights.sort_by(|a, b| a.1.cmp(&b.1).then(a.2.cmp(&b.2)).then(a.0.cmp(&b.0)));
     let mut out: Vec<ImagingSession> = Vec::new();
     for (id, profile, at) in lights {
@@ -803,6 +848,7 @@ pub fn imaging_sessions(mut lights: Vec<(i64, Option<String>, i64)>) -> Vec<Imag
             }
             _ => out.push(ImagingSession {
                 key: format!("{}:{id}", profile.as_deref().unwrap_or("-")),
+                rigs: rigs_of(profile.as_deref()),
                 profile,
                 start: at,
                 end: at,
@@ -965,6 +1011,40 @@ mod tests {
     }
 
     #[test]
+    fn one_night_unlike_its_alike_neighbours_makes_no_change() {
+        // A hazy dawn on the second morning: unlike the first and the
+        // third, which are alike.
+        let responses = vec![
+            row("a", "L", "L", Some(3.2), 0),
+            row("b", "L", "L", Some(3.2), 3 * DAY),
+            row("c", "L", "L", Some(3.2), 6 * DAY),
+        ];
+        let book = |comparisons: Vec<ComparisonRow>| {
+            Book::build(responses.clone(), comparisons, vec![], vec![], |_| rules())
+        };
+        let hazy = book(vec![
+            cmp("a", "b", 0.001, 0.03, vec![]),
+            cmp("b", "c", 0.001, 0.03, vec![]),
+            cmp("a", "c", 0.001, 0.002, vec![]),
+        ]);
+        assert_eq!(hazy.families[0].groups.len(), 3, "it still keeps to itself");
+        assert_eq!(hazy.outliers.len(), 2);
+        assert!(hazy.events.is_empty(), "{:?}", hazy.events);
+        // Its neighbours are compared, so the outlier can be told.
+        let pairs = hazy.pairs_to_compare();
+        assert!(pairs.contains(&(0, 2)), "{pairs:?}");
+
+        // The third morning stays changed: a change, not an outlier.
+        let changed = book(vec![
+            cmp("a", "b", 0.001, 0.03, vec![]),
+            cmp("b", "c", 0.001, 0.03, vec![]),
+            cmp("a", "c", 0.001, 0.03, vec![]),
+        ]);
+        assert!(changed.outliers.is_empty());
+        assert_eq!(changed.events.len(), 2);
+    }
+
+    #[test]
     fn filter_dust_stays_with_its_filter() {
         let responses = vec![
             row("a", "L", "L", Some(3.2), 0),
@@ -983,12 +1063,15 @@ mod tests {
             row("b", "R", "R", Some(3.2), 4 * DAY),
         ];
         let comparisons = vec![cmp("a", "b", 0.016, 0.0, vec![spot(1.0, true)])];
-        let imaging = imaging_sessions(vec![
-            (1, Some("p".into()), 300),
-            (2, Some("p".into()), 3_000),
-            (3, Some("p".into()), 2 * DAY),
-            (4, Some("p".into()), 2 * DAY + 3_600),
-        ]);
+        let imaging = imaging_sessions(
+            vec![
+                (1, Some("p".into()), 300),
+                (2, Some("p".into()), 3_000),
+                (3, Some("p".into()), 2 * DAY),
+                (4, Some("p".into()), 2 * DAY + 3_600),
+            ],
+            |_| vec!["rig".into()],
+        );
         let book = Book::build(responses, comparisons, vec![], imaging, |_| rules());
         let event = &book.events[0];
         assert_eq!(
@@ -1009,16 +1092,53 @@ mod tests {
     }
 
     #[test]
+    fn another_rigs_session_places_no_light() {
+        let responses = vec![
+            row("a", "R", "R", Some(3.2), 0),
+            row("b", "R", "R", Some(3.2), 4 * DAY),
+        ];
+        let comparisons = vec![cmp("a", "b", 0.016, 0.0, vec![spot(1.0, true)])];
+        // Another rig images all night from before the window; this rig's
+        // lone light sits inside it.
+        let imaging = imaging_sessions(
+            vec![
+                (1, Some("another".into()), 300),
+                (2, Some("another".into()), 3_000),
+                (3, Some("another".into()), 2 * DAY + 7_200),
+                (4, Some("this".into()), 2 * DAY + 3_600),
+            ]
+            .into_iter()
+            .chain((0..60).map(|i| (10 + i, Some("another".into()), 3_000 + i * 3_500)))
+            .collect(),
+            |profile| match profile {
+                Some("this") => vec!["rig".into()],
+                _ => vec!["other-rig".into()],
+            },
+        );
+        let book = Book::build(responses, comparisons, vec![], imaging, |_| rules());
+        let event = &book.events[0];
+        let placement = book.place(event, 2 * DAY + 3_600);
+        assert!(
+            matches!(placement, Placement::Undetermined { .. }),
+            "{placement:?}"
+        );
+        // Only this rig's session asks for its lights to be read.
+        let needed = book.sessions_needing_evidence();
+        assert_eq!(needed.len(), 1);
+        assert_eq!(book.imaging[needed[0].1].profile.as_deref(), Some("this"));
+    }
+
+    #[test]
     fn pixel_evidence_places_a_session_inside_the_window() {
         let responses = vec![
             row("a", "R", "R", Some(3.2), 0),
             row("b", "R", "R", Some(3.2), 4 * DAY),
         ];
         let comparisons = vec![cmp("a", "b", 0.016, 0.0, vec![spot(1.0, true)])];
-        let imaging = imaging_sessions(vec![
-            (1, Some("p".into()), DAY),
-            (2, Some("p".into()), DAY + 600),
-        ]);
+        let imaging = imaging_sessions(
+            vec![(1, Some("p".into()), DAY), (2, Some("p".into()), DAY + 600)],
+            |_| vec!["rig".into()],
+        );
         let key = event_key("rig", 600, 4 * DAY);
         let evidence = vec![EvidenceRow {
             session_key: imaging[0].key.clone(),

@@ -226,3 +226,17 @@ export const RIG_PRESETS: ReadonlyArray<RigPreset> = [
     },
   },
 ];
+
+/**
+ * Bring one setting's row into view and focus its first control, as a link
+ * from elsewhere asks. False when the row is not drawn.
+ */
+export function focusRuleRow(container: ParentNode | null | undefined, key: string): boolean {
+  const row = container?.querySelector<HTMLElement>(`[data-rule='${key}']`);
+  if (!row) return false;
+  row.scrollIntoView?.({ block: 'center' });
+  row
+    .querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])')
+    ?.focus({ preventScroll: true });
+  return true;
+}

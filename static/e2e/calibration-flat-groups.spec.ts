@@ -81,17 +81,25 @@ test('splits two nights of flats at new dust and compares them', async ({ page, 
     }, { timeout: 90_000 })
     .toBe('2 groups, 1 changes');
 
+  // Flat groups live in Frames: each flat session carries its group, and
+  // the split sits between the two nights.
   await page.goto(`/#/calibration?db=${dbId}`);
-  await page.getByRole('tab', { name: 'Flat groups' }).click();
-  await expect(page).toHaveURL(/calTab=groups/);
-  const panel = page.getByRole('tabpanel', { name: 'Flat groups' });
-  await expect(panel.getByTestId('flat-group')).toHaveCount(2);
-  const split = panel.getByTestId('flat-split');
+  await page.getByRole('combobox', { name: 'Type' }).selectOption('flat');
+  await expect(page).toHaveURL(/calKind=flat/);
+  const list = page.getByRole('navigation', { name: 'Sessions' });
+  await expect(list.getByTestId('flat-group-badge')).toHaveText([
+    'Group 2 · 09-14, 1 night',
+    'Group 1 · 09-10, 1 night',
+  ]);
+  // One filter at one angle: the change is the filter's, a split in Hα.
+  const split = list.getByTestId('flat-split');
   await expect(split).toContainText(/dust/i);
-  await expect(panel.getByTestId('flat-change-event')).toContainText(/new dust/i);
+  await expect(page.getByTestId('flat-rig-summary')).toContainText('Splits at 1% dust, 2% light pattern');
 
   // Compare draws the later night over the earlier through the queue.
-  await split.getByTestId('flat-compare').click();
+  const compare = split.getByTestId('flat-compare');
+  await compare.click();
+  await expect(compare).toHaveAttribute('aria-pressed', 'true');
   await expect(page).toHaveURL(/calEarlier=.*calLater=|calLater=.*calEarlier=/);
   const viewer = page.getByTestId('flat-ratio-viewer');
   const image = viewer.getByTestId('flat-ratio-image');
@@ -99,15 +107,31 @@ test('splits two nights of flats at new dust and compares them', async ({ page, 
   await expect
     .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth), { timeout: 60_000 })
     .toBe(SIDE);
-  await expect(viewer.getByRole('img', { name: /spot/ })).toBeVisible();
+  await expect(viewer.getByTestId('flat-ratio-spots')).toBeVisible();
+  await expect(viewer.getByRole('list', { name: 'Spots that changed' })).toContainText('New: darker');
   const stretch = viewer.getByRole('group', { name: 'Stretch' });
   await stretch.getByRole('button', { name: 'Tight' }).click();
   await expect(stretch.getByRole('button', { name: 'Tight' })).toHaveAttribute('aria-pressed', 'true');
 
-  // A reload keeps the tab and the pair; the page fits a phone.
+  // A reload keeps the view and the pair; the page fits a phone.
   await page.reload();
   await expect(page.getByTestId('flat-ratio-viewer')).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(panel.getByTestId('flat-group').first()).toBeVisible();
+  await expect(list.getByTestId('flat-split')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  // A link to the old Flat groups tab opens Frames on flats with its pair.
+  const pair = new URL(page.url().replace('/#/', '/')).searchParams;
+  await page.goto(`/#/calibration?db=${dbId}&calTab=groups&calEarlier=${pair.get('calEarlier')}&calLater=${pair.get('calLater')}`);
+  await expect(page).toHaveURL(/calKind=flat/);
+  await expect(page).not.toHaveURL(/calTab=/);
+  await expect(page.getByRole('tab', { name: 'Frames' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('flat-ratio-viewer')).toBeVisible();
+
+  // Edit limits lands on the dust limit in Settings › Calibration.
+  await page.getByRole('button', { name: /^Edit limits for / }).click();
+  const dust = page.locator('.calibration-matching-settings').getByLabel('Dust that splits flats');
+  await expect(dust).toBeFocused();
+  await expect(dust).toBeInViewport();
 });

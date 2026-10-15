@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../../api/client';
@@ -15,8 +15,12 @@ import CalibrationFrameStrip from './CalibrationFrameStrip';
 import CalibrationFrameViewer from './CalibrationFrameViewer';
 import CalibrationMasterList from './CalibrationMasterList';
 import CalibrationSessionList from './CalibrationSessionList';
-import FlatGroupsTab from './FlatGroupsTab';
+import { FlatGroupsSummary, FlatSessionGroupLine } from './FlatGroupMarks';
+import FlatRatioViewer from './FlatRatioViewer';
 import { fileName, nightLabel, plural, sessionDetails, sessionTitle } from './calibrationLabels';
+import { indexFlatGroups } from './flatGroupIndex';
+import { findPair } from './flatGroupLabels';
+import { useFlatGroups } from './useFlatGroups';
 import { useCalibrationActions } from './useCalibrationActions';
 import type { ValidityChoice } from './useCalibrationActions';
 import { ALL_RIGS, listFilters, useCalibrationUrlState } from './useCalibrationUrlState';
@@ -29,7 +33,6 @@ const STRIP_FRAMES = 500;
 
 const TABS: { value: CalibrationTab; label: string }[] = [
   { value: 'frames', label: 'Frames' },
-  { value: 'groups', label: 'Flat groups' },
   { value: 'masters', label: 'Masters' },
   { value: 'scheduler', label: 'Scheduler flats' },
 ];
@@ -43,7 +46,12 @@ export default function CalibrationPage() {
   const { dbId, projectId } = useDbProjectTarget();
   const { data: databases } = useAllDatabases();
   const state = useCalibrationUrlState();
-  const { setDatabase, resetForDatabase, filters, setFilters } = state;
+  const { setDatabase, resetForDatabase, filters, setFilters, oldGroupsLink, openOldGroupsLink } = state;
+
+  // Flat groups once had a tab of their own; its links open Frames on flats.
+  useEffect(() => {
+    if (oldGroupsLink) openOldGroupsLink();
+  }, [oldGroupsLink, openOldGroupsLink]);
 
   // A page opened without a database takes the first one.
   useEffect(() => {
@@ -148,9 +156,6 @@ function CalibrationLibrary({
   if (state.tab === 'scheduler') {
     return <SchedulerFlatHistory dbId={dbId} canManage={canManage} />;
   }
-  if (state.tab === 'groups') {
-    return <FlatGroupsTab dbId={dbId} state={state} />;
-  }
   if (state.tab === 'masters') {
     return (
       <CalibrationMasterList dbId={dbId} dbName={dbName} canManage={canManage}
@@ -196,8 +201,37 @@ function CalibrationFrames({
   rigs: NonNullable<Awaited<ReturnType<typeof apiClient.getCalibrationLibrary>>>['rigs'];
   state: ReturnType<typeof useCalibrationUrlState>;
 }) {
-  const { filters, page, session: sessionId, frame: frameUuid, selectSession, selectFrame } = state;
+  const { filters, page, session: sessionId, frame: frameUuid, selectSession, selectFrame, ratio, openRatio } = state;
   const listed = useMemo(() => listFilters(filters), [filters]);
+  // Flat groups ride along wherever the list can hold flats.
+  const flatsListed = filters.kind === undefined || filters.kind === 'flat';
+  const flat = useFlatGroups(dbId, flatsListed);
+  const flatRigs = useMemo(() => flat.groups.data?.rigs ?? [], [flat.groups.data]);
+  const flatIndex = useMemo(() => indexFlatGroups(flatRigs), [flatRigs]);
+  const chosenRig = filters.rig && filters.rig !== ALL_RIGS ? filters.rig : undefined;
+  const rigsInView = chosenRig ? flatRigs.filter((rig) => rig.rig_uuid === chosenRig) : flatRigs;
+  // Closing the comparison hands focus back to the Compare that opened it,
+  // which also brings the list back to where it was.
+  const opener = useRef<HTMLElement | null>(null);
+  const [returnFocus, setReturnFocus] = useState(false);
+  const compareFlats = (earlier: string, later: string, button: HTMLElement) => {
+    if (ratio?.earlier === earlier && ratio.later === later) {
+      openRatio(null);
+      return;
+    }
+    opener.current = button;
+    openRatio({ earlier, later });
+  };
+  const closeRatio = () => {
+    openRatio(null);
+    setReturnFocus(true);
+  };
+  useEffect(() => {
+    if (!returnFocus || ratio) return;
+    setReturnFocus(false);
+    if (opener.current?.isConnected) opener.current.focus();
+  }, [ratio, returnFocus]);
+  const pair = ratio ? findPair(flatRigs, ratio.earlier, ratio.later) : {};
   const sessions = useQuery({
     queryKey: ['db', dbId, 'calibrations', 'sessions', listed, page],
     queryFn: () => apiClient.getCalibrationSessions(dbId, { ...listed, page, per_page: SESSIONS_PER_PAGE }),
@@ -306,6 +340,10 @@ function CalibrationFrames({
     <>
       <CalibrationFilters filters={filters} facets={sessions.data?.facets} rigs={rigs}
         onChange={state.setFilters} onClear={state.clearFilters} />
+      {flatsListed && (
+        <FlatGroupsSummary view={flat.groups.data} error={flat.groups.error} rigs={rigsInView}
+          progress={flat.progress} measuring={flat.measuring} canManage={canManage} />
+      )}
       {sessions.error && <p className="calibration-error">Could not read the sessions: {sessions.error.message}</p>}
       <div className="calibration-layout">
         <div className="calibration-sessions-column" ref={listRef}>
@@ -319,9 +357,26 @@ function CalibrationFrames({
           )}
           <CalibrationSessionList sessions={sessionList} selected={sessionId} showRig={rigs.length > 1}
             page={page} perPage={sessions.data?.per_page ?? SESSIONS_PER_PAGE} total={sessions.data?.total ?? 0}
-            onSelect={(id) => selectSession(id)} onPage={state.setPage} />
+            onSelect={(id) => selectSession(id)} onPage={state.setPage}
+            flatGroups={flatsListed && flat.groups.data?.available
+              ? { index: flatIndex, open: ratio, onCompare: compareFlats }
+              : undefined} />
         </div>
         <div className="calibration-main">
+          {ratio && flatsListed && (
+            <FlatRatioViewer
+              dbId={dbId}
+              earlier={ratio.earlier}
+              later={ratio.later}
+              earlierSession={flatIndex.response(ratio.earlier)}
+              laterSession={flatIndex.response(ratio.later)}
+              title={pair.event?.what ?? pair.split?.reason ?? 'Two flat sessions'}
+              spots={pair.event?.spots ?? pair.split?.spots ?? []}
+              stretch={state.stretch}
+              onStretch={state.setStretch}
+              onClose={closeRatio}
+            />
+          )}
           {sessionId && (
             <div className="calibration-session-bar">
               <div>
@@ -330,6 +385,9 @@ function CalibrationFrames({
                   <p className="calibration-muted">
                     {[nightLabel(session.night), session.rig_name, sessionDetails(session)].filter(Boolean).join(' · ')}
                   </p>
+                )}
+                {session?.kind === 'flat' && flatsListed && (
+                  <FlatSessionGroupLine place={flatIndex.place(session.id)} unmeasured={flatIndex.unmeasured(session.id)} />
                 )}
               </div>
               <PillSelect label="Order" value={filters.sort ?? 'oldest'}

@@ -383,8 +383,14 @@ fn measure_flat_groups(
         .ensure_category_dir(flat_groups::CACHE_CATEGORY)?;
     flat_groups::register_response_dir(std::path::Path::new(path), dir.clone());
     let tree = ctx.get_directory_tree()?;
-    let budget =
-        crate::concurrency::plan_workers(None, &state.worker_policy(), Priority::Background, None);
+    // Each worker holds one whole frame as it reads: a flat, or a light of
+    // the same sensor while the evidence stage reads lights.
+    let budget = crate::concurrency::plan_workers(
+        None,
+        &state.worker_policy(),
+        Priority::Background,
+        largest_flat_pixels(conn),
+    );
     let lease = state.lease_workers(Priority::Background, budget.workers);
     let pool = ComputePool::take("calibration-flat-groups", lease.workers)?;
     let keep_going = || !state.shutdown.is_stopping();
@@ -410,6 +416,21 @@ fn measure_flat_groups(
         find_light: &find_light,
         pool: Some(&pool),
     })
+}
+
+/// The samples in the library's largest raw flat, every channel counted:
+/// what one flat-group worker holds at once.
+fn largest_flat_pixels(conn: &Connection) -> Option<usize> {
+    conn.query_row(
+        "SELECT MAX(width * height * COALESCE(channels, 1)) FROM psf_guard_calibration_frame
+         WHERE kind = 'flat' AND is_master = 0",
+        [],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+    .and_then(|pixels| usize::try_from(pixels).ok())
+    .filter(|pixels| *pixels > 0)
 }
 
 #[derive(Debug, Serialize)]
@@ -468,6 +489,23 @@ mod tests {
 
     fn test_state() -> AppState {
         AppState::new_for_test(Connection::open_in_memory().unwrap())
+    }
+
+    #[test]
+    fn the_flat_stage_sizes_its_workers_by_the_largest_flat() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut frames = Vec::new();
+        for (index, size) in [(64usize, 48usize), (96, 80)].into_iter().enumerate() {
+            let path = temp.path().join(format!("flat-{index}.fits"));
+            write_frame(&path, "FLAT", size, "2026-09-10T14:00:00", |_, _| 30_000.0);
+            frames.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let mut conn = Connection::open_in_memory().unwrap();
+        assert_eq!(largest_flat_pixels(&conn), None, "no library, no estimate");
+        let tx = conn.transaction().unwrap();
+        crate::calibration::import_calibration_frames(&tx, &frames, Some("profile")).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(largest_flat_pixels(&conn), Some(96 * 80));
     }
 
     #[test]

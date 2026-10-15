@@ -1,9 +1,40 @@
-/* Flat groups: a split is not a fault, so groups, splits and changes use
-   the neutral text colours. */
-.flat-groups {
+/* Flat groups on the Calibration page's Frames view: a split is not a
+   fault, so groups, splits and changes use the neutral text colours, and a
+   group's colour only tells it from its neighbours. */
+.flat-groups-summary {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.25rem;
   min-width: 0;
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+}
+
+.flat-groups-summary p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.flat-rig-summary {
+  color: var(--color-text-secondary);
+}
+
+.flat-rig-summary strong {
+  color: var(--color-text-primary);
+}
+
+.flat-rig-summary .link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.flat-rig-summary .link-button:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
 }
 
 .flat-groups-measuring {
@@ -12,117 +43,112 @@
   gap: 0.4rem;
 }
 
-.flat-groups-rig {
-  display: grid;
-  gap: 0.75rem;
-  min-width: 0;
+/* A session's group: a band down its row's edge, and a label. */
+.calibration-sessions li[data-flat-tone] button {
+  border-left-width: 4px;
 }
 
-.flat-groups-rig-head {
-  display: grid;
-  gap: 0.2rem;
+.calibration-sessions li[data-flat-tone='1'] button,
+.flat-group-badge[data-tone='1'],
+.flat-session-group[data-tone='1'] {
+  --flat-group-tone: var(--color-flat-group-1);
 }
 
-.flat-groups-rig-head h2 {
-  margin: 0;
-  font-size: 1.05rem;
+.calibration-sessions li[data-flat-tone='2'] button,
+.flat-group-badge[data-tone='2'],
+.flat-session-group[data-tone='2'] {
+  --flat-group-tone: var(--color-flat-group-2);
+}
+
+.calibration-sessions li[data-flat-tone='3'] button,
+.flat-group-badge[data-tone='3'],
+.flat-session-group[data-tone='3'] {
+  --flat-group-tone: var(--color-flat-group-3);
+}
+
+.calibration-sessions li[data-flat-tone='4'] button,
+.flat-group-badge[data-tone='4'],
+.flat-session-group[data-tone='4'] {
+  --flat-group-tone: var(--color-flat-group-4);
+}
+
+.calibration-sessions li[data-flat-tone] button {
+  border-left-color: var(--flat-group-tone);
+}
+
+.flat-group-badge {
+  justify-self: start;
+  max-width: 100%;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--flat-group-tone, var(--color-border-secondary));
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  font-size: 0.75rem;
   overflow-wrap: anywhere;
 }
 
-.flat-groups-block {
-  display: grid;
-  gap: 0.45rem;
-  min-width: 0;
+.flat-session-group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
 }
 
-.flat-groups-block h3 {
-  margin: 0;
-  font-size: 0.9rem;
-  color: var(--color-text-secondary);
+.flat-group-swatch {
+  flex: none;
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 2px;
+  background: var(--flat-group-tone);
 }
 
-.flat-events,
-.flat-unmeasured,
-.flat-group ul {
-  display: grid;
-  gap: 0.35rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.flat-event,
-.flat-split {
+/* A split, or a change of the whole rig, between two sessions. */
+.calibration-sessions li.flat-mark {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.4rem 0.75rem;
+  gap: 0.35rem 0.5rem;
   min-width: 0;
+  padding: 0.4rem 0.55rem;
+  border-top: 1px dashed var(--color-border-tertiary);
+  border-bottom: 1px dashed var(--color-border-tertiary);
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
 }
 
-.flat-event {
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 8px;
-  background: var(--color-bg-secondary);
-  font-size: 0.85rem;
+.calibration-sessions li.flat-mark[data-kind='event'] {
+  border-style: solid;
+  border-color: var(--color-border-quaternary);
+  border-radius: 6px;
+  background: var(--color-bg-tertiary);
 }
 
-.flat-event-text {
+.flat-mark-text {
   display: grid;
-  gap: 0.15rem;
-  flex: 1 1 18rem;
+  gap: 0.1rem;
+  flex: 1 1 11rem;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.flat-group {
-  padding: 0.55rem 0.7rem;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 8px;
-  background: var(--color-bg-secondary);
-  font-size: 0.85rem;
+.flat-mark-text strong {
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
 }
 
-.flat-group-head {
-  margin-bottom: 0.35rem;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.flat-group li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.15rem 0.75rem;
-  min-width: 0;
-}
-
-.flat-session-night {
-  font-variant-numeric: tabular-nums;
-}
-
-.flat-split {
-  padding: 0.1rem 0.7rem;
-  color: var(--color-text-secondary);
-  font-size: 0.82rem;
-}
-
-.flat-split p {
-  flex: 1 1 18rem;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.flat-unmeasured li {
-  color: var(--color-text-secondary);
-  font-size: 0.82rem;
-  overflow-wrap: anywhere;
+.calibration-sessions .flat-mark-compare {
+  flex: none;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
 }
 
 /* The ratio picture of two sessions. */
 .flat-ratio-viewer {
   display: grid;
+  margin-bottom: 0.75rem;
   gap: 0.5rem;
   min-width: 0;
   padding: 0.7rem;
@@ -189,8 +215,8 @@
 
 .flat-ratio-canvas {
   position: relative;
-  width: 100%;
-  max-width: 60rem;
+  /* A portrait frame keeps within the screen's height. */
+  width: min(100%, 60rem, calc(70vh * var(--flat-ratio-aspect, 1.5)));
   overflow: hidden;
   border-radius: 8px;
   background: var(--color-bg-image);
@@ -232,4 +258,26 @@
 
 .flat-ratio-spot.is-gone {
   stroke: var(--color-flat-dust-gone);
+}
+
+.flat-ratio-head h3:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
+}
+
+.flat-ratio-spot-list {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}
+
+.flat-ratio-spot-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  overflow-wrap: anywhere;
 }

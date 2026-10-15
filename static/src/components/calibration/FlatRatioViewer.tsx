@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { apiClient } from '../../api/client';
 import type { CalibrationFrameStretch, FlatSession, FlatSpot } from '../../api/types';
 import { useAsyncImage } from '../../hooks/useAsyncImage';
@@ -55,10 +55,13 @@ export default function FlatRatioViewer({
   const image = useAsyncImage(dbId, url, { kind: 'flat_ratio', earlier, later, stretch });
   const [showSpots, setShowSpots] = useState(true);
   const sectionRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
-  // Opened from a button further down: bring it into sight once per pair.
+  // Opened from a button elsewhere: bring it into sight and move focus to
+  // it once per pair, so the keyboard carries on from here.
   useEffect(() => {
     sectionRef.current?.scrollIntoView?.({ block: 'nearest' });
+    headingRef.current?.focus({ preventScroll: true });
   }, [earlier, later]);
 
   const grid = earlierSession && earlierSession.bin && earlierSession.width && earlierSession.height
@@ -77,7 +80,7 @@ export default function FlatRatioViewer({
     <section ref={sectionRef} className="flat-ratio-viewer" aria-label="Flat comparison" data-testid="flat-ratio-viewer">
       <div className="flat-ratio-head">
         <div>
-          <h3>{title}</h3>
+          <h3 ref={headingRef} tabIndex={-1}>{title}</h3>
           <p className="calibration-muted">{nights}: the later flats divided by the earlier, grey where they agree</p>
         </div>
         <button type="button" className="tool-button" onClick={onClose}>Close</button>
@@ -110,7 +113,9 @@ export default function FlatRatioViewer({
       </div>
       <div
         className={`flat-ratio-canvas${grid ? '' : ' is-unsized'}`}
-        style={grid ? { aspectRatio: `${grid.width} / ${grid.height}` } : undefined}
+        style={grid
+          ? ({ aspectRatio: `${grid.width} / ${grid.height}`, '--flat-ratio-aspect': grid.width / grid.height } as CSSProperties)
+          : undefined}
       >
         <img
           className={ready ? undefined : 'is-pending'}
@@ -126,8 +131,8 @@ export default function FlatRatioViewer({
             className="flat-ratio-spots"
             viewBox={`0 0 ${grid.sensorWidth} ${grid.sensorHeight}`}
             preserveAspectRatio="none"
-            role="img"
-            aria-label={`${spots.length} ${spots.length === 1 ? 'spot' : 'spots'} that changed`}
+            aria-hidden="true"
+            data-testid="flat-ratio-spots"
           >
             {spots.map((spot, index) => (
               <circle
@@ -137,11 +142,7 @@ export default function FlatRatioViewer({
                 cy={spot.y}
                 r={Math.max(spot.radius * 1.5, minRadius)}
                 vectorEffect="non-scaling-stroke"
-              >
-                <title>
-                  {`${SPOT_KINDS[spot.kind]}: ${spot.darker ? 'darker' : 'brighter'} by ${percent(spot.peak_pct)} near (${Math.round(spot.x)}, ${Math.round(spot.y)})`}
-                </title>
-              </circle>
+              />
             ))}
           </svg>
         )}
@@ -154,6 +155,16 @@ export default function FlatRatioViewer({
           </div>
         ) : null}
       </div>
+      {spots.length > 0 && (
+        <ul className="flat-ratio-spot-list" aria-label="Spots that changed">
+          {spots.map((spot, index) => (
+            <li key={index}>
+              <span className={`flat-ratio-swatch ${spot.darker ? 'is-new' : 'is-gone'}`} aria-hidden="true" />
+              {`${SPOT_KINDS[spot.kind]}: ${spot.darker ? 'darker' : 'brighter'} by ${percent(spot.peak_pct)} near (${Math.round(spot.x)}, ${Math.round(spot.y)})`}
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
