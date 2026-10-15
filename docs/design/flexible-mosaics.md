@@ -174,15 +174,24 @@ browser). The cover is the shared framing while a rig shoots it, and the own
 framing of each rig that is on, in the draft's order.
 
 - Two panels of one framing are read as above, in that framing's own camera
-  frame and against its own minimum. A thin overlap is said only here.
+  frame and against its own minimum.
 - Two panels of different framings are read in the first one's frame, every
-  outline taken there through the sky. They are joined when they overlap or
-  touch: across cameras only the cover counts. Side by side with sky between
-  them they are a gap.
+  outline taken there through the sky, against the larger of the two
+  framings' minimums: stitching needs whichever overlap asks more. Their
+  panels may differ in size, so the seam is read as shares of the smaller
+  panel (`of_smaller` in the core, `ofSmaller` in the browser): across it
+  for the overlap, along it for whether they sit side by side. A 1° panel
+  sharing 0.2° with a 2° one overlaps by 20%, not 10%. Side by side, a seam
+  under the minimum is a thin overlap and sky between them is a gap, unless
+  the smaller panel is covered beyond the seam by panels it joins
+  (`beyond_covered`, sampled on a 5 × 5 grid): a rig's panel inside a shared
+  one reaches into the shared mosaic's own overlap strips, and that is no
+  seam of its.
 - A gap is covered by a panel of any framing, and isolated panels and groups
   apart are read over every panel. A rig's own panels therefore need not
   touch where another framing fills the sky between them. A lone panel is
-  said as touching no other panel.
+  one that overlaps no other panel by the minimum, within a framing or
+  across.
 - Groups apart are said beside any other issue, not only when nothing else
   is: one framing's thin seam does not explain another framing's panels far
   away. Two panels a thin overlap or a gap keeps apart count as one group
@@ -580,7 +589,8 @@ What PSF Guard keeps on its side:
    its own panels in the same tools. Picking another rig to size a shared
    mosaic of more than one panel, when its field differs, asks first: frame
    it separately, or use its field for the shared mosaic anyway. Its panels
-   need not touch each other; the cover across framings is what is checked.
+   need not touch each other; the cover across framings is what is checked,
+   and a seam with another rig's panel needs the larger minimum too.
 
 States are drawn from data attributes (`data-panel-state='locked' |
 'invalid'`, `data-selected`, `data-shot`, `data-framing`, `data-rig-index`)

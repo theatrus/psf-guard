@@ -502,11 +502,13 @@ export interface CoveragePanel { framing: number; id: string }
 export interface CoverageIssue { kind: TaggedIssue['kind']; panels: CoveragePanel[]; percent: number | null }
 
 /** Where several framings of one object fall short as one cover of the sky:
- *  the core's `coverage_issues`. A thin overlap is said only where two
- *  panels of one framing meet. A gap, a lone panel and groups apart are read
- *  over every panel, so a rig's own panels need not touch where another
- *  framing fills the sky between them. `groups[f][k]` is the group of
- *  framing `f`'s panel `k`, as a panel of the list. */
+ *  the core's `coverage_issues`. Two panels of different framings need the
+ *  larger of the two minimum overlaps, counted on the smaller panel, unless
+ *  the smaller one is covered beyond their seam by panels it joins. A gap, a
+ *  lone panel and groups apart are read over every panel, so a rig's own
+ *  panels need not touch where another framing fills the sky between them.
+ *  `groups[f][k]` is the group of framing `f`'s panel `k`, as a panel of the
+ *  list. */
 export function readCoverage(framings: CoverageFraming[]): CoverageReading {
   if (framings.length === 0) return { issues: [], groups: [] };
   // Kept per first layout, for the framings read with it: a pan, a zoom or

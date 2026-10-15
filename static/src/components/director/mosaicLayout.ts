@@ -143,14 +143,13 @@ export function layoutIssues(layout: DirectorLayout): DirectorLayoutIssue[] {
   return shapeIssues(layout.panels.map(unitShape), layout.min_overlap_percent);
 }
 
-/** An issue in a few words, for the panel list and the sky. Read `across`
- *  framings, a panel is on its own when it touches no other panel. */
-export function describeIssue(issue: DirectorLayoutIssue, across = false): string {
+/** An issue in a few words, for the panel list and the sky. */
+export function describeIssue(issue: DirectorLayoutIssue): string {
   const pair = issue.panels.join(' and ');
   switch (issue.kind) {
     case 'thin_overlap': return `${pair} overlap by only ${issue.percent ?? 0}%`;
     case 'gap': return `${pair} leave a gap of ${issue.percent ?? 0}% of a panel`;
-    case 'isolated': return across ? `${pair} touches no other panel` : `${pair} overlaps no other panel by the minimum`;
+    case 'isolated': return `${pair} overlaps no other panel by the minimum`;
     case 'disconnected': return `the panels fall into ${issue.panels.length} groups that do not overlap`;
   }
 }

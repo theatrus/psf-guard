@@ -765,7 +765,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
     const next = turnPanel(active.layout, id, degrees);
     const fresh = freshFrom(active.layout, next, id);
     const turn = turnOf(findPanel(next, id) ?? { id, x: 0, y: 0, locked: false });
-    editLayout(next, `${turn === 0 ? `Turned ${id} back to the framing angle` : `Turned ${id} ${signedTurn(turn)} from the framing`}${fresh.length ? `; it leaves ${fresh.map(issue => describeIssue(issue, across)).join('; ')}` : ''}.`);
+    editLayout(next, `${turn === 0 ? `Turned ${id} back to the framing angle` : `Turned ${id} ${signedTurn(turn)} from the framing`}${fresh.length ? `; it leaves ${fresh.map(issue => describeIssue(issue)).join('; ')}` : ''}.`);
   };
   // What each panel is short of, for the sky and the list.
   const layoutIssueList = useMemo(() => (active?.panel && coverageFor(cover, active.rig, active.layout)?.issues) || (active?.geometry?.issues ?? []), [active, cover]);
@@ -1146,7 +1146,7 @@ export default function FramingView({ projectId, seed, preferredRigIds = [], sho
       // A placement or a turn that leaves a thin overlap, a gap or a lone
       // panel the layout did not have springs back unless Alt asks for it.
       const fresh = freshFrom(before, after, id);
-      const short = fresh.map(issue => describeIssue(issue, across)).join('; ');
+      const short = fresh.map(issue => describeIssue(issue)).join('; ');
       const offRule = `${turned ? 'Turned' : 'Placed'} ${id} off the rule: ${short}.`;
       if (fresh.length > 0 && snap && !event.altKey) {
         update(current => withLayout(current, rig, before));

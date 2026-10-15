@@ -431,16 +431,33 @@ describe('coverage across framings', () => {
     expect(readCoverage([alone]).issues.map(issue => ({ ...issue, panels: issue.panels.map(panel => panel.id) }))).toEqual(own);
   });
 
-  it('lets another framing fill a rig\'s gap, joins two framings that touch, and says the rest with their framing', () => {
+  it('lets another framing fill a rig\'s gap, holds a seam between two framings to the larger minimum of the smaller panel, and says the rest with their framing', () => {
     const own = framingAt([[-0.75, 0], [0.75, 0]], [1, 0.75]);
     expect(readCoverage([own]).issues.map(issue => issue.kind)).toEqual(['gap']);
     const shared = framingAt([[0, 0]], [2, 1.5]);
     expect(readCoverage([shared, own]).issues).toEqual([]);
-    // Five per cent of the larger side: thin in one framing, joined across two.
-    expect(readCoverage([shared, framingAt([[1.4, 0]], [1, 0.75])]).issues).toEqual([]);
+    // 0.2° shared is 20% of the smaller 1° panel, the minimum: joined.
+    expect(readCoverage([shared, framingAt([[1.3, 0]], [1, 0.75])]).issues).toEqual([]);
+    // 0.1° shared is 10% of the smaller panel: thin across two framings too.
+    const thin = readCoverage([shared, framingAt([[1.4, 0]], [1, 0.75])]).issues;
+    expect(thin.map(issue => [issue.kind, issue.panels])).toEqual([['thin_overlap', [{ framing: 0, id: 'r1c1' }, { framing: 1, id: 'r1c1' }]]]);
+    expect(thin[0].percent).toBeCloseTo(10, 6);
+    // The larger minimum holds: a rig asking 5% still meets the shared 20%.
+    const lax = framingAt([[1.4, 0]], [1, 0.75]);
+    lax.layout = { ...lax.layout, min_overlap_percent: 5 };
+    expect(readCoverage([shared, lax]).issues.map(issue => issue.kind)).toEqual(['thin_overlap']);
     const apart = readCoverage([shared, framingAt([[1.6, 0]], [1, 0.75])]).issues;
     expect(apart.map(issue => [issue.kind, issue.panels])).toEqual([['gap', [{ framing: 0, id: 'r1c1' }, { framing: 1, id: 'r1c1' }]]]);
-    expect(apart[0].percent).toBeCloseTo(5, 6);
+    expect(apart[0].percent).toBeCloseTo(10, 6);
+  });
+
+  it('finds no seam for a rig panel inside a shared panel, near the shared mosaic\'s own seam', () => {
+    // Shared panels 2° wide, centers 0.8° either side: the first spans -1.8° to 0.2°.
+    const shared = framingAt([[-0.4, 0], [0.4, 0]], [2, 1.5]);
+    // A 1° rig panel from -1.15° to -0.15°, reaching 0.05° into the shared strip.
+    const inside = framingAt([[-0.65, 0]], [1, 0.75]);
+    expect(readCoverage([shared, inside]).issues).toEqual([]);
+    expect(readCoverage([inside, shared]).issues).toEqual([]);
   });
 
   it('says groups apart beside other issues once several framings are read, as the core does', () => {
@@ -452,8 +469,7 @@ describe('coverage across framings', () => {
     expect(read([shared, framingAt([[0, 0]], [1, 0.75], 0, north)])).toEqual([['thin_overlap', ['0:r1c1', '0:p2']], ['isolated', ['1:r1c1']]]);
     // One framing keeps the old rule.
     expect(read([framingAt([[0, 0], [0.9, 0], [5, 0], [5.8, 0]], [2, 1.5])])).toEqual([['thin_overlap', ['0:r1c1', '0:p2']]]);
-    // Across framings a lone panel touches nothing.
-    expect(describeIssue({ kind: 'isolated', panels: ['p2'], percent: null }, true)).toBe('p2 touches no other panel');
+    // Within a framing or across several, a lone panel overlaps nothing by the minimum.
     expect(describeIssue({ kind: 'isolated', panels: ['p2'], percent: null })).toBe('p2 overlaps no other panel by the minimum');
   });
 
@@ -488,8 +504,9 @@ describe('coverage across framings', () => {
     expect(coverageFor(cover, 'rig-x', shared.layout)).toBeNull();
     expect(coverageFor(cover, 'rig-b', beside.layout)!.issues.map(issue => issue.panels)).toEqual([['shared r1c1', 'r1c1']]);
     expect(coverageFor(cover, null, shared.layout)!.issues.map(issue => issue.panels)).toEqual([['r1c1', 'Askar r1c1']]);
-    // A layout in place of the framing's own: moved onto the shared panel, the gap goes.
-    const moved = movePanel(beside.layout, 'r1c1', 1.4, 0);
+    // A layout in place of the framing's own: moved onto the shared panel by
+    // the minimum of the smaller panel, the gap goes.
+    const moved = movePanel(beside.layout, 'r1c1', 1.3, 0);
     const reading = coverageFor(cover, 'rig-b', moved)!;
     expect(reading.issues).toEqual([]);
     expect(reading.groups.get('r1c1')).toBe('shared r1c1');

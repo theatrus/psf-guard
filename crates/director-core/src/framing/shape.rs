@@ -311,10 +311,11 @@ pub(crate) struct TaggedIssue {
 /// `k` belongs to, and `minimum[f]` that framing's minimum overlap.
 ///
 /// Two panels of one framing are read in its own frame against its
-/// minimum, as [`shape_issues`] reads them, so a thin overlap is said only
-/// where a framing's own panels meet. Two panels of different framings are
-/// read in the first one's frame and are joined when they overlap or touch:
-/// across framings only the sky's cover counts. A gap is covered by any
+/// minimum, as [`shape_issues`] reads them. Two panels of different
+/// framings are read in the first one's frame against the larger of the
+/// two framings' minimums, so a seam between rigs gets the overlap stitching
+/// needs too, and a thin seam or a gap is said, as within a framing, only
+/// between panels side by side. A gap is covered by any
 /// panel of any framing, and isolated panels and groups apart are read over
 /// them all. With more than one framing, groups apart are said whatever else
 /// is: two panels a thin overlap or a gap keeps apart count as one group
@@ -333,43 +334,64 @@ pub(crate) fn tagged_issues(
     }
     let mut linked = vec![Vec::new(); n];
     let mut flagged = vec![false; n];
+    // Pairs side by side that neither join nor sit wholly apart.
+    let mut apart: Vec<(usize, usize, ShapeOverlap, bool)> = Vec::new();
     for i in 0..n {
         let shapes = frames[framing[i]];
         for j in i + 1..n {
             let same = framing[i] == framing[j];
+            // Across framings a seam needs the larger of the two minimums:
+            // stitching needs whichever overlap asks more.
             let threshold = if same {
                 f64::from(minimum[framing[i]]) / 100.0
             } else {
-                0.0
+                f64::from(minimum[framing[i]].max(minimum[framing[j]])) / 100.0
             };
             let Some(pair) = shape_overlap(&shapes[i], &shapes[j]) else {
                 continue;
+            };
+            // Two rigs' panels may differ in size; a seam between them is
+            // read as shares of the smaller one, as a person stitching them
+            // would count it.
+            let pair = if same {
+                pair
+            } else {
+                of_smaller(pair, &shapes[i], &shapes[j])
             };
             if pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= threshold {
                 linked[i].push(j);
                 linked[j].push(i);
                 continue;
             }
-            if pair.run + PLACE_TOLERANCE < SIDE_BY_SIDE {
-                continue;
+            if pair.run + PLACE_TOLERANCE >= SIDE_BY_SIDE {
+                apart.push((i, j, pair, same));
             }
-            if pair.thickness >= -PLACE_TOLERANCE {
-                issues.push(TaggedIssue {
-                    kind: LayoutIssueKind::ThinOverlap,
-                    panels: vec![i, j],
-                    percent: Some(round_percent(pair.thickness.max(0.0))),
-                });
-                flagged[i] = true;
-                flagged[j] = true;
-            } else if -pair.thickness < 1.0 && !gap_covered(shapes, i, j, pair) {
-                issues.push(TaggedIssue {
-                    kind: LayoutIssueKind::Gap,
-                    panels: vec![i, j],
-                    percent: Some(round_percent(-pair.thickness)),
-                });
-                flagged[i] = true;
-                flagged[j] = true;
-            }
+        }
+    }
+    // Every link is known before a seam is judged: a rig's panel inside a
+    // shared one reaches into that mosaic's own overlap strips, which is no
+    // seam of its, since the panel it lies in covers it.
+    for (i, j, pair, same) in apart {
+        let shapes = frames[framing[i]];
+        if !same && beyond_covered(shapes, &linked, i, j) {
+            continue;
+        }
+        if pair.thickness >= -PLACE_TOLERANCE {
+            issues.push(TaggedIssue {
+                kind: LayoutIssueKind::ThinOverlap,
+                panels: vec![i, j],
+                percent: Some(round_percent(pair.thickness.max(0.0))),
+            });
+            flagged[i] = true;
+            flagged[j] = true;
+        } else if -pair.thickness < 1.0 && !gap_covered(shapes, i, j, pair) {
+            issues.push(TaggedIssue {
+                kind: LayoutIssueKind::Gap,
+                panels: vec![i, j],
+                percent: Some(round_percent(-pair.thickness)),
+            });
+            flagged[i] = true;
+            flagged[j] = true;
         }
     }
     let mut isolated = vec![false; n];
@@ -413,6 +435,63 @@ pub(crate) fn tagged_issues(
         }
     }
     issues
+}
+
+/// Whether the smaller of panels `i` and `j` is covered, beyond `j` or `i`,
+/// by the panels it joins: then their seam is no edge of the cover, as for a
+/// rig's panel inside a shared one, near that mosaic's own seams. Sampled on
+/// a 5 × 5 grid inside the smaller panel.
+fn beyond_covered(shapes: &[PanelShape], linked: &[Vec<usize>], i: usize, j: usize) -> bool {
+    let area = |k: usize| signed_area(&shapes[k].corners).abs();
+    let (small, other) = if area(i) <= area(j) { (i, j) } else { (j, i) };
+    let [a, b, c, d] = [
+        shapes[small].corners[0],
+        shapes[small].corners[1],
+        shapes[small].corners[2],
+        shapes[small].corners[3],
+    ];
+    let at = |u: f64, v: f64| {
+        let top = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+        let bottom = [d[0] + (c[0] - d[0]) * u, d[1] + (c[1] - d[1]) * u];
+        [
+            top[0] + (bottom[0] - top[0]) * v,
+            top[1] + (bottom[1] - top[1]) * v,
+        ]
+    };
+    (0..5).all(|row| {
+        (0..5).all(|column| {
+            let point = at(0.1 + 0.2 * f64::from(column), 0.1 + 0.2 * f64::from(row));
+            shapes[other].contains(point)
+                || linked[small]
+                    .iter()
+                    .any(|&k| k != other && shapes[k].contains(point))
+        })
+    })
+}
+
+/// `pair` as shares of the smaller of the two panels' sides, not the
+/// larger's: across the seam for its thickness, along it for its run.
+fn of_smaller(pair: ShapeOverlap, a: &PanelShape, b: &PanelShape) -> ShapeOverlap {
+    let (ab, bb) = (a.bounds(), b.bounds());
+    let ratio = |lo: usize, hi: usize| {
+        let (sa, sb) = (ab[hi] - ab[lo], bb[hi] - bb[lo]);
+        let smaller = sa.min(sb);
+        if smaller > 0.0 {
+            sa.max(sb) / smaller
+        } else {
+            1.0
+        }
+    };
+    let (across, along) = if pair.vertical_seam {
+        (ratio(0, 1), ratio(2, 3))
+    } else {
+        (ratio(2, 3), ratio(0, 1))
+    };
+    ShapeOverlap {
+        thickness: pair.thickness * across,
+        run: (pair.run * along).min(1.0),
+        vertical_seam: pair.vertical_seam,
+    }
 }
 
 /// Whether other panels cover the sky between panels `i` and `j`, which
