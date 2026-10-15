@@ -94,10 +94,14 @@ impl ListQuery {
 
     /// The filter, narrowed to a project's sessions when the query names
     /// one.
-    async fn scoped_filter(&self, ctx: &DbContext) -> Result<FrameFilter, AppError> {
+    async fn scoped_filter(
+        &self,
+        state: &Arc<AppState>,
+        ctx: &DbContext,
+    ) -> Result<FrameFilter, AppError> {
         let mut filter = self.filter();
         if let Some(project) = self.project {
-            let scope = crate::server::calibration_scope::scope_for(&ctx.0, project).await?;
+            let scope = crate::server::calibration_scope::scope_for(state, &ctx.0, project).await?;
             filter.within = Some(Arc::new(scope.sessions.clone()));
         }
         Ok(filter)
@@ -153,10 +157,11 @@ fn missing_files<'a>(
 /// GET /api/db/{db}/calibrations/frames — one page of the frames the
 /// filters keep, with whether each file is on disk.
 pub async fn list_frames(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ApiResponse<FramePage>>, AppError> {
-    let filter = query.scoped_filter(&ctx).await?;
+    let filter = query.scoped_filter(&state, &ctx).await?;
     // Read under the shared connection; files are checked after it is free.
     let library = read_library(&ctx)?;
     let roots = ReadableRoots::of(&ctx);
@@ -190,10 +195,11 @@ pub async fn list_frames(
 /// hold frames the filters keep, newest night first, with each session's
 /// counts by grade and the values the filters can take.
 pub async fn list_sessions(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<ApiResponse<SessionPage>>, AppError> {
-    let filter = query.scoped_filter(&ctx).await?;
+    let filter = query.scoped_filter(&state, &ctx).await?;
     let library = read_library(&ctx)?;
     let roots = ReadableRoots::of(&ctx);
     let page = tokio::task::spawn_blocking(move || {
@@ -764,11 +770,14 @@ pub struct MastersQuery {
 /// recorded, newest first, with its sources, its statistics and the
 /// projects whose latest stacks use it.
 pub async fn list_masters(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Query(query): Query<MastersQuery>,
 ) -> Result<Json<ApiResponse<LibraryMasterCatalog>>, AppError> {
     let scope = match query.project {
-        Some(project) => Some(crate::server::calibration_scope::scope_for(&ctx.0, project).await?),
+        Some(project) => {
+            Some(crate::server::calibration_scope::scope_for(&state, &ctx.0, project).await?)
+        }
         None => None,
     };
     let (masters, names) = {

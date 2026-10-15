@@ -147,7 +147,10 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
   const kinds = explanation?.kinds.filter(hasAnything) ?? [];
 
   const calibrationHref = (kind: CalibrationKind, night?: string) => {
-    const [path, search] = calibrationPageHref(location.search, dbId, projectId ?? undefined).split('?');
+    // The panel accounts for every frame the light matched, refused or
+    // lacks, most of which its project's scope leaves out, so its links
+    // open the rig's whole library narrowed to the kind and night.
+    const [path, search] = calibrationPageHref(location.search, dbId, projectId ?? undefined, { scoped: false }).split('?');
     const params = new URLSearchParams(search);
     params.set('calKind', kind);
     if (kind === 'flat' && explanation?.light.filter) params.set('calFilter', explanation.light.filter);

@@ -120,7 +120,7 @@ test('Calibration opened from a project shows its calibration, and ✕ widens to
   await expect(page).toHaveURL(new RegExp(`calProject=${m44}`));
 
   // Scoped: the Ha flats and the 300 s darks its lights use.
-  const chip = page.getByRole('group', { name: 'Scope: Project: M 44' });
+  const chip = page.getByRole('group', { name: 'Scope: M 44 on Askar 120' });
   await expect(chip).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('calibration-scope-heading')).toHaveText(/for M 44/);
   // The header names the rig only.
@@ -131,7 +131,7 @@ test('Calibration opened from a project shows its calibration, and ✕ widens to
   await expect(sessions).not.toContainText('OIII');
 
   // ✕ widens to the rig's whole library.
-  await chip.getByRole('button', { name: /^Show the whole library/ }).click();
+  await chip.getByRole('button', { name: "Show all of Askar 120's calibration" }).click();
   await expect(chip).toHaveCount(0);
   await expect(page).not.toHaveURL(/calProject=/);
   await expect(sessions.getByRole('button')).toHaveCount(4);

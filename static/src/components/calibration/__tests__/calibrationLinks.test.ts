@@ -48,6 +48,9 @@ describe('calibrationPageHref', () => {
     expect(scoped.get('calProject')).toBe('3');
     expect(scoped.has('calKind')).toBe(false);
     expect(query(calibrationPageHref('?db=a&project=3&calProject=3', 'a')).has('calProject')).toBe(false);
+    const unscoped = query(calibrationPageHref('?db=a&project=3', 'a', 3, { scoped: false }));
+    expect(unscoped.get('project')).toBe('3');
+    expect(unscoped.has('calProject')).toBe(false);
     // A master is found in the whole library.
     expect(query(calibrationMasterHref('?db=a&project=3', 'a', 'm1')).has('calProject')).toBe(false);
   });

@@ -30,13 +30,13 @@
   what to do first instead of offering **Activate…**. Unsaved plan edits
   are never saved unasked: the dialog offers **Save and activate…**.
 - **Calibration** opened from a project shows the calibration that project
-  uses: the sessions its lights match, flat grouping's choices included,
-  the masters they calibrate with, and only the flat groups they touch,
-  across every rig the project was shot with. A **Project: M 44 ✕** chip
-  heads the filter bar; ✕ or **Show the whole library** widens to the rig's
-  whole library. Opened from the Library, it shows the whole library as
-  before. On Calibration the header's Rig · target control names the rig
-  only.
+  uses: the sessions its lights' masters are built from, flat grouping's
+  choices included, the masters they calibrate with, and only the flat
+  groups they touch, across every rig the project was shot with. An
+  **M 44 on Askar 120 ✕** chip heads the filter bar; ✕ or **Show all of
+  Askar 120's calibration** widens to the rig's whole library. Opened from
+  the Library, it shows the whole library as before. On Calibration the
+  header's Rig · target control names the rig only.
 
 - **Settings › Server** can fix the desktop app's localhost port, so browser,
   API, and agent connections keep the same address across restarts. A port

@@ -20,13 +20,13 @@ export const flatGroupsKey = (dbId: string) => ['db', dbId, 'calibrations', 'fla
  * progress however many parts of the page show it; when a pass that worked
  * on flats ends, the groups are read again.
  */
-export function useFlatGroups(dbId: string, enabled: boolean, project?: number) {
+export function useFlatGroups(dbId: string, enabled: boolean, project?: number, revision: string | null = null) {
   const queryClient = useQueryClient();
   // Read once, and again only when a pass changed them: not on the app's
   // usual timer, since the server reads every light to answer.
   const groups = useQuery({
     // Under the database's key, so a pass's end reads every scope again.
-    queryKey: [...flatGroupsKey(dbId), project ?? 'all'],
+    queryKey: [...flatGroupsKey(dbId), project ?? 'all', revision],
     queryFn: () => apiClient.getFlatGroups(dbId, project),
     enabled,
     refetchInterval: false,

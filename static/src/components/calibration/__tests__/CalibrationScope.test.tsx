@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { server } from '../../../test/msw-server';
 import CalibrationPage from '../CalibrationPage';
 import { listFilters } from '../useCalibrationUrlState';
@@ -34,8 +34,8 @@ interface Seen {
   groups: URLSearchParams[];
 }
 
-/** Askar holds M 44 (7) and Heart (8); M 44's lights use the Askar only,
- *  unless `spans` says otherwise. Other holds Iris (9). */
+/** Demo holds M 44 (7) and Heart (8); M 44's lights use the Askar only,
+ *  unless `spans` says otherwise, and Heart's the C925. Other holds Iris (9). */
 function serve({ spans = ['askar'] }: { spans?: string[] } = {}): Seen {
   const seen: Seen = { sessions: [], masters: [], groups: [] };
   const database = (id: string, name: string) =>
@@ -49,9 +49,11 @@ function serve({ spans = ['askar'] }: { spans?: string[] } = {}): Seen {
     http.get('/api/db/empty/projects', () => ok([])),
     http.get('/api/db/:db/calibrations/project-scope', ({ request }) => {
       const id = Number(new URL(request.url).searchParams.get('project'));
+      const rigs = id === 8 ? ['c925'] : spans;
       return ok({
         project_id: id, lights: 40, unread: 0, sessions: ['s1'], frames: 3, masters: ['m1'],
-        rigs: spans.map((rig) => ({ rig_uuid: rig, name: RIGS.find((entry) => entry.rig_uuid === rig)?.name ?? rig })),
+        rigs: rigs.map((rig) => ({ rig_uuid: rig, name: RIGS.find((entry) => entry.rig_uuid === rig)?.name ?? rig })),
+        pending: 0, revision: `r${id}`, refreshing: false,
       });
     }),
     http.get('/api/db/:db/calibrations/sessions', ({ request }) => {
@@ -119,14 +121,26 @@ function renderPage(entry: string) {
 
 const params = () => new URLSearchParams(screen.getByRole('status', { name: 'location' }).textContent ?? '');
 const chip = () => screen.queryByRole('group', { name: /^Scope: / });
+/** The heading's link, which does what the chip's ✕ does. */
+const headingLink = () => {
+  const link = screen.getAllByRole('button', { name: /^Show all of .*'s calibration$/ })
+    .find((button) => button.classList.contains('calibration-link-button'));
+  expect(link).toBeTruthy();
+  return link!;
+};
 
 describe('the Calibration page scoped to a project', () => {
+  // Each step waits on two or three requests and the effects after them;
+  // a busy full run can take longer than the default second.
+  beforeAll(() => configure({ asyncUtilTimeout: 10_000 }));
+  afterAll(() => configure({ asyncUtilTimeout: 1_000 }));
+
   it('starts on the calibration the project uses, on its rig, and says so', async () => {
     const seen = serve();
     renderPage('/calibration?db=demo&project=7&calProject=7');
-    expect(await screen.findByRole('group', { name: 'Scope: Project: M 44' }, { timeout: 5000 })).toHaveClass('is-set');
+    expect(await screen.findByRole('group', { name: 'Scope: M 44 on Demo' }, { timeout: 10_000 })).toHaveClass('is-set');
     // The one rig its lights use is the Rig filter's choice.
-    await waitFor(() => expect(params().get('calRig')).toBe('askar'));
+    await waitFor(() => expect(params().get('calRig')).toBe('askar'), { timeout: 10_000 });
     await waitFor(() => expect(seen.sessions.at(-1)?.get('project')).toBe('7'));
     expect(seen.sessions.at(-1)?.get('rig')).toBe('askar');
     expect(seen.groups.at(-1)?.get('project')).toBe('7');
@@ -139,13 +153,13 @@ describe('the Calibration page scoped to a project', () => {
     // The Masters tab keeps the scope.
     fireEvent.click(screen.getByRole('tab', { name: 'Masters' }));
     await waitFor(() => expect(seen.masters.at(-1)?.get('project')).toBe('7'));
-    expect(screen.getByRole('group', { name: 'Scope: Project: M 44' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Scope: M 44 on Demo' })).toBeInTheDocument();
   });
 
   it('starts on the whole library without a project scope', async () => {
     const seen = serve();
     renderPage('/calibration?db=demo&project=7');
-    await waitFor(() => expect(seen.sessions.length).toBeGreaterThan(0), { timeout: 5000 });
+    await waitFor(() => expect(seen.sessions.length).toBeGreaterThan(0), { timeout: 10_000 });
     expect(chip()).not.toBeInTheDocument();
     expect(screen.queryByTestId('calibration-scope-heading')).not.toBeInTheDocument();
     expect(seen.sessions.every((query) => !query.has('project'))).toBe(true);
@@ -154,8 +168,8 @@ describe('the Calibration page scoped to a project', () => {
   it('widens to the rig\'s whole library with ✕, keeping the Rig filter', async () => {
     const seen = serve();
     renderPage('/calibration?db=demo&project=7&calProject=7');
-    await waitFor(() => expect(params().get('calRig')).toBe('askar'), { timeout: 5000 });
-    fireEvent.click(within(chip()!).getByRole('button', { name: /^Show the whole library, not only/ }));
+    await waitFor(() => expect(params().get('calRig')).toBe('askar'), { timeout: 10_000 });
+    fireEvent.click(within(chip()!).getByRole('button', { name: "Show all of Demo's calibration" }));
     await waitFor(() => expect(params().has('calProject')).toBe(false));
     expect(params().get('calRig')).toBe('askar');
     await waitFor(() => expect(seen.sessions.at(-1)?.has('project')).toBe(false));
@@ -169,8 +183,8 @@ describe('the Calibration page scoped to a project', () => {
   it('widens the same way from the heading\'s link', async () => {
     serve();
     renderPage('/calibration?db=demo&project=7&calProject=7');
-    await waitFor(() => expect(params().get('calRig')).toBe('askar'), { timeout: 5000 });
-    fireEvent.click(screen.getByRole('button', { name: 'Show the whole library' }));
+    await waitFor(() => expect(params().get('calRig')).toBe('askar'), { timeout: 10_000 });
+    fireEvent.click(headingLink());
     await waitFor(() => expect(params().has('calProject')).toBe(false));
     expect(params().get('calRig')).toBe('askar');
     expect(screen.queryByTestId('calibration-scope-heading')).not.toBeInTheDocument();
@@ -179,7 +193,7 @@ describe('the Calibration page scoped to a project', () => {
   it('clears the scope with every filter', async () => {
     serve();
     renderPage('/calibration?db=demo&project=7&calProject=7&calKind=flat');
-    await waitFor(() => expect(params().get('calRig')).toBe('askar'), { timeout: 5000 });
+    await waitFor(() => expect(params().get('calRig')).toBe('askar'), { timeout: 10_000 });
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     await waitFor(() => expect(params().has('calProject')).toBe(false));
     expect(params().has('calRig')).toBe(false);
@@ -190,7 +204,7 @@ describe('the Calibration page scoped to a project', () => {
     const seen = serve();
     // The header's project is Heart; the page's scope is still M 44.
     renderPage('/calibration?db=demo&project=8&calProject=7&calRig=c925');
-    expect(await screen.findByRole('group', { name: 'Scope: Project: M 44' }, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByRole('group', { name: 'Scope: M 44 on Demo' }, { timeout: 10_000 })).toBeInTheDocument();
     await waitFor(() => expect(seen.sessions.at(-1)?.get('project')).toBe('7'));
     // A rig chosen in the address stays.
     expect(params().get('calRig')).toBe('c925');
@@ -200,7 +214,7 @@ describe('the Calibration page scoped to a project', () => {
   it('shows every rig a project spans, with All rigs', async () => {
     const seen = serve({ spans: ['askar', 'c925'] });
     renderPage('/calibration?db=demo&project=7&calProject=7');
-    expect(await screen.findByRole('group', { name: 'Scope: Project: M 44 · 2 rigs' }, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByRole('group', { name: 'Scope: M 44 on Demo · 2 rigs' }, { timeout: 10_000 })).toBeInTheDocument();
     await waitFor(() => expect(params().get('calRig')).toBe('any'));
     await waitFor(() => expect(seen.sessions.at(-1)?.has('rig')).toBe(false));
     expect(screen.getByTestId('calibration-scope-heading')).toHaveTextContent('· for M 44 · 2 rigs');
@@ -209,23 +223,35 @@ describe('the Calibration page scoped to a project', () => {
   it('follows the project to another rig, and widens where the rig has none', async () => {
     serve();
     renderPage('/calibration?db=demo&project=7&calProject=7');
-    await screen.findByRole('group', { name: 'Scope: Project: M 44' }, { timeout: 5000 });
+    await screen.findByRole('group', { name: 'Scope: M 44 on Demo' }, { timeout: 10_000 });
     fireEvent.click(screen.getByRole('button', { name: 'Switch to Other' }));
     await waitFor(() => expect(params().get('calProject')).toBe('9'));
-    expect(await screen.findByRole('group', { name: 'Scope: Project: Iris' })).toBeInTheDocument();
+    expect(await screen.findByRole('group', { name: 'Scope: Iris on Other' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Switch to Empty' }));
     await waitFor(() => expect(params().get('db')).toBe('empty'));
     await waitFor(() => expect(params().has('calProject')).toBe(false));
     expect(chip()).not.toBeInTheDocument();
   });
 
+  it("opens the next project on its own rig, not the last project's", async () => {
+    const seen = serve();
+    renderPage('/calibration?db=demo&project=7&calProject=7');
+    await waitFor(() => expect(params().get('calRig')).toBe('askar'), { timeout: 10_000 });
+    // Heart's lights use the C925 only.
+    fireEvent.click(screen.getByRole('button', { name: 'Open Heart' }));
+    await waitFor(() => expect(params().get('calProject')).toBe('8'));
+    await waitFor(() => expect(params().get('calRig')).toBe('c925'), { timeout: 10_000 });
+    await waitFor(() => expect(seen.sessions.at(-1)?.get('rig')).toBe('c925'));
+    expect(seen.sessions.at(-1)?.get('project')).toBe('8');
+  });
+
   it('follows another project chosen in the header, and stays wide once widened', async () => {
     serve();
     renderPage('/calibration?db=demo&project=7&calProject=7');
-    await screen.findByRole('group', { name: 'Scope: Project: M 44' }, { timeout: 5000 });
+    await screen.findByRole('group', { name: 'Scope: M 44 on Demo' }, { timeout: 10_000 });
     fireEvent.click(screen.getByRole('button', { name: 'Open Heart' }));
     await waitFor(() => expect(params().get('calProject')).toBe('8'));
-    fireEvent.click(screen.getByRole('button', { name: 'Show the whole library' }));
+    fireEvent.click(headingLink());
     await waitFor(() => expect(params().has('calProject')).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'Switch to Other' }));
     await waitFor(() => expect(params().get('db')).toBe('other'));

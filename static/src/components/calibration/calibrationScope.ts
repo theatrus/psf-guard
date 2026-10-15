@@ -29,6 +29,9 @@ export function useProjectScope(dbId: string | null, projectId: number | undefin
     queryFn: () => apiClient.getCalibrationProjectScope(dbId!, projectId!),
     enabled: !!dbId && projectId !== undefined,
     staleTime: 60_000,
+    // Asked again while headers are read or a newer scope is worked out.
+    refetchInterval: (query) =>
+      query.state.data && (query.state.data.pending > 0 || query.state.data.refreshing) ? 2_000 : false,
   });
   const scope: CalibrationScope | null = dbId && projectId !== undefined
     ? { kind: 'project', dbId, projectId, name: name ?? `Project ${projectId}`, use: query.data }
@@ -51,5 +54,6 @@ export function scopeRigsLabel(
   return undefined;
 }
 
-/** What the ✕ and the heading's link say they do. */
-export const WIDEN_LABEL = 'Show the whole library';
+/** What the ✕ and the heading's link say they do: widen to the rig's
+ *  whole library, "Show all of Askar 120's calibration". */
+export const widenText = (rig: string) => `Show all of ${rig}'s calibration`;

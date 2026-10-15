@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { useLocation } from 'react-router-dom';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { CalibrationSession } from '../../api/types';
@@ -22,7 +23,7 @@ import { fileName, nightLabel, plural, sessionDetails, sessionTitle } from './ca
 import { indexFlatGroups } from './flatGroupIndex';
 import { findPair } from './flatGroupLabels';
 import { useFlatGroups } from './useFlatGroups';
-import { scopeRigsLabel, useProjectScope, WIDEN_LABEL, type CalibrationScope } from './calibrationScope';
+import { scopeRigsLabel, useProjectScope, widenText, type CalibrationScope } from './calibrationScope';
 import { useCalibrationActions } from './useCalibrationActions';
 import type { ValidityChoice } from './useCalibrationActions';
 import { ALL_RIGS, listFilters, useCalibrationUrlState } from './useCalibrationUrlState';
@@ -85,6 +86,12 @@ export default function CalibrationPage() {
   const shownDb = useRef(dbId);
   const openedFor = useRef<string | null>(null);
   const defaultRig = useRef<string | null>(null);
+  // Whether the rig chosen for the project has reached the address. A URL
+  // update made in the same moment as another can be lost; until it lands,
+  // the rig is asked for again.
+  const rigLanded = useRef(true);
+  // Every change to the address, so a lost rig is asked for again.
+  const { search } = useLocation();
   useEffect(() => {
     let rig = filters.rig;
     if (shownDb.current !== dbId) {
@@ -103,11 +110,21 @@ export default function CalibrationPage() {
       openedFor.current = null;
     }
     const rigs = summary.data?.rigs;
-    // Once per project: removing the scope or clearing leaves the rig be.
-    const opened = `${dbId}:${projectId}`;
-    if (!dbId || !rigs || rigs.length < 2 || openedFor.current === opened) return;
-    // A scoped page waits for the rigs its project's lights use.
-    if (filters.project !== undefined && !scopeUse) return;
+    // Once per project and scope.
+    const opened = `${dbId}:${projectId}:${filters.project ?? ''}`;
+    if (rig !== undefined && rig === defaultRig.current) rigLanded.current = true;
+    if (!dbId || !rigs || rigs.length < 2) return;
+    if (openedFor.current === opened) {
+      if (!rigLanded.current && rig === undefined && defaultRig.current && search) {
+        setFilters({ rig: defaultRig.current });
+      }
+      return;
+    }
+    // Removing the scope, or Clear, leaves the rig as it is.
+    if (filters.project === undefined && openedFor.current?.startsWith(`${dbId}:${projectId}:`)) return;
+    // A scoped page waits for the rigs its own project's lights use, not
+    // the last project's while the next one's are on their way.
+    if (filters.project !== undefined && scopeUse?.project_id !== filters.project) return;
     const used = scopeUse?.rigs.map((entry) => entry.rig_uuid) ?? [];
     if (used.length === 0 && !profile) return;
     openedFor.current = opened;
@@ -116,8 +133,9 @@ export default function CalibrationPage() {
       ? used
       : rigs.filter((entry) => entry.profile_ids?.includes(profile!)).map((entry) => entry.rig_uuid);
     defaultRig.current = own.length === 1 ? own[0] : ALL_RIGS;
+    rigLanded.current = false;
     setFilters({ rig: defaultRig.current });
-  }, [dbId, filters.project, filters.rig, profile, projectId, resetForDatabase, scopeUse, setFilters, summary.data]);
+  }, [dbId, filters.project, filters.rig, profile, projectId, resetForDatabase, scopeUse, search, setFilters, summary.data]);
 
   // Another project chosen in the header while scoped: the scope follows
   // it, and All projects widens to the whole library. A page a person
@@ -135,13 +153,16 @@ export default function CalibrationPage() {
 
   const database = databases?.find((entry) => entry.id === dbId);
   const widen = () => setFilters({ project: undefined });
+  // The header's rig: the database the page shows.
+  const rigName = database?.name ?? dbId ?? '';
+  const widenLabel = widenText(rigName);
   const chosenRig = filters.rig && filters.rig !== ALL_RIGS ? filters.rig : undefined;
   const rigLabel = scope ? scopeRigsLabel(scope, summary.data?.rigs ?? [], chosenRig) : undefined;
   const spans = scope?.use?.rigs.length ?? 0;
   const scopeChip = scope ? (
-    <ScopeChip caption="Project" name={scope.name}
+    <ScopeChip name={scope.name} on={rigName}
       detail={!chosenRig && spans > 1 ? `${spans} rigs` : undefined}
-      removeLabel={`${WIDEN_LABEL}, not only the calibration ${scope.name} uses`} onRemove={widen} />
+      removeLabel={widenLabel} onRemove={widen} />
   ) : undefined;
   // The header's project picker chooses the database, as for every view.
   return (
@@ -160,7 +181,7 @@ export default function CalibrationPage() {
             <span className="calibration-muted">
               {scopeLine(scope)}
               {' '}
-              <button type="button" className="calibration-link-button" onClick={widen}>{WIDEN_LABEL}</button>
+              <button type="button" className="calibration-link-button" onClick={widen}>{widenLabel}</button>
             </span>
           ) : database && <span className="calibration-muted">{database.name}</span>}
         </div>
@@ -177,7 +198,8 @@ export default function CalibrationPage() {
         <p className="calibration-empty">{databases?.length === 0 ? 'No databases yet.' : 'Loading…'}</p>
       ) : (
         <CalibrationLibrary key={dbId} dbId={dbId} dbName={database?.name ?? dbId} state={state}
-          scopeChip={scopeChip} scopeError={scope ? scopeQuery.error?.message ?? null : null} />
+          scopeChip={scopeChip} scopeRevision={scopeUse?.revision}
+          scopeError={scope ? scopeQuery.error?.message ?? null : null} />
       )}
     </div>
   );
@@ -187,6 +209,7 @@ export default function CalibrationPage() {
 function scopeLine(scope: CalibrationScope): string {
   const use = scope.use;
   if (!use) return 'Working out which calibration its lights use…';
+  if (use.lights === 0 && use.pending > 0) return `Reading its ${plural(use.pending, 'light')}’ headers…`;
   if (use.lights === 0) {
     return use.unread > 0
       ? `None of its ${plural(use.unread, 'light')} could be read, so none is shown.`
@@ -195,6 +218,7 @@ function scopeLine(scope: CalibrationScope): string {
   const parts = [
     `What its ${plural(use.lights, 'light')} use: ${plural(use.sessions.length, 'session')}, ${plural(use.masters.length, 'master')}`,
   ];
+  if (use.pending > 0) parts.push(`reading ${plural(use.pending, 'more light')}…`);
   if (use.unread > 0) parts.push(`${plural(use.unread, 'light')} not read`);
   return `${parts.join(' · ')}.`;
 }
@@ -204,6 +228,7 @@ function CalibrationLibrary({
   dbName,
   state,
   scopeChip,
+  scopeRevision,
   scopeError,
 }: {
   dbId: string;
@@ -211,6 +236,8 @@ function CalibrationLibrary({
   state: ReturnType<typeof useCalibrationUrlState>;
   /** The project scope's chip, first in the filter bar. */
   scopeChip?: ReactNode;
+  /** The scope's revision: the lists ask again when it changes. */
+  scopeRevision?: string;
   scopeError: string | null;
 }) {
   // Keep out, validity marks, Forget and Clear masters edit catalog rows:
@@ -239,7 +266,7 @@ function CalibrationLibrary({
     return (
       <CalibrationMasterList dbId={dbId} dbName={dbName} canManage={canManage}
         opened={state.master} actions={actions} onOpen={state.openMaster}
-        project={state.filters.project} scopeChip={scopeChip}
+        project={state.filters.project} scopeRevision={scopeRevision} scopeChip={scopeChip}
         onClearScope={() => state.setFilters({ project: undefined })} />
     );
   }
@@ -264,7 +291,7 @@ function CalibrationLibrary({
         </p>
       ) : (
         <CalibrationFrames dbId={dbId} canManage={canManage} actions={actions}
-          rigs={summary.data?.rigs ?? []} state={state} scopeChip={scopeChip} />
+          rigs={summary.data?.rigs ?? []} state={state} scopeChip={scopeChip} scopeRevision={scopeRevision} />
       )}
     </>
   );
@@ -277,6 +304,7 @@ function CalibrationFrames({
   rigs,
   state,
   scopeChip,
+  scopeRevision,
 }: {
   dbId: string;
   canManage: boolean;
@@ -284,12 +312,15 @@ function CalibrationFrames({
   rigs: NonNullable<Awaited<ReturnType<typeof apiClient.getCalibrationLibrary>>>['rigs'];
   state: ReturnType<typeof useCalibrationUrlState>;
   scopeChip?: ReactNode;
+  scopeRevision?: string;
 }) {
   const { filters, page, session: sessionId, frame: frameUuid, selectSession, selectFrame, ratio, openRatio } = state;
   const listed = useMemo(() => listFilters(filters), [filters]);
+  // A scoped list is asked again when its scope's revision moves on.
+  const revision = filters.project !== undefined ? scopeRevision ?? null : null;
   // Flat groups ride along wherever the list can hold flats.
   const flatsListed = filters.kind === undefined || filters.kind === 'flat';
-  const flat = useFlatGroups(dbId, flatsListed, filters.project);
+  const flat = useFlatGroups(dbId, flatsListed, filters.project, revision);
   const flatRigs = useMemo(() => flat.groups.data?.rigs ?? [], [flat.groups.data]);
   const flatIndex = useMemo(() => indexFlatGroups(flatRigs), [flatRigs]);
   const chosenRig = filters.rig && filters.rig !== ALL_RIGS ? filters.rig : undefined;
@@ -317,14 +348,14 @@ function CalibrationFrames({
   }, [ratio, returnFocus]);
   const pair = ratio ? findPair(flatRigs, ratio.earlier, ratio.later) : {};
   const sessions = useQuery({
-    queryKey: ['db', dbId, 'calibrations', 'sessions', listed, page],
+    queryKey: ['db', dbId, 'calibrations', 'sessions', listed, page, revision],
     queryFn: () => apiClient.getCalibrationSessions(dbId, { ...listed, page, per_page: SESSIONS_PER_PAGE }),
     // Keep the old list while a new one loads, so nothing below it jumps.
     placeholderData: keepPreviousData,
   });
   const sessionList = useMemo(() => sessions.data?.sessions ?? [], [sessions.data]);
   const strip = useQuery({
-    queryKey: ['db', dbId, 'calibrations', 'frames', listed, sessionId, filters.sort],
+    queryKey: ['db', dbId, 'calibrations', 'frames', listed, sessionId, filters.sort, revision],
     queryFn: () => apiClient.getCalibrationFrames(dbId, {
       ...listed,
       session: sessionId ?? undefined,

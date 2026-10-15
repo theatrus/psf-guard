@@ -237,14 +237,21 @@
   color: var(--color-text-primary);
 }
 
-/* The scope a view is narrowed to, "Project: M 44 ✕": first in the bar
-   and in sight at every width. Only its ✕ is a button. */
+/* The scope a view is narrowed to, "M 44 on Askar 120 ✕": first in the
+   bar and in sight at every width. Only its ✕ is a button. */
 .toolbar-scope-chip {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 18rem;
   padding-right: 0.2rem;
   cursor: default;
+}
+
+.toolbar-scope-on {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-lighter);
 }
 
 .toolbar-scope-detail {
@@ -257,8 +264,8 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -278,10 +285,18 @@
   box-shadow: var(--state-focus-ring);
 }
 
+/* The scope keeps its width while filter pills give theirs up; on a phone,
+   where the pills fold away, it shares the row with Filters and shrinks. */
 .view-toolbar-scope {
   display: flex;
-  flex: 0 1 auto;
+  flex: none;
   min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .view-toolbar-scope {
+    flex: 0 1 auto;
+  }
 }
 
 /* Search: a pill-shaped field with a magnifier. */

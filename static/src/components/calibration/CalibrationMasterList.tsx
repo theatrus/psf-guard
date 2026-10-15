@@ -17,6 +17,8 @@ interface CalibrationMasterListProps {
   onOpen: (id: string | null) => void;
   /** Keep only the masters this project's lights calibrate with. */
   project?: number;
+  /** The scope's revision: the list is asked again when it changes. */
+  scopeRevision?: string;
   /** The project scope's chip, first in the bar. */
   scopeChip?: ReactNode;
   /** Clear removes the scope as well as the filters. */
@@ -55,12 +57,12 @@ function flatSetText(master: LibraryCalibrationMaster): string | null {
 
 /** The masters the library recorded, and an inspector for any of them. */
 export default function CalibrationMasterList({
-  dbId, dbName, canManage, opened, actions, onOpen, project, scopeChip, onClearScope,
+  dbId, dbName, canManage, opened, actions, onOpen, project, scopeRevision, scopeChip, onClearScope,
 }: CalibrationMasterListProps) {
   const [kind, setKind] = useState<CalibrationKind | ''>('');
   const [onDisk, setOnDisk] = useState(false);
   const catalog = useQuery({
-    queryKey: ['db', dbId, 'calibrations', 'masters', project ?? 'all'],
+    queryKey: ['db', dbId, 'calibrations', 'masters', project ?? 'all', scopeRevision],
     queryFn: () => apiClient.getLibraryCalibrationMasters(dbId, project),
   });
   const masters = useMemo(

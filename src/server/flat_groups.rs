@@ -490,11 +490,14 @@ pub struct FlatGroupsQuery {
 /// splits, change events and angle term, from what the background pass
 /// measured. Reads no pixels.
 pub async fn get_flat_groups(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Query(query): Query<FlatGroupsQuery>,
 ) -> Result<Json<ApiResponse<FlatGroupsView>>, AppError> {
     let scope = match query.project {
-        Some(project) => Some(crate::server::calibration_scope::scope_for(&ctx.0, project).await?),
+        Some(project) => {
+            Some(crate::server::calibration_scope::scope_for(&state, &ctx.0, project).await?)
+        }
         None => None,
     };
     let path = ctx.database_path.clone();

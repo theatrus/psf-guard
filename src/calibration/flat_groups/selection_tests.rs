@@ -289,6 +289,47 @@ fn a_project_scope_holds_the_flats_its_lights_take_from_another_angle() {
 }
 
 #[test]
+fn a_project_scope_holds_the_sessions_a_correction_map_is_made_from() {
+    use crate::calibration::project_scope::project_scope;
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let (conn, _) = measured_library(
+        temp.path(),
+        &[
+            BEFORE_HA_0,
+            BEFORE_OIII_0,
+            AFTER_HA_0,
+            AFTER_HA_90,
+            AFTER_OIII_0,
+        ],
+    );
+    let before = light(temp.path(), "2026-09-09T04:00:00", 90.0);
+    let selected = select_for_light(&conn, &before).unwrap();
+    let correction = selected.flat_basis.correction().expect("corrected").clone();
+    let book = super::load_book(&conn).unwrap();
+    let source: std::collections::HashSet<String> =
+        [&correction.before_response, &correction.after_response]
+            .into_iter()
+            .flat_map(|key| {
+                let index = book.session_by_response(key).expect("measured");
+                book.sessions[index].row.frame_uuids.clone()
+            })
+            .collect();
+    let library = crate::calibration::browse::library_frames(&conn).unwrap();
+    let mut expected = browser_sessions(&conn, &[&AFTER_HA_90]);
+    expected.extend(
+        library
+            .frames
+            .iter()
+            .filter(|row| source.contains(&row.frame.frame_uuid))
+            .map(|row| row.session.clone()),
+    );
+    let scope = project_scope(&conn, 1, &[before], 0).unwrap();
+    assert!(expected.len() > 1, "the map's sessions are others");
+    assert_eq!(scope.sessions, expected);
+}
+
+#[test]
 fn without_an_angle_term_the_other_side_is_carried_across() {
     let _settings = settings_lock();
     let temp = tempfile::tempdir().unwrap();

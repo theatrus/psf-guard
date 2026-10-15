@@ -2637,6 +2637,12 @@ export interface CalibrationProjectScope {
   /** Recorded masters the lights calibrate with. */
   masters: string[];
   rigs: CalibrationScopeRig[];
+  /** Lights whose headers are still being read; the scope grows as they arrive. */
+  pending: number;
+  /** What the scope was worked out from; the lists ask again when it changes. */
+  revision: string;
+  /** Worked out before the latest change; a newer one is on its way. */
+  refreshing: boolean;
 }
 
 export interface CalibrationFrameMetric {
