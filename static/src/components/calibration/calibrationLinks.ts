@@ -2,15 +2,26 @@ import { keepScoringInScope, withoutPlanningParams } from '../../hooks/useUrlSta
 
 /**
  * The calibration page for one database, from wherever a person is. The
- * scope comes along; a project from another database does not.
+ * scope comes along; a project from another database does not. Given a
+ * project, the page shows the calibration that project's lights use,
+ * unless `scoped` is false: a link to frames a light matched or was refused
+ * points outside what it uses, so it opens the rig's whole library.
  */
-export function calibrationPageHref(search: string, dbId: string, projectId?: number): string {
+export function calibrationPageHref(
+  search: string,
+  dbId: string,
+  projectId?: number,
+  { scoped = true }: { scoped?: boolean } = {},
+): string {
   const params = withoutPlanningParams(search);
   if (params.get('db') !== dbId) {
     for (const key of ['project', 'target', 'mosaic']) params.delete(key);
   }
   params.set('db', dbId);
-  if (projectId !== undefined) params.set('project', String(projectId));
+  if (projectId !== undefined) {
+    params.set('project', String(projectId));
+    if (scoped) params.set('calProject', String(projectId));
+  }
   return `/calibration?${keepScoringInScope(search, params)}`;
 }
 

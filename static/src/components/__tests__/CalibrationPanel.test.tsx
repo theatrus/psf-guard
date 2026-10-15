@@ -150,6 +150,14 @@ describe('CalibrationPanel', () => {
       db: 'c925', project: '1', calKind: 'flat', calFilter: 'Ha', calFrom: '2026-10-01', calTo: '2026-10-01',
     });
     expect(href.searchParams.get('calibFocus')).toBeNull();
+    // Frames a light matched or was refused lie outside its project's
+    // scope, so the link opens the rig's whole library.
+    expect(href.searchParams.has('calProject')).toBe(false);
+    const opens = screen.getAllByRole('link', { name: 'Open' });
+    expect(opens.length).toBeGreaterThan(0);
+    for (const kindLink of opens) {
+      expect(new URL(kindLink.getAttribute('href')!, 'http://x').searchParams.has('calProject')).toBe(false);
+    }
   });
 
   it('keeps the chosen finding in the URL and can show every kind', async () => {

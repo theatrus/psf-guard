@@ -2611,9 +2611,38 @@ export interface CalibrationListFilters {
   /** A rotator angle in degrees, matched within 2°. */
   rotation?: number;
   session?: string;
+  /** Keep only the sessions this project's lights use. */
+  project?: number;
   sort?: CalibrationFrameSort;
   page?: number;
   per_page?: number;
+}
+
+/** A calibration rig in a project's scope. */
+export interface CalibrationScopeRig {
+  rig_uuid: string;
+  name: string | null;
+}
+
+/** What one project's lights use from the calibration library. */
+export interface CalibrationProjectScope {
+  project_id: number;
+  /** Lights matched against the library. */
+  lights: number;
+  /** Lights whose file was not found or whose header could not be read. */
+  unread: number;
+  /** The Calibration page's sessions holding frames the lights use. */
+  sessions: string[];
+  frames: number;
+  /** Recorded masters the lights calibrate with. */
+  masters: string[];
+  rigs: CalibrationScopeRig[];
+  /** Lights whose headers are still being read; the scope grows as they arrive. */
+  pending: number;
+  /** What the scope was worked out from; the lists ask again when it changes. */
+  revision: string;
+  /** Worked out before the latest change; a newer one is on its way. */
+  refreshing: boolean;
 }
 
 export interface CalibrationFrameMetric {

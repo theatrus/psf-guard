@@ -8,6 +8,7 @@ pub mod calibration_browser;
 pub mod calibration_duplicates;
 pub mod calibration_health;
 pub mod calibration_quality;
+pub mod calibration_scope;
 pub mod calibration_settings;
 pub mod catalog_install;
 pub mod database_context;
@@ -248,6 +249,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/calibrations/quality",
             get(calibration_quality::get_progress),
+        )
+        .route(
+            "/calibrations/project-scope",
+            get(calibration_scope::get_project_scope),
         )
         .route(
             "/calibrations/flat-groups",

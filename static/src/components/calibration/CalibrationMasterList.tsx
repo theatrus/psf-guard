@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { CalibrationKind, LibraryCalibrationMaster } from '../../api/types';
@@ -15,6 +15,14 @@ interface CalibrationMasterListProps {
   opened: string | null;
   actions: ReturnType<typeof useCalibrationActions>;
   onOpen: (id: string | null) => void;
+  /** Keep only the masters this project's lights calibrate with. */
+  project?: number;
+  /** The scope's revision: the list is asked again when it changes. */
+  scopeRevision?: string;
+  /** The project scope's chip, first in the bar. */
+  scopeChip?: ReactNode;
+  /** Clear removes the scope as well as the filters. */
+  onClearScope?: () => void;
 }
 
 function sourcesText(master: LibraryCalibrationMaster): string {
@@ -48,12 +56,14 @@ function flatSetText(master: LibraryCalibrationMaster): string | null {
 }
 
 /** The masters the library recorded, and an inspector for any of them. */
-export default function CalibrationMasterList({ dbId, dbName, canManage, opened, actions, onOpen }: CalibrationMasterListProps) {
+export default function CalibrationMasterList({
+  dbId, dbName, canManage, opened, actions, onOpen, project, scopeRevision, scopeChip, onClearScope,
+}: CalibrationMasterListProps) {
   const [kind, setKind] = useState<CalibrationKind | ''>('');
   const [onDisk, setOnDisk] = useState(false);
   const catalog = useQuery({
-    queryKey: ['db', dbId, 'calibrations', 'masters'],
-    queryFn: () => apiClient.getLibraryCalibrationMasters(dbId),
+    queryKey: ['db', dbId, 'calibrations', 'masters', project ?? 'all', scopeRevision],
+    queryFn: () => apiClient.getLibraryCalibrationMasters(dbId, project),
   });
   const masters = useMemo(
     () => (catalog.data?.masters ?? []).filter(
@@ -70,6 +80,7 @@ export default function CalibrationMasterList({ dbId, dbName, canManage, opened,
     <section className="calibration-masters" aria-label="Masters">
       <ViewToolbar
         label="Master filters"
+        scope={scopeChip}
         filters={(
           <>
             <PillSelect
@@ -93,6 +104,7 @@ export default function CalibrationMasterList({ dbId, dbName, canManage, opened,
         onClearFilters={() => {
           setKind('');
           setOnDisk(false);
+          onClearScope?.();
         }}
         menu={canManage && (catalog.data?.masters.length ?? 0) > 0 ? (
           <button type="button" className="toolbar-menu-item toolbar-menu-item-danger" disabled={actions.pending} onClick={clear}>
@@ -105,7 +117,13 @@ export default function CalibrationMasterList({ dbId, dbName, canManage, opened,
       {catalog.isLoading && <p className="calibration-muted">Loading…</p>}
       {catalog.error && <p className="calibration-error">Could not read the masters: {catalog.error.message}</p>}
       {catalog.data && masters.length === 0 && (
-        <p className="calibration-empty">{catalog.data.masters.length ? 'No masters match.' : 'No masters yet. A stack builds them.'}</p>
+        <p className="calibration-empty">
+          {catalog.data.masters.length
+            ? 'No masters match.'
+            : project !== undefined
+              ? 'No master this project’s lights calibrate with yet. A stack builds them.'
+              : 'No masters yet. A stack builds them.'}
+        </p>
       )}
       {masters.length > 0 && (
         <ul className="calibration-master-cards">

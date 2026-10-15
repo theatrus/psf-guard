@@ -31,6 +31,36 @@
   font-size: 1.35rem;
 }
 
+/* "· for M 44 · Askar 120": the scope the page shows, lighter than the
+   page's name. */
+.calibration-scope-heading {
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* "Show the whole library": the same as the scope chip's ✕, as a link. */
+.calibration-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.calibration-link-button:hover {
+  color: var(--color-text-primary);
+}
+
+.calibration-link-button:focus-visible {
+  outline: none;
+  border-radius: 3px;
+  box-shadow: var(--state-focus-ring);
+}
+
 .calibration-tabs {
   display: flex;
   gap: 1.25rem;

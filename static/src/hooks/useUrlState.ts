@@ -228,6 +228,7 @@ export const CALIBRATION_PARAMS = [
   'calRotation',
   'calEarlier',
   'calLater',
+  'calProject',
 ] as const;
 
 /** The image detail's chosen calibration finding, or `all`. */

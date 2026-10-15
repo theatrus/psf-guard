@@ -231,8 +231,9 @@ function AppContent() {
             />
             {/* In pipeline order: the lights, their sequence, the calibration
                 that serves them, then the stacks they make. Calibration
-                follows the database and rig in scope; with no database it
-                opens on the first. */}
+                shows the rig in scope (the picker names the rig alone
+                there), narrowed to the project's calibration when opened
+                from a project; with no database it opens on the first. */}
             <ViewTab
               label="Calibration"
               icon={TestTubeDiagonal}

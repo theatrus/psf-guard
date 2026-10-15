@@ -229,6 +229,106 @@ fn a_light_before_new_dust_takes_its_side_at_another_angle() {
     assert_eq!(selected.flat_basis, FlatBasis::Nearest);
 }
 
+/// The browser sessions of the flats of `sessions`.
+fn browser_sessions(
+    conn: &Connection,
+    sessions: &[&Session],
+) -> std::collections::BTreeSet<String> {
+    crate::calibration::browse::library_frames(conn)
+        .unwrap()
+        .frames
+        .into_iter()
+        .filter(|row| {
+            let name = Path::new(&row.frame.source_path)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            sessions
+                .iter()
+                .any(|session| name.rsplit_once('-').unwrap().0 == session.name)
+        })
+        .map(|row| row.session)
+        .collect()
+}
+
+#[test]
+fn a_project_scope_holds_the_flats_its_lights_take_from_another_angle() {
+    use crate::calibration::project_scope::project_scope;
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let (conn, _) = measured_library(
+        temp.path(),
+        &[
+            BEFORE_HA_0,
+            BEFORE_OIII_0,
+            BEFORE_OIII_90,
+            AFTER_HA_0,
+            AFTER_HA_90,
+            AFTER_OIII_0,
+        ],
+    );
+    // A light at 90° before the dust takes the first morning's Ha flats at
+    // 0°: that session is in its project's scope, and the Ha flats at 90°
+    // after the dust, the nearest at its own angle, are not.
+    let before = light(temp.path(), "2026-09-09T04:00:00", 90.0);
+    let scope = project_scope(&conn, 1, std::slice::from_ref(&before), 0).unwrap();
+    assert_eq!(scope.sessions, browser_sessions(&conn, &[&BEFORE_HA_0]));
+
+    // A light at 0° before the dust keeps the dusty flats in its list only
+    // so its stacks keep their keys; they are held back, so not in scope.
+    let own_angle = light(temp.path(), "2026-09-09T05:00:00", 0.0);
+    let scope = project_scope(&conn, 1, &[before, own_angle], 0).unwrap();
+    assert_eq!(scope.sessions, browser_sessions(&conn, &[&BEFORE_HA_0]));
+
+    // A light after the change takes the Ha flats at 90° after it.
+    let after = light(temp.path(), "2026-09-18T04:00:00", 90.0);
+    let scope = project_scope(&conn, 1, &[after], 0).unwrap();
+    assert_eq!(scope.sessions, browser_sessions(&conn, &[&AFTER_HA_90]));
+    assert_eq!(scope.rigs.len(), 1);
+}
+
+#[test]
+fn a_project_scope_holds_the_sessions_a_correction_map_is_made_from() {
+    use crate::calibration::project_scope::project_scope;
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let (conn, _) = measured_library(
+        temp.path(),
+        &[
+            BEFORE_HA_0,
+            BEFORE_OIII_0,
+            AFTER_HA_0,
+            AFTER_HA_90,
+            AFTER_OIII_0,
+        ],
+    );
+    let before = light(temp.path(), "2026-09-09T04:00:00", 90.0);
+    let selected = select_for_light(&conn, &before).unwrap();
+    let correction = selected.flat_basis.correction().expect("corrected").clone();
+    let book = super::load_book(&conn).unwrap();
+    let source: std::collections::HashSet<String> =
+        [&correction.before_response, &correction.after_response]
+            .into_iter()
+            .flat_map(|key| {
+                let index = book.session_by_response(key).expect("measured");
+                book.sessions[index].row.frame_uuids.clone()
+            })
+            .collect();
+    let library = crate::calibration::browse::library_frames(&conn).unwrap();
+    let mut expected = browser_sessions(&conn, &[&AFTER_HA_90]);
+    expected.extend(
+        library
+            .frames
+            .iter()
+            .filter(|row| source.contains(&row.frame.frame_uuid))
+            .map(|row| row.session.clone()),
+    );
+    let scope = project_scope(&conn, 1, &[before], 0).unwrap();
+    assert!(expected.len() > 1, "the map's sessions are others");
+    assert_eq!(scope.sessions, expected);
+}
+
 #[test]
 fn without_an_angle_term_the_other_side_is_carried_across() {
     let _settings = settings_lock();

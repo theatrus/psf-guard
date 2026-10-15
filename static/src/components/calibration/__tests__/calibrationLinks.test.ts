@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calibrationGridHref, nightDates } from '../calibrationLinks';
+import { calibrationGridHref, calibrationMasterHref, calibrationPageHref, nightDates } from '../calibrationLinks';
 
 /** Whether the Images grid keeps a light taken at `acquired` (seconds) under
  *  these dates: the same comparison as its date filter. */
@@ -36,5 +36,22 @@ describe('nightDates', () => {
     );
     expect(without.has('dateStart')).toBe(false);
     expect(without.has('dateEnd')).toBe(false);
+  });
+});
+
+describe('calibrationPageHref', () => {
+  const query = (href: string) => new URLSearchParams(href.split('?')[1]);
+
+  it("opens on a project's calibration when it names one, and on the whole library otherwise", () => {
+    const scoped = query(calibrationPageHref('?db=a&project=3&calProject=5&calKind=dark', 'a', 3));
+    expect(scoped.get('project')).toBe('3');
+    expect(scoped.get('calProject')).toBe('3');
+    expect(scoped.has('calKind')).toBe(false);
+    expect(query(calibrationPageHref('?db=a&project=3&calProject=3', 'a')).has('calProject')).toBe(false);
+    const unscoped = query(calibrationPageHref('?db=a&project=3', 'a', 3, { scoped: false }));
+    expect(unscoped.get('project')).toBe('3');
+    expect(unscoped.has('calProject')).toBe(false);
+    // A master is found in the whole library.
+    expect(query(calibrationMasterHref('?db=a&project=3', 'a', 'm1')).has('calProject')).toBe(false);
   });
 });

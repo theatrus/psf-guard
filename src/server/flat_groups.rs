@@ -18,7 +18,7 @@ use axum::Json;
 use rusqlite::OpenFlags;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -445,16 +445,69 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
     })
 }
 
+/// Keep only the families a project's lights touch: those with a session
+/// holding one of `sessions` (the Calibration page's sessions), the change
+/// events found in them, and the unmeasured sessions among `sessions`. A
+/// rig left with nothing goes.
+fn scoped(view: FlatGroupsView, sessions: &BTreeSet<String>) -> FlatGroupsView {
+    let touches = |held: &[String]| held.iter().any(|id| sessions.contains(id));
+    let rigs = view
+        .rigs
+        .into_iter()
+        .filter_map(|mut rig| {
+            rig.families.retain(|family| {
+                family
+                    .groups
+                    .iter()
+                    .flat_map(|group| &group.sessions)
+                    .any(|session| touches(&session.sessions))
+            });
+            let events: BTreeSet<&str> = rig
+                .families
+                .iter()
+                .flat_map(|family| &family.splits)
+                .filter_map(|split| split.event_key.as_deref())
+                .collect();
+            let events: BTreeSet<String> = events.into_iter().map(str::to_owned).collect();
+            rig.events.retain(|event| events.contains(&event.key));
+            rig.unmeasured.retain(|session| touches(&session.sessions));
+            (!rig.families.is_empty() || !rig.unmeasured.is_empty()).then_some(rig)
+        })
+        .collect();
+    FlatGroupsView {
+        available: view.available,
+        rigs,
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FlatGroupsQuery {
+    /// Keep only the families this project's lights touch.
+    pub project: Option<i32>,
+}
+
 /// `GET /api/db/{db}/calibrations/flat-groups` — every rig's flat groups,
 /// splits, change events and angle term, from what the background pass
 /// measured. Reads no pixels.
 pub async fn get_flat_groups(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
+    Query(query): Query<FlatGroupsQuery>,
 ) -> Result<Json<ApiResponse<FlatGroupsView>>, AppError> {
+    let scope = match query.project {
+        Some(project) => {
+            Some(crate::server::calibration_scope::scope_for(&state, &ctx.0, project).await?)
+        }
+        None => None,
+    };
     let path = ctx.database_path.clone();
     let view = tokio::task::spawn_blocking(move || {
         let conn = read_only(&path)?;
-        build_view(&conn).map_err(AppError::db)
+        let view = build_view(&conn).map_err(AppError::db)?;
+        Ok::<_, AppError>(match scope {
+            Some(scope) => scoped(view, &scope.sessions),
+            None => view,
+        })
     })
     .await
     .map_err(|error| AppError::InternalError(format!("reading flat groups: {error}")))??;
@@ -728,5 +781,43 @@ mod tests {
         let view = build_view(&conn).unwrap();
         assert_eq!(view.rigs[0].own_limits, vec!["flat_split_dust_pct"]);
         assert_eq!(view.rigs[0].families[0].groups.len(), 1, "2% is within 3%");
+    }
+
+    #[test]
+    fn a_project_scope_keeps_only_the_families_its_sessions_touch() {
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let conn = measured_catalog(temp.path());
+        let library = crate::calibration::browse::library_frames(&conn).unwrap();
+        let first: BTreeSet<String> = library
+            .frames
+            .iter()
+            .filter(|row| row.night.as_deref() == Some("2026-09-10"))
+            .map(|row| row.session.clone())
+            .collect();
+        assert_eq!(first.len(), 1);
+
+        let whole = build_view(&conn).unwrap();
+        let events = whole.rigs[0].events.len();
+        let view = scoped(build_view(&conn).unwrap(), &first);
+        assert_eq!(view.rigs.len(), 1);
+        assert_eq!(
+            view.rigs[0].families.len(),
+            1,
+            "the family it touches, whole"
+        );
+        assert_eq!(view.rigs[0].families[0].groups.len(), 2);
+        assert_eq!(
+            view.rigs[0].events.len(),
+            events,
+            "its family's changes stay"
+        );
+
+        // Sessions no family holds leave nothing, not even the rig.
+        let none = scoped(
+            build_view(&conn).unwrap(),
+            &BTreeSet::from(["elsewhere".to_string()]),
+        );
+        assert!(none.available && none.rigs.is_empty());
     }
 }

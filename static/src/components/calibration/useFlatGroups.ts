@@ -15,18 +15,19 @@ export const FLAT_POLL_MS = { running: 3_000, idle: 30_000 };
 export const flatGroupsKey = (dbId: string) => ['db', dbId, 'calibrations', 'flat-groups'] as const;
 
 /**
- * One database's flat groups, and whether the background pass is measuring
+ * One database's flat groups, or those a project's lights touch, and whether the background pass is measuring
  * them now. The page holds one of these, so one poll asks for the job's
  * progress however many parts of the page show it; when a pass that worked
  * on flats ends, the groups are read again.
  */
-export function useFlatGroups(dbId: string, enabled: boolean) {
+export function useFlatGroups(dbId: string, enabled: boolean, project?: number, revision: string | null = null) {
   const queryClient = useQueryClient();
   // Read once, and again only when a pass changed them: not on the app's
   // usual timer, since the server reads every light to answer.
   const groups = useQuery({
-    queryKey: flatGroupsKey(dbId),
-    queryFn: () => apiClient.getFlatGroups(dbId),
+    // Under the database's key, so a pass's end reads every scope again.
+    queryKey: [...flatGroupsKey(dbId), project ?? 'all', revision],
+    queryFn: () => apiClient.getFlatGroups(dbId, project),
     enabled,
     refetchInterval: false,
   });

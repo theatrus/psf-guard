@@ -60,6 +60,10 @@ pub struct FrameFilter {
     /// [`ROTATION_TOLERANCE_DEG`]; frames without one are left out.
     pub rotation: Option<f64>,
     pub session: Option<String>,
+    /// Keep only these sessions: a project's scope
+    /// ([`super::project_scope`]).
+    #[serde(skip)]
+    pub within: Option<std::sync::Arc<BTreeSet<String>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -360,6 +364,10 @@ impl FrameFilter {
         if self.rig.as_deref().is_some_and(|rig| rig != frame.rig_uuid)
             || self.kind.is_some_and(|kind| kind != frame.kind)
             || self.session.as_deref().is_some_and(|id| id != row.session)
+            || self
+                .within
+                .as_ref()
+                .is_some_and(|sessions| !sessions.contains(&row.session))
         {
             return false;
         }
@@ -494,6 +502,11 @@ pub fn library_frames(conn: &Connection) -> Result<LibraryFrames> {
 }
 
 impl LibraryFrames {
+    /// A rig's name, when the library names it.
+    pub fn rig_name(&self, rig_uuid: &str) -> Option<String> {
+        self.rigs.get(rig_uuid).cloned()
+    }
+
     /// The frames `filter` keeps, in library order.
     pub fn kept<'a>(&'a self, filter: &'a FrameFilter) -> impl Iterator<Item = &'a BrowsedFrame> {
         self.frames.iter().filter(move |row| filter.keeps(row))
@@ -972,6 +985,9 @@ pub struct RecordedLibraryMaster {
     /// The source frames still in the library.
     pub sources: Option<FrameSpan>,
     pub statistics: serde_json::Value,
+    /// Every source frame's UUID, as recorded.
+    #[serde(skip)]
+    pub source_uuids: Vec<String>,
 }
 
 /// Every master the library recorded, newest first.
@@ -1045,6 +1061,7 @@ pub fn recorded_masters(conn: &Connection) -> Result<Vec<RecordedLibraryMaster>>
                     sources: (!known.is_empty()).then(|| FrameSpan::of(known)),
                     statistics: serde_json::from_str(&statistics)
                         .unwrap_or(serde_json::Value::Null),
+                    source_uuids: sources,
                 })
             },
         )
@@ -1207,6 +1224,11 @@ mod tests {
             // Across north: 359.2° is 1.6° from 0.8°.
             rotation: Some(0.8),
             session: Some(row.session.clone()),
+            within: Some(std::sync::Arc::new(BTreeSet::from([row.session.clone()]))),
+        }));
+        assert!(!keeps(FrameFilter {
+            within: Some(std::sync::Arc::new(BTreeSet::from(["another".to_string()]))),
+            ..Default::default()
         }));
         assert!(!keeps(FrameFilter {
             rotation: Some(3.2),
