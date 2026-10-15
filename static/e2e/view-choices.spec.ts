@@ -63,9 +63,29 @@ const gridIds = (page: Page) => page.locator('.image-card-wrapper').evaluateAll(
 );
 const headings = (page: Page) => page.locator('.filter-header h3').allTextContents();
 
+/** Until no card waits for its preview and every preview has faded in.
+ *  On a slow runner WebKit draws almost no frames while a page of previews
+ *  decodes and fades in, and a click then waits for a steady frame that
+ *  does not come in its five seconds. Polled on a timer, not per frame. */
+async function previewsSettled(page: Page) {
+  await expect(page.locator('.image-card-wrapper .preview-status-box:not(.preview-status-error)')).toHaveCount(0, { timeout: 60_000 });
+  await page.waitForFunction(
+    () => document.getAnimations().every((animation) => !((animation.effect as KeyframeEffect | null)?.target instanceof HTMLImageElement)),
+    null,
+    { polling: 250, timeout: 60_000 },
+  );
+}
+
+/** By keyboard, as a person can: a key press does not wait for the
+ *  steady frame a click does, which a slow WebKit can take seconds to draw
+ *  under a page of previews. */
 async function chooseOrder(page: Page, name: 'Oldest first' | 'Newest first') {
-  await page.getByRole('button', { name: /^View/ }).click();
-  await page.getByRole('radiogroup', { name: 'Sort' }).getByRole('radio', { name }).click();
+  await page.getByRole('button', { name: /^View/ }).focus();
+  await page.keyboard.press('Enter');
+  const choice = page.getByRole('radiogroup', { name: 'Sort' }).getByRole('radio', { name });
+  await choice.focus();
+  await page.keyboard.press('Enter');
+  await expect(choice).toHaveAttribute('aria-checked', 'true');
   await page.keyboard.press('Escape');
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 }
@@ -86,6 +106,7 @@ test('a flip after the person moved keeps the current card where it is on a long
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&size=300`);
   await expect(page.locator('.image-card-wrapper')).toHaveCount(60, { timeout: 30_000 });
+  await previewsSettled(page);
   const oldest = await gridIds(page);
 
   // Scroll a card from the middle into view and click it: the person has
@@ -95,6 +116,7 @@ test('a flip after the person moved keeps the current card where it is on a long
     const scroller = card.closest('.app-main')!;
     scroller.scrollTop += card.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 320;
   });
+  await previewsSettled(page);
   await page.locator(`[data-image-id="${chosen}"] .image-card`).click();
   await expect(page.locator(`[data-image-id="${chosen}"]`)).toHaveClass(/current-selection/);
   const before = await screenTop(page, chosen);
@@ -105,11 +127,13 @@ test('a flip after the person moved keeps the current card where it is on a long
   await expect.poll(() => gridIds(page)).toEqual([...oldest].reverse());
   await expect(page.locator(`[data-image-id="${chosen}"]`)).toHaveClass(/current-selection/);
   // Let previews and the lazy cards settle, then measure again.
+  await previewsSettled(page);
   await page.waitForTimeout(500);
   expect(Math.abs(await screenTop(page, chosen) - before)).toBeLessThanOrEqual(2);
 
   await chooseOrder(page, 'Oldest first');
   await expect.poll(() => gridIds(page)).toEqual(oldest);
+  await previewsSettled(page);
   await page.waitForTimeout(500);
   expect(Math.abs(await screenTop(page, chosen) - before)).toBeLessThanOrEqual(2);
 });
@@ -162,10 +186,15 @@ test('Images and Sequence each keep their own thumbnail size across the header',
   await expect(page.locator('.image-card-wrapper')).toHaveCount(12, { timeout: 30_000 });
   const gridSize = page.locator('#grid-thumbnail-size');
   await expect(gridSize).toHaveValue('300');
-  // Images to 450.
+  await previewsSettled(page);
+  // Images to 450, a step at a time: the size lives in the URL, and a key
+  // pressed before the last step reaches it starts from the old value.
   await gridSize.focus();
-  for (let step = 0; step < 3; step++) await gridSize.press('ArrowRight');
-  await expect(gridSize).toHaveValue('450');
+  for (const value of ['350', '400', '450']) {
+    await gridSize.press('ArrowRight');
+    await expect(gridSize).toHaveValue(value);
+    await expect(page).toHaveURL(new RegExp(`size=${value}`));
+  }
   await expect(page).toHaveURL(/size=450/);
 
   // Sequence keeps its own.
