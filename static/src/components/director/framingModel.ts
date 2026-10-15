@@ -484,8 +484,25 @@ export interface CoverageIssue { kind: TaggedIssue['kind']; panels: CoveragePane
  *  over every panel, so a rig's own panels need not touch where another
  *  framing fills the sky between them. `groups[f][k]` is the group of
  *  framing `f`'s panel `k`, as a panel of the list. */
-export function readCoverage(framings: CoverageFraming[]): { issues: CoverageIssue[]; groups: CoveragePanel[][] } {
-  const own = framings.map(f => readFraming(f.center, f.positionAngle, f.panel, f.layout).shapes);
+export function readCoverage(framings: CoverageFraming[]): CoverageReading {
+  if (framings.length === 0) return { issues: [], groups: [] };
+  // Kept per first layout, for the framings read with it: a pan, a zoom or
+  // an edit elsewhere reads it again for free.
+  const known = coverReadings.get(framings[0].layout) ?? [];
+  const hit = known.find(entry => entry.framings.length === framings.length && entry.framings.every((f, k) => sameCoverageFraming(f, framings[k])));
+  if (hit) return hit.reading;
+  const reading = readCoverageAfresh(framings);
+  coverReadings.set(framings[0].layout, [{ framings, reading }, ...known].slice(0, 4));
+  return reading;
+}
+export interface CoverageReading { issues: CoverageIssue[]; groups: CoveragePanel[][] }
+const coverReadings = new WeakMap<DirectorLayout, Array<{ framings: CoverageFraming[]; reading: CoverageReading }>>();
+const sameCoverageFraming = (a: CoverageFraming, b: CoverageFraming) => a.layout === b.layout && a.positionAngle === b.positionAngle
+  && a.center.ra_degrees === b.center.ra_degrees && a.center.dec_degrees === b.center.dec_degrees
+  && a.panel.width_degrees === b.panel.width_degrees && a.panel.height_degrees === b.panel.height_degrees;
+
+function readCoverageAfresh(framings: CoverageFraming[]): CoverageReading {
+  const own = framings.map(f => shapesOf(f.center, f.positionAngle, f.panel, f.layout));
   const sky = framings.map((f, g) => own[g].map(shape => shape.corners.map(corner => deprojectFrom(f.center, cameraDegreesToPlane(corner, f.positionAngle)))));
   // Every panel in each framing's camera frame: its own panels as they are,
   // the others' taken there through the sky.

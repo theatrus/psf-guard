@@ -164,7 +164,29 @@ function grownContains(shape: PanelShape, point: Point): boolean {
   return [[-1, 0], [1, 0], [0, -1], [0, 1]].some(([dx, dy]) => polygonContains(shape.corners, [point[0] + dx * tolerance, point[1] + dy * tolerance]));
 }
 
-function gapCovered(shapes: PanelShape[], bounds: Bounds[], i: number, j: number, pair: ShapeOverlap): boolean {
+/** The panels whose bounds may meet a region, from buckets a panel wide:
+ *  never fewer than a scan of every panel finds. */
+type NearIndex = (region: Bounds) => number[];
+function nearIndex(bounds: Bounds[]): NearIndex {
+  const size = Math.max(1e-9, ...bounds.map(b => Math.max(b[1] - b[0], b[3] - b[2])).filter(Number.isFinite));
+  const buckets = new Map<string, number[]>();
+  bounds.forEach((b, k) => {
+    for (let x = Math.floor(b[0] / size); x <= Math.floor(b[1] / size); x += 1) for (let y = Math.floor(b[2] / size); y <= Math.floor(b[3] / size); y += 1) {
+      const key = `${x},${y}`; const list = buckets.get(key);
+      if (list) list.push(k); else buckets.set(key, [k]);
+    }
+  });
+  const margin = size * PLACE_TOLERANCE * 2;
+  return region => {
+    const found = new Set<number>();
+    for (let x = Math.floor((region[0] - margin) / size); x <= Math.floor((region[1] + margin) / size); x += 1) for (let y = Math.floor((region[2] - margin) / size); y <= Math.floor((region[3] + margin) / size); y += 1) {
+      for (const k of buckets.get(`${x},${y}`) ?? []) found.add(k);
+    }
+    return [...found];
+  };
+}
+
+function gapCovered(shapes: PanelShape[], bounds: Bounds[], i: number, j: number, pair: ShapeOverlap, index?: NearIndex): boolean {
   const ab = bounds[i]; const bb = bounds[j];
   const [acrossA, acrossB, alongA, alongB]: Array<[number, number]> = pair.verticalSeam
     ? [[ab[0], ab[1]], [bb[0], bb[1]], [ab[2], ab[3]], [bb[2], bb[3]]]
@@ -176,11 +198,11 @@ function gapCovered(shapes: PanelShape[], bounds: Bounds[], i: number, j: number
   const across: [number, number] = [Math.min(low, high), Math.max(low, high)];
   const along: [number, number] = [Math.min(start, end), Math.max(start, end)];
   const region: Bounds = pair.verticalSeam ? [...across, ...along] : [...along, ...across];
-  const near = shapes.filter((_, k) => {
+  const near = (index ? index(region) : shapes.map((_, k) => k)).filter(k => {
     const b = bounds[k];
     const t = PLACE_TOLERANCE * Math.max(b[1] - b[0], b[3] - b[2]);
     return k !== i && k !== j && b[0] - t <= region[1] && b[1] + t >= region[0] && b[2] - t <= region[3] && b[3] + t >= region[2];
-  });
+  }).map(k => shapes[k]);
   for (let s = 0; s < 3; s += 1) {
     const across = low + ((high - low) * (s + 0.5)) / 3;
     for (let t = 0; t < 5; t += 1) {
@@ -214,6 +236,19 @@ export function readShapes(shapes: PanelShape[], minOverlapPercent: number): Sha
   return { issues: tagged.issues.map(issue => ({ ...issue, panels: issue.panels.map(k => shapes[k].id) })), groups };
 }
 
+/** Connected groups of a link list, each by its members in input order. */
+function groupStarts(linked: number[][]): number[][] {
+  const seen = linked.map(() => false);
+  const out: number[][] = [];
+  for (let start = 0; start < linked.length; start += 1) {
+    if (seen[start]) continue;
+    const group = [start]; seen[start] = true;
+    for (let next = 0; next < group.length; next += 1) for (const other of linked[group[next]]) if (!seen[other]) { seen[other] = true; group.push(other); }
+    out.push(group.sort((a, b) => a - b));
+  }
+  return out;
+}
+
 /** An issue read across framings, its panels by their place in the input. */
 export interface TaggedIssue { kind: DirectorLayoutIssue['kind']; panels: number[]; percent: number | null }
 
@@ -223,18 +258,28 @@ export interface TaggedIssue { kind: DirectorLayoutIssue['kind']; panels: number
  *  `framing[k]` is the framing panel `k` belongs to, and `minimum[f]` its
  *  minimum overlap. Two panels of one framing are read in its frame against
  *  its minimum; two of different framings in the first one's frame, joined
- *  when they overlap or touch. `groups[k]` is the first member of panel
- *  `k`'s group of joined panels. */
+ *  when they overlap or touch. With more than one framing, groups apart are
+ *  said whatever else is, two panels a thin overlap or a gap keeps apart
+ *  counting as one group, and a lone panel as said already. `groups[k]` is
+ *  the first member of panel `k`'s group of joined panels. */
 export function readTagged(frames: PanelShape[][], framing: number[], minimum: number[]): { issues: TaggedIssue[]; groups: number[] } {
   const n = framing.length;
   const issues: TaggedIssue[] = [];
   const linked: number[][] = framing.map(() => []);
   const bounds = frames.map(shapes => shapes.map(shape => boundsOf(shape.corners)));
+  // Built once a frame has a gap to check.
+  const indexes = new Map<number, NearIndex>();
+  const indexOf = (f: number) => { let index = indexes.get(f); if (!index) { index = nearIndex(bounds[f]); indexes.set(f, index); } return index; };
   const flagged = framing.map(() => false);
   for (let i = 0; i < n; i += 1) {
     const shapes = frames[framing[i]];
     for (let j = i + 1; j < n; j += 1) {
       const threshold = framing[i] === framing[j] ? minimum[framing[i]] / 100 : 0;
+      // Apart on both axes, or a whole panel or more apart on one: nothing to
+      // say about the pair. Most pairs of a large cover end here.
+      const a = bounds[framing[i]][i]; const b = bounds[framing[i]][j];
+      const gapX = Math.max(a[0], b[0]) - Math.min(a[1], b[1]); const gapY = Math.max(a[2], b[2]) - Math.min(a[3], b[3]);
+      if ((gapX >= 0 && gapY >= 0) || gapX >= Math.max(a[1] - a[0], b[1] - b[0]) || gapY >= Math.max(a[3] - a[2], b[3] - b[2])) continue;
       const pair = shapeOverlap(shapes[i], shapes[j]);
       if (!pair) continue;
       if (pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= threshold) { linked[i].push(j); linked[j].push(i); continue; }
@@ -242,13 +287,14 @@ export function readTagged(frames: PanelShape[][], framing: number[], minimum: n
       if (pair.thickness >= -PLACE_TOLERANCE) {
         issues.push({ kind: 'thin_overlap', panels: [i, j], percent: roundPercent(Math.max(0, pair.thickness)) });
         flagged[i] = true; flagged[j] = true;
-      } else if (-pair.thickness < 1 && !gapCovered(shapes, bounds[framing[i]], i, j, pair)) {
+      } else if (-pair.thickness < 1 && !gapCovered(shapes, bounds[framing[i]], i, j, pair, indexOf(framing[i]))) {
         issues.push({ kind: 'gap', panels: [i, j], percent: roundPercent(-pair.thickness) });
         flagged[i] = true; flagged[j] = true;
       }
     }
   }
-  if (n > 1) for (let i = 0; i < n; i += 1) if (linked[i].length === 0 && !flagged[i]) issues.push({ kind: 'isolated', panels: [i], percent: null });
+  const isolated = framing.map((_, i) => n > 1 && linked[i].length === 0 && !flagged[i]);
+  isolated.forEach((alone, i) => { if (alone) issues.push({ kind: 'isolated', panels: [i], percent: null }); });
   const groups = framing.map(() => -1);
   const starts: number[] = [];
   for (let start = 0; start < n; start += 1) {
@@ -258,7 +304,12 @@ export function readTagged(frames: PanelShape[][], framing: number[], minimum: n
     for (let next = 0; next < group.length; next += 1) for (const other of linked[group[next]]) if (groups[other] < 0) { groups[other] = start; group.push(other); }
     starts.push(start);
   }
-  if (issues.length === 0 && starts.length > 1) issues.push({ kind: 'disconnected', panels: starts, percent: null });
+  if (frames.length > 1) {
+    const near = linked.map(list => [...list]);
+    for (const issue of issues) if (issue.panels.length === 2) { const [a, b] = issue.panels; near[a].push(b); near[b].push(a); }
+    const apart = groupStarts(near).filter(group => !group.every(k => isolated[k])).map(group => group[0]);
+    if (apart.length > 1) issues.push({ kind: 'disconnected', panels: apart, percent: null });
+  } else if (issues.length === 0 && starts.length > 1) issues.push({ kind: 'disconnected', panels: starts, percent: null });
   return { issues, groups };
 }
 

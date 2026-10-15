@@ -181,14 +181,24 @@ framing of each rig that is on, in the draft's order.
   them they are a gap.
 - A gap is covered by a panel of any framing, and isolated panels and groups
   apart are read over every panel. A rig's own panels therefore need not
-  touch where another framing fills the sky between them.
+  touch where another framing fills the sky between them. A lone panel is
+  said as touching no other panel.
+- Groups apart are said beside any other issue, not only when nothing else
+  is: one framing's thin seam does not explain another framing's panels far
+  away. Two panels a thin overlap or a gap keeps apart count as one group
+  for this, since that issue is said already, and a lone panel is said as
+  such, not again as a group.
 - One framing alone reads exactly as before.
 
 The framing view lists the issues that touch the framing being edited, and
 groups apart, with another framing's panels given as `shared r1c1` or
 `{rig} p2`; a drop or a turn springs back on the same reading. Activation
 lists every issue of the cover as a plan warning, a rig's own panels under
-its name. `POST /framing/preview` reads one framing and stays as it was.
+its database's name; the cover holds only the rigs that get panels from a
+framing (not one skipped, nor one shooting a collaboration's assignment). A
+rig on a shared mosaic of more than one panel whose field is another size is
+warned, and its card says **field differs**. `POST /framing/preview` reads
+one framing and stays as it was.
 
 For panels of one size on the camera's axes this is exactly the first
 round's rule, `1 − |aₓ − bₓ|` of a panel width across a vertical seam, so

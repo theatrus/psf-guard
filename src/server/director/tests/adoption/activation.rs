@@ -1583,7 +1583,8 @@ async fn a_separate_framings_gap_is_judged_against_every_framing_on_the_sky() {
         second.rig_id = other_rig;
         plan.contributions.push(second);
         store.save_plan_draft(&plan, revision).unwrap();
-        store.rig(other_rig).unwrap().unwrap().name
+        // Panels carry the rig's database name, as the plan shows it.
+        "rig-b rig".to_string()
     };
     // Rig B's two small panels half a panel apart, either side of the
     // shared 2 × 1 mosaic's middle.
@@ -1643,11 +1644,71 @@ async fn a_separate_framings_gap_is_judged_against_every_framing_on_the_sky() {
     });
     assert_eq!(
         panel_warnings().await,
-        vec![format!(
-            "Panels: {name} r1c1 and {name} p2 leave a gap of 50% of a panel."
-        )]
+        vec![
+            format!("Panels: {name} r1c1 and {name} p2 leave a gap of 50% of a panel."),
+            // Far from the shared mosaic, its panels are a group apart too.
+            format!(
+                "Panels: the panels fall into 2 groups that do not overlap, starting at r1c1, {name} r1c1."
+            ),
+        ]
+    );
+    // On the shared 2 × 1 mosaic with a field of its own, rig B is told the
+    // panels are not sized for it.
+    {
+        use psf_guard_director_core::optics::{Optics, Rotation};
+        use psf_guard_director_meta::profile::{Reported, RigProfile, Source};
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut profile = store
+            .rig_profile(other_rig)
+            .unwrap()
+            .unwrap_or_else(|| RigProfile::empty(other_rig, 1));
+        let revision = profile.revision;
+        profile.optics = Some(Reported {
+            value: Optics {
+                sensor_width_px: 6248,
+                sensor_height_px: 4176,
+                pixel_size_um: 3.76,
+                focal_length_mm: 749.0,
+                aperture_mm: Some(107.0),
+                rotation: Rotation::Manual { angle_degrees: 0.0 },
+            },
+            source: Source::Manual {},
+            reported_at_ms: 1,
+        });
+        store.save_rig_profile(&profile, revision).unwrap();
+    }
+    edit_framing(&a.f, a.project, |framing| {
+        framing.rig_framings = vec![];
+    });
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let differs: Vec<&str> = preview["data"]["rigs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|rig| rig["warnings"].as_array().unwrap())
+        .filter_map(|w| w.as_str())
+        .filter(|w| w.starts_with("Its field is"))
+        .collect();
+    assert_eq!(
+        differs,
+        ["Its field is 1.80° × 1.20°, the shared panels 2.00° × 1.50°: frame it separately, or size the shared mosaic by it."],
+        "{preview}"
     );
     // With rig B off, its framing is not part of the cover.
+    edit_framing(&a.f, a.project, |framing| {
+        framing.rig_framings = vec![own(Some(IcrsPosition {
+            ra_degrees: 38.2,
+            dec_degrees: 71.45,
+        }))];
+    });
     {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut plan = store.plan_draft(a.project).unwrap().unwrap();

@@ -1496,13 +1496,18 @@ describe('Mosaic panels', () => {
     await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
     const source = () => screen.getByTestId('framing-panel-source');
     const askar = () => screen.getByRole('group', { name: 'Askar 107' });
-    // Nothing moves yet: Askar's card asks.
+    // Its card says the shared panels are not sized for it.
+    expect(askar()).toHaveTextContent('Shared framing · 2 panels · field differs');
+    // Nothing moves yet: Askar's card asks, and the question takes the focus.
     fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
-    expect(within(askar()).getByTestId('framing-rig-ask')).toHaveTextContent('Its field moves all 2 panels.');
+    const question = within(askar()).getByRole('group', { name: 'Its field moves all 2 panels.' });
+    expect(question).toHaveFocus();
     expect(source()).toHaveTextContent('Size from RedCat 61 · 5.38° × 3.60°');
     const ask = () => within(screen.getByTestId('framing-rig-ask'));
     fireEvent.click(ask().getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByTestId('framing-rig-ask')).not.toBeInTheDocument();
+    // The focus goes back to the rig's card.
+    expect(askar()).toHaveFocus();
     // Framed separately, Askar gets its own copy and the shared mosaic keeps its size.
     fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
     fireEvent.click(ask().getByRole('button', { name: 'Frame separately' }));
@@ -1517,6 +1522,30 @@ describe('Mosaic panels', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Frame with Askar 107' }));
     fireEvent.click(ask().getByRole('button', { name: 'Use its field' }));
     expect(source()).toHaveTextContent('Size from Askar 107 · 1.20° × 48.0′');
+    expect(screen.queryByTestId('framing-rig-ask')).not.toBeInTheDocument();
+  });
+
+  it('drops the question when its rig goes off, and hands the size to a rig with the same field', async () => {
+    const rigC = { ...rigA, rig: { ...rigA.rig, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'Askar' }, catalog_slug: 'askar', catalog_name: 'Askar 107',
+      field_of_view: { width_degrees: 1.2, height_degrees: 0.8, pixel_scale_arcsec: 1.9, focal_ratio: 7 } };
+    const rigD = { ...rigA, rig: { ...rigA.rig, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', name: 'Twin' }, catalog_slug: 'twin', catalog_name: 'Twin RedCat' };
+    fixture(placed([{ id: 'r1c1', x: 0, y: 0, locked: false }, { id: 'p2', x: -0.8, y: 0, locked: false }]));
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB, rigC, rigD]))));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const view = (shooting: string[]) => <QueryClientProvider client={client}><FramingView projectId="project" seed={seed} preferredRigIds={[rigA.rig.id]}
+      shootingRigIds={shooting} onToggleRig={() => {}} /></QueryClientProvider>;
+    const { rerender } = render(view([rigA.rig.id, rigD.rig.id]));
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61 · 5.38° × 3.60°'));
+    // Turned on, Askar asks once the page has heard it is on.
+    fireEvent.click(screen.getByRole('switch', { name: 'Askar 107 on' }));
+    rerender(view([rigA.rig.id, rigC.rig.id, rigD.rig.id]));
+    expect(await screen.findByTestId('framing-rig-ask')).toHaveFocus();
+    expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from RedCat 61 · 5.38° × 3.60°');
+    rerender(view([rigA.rig.id, rigD.rig.id]));
+    await waitFor(() => expect(screen.queryByTestId('framing-rig-ask')).not.toBeInTheDocument());
+    // Askar is on again; RedCat goes off. Twin RedCat has the same field, so it takes over, though Askar comes first.
+    rerender(view([rigC.rig.id, rigD.rig.id]));
+    await waitFor(() => expect(screen.getByTestId('framing-panel-source')).toHaveTextContent('Size from Twin RedCat · 5.38° × 3.60°'));
     expect(screen.queryByTestId('framing-rig-ask')).not.toBeInTheDocument();
   });
 

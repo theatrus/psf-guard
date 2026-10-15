@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { DirectorFramingPreview, DirectorFramingRequest, DirectorLayout, DirectorMeasuredGeometry } from '../../../api/directorTypes';
 import { cameraAngleAt, coverageFor, framingBoxes, framingGeometry, framingShapes, northTurn, offsetFrom, readCoverage, type CoverageFraming, type CoverageIssue } from '../framingModel';
 import {
-  asGrid, cameraStep, cameraToPlane, extendFrom, extendMosaic, fillHoles, freshIssues, gridLayout, layoutIssues, layoutStructureProblem, movePanel, nextPanelId,
+  asGrid, cameraStep, cameraToPlane, describeIssue, extendFrom, extendMosaic, fillHoles, freshIssues, gridLayout, layoutIssues, layoutStructureProblem, movePanel, nextPanelId,
   planeToCamera, removePanel, ringAround, setLocked, singleLayout, snapPlacement, snapTurn, turnPanel, unitShape, wrapTurn,
 } from '../mosaicLayout';
 import { boundsOf, intersection, readShapes, rectangleShape, shapeIssues, shapeOverlap, sharedStrips, splitApart, turnedShape } from '../panelShape';
@@ -441,6 +441,41 @@ describe('coverage across framings', () => {
     const apart = readCoverage([shared, framingAt([[1.6, 0]], [1, 0.75])]).issues;
     expect(apart.map(issue => [issue.kind, issue.panels])).toEqual([['gap', [{ framing: 0, id: 'r1c1' }, { framing: 1, id: 'r1c1' }]]]);
     expect(apart[0].percent).toBeCloseTo(5, 6);
+  });
+
+  it('says groups apart beside other issues once several framings are read, as the core does', () => {
+    const north = { ra_degrees: center.ra_degrees, dec_degrees: center.dec_degrees + 10 };
+    const shared = framingAt([[0, 0], [0.9, 0]], [2, 1.5]);
+    const read = (framings: CoverageFraming[]) => readCoverage(framings).issues.map(issue => [issue.kind, issue.panels.map(panel => `${panel.framing}:${panel.id}`)]);
+    expect(read([shared, framingAt([[0, 0], [0.8, 0]], [1, 0.75], 0, north)])).toEqual([['thin_overlap', ['0:r1c1', '0:p2']], ['disconnected', ['0:r1c1', '1:r1c1']]]);
+    // A lone panel is said as such, not again as a group.
+    expect(read([shared, framingAt([[0, 0]], [1, 0.75], 0, north)])).toEqual([['thin_overlap', ['0:r1c1', '0:p2']], ['isolated', ['1:r1c1']]]);
+    // One framing keeps the old rule.
+    expect(read([framingAt([[0, 0], [0.9, 0], [5, 0], [5.8, 0]], [2, 1.5])])).toEqual([['thin_overlap', ['0:r1c1', '0:p2']]]);
+    // Across framings a lone panel touches nothing.
+    expect(describeIssue({ kind: 'isolated', panels: ['p2'], percent: null }, true)).toBe('p2 touches no other panel');
+    expect(describeIssue({ kind: 'isolated', panels: ['p2'], percent: null })).toBe('p2 overlaps no other panel by the minimum');
+  });
+
+  it('reads two 16 by 16 mosaics as one cover well inside a frame', () => {
+    const grid = (offset: number): CoverageFraming => {
+      const panels = [];
+      for (let row = 0; row < 16; row += 1) for (let column = 0; column < 16; column += 1) {
+        panels.push({ ...place(`r${row + 1}c${column + 1}`, column * 0.8 + offset, row * 0.8), ...((row + column) % 7 === 0 ? { angle_offset_degrees: 2 } : {}) });
+      }
+      return { center, positionAngle: 20, panel: { width_degrees: 0.5, height_degrees: 0.4 }, layout: layout(panels, 15) };
+    };
+    // The fastest of several reads of fresh layouts, so neither a cache nor
+    // a busy machine decides it.
+    let fastest = Infinity;
+    for (let i = 0; i < 7; i += 1) {
+      // Side by side, the second turned 15° and over the first one's edge.
+      const framings = [grid(0), { ...grid(12.4), positionAngle: 35 }];
+      const started = performance.now();
+      readCoverage(framings);
+      fastest = Math.min(fastest, performance.now() - started);
+    }
+    expect(fastest).toBeLessThan(40);
   });
 
   it('gives the active framing its own issues by id and the others\' panels by label', () => {

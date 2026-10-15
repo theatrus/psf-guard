@@ -316,7 +316,11 @@ pub(crate) struct TaggedIssue {
 /// read in the first one's frame and are joined when they overlap or touch:
 /// across framings only the sky's cover counts. A gap is covered by any
 /// panel of any framing, and isolated panels and groups apart are read over
-/// them all.
+/// them all. With more than one framing, groups apart are said whatever else
+/// is: two panels a thin overlap or a gap keeps apart count as one group
+/// there, since that is said already, and so does a lone panel; but a
+/// framing's panels far from the rest are not explained by a thin seam
+/// elsewhere.
 pub(crate) fn tagged_issues(
     frames: &[&[PanelShape]],
     framing: &[usize],
@@ -368,8 +372,10 @@ pub(crate) fn tagged_issues(
             }
         }
     }
+    let mut isolated = vec![false; n];
     for i in 0..n {
         if linked[i].is_empty() && !flagged[i] {
+            isolated[i] = true;
             issues.push(TaggedIssue {
                 kind: LayoutIssueKind::Isolated,
                 panels: vec![i],
@@ -377,7 +383,26 @@ pub(crate) fn tagged_issues(
             });
         }
     }
-    if issues.is_empty() {
+    if frames.len() > 1 {
+        let mut near = linked.clone();
+        for issue in &issues {
+            if let [a, b] = issue.panels[..] {
+                near[a].push(b);
+                near[b].push(a);
+            }
+        }
+        let groups: Vec<Vec<usize>> = components(&near)
+            .into_iter()
+            .filter(|group| !group.iter().all(|&k| isolated[k]))
+            .collect();
+        if groups.len() > 1 {
+            issues.push(TaggedIssue {
+                kind: LayoutIssueKind::Disconnected,
+                panels: groups.iter().map(|group| group[0]).collect(),
+                percent: None,
+            });
+        }
+    } else if issues.is_empty() {
         let groups = components(&linked);
         if groups.len() > 1 {
             issues.push(TaggedIssue {

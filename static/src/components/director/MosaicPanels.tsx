@@ -14,6 +14,8 @@ export type ExtendScope = 'panel' | 'mosaic';
 export interface MosaicPanelsProps {
   layout: DirectorLayout;
   issues: DirectorLayoutIssue[];
+  /** The issues are read across several framings on the sky. */
+  across?: boolean;
   selected: string | null;
   onSelect: (id: string | null) => void;
   /** Frames captured per panel, from the rigs that shoot this framing. */
@@ -63,7 +65,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
   const cells = layoutCells(layout);
   const ordered = layout.panels.map((panel, index) => ({ panel, cell: cells[index] })).sort((a, b) => a.cell[0] - b.cell[0] || a.cell[1] - b.cell[1]);
   const flagged = new Map<string, string[]>();
-  for (const issue of issues) for (const id of issue.kind === 'disconnected' ? [] : issue.panels) flagged.set(id, [...(flagged.get(id) ?? []), describeIssue(issue)]);
+  for (const issue of issues) for (const id of issue.kind === 'disconnected' ? [] : issue.panels) flagged.set(id, [...(flagged.get(id) ?? []), describeIssue(issue, props.across)]);
   const fromChosen = scope === 'panel' && chosen;
   const where = (direction: Direction) => fromChosen ? `${DIRECTION_NAMES[direction]} of ${chosen.id}` : `on the mosaic's ${DIRECTION_NAMES[direction]} side`;
   const setGrid = (rows: number, columns: number, overlapPercent: number) => onEdit(keepHandUnlocks(gridLayout({ rows: clamp(Math.round(rows), 1, 16), columns: clamp(Math.round(columns), 1, 16), overlap_percent: clamp(Math.round(overlapPercent), 0, 90) }), layout), 'Laid the panels out as a grid.');
@@ -175,7 +177,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
       </div>}
     </div>}
     {issues.length > 0 && <ul className="framing-issues" data-testid="framing-issues" aria-label="Panel problems">
-      {issues.map(issue => <li key={`${issue.kind}:${issue.panels.join(',')}`}>{describeIssue(issue)}{issue.kind === 'thin_overlap' ? `, under the ${layout.min_overlap_percent}% minimum` : ''}.</li>)}
+      {issues.map(issue => <li key={`${issue.kind}:${issue.panels.join(',')}`}>{describeIssue(issue, props.across)}{issue.kind === 'thin_overlap' ? `, under the ${layout.min_overlap_percent}% minimum` : ''}.</li>)}
     </ul>}
   </div>;
 }

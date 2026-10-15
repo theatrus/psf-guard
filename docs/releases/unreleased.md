@@ -35,10 +35,11 @@
   not. A rig framed on its own gets the same panel tools.
 - Picking another rig for a shared mosaic of more than one panel no longer
   moves its panels to that rig's field: the rig's card offers **Frame
-  separately** or **Use its field**. A rig framed on its own is checked with
-  the other framings on the sky, so its panels need not touch where another
-  rig's cover the sky between them; gaps and lone panels are said for the
-  whole object.
+  separately** or **Use its field**, and a mosaic keeps its size when its
+  rig goes off. A rig framed on its own is checked with the other framings
+  on the sky, so its panels need not touch where another rig's cover the sky
+  between them; gaps, lone panels and groups apart are said for the whole
+  object.
 - Activation no longer takes over an existing Target Scheduler target with
   frames that sits more than a quarter of a panel from the panel it would
   stand for: the panel gets a new target, the frames stay where they were

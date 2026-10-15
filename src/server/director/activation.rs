@@ -251,6 +251,15 @@ pub(super) async fn apply(
     .await
 }
 
+/// Two panel sizes the same to a millionth of a degree.
+fn same_size(
+    a: psf_guard_director_core::framing::PanelSize,
+    b: psf_guard_director_core::framing::PanelSize,
+) -> bool {
+    (a.width_degrees - b.width_degrees).abs() <= 1e-6
+        && (a.height_degrees - b.height_degrees).abs() <= 1e-6
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -530,18 +539,9 @@ async fn execute_guarded(
         }
         // Every objective should have some rig on every shared panel; say
         // where not. A rig framed on its own covers its own grid.
-        // A layout short of its minimum overlap is the operator's call, not
-        // a refusal: it is said with the coverage, read across the shared
-        // framing and every rig's own as one cover of the object.
-        let mut shooting = Vec::new();
-        for rig in by_rig.keys() {
-            shooting.push(ShootingRig {
-                id: *rig,
-                name: store.rig(*rig)?.map(|rig| rig.name).unwrap_or_default(),
-                field: rig_field(store.rig_profile(*rig)?.as_ref()),
-            });
-        }
-        let mut coverage_warnings = cover_warnings(&framing, &shooting);
+        let mut coverage_warnings: Vec<String> = Vec::new();
+        // The rigs that get panels from a framing, for the layout's warnings.
+        let mut shooting: Vec<ShootingRig> = Vec::new();
         let on_shared = |c: &&&Contribution| framing.rig_framing(c.rig_id).is_none();
         for objective in &plan.objectives {
             let uncovered: Vec<&str> = panels
@@ -668,8 +668,26 @@ async fn execute_guarded(
                     }
                 }
             } else {
+                // The shared panels are sized for one field; a rig with
+                // another shoots them at that place, not as they were drawn.
+                if layout.layout.panels.len() > 1
+                    && let Some(own) = field
+                    && !same_size(own, layout.panel)
+                {
+                    warnings.push(format!(
+                        "Its field is {:.2}° × {:.2}°, the shared panels {:.2}° × {:.2}°: frame it separately, or size the shared mosaic by it.",
+                        own.width_degrees, own.height_degrees, layout.panel.width_degrees, layout.panel.height_degrees
+                    ));
+                }
                 panels.clone()
             };
+            if assignment.is_none() {
+                shooting.push(ShootingRig {
+                    id: *rig_id,
+                    name: catalog.context.name.clone(),
+                    field,
+                });
+            }
             if profile.as_ref().is_none_or(|p| p.configuration.is_none()) {
                 warnings.push("The N.I.N.A. plugin has not reported this rig's camera yet; the Target Scheduler plugin can still run these rows.".into());
             }
@@ -916,7 +934,11 @@ async fn execute_guarded(
             });
             pending.push((*rig_id, connection, None, false));
         }
-        let mut warnings = coverage_warnings;
+        // A layout short of its minimum overlap is the operator's call, not
+        // a refusal: it is said first, read across the shared framing and
+        // the own framing of every rig given panels, as one cover.
+        let mut warnings = cover_warnings(&framing, &shooting);
+        warnings.extend(coverage_warnings);
         if pending.iter().all(|(_, _, record, _)| record.is_none()) {
             warnings.push("No rig database can take this plan yet.".into());
         }

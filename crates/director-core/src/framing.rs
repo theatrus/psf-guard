@@ -1532,7 +1532,7 @@ mod tests {
         assert!(coverage(&[shared.clone(), beside(1.4)]).is_empty());
         let one = framing_at(center, 0.0, (2.0, 1.5), &[(0.0, 0.0), (0.95, 0.0)]);
         assert_eq!(one.issues().unwrap()[0].kind, LayoutIssueKind::ThinOverlap);
-        // Five hundredths of a degree apart: a gap across the two.
+        // A tenth of a degree apart, 5% of the larger width: a gap across the two.
         let read = coverage_issues(&[shared.clone(), beside(1.6)]).unwrap();
         assert_eq!(read.len(), 1, "{read:?}");
         assert_eq!(read[0].kind, LayoutIssueKind::Gap);
@@ -1574,6 +1574,59 @@ mod tests {
             vec![(
                 LayoutIssueKind::Disconnected,
                 vec![(0, "r1c1".to_string()), (1, "r1c1".to_string())]
+            )]
+        );
+    }
+
+    #[test]
+    fn groups_apart_across_framings_are_said_beside_other_issues() {
+        let center = request().center;
+        let north = IcrsPosition {
+            ra_degrees: center.ra_degrees,
+            dec_degrees: center.dec_degrees + 10.0,
+        };
+        // The shared pair overlaps thinly, an issue of its own; the rig's
+        // pair ten degrees north is joined, but far from everything else.
+        let shared = framing_at(center, 0.0, (2.0, 1.5), &[(0.0, 0.0), (0.9, 0.0)]);
+        let own = framing_at(north, 0.0, (1.0, 0.75), &[(0.0, 0.0), (0.8, 0.0)]);
+        assert_eq!(
+            coverage(&[shared.clone(), own]),
+            vec![
+                (
+                    LayoutIssueKind::ThinOverlap,
+                    vec![(0, "r1c1".to_string()), (0, "p2".to_string())]
+                ),
+                (
+                    LayoutIssueKind::Disconnected,
+                    vec![(0, "r1c1".to_string()), (1, "r1c1".to_string())]
+                ),
+            ]
+        );
+        // A lone panel far away is said as such, not again as a group.
+        let lone = framing_at(north, 0.0, (1.0, 0.75), &[(0.0, 0.0)]);
+        assert_eq!(
+            coverage(&[shared.clone(), lone]),
+            vec![
+                (
+                    LayoutIssueKind::ThinOverlap,
+                    vec![(0, "r1c1".to_string()), (0, "p2".to_string())]
+                ),
+                (LayoutIssueKind::Isolated, vec![(1, "r1c1".to_string())]),
+            ]
+        );
+        // One framing keeps the old rule: groups apart only when nothing
+        // else is said.
+        let alone = framing_at(
+            center,
+            0.0,
+            (2.0, 1.5),
+            &[(0.0, 0.0), (0.9, 0.0), (5.0, 0.0), (5.8, 0.0)],
+        );
+        assert_eq!(
+            coverage(std::slice::from_ref(&alone)),
+            vec![(
+                LayoutIssueKind::ThinOverlap,
+                vec![(0, "r1c1".to_string()), (0, "p2".to_string())]
             )]
         );
     }

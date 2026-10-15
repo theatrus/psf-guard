@@ -11,8 +11,9 @@ use psf_guard_director_core::{
     optics::FieldOfView,
 };
 
-/// A layout issue in a few words, for warnings and refusals.
-pub(super) fn describe_issue(issue: &LayoutIssue) -> String {
+/// A layout issue in a few words, for warnings and refusals. Read `across`
+/// framings, a panel is on its own when it touches no other panel.
+pub(super) fn describe_issue(issue: &LayoutIssue, across: bool) -> String {
     let percent = issue
         .percent
         .map(|value| format!("{value:.0}%"))
@@ -21,6 +22,7 @@ pub(super) fn describe_issue(issue: &LayoutIssue) -> String {
     match issue.kind {
         LayoutIssueKind::ThinOverlap => format!("{pair} overlap by only {percent}"),
         LayoutIssueKind::Gap => format!("{pair} leave a gap of {percent} of a panel"),
+        LayoutIssueKind::Isolated if across => format!("{pair} touches no other panel"),
         LayoutIssueKind::Isolated => format!("{pair} overlaps no other panel by the minimum"),
         LayoutIssueKind::Disconnected => format!(
             "the panels fall into {} groups that do not overlap, starting at {}",
@@ -29,6 +31,7 @@ pub(super) fn describe_issue(issue: &LayoutIssue) -> String {
         ),
     }
 }
+
 /// A rig that shoots a plan, as its framing's warnings need it.
 pub(super) struct ShootingRig {
     pub id: Uuid,
@@ -75,9 +78,10 @@ pub(super) fn cover_warnings(framing: &FramingDraft, shooting: &[ShootingRig]) -
         }
     }
     let label = |framing: usize, id: &str| match cover[framing].0 {
-        Some(name) => format!("{name} {id}"),
-        None => id.to_owned(),
+        Some(name) if !name.is_empty() => format!("{name} {id}"),
+        _ => id.to_owned(),
     };
+    let across = cover.len() > 1;
     let requests: Vec<FramingRequest> = cover.iter().map(|(_, request)| request.clone()).collect();
     let issues: Vec<LayoutIssue> = match coverage_issues(&requests) {
         Ok(issues) => issues
@@ -111,7 +115,7 @@ pub(super) fn cover_warnings(framing: &FramingDraft, shooting: &[ShootingRig]) -
     };
     issues
         .iter()
-        .map(|issue| format!("Panels: {}.", describe_issue(issue)))
+        .map(|issue| format!("Panels: {}.", describe_issue(issue, across)))
         .collect()
 }
 
