@@ -137,8 +137,8 @@ describe('automatic color exposure cards', () => {
     const { submissions } = mount();
     await userEvent.click(await screen.findByRole('button', { name: `Build RGB ${seconds} s color preview` }));
     await waitFor(() => expect(submissions[0]?.input_sources).toEqual(references(atSeconds(seconds))));
-    const active = screen.getByRole('button', { name: `Build RGB ${seconds} s color preview` });
-    expect(within(cardFor(active)).getByRole('status')).toHaveTextContent('Waiting');
+    // The card says Waiting once the queued job comes back.
+    await waitFor(() => expect(within(cardFor(screen.getByRole('button', { name: `Build RGB ${seconds} s color preview` }))).getByRole('status')).toHaveTextContent('Waiting'));
     expect(screen.getByRole('button', { name: `Build RGB ${seconds === 30 ? 300 : 30} s color preview` })).toBeEnabled();
   });
 

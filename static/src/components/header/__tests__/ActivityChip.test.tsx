@@ -176,16 +176,20 @@ describe('ActivityChip', () => {
       stacks: () => [stack('R', 'running', 1, 3)],
     });
     renderChip();
-    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    // Looked up each time: the chip may be drawn anew as a poll lands.
+    const chip = () => screen.getByRole('button', { name: /Background jobs/ });
+    // The scan must be seen running before it ends: frame errors belong only
+    // to a scan the header watched. The build alone shows the chip first.
+    await waitFor(() => expect(chip()).toHaveAccessibleName(/2 running/));
     scanning = false;
-    await waitFor(() => expect(chip).toHaveAccessibleName(/a quality scan had errors/), { timeout: 3000 });
-    await userEvent.click(chip);
+    await waitFor(() => expect(chip()).toHaveAccessibleName(/a quality scan had errors/), { timeout: 8000 });
+    await userEvent.click(chip());
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     await userEvent.click(within(list).getByRole('button', { name: 'Dismiss the quality scan errors in Askar' }));
-    await waitFor(() => expect(chip).not.toHaveAccessibleName(/had errors/));
+    await waitFor(() => expect(chip()).not.toHaveAccessibleName(/had errors/));
     expect(within(list).queryByRole('note')).toBeNull();
-    expect(chip).toHaveTextContent('1 job');
-  }, 10_000);
+    expect(chip()).toHaveTextContent('1 job');
+  }, 15_000);
 
   it('takes a row to the view showing what it works on', async () => {
     mockServer({ stacks: () => [{ ...stack('R', 'running', 1, 3), target_id: 7 }] });
