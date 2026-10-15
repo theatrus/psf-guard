@@ -48,7 +48,7 @@ use crate::acquisition_context::FramingResolver;
 use crate::db::Database;
 use crate::models::AcquiredImage;
 use crate::sequence_analysis::{
-    extract_metrics_from_metadata, ImageQualityResult, SequenceAnalyzer, SequenceAnalyzerConfig,
+    extract_light_metrics, ImageQualityResult, SequenceAnalyzer, SequenceAnalyzerConfig,
 };
 use crate::server::api::ApiResponse;
 use crate::server::database_context::DatabaseContext;
@@ -3165,8 +3165,7 @@ fn quality_results(
         let mut metrics = Vec::with_capacity(group.len());
         let mut entries = Vec::with_capacity(group.len());
         for image in group {
-            let mut value =
-                extract_metrics_from_metadata(image.id, &image.metadata, image.acquired_date);
+            let mut value = extract_light_metrics(image);
             let mapped_source = mapped_sources.get(&image.id);
             let mapped_source_revision = mapped_sources.quality_revision(image.id);
             super::handlers::merge_spatial_metrics(

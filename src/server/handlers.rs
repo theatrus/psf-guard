@@ -7079,6 +7079,7 @@ pub async fn get_overall_stats(
 
     // For now, we'll return empty recent activity - this could be enhanced later
     let recent_activity = Vec::new();
+    let night_boundary_seconds = crate::server::sky_coverage::cached_night_boundary(&ctx, &conn)?;
 
     let response = OverallStatsResponse {
         total_projects: stats.total_projects,
@@ -7099,6 +7100,7 @@ pub async fn get_overall_stats(
             span_days,
         },
         recent_activity,
+        night_boundary_seconds,
     };
 
     Ok(Json(ApiResponse::success(response)))
@@ -7112,7 +7114,7 @@ pub async fn analyze_sequence(
     Query(params): Query<crate::server::api::SequenceAnalysisQuery>,
 ) -> Result<Json<ApiResponse<crate::server::api::SequenceAnalysisResponse>>, AppError> {
     use crate::sequence_analysis::{
-        extract_metrics_from_metadata, QualityWeights, SequenceAnalyzer, SequenceAnalyzerConfig,
+        extract_light_metrics, QualityWeights, SequenceAnalyzer, SequenceAnalyzerConfig,
     };
 
     let filter_name = params.filter_name.clone();
@@ -7262,8 +7264,7 @@ pub async fn analyze_sequence(
         let mut display_filter_names: std::collections::HashMap<(i32, String, String), String> =
             std::collections::HashMap::new();
         for (img, _project_name, target_name) in &images_data {
-            let mut metrics =
-                extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
+            let mut metrics = extract_light_metrics(img);
             let mapped_source = mapped_sources.get(&img.id);
             let mapped_source_revision = mapped_sources.quality_revision(img.id);
             merge_spatial_metrics(
@@ -7370,7 +7371,7 @@ pub async fn get_image_quality(
     Query(overrides): Query<crate::server::api::ScoringOverrideQuery>,
 ) -> Result<Json<ApiResponse<crate::server::api::ImageQualityContextResponse>>, AppError> {
     use crate::sequence_analysis::{
-        extract_metrics_from_metadata, SequenceAnalyzer, SequenceAnalyzerConfig,
+        extract_light_metrics, SequenceAnalyzer, SequenceAnalyzerConfig,
     };
 
     // Get the target image and its context from database
@@ -7476,7 +7477,7 @@ pub async fn get_image_quality(
         let mut metrics: Vec<_> = Vec::with_capacity(all_filter_images.len());
         let mut entries = Vec::with_capacity(all_filter_images.len());
         for (img, _, _) in &all_filter_images {
-            let mut m = extract_metrics_from_metadata(img.id, &img.metadata, img.acquired_date);
+            let mut m = extract_light_metrics(img);
             let mapped_source = mapped_sources.get(&img.id);
             let mapped_source_revision = mapped_sources.quality_revision(img.id);
             merge_spatial_metrics(
@@ -7576,8 +7577,9 @@ pub(crate) fn stored_entry_for(
 /// per-cell temporal baselines) over one filter group and merge the signals
 /// into its `ImageMetrics`. `entries` parallels `metrics` index-for-index;
 /// frames without a stored scan entry contribute empty inputs and receive no
-/// signals. Frames are bucketed by exposure (flux ratios are only meaningful
-/// within one exposure length) and split into sessions before the pass.
+/// signals. Frames are bucketed by exposure, and by instrument where the
+/// group holds several (flux ratios are only meaningful within one rig and
+/// one exposure length), and split into sessions before the pass.
 pub(crate) fn merge_photometric_signals(
     metrics: &mut [crate::sequence_analysis::ImageMetrics],
     entries: &[Option<crate::server::spatial_scan::StoredSpatialMetrics>],
@@ -7595,16 +7597,28 @@ pub(crate) fn merge_photometric_signals(
     let mut order: Vec<usize> = (0..metrics.len()).collect();
     order.sort_by_key(|&i| (metrics[i].timestamp.unwrap_or(0), metrics[i].image_id));
 
-    // Bucket by exposure seconds.
-    let mut buckets: std::collections::BTreeMap<i64, Vec<usize>> =
+    // Bucket by exposure seconds, and by instrument where the group holds
+    // two or more (see sequence_analysis::instruments_differ).
+    let instruments_differ = crate::sequence_analysis::instruments_differ(
+        metrics.iter().map(|metric| metric.instrument.as_deref()),
+    );
+    let mut buckets: std::collections::BTreeMap<(Option<String>, i64), Vec<usize>> =
         std::collections::BTreeMap::new();
     for &i in &order {
-        let key = entries[i]
+        let exposure = entries[i]
             .as_ref()
             .and_then(|e| e.exposure_s)
             .map(|e| e.round() as i64)
             .unwrap_or(-1);
-        buckets.entry(key).or_default().push(i);
+        buckets
+            .entry((
+                instruments_differ
+                    .then(|| metrics[i].instrument.clone())
+                    .flatten(),
+                exposure,
+            ))
+            .or_default()
+            .push(i);
     }
 
     let phot_config = PhotometryConfig::default();

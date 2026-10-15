@@ -59,6 +59,29 @@ describe('detail next and previous', () => {
     await waitFor(() => expect(result.current.path).toBe('/detail/2'));
   });
 
+  it('walk the grid\'s nights, split where the catalog\'s nights split', async () => {
+    // Twenty frames from 19:30 JST on the 12th, every half hour. The
+    // catalog splits at 03:30 UTC (12:30 JST); noon UTC would cut the night
+    // at 21:00 JST and leave the evening's first three frames on the 11th.
+    const evening = Date.UTC(2026, 9, 12, 10, 30) / 1000;
+    const night = Array.from({ length: 20 }, (_, index) => image(100 + index, evening + index * 1800, 'HA'));
+    server.use(
+      http.get('/api/db/:dbId/images', () =>
+        HttpResponse.json({ success: true, error: null, status: 'ready', data: night })),
+      http.get('/api/db/:dbId/stats/overall', () =>
+        HttpResponse.json({ success: true, error: null, data: { night_boundary_seconds: 3.5 * 3600 } })),
+    );
+    const { result } = renderHook(() => ({
+      ...useImageNavigation(101),
+      path: useLocation().pathname,
+    }), { wrapper: wrapper('/detail/101?db=c925&project=1&grouping=date&expanded=2026-10-12') });
+    await waitFor(() => expect(result.current.allImages).toHaveLength(20));
+    expect(result.current.allImages.map((entry) => entry.id)).toEqual(night.map((entry) => entry.id));
+    expect(result.current.canGoPrevious).toBe(true);
+    act(() => result.current.goToPrevious());
+    await waitFor(() => expect(result.current.path).toBe('/detail/100'));
+  });
+
   it('walk it newest first when the grid shows it that way', async () => {
     const { result } = navigation('/detail/3?db=c925&project=1&order=newest', 3);
     await waitFor(() => expect(result.current.allImages.map((entry) => entry.id)).toEqual([3, 1, 4, 2]));

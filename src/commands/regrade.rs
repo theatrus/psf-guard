@@ -155,14 +155,7 @@ fn perform_statistical_grading(
     // Convert to format expected by grader
     let mut image_stats = Vec::new();
     for (image, _project_name, target_name) in &all_images {
-        match grading::parse_image_metadata(
-            image.id,
-            image.target_id,
-            target_name,
-            &image.metadata,
-            &image.filter_name,
-            image.grading_status,
-        ) {
+        match grading::light_statistics(image, target_name) {
             Ok(stats) => image_stats.push(stats),
             Err(e) => println!(
                 "  Warning: Failed to parse metadata for image {}: {}",

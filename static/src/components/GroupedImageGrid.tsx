@@ -36,8 +36,6 @@ import {
   getNextMultiProjectMode 
 } from '../types/grouping';
 import {
-  groupGridImages,
-  groupImagesByPanel,
   imageGroupKey,
   NO_EXPANDED_GROUPS,
   resolveExpandedGroups,
@@ -49,6 +47,7 @@ import {
 } from '../utils/gridNavigation';
 import { thumbnailCardHeightEstimate, thumbnailGridColumns } from '../utils/thumbnailSizing';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
+import { useGridGroups } from '../hooks/useGridGroups';
 import { mosaicLabel, useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SecondaryScoreToggle from './SecondaryScoreToggle';
@@ -139,7 +138,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   }, [navigateNow, searchParams]);
   
   // Fetch ALL images (no pagination for grouping) with periodic refresh
-  const { data: allImages = [], isLoading } = useQuery({
+  const { data: allImages = [], isLoading: imagesLoading } = useQuery({
     queryKey: ['db', dbId, 'all-images', projectId, targetId],
     queryFn: () =>
       apiClient.getImages(dbId!, {
@@ -151,7 +150,6 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: true,
   });
-  useStableScrollAnchor(containerRef, !isLoading);
 
   const imagesToMove = allImages.filter(image => selectedImages.has(image.id));
   const canMoveImages = imagesToMove.length > 0
@@ -299,13 +297,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const isMultiProjectMode = projectId === null;
 
   
-  // Group images based on selected mode, under their panels in a mosaic.
-  const groupsIn = useCallback(
-    (inOrder: ImageOrder) => mosaic
-      ? groupImagesByPanel(filteredImages, mosaic, images => groupGridImages(images, groupingMode, inOrder))
-      : groupGridImages(filteredImages, groupingMode, inOrder),
-    [filteredImages, groupingMode, mosaic],
-  );
+  // Group images based on selected mode, under their panels in a mosaic,
+  // exactly as the detail view's next and previous walk them. Date groups
+  // are observing nights, split where this catalog's nights split; they
+  // wait for the boundary rather than open on UTC dates and move.
+  const { groupsIn, ready: groupsReady } = useGridGroups(dbId, filteredImages, groupingMode, mosaic);
+  const isLoading = imagesLoading || !groupsReady;
+  useStableScrollAnchor(containerRef, !isLoading);
   const imageGroups = useMemo(() => groupsIn(order), [groupsIn, order]);
 
   const visibleExpandedGroups = useMemo(

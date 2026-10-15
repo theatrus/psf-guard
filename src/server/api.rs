@@ -181,6 +181,10 @@ pub struct OverallStatsResponse {
     pub unique_filters: Vec<String>,
     pub date_range: DateRange,
     pub recent_activity: Vec<RecentActivity>,
+    /// Where this catalog's nights split, in seconds after 00:00 UTC
+    /// ([`crate::server::sky_coverage::night_boundary`]). Images groups by
+    /// night here, as calibration and the AstroBin export do.
+    pub night_boundary_seconds: i64,
 }
 
 #[derive(Debug, Serialize)]

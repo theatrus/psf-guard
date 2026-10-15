@@ -12,7 +12,13 @@ The `filter-rejected` command still supports these flags, but
 ## What it checks
 
 The grader groups images by target and filter. Each group needs at least three
-images.
+images. Where a target and filter hold frames from two or more Target
+Scheduler profiles, each profile is its own group, since the profile stands
+for the rig and two rigs merged into one catalog must not be measured against
+each other. Rows with no profile join the only profile when there is one, and
+form their own group beside several. A rig with fewer than three frames of a
+target and filter is therefore not graded, where it used to be pooled with
+the other rig's.
 
 ### HFR and star-count outliers
 

@@ -170,6 +170,13 @@ export const handlers = [
   }),
 
   // Per-DB project / target / image listings
+  // The catalog's stats, read by the grid and detail navigation for the
+  // night boundary: an empty catalog, split at the server's fallback, noon.
+  http.get('/api/db/:dbId/stats/overall', () => HttpResponse.json({ success: true, error: null, data: {
+    total_projects: 0, active_projects: 0, total_targets: 0, active_targets: 0, total_images: 0,
+    accepted_images: 0, rejected_images: 0, pending_images: 0, total_desired: 0, files_found: 0,
+    files_missing: 0, unique_filters: [], date_range: {}, recent_activity: [], night_boundary_seconds: 43200,
+  } })),
   http.get('/api/db/:dbId/projects', () => HttpResponse.json(emptyList)),
   http.get('/api/db/:dbId/projects/overview', () => HttpResponse.json(emptyList)),
   // The background calibration check has not judged anything yet.

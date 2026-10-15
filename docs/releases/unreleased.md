@@ -4,6 +4,19 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Images' **Date** groups are observing nights, split where the catalog's
+  nights split, as calibration and the AstroBin export do: a night west of
+  Greenwich no longer lands on the next day's date or across two dates.
+  Where one target and filter hold frames from two or more Target Scheduler
+  profiles, sequence scoring and statistical grading compare each profile
+  with itself, so two rigs merged into one catalog are no longer scored
+  against each other. The profile stands for the rig because catalog rows do
+  not record the camera or telescope, and reading every frame's header would
+  make scoring slow, so one rig kept under two N.I.N.A. profiles now scores
+  as two. A catalog with one profile scores as before, including older rows
+  that name no profile. Two projects with one name stay in separate Project
+  groups. Links to groups from before still open them, and the image
+  detail's next and previous walk the same nights as the grid.
 - **Settings › Server** can fix the desktop app's localhost port, so browser,
   API, and agent connections keep the same address across restarts. A port
   conflict shows the error and Server settings so you can choose another
