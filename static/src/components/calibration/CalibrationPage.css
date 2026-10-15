@@ -579,6 +579,140 @@
   background: var(--color-primary-alpha-20);
 }
 
+.calibration-duplicates {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.calibration-duplicates-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.calibration-duplicates-head .calibration-count {
+  margin: 0 !important;
+}
+
+.calibration-twin-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 32rem), 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.calibration-twin-group {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.8rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+  font-size: 0.85rem;
+}
+
+.calibration-twin-group p {
+  margin: 0;
+}
+
+.calibration-twin-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.calibration-twin-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.calibration-twin-members {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.calibration-twin-member {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.calibration-twin-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+@media (max-width: 600px) {
+  .calibration-twin-member {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.2rem;
+  }
+}
+
+.calibration-twin-member code,
+.calibration-twin-move code {
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.calibration-repair-dialog {
+  width: min(36rem, 100%);
+}
+
+.calibration-repair-preview {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.calibration-repair-preview ul {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.calibration-repair-preview p {
+  margin: 0;
+}
+
+.calibration-repair-masters {
+  max-height: 12rem;
+  margin-top: 0.4rem !important;
+  overflow-y: auto;
+  font-size: 0.82rem;
+}
+
+.calibration-repair-dialog .dialog-footer {
+  flex-wrap: wrap;
+}
+
+.calibration-repair-dialog .dialog-footer .action-button {
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-bg-primary);
+  font-weight: 600;
+}
+
+.calibration-repair-dialog .dialog-footer .action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .calibration-page .scheduler-flat-history {
   border: 1px solid var(--color-border-secondary);
   border-radius: 10px;

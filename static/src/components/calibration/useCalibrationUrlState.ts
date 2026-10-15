@@ -44,6 +44,8 @@ export interface CalibrationFilterState {
   grade?: CalibrationGradeFilter;
   keptOut?: boolean;
   missing?: boolean;
+  /** Show exposures recorded more than once instead of sessions. */
+  duplicates?: boolean;
   sort?: CalibrationFrameSort;
 }
 
@@ -59,6 +61,7 @@ const FILTER_KEYS: Record<keyof CalibrationFilterState, (typeof CALIBRATION_PARA
   grade: 'calGrade',
   keptOut: 'calKept',
   missing: 'calMissing',
+  duplicates: 'calDupes',
   sort: 'calSort',
 };
 
@@ -103,10 +106,11 @@ export function useCalibrationUrlState() {
   const kept = getParam('calKept');
   const keptOut = kept === 'true' ? true : kept === 'false' ? false : undefined;
   const missing = getParam('calMissing') === 'true' || undefined;
+  const duplicates = getParam('calDupes') === 'true' || undefined;
   const sort = oneOf(getParam('calSort'), SORTS);
   const filters = useMemo<CalibrationFilterState>(
-    () => ({ rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, sort }),
-    [rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, sort]
+    () => ({ rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, sort }),
+    [rig, kind, filter, exposure, tempMin, tempMax, from, to, grade, keptOut, missing, duplicates, sort]
   );
   const page = Math.max(0, Math.floor(number(getParam('calPage')) ?? 0));
   const session = getParam('calSession');

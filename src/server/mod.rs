@@ -5,6 +5,7 @@ pub mod autoimport;
 pub mod cache;
 pub mod cache_budget;
 pub mod calibration_browser;
+pub mod calibration_duplicates;
 pub mod calibration_health;
 pub mod calibration_quality;
 pub mod calibration_settings;
@@ -222,6 +223,14 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/calibrations/sessions",
             get(calibration_browser::list_sessions),
+        )
+        .route(
+            "/calibrations/duplicates",
+            get(calibration_duplicates::get_duplicates),
+        )
+        .route(
+            "/calibrations/duplicates/repair",
+            post(calibration_duplicates::repair_duplicates),
         )
         .route(
             "/calibrations/generation-status",

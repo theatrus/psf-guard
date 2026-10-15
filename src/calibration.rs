@@ -19,6 +19,7 @@ pub mod browse;
 mod health;
 mod quality;
 pub mod rules;
+mod twins;
 pub use health::{
     current_keys as health_keys, project_file_digests as health_file_digests, project_health,
     project_lights, summarize as summarize_health, HealthCode, HealthFinding, HealthLevel,
@@ -30,6 +31,11 @@ pub use rules::{
     RuleValues, Rules,
 };
 use std::sync::Arc;
+pub use twins::{
+    apply_repair as apply_duplicate_repair, duplicate_snapshot,
+    plan_repair as plan_duplicate_repair, DuplicateReport, DuplicateSnapshot, FileAccess,
+    InvalidatedMaster, RepairError, RepairOutcome, TwinGroup, TwinMember,
+};
 /// Synthetic frames for tests elsewhere in the crate.
 #[cfg(test)]
 pub(crate) mod test_frames {
@@ -295,6 +301,9 @@ pub struct CalibrationImportOutcome {
     pub imported: usize,
     pub updated: usize,
     pub skipped_existing: usize,
+    /// Of those skipped, files that are a second copy of a frame the catalog
+    /// records at another path.
+    pub twins: usize,
     pub bias: usize,
     pub dark: usize,
     pub dark_flat: usize,
@@ -1252,6 +1261,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
     .context("creating PSF Guard calibration tables")?;
     conn.execute_batch(quality::QUALITY_TABLE_SQL)
         .context("creating PSF Guard calibration tables")?;
+    conn.execute_batch(twins::TWIN_TABLE_SQL)
+        .context("creating PSF Guard calibration tables")?;
     // A catalog that has just had its tables created is already at the
     // current version; one that had them from an older build is stamped with
     // whatever it was, and the ladder below carries it up.
@@ -1287,6 +1298,7 @@ pub fn import_calibration_frames(
     ensure_schema(tx)?;
     let now = chrono::Utc::now().timestamp();
     let mut outcome = CalibrationImportOutcome::default();
+    let files = twins::FileAccess::disk();
 
     for frame in frames {
         let Some(kind) = kind_from_meta(frame) else {
@@ -1312,35 +1324,52 @@ pub fn import_calibration_frames(
             count_kind(&mut outcome, kind);
             continue;
         }
-        // A frame at a new path may be a frame the catalog already knows,
-        // moved: the filer takes calibration frames out of the drop zone
-        // nightly. The row from before the move keeps its identity — its
-        // uuid, its validity mark, the masters built from it — and only
-        // learns the new path, rather than gaining a twin whose old path
-        // resolves to the same file at stack time.
-        let moved_from = if existing.is_none() {
-            moved_calibration_row(tx, kind, frame, &frame.path)?
-        } else {
-            None
-        };
-        if let Some(previous_id) = moved_from {
-            tx.execute(
-                "UPDATE psf_guard_calibration_frame
-                 SET source_path = ?1, source_fingerprint = ?2, file_size = ?3,
-                     file_mtime_ns = ?4, updated_at = ?5
-                 WHERE id = ?6",
-                params![
-                    source_path,
-                    fingerprint,
-                    file_size,
-                    file_mtime_ns,
-                    now,
-                    previous_id
-                ],
-            )?;
-            outcome.updated += 1;
-            count_kind(&mut outcome, kind);
-            continue;
+        // A frame at a new path may be a frame the catalog already knows:
+        // the filer copies calibration frames out of the drop zone nightly
+        // and deletes the originals a day later, and a person may keep a
+        // second copy in another scanned folder. While the recorded file is
+        // still there, the new file is remembered as its twin and nothing
+        // else changes. Once it is gone, the row learns the new path and
+        // keeps its identity — its uuid, its grade, its validity mark, the
+        // masters built from it — rather than gaining a twin of its own.
+        if existing.is_none() {
+            if let Some(twin) = twins::recorded_twin(tx, &source_path)? {
+                if twin.source_fingerprint == fingerprint && files.exists(Path::new(&twin.row_path))
+                {
+                    outcome.skipped_existing += 1;
+                    outcome.twins += 1;
+                    count_kind(&mut outcome, kind);
+                    continue;
+                }
+                twins::forget_twin(tx, &source_path)?;
+            }
+            let recorded =
+                match twins::ExposureKey::new(kind, frame.timestamp, &frame.path, &rig_uuid) {
+                    Some(key) => twins::recorded_copy(tx, &key, &frame.path, &files)?,
+                    None => None,
+                };
+            match recorded {
+                Some(twins::RecordedCopy::Live { frame_uuid }) => {
+                    twins::record_twin(tx, &source_path, &frame_uuid, &fingerprint, now)?;
+                    outcome.skipped_existing += 1;
+                    outcome.twins += 1;
+                    count_kind(&mut outcome, kind);
+                    continue;
+                }
+                Some(twins::RecordedCopy::Moved { id }) => {
+                    tx.execute(
+                        "UPDATE psf_guard_calibration_frame
+                         SET source_path = ?1, source_fingerprint = ?2, file_size = ?3,
+                             file_mtime_ns = ?4, updated_at = ?5
+                         WHERE id = ?6",
+                        params![source_path, fingerprint, file_size, file_mtime_ns, now, id],
+                    )?;
+                    outcome.updated += 1;
+                    count_kind(&mut outcome, kind);
+                    continue;
+                }
+                None => {}
+            }
         }
         let frame_uuid = existing
             .as_ref()
@@ -1710,67 +1739,7 @@ pub fn forget_frames(
         return Ok(CalibrationMutationOutcome::default());
     }
 
-    #[derive(Debug)]
-    struct MasterLink {
-        uuid: String,
-        sources: Vec<String>,
-        bias: Option<String>,
-        dark: Option<String>,
-    }
-    let raw_links = {
-        let mut statement = transaction.prepare(
-            "SELECT master_uuid, source_frame_uuids, bias_master_uuid, dark_master_uuid
-             FROM psf_guard_calibration_master",
-        )?;
-        statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    let links = raw_links
-        .into_iter()
-        .map(|(uuid, sources_json, bias, dark)| {
-            Ok(MasterLink {
-                uuid,
-                sources: serde_json::from_str(&sources_json)
-                    .context("reading calibration master source provenance")?,
-                bias,
-                dark,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut invalid = links
-        .iter()
-        .filter(|master| {
-            master
-                .sources
-                .iter()
-                .any(|source| uuid_set.contains(source.as_str()))
-        })
-        .map(|master| master.uuid.clone())
-        .collect::<std::collections::HashSet<_>>();
-    loop {
-        let before = invalid.len();
-        for master in &links {
-            if master
-                .bias
-                .iter()
-                .chain(master.dark.iter())
-                .any(|dependency| invalid.contains(dependency))
-            {
-                invalid.insert(master.uuid.clone());
-            }
-        }
-        if invalid.len() == before {
-            break;
-        }
-    }
+    let invalid = twins::masters_citing(&transaction, &uuid_set)?;
     for master_uuid in &invalid {
         transaction.execute(
             "DELETE FROM psf_guard_calibration_master WHERE master_uuid = ?1",
@@ -1786,6 +1755,7 @@ pub fn forget_frames(
         }
     }
     quality::forget(&transaction, frame_uuids)?;
+    twins::forget_twins_of(&transaction, frame_uuids)?;
     transaction.commit()?;
     Ok(CalibrationMutationOutcome {
         frames_removed,
@@ -6159,43 +6129,6 @@ fn record_master(
     Ok(())
 }
 
-/// The row of a frame that has moved to `new_path`, if the catalog has one:
-/// same kind, same file name, same capture time, and a recorded path whose
-/// file is no longer there. A row whose file still exists is a different
-/// frame that happens to share a name, and is left alone.
-fn moved_calibration_row(
-    conn: &Connection,
-    kind: CalibrationKind,
-    frame: &FrameMeta,
-    new_path: &Path,
-) -> Result<Option<i64>> {
-    let Some(name) = new_path.file_name().and_then(|name| name.to_str()) else {
-        return Ok(None);
-    };
-    // `IS`, not `=`: a frame whose header carries no date has a NULL capture
-    // time on both sides, and the file name and missing file still identify
-    // the move.
-    let mut statement = conn.prepare(
-        "SELECT id, source_path FROM psf_guard_calibration_frame
-         WHERE kind = ?1 AND captured_at IS ?2 AND source_path <> ?3
-         ORDER BY id",
-    )?;
-    let candidates = statement
-        .query_map(
-            params![kind.as_str(), frame.timestamp, canonical_text(new_path)],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(candidates.into_iter().find_map(|(id, path)| {
-        let path = Path::new(&path);
-        let same_name = path
-            .file_name()
-            .and_then(|other| other.to_str())
-            .is_some_and(|other| other.eq_ignore_ascii_case(name));
-        (same_name && !path.is_file()).then_some(id)
-    }))
-}
-
 /// One rig of a catalog, for choosing which rig's calibration settings to
 /// tune.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -6423,7 +6356,10 @@ pub(crate) fn known_calibration_fingerprints(
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
-    Ok(rows.flatten().collect())
+    let mut known = rows.flatten().collect::<HashMap<_, _>>();
+    // Second copies of recorded frames, while the recorded file is there.
+    known.extend(twins::skippable_twins(conn)?);
+    Ok(known)
 }
 
 /// The path key and fingerprint `import_calibration_frames` would record for

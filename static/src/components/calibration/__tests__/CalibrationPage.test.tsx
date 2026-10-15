@@ -526,4 +526,115 @@ describe('CalibrationPage', () => {
     expect(await screen.findByRole('tabpanel', { name: 'Scheduler flats' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Scheduler flats' })).toHaveAttribute('aria-selected', 'true');
   });
+
+  describe('duplicates', () => {
+    const report = (token: string, groups = DUPLICATE_GROUPS) => ({
+      groups,
+      rows_removed: groups.length,
+      missing_rows: groups.filter((group) => group.members.some((member) => !member.exists)).length,
+      physical_rows: groups.filter((group) => group.physical).length,
+      repointed: 0,
+      masters: groups.length ? [{ master_uuid: 'dc6ba609-0000', kind: 'bias', source_count: 12, created_at: 1757600000, direct: true, doubled: true }] : [],
+      token,
+    });
+
+    function serveDuplicates({ manage = true, stale = false }: { manage?: boolean; stale?: boolean } = {}) {
+      serve({ manage });
+      const repaired: unknown[] = [];
+      let reads = 0;
+      let applied = false;
+      server.use(
+        http.get('/api/db/demo/calibrations/duplicates', () => {
+          reads += 1;
+          return ok(applied ? report(`t${reads}`, []) : report(`t${reads}`));
+        }),
+        http.post('/api/db/demo/calibrations/duplicates/repair', async ({ request }) => {
+          const body = await request.json();
+          repaired.push(body);
+          if (stale && repaired.length === 1) {
+            return HttpResponse.json(
+              { success: false, data: null, error: 'The calibration library changed since the preview. Preview the repair again.' },
+              { status: 409 },
+            );
+          }
+          applied = true;
+          return ok({ groups: 2, rows_removed: 2, repointed: 0, masters_removed: 1 });
+        }),
+      );
+      return { repaired };
+    }
+
+    it('shows each exposure recorded twice with the row kept, from the URL', async () => {
+      serveDuplicates();
+      renderPage('/calibration?db=demo&calDupes=true');
+      const section = await screen.findByRole('region', { name: 'Duplicates' });
+      expect(await within(section).findByText('2 exposures recorded more than once')).toBeInTheDocument();
+      const flat = within(section).getByRole('listitem', { name: 'flat_0007.fits' });
+      expect(within(flat).getByText('Keep')).toBeInTheDocument();
+      expect(within(flat).getByText('Missing')).toBeInTheDocument();
+      expect(within(flat).getByText('/data/_Incoming/flat_0007.fits')).toBeInTheDocument();
+      expect(screen.getByRole('checkbox', { name: 'Duplicates' })).toBeChecked();
+      // The type filter narrows the groups shown.
+      fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'dark' } });
+      await waitFor(() => expect(within(section).getByText('1 of 2 exposures recorded more than once')).toBeInTheDocument());
+      // Turning the filter off goes back to sessions.
+      fireEvent.click(screen.getByRole('checkbox', { name: 'Duplicates' }));
+      await waitFor(() => expect(params().get('calDupes')).toBeNull());
+      expect(await screen.findByRole('navigation', { name: 'Sessions' })).toBeInTheDocument();
+    });
+
+    it('previews the repair, then applies the previewed plan', async () => {
+      const { repaired } = serveDuplicates();
+      renderPage('/calibration?db=demo&calDupes=true');
+      fireEvent.click(await screen.findByRole('button', { name: 'Repair duplicates…' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Repair duplicates' });
+      const preview = within(dialog).getByRole('region', { name: 'Repair preview' });
+      expect(within(preview).getByText('2 exposures recorded more than once')).toBeInTheDocument();
+      expect(within(preview).getByText(/1 master built again, 1 of them averaged an exposure twice/)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+      await waitFor(() => expect(repaired).toEqual([{ token: 't2' }]));
+      expect(await screen.findByText(/Repaired 2 exposures: 2 rows merged, 1 master to build again/)).toBeInTheDocument();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(await screen.findByText('No exposure is recorded more than once.')).toBeInTheDocument();
+    });
+
+    it('refuses a stale preview and offers a fresh one', async () => {
+      const { repaired } = serveDuplicates({ stale: true });
+      renderPage('/calibration?db=demo&calDupes=true');
+      fireEvent.click(await screen.findByRole('button', { name: 'Repair duplicates…' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Repair duplicates' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent('changed since the preview');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Preview again' }));
+      await waitFor(() => expect(within(dialog).queryByRole('alert')).toBeNull());
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+      await waitFor(() => expect(repaired).toEqual([{ token: 't2' }, { token: 't3' }]));
+    });
+
+    it('keeps the repair behind database management', async () => {
+      serveDuplicates({ manage: false });
+      renderPage('/calibration?db=demo&calDupes=true');
+      expect(await screen.findByText(/needs database management/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Repair duplicates…' })).toBeNull();
+    });
+  });
 });
+
+const DUPLICATE_GROUPS = [
+  {
+    kind: 'flat', captured_at: 1757563200, file_name: 'flat_0007.fits', rig_uuid: 'rig', rig_name: 'Askar · ASI2600',
+    keep: 'k1', path: '/data/_Calibration/flat_0007.fits', repointed: false, physical: false,
+    members: [
+      { frame_uuid: 'k1', source_path: '/data/_Calibration/flat_0007.fits', exists: true, keep: true },
+      { frame_uuid: 'r1', source_path: '/data/_Incoming/flat_0007.fits', exists: false, keep: false },
+    ],
+  },
+  {
+    kind: 'dark', captured_at: 1757500000, file_name: 'dark_0003.fits', rig_uuid: 'rig', rig_name: 'Askar · ASI2600',
+    keep: 'k2', path: '/data/darks/dark_0003.fits', repointed: false, physical: true,
+    members: [
+      { frame_uuid: 'k2', source_path: '/data/darks/dark_0003.fits', exists: true, keep: true },
+      { frame_uuid: 'r2', source_path: '/data/darks-copy/dark_0003.fits', exists: true, keep: false },
+    ],
+  },
+];

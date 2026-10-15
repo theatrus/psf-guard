@@ -184,6 +184,14 @@ export default function CalibrationFilters({ filters, facets, rigs, onChange, on
         />
         Missing files
       </label>
+      <label className="toolbar-pill toolbar-pill-check" title="Exposures the library records more than once">
+        <input
+          type="checkbox"
+          checked={filters.duplicates ?? false}
+          onChange={(event) => onChange({ duplicates: event.target.checked || undefined })}
+        />
+        Duplicates
+      </label>
     </>
   );
   return (
