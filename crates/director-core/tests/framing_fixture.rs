@@ -311,7 +311,12 @@ fn the_free_layout_fixture_matches_the_core() {
 ///   measured outline) and a thin seam of its own, a panel a tenth of a
 ///   degree off the shared mosaic's edge (a gap read in a frame the rig's
 ///   outline is turned in), and a panel far out on its own;
-/// - a rig eight degrees north whose two joined panels meet nothing else.
+/// - a rig eight degrees north whose two joined panels meet nothing else;
+/// - a rig whose one small panel overlaps the shared mosaic's outer edge by
+///   a tenth of a degree: 10% of its own side, a thin seam across rigs.
+///
+/// The gapped rig's panels lie inside shared panels, reaching into the
+/// shared mosaic's own overlap strips: no seam of theirs.
 fn coverage_requests() -> Vec<FramingRequest> {
     let shared = free_request();
     let mut gapped = FramingRequest {
@@ -390,7 +395,23 @@ fn coverage_requests() -> Vec<FramingRequest> {
         overlays: vec![],
         view: None,
     };
-    vec![shared, gapped, turned, apart]
+    let edge = FramingRequest {
+        center: shared.center,
+        position_angle_degrees: shared.position_angle_degrees,
+        panel: PanelSize {
+            width_degrees: 1.0,
+            height_degrees: 0.7,
+        },
+        layout: Layout {
+            min_overlap_percent: 20,
+            // Shared r1c1's edge is 1° east of the center; this panel's
+            // starts 0.9° out.
+            panels: vec![PanelPlacement::at("r1c1", 1.4, 0.0)],
+        },
+        overlays: vec![],
+        view: None,
+    };
+    vec![shared, gapped, turned, apart, edge]
 }
 
 /// The turned rig's panel off the shared mosaic's edge, in its own panel sizes.
@@ -435,8 +456,11 @@ fn the_coverage_fixture_matches_the_core() {
     assert!(has(LayoutIssueKind::ThinOverlap, &[0, 0]), "{issues:?}");
     assert!(has(LayoutIssueKind::ThinOverlap, &[2, 2]), "{issues:?}");
     // A seam between two rigs needs the larger minimum, of the smaller
-    // panel: the shared 2° panels against the gapped rig's 1.2° ones.
-    assert!(has(LayoutIssueKind::ThinOverlap, &[0, 1]), "{issues:?}");
+    // panel: the edge rig's 1° panel shares 0.1° with shared r1c1.
+    assert!(has(LayoutIssueKind::ThinOverlap, &[0, 4]), "{issues:?}");
+    // The gapped rig's panels lie inside shared ones: the shared mosaic's
+    // own overlap strips are no seam of theirs.
+    assert!(!has(LayoutIssueKind::ThinOverlap, &[0, 1]), "{issues:?}");
     assert!(has(LayoutIssueKind::Isolated, &[1]), "{issues:?}");
     assert!(has(LayoutIssueKind::Isolated, &[2]), "{issues:?}");
     // Across two framings, read in the shared framing's frame, where the

@@ -182,7 +182,11 @@ framing of each rig that is on, in the draft's order.
   panel (`of_smaller` in the core, `ofSmaller` in the browser): across it
   for the overlap, along it for whether they sit side by side. A 1° panel
   sharing 0.2° with a 2° one overlaps by 20%, not 10%. Side by side, a seam
-  under the minimum is a thin overlap and sky between them is a gap.
+  under the minimum is a thin overlap and sky between them is a gap, unless
+  the smaller panel is covered beyond the seam by panels it joins
+  (`beyond_covered`, sampled on a 5 × 5 grid): a rig's panel inside a shared
+  one reaches into the shared mosaic's own overlap strips, and that is no
+  seam of its.
 - A gap is covered by a panel of any framing, and isolated panels and groups
   apart are read over every panel. A rig's own panels therefore need not
   touch where another framing fills the sky between them. A lone panel is

@@ -179,23 +179,33 @@
       },
       "position_angle_degrees": 10.0,
       "view": null
+    },
+    {
+      "center": {
+        "dec_degrees": 61.45,
+        "ra_degrees": 38.2
+      },
+      "layout": {
+        "min_overlap_percent": 20,
+        "panels": [
+          {
+            "id": "r1c1",
+            "locked": false,
+            "x": 1.4,
+            "y": 0.0
+          }
+        ]
+      },
+      "overlays": [],
+      "panel": {
+        "height_degrees": 0.7,
+        "width_degrees": 1.0
+      },
+      "position_angle_degrees": 35.0,
+      "view": null
     }
   ],
   "issues": [
-    {
-      "kind": "thin_overlap",
-      "panels": [
-        {
-          "framing": 0,
-          "id": "r1c1"
-        },
-        {
-          "framing": 1,
-          "id": "r1c1"
-        }
-      ],
-      "percent": 14.0
-    },
     {
       "kind": "gap",
       "panels": [
@@ -215,6 +225,20 @@
       "panels": [
         {
           "framing": 0,
+          "id": "r1c1"
+        },
+        {
+          "framing": 4,
+          "id": "r1c1"
+        }
+      ],
+      "percent": 10.0
+    },
+    {
+      "kind": "thin_overlap",
+      "panels": [
+        {
+          "framing": 0,
           "id": "p3"
         },
         {
@@ -223,34 +247,6 @@
         }
       ],
       "percent": 7.0
-    },
-    {
-      "kind": "thin_overlap",
-      "panels": [
-        {
-          "framing": 0,
-          "id": "p3"
-        },
-        {
-          "framing": 1,
-          "id": "p2"
-        }
-      ],
-      "percent": 10.2
-    },
-    {
-      "kind": "thin_overlap",
-      "panels": [
-        {
-          "framing": 0,
-          "id": "p4"
-        },
-        {
-          "framing": 1,
-          "id": "r1c1"
-        }
-      ],
-      "percent": 11.8
     },
     {
       "kind": "gap",
@@ -265,6 +261,20 @@
         }
       ],
       "percent": 17.3
+    },
+    {
+      "kind": "thin_overlap",
+      "panels": [
+        {
+          "framing": 1,
+          "id": "p2"
+        },
+        {
+          "framing": 4,
+          "id": "r1c1"
+        }
+      ],
+      "percent": 7.7
     },
     {
       "kind": "thin_overlap",
@@ -293,6 +303,20 @@
         }
       ],
       "percent": 95.9
+    },
+    {
+      "kind": "gap",
+      "panels": [
+        {
+          "framing": 2,
+          "id": "p2"
+        },
+        {
+          "framing": 4,
+          "id": "r1c1"
+        }
+      ],
+      "percent": 16.4
     },
     {
       "kind": "isolated",

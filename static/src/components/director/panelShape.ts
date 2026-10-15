@@ -252,6 +252,29 @@ function groupStarts(linked: number[][]): number[][] {
 /** An issue read across framings, its panels by their place in the input. */
 export interface TaggedIssue { kind: DirectorLayoutIssue['kind']; panels: number[]; percent: number | null }
 
+/** Whether the smaller of panels `i` and `j` is covered, beyond `j` or `i`,
+ *  by the panels it joins: then their seam is no edge of the cover, as for a
+ *  rig's panel inside a shared one, near that mosaic's own seams. Sampled on
+ *  a 5 × 5 grid inside the smaller panel. The core's `beyond_covered`. */
+function beyondCovered(shapes: PanelShape[], linked: number[][], i: number, j: number): boolean {
+  const area = (k: number) => Math.abs(signedArea(shapes[k].corners));
+  const [small, other] = area(i) <= area(j) ? [i, j] : [j, i];
+  const [a, b, c, d] = shapes[small].corners;
+  const at = (u: number, v: number): Point => {
+    const top: Point = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+    const bottom: Point = [d[0] + (c[0] - d[0]) * u, d[1] + (c[1] - d[1]) * u];
+    return [top[0] + (bottom[0] - top[0]) * v, top[1] + (bottom[1] - top[1]) * v];
+  };
+  for (let row = 0; row < 5; row += 1) {
+    for (let column = 0; column < 5; column += 1) {
+      const point = at(0.1 + 0.2 * column, 0.1 + 0.2 * row);
+      if (polygonContains(shapes[other].corners, point)) continue;
+      if (!linked[small].some(k => k !== other && polygonContains(shapes[k].corners, point))) return false;
+    }
+  }
+  return true;
+}
+
 /** `pair` as shares of the smaller of the two panels' sides, not the
  *  larger's: across the seam for its thickness, along it for its run. The
  *  core's `of_smaller`. */
@@ -284,6 +307,8 @@ export function readTagged(frames: PanelShape[][], framing: number[], minimum: n
   const indexes = new Map<number, NearIndex>();
   const indexOf = (f: number) => { let index = indexes.get(f); if (!index) { index = nearIndex(bounds[f]); indexes.set(f, index); } return index; };
   const flagged = framing.map(() => false);
+  // Pairs side by side that neither join nor sit wholly apart.
+  const apart: Array<{ i: number; j: number; pair: ShapeOverlap; same: boolean }> = [];
   for (let i = 0; i < n; i += 1) {
     const shapes = frames[framing[i]];
     for (let j = i + 1; j < n; j += 1) {
@@ -300,14 +325,21 @@ export function readTagged(frames: PanelShape[][], framing: number[], minimum: n
       // shares of the smaller one, as a person stitching them would count it.
       const pair = framing[i] === framing[j] ? read : ofSmaller(read, a, b);
       if (pair.thickness >= -PLACE_TOLERANCE && pair.thickness + PLACE_TOLERANCE >= threshold) { linked[i].push(j); linked[j].push(i); continue; }
-      if (pair.run + PLACE_TOLERANCE < SIDE_BY_SIDE) continue;
-      if (pair.thickness >= -PLACE_TOLERANCE) {
-        issues.push({ kind: 'thin_overlap', panels: [i, j], percent: roundPercent(Math.max(0, pair.thickness)) });
-        flagged[i] = true; flagged[j] = true;
-      } else if (-pair.thickness < 1 && !gapCovered(shapes, bounds[framing[i]], i, j, pair, indexOf(framing[i]))) {
-        issues.push({ kind: 'gap', panels: [i, j], percent: roundPercent(-pair.thickness) });
-        flagged[i] = true; flagged[j] = true;
-      }
+      if (pair.run + PLACE_TOLERANCE >= SIDE_BY_SIDE) apart.push({ i, j, pair, same: framing[i] === framing[j] });
+    }
+  }
+  // Every link is known before a seam is judged: a rig's panel inside a
+  // shared one reaches into that mosaic's own overlap strips, which is no
+  // seam of its, since the panel it lies in covers it.
+  for (const { i, j, pair, same } of apart) {
+    const shapes = frames[framing[i]];
+    if (!same && beyondCovered(shapes, linked, i, j)) continue;
+    if (pair.thickness >= -PLACE_TOLERANCE) {
+      issues.push({ kind: 'thin_overlap', panels: [i, j], percent: roundPercent(Math.max(0, pair.thickness)) });
+      flagged[i] = true; flagged[j] = true;
+    } else if (-pair.thickness < 1 && !gapCovered(shapes, bounds[framing[i]], i, j, pair, indexOf(framing[i]))) {
+      issues.push({ kind: 'gap', panels: [i, j], percent: roundPercent(-pair.thickness) });
+      flagged[i] = true; flagged[j] = true;
     }
   }
   const isolated = framing.map((_, i) => n > 1 && linked[i].length === 0 && !flagged[i]);

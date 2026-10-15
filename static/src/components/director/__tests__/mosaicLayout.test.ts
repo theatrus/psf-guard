@@ -451,6 +451,15 @@ describe('coverage across framings', () => {
     expect(apart[0].percent).toBeCloseTo(10, 6);
   });
 
+  it('finds no seam for a rig panel inside a shared panel, near the shared mosaic\'s own seam', () => {
+    // Shared panels 2° wide, centers 0.8° either side: the first spans -1.8° to 0.2°.
+    const shared = framingAt([[-0.4, 0], [0.4, 0]], [2, 1.5]);
+    // A 1° rig panel from -1.15° to -0.15°, reaching 0.05° into the shared strip.
+    const inside = framingAt([[-0.65, 0]], [1, 0.75]);
+    expect(readCoverage([shared, inside]).issues).toEqual([]);
+    expect(readCoverage([inside, shared]).issues).toEqual([]);
+  });
+
   it('says groups apart beside other issues once several framings are read, as the core does', () => {
     const north = { ra_degrees: center.ra_degrees, dec_degrees: center.dec_degrees + 10 };
     const shared = framingAt([[0, 0], [0.9, 0]], [2, 1.5]);

@@ -334,6 +334,8 @@ pub(crate) fn tagged_issues(
     }
     let mut linked = vec![Vec::new(); n];
     let mut flagged = vec![false; n];
+    // Pairs side by side that neither join nor sit wholly apart.
+    let mut apart: Vec<(usize, usize, ShapeOverlap, bool)> = Vec::new();
     for i in 0..n {
         let shapes = frames[framing[i]];
         for j in i + 1..n {
@@ -361,26 +363,35 @@ pub(crate) fn tagged_issues(
                 linked[j].push(i);
                 continue;
             }
-            if pair.run + PLACE_TOLERANCE < SIDE_BY_SIDE {
-                continue;
+            if pair.run + PLACE_TOLERANCE >= SIDE_BY_SIDE {
+                apart.push((i, j, pair, same));
             }
-            if pair.thickness >= -PLACE_TOLERANCE {
-                issues.push(TaggedIssue {
-                    kind: LayoutIssueKind::ThinOverlap,
-                    panels: vec![i, j],
-                    percent: Some(round_percent(pair.thickness.max(0.0))),
-                });
-                flagged[i] = true;
-                flagged[j] = true;
-            } else if -pair.thickness < 1.0 && !gap_covered(shapes, i, j, pair) {
-                issues.push(TaggedIssue {
-                    kind: LayoutIssueKind::Gap,
-                    panels: vec![i, j],
-                    percent: Some(round_percent(-pair.thickness)),
-                });
-                flagged[i] = true;
-                flagged[j] = true;
-            }
+        }
+    }
+    // Every link is known before a seam is judged: a rig's panel inside a
+    // shared one reaches into that mosaic's own overlap strips, which is no
+    // seam of its, since the panel it lies in covers it.
+    for (i, j, pair, same) in apart {
+        let shapes = frames[framing[i]];
+        if !same && beyond_covered(shapes, &linked, i, j) {
+            continue;
+        }
+        if pair.thickness >= -PLACE_TOLERANCE {
+            issues.push(TaggedIssue {
+                kind: LayoutIssueKind::ThinOverlap,
+                panels: vec![i, j],
+                percent: Some(round_percent(pair.thickness.max(0.0))),
+            });
+            flagged[i] = true;
+            flagged[j] = true;
+        } else if -pair.thickness < 1.0 && !gap_covered(shapes, i, j, pair) {
+            issues.push(TaggedIssue {
+                kind: LayoutIssueKind::Gap,
+                panels: vec![i, j],
+                percent: Some(round_percent(-pair.thickness)),
+            });
+            flagged[i] = true;
+            flagged[j] = true;
         }
     }
     let mut isolated = vec![false; n];
@@ -424,6 +435,38 @@ pub(crate) fn tagged_issues(
         }
     }
     issues
+}
+
+/// Whether the smaller of panels `i` and `j` is covered, beyond `j` or `i`,
+/// by the panels it joins: then their seam is no edge of the cover, as for a
+/// rig's panel inside a shared one, near that mosaic's own seams. Sampled on
+/// a 5 × 5 grid inside the smaller panel.
+fn beyond_covered(shapes: &[PanelShape], linked: &[Vec<usize>], i: usize, j: usize) -> bool {
+    let area = |k: usize| signed_area(&shapes[k].corners).abs();
+    let (small, other) = if area(i) <= area(j) { (i, j) } else { (j, i) };
+    let [a, b, c, d] = [
+        shapes[small].corners[0],
+        shapes[small].corners[1],
+        shapes[small].corners[2],
+        shapes[small].corners[3],
+    ];
+    let at = |u: f64, v: f64| {
+        let top = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+        let bottom = [d[0] + (c[0] - d[0]) * u, d[1] + (c[1] - d[1]) * u];
+        [
+            top[0] + (bottom[0] - top[0]) * v,
+            top[1] + (bottom[1] - top[1]) * v,
+        ]
+    };
+    (0..5).all(|row| {
+        (0..5).all(|column| {
+            let point = at(0.1 + 0.2 * f64::from(column), 0.1 + 0.2 * f64::from(row));
+            shapes[other].contains(point)
+                || linked[small]
+                    .iter()
+                    .any(|&k| k != other && shapes[k].contains(point))
+        })
+    })
 }
 
 /// `pair` as shares of the smaller of the two panels' sides, not the

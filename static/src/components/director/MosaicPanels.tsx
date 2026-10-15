@@ -179,7 +179,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
       </div>}
     </div>}
     {issues.length > 0 && <ul className="framing-issues" data-testid="framing-issues" aria-label="Panel problems">
-      {issues.map(issue => <li key={`${issue.kind}:${issue.panels.join(',')}`}>{describeIssue(issue)}{issue.kind === 'thin_overlap' ? (issue.panels.some(panel => panel.includes(' ')) ? ', under the minimum' : `, under the ${layout.min_overlap_percent}% minimum`) : ''}.</li>)}
+      {issues.map(issue => <li key={`${issue.kind}:${issue.panels.join(',')}`}>{describeIssue(issue)}{issue.kind === 'thin_overlap' ? (props.across && issue.panels.some(panel => panel.includes(' ')) ? ', under the minimum' : `, under the ${layout.min_overlap_percent}% minimum`) : ''}.</li>)}
     </ul>}
   </div>;
 }

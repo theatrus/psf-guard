@@ -740,13 +740,14 @@ pub struct CoverageIssue {
 }
 
 /// Where several framings of one object, such as the shared framing and the
-/// rigs framed on their own, fall short as one cover of the sky. A thin
-/// overlap is said only where two panels of one framing meet, each framing
-/// read as [`FramingRequest::issues`] reads it. A gap, a lone panel and
-/// groups apart are read over every panel: a framing's own panels need not
-/// touch when another framing's panels fill the sky between them, and two
-/// framings' panels that overlap or touch are joined. One framing reads
-/// exactly as its own issues.
+/// rigs framed on their own, fall short as one cover of the sky. Two panels
+/// of one framing are read as [`FramingRequest::issues`] reads them; two of
+/// different framings need the larger of the two minimum overlaps, counted
+/// on the smaller panel, unless the smaller one is covered beyond their seam
+/// by panels it joins (a rig's panel inside a shared one). A gap, a lone
+/// panel and groups apart are read over every panel, so a framing's own
+/// panels need not touch when another framing's panels fill the sky between
+/// them. One framing reads exactly as its own issues.
 pub fn coverage_issues(framings: &[FramingRequest]) -> Result<Vec<CoverageIssue>, FramingError> {
     let own = framings
         .iter()
@@ -1569,6 +1570,19 @@ mod tests {
                 (LayoutIssueKind::Isolated, vec![(1, "r1c1".to_string())]),
             ]
         );
+    }
+
+    #[test]
+    fn a_rig_panel_inside_a_shared_panel_has_no_seam_with_its_neighbour() {
+        let center = request().center;
+        // A shared 1 × 2 at 20%: panels 2° wide, their centers 0.8° either
+        // side, so the first spans -1.8° to 0.2°.
+        let shared = framing_at(center, 0.0, (2.0, 1.5), &[(-0.4, 0.0), (0.4, 0.0)]);
+        // A 1° rig panel from -1.15° to -0.15°: wholly inside the first, it
+        // reaches 0.05° into the shared mosaic's own overlap strip.
+        let inside = framing_at(center, 0.0, (1.0, 0.75), &[(-0.65, 0.0)]);
+        assert!(coverage(&[shared.clone(), inside.clone()]).is_empty());
+        assert!(coverage(&[inside, shared]).is_empty());
     }
 
     #[test]
