@@ -2,11 +2,13 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '../../api/client';
 import AuthGate from '../../auth/AccessContext';
 import type { DesktopServerStatus } from '../../utils/tauri';
 import DesktopServerSettings, { DesktopServerGate } from '../DesktopServerSettings';
+import TauriSettings from '../TauriSettings';
 
 const native = vi.hoisted(() => ({
   isTauriApp: vi.fn(), getSettings: vi.fn(), savePort: vi.fn(), restart: vi.fn(),
@@ -37,6 +39,20 @@ function mount(children: ReactNode) {
 }
 
 describe('desktop server settings', () => {
+  it('keeps every restart control disabled while the port has unsaved edits', async () => {
+    mount(<MemoryRouter><TauriSettings isOpen onClose={() => {}} /></MemoryRouter>);
+    await userEvent.click(await screen.findByRole('tab', { name: 'Server' }));
+    await userEvent.click(await screen.findByRole('radio', { name: 'Fixed port' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Server port' }), { target: { value: '3030' } });
+    const buttons = screen.getAllByRole('button', { name: /^Restart server$/i });
+    expect(buttons).toHaveLength(1);
+    for (const button of buttons) {
+      expect(button).toBeDisabled();
+      await userEvent.click(button);
+    }
+    expect(native.restart).not.toHaveBeenCalled();
+  });
+
   it('saves a fixed port separately from restarting, then reloads only after readiness', async () => {
     const reloaded = vi.fn();
     let ready!: (url: string) => void;

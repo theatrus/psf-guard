@@ -58,6 +58,9 @@ test('desktop Server settings retain a fixed port through restart and show the s
   await server.getByRole('radio', { name: 'Fixed port' }).check();
   const port = Number(new URL(baseURL!).port);
   await server.getByRole('spinbutton', { name: 'Server port' }).fill(String(port));
+  const restart = page.getByRole('button', { name: /^Restart server$/i });
+  await expect(restart).toHaveCount(1);
+  await expect(restart).toBeDisabled();
   await server.getByRole('button', { name: 'Save port' }).click();
   await expect(server.getByRole('status')).toContainText(`Port ${port} is saved`);
   await Promise.all([

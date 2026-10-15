@@ -2003,7 +2003,7 @@ export default function TauriSettings({
               Done
             </button>
             {isTauri && <OpenLogsButton onError={setStatusMessage} />}
-            <button
+            {currentTab !== 'server' && <button
               onClick={handleRestart}
               className="cancel-button"
               disabled={isApplying}
@@ -2014,7 +2014,7 @@ export default function TauriSettings({
               }
             >
               {isTauri ? 'Restart Server' : 'Reload Page'}
-            </button>
+            </button>}
           </div>
         </div>
       </div>
