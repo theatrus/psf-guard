@@ -1817,6 +1817,21 @@ pub fn persisted_pixel_analysis(cache_dir: &Path, image_id: i32) -> Option<Astro
         .then_some(analysis)
 }
 
+/// [`persisted_pixel_analysis`], only while the FITS file it solved is
+/// unchanged: a solve of pixels that have since been rewritten says nothing
+/// of the file now.
+pub(crate) fn persisted_current_pixel_analysis(
+    cache_dir: &Path,
+    image_id: i32,
+) -> Option<AstrometryAnalysis> {
+    persisted_pixel_analysis(cache_dir, image_id).filter(source_still_matches)
+}
+
+/// The path the astrometry cache keeps a light's analysis at.
+pub(crate) fn persisted_analysis_path(cache_dir: &Path, image_id: i32) -> PathBuf {
+    astrometry_cache_path(cache_dir, image_id)
+}
+
 /// True when the FITS file named in the persisted fingerprint is unchanged.
 fn source_still_matches(cached: &AstrometryAnalysis) -> bool {
     source_fingerprint(Path::new(&cached.source_fingerprint.canonical_path))

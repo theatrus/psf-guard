@@ -7,6 +7,9 @@
 //!    from the cached planes.
 //! 3. Every imaging session shot inside a change's window asks its own
 //!    lights which side they are on ([`super::evidence`]).
+//! 4. Every imaging session whose lights' angle points at two or more
+//!    response families asks its own lights which one they follow
+//!    ([`super::family_job`]).
 //!
 //! Each step commits as it goes, so a stop loses little. The caller runs
 //! this on workers from the background budget, and says which rigs it
@@ -16,6 +19,7 @@ use super::evidence::{self, EVIDENCE_ALGORITHM_VERSION};
 use super::metric::{self, Plane};
 use super::model::{canonical_filter, Book, Side};
 use super::store::{self, EvidenceFit, EvidenceRow, ResponseRow, Verdict};
+use super::{family_job, family_store};
 use crate::calibration::{
     catalog_night_boundary, night_of, CalibrationFrame, CalibrationKind, LibrarySnapshot,
 };
@@ -51,6 +55,8 @@ pub struct PassOutcome {
     pub retry: BTreeSet<String>,
     /// Whether the pass stopped before its end (`keep_going` said so).
     pub stopped: bool,
+    /// Imaging sessions and filters whose lights chose their family.
+    pub families: usize,
 }
 
 /// Where a pass stands, as it reports it.
@@ -58,7 +64,8 @@ pub struct PassOutcome {
 pub struct Progress<'a> {
     /// The rig being worked on.
     pub rig: &'a str,
-    /// [`STAGE_MEASURING`], [`STAGE_COMPARING`] or [`STAGE_EVIDENCE`].
+    /// [`STAGE_MEASURING`], [`STAGE_COMPARING`], [`STAGE_EVIDENCE`] or
+    /// [`STAGE_FAMILIES`].
     pub stage: &'a str,
     pub done: usize,
     pub total: usize,
@@ -229,7 +236,7 @@ pub struct Pass<'a> {
 }
 
 impl Pass<'_> {
-    fn in_pool<R: Send>(&self, work: impl FnOnce() -> R + Send) -> R {
+    pub(crate) fn in_pool<R: Send>(&self, work: impl FnOnce() -> R + Send) -> R {
         match self.pool {
             Some(pool) => {
                 let mut work = Some(work);
@@ -246,6 +253,7 @@ impl Pass<'_> {
 pub const STAGE_MEASURING: &str = "measuring flat sessions";
 pub const STAGE_COMPARING: &str = "comparing flat sessions";
 pub const STAGE_EVIDENCE: &str = "reading lights shot during a change";
+pub const STAGE_FAMILIES: &str = "reading lights to choose their flats";
 
 /// Whether flats of this rig are grouped by measurement, so measured.
 pub fn rig_is_measured(rig: &str) -> bool {
@@ -568,10 +576,18 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         .filter(|rig| pass.scope.reads_lights(rig) && rig_is_measured(rig))
         .collect();
     rigs.sort_by_key(|rig| !(pass.goes_first)(rig));
+    // The lights' rotator offsets, which the family stage's candidates are
+    // turned by: from the lights' metadata and the solves in the catalog's
+    // cache folder that changed since the last pass.
+    if !rigs.is_empty() && (pass.keep_going)() {
+        super::gather_angles(conn, pass.dir.parent())?;
+    }
     let frames_read = AtomicUsize::new(0);
     let mut measured_rigs: BTreeSet<String> = BTreeSet::new();
     let mut current: Vec<String> = Vec::new();
     let mut tried: std::collections::HashSet<(String, String)> = Default::default();
+    let mut family_keep: Vec<family_store::Kept> = Vec::new();
+    let mut family_rigs: BTreeSet<String> = BTreeSet::new();
     'rigs: for rig in rigs {
         let report = |stage: &'static str, done: usize, total: usize| Progress {
             rig,
@@ -737,6 +753,40 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
             }
         }
         (pass.progress)(&report(STAGE_EVIDENCE, total, total));
+
+        // Which response family this rig's lights follow, where their angle
+        // points at two or more ([`super::family_job`]).
+        family_store::add_table(conn)?;
+        let library = LibrarySnapshot::load(conn)?;
+        let book = std::sync::Arc::clone(library.flat_book());
+        let questions = family_job::questions(&pass, &library, &book, rig)?;
+        let todo: Vec<&family_job::Question> = questions
+            .iter()
+            .filter(|question| !family_job::answered(question))
+            .collect();
+        let total = todo.len();
+        for (done, question) in todo.iter().enumerate() {
+            if !(pass.keep_going)() {
+                outcome.stopped = true;
+                break 'rigs;
+            }
+            (pass.progress)(&report(STAGE_FAMILIES, done, total));
+            (pass.yield_now)();
+            match family_job::answer(&pass, &book, question, &pedestal_table, &frames_read) {
+                Some(row) => {
+                    family_store::upsert(conn, &row)?;
+                    outcome.families += 1;
+                }
+                None => outcome.lights_missing += 1,
+            }
+        }
+        (pass.progress)(&report(STAGE_FAMILIES, total, total));
+        family_keep.extend(
+            questions
+                .iter()
+                .map(|question| family_job::kept(&book, question)),
+        );
+        family_rigs.insert(rig.to_string());
         if (outcome.unreadable, outcome.lights_missing) != left_before {
             outcome.retry.insert(rig.to_string());
         }
@@ -776,6 +826,16 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         .map(|session| session.key.clone())
         .collect();
     store::retain_evidence(conn, &wanted, &sessions, EVIDENCE_ALGORITHM_VERSION)?;
+    // Family evidence of the rigs whose lights were asked: rows no
+    // question asks for go, and rows of sessions the catalog lost.
+    let judged: std::collections::HashSet<String> = book
+        .imaging
+        .iter()
+        .filter(|session| session.rigs.iter().any(|rig| family_rigs.contains(rig)))
+        .map(|session| session.key.clone())
+        .collect();
+    let all: std::collections::HashSet<String> = sessions.into_iter().collect();
+    family_store::retain(conn, &family_keep, &judged, &all)?;
     Ok(outcome)
 }
 

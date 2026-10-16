@@ -291,7 +291,9 @@ fn digest_query(
 /// - each frame's identity, file, validity mark and whether it is kept
 ///   out: a grade counts only where it keeps a frame out, so grading the
 ///   library in the background leaves it alone;
-/// - flat grouping's measurements, which choose a light's flats;
+/// - flat grouping's measurements, which choose a light's flats, with the
+///   family its lights' own pixels chose and the rotator angles they were
+///   turned by;
 /// - the recorded masters, by count and newest;
 /// - the settings and rules that match a light, with the night boundary;
 /// - this project's lights, and no other project's.
@@ -356,7 +358,8 @@ fn short_hex(hasher: Sha256) -> String {
 
 /// The library's part of a revision: each frame's identity, file, validity
 /// mark and whether it is kept out; the recorded masters by count and
-/// newest; flat grouping's measurements; the settings and night boundary.
+/// newest; flat grouping's measurements, family evidence and light angles;
+/// the settings and night boundary.
 fn library_revision(conn: &Connection, hasher: &mut Sha256) -> Result<()> {
     if super::schema_exists(conn) {
         let kept = if super::quality::table_exists(conn) {
@@ -388,6 +391,9 @@ fn library_revision(conn: &Connection, hasher: &mut Sha256) -> Result<()> {
         )?;
     }
     super::flat_groups::store::digest_rows(conn, hasher)?;
+    // Which family a light's own pixels chose, and the rotator angles the
+    // job gathered, move a light's flats as much as the measurements do.
+    super::flat_groups::family_store::digest(conn, hasher)?;
     hasher.update(super::health::settings_digest(
         super::catalog_night_boundary(conn),
     ));
@@ -668,6 +674,66 @@ mod tests {
         // A master recorded since counts.
         library.master("m", "dark", &library.rig_of("dark"), &darks);
         assert_ne!(revision(), poor);
+    }
+
+    /// A light that changes family on its own pixels, or whose rotator
+    /// angle the measuring job learns, can take other flats: both move the
+    /// scope and the catalog's revision.
+    #[test]
+    fn family_evidence_and_light_angles_move_the_revision() {
+        use crate::calibration::flat_groups::family_store;
+        use crate::calibration::flat_groups::measure::rows::FamilyEvidenceRow;
+        let library = Library::new();
+        crate::ts_schema::apply_schema(&library.conn).unwrap();
+        library.frames("flat", "FLAT", RIG_A, "2026-09-10T15:00", "Ha");
+        let scope = || scope_revision(&library.conn, 1).unwrap();
+        let catalog = || catalog_revision(&library.conn).unwrap();
+        family_store::add_table(&library.conn).unwrap();
+        let start = (scope(), catalog());
+
+        let mut row = FamilyEvidenceRow {
+            session_key: "p:1".into(),
+            filter: "ha".into(),
+            target: "M 27".into(),
+            angle: 4.0,
+            angle_low: 4.0,
+            angle_high: 4.0,
+            start: 1_757_563_200,
+            end: 1_757_566_800,
+            key: "k".into(),
+            candidates: vec!["a".into(), "b".into()],
+            chosen: None,
+            lights: 8,
+            targets: vec!["M 27".into()],
+            pairs: Vec::new(),
+        };
+        family_store::upsert(&library.conn, &row).unwrap();
+        let undecided = (scope(), catalog());
+        assert_ne!(undecided.0, start.0);
+        assert_ne!(undecided.1, start.1);
+        // The lights chose: their flats can move.
+        row.chosen = Some("b".into());
+        family_store::upsert(&library.conn, &row).unwrap();
+        let chosen = (scope(), catalog());
+        assert_ne!(chosen.0, undecided.0);
+        assert_ne!(chosen.1, undecided.1);
+
+        family_store::store_angles(
+            &library.conn,
+            &[family_store::LightAngle {
+                light_id: 1,
+                rig: "rig".into(),
+                at: 1_757_563_200,
+                offset: 76.0,
+                solved: false,
+                solved_pa: None,
+                solve_stamp: None,
+            }],
+        )
+        .unwrap();
+        let angled = (scope(), catalog());
+        assert_ne!(angled.0, chosen.0);
+        assert_ne!(angled.1, chosen.1);
     }
 
     #[test]

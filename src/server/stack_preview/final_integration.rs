@@ -680,12 +680,14 @@ mod tests {
     }
 
     /// A light before new dust whose only same-side flats are 110.6° off,
-    /// taken because the rig's flats measure alike across angles, must
-    /// stack through the live and final passes: its session's gate widens
-    /// the rotation just enough for those flats, and nothing else.
+    /// in its response family because the rig's flats at the two angles
+    /// measure alike, must stack through the live and final passes: its
+    /// session's gate reads the light at its flats' angle, and nothing else
+    /// changes.
     #[test]
-    fn flats_from_another_angle_stack_through_the_final_pass() {
+    fn flats_of_the_lights_measured_family_stack_through_the_final_pass() {
         use crate::calibration::test_frames::write_frame_with;
+        use seiza_calibration::LightRotation;
         let temp = tempfile::tempdir().unwrap();
         let angle = |degrees: f64| format!("ROTATANG= {degrees:20.1}");
         let mut frames = Vec::new();
@@ -710,6 +712,7 @@ mod tests {
             ("before-0", "2026-09-10T14:0", 0.0),
             ("after-0", "2026-09-14T14:0", 0.0),
             ("after-110", "2026-09-14T14:3", 110.6),
+            ("other-104", "2026-09-14T14:4", 104.0),
         ] {
             for index in 0..3 {
                 frames.push(write(
@@ -733,21 +736,29 @@ mod tests {
             tx.commit().unwrap();
         }
         // New dust between the mornings at 0°; the after morning's two
-        // angles measure alike, which is the rig's angle term.
+        // angles measure alike, which is the rig's angle term. Flats at
+        // 104° measure apart from every other: another family the light's
+        // angle could reach.
         crate::calibration::flat_groups::testing::measure_as(&conn, |a, b| {
-            if a.night != b.night {
+            if a.rotation == Some(104.0) || b.rotation == Some(104.0) || a.night != b.night {
                 0.02
             } else {
                 0.0
             }
         });
         let light_meta = crate::commands::import::headers::read_frame_meta(&light);
+        // Its own pixels chose the family at its angle: the family's flats
+        // at its other angle may serve it.
+        crate::calibration::flat_groups::testing::lights_confirm_their_family(&conn, &light_meta);
         let selected = crate::calibration::select_for_light(&conn, &light_meta).unwrap();
-        let tolerance = selected
-            .flat_basis
-            .rotation_tolerance()
-            .expect("other angle");
-        assert!((tolerance - 112.6).abs() < 0.01, "{tolerance}");
+        let family = selected.flat_family.as_ref().expect("its measured family");
+        assert_eq!(family.label, "Ha at 0.0° & 110.6°");
+        assert!(family.by_pixels(), "{family:?}");
+        assert_eq!(
+            family.light_rotation,
+            LightRotation::Measured { degrees: 0.0 }
+        );
+        assert_eq!(selected.flat_basis.rotation_tolerance(), None);
 
         // The plan gives the light's session the widened gate.
         let plan = crate::calibration::resolve_or_build_master_plan(
@@ -767,14 +778,14 @@ mod tests {
             session.applied
         );
         let gate = session.match_tolerances;
-        assert!((gate.rotation_deg - tolerance).abs() < 1e-9);
+        assert_eq!(gate.light_rotation, family.light_rotation);
         assert_eq!(
             MatchTolerances {
-                rotation_deg: MatchTolerances::default().rotation_deg,
+                light_rotation: LightRotation::Recorded,
                 ..gate
             },
             crate::calibration::light_match_tolerances_at(&light),
-            "only the rotation is widened"
+            "only how the light's angle is read changes"
         );
         let masters = &session.masters;
         let replay = |path: &std::path::Path, gate: &MatchTolerances| {
@@ -792,7 +803,7 @@ mod tests {
         // The final pass calibrates the light under its session's gate, and
         // Seiza's default gate would refuse it.
         replay(&light, &gate)
-            .expect("the final pass calibrates the light with its side's flats at another angle");
+            .expect("the final pass calibrates the light with its family's flats at another angle");
         let refused = replay(&light, &MatchTolerances::default())
             .unwrap_err()
             .to_string();
@@ -818,9 +829,12 @@ mod tests {
         assert!(opened.contains("usable stars"), "{opened}");
         assert!(open(MatchTolerances::default()).contains("rotat"));
 
-        // A light further from the flats than the widened gate is still
-        // refused.
-        let stray = write("stray.fits", "LIGHT", "2026-09-09T05:00:00", 180.0, 1_100.0);
-        assert!(replay(&stray, &gate).is_err());
+        // The measured angle is an angle, not a pass: read anywhere else,
+        // the light is still refused.
+        let elsewhere = MatchTolerances {
+            light_rotation: LightRotation::Measured { degrees: 90.0 },
+            ..gate
+        };
+        assert!(replay(&light, &elsewhere).is_err());
     }
 }

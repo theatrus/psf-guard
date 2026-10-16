@@ -45,35 +45,7 @@ pub struct ComparisonRow {
 }
 
 /// What an imaging session's own lights say about one change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Verdict {
-    /// The lights lack the change: shot before it.
-    Before,
-    /// The lights carry the change: shot after it.
-    After,
-    /// The lights cannot tell, as over a nebula.
-    Undecided,
-}
-
-impl Verdict {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Verdict::Before => "before",
-            Verdict::After => "after",
-            Verdict::Undecided => "undecided",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "before" => Some(Verdict::Before),
-            "after" => Some(Verdict::After),
-            "undecided" => Some(Verdict::Undecided),
-            _ => None,
-        }
-    }
-}
+pub use super::evidence::Verdict;
 
 /// One filter's fit within an imaging session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,4 +68,60 @@ pub struct EvidenceRow {
     pub event_key: String,
     pub verdict: Verdict,
     pub fits: Vec<EvidenceFit>,
+}
+
+/// What some of an imaging session's lights said about which response
+/// family their flats come from: the lights of one filter, one target and
+/// one recorded angle (lights within the rig's rotation tolerance of each
+/// other), so a background never mixes two fields or two angles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FamilyEvidenceRow {
+    pub session_key: String,
+    /// Canonical filter name.
+    pub filter: String,
+    pub target: String,
+    /// The lights' middle recorded angle, and the lowest and highest.
+    pub angle: f64,
+    pub angle_low: f64,
+    pub angle_high: f64,
+    /// The first and last of the lights, Unix seconds.
+    pub start: i64,
+    pub end: i64,
+    /// The candidates, the sessions standing for them, which of those
+    /// measured alike, and the choice algorithm, digested
+    /// (`Book::family_evidence_key`): a row whose key is not the current
+    /// one is not read.
+    pub key: String,
+    /// The candidate families' keys.
+    pub candidates: Vec<String>,
+    /// The family the lights follow, when one stood clear.
+    pub chosen: Option<String>,
+    pub lights: usize,
+    pub targets: Vec<String>,
+    /// Each pair of candidates, as the lights' background fitted it.
+    pub pairs: Vec<FamilyPairRow>,
+}
+
+/// One pair of candidate families against a session's background.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FamilyPairRow {
+    pub first: String,
+    pub second: String,
+    /// `alike` (nothing compact tells them apart), `unfitted` (the
+    /// background could not be weighed against them) or `fit`.
+    #[serde(default)]
+    pub outcome: String,
+    /// 0 follows `first`, 1 follows `second`; absent when nothing compact
+    /// tells the two apart.
+    pub carried: Option<f64>,
+    pub spread: Option<f64>,
+    pub verdict: Option<Verdict>,
+}
+
+impl FamilyEvidenceRow {
+    /// Where it is kept, besides the session and filter: its target and
+    /// lowest angle.
+    pub fn angle_key(&self) -> String {
+        format!("{:.1}", self.angle_low)
+    }
 }

@@ -27,8 +27,14 @@ struct SessionReport {
 
 #[derive(Debug, Serialize)]
 struct FamilyReport {
+    key: String,
     filter: Option<String>,
     rotation: Option<f64>,
+    /// Its measured angle range: "100.1–104.4°", "72.6° & 82.2°".
+    angles: String,
+    /// The spans its flats measure alike across: "101.9–104.2° (5 pairs,
+    /// 3 nights)".
+    alike_ranges: Vec<String>,
     groups: Vec<Vec<SessionReport>>,
     splits: Vec<String>,
 }
@@ -54,9 +60,23 @@ struct LightReport {
     filter: String,
     rotation: Option<f64>,
     flats: Vec<String>,
+    /// The nights and recorded angles of the flats its master is built
+    /// from: the coherent set nearest the light.
+    master: Vec<String>,
+    master_angles: Vec<f64>,
     basis: String,
     chosen_by: Option<String>,
     flagged: bool,
+    /// The response family its flats come from, when one was chosen.
+    family: Option<String>,
+    /// How: `angle`, `pixels`, `pixels-moved` (off its recorded angle),
+    /// `nearest` or `disputed`.
+    family_by: Option<String>,
+    /// Its flats' recorded angles.
+    flat_angles: Vec<f64>,
+    /// The span its family measures alike across, when its master's flats
+    /// lie at another angle inside it.
+    alike_range: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,6 +86,9 @@ struct Report {
     families: Vec<FamilyReport>,
     events: Vec<EventReport>,
     angle_terms: std::collections::BTreeMap<String, flat_groups::model::AngleTerm>,
+    /// Each rig's rotator angle epochs: runs of lights with one sky −
+    /// mechanical offset.
+    epochs: std::collections::BTreeMap<String, Vec<flat_groups::lights::Epoch>>,
     lights: Vec<LightReport>,
 }
 
@@ -187,6 +210,12 @@ pub fn run(
             .iter()
             .map(|(rig, term)| (rig.clone(), *term))
             .collect(),
+        epochs: book
+            .epochs
+            .by_rig
+            .iter()
+            .map(|(rig, epochs)| (rig.clone(), epochs.clone()))
+            .collect(),
         lights: Vec::new(),
     };
     if lights {
@@ -254,8 +283,31 @@ fn families(book: &Book) -> Vec<FamilyReport> {
                 })
                 .collect();
             FamilyReport {
+                key: family.key.clone(),
                 filter: family.filter.clone(),
                 rotation: family.rotation,
+                angles: book.angle_label(
+                    book.families
+                        .iter()
+                        .position(|f| f.key == family.key)
+                        .unwrap_or(0),
+                ),
+                alike_ranges: family
+                    .alike_ranges
+                    .iter()
+                    .map(|range| {
+                        format!(
+                            "{} ({} pairs, {}+{} sessions, {}+{} nights, groups {:?})",
+                            range.label(),
+                            range.pairs,
+                            range.sessions[0],
+                            range.sessions[1],
+                            range.ends_nights[0],
+                            range.ends_nights[1],
+                            range.groups
+                        )
+                    })
+                    .collect(),
                 groups,
                 splits,
             }
@@ -296,6 +348,39 @@ fn light_reports(
             .collect();
         nights.sort();
         nights.dedup();
+        let delivered = crate::calibration::delivery_selection(selected.clone());
+        let mut master: Vec<String> = delivered
+            .flat
+            .iter()
+            .filter_map(|f| f.captured_at)
+            .map(|at| crate::calibration::night_of(at, boundary))
+            .collect();
+        master.sort();
+        master.dedup();
+        let mut master_angles: Vec<f64> = delivered
+            .flat
+            .iter()
+            .filter_map(|f| f.rotation)
+            .map(|a| (a * 10.0).round() / 10.0)
+            .collect();
+        master_angles.sort_by(f64::total_cmp);
+        master_angles.dedup();
+        let mut flat_angles: Vec<f64> = selected
+            .flat
+            .iter()
+            .filter_map(|f| f.rotation)
+            .map(|a| (a * 10.0).round() / 10.0)
+            .collect();
+        flat_angles.sort_by(f64::total_cmp);
+        flat_angles.dedup();
+        let family = selected.flat_family.as_ref();
+        let family_by = family
+            .and_then(|family| serde_json::to_value(family).ok())
+            .and_then(|value| value.get("by")?.as_str().map(str::to_string))
+            .map(|by| match family {
+                Some(family) if family.by_pixels() && !family.at_recorded => format!("{by}-moved"),
+                _ => by,
+            });
         let basis = serde_json::to_value(&selected.flat_basis)?
             .get("basis")
             .and_then(|b| b.as_str())
@@ -311,9 +396,33 @@ fn light_reports(
             filter,
             rotation: meta.rotator_position,
             flats: nights,
-            chosen_by: flat_groups::describe_basis(&selected.flat_basis, &selected.rules),
-            flagged: selected.flat_basis.flags(),
+            master,
+            master_angles,
+            chosen_by: [
+                family.and_then(flat_groups::describe_family),
+                flat_groups::describe_basis(&selected.flat_basis, &selected.rules),
+            ]
+            .into_iter()
+            .flatten()
+            .reduce(|a, b| format!("{a}. {b}")),
+            flagged: selected.flat_basis.flags()
+                || selected.flat_family.as_ref().is_some_and(|f| f.flags()),
             basis,
+            family: family.map(|family| family.label.clone()),
+            family_by,
+            flat_angles,
+            alike_range: family
+                .and_then(|family| family.alike_range.as_ref())
+                .map(|range| {
+                    format!(
+                        "{} at {:.1}° ({} pairs, {} nights{})",
+                        range.label,
+                        range.flats_angle,
+                        range.pairs,
+                        range.nights,
+                        if range.carried { ", carried" } else { "" }
+                    )
+                }),
         });
     }
     Ok(out)
@@ -321,19 +430,21 @@ fn light_reports(
 
 fn print_summary(report: &Report) {
     println!(
-        "\n{} sessions, {} measured this run, {} unreadable, {} comparisons, {} evidence rows",
+        "\n{} sessions, {} measured this run, {} unreadable, {} comparisons, {} evidence rows, \
+         {} family rows",
         report.outcome.sessions,
         report.outcome.measured,
         report.outcome.unreadable,
         report.outcome.compared,
-        report.outcome.evidence
+        report.outcome.evidence,
+        report.outcome.families
     );
     for family in &report.families {
         let sessions: usize = family.groups.iter().map(Vec::len).sum();
         println!(
             "{} at {}: {} session(s) in {} group(s)",
             family.filter.as_deref().unwrap_or("-"),
-            family.rotation.map_or("-".into(), |r| format!("{r:.1}°")),
+            family.angles,
             sessions,
             family.groups.len()
         );
@@ -377,6 +488,13 @@ fn print_summary(report: &Report) {
             *counts.entry(light.basis.as_str()).or_default() += 1;
         }
         println!("lights by basis: {counts:?}");
+        let mut families: std::collections::BTreeMap<&str, usize> = Default::default();
+        for light in &report.lights {
+            *families
+                .entry(light.family_by.as_deref().unwrap_or("by angle"))
+                .or_default() += 1;
+        }
+        println!("lights by family choice: {families:?}");
         let flagged = report.lights.iter().filter(|l| l.flagged).count();
         println!("lights flagged for their flats: {flagged}");
     }

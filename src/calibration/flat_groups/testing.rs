@@ -106,3 +106,128 @@ pub(crate) fn measure_as(conn: &Connection, dust: impl Fn(&ResponseRow, &Respons
         .unwrap();
     }
 }
+
+/// A deterministic, roughly normal number with unit spread.
+pub(crate) fn noise(x: usize, y: usize, seed: u64) -> f32 {
+    let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ seed.wrapping_mul(0x1656_67B1_9E37_79F9);
+    let mut sum = 0f32;
+    for _ in 0..4 {
+        h ^= h >> 33;
+        h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+        h ^= h >> 33;
+        sum += (h >> 40) as f32 / (1u64 << 24) as f32;
+    }
+    (sum - 2.0) * 1.732
+}
+
+/// A synthetic flat response for test frames: radial vignetting, dust
+/// shadows `(x, y, radius, depth)` in plane pixels, a linear gradient, stars
+/// `(x, y, height)`, and noise of `noise_level`.
+pub(crate) fn synthetic(
+    width: usize,
+    height: usize,
+    dust: &[(f32, f32, f32, f32)],
+    gradient: f32,
+    stars: &[(f32, f32, f32)],
+    noise_level: f32,
+    seed: u64,
+) -> super::metric::Plane {
+    let (cx, cy) = (width as f32 / 2.0, height as f32 / 2.0);
+    let r_max = (cx * cx + cy * cy).sqrt();
+    let mut data = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            let r = (dx * dx + dy * dy).sqrt() / r_max;
+            let mut value = 1.0 - 0.3 * r * r;
+            value *= 1.0 + gradient * (x as f32 / width as f32 - 0.5);
+            for (sx, sy, radius, depth) in dust {
+                let d = ((x as f32 - sx).powi(2) + (y as f32 - sy).powi(2)).sqrt();
+                let edge = ((radius - d) / 2.0).clamp(0.0, 1.0);
+                value *= 1.0 - depth * edge;
+            }
+            for (sx, sy, peak) in stars {
+                let d2 = (x as f32 - sx).powi(2) + (y as f32 - sy).powi(2);
+                value += peak * (-d2 / 2.0).exp();
+            }
+            value *= 1.0 + noise_level * noise(x, y, seed);
+            data.push(value);
+        }
+    }
+    super::metric::Plane {
+        width,
+        height,
+        data,
+    }
+}
+
+/// Record that the lights of `light`'s imaging session were read and
+/// follow the family at its recorded angle, as the measuring job would
+/// store it: the light is added to the catalog's lights (one imaging
+/// session of its own), and the answer is kept under the key its
+/// candidates give now.
+pub(crate) fn lights_confirm_their_family(
+    conn: &Connection,
+    light: &crate::commands::import::headers::FrameMeta,
+) {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS acquiredimage (Id INTEGER PRIMARY KEY, projectId INTEGER,
+            targetId INTEGER, acquireddate INTEGER, filtername TEXT, gradingStatus INTEGER,
+            metadata TEXT);",
+    )
+    .unwrap();
+    let at = light.timestamp.expect("the light's time");
+    conn.execute(
+        "INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername, gradingStatus,
+         metadata) VALUES (1, 1, ?1, ?2, 0, '{}')",
+        rusqlite::params![at, light.filter],
+    )
+    .unwrap();
+    super::family_store::add_table(conn).unwrap();
+    let rules = crate::calibration::rules::rules_for_light(light);
+    let rig = crate::calibration::rules::light_rig_uuid(light);
+    let angle = light.rotator_position.expect("the light's angle");
+    let library = LibrarySnapshot::load(conn).unwrap();
+    let book = library.flat_book();
+    let compatible = library.flat_family_compatible(light, &rules);
+    let candidates: Vec<usize> = book
+        .family_candidates(&rig, Some(at), angle, &compatible)
+        .into_iter()
+        .map(|(family, _)| family)
+        .collect();
+    assert!(
+        candidates.len() >= 2,
+        "the lights are asked between families"
+    );
+    let chosen = book
+        .at_recorded(&candidates, angle, rules.rotation_deg)
+        .into_iter()
+        .next()
+        .expect("a family at the light's angle");
+    let session = book.imaging_session(&rig, at).expect("its imaging session");
+    super::family_store::upsert(
+        conn,
+        &super::measure::rows::FamilyEvidenceRow {
+            session_key: session.key.clone(),
+            filter: super::model::canonical_filter(light.filter.as_deref().unwrap_or("")),
+            target: String::new(),
+            angle,
+            angle_low: angle,
+            angle_high: angle,
+            start: session.start,
+            end: session.end,
+            key: book.family_evidence_key(&candidates, &rig, session.start, angle),
+            candidates: candidates
+                .iter()
+                .map(|f| book.families[*f].key.clone())
+                .collect(),
+            chosen: Some(book.families[chosen].key.clone()),
+            lights: 1,
+            targets: Vec::new(),
+            pairs: Vec::new(),
+        },
+    )
+    .unwrap();
+}

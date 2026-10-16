@@ -1,7 +1,7 @@
 # Flat grouping
 
-Status: **Built**. Still open: split and join by hand, moving
-`flat_groups::measure` into Seiza, gap lights (a light whose night has no
+Status: **Built**, with flats matched by measured response (§2.3, §4.2).
+Still open: split and join by hand, gap lights (a light whose night has no
 flats between two groups that differ), and corrected flats in WBPP
 exports (§8).
 Last updated: 2026-10-15
@@ -31,15 +31,18 @@ work, PSF Guard judged both by the clock alone:
 
 ## 2. Measurement
 
-All of it lives in `src/calibration/flat_groups/`. The measurements sit in
-one module, `flat_groups::measure`, with a pure API: planes and numbers
-in, plain structs out, no catalog, server or file types. Its `metric`
-holds the response, the star mask, the comparison (`Q`, dust, broad,
-spots), the change map and applying it to a flat; `model` holds groups,
-change events, the angle term and placement; `evidence` the light fit;
-`rows` the data they share. A test fails if any of them names `crate::`,
-`rusqlite` or the file system, so the module can move to Seiza as it
-stands (§8). Only the background job (`job.rs`) reads pixels.
+The pixel measurements are Seiza's, `seiza_calibration::flat_response`
+(seiza #282): `metric` holds the response, the star mask, the comparison
+(`Q`, dust, broad, spots), the change map and applying it to a flat;
+`evidence` the light fit against a change; `choice` the light fit against
+several candidate responses. PSF Guard re-exports them as
+`flat_groups::measure::{metric, evidence, choice}` and keeps, in the same
+module, what it builds on the numbers with a pure API: `model` (response
+families, groups, change events, the angle term and placement), `lights`
+(angle epochs and which family a light takes) and `rows` (the data they
+share). A test fails if any of those names `crate::`, `rusqlite` or the
+file system. Only the background job (`job.rs`, `family_job.rs`) reads
+pixels.
 
 ### 2.1 Responses
 
@@ -76,8 +79,9 @@ it stays in a family of its own, at no angle. The pass makes comparisons in roun
 at most three, so a session that joined a cluster is compared within it
 in the same pass.
 
-A session with at least 3 flats in use (not graded poor, not kept out) gets
-a **response** (`metric::build_response`):
+A session with at least 2 flats in use (not graded poor, not kept out) gets
+a **response** (`metric::build_response`). Two flats make a master, so two
+make a response; a session of one stays out:
 
 1. Take at most 16 flats, evenly spaced in capture order.
 2. Read each through `image_io`, sum 2×2 CFA cells on a colour sensor, and
@@ -85,7 +89,13 @@ a **response** (`metric::build_response`):
 3. Divide each by its median; take the per-pixel median, clipped at 3σ.
    Stars that move between frames drop out.
 4. Keep the plane, the session's raw level, and the noise per response
-   pixel.
+   pixel: the per-frame spread of neighbouring frames' differences, over
+   √n. With fewer than three flats (`metric::MEDIAN_FRAMES`) the
+   combination is a mean, not a median, and keeps half of anything that
+   moved; a comparison that takes such a session sets two of its own
+   spreads (`model::NOISY_DUST_SIGMAS`) against its dust before the limit
+   (`Limits::noisy_distance`), since the deepest spot of a noisier ratio
+   stands that much higher for noise alone.
 
 The pedestal is the median level of the rig's matching dark-flats, else
 its bias frames, else 0, from the stored frame measurements. It is kept on
@@ -119,7 +129,92 @@ background. Every number below is in that unit.
 Comparisons are stored without limits applied. Limits apply on load, so a
 changed limit regroups without reading a pixel.
 
-### 2.3 Defaults
+### 2.3 Response families
+
+The recorded rotator angle is a prior, not an identity. On C925 the
+offset between N.I.N.A.'s synced sky angle and the rotator's mechanical
+angle takes at least five values: re-homes moved the mechanical angle of
+one framing by up to 20°. Of 54 same-filter flat pairs shot within 36 h,
+every pair 2–5° apart measured alike, and three pairs over 5° apart did
+too (OIII 82.2° and 72.6°, OIII 140.9° and 81.2° twice).
+
+`Book::build_families` forms, per rig and family key (rig, filter, focal
+class, sensor mode):
+
+1. **Rotation clusters** by single linkage, as before (§2.1).
+2. **Response families** by joining clusters, closest first
+   (`Book::join_alike_clusters`): two join when some pair of their
+   sessions shot within one flat session window, or neighbours in time,
+   measures alike, and no such pair measures apart (`Book::family_link`).
+   Complete linkage over the pairs that speak to the angle, so a family
+   never chains: Hα at 80° alike with 140° three days later, and 140°
+   apart from 80° three days after that, are two families, however alike
+   the two 80° nights are. A pair apart is let pass only when a change of
+   dust explains it (`Book::apart_by_a_change`): a session at one of its
+   angles measured alike with the other and apart from the one beside it,
+   as a morning's two angles alike after new dust and the same angle
+   apart from the morning before. Clusters never measured alike stay
+   apart.
+3. **No-angle sessions** join the family one of whose neighbours they
+   measure alike with, when exactly one does and every other was measured
+   and is unlike (`Book::measured_cluster`), as before, now against
+   families.
+
+`Book::pairs_to_compare` asks for each session against its neighbours in
+time in every other rotation cluster of its family key, so every session
+has a measured neighbourhood whatever its header says (C925: 216
+comparisons became 436).
+
+**Alike ranges** (`Book::build_alike_ranges`, `model::AlikeRange`): a
+family's own angle term, from pairs of its sessions compared directly.
+
+- **Evidence**: pairs at two angles further apart than the rig's
+  tolerance, in one group, with no change of the rig that reaches the
+  filter between them. Only measured pairs count; a header's angle never
+  makes or widens a range.
+- **A range** gathers the alike pairs whose two ends each lie within the
+  tolerance of one pair's ends. It needs `ALIKE_RANGE_MIN_SESSIONS` (2)
+  distinct sessions on `ALIKE_RANGE_MIN_NIGHTS` (2) nights at each end:
+  one session at an end can make a range alone (a gradient of its
+  twilight, a header that changed while the rotator did not), so pairs
+  sharing it do not count twice.
+- **Serving** (`AlikeRange::serves`): a light at L may take flats at F
+  only when one pair's own arc, within the tolerance at either end,
+  holds both, and L and F lie no further apart than that arc plus the
+  tolerance, which so counts once. A chain of pairs never bridges angles
+  no pair compared: 100°↔104°↔108° alike does not hand a 100° light 108°
+  flats. Ranges may overlap, sharing an end, and stay apart.
+- **Veto**: a pair of the family measured apart that a range would serve
+  rules the range out.
+- **Across changes** (`Book::carries_angle_term`, `Family::carry_class`):
+  a range is built per group, and may gather pairs from, and serve flats
+  of, other groups of the family only across changes that are
+  camera-side dust: seen in two filters or two families, with spots, and
+  no broad change over the limit. The argument: how flats depend on the
+  angle comes from the telescope side (vignetting, reflections, the
+  light path through a rotating camera's optics); dust on the camera's
+  window or filter moves with the camera, adds the same shadows at every
+  angle, and leaves that dependence as it was. A broad change
+  (vignetting), a change seen in one filter alone (filter or telescope
+  side), a split that makes no change, or a split made by hand carries
+  nothing (a seam is left for #878's choices).
+- **What it brings back**: this carrying is what serves C925's lights
+  shot before the 05-20 dust their own side's 05-19 flats at 104.0°: no
+  pair at two angles was shot before that change, so the ranges come
+  from flats after it. The data can test the argument only across the
+  later changes. Hα's and OIII's ranges hold pairs on both sides of the
+  09-16 corner shadow, each side alike on its own, so the angle term
+  survived that camera-side change; across the 05-20 change itself it is
+  an inference from the argument, not a measurement.
+
+A family's **measured angle range** is its clusters' recorded anglesA family's **measured angle range** is its clusters' recorded angles
+(`Family::angles`, `Book::angle_label`): `100.1–104.4°`, or
+`72.6° & 82.2°`. Its `rotation` is the middle angle of its largest
+cluster. Its key is the family key and its earliest session's first flat, so a
+session that arrives later never renames it, nor does a new night
+boundary, and a choice made by hand (§8) can find it again. Groups and splits within a family work as before.
+
+### 2.4 Defaults
 
 Set from every flat of two Starfront rigs (§7):
 
@@ -148,15 +243,21 @@ unchanged.
   slow drift cannot chain nights that differ into one group.
 - **Boundaries.** Between two groups: a window from the last flat before
   to the first flat after, the step's dust and broad, its spots, and a
-  drift note when no single step crossed the limit.
+  drift note when no single step crossed the limit. In a family of two
+  angles the step is told by the nearest pair across it at one angle;
+  a boundary with no such pair is at two angles, splits groups, and
+  makes no event (`Book::at_two_angles`): the light path differs there as
+  well as the dust, and which changed cannot be told.
 - **Outliers.** A group of one session between two groups whose facing
   sessions measure alike is one odd night, such as a hazy dawn, not a
   change: its two boundaries still split groups but make no event, so no
   light is flagged or kept from flats for it.
 - **Events.** Boundaries of one rig whose windows overlap and whose spots
-  coincide merge. The window is the overlap. An event seen in two filters
-  or at two angles is **camera side** and applies to every light of the
-  rig; otherwise it applies only to its filter.
+  coincide merge. The window is the overlap. An event seen in two filters,
+  or in two response families of one family key (one filter, optics and
+  sensor mode, two light paths), is **camera side** and applies to every
+  light of the rig; otherwise it applies only to its filter. Two angles
+  of one family are one light path and count once.
 - **Splits across two changes.** A split is **spanning**
   (`Book::spanning`) when another family of the rig holds a group with a
   split on either side, both splits inside the split's window (give or
@@ -243,8 +344,115 @@ evidence about the flats. The account names which placed the light.
 
 ### 4.2 Choosing flats
 
-Before any change is looked at, the angle gate learns what grouping
-measured. Seiza's `rotation_matches` takes an unknown angle as a match
+**The family first** (`LibrarySnapshot::flat_family`,
+`Book::choose_family`, `measure::lights`). With measured grouping and a
+light that records its angle:
+
+1. **Compatible families**: those with a flat that passes every gate for
+   the light but the angle (`flat_family_compatible`).
+2. **Angle epochs** (`epochs.rs`, `lights::AngleEpochs`): per rig, each
+   light's sky − mechanical offset, modulo a half turn, from N.I.N.A.'s
+   `RotatorPosition` and `RotatorMechanicalPosition` in
+   `acquiredimage.metadata`. Where PSF Guard has a pixel solve of the light
+   that still matches its file (`astrometry::source_still_matches`), its
+   position angle gives the sky angle instead, once the rig's lights that
+   have both agree on a convention (a constant turn, either sense, scatter
+   at most 1°). The measuring job gathers the offsets
+   (`flat_groups::gather_angles`) into `psf_guard_flat_light_angle`,
+   re-reading a solve only when its file's stamp changed; the book reads
+   that table and never the cache.
+   A jump of more than 2.5° between consecutive lights starts an epoch:
+   N.I.N.A.'s re-syncs move the offset by a degree or two (RedCat61
+   wanders between 138.6° and 140.6°), re-homes and re-seats by several
+   (C925: 76°, 79°, 87°, 97°).
+   A light compared with a flat session turns by the difference of their
+   epochs' offsets (`AngleEpochs::shift`).
+3. **Candidates** (`Book::family_candidates`): compatible families with a
+   session within `ANGLE_PRIOR_DEG` (10°) of the light's angle, recorded
+   or turned.
+4. **One candidate**: it (`Angle`), only when it has flats at the light's
+   recorded angle, within the rig's tolerance. An alike range never
+   counts as the recorded angle; a header or an epoch alone never hands a
+   light another angle's flats.
+5. **Two or more**: the light's imaging session's own pixels, when the
+   pass has read them. They **confirm** the family at the light's
+   recorded angle freely (`FamilyBasis::Pixels`, `moved: false`). They
+   **move** the light to another family only with corroboration
+   (`lights::corroboration`): the rotator's epochs turn the light into
+   that family's angles, or another filter's lights of the same imaging
+   session, at the same angles, moved to a family at the same angles too.
+   A move nothing corroborates is `Disputed`: the light keeps the family
+   at its recorded angle, if any, and is flagged (Check, `FlatsDiffer`).
+   Unread, or undecided, the family at the light's recorded angle
+   (`Nearest`, `undecided` when read); with none there, no family.
+6. **None**: matched by angle as before.
+
+A family serves the light's flats when it is at the light's recorded
+angle or its pixels chose it. Then its flats match: flats of another
+family with an angle do not, nor unmeasured flats when its pixels moved
+the light to another angle (`LibrarySnapshot::family_admits`). A flat of
+the family at another angle than the light's is admitted only when the
+light's pixels chose the family, when its session measured alike with
+a session of the family at the light's recorded angle
+(`Book::alike_with_angle`), or when an alike range of the family, of the
+flat's own carrying class, serves both angles and the flat lies on the
+light's side of every change of its rig that reaches its filter, the
+light's side known for each (`Book::alike_range_for`,
+`LibrarySnapshot::on_lights_side_of_changes`, which asks
+`flat_groups::place_light`, the one placement hook selection uses). A
+light shot while a change happened takes nothing through a range. The
+stacker's gate then reads the light at the flats' angle, and the light's
+`FlatFamily::alike_range` names the range, its pairs and nights for the
+panel ("Flats at 104.0°: this family's flats at 101.5–102.2° and
+104.2–104.4° measure alike (10 pairs over 9 nights, measured across a
+change of dust on the camera side only)").
+
+Flats admitted at another angle than the light's (by its pixels, by a
+measured-alike session or by a range) stay candidates only where they can
+do something: when no flat at the light's own angle lies on no known
+other side of a change from it, and only those on no known other side
+themselves. A stack's key names every candidate flat
+(`selection_hash`), and its master may fall back on the next set, so
+the candidates must stay; but a light whose own angle serves it keeps
+exactly the candidates, and the stack key, grouping by time gives it. Within the family, flats at the angle the
+light recorded sort first, as before families: measured alike is not
+identical; then those within the angle prior, then the rest, each in
+time order. The family's far angles serve where nothing nearer lies on
+the light's side of a change. The epochs widen the candidates but never
+reorder a family's flats: a sync's degree or two would.
+
+**Light evidence for families** (`family_job.rs`, stage
+`STAGE_FAMILIES` of the measuring job, per rig in its scope after the
+change evidence): the lights of every imaging session are grouped by
+filter, target and angle cluster (single linkage at the rig's rotation
+tolerance), and each group with two or more candidates is read once, up
+to `evidence::MAX_LIGHTS` lights. A light takes the row of its session
+and filter whose time and angle range hold it. A group whose kept row is
+current is skipped without reading its headers. Each
+candidate stands as its session nearest in time among those within the
+prior of the lights' middle angle, turned into that session's epoch
+(`Book::family_representative`): a family that is a candidate through
+one epoch's session is weighed by that session, not by one shot where the
+rotator stood elsewhere. Pedestals come out; the
+background is fitted against every pair (`choice::choose_response`, both
+ways round, with placebos), pairs measured alike flat against flat
+(`Book::measured_alike`) not fitted. A candidate wins when it beats every
+candidate it can be told apart from and loses to none; several winners
+alike with each other give the nearest angle among them, but never when
+any pair could not be fitted. The row (`psf_guard_flat_family_evidence`)
+keeps the candidates, the choice and each pair's fit; selection reads no
+pixel.
+
+**The stacker's gate.** A light whose master's flats lie off its
+recorded angle by more than the rig's tolerance has its gate read it at
+their angle (`MatchTolerances::light_rotation =
+LightRotation::Measured { degrees }`, seiza #282;
+`family_light_rotation`), so the stacker accepts the master its family
+chose. The flats' angle is that of the master's coherent subset, so every
+light of one master shares the gate, and `session_key` carries it
+(`flat-light-rotation=`).
+
+**Then the angle gate** learns what grouping measured. Seiza's `rotation_matches` takes an unknown angle as a match
 for any, for rigs without a rotator. A flat that records no angle but
 whose session joined a rotation cluster is matched at that cluster's
 angle. One whose angle stays unknown is a last resort
@@ -453,11 +661,29 @@ opens the rig's own value or the global one.
 - **Evidence key**: the imaging session (its profile and first light),
   the event and the evidence algorithm version. A change's key is its rig
   and window, so new flats that narrow the window ask the lights again.
+- **Family evidence**: `psf_guard_flat_family_evidence`, added like the
+  other tables, by session key, canonical filter, target, angle cluster
+  (its low angle to 0.1°) and `FAMILY_EVIDENCE_VERSION`; a table of the
+  older shape is dropped and made again. Its key
+  (`Book::family_evidence_key`) digests the candidates' family keys in
+  order, the sessions and responses standing for them, which pairs of
+  those measured alike, and the evidence and Seiza choice algorithm
+  versions, so new flats nearer the session, families that joined, a
+  comparison that changed or a new choice ask the lights again. A pass drops rows of the rigs it judged that no question asks
+  for, and rows of imaging sessions the catalog lost; other rigs' rows
+  wait for their own pass. Lights read but nothing to fit keep a row that
+  chooses nothing; lights not found leave the rig to be tried again.
+- **Light angles**: `psf_guard_flat_light_angle`, one row per light (rig,
+  time, offset, the solved position angle and its file stamp), written by
+  the job only when a row changes.
+- **Book digest**: the family evidence and light angle rows join the
+  digest the book is memoized by; loading the book reads no directory.
 - **Stacks**: `selection_hash` adds `flat-correction=<key>` for a
   corrected flat. Which flats a change leaves a light already shows in its
   candidate list.
-- **Health**: `library_digest` hashes the three tables;
-  `HEALTH_ALGORITHM_VERSION` is 4.
+- **Health**: `library_digest` hashes the three tables and the family
+  evidence; `HEALTH_ALGORITHM_VERSION` is 5, as families change which
+  flats a light takes.
 - **Stability check**: dips only; `FLAT_STABILITY_VERSION` 2, and
   judgements from version 1 are made again.
 - **Pictures**: the ratio picture goes through the preview queue
@@ -567,6 +793,42 @@ frames from the archive in place:
   The same rerun leaves UltraCat131 (one change, 84 lights flagged, 23 at
   the other angle) and RedCat61 (no change) as they were.
 
+**Response families** (the same three copies, rerun):
+
+- **C925**: 33 families become 32, and 216 comparisons 436. The OIII
+  flats at 82.2° and 72.6°, and at 79.7–82.3°, are one family
+  (`72.4–72.6° & 79.7–82.3°`); 140.9° stays a family of its own, since a
+  neighbour pair measured it apart from 81.2°. The three changes and their
+  windows stand. Alike ranges: Hα `100.1–102.2° and 104.2–104.4°` (7
+  pairs, 4 and 5 sessions), OIII `101.5–102.2° and 104.2–104.4°` (10
+  pairs), and three overlapping OIII ranges between 72.4–72.6° and
+  79.7–82.2°. G, R and SII have none: one end rests on a single session
+  (08-24 at 104.2° for G and R, 10-03 at 101.5° for SII); B and L have no
+  pair further apart than 2°. 170 lights change from main, all NGC 6543
+  lights at 100.8–101.7° shot before the first change: they take the
+  05-19 flats at 104.0° from their own side through a range carried
+  across camera-side dust, read at 104.0° by the stacker's gate. 153 were
+  flagged on main as having no flats on their side, 17 were corrected
+  across the change. Flagged lights fall from 1,586 to 1,433. No direct
+  pair measured apart on the same side of a change contradicts any of
+  them: the only measured pairs between their flats and flats at their
+  own angle cross the dust change. 48 lights were chosen by their own
+  pixels, all at their recorded angle; none was moved or disputed.
+- **UltraCat131**: 9 families; one range (Hα `53.4–53.5° and 163.8°`,
+  measured after the 09-17 change). Every light's master, basis and flag
+  is main's; the 23 Heart of the Soul R lights take the 09-16 R flats at
+  3.2° by the rig's measured angle term, as on main.
+- **RedCat61**: 13 families, ranges such as `180.3–181.0° and
+  230.9–231.3°` in every filter (tracked sky flats behind a refractor do
+  not depend on the angle), no change, no flag; every master is main's,
+  since every light has flats at its own angle.
+- **Rebuilds**: a stack key names every candidate flat, so a light
+  whose candidates change rebuilds even when its master does not. With
+  other-angle flats admitted only where nothing at the light's own angle
+  can serve it, no light on the three catalogs keeps main's master and
+  basis with other candidates (by the nights the reports list); on C925
+  the 170 lights whose master changes rebuild, and no others.
+
 The prototype behind these numbers, its pictures and the method are kept
 with the PR's working notes; the Rust metric reproduced them.
 
@@ -574,13 +836,12 @@ with the PR's working notes; the Rust metric reproduced them.
 
 ### Move to Seiza
 
-Once the current calibration work lands:
-
-- **`flat_groups::measure` into `seiza-calibration`**: the session
-  response, star mask, comparison metrics, change map and its
-  application, event detection, placement and the light evidence. The
-  module is already pure (§2), so it lifts without rework; PSF Guard keeps
-  the job, the store and the selection.
+- **Done in seiza #282**: the session response, star mask, comparison
+  metrics, change map and its application, the light evidence, and the
+  light-against-responses choice are `seiza_calibration::flat_response`;
+  `MatchTolerances::light_rotation` lets the stacker's gate follow a
+  measured angle. PSF Guard keeps the families, events, placement, the
+  job, the store and the selection.
 - **The stability check onto Seiza's measurement.** PSF Guard's
   `flat_set_stability` reads each flat back against its master and, until
   this change, counted bright departures too (`abs()`), which made tracked

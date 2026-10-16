@@ -247,6 +247,9 @@ pub struct CalibrationSelection {
     /// for its own master, and refused by every fallback (the next set when
     /// one is unstable, an external master).
     pub flat_held_back: Vec<String>,
+    /// The response family the flats come from, when measured grouping
+    /// chose one (see [`flat_groups::lights`]).
+    pub flat_family: Option<flat_groups::FlatFamily>,
 }
 
 /// Which kinds of usable frame the library holds for one light's sensor,
@@ -306,6 +309,9 @@ impl CalibrationSelection {
         let mut tolerances = self.rules.tolerances();
         if let Some(widened) = self.flat_basis.rotation_tolerance() {
             tolerances.rotation_deg = tolerances.rotation_deg.max(widened);
+        }
+        if let Some(family) = &self.flat_family {
+            tolerances.light_rotation = family.light_rotation;
         }
         tolerances
     }
@@ -2099,6 +2105,18 @@ impl LibrarySnapshot {
             ..Default::default()
         };
         let policy = rules.external_masters;
+        let family = self.flat_family(light, &rules);
+        // The family serves the light's flats when it has flats at the
+        // angle the light recorded, or its own pixels chose it. A family
+        // its lights only pointed to is a Check, not flats.
+        let serving = family
+            .as_ref()
+            .filter(|choice| choice.at_recorded || choice.by_pixels());
+        // Flats of the serving family at another angle than the light's,
+        // admitted by measurement: they stay candidates only where nothing
+        // at the light's own angle can serve it (below), so a light that
+        // never needs them keeps the candidates, and the stack key, it had.
+        let mut off_angle: HashSet<String> = HashSet::new();
         for candidate in &self.frames {
             if candidate.is_master && policy == ExternalMasterPolicy::Ignore {
                 continue;
@@ -2132,16 +2150,32 @@ impl LibrarySnapshot {
                         && dark_within_reach(candidate, light.timestamp, &rules)
                 }
                 CalibrationKind::DarkFlat => false,
-                CalibrationKind::Flat => match self.measured_angle(candidate, &rules) {
-                    // Flats that record no angle, measured alike with a
-                    // rotation cluster: matched at its angle.
-                    Some(angle) if candidate.rotation.is_none() => {
-                        let mut at_angle = candidate.clone();
-                        at_angle.rotation = Some(angle);
-                        flat_matches(light, &at_angle, &rules)
+                CalibrationKind::Flat => {
+                    match self.family_admits(serving, light, candidate, &rules) {
+                        Some(admitted) => {
+                            if admitted && !self.at_lights_angle(light, candidate, &rules) {
+                                off_angle.insert(candidate.frame_uuid.clone());
+                            }
+                            admitted && {
+                                // Its family was chosen for the light: matched at
+                                // the light's angle, every other gate as always.
+                                let mut at_angle = candidate.clone();
+                                at_angle.rotation = light.rotator_position;
+                                flat_matches(light, &at_angle, &rules)
+                            }
+                        }
+                        None => match self.measured_angle(candidate, &rules) {
+                            // Flats that record no angle, measured alike with a
+                            // rotation cluster: matched at its angle.
+                            Some(angle) if candidate.rotation.is_none() => {
+                                let mut at_angle = candidate.clone();
+                                at_angle.rotation = Some(angle);
+                                flat_matches(light, &at_angle, &rules)
+                            }
+                            _ => flat_matches(light, candidate, &rules),
+                        },
                     }
-                    _ => flat_matches(light, candidate, &rules),
-                },
+                }
             };
             if matches && candidate.kept_out.is_some() {
                 selected.kept_out.push(candidate.clone());
@@ -2157,11 +2191,76 @@ impl LibrarySnapshot {
             }
         }
 
+        if !off_angle.is_empty() {
+            // One at the light's own angle that can reach it leaves them
+            // nothing to do; one across a known change from the light
+            // could serve it only as its own angle's flats would, carried
+            // or flagged, which they are not.
+            let own_angle_serves = selected.flat.iter().any(|frame| {
+                !off_angle.contains(&frame.frame_uuid)
+                    && self.at_lights_angle(light, frame, &rules)
+                    && self.not_across_a_known_change(light, frame)
+            });
+            let keep = |frame: &CalibrationFrame| {
+                !off_angle.contains(&frame.frame_uuid)
+                    || (!own_angle_serves && self.not_across_a_known_change(light, frame))
+            };
+            selected.flat.retain(|frame| keep(frame));
+            selected.kept_out.retain(|frame| keep(frame));
+        }
         sort_candidates(&mut selected.bias, light.timestamp);
         sort_candidates(&mut selected.dark, light.timestamp);
         sort_candidates(&mut selected.flat, light.timestamp);
+        if let Some(family) = serving {
+            // Within its family, the flats at the angle the light recorded
+            // first, as before families: measured alike is not identical.
+            // Then those within the angle prior, then the rest, each in
+            // time order: the family's far angles serve where nothing
+            // nearer lies on the light's side of a change. The epochs widen
+            // which families are candidates; they do not reorder a
+            // family's flats, since a sync's degree or two would.
+            let tier = |frame: &CalibrationFrame| match self.measured_angle(frame, &rules) {
+                Some(flat) if rotation_gap(family.light_angle, flat) <= rules.rotation_deg => 0,
+                Some(flat)
+                    if rotation_gap(family.light_angle, flat)
+                        <= flat_groups::lights::ANGLE_PRIOR_DEG =>
+                {
+                    1
+                }
+                _ => 2,
+            };
+            selected.flat.sort_by_key(tier);
+        }
         self.keep_unknown_angles_last(light, &rules, &mut selected.flat);
         self.choose_flats_around_changes(light, &rules, &mut selected);
+        selected.flat_family = family.map(|choice| {
+            let mut family = flat_groups::FlatFamily::of(&self.flat_book, &choice);
+            family.light_rotation = family_light_rotation(light, &selected.flat, &rules);
+            // Its flats lie at another angle that the family measures
+            // alike with the light's: say over which span, and on what.
+            if let flat_groups::LightRotation::Measured { degrees } = family.light_rotation {
+                let book = &self.flat_book;
+                family.alike_range = selected
+                    .flat
+                    .iter()
+                    .filter(|frame| frame.rotation.is_some_and(|r| (r - degrees).abs() < 1e-6))
+                    .find_map(|frame| book.session_of_frame(&frame.frame_uuid))
+                    .and_then(|session| {
+                        let range = book.alike_range_for(
+                            choice.family,
+                            session,
+                            choice.light_angle,
+                            rules.rotation_deg,
+                        )?;
+                        let group = book.families[choice.family]
+                            .groups
+                            .iter()
+                            .position(|group| group.contains(&session));
+                        Some(flat_groups::AlikeRangeNote::of(range, degrees, group))
+                    });
+            }
+            family
+        });
         if let Some(flat) = selected.flat.first() {
             for candidate in self.of_kind(CalibrationKind::DarkFlat) {
                 // Dark-flats pair with the flat, but the boundary is judged
@@ -2185,7 +2284,210 @@ impl LibrarySnapshot {
     }
 }
 
+/// How the stacker's gate reads a light whose flats came from its measured
+/// response family: as recorded when the flats its master is built from lie
+/// at its angle, else at their angle, which the family measured to be the
+/// light's own light path. Every light of one master shares it.
+fn family_light_rotation(
+    light: &FrameMeta,
+    flats: &[CalibrationFrame],
+    rules: &Rules,
+) -> flat_groups::LightRotation {
+    use flat_groups::LightRotation;
+    let subset = coherent_master_subset(CalibrationKind::Flat, flats, rules);
+    let Some(angle) = subset
+        .iter()
+        .find_map(|frame| frame.rotation.filter(|a| a.is_finite()))
+    else {
+        return LightRotation::Recorded;
+    };
+    match light.rotator_position.filter(|a| a.is_finite()) {
+        Some(recorded)
+            if subset.iter().all(|frame| {
+                frame
+                    .rotation
+                    .is_none_or(|flat| rotation_gap(recorded, flat) <= rules.rotation_deg)
+            }) =>
+        {
+            LightRotation::Recorded
+        }
+        Some(_) => LightRotation::Measured { degrees: angle },
+        None => LightRotation::Recorded,
+    }
+}
+
 impl LibrarySnapshot {
+    /// The response family a light's flats come from, with measured
+    /// grouping and a light that records its angle: among the families
+    /// whose flats pass every gate but the angle, the one its angle, its
+    /// rotator's epochs and its own pixels point to (see
+    /// [`flat_groups::lights`]). `None` matches flats by angle as before.
+    fn flat_family(
+        &self,
+        light: &FrameMeta,
+        rules: &Rules,
+    ) -> Option<flat_groups::lights::FamilyChoice> {
+        if rules.flat_grouping != rules::FlatGrouping::Measured
+            || self.flat_book.families.is_empty()
+        {
+            return None;
+        }
+        let angle = light.rotator_position.filter(|a| a.is_finite())?;
+        let compatible = self.flat_family_compatible(light, rules);
+        self.flat_book.choose_family(
+            &rules::light_rig_uuid(light),
+            light.filter.as_deref(),
+            light.timestamp,
+            Some(angle),
+            &compatible,
+            rules.rotation_deg,
+        )
+    }
+
+    /// The response families whose flats pass every gate for `light` but
+    /// the angle.
+    pub(crate) fn flat_family_compatible(&self, light: &FrameMeta, rules: &Rules) -> Vec<usize> {
+        let book = &self.flat_book;
+        let light_signature = light_signature(light);
+        let mut tolerances = rules.tolerances();
+        tolerances.rotation_deg = seiza_calibration::MatchTolerances::MAX_ROTATION_DEG;
+        let mut compatible: Vec<usize> = self
+            .of_kind(CalibrationKind::Flat)
+            .filter(|frame| {
+                !frame.is_master
+                    && frame.kept_out.is_none()
+                    && validity_admits(frame, light.timestamp)
+                    && sensor_matches(light, frame)
+                    && seiza_calibration::optics_match(
+                        &light_signature.seiza,
+                        &frame_signature(frame).seiza,
+                        &tolerances,
+                    )
+            })
+            .filter_map(|frame| book.family_of_frame(&frame.frame_uuid))
+            .collect();
+        compatible.sort_unstable();
+        compatible.dedup();
+        compatible
+    }
+
+    /// Whether a flat may serve a light whose response family serves it:
+    /// `None` to match it by angle as before (no family serves, a flat whose
+    /// family records no angle, or one not measured while the family is at
+    /// the light's recorded angle); `Some(false)` for a flat of another
+    /// family with an angle, or one not measured when its own pixels moved
+    /// the light to another angle; `Some(true)` for a flat of its family
+    /// that its evidence reaches. A flat of its family at the light's
+    /// recorded angle always is. One at another angle is only when the
+    /// light's own pixels chose the family, its session measured alike
+    /// with a session of the family at the light's recorded angle, or the
+    /// family's flats measure alike across a span holding both angles
+    /// ([`flat_groups::model::AlikeRange`]) and the flat lies on the
+    /// light's side of every change: a header or an epoch alone never
+    /// hands a light flats at another angle.
+    fn family_admits(
+        &self,
+        family: Option<&flat_groups::lights::FamilyChoice>,
+        light: &FrameMeta,
+        candidate: &CalibrationFrame,
+        rules: &Rules,
+    ) -> Option<bool> {
+        let family = family?;
+        let book = &self.flat_book;
+        match book.family_of_frame(&candidate.frame_uuid) {
+            Some(of) if of == family.family => {
+                let angle = self.measured_angle(candidate, rules);
+                let at_angle = angle.is_some_and(|flat| {
+                    rotation_gap(family.light_angle, flat) <= rules.rotation_deg
+                });
+                let in_range = || {
+                    book.session_of_frame(&candidate.frame_uuid)
+                        .and_then(|session| {
+                            book.alike_range_for(
+                                of,
+                                session,
+                                family.light_angle,
+                                rules.rotation_deg,
+                            )
+                        })
+                        .is_some()
+                        && self.on_lights_side_of_changes(light, candidate)
+                };
+                Some(
+                    at_angle
+                        || family.by_pixels()
+                        || in_range()
+                        || book
+                            .session_of_frame(&candidate.frame_uuid)
+                            .is_some_and(|session| {
+                                book.alike_with_angle(
+                                    of,
+                                    session,
+                                    family.light_angle,
+                                    rules.rotation_deg,
+                                )
+                            }),
+                )
+            }
+            Some(of) if book.families[of].angles.is_empty() => None,
+            Some(_) => Some(false),
+            None if family.moved() => Some(false),
+            None => None,
+        }
+    }
+
+    /// Whether a flat lies at the light's recorded angle, within the rig's
+    /// tolerance.
+    fn at_lights_angle(&self, light: &FrameMeta, frame: &CalibrationFrame, rules: &Rules) -> bool {
+        match (light.rotator_position, self.measured_angle(frame, rules)) {
+            (Some(light), Some(flat)) => rotation_gap(light, flat) <= rules.rotation_deg,
+            _ => false,
+        }
+    }
+
+    /// Whether a flat lies on no known other side of a measured change from
+    /// the light: on its side of every change whose side for the light is
+    /// known.
+    fn not_across_a_known_change(&self, light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
+        let book = &self.flat_book;
+        let rig = rules::light_rig_uuid(light);
+        let Some(at) = light.timestamp else {
+            return true;
+        };
+        book.events
+            .iter()
+            .filter(|event| event.rig_uuid == rig && event.applies_to(light.filter.as_deref()))
+            .all(
+                |event| match flat_groups::place_light(book, event, at).side() {
+                    Some(side) => candidate
+                        .captured_at
+                        .is_none_or(|captured| event.side_of(captured) == Some(side)),
+                    None => true,
+                },
+            )
+    }
+
+    /// Whether a flat lies on the light's side of every measured change of
+    /// the light's rig that reaches its filter, the light's side known for
+    /// each: a light shot while a change happened takes no flats through
+    /// an alike range.
+    fn on_lights_side_of_changes(&self, light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
+        let book = &self.flat_book;
+        let rig = rules::light_rig_uuid(light);
+        let (Some(at), Some(captured)) = (light.timestamp, candidate.captured_at) else {
+            return false;
+        };
+        book.events
+            .iter()
+            .filter(|event| event.rig_uuid == rig && event.applies_to(light.filter.as_deref()))
+            .all(
+                |event| match flat_groups::place_light(book, event, at).side() {
+                    Some(side) => event.side_of(captured) == Some(side),
+                    None => false,
+                },
+            )
+    }
+
     /// A flat's rotator angle: the one it records, or, with measured
     /// grouping, the angle of the rotation cluster its session measured
     /// alike with.
@@ -2285,7 +2587,7 @@ impl LibrarySnapshot {
         }
         let placements: Vec<(usize, flat_groups::model::Placement)> = events
             .iter()
-            .map(|(index, event)| (*index, book.place(event, at)))
+            .map(|(index, event)| (*index, flat_groups::place_light(&book, event, at)))
             .collect();
         let side_of = |frame: &CalibrationFrame, event: &flat_groups::model::Event| {
             frame
@@ -3264,6 +3566,11 @@ pub struct KindExplanation {
     /// Flats only: the choice itself, for the panel to mark.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basis: Option<flat_groups::FlatBasis>,
+    /// Flats only: the response family they come from, when measured
+    /// grouping chose one at another angle than the light's or by its own
+    /// pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<flat_groups::FlatFamily>,
     /// Flats only: when the master mixes nights measured alike, the largest
     /// difference between them, fractions of the background.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3467,8 +3774,20 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
         let (chosen_by, basis, alike) = if kind == CalibrationKind::Flat {
             let basis = (selected.flat_basis != flat_groups::FlatBasis::Nearest)
                 .then(|| selected.flat_basis.clone());
-            (
+            // The family first: which light path, then which side of a
+            // change.
+            let chosen_by = [
+                selected
+                    .flat_family
+                    .as_ref()
+                    .and_then(flat_groups::describe_family),
                 flat_groups::describe_basis(&selected.flat_basis, &selected.rules),
+            ]
+            .into_iter()
+            .flatten()
+            .reduce(|family, basis| format!("{family}. {basis}"));
+            (
+                chosen_by,
                 basis,
                 // Grouping by time says nothing of measurements.
                 (selected.rules.flat_grouping == rules::FlatGrouping::Measured)
@@ -3482,6 +3801,14 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
             chosen_by,
             basis,
             alike,
+            family: (kind == CalibrationKind::Flat)
+                .then(|| {
+                    selected
+                        .flat_family
+                        .clone()
+                        .filter(|family| flat_groups::describe_family(family).is_some())
+                })
+                .flatten(),
             kind: kind.as_str().to_string(),
             master: FrameSpan::of(master.iter().map(|frame| {
                 (
@@ -4822,6 +5149,12 @@ fn session_key(selected: &CalibrationSelection) -> String {
     // one session shares the session's gate.
     if let Some(tolerance) = selected.flat_basis.rotation_tolerance() {
         parts.push(format!("flat-rotation-tolerance={tolerance:.3}"));
+    }
+    // So does a gate that reads the light at its flats' measured angle.
+    if let Some(family) = &selected.flat_family
+        && !family.light_rotation.is_recorded()
+    {
+        parts.push(format!("flat-light-rotation={:?}", family.light_rotation));
     }
     hex_digest(&parts.join("\u{1e}"))
 }

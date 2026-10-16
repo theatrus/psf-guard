@@ -2837,6 +2837,58 @@ export interface CalibrationKindExplanation {
   basis?: FlatBasis;
   /** Flats only: the master mixes nights measured alike. Fractions, not percent. */
   alike?: { nights: number; dust: number; broad: number };
+  /** Flats only: the response family they come from, when measured grouping
+   *  chose one at another angle than the light's, or by its own pixels. */
+  family?: FlatFamilyNote;
+}
+
+/** The response family a light's flats come from, and how it was chosen. */
+export interface FlatFamilyNote {
+  key: string;
+  /** Filter, as the flats name it, and measured angle range: "OIII at
+   *  72.6° & 82.2°". */
+  label: string;
+  /** `angle`: the only family near it, at its recorded angle; `pixels`:
+   *  its own lights follow these flats; `nearest`: the family at its
+   *  recorded angle, its lights not read or unable to tell; `disputed`:
+   *  its lights pointed to another family and nothing confirmed it. */
+  by: 'angle' | 'pixels' | 'nearest' | 'disputed';
+  /** `pixels` and `disputed`: how many lights, of which targets, said so. */
+  lights?: number;
+  targets?: string[];
+  /** `pixels`: whether they moved it off its recorded angle, and what
+   *  confirmed the move ("its OIII lights", "the rotator's epochs"). */
+  moved?: boolean;
+  corroborated?: string | null;
+  /** `nearest`: its lights were read and could not tell. */
+  undecided?: boolean;
+  /** `disputed`: the family its lights pointed to. */
+  pointed?: string;
+  /** Whether the family has flats at the light's recorded angle. */
+  at_recorded: boolean;
+  light_angle: number;
+  /** How far the rotator's epochs turn the light's angle into the flats'. */
+  shift: number;
+  /** The families within the angle prior, nearest first. */
+  candidates: string[];
+  /** When its master's flats lie at another angle inside a span the
+   *  family's flats measure alike across: the span and its evidence. */
+  alike_range?: FlatAlikeRangeNote;
+}
+
+/** A span of angles a flat family's own flats measure alike across. */
+export interface FlatAlikeRangeNote {
+  /** The angle of the flats the light's master is built from. */
+  flats_angle: number;
+  low: number;
+  high: number;
+  /** The angles at its two ends: "101.5–102.2° and 104.2–104.4°". */
+  label: string;
+  pairs: number;
+  nights: number;
+  /** Its pairs were all measured in other groups of the family, across
+   *  camera-side dust changes only. */
+  carried: boolean;
 }
 
 /** A measured change near a light, as its account names it. Fractions. */
@@ -4129,11 +4181,17 @@ export interface FlatSpot {
   peak_pct: number;
 }
 
-/** One filter at one angle on one rig. */
+/** One filter's response family on one rig: the angles whose flats
+ *  measure alike. */
 export interface FlatFamily {
   key: string;
   filter: string | null;
+  /** The middle angle of its largest rotation cluster. */
   rotation: number | null;
+  /** Its measured angle range, one span per rotation cluster that joined. */
+  angles?: { low: number; high: number }[];
+  /** That range in words: "100.1–104.4°", "72.6° & 82.2°", "no angle". */
+  angle_label?: string;
   /** Newest first. */
   groups: FlatGroup[];
   /** `splits[i]` lies between `groups[i + 1]` (older) and `groups[i]` (newer). */

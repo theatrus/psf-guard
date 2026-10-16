@@ -432,13 +432,16 @@ own side of each change.
 
 After each grading pass, a background stage reads every flat session once
 more: one night of one rig, filter, focal length, sensor mode and rotator
-angle, with at least three flats in use. Focal lengths within the rig's
+angle, with at least two flats in use. Two flats make a response as two
+make a master; their combination is a mean, noisier than a median of
+three or more, and the comparison allows for that. Focal lengths within the rig's
 tolerance (1 mm by default) count as one; flats shot through a reducer
 are never compared with flats shot without it, and flats that record no
 focal length join the rig's only one, or keep to themselves when it has
 several. It takes at most 16 flats of a session, bins each to at most
 1,024 px on the long side, divides each by its median and keeps the
-sigma-clipped median of them: the session's **response**. Stars that move
+sigma-clipped median of them: the session's **response**. The measuring
+itself is Seiza's (`seiza_calibration::flat_response`). Stars that move
 between frames drop out. Stars that sit still, as in tracked sky flats,
 are masked when two responses are compared.
 
@@ -491,31 +494,50 @@ sessions`, then the pairs it compares, then the lights it reads.
 A read-only catalog, or one from an older build, has no place for the
 numbers and groups flats by time, as before.
 
+### Response families
+
+The rotator angle a flat records is a good guide but not proof of its
+light path. A rotator re-homed or a camera re-seated reads the same angle
+for another position, and on some optics flats tens of degrees apart
+measure alike. So flats are grouped by what they measure, with the angle
+as a starting point:
+
+1. Within one rig, filter, focal length and sensor mode, the recorded
+   angles first form **angle clusters**: angles join while the gaps between
+   them are no wider than the rig's rotation tolerance, at most 2°. Flats
+   at 101.3°, 102.2° and 104.0° are one cluster; flats at 82° and 104° are
+   two. A wider match tolerance lets a light reach further for flats; it
+   does not make two angles one.
+2. Each session is compared with its neighbours in time in every other
+   cluster of its filter, as well as within its own.
+3. Two clusters join into one **response family** when some pair of their
+   sessions shot within one flat session window, or neighbours in time,
+   measure alike, and no pair shot within one window measures apart.
+   Clusters never measured alike stay apart.
+4. Flats that record no angle join the family one of whose neighbours in
+   time they measure alike with, when exactly one does and every other
+   was measured and is unlike. Alike with none, or with several, they keep
+   to themselves at no angle.
+
+A family's **measured angle range** is the recorded angles of its
+clusters: `100.1–104.4°`, or `72.6° & 82.2°` for two angles whose flats
+measure alike. Frames names each family by it.
+
 ### Groups and changes
 
-Within one rig, filter, sensor mode and rotator angle, sessions join into
-**groups** in time order. Two sessions are alike when their dust and light
+Within one response family, sessions join into **groups** in time
+order. Two sessions are alike when their dust and light
 pattern are both within the limits: 1% dust and 2% light pattern by
 default. Each group holds only sessions measured alike with every other
 session it was compared with, so a slow drift cannot chain nights that
 differ into one master.
 
-Angles count as one while the rig's flats step between them in gaps no
-wider than its rotation tolerance, at most 2°: flats at 101.3°, 102.2° and
-104.0° are one angle; flats at 82° and 104° are two. A wider match
-tolerance lets a light reach further for flats; it does not make two
-angles one. Flats that record no angle, on a rig whose other flats do,
-are compared with that filter's flats either side of them in time at
-every angle. When they measure alike with one angle and unlike every
-other, they take the angle of the flats they matched. Alike with none, or
-with several, they keep to themselves at no angle.
-
 Between two groups lies a **split**, a window from the last flat before it
 to the first flat after it. Splits of one rig whose windows overlap and
 whose shadows sit at the same sensor position are one **change**. Dust on
 the camera side turns with the camera, so the same shadow shows in every
-filter and at every angle: a change seen in two filters or at two angles
-applies to every light of the rig. A change seen in one filter, as filter
+filter and every light path: a change seen in two filters, or in two
+response families of one filter, applies to every light of the rig. A change seen in one filter, as filter
 dust, applies to that filter only. One night unlike the nights either side
 of it, which measure alike, as after a hazy dawn, keeps to a group of its
 own but is no change: no light is flagged or kept from flats for it.
@@ -551,14 +573,66 @@ A light stands before or after a change:
    only when the change's map or the flat it divides by changes.
 4. Otherwise it is **undetermined**.
 
+### Which family a light takes
+
+First, the response family. The candidates are the families of the
+light's filter and sensor mode whose measured angle range lies within 10°
+of the light's angle:
+
+- **Its angle** as it recorded it, and as the rotator's **epochs** turn it.
+  N.I.N.A. records each light's sky angle, synced from its own plate
+  solves, beside the mechanical angle; where PSF Guard has solved the
+  light's pixels, that solve gives the sky angle instead. Sky − mechanical
+  is constant until the rotator is re-homed or the camera re-seated, so
+  each run of lights with one offset is an epoch, and a light compared
+  with flats of another epoch is turned by the difference.
+- **One candidate**: its flats, when it has flats at the light's recorded
+  angle. A header or an epoch alone never hands a light flats at another
+  angle.
+- **Two or more**: the light's own pixels choose. The measuring job takes
+  the sky background of up to eight lights of each imaging session,
+  filter, target and angle, and fits it against what tells each pair of
+  candidates apart, weighed against the same fit where nothing differs
+  (Seiza's `flat_response::choice`). The family the lights follow wins
+  when it stands clear of every other. The answer is kept, so choosing
+  flats reads no pixel.
+  - Pixels that pick the family at the light's recorded angle confirm it.
+  - Pixels that pick a family at another angle move the light only when
+    something else agrees: the rotator's epochs put the light at that
+    family's angle, or the session's lights of another filter, at the
+    same angles, moved the same way. Otherwise the light keeps the family
+    at its recorded angle and gets a Check.
+  - Over a nebula the lights usually cannot tell, and the light keeps the
+    family at its recorded angle; the panel says so.
+- **None** within 10°, or none at its recorded angle that its pixels
+  confirm: flats are matched by angle as before.
+
+Within its family a light takes the flats at its own angle first, then
+those within 10° of it, then the rest; the family's far angles serve
+where nothing nearer lies on its side of a change. A flat at another
+angle serves only when the light's own pixels chose the family, when
+its session measured alike with the family's flats at the light's
+angle, or when the family's own flats at the two angles measure alike.
+That needs pairs compared directly, with two sessions on two nights at
+each angle, and no change between the two flats of a pair; a pair
+measured apart that it would serve rules it out. It reaches across a
+change only when that change is dust on the camera side, which leaves
+how flats depend on the angle as it was. A flat served this way must
+come from the light's side of every change, and the panel names the
+angles and their pairs. A light whose flats sit at another angle than it recorded is read
+at its flats' angle when a stack judges it against its masters, so the
+stacker does not refuse the master its family chose.
+
 ### Which flats a light takes
 
-A light no change touches takes the nearest flats, as before. Otherwise,
-in this order:
+A light no change touches takes the nearest flats of its family, as
+before. Otherwise, in this order:
 
-1. Its own angle's flats from its own side of every change.
+1. Its family's flats from its own side of every change.
 2. When it has none, its own side's flats at the nearest other angle, if
-   this rig's flats measure alike across angles. Flats of one filter shot
+   this rig's flats measure alike across angles. Angles that measure alike
+   are usually one family already; this serves a family never measured
+   against the others. Flats of one filter shot
    at two angles within one flat session show how much the angle matters;
    that difference must be within the split limits.
 3. Otherwise, when the change is on the camera side, its own angle's flats
@@ -580,7 +654,13 @@ change this way takes a new master: its stack's key changes.
 
 An undetermined light keeps the nearest flats and is flagged. The light's
 Calibration panel says which of these chose its flats, under **Chosen
-by**, with the change and how the light was placed. When its flat master
+by**, with the change and how the light was placed. When its family was
+not simply the one at its recorded angle, **Flat family** names it with
+its measured angle range and how it was chosen: *chosen by its own
+pixels*, *moved by its own pixels* with what confirmed it, *its angles
+measure alike*, or *at its recorded angle*, with whether its lights
+could not tell or have not been read yet. A move nothing confirmed reads
+*check: its lights point to …*. When its flat master
 mixes nights, the panel says how alike they measured.
 
 An export, and a WBPP run, place the same flats a stack takes. WBPP
