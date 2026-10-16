@@ -490,6 +490,9 @@ describe('duplicate checks and repairs in the job line', () => {
     for (const state of ['idle', 'done', 'stopped', 'failed'] as const) {
       expect(activityItems([{ ...db, duplicates: { ...idle, state } }], [])).toEqual([]);
     }
+  });
+});
+
 describe('backups in the job line', () => {
   const job: BackupJob = {
     trigger: 'manual', scope: 'full', include_secrets: false, destination: '/backups',
