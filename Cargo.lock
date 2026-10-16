@@ -111,7 +111,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -122,7 +122,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1231,7 +1231,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1427,7 +1427,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3061,7 +3061,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3223,7 +3223,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4245,7 +4245,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4735,7 +4735,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4793,7 +4793,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4965,20 +4965,19 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.31.1"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfa12b573157d6effdfd6d5259be51c84cb9aed56871a841b0e96c236f14cd57"
+checksum = "2e1f6b897bd0f1b306cecd8c6e398d40341b173886ffdcac66a9df1e50840f66"
 dependencies = [
- "chrono",
  "directories",
  "image",
- "kamadak-exif",
  "memmap2",
  "multiversion",
  "postcard",
  "rayon",
  "rustc-hash",
  "seiza-calibration",
+ "seiza-core",
  "seiza-stats",
  "serde",
  "serde_json",
@@ -5001,16 +5000,23 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d1dff197eb787c08b397926ec0e974347785a14dbd6842a59be1f21e112fc98"
+checksum = "0aac3bdf11359a88256d2fb884a2ac2d793c6cbc6ed146eb7da1e2f15bb2c285"
 dependencies = [
+ "nalgebra",
  "rayon",
  "seiza-imgproc",
  "seiza-stats",
  "serde",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "seiza-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcc138b25739bdb6456c81373a8042bdddcfc957283e08af18ad9f6c083f95bc"
 
 [[package]]
 name = "seiza-deconvolution"
@@ -5058,14 +5064,17 @@ dependencies = [
 
 [[package]]
 name = "seiza-image-io"
-version = "0.6.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c23177db98199a1de41791f2891206a58d1298b78df4976182423461048f439f"
+checksum = "4d3f9a26e2cb38c5e58fc13b0e026e8c2a0f84319ea8d5d0a23ca71047dcf020"
 dependencies = [
+ "chrono",
  "image",
- "seiza",
+ "kamadak-exif",
+ "seiza-core",
  "seiza-fits",
  "seiza-xisf",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -5080,15 +5089,14 @@ dependencies = [
 
 [[package]]
 name = "seiza-satellites"
-version = "0.20.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2dcb2b0863f8f11b9ed0cb696a18311e5dd8ced6da7ef48e78060e815fd62c5a"
+checksum = "e76e3f8f288ee7febe65e5dbc69b4af204577ce26273c157a1301ab5fab21366"
 dependencies = [
  "directories",
  "fs2",
  "reqwest",
  "satkit",
- "seiza",
  "seiza-download",
  "serde",
  "serde_json",
@@ -5099,9 +5107,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.34.0"
+version = "0.36.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e7bf8e30f844935c64c7c25739e02a623df18bbebf18c3e50843247fb9c3e53"
+checksum = "8688fc5e324aa6e450b13980768f4b0736575adfa13952905996c98b4dbc2dce"
 dependencies = [
  "multiversion",
  "postcard",
@@ -5125,9 +5133,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stars"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c178a3d3676866cc042b689934b98c7e60e46e96c4fc9d8509b8d1f18773cd5"
+checksum = "8d8f7ea3db9ae4e4ca1ad90f802ecb7167e918867ab749ef51c9065837a7e3c7"
 dependencies = [
  "nalgebra",
  "rayon",
@@ -5154,9 +5162,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-xisf"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "035e6f264aba23ca99eb0c32046393b8811f82b2dbf00eedf1c3d65b6ef2cc40"
+checksum = "deb2f85239a996204ee9ea4f0f7c1ebf050a1dd878125e0b04bac1c98c9eaea3"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -5535,7 +5543,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6197,7 +6205,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6662,7 +6670,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.21",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7090,7 +7098,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7111,7 +7119,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "raw-window-handle",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
  "windows-version",
 ]
 
@@ -7492,7 +7500,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

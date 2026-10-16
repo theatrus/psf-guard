@@ -9,7 +9,7 @@ test('partial data directory reports usable and missing Seiza resources', async 
   const body = await response.json();
   expect(body.success).toBe(true);
   expect(body.data).toMatchObject({
-    seiza_version: '0.31.1',
+    seiza_version: '0.33.0',
     seiza_fits_version: '0.3.0',
     features: {
       object_association: true,

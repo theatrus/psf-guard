@@ -200,7 +200,7 @@
   they waited for the next server start. The calibration library shows each
   measured dark's level and spread, in ADU.
 - Every stack and master rebuilds once, the first time each is used, after
-  the move to Seiza 0.31 and stacking 0.34. Astrometry, satellite, stretch,
+  the move to Seiza 0.33 and stacking 0.36. Astrometry, satellite, stretch,
   and background cache metadata now follows the installed engine versions,
   so later dependency updates also invalidate affected cached results.
 - Automatic import no longer creates projects on its own. Frames for targets

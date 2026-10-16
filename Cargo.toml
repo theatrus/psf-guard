@@ -48,20 +48,20 @@ regex = "1.12"
 globset = "0.4"
 semver = "1"
 byteorder = "1.5"
-seiza = "0.31.1"
+seiza = "0.33.0"
 seiza-download = "0.9.0"
 seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
 seiza-fits = "=0.3.0"
-seiza-satellites = { version = "0.20.0", features = ["serde"] }
-seiza-stacking = "0.34.0"
+seiza-satellites = { version = "0.22.0", features = ["serde"] }
+seiza-stacking = "0.36.0"
 seiza-stretch = "0.2.2"
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
-seiza-xisf = "0.4.0"
+seiza-xisf = "0.4.1"
 seiza-background = "0.3.1"
-seiza-calibration = "0.5.1"
+seiza-calibration = "0.6.0"
 seiza-deconvolution = "0.1.1"
-seiza-stars = "0.3.0"
+seiza-stars = "0.4.0"
 sha2 = "0.11"
 base64 = "0.23"
 rayon = "1"

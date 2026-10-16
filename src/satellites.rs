@@ -318,7 +318,7 @@ pub fn predict_tracks(
     let result = snapshot
         .catalog
         .tracks_in_footprint(
-            &wcs,
+            |ra, dec| wcs.world_to_pixel(ra, dec),
             (solution.image_width, solution.image_height),
             &exposure,
             &TrackOptions::default(),

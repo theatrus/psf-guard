@@ -525,7 +525,7 @@ toggles the overlay instead of solving again.
 
 ### Install the Seiza catalogs
 
-PSF Guard embeds Seiza 0.29.0's solver but does not bundle its multi-gigabyte
+PSF Guard embeds Seiza 0.33.0's solver but does not bundle its multi-gigabyte
 catalog data. The desktop app can install and update these files from
 **Settings → Seiza Catalogs**. The same controls appear in a browser when the
 server starts with `--allow-database-management`. The **Catalogs** tab in
