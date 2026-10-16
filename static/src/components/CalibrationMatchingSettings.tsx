@@ -14,6 +14,7 @@ import {
 import CalibrationRuleControl from './CalibrationRuleControl';
 import { invalidateCalibrationViews } from '../utils/calibrationQueries';
 import { invalidateNightSplitViews } from '../hooks/useNightSplit';
+import UnsavedMark from './UnsavedMark';
 
 /** What each group's settings change, said once above them. */
 const GROUP_NOTES: Record<CalibrationRuleField['group'], string> = {
@@ -176,6 +177,7 @@ export default function CalibrationMatchingSettings({ focusField = null }: { foc
 
   return (
     <div className="calibration-matching-settings" ref={rootRef}>
+      <UnsavedMark label="calibration settings" dirty={dirty} />
       <h3>Calibration</h3>
       <p className="review-preferences-note">
         Every database on this server, and every rig without a value of its own (see Rigs below).

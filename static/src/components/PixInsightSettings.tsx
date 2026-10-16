@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { describePixInsight, formatFree } from '../utils/pixinsight';
 import PathField from './PathField';
+import UnsavedMark from './UnsavedMark';
 
 /**
  * Where PixInsight is on the server, for stacking with WBPP from inside
@@ -52,6 +53,7 @@ export default function PixInsightSettings() {
 
   return (
     <div className="pixinsight-settings">
+      <UnsavedMark label="PixInsight settings" dirty={changed} />
       <h3>PixInsight</h3>
       <p className="review-preferences-note">
         Where PixInsight is on this server, for stacking a project with WBPP from the Library,

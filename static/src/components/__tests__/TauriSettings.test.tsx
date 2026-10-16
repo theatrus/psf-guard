@@ -8,6 +8,7 @@ import { server } from '../../test/msw-server';
 import { AccessContext } from '../../auth/access';
 import type { AuthUserSummary } from '../../api/types';
 import TauriSettings from '../TauriSettings';
+import UnsavedMark from '../UnsavedMark';
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -181,6 +182,30 @@ describe('TauriSettings import state', () => {
 
     expect(await screen.findByRole('heading', { name: 'Processor use' })).toBeInTheDocument();
     expect(screen.getByRole('slider', { name: 'Background work share of cores' })).toBeInTheDocument();
+  });
+
+  it('asks before Done, × or a click outside closes over unsaved edits', async () => {
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <><TauriSettings isOpen onClose={onClose} /><UnsavedMark label="C925 setup" dirty /></>,
+      { wrapper: createWrapper() },
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
+    const ask = screen.getByRole('alertdialog');
+    expect(ask).toHaveTextContent('Unsaved changes in C925 setup. Close without saving them?');
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole('button', { name: 'Keep editing' }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Close without saving' }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Saved meanwhile: Done closes at once.
+    rerender(<><TauriSettings isOpen onClose={onClose} /><UnsavedMark label="C925 setup" dirty={false} /></>);
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 
   it('keeps calibration settings on their own tab, not under Setups', async () => {

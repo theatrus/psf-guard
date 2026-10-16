@@ -22,6 +22,7 @@ import {
 import { invalidateCalibrationViews } from '../utils/calibrationQueries';
 import CalibrationRuleControl from './CalibrationRuleControl';
 import { invalidateNightSplitViews } from '../hooks/useNightSplit';
+import UnsavedMark from './UnsavedMark';
 
 /** A rig to open on arrival, as a light's Calibration panel names it. */
 export interface CalibrationRigFocus {
@@ -240,6 +241,7 @@ function RigEditor({ rig, fields, globalRules }: RigEditorProps) {
       role="region"
       aria-label={`${rig.name} calibration settings`}
     >
+      <UnsavedMark label={`${rig.name} calibration settings`} dirty={dirty} />
       <div className="calibration-rig-presets" role="group" aria-label="Start from">
         <span className="calibration-rig-presets-label">Start from</span>
         {RIG_PRESETS.map((entry) => (

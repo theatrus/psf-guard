@@ -58,6 +58,7 @@ import AgentConnect from './AgentConnect';
 import { useMcpUrl } from '../utils/agentSetup';
 import './TauriSettings.css';
 import PathField from './PathField';
+import { describeUnsaved, useUnsavedLabels } from '../hooks/useUnsavedChanges';
 
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
@@ -192,6 +193,14 @@ export default function TauriSettings({
   const [showAddForm, setShowAddForm] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>(isTabIntent(initialIntent) ? initialIntent : 'databases');
   const director = useDirectorStatus();
+  // Forms with edits their Save has not sent: closing asks first, so Done
+  // does not drop a rig's new location without a word.
+  const unsaved = useUnsavedLabels();
+  const [confirmClose, setConfirmClose] = useState(false);
+  const requestClose = () => {
+    if (unsaved.length > 0) setConfirmClose(true);
+    else onClose();
+  };
   const planningEnabled = !!director.data?.enabled && director.data.protocol_version === 1;
   // true = "create a brand-new TS database from image folders" flow (no
   // existing .sqlite required; the server bootstraps the full TS schema).
@@ -1690,11 +1699,11 @@ export default function TauriSettings({
     ) : null;
 
   return (
-    <div className="tauri-settings modal-overlay" onClick={onClose}>
+    <div className="tauri-settings modal-overlay" onClick={requestClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>PSF Guard Settings</h2>
-          <button className="close-button" onClick={onClose}>×</button>
+          <button className="close-button" aria-label="Close settings" onClick={requestClose}>×</button>
         </div>
 
         <div
@@ -2010,8 +2019,31 @@ export default function TauriSettings({
               {statusMessage}
             </div>
           )}
+          {confirmClose && unsaved.length > 0 && (
+            <div className="unsaved-confirm" role="alertdialog" aria-labelledby="unsaved-confirm-text">
+              <p id="unsaved-confirm-text">
+                Unsaved changes in {describeUnsaved(unsaved)}. Close without saving them?
+              </p>
+              {/* Focus lands on the safe choice. */}
+              <button type="button" autoFocus onClick={() => setConfirmClose(false)}>
+                Keep editing
+              </button>
+              <button
+                type="button"
+                className="unsaved-discard"
+                onClick={() => { setConfirmClose(false); onClose(); }}
+              >
+                Close without saving
+              </button>
+            </div>
+          )}
           <div className="modal-buttons">
-            <button onClick={onClose} className="save-button" disabled={isApplying}>
+            <button
+              onClick={requestClose}
+              className="save-button"
+              disabled={isApplying}
+              title={unsaved.length > 0 ? `Unsaved changes in ${describeUnsaved(unsaved)}` : undefined}
+            >
               Done
             </button>
             {isTauri && <OpenLogsButton onError={setStatusMessage} />}

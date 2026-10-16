@@ -15,6 +15,7 @@ import EarlyBeta from './EarlyBeta';
 import WorkspaceTabs from './WorkspaceTabs';
 import { workspacePanel } from './workspacePanel';
 import { applyDefaults, describeSource, editFromForm, fieldOfView, formFromProfile, formatFieldOfView, opticsFromForm, type RigProfileForm } from './rigProfileForm';
+import { useUnsavedChanges } from '../../hooks/useUnsavedChanges';
 
 const message = (error: unknown) => isAxiosError(error)
   ? error.response?.data?.error || error.message
@@ -119,6 +120,13 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   };
   const update = (patch: Partial<RigProfileForm>) => setForm(current => current ? { ...current, ...patch } : current);
   const data = loaded.data;
+  // Edits Save has not sent: the form against the profile it loaded, the
+  // planning site and the Target Scheduler limits. Settings asks before
+  // closing over them.
+  const siteChanged = !!rigSettings.data && siteId !== rigSettings.data.site_id;
+  const unsaved = !!data && !!form && canWrite
+    && (JSON.stringify(form) !== JSON.stringify(formFromProfile(data.profile)) || siteChanged || schedulingChanged);
+  useUnsavedChanges(`${data?.rig.name ?? slug} setup`, unsaved);
   const disabled = !canWrite || save.isPending || stale;
   const optics = form ? opticsFromForm(form) : null;
   const preview = optics ? fieldOfView(optics) : null;
@@ -228,7 +236,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       <p className="director-muted">Camera modes and filters: {data.profile.configuration ? describeSource(data.profile.configuration.source, data.profile.configuration.reported_at_ms) : 'not reported; only the N.I.N.A. Director plugin reports them.'} <EarlyBeta /></p>
       </div>
       {(problem || save.isError) && !stale && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
-      {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save rig profile'}</button></div>}
+      {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save rig profile'}</button>{unsaved && !save.isPending && <span className="unsaved-note">Unsaved changes</span>}</div>}
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>
     <div {...workspacePanel(id, 'collaboration', tab)}>{data && collaborationVisited && <CollaborationConnections rig={data.rig.id} name={data.rig.name} active={tab === 'collaboration'} />}</div>

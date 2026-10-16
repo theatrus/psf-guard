@@ -16,6 +16,7 @@ import { isTauriApp } from '../utils/tauri';
 import { describeJob, jobPercent, jobStage } from '../utils/backupJob';
 import PathField from './PathField';
 import './BackupSettings.css';
+import UnsavedMark from './UnsavedMark';
 
 const KB = 1000;
 const MB = KB * 1000;
@@ -404,6 +405,7 @@ function BackupSchedule({ overview }: { overview: BackupsOverview }) {
 
   return (
     <section className="backup-card" aria-labelledby="backup-schedule-heading">
+      <UnsavedMark label="backup schedule" dirty={dirty} />
       <h3 id="backup-schedule-heading">Scheduled backups</h3>
       <p className="review-preferences-note">
         Runs in the background at the time you choose, steps aside for work you start, and removes
