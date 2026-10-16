@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type {
   CacheRefreshProgress,
   FlatMeasureStatus,
+  FrameSitesStatus,
   QualityBackfillStatus,
   SpatialScanStatus,
   StackActivityEntry,
 } from '../../../api/types';
-import { activityItems, lineLengths, summarize } from '../activityItems';
+import { activityItems, frameSitesLabel, lineLengths, summarize } from '../activityItems';
 
 function scan(processed: number, total: number, stage = 'astrometry'): SpatialScanStatus {
   return {
@@ -402,5 +403,41 @@ describe('flat measuring in the job line', () => {
       percent: 25,
     });
     expect(summarize([waiting])).toMatchObject({ running: 0, waiting: 1 });
+  });
+});
+
+describe('reading frame sites in the job line', () => {
+  const db = { dbId: 'astro', dbName: 'Observatory' };
+  const reading: FrameSitesStatus = {
+    state: 'running', active: true, done: 812, total: 1867, waiting_for: null, retry_at: null,
+    started_at: 1, finished_at: null, last: null, last_error: null,
+  };
+
+  it('shows a pass with frames to read as an automatic job, with its progress and a stop', () => {
+    const [item] = activityItems([{ ...db, sites: reading }], []);
+    expect(item).toMatchObject({
+      key: 'sites:astro',
+      kind: 'sites',
+      title: 'Reading frame sites',
+      scope: 'Observatory',
+      detail: 'Reading frame sites · 812 of 1,867 frames',
+      status: 'running',
+      automatic: true,
+      background: true,
+      stoppable: true,
+      control: { kind: 'sites', dbId: 'astro' },
+    });
+    expect(item.percent).toBeCloseTo(43.49, 1);
+  });
+
+  it('is listed as waiting while it steps aside, and left out at rest or retrying', () => {
+    const [waiting] = activityItems([{ ...db, sites: { ...reading, waiting_for: 'a stack build' } }], []);
+    expect(waiting).toMatchObject({
+      status: 'waiting',
+      detail: 'Waiting for a stack build · Reading frame sites · 812 of 1,867 frames',
+    });
+    expect(activityItems([{ ...db, sites: { ...reading, state: 'queued', active: false, retry_at: 99 } }], []))
+      .toEqual([]);
+    expect(frameSitesLabel({ done: 0, total: 1 })).toBe('Reading frame sites · 0 of 1 frame');
   });
 });

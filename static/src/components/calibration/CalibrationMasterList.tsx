@@ -4,6 +4,7 @@ import { apiClient } from '../../api/client';
 import type { CalibrationKind, LibraryCalibrationMaster } from '../../api/types';
 import { CalibrationMasterInspector } from '../CalibrationMasterInspector';
 import { KIND_LABELS, formatTime, plural } from './calibrationLabels';
+import { useRigClocks } from './useRigClocks';
 import PillSelect from '../toolbar/PillSelect';
 import ViewToolbar from '../toolbar/ViewToolbar';
 import type { useCalibrationActions } from './useCalibrationActions';
@@ -61,6 +62,7 @@ export default function CalibrationMasterList({
 }: CalibrationMasterListProps) {
   const [kind, setKind] = useState<CalibrationKind | ''>('');
   const [onDisk, setOnDisk] = useState(false);
+  const clockOf = useRigClocks(dbId);
   const catalog = useQuery({
     queryKey: ['db', dbId, 'calibrations', 'masters', project ?? 'all', scopeRevision],
     queryFn: () => apiClient.getLibraryCalibrationMasters(dbId, project),
@@ -142,7 +144,7 @@ export default function CalibrationMasterList({
                 </div>
                 <p className="calibration-muted">{sourcesText(master)}</p>
                 <p className="calibration-muted">
-                  {[master.rig_name, `built ${formatTime(master.created_at)}`].filter(Boolean).join(' · ')}
+                  {[master.rig_name, `built ${formatTime(master.created_at, clockOf(master.rig_uuid))}`].filter(Boolean).join(' · ')}
                 </p>
                 <div className="calibration-badges">
                   {master.thin && <span className="calibration-badge calibration-badge-poor" title="Fewer frames than a master needs; its noise goes into every light">Thin</span>}

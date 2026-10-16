@@ -210,19 +210,11 @@ pub(crate) fn spawn_query_index_build(path: String, shutdown: &Arc<Shutdown>) {
 /// nothing logged. It runs here instead: its own connection with a short busy
 /// timeout, one commit per hundred frames, a progress line every chunk, and a
 /// clean stop if the capture software holds the catalog — the next start
-/// picks up where it left off. Then each rig's site, for the rigs imported
-/// before the catalog kept them ([`crate::calibration::backfill_rig_sites`]),
-/// stepping aside for interactive work through `yield_now`; `placed` is
-/// given the rigs whose frames found a site, whose nights may now split
-/// elsewhere.
-pub(crate) fn spawn_calibration_header_backfill(
-    path: String,
-    shutdown: &Arc<Shutdown>,
-    yield_now: impl Fn() + Send + 'static,
-    placed: impl FnOnce(Vec<String>) + Send + 'static,
-) {
+/// picks up where it left off. Frame sites are the frame-sites job's
+/// ([`crate::server::frame_sites`]).
+pub(crate) fn spawn_calibration_header_backfill(path: String, shutdown: &Arc<Shutdown>) {
     // A stop ends the pass at its next commit.
-    let work = shutdown.hold(format!("calibration header backfill ({path})"));
+    let work = shutdown.hold(format!("readout mode backfill ({path})"));
     std::thread::spawn(move || {
         let outcome = Connection::open_with_flags(&path, db_open_flags())
             .and_then(|conn| {
@@ -260,41 +252,6 @@ pub(crate) fn spawn_calibration_header_backfill(
             ),
             Err(error) => tracing::info!(
                 "Paused recording readout modes in {path}: {error:#}. \
-                 The next server start continues where this left off."
-            ),
-        }
-        if work.is_stopping() {
-            return;
-        }
-        // Each frame's site, so calibration nights split at local noon
-        // where it was shot: the headers of frames imported before the
-        // catalog kept it.
-        let sites = Connection::open_with_flags(&path, db_open_flags())
-            .and_then(|conn| {
-                conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
-                Ok(conn)
-            })
-            .map_err(anyhow::Error::from)
-            .and_then(|conn| {
-                crate::calibration::backfill_rig_sites(&conn, || !work.is_stopping(), &yield_now)
-            });
-        match sites {
-            Ok(outcome) if outcome.pending == 0 => {}
-            Ok(outcome) => {
-                tracing::info!(
-                    "Recorded calibration frame sites in {path}: {} by longitude, {} by clock, \
-                     {} with neither, {} with files away, read again in a week or on import",
-                    outcome.located,
-                    outcome.clocked,
-                    outcome.unplaced,
-                    outcome.unreadable
-                );
-                if !outcome.placed.is_empty() && !work.is_stopping() {
-                    placed(outcome.placed);
-                }
-            }
-            Err(error) => tracing::info!(
-                "Paused recording calibration frame sites in {path}: {error:#}. \
                  The next server start continues where this left off."
             ),
         }

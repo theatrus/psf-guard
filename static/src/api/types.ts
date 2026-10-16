@@ -2479,6 +2479,8 @@ export interface CalibrationRigSummary {
   flat: number;
   oldest_at?: number | null;
   newest_at?: number | null;
+  /** The rig's clock over time: its frames' and masters' times read on it. */
+  clock?: FlatClockRun[];
 }
 
 export interface CalibrationLibrarySummary {
@@ -4335,6 +4337,36 @@ export interface CalibrationQualityProgress {
   started_at: number | null;
   finished_at: number | null;
   last_error?: string | null;
+}
+
+/** What one pass of the frame-sites job did. */
+export interface FrameSitesOutcome {
+  pending: number;
+  done: number;
+  located: number;
+  clocked: number;
+  unplaced: number;
+  unreadable: number;
+  /** No file could be read, as when the volume is not mounted. */
+  volume_away: boolean;
+  error: string | null;
+  placed: string[];
+}
+
+/** The frame-sites job of one catalog: reads the site of each calibration
+ *  frame imported before the catalog kept one. */
+export interface FrameSitesStatus {
+  state: 'idle' | 'queued' | 'running' | 'stopped';
+  /** A pass is reading frames: what the job line shows. */
+  active: boolean;
+  done: number;
+  total: number;
+  waiting_for: string | null;
+  retry_at: number | null;
+  started_at: number | null;
+  finished_at: number | null;
+  last: FrameSitesOutcome | null;
+  last_error: string | null;
 }
 
 /** The flat measuring job of one catalog: responses, comparisons and light

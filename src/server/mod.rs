@@ -22,6 +22,7 @@ pub mod flat_group_use;
 pub mod flat_groups;
 pub mod flat_history;
 pub mod flat_measure;
+pub mod frame_sites;
 pub mod handlers;
 pub mod import_job;
 pub mod master_cleanup;
@@ -272,6 +273,15 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/calibrations/flat-measure/cancel",
             post(flat_measure::post_cancel),
+        )
+        .route("/calibrations/frame-sites", get(frame_sites::get_status))
+        .route(
+            "/calibrations/frame-sites/cancel",
+            post(frame_sites::post_cancel),
+        )
+        .route(
+            "/calibrations/frame-sites/resume",
+            post(frame_sites::post_resume),
         )
         .route(
             "/calibrations/flat-groups/ratio",
@@ -1077,24 +1087,14 @@ async fn run_server_internal(
             .unwrap_or_default();
         for path in paths {
             crate::server::database_context::spawn_query_index_build(path.clone(), &state.shutdown);
-            // A rig whose sites this reads may split its nights elsewhere:
-            // grading screens its flats by the new sessions, and flat
-            // measuring, which waits for grading, plans it again, renaming
-            // what it measured and measuring runs a new split joins.
-            let for_sites = Arc::clone(&state);
-            let for_yield = Arc::clone(&state);
-            let site_path = path.clone();
             crate::server::database_context::spawn_calibration_header_backfill(
                 path.clone(),
                 &state.shutdown,
-                move || {
-                    for_yield
-                        .wait_for_interactive_work(std::time::Duration::from_millis(500), |_| {});
-                },
-                move |rigs| {
-                    crate::server::flat_measure::sites_found(&for_sites, &site_path, rigs);
-                },
             );
+            // Frames imported before the catalog kept their sites: a rig
+            // whose sites it reads is graded again and its flats planned
+            // again as each chunk commits.
+            crate::server::frame_sites::queue(&state, &path);
             crate::server::calibration_quality::request(&state, &path);
             // Only what is unfinished or stale: a catalog that is up to date
             // reads no pixels.

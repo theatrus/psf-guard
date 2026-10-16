@@ -1,4 +1,4 @@
-import type { CalibrationFrameDetail, CalibrationValidDirection } from '../../api/types';
+import type { CalibrationFrameDetail, CalibrationValidDirection, FlatClockRun } from '../../api/types';
 import {
   KIND_LABELS,
   VALIDITY_LABELS,
@@ -25,6 +25,8 @@ interface CalibrationFramePanelProps {
   /** Forget this frame, once confirmed. The browser sends the request
    *  and chooses the frame to show after it. */
   onForget: (frameUuid: string) => void;
+  /** Its rig's clock, which its time reads on. */
+  clock?: FlatClockRun[];
 }
 
 const VALIDITY: { value: CalibrationValidDirection | 'both'; label: string; title: string }[] = [
@@ -43,6 +45,7 @@ export default function CalibrationFramePanel({
   canManage,
   actions,
   onForget,
+  clock,
 }: CalibrationFramePanelProps) {
   if (!detail) {
     return (
@@ -64,7 +67,7 @@ export default function CalibrationFramePanel({
       <header>
         <h2 title={detail.source_path}>{name}</h2>
         <p className="calibration-muted calibration-path" title={detail.source_path}>{detail.source_path}</p>
-        <p>{KIND_LABELS[detail.kind]} · {formatTime(detail.captured_at)}</p>
+        <p>{KIND_LABELS[detail.kind]} · {formatTime(detail.captured_at, clock)}</p>
         <p className="calibration-muted">{formatSettings(detail)}</p>
         {detail.camera && <p className="calibration-muted">{detail.camera}</p>}
       </header>

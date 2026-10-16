@@ -29,7 +29,10 @@ pub use health::{
     HealthLibrary, JudgedLight, KeptHeader, LightFinding, LightResult, NightFilterLights,
     ProjectHealth, ProjectLight, FLAT_CHECK_AGE_DAYS, HEALTH_ALGORITHM_VERSION,
 };
-pub use night::{backfill_rig_sites, NightSource, Nights, RigNight, SiteBackfillOutcome};
+pub use night::{
+    backfill_frame_sites, backfill_rig_sites, NightSource, Nights, RigNight, SiteBackfill,
+    SiteBackfillOutcome,
+};
 pub use rules::{
     rule_book, rules_for_light, rules_for_rig, Check, CheckMode, RuleBook, RuleNote, RuleSource,
     RuleValues, Rules,
@@ -357,6 +360,9 @@ pub struct CalibrationRigSummary {
     pub flat: usize,
     pub oldest_at: Option<i64>,
     pub newest_at: Option<i64>,
+    /// The rig's clock over time ([`night::clock_runs`]): the clock its
+    /// frames' and masters' times read on.
+    pub clock: Vec<night::ClockRun>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1589,9 +1595,14 @@ pub fn library_summary(conn: &Connection) -> Result<CalibrationLibrarySummary> {
                 flat: row.get::<_, i64>(9)? as usize,
                 oldest_at: row.get(10)?,
                 newest_at: row.get(11)?,
+                clock: Vec::new(),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut rigs = rigs;
+    for rig in &mut rigs {
+        rig.clock = night::clock_runs(conn, &rig.rig_uuid);
+    }
     Ok(CalibrationLibrarySummary {
         schema_version,
         frame_count: rigs.iter().map(|rig| rig.frame_count).sum(),

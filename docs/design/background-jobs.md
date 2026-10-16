@@ -118,6 +118,10 @@ Then:
 ## Jobs today, and the gaps
 
 - Flat measuring (`flat_measure.rs`) follows all of it.
+- Reading frame sites (`frame_sites.rs`) follows it for one catalog-wide
+  scope: queued at start and after imports, retried while the server runs
+  when the volume is away or a pass fails, Stop and Resume, a row in the
+  job line, and a wait for interactive work before each chunk.
 - Calibration grading (`calibration_quality.rs`) is a Background runner per
   catalog with a status route, but it has no row in the job line yet.
 - Calibration health (`calibration_health.rs`), quality backfill and scans

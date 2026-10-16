@@ -12,6 +12,7 @@ import CalibrationFrameStrip, { type FrameRun } from './CalibrationFrameStrip';
 import CalibrationFrameViewer from './CalibrationFrameViewer';
 import { fileName } from './calibrationLabels';
 import type { useCalibrationActions } from './useCalibrationActions';
+import { useRigClocks } from './useRigClocks';
 
 interface CalibrationFrameBrowserProps {
   dbId: string;
@@ -77,6 +78,7 @@ export default function CalibrationFrameBrowser({
 }: CalibrationFrameBrowserProps) {
   // The last frame's detail stays, faded, while the next one loads, so the
   // panel keeps its height.
+  const clockOf = useRigClocks(dbId);
   const detail = useQuery({
     queryKey: ['db', dbId, 'calibrations', 'frame', frameUuid],
     queryFn: () => apiClient.getCalibrationFrame(dbId, frameUuid!),
@@ -193,6 +195,7 @@ export default function CalibrationFrameBrowser({
             canManage={canManage}
             actions={actions}
             onForget={forget}
+            clock={clockOf(shownDetail?.rig_uuid)}
           />
         </div>
       )}

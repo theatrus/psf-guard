@@ -4,7 +4,9 @@ import type {
   CalibrationKind,
   CalibrationSession,
   CalibrationValidDirection,
+  FlatClockRun,
 } from '../../api/types';
+import { timeLabel } from './flatGroupLabels';
 
 export const KIND_LABELS: Record<CalibrationKind, string> = {
   bias: 'Bias',
@@ -59,9 +61,14 @@ export function fileName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
 }
 
-export function formatTime(timestamp?: number | null): string {
+/**
+ * A frame's or master's time with its zone, on its rig's clock when its
+ * frames record one (`2026-08-19 04:58 UTC−7`), else on the viewer's
+ * (`2026-08-19 04:58 PDT`): the clock flat groups read on too.
+ */
+export function formatTime(timestamp?: number | null, clock?: readonly FlatClockRun[]): string {
   if (timestamp === undefined || timestamp === null) return 'Time unknown';
-  return new Date(timestamp * 1000).toLocaleString();
+  return timeLabel(timestamp, clock);
 }
 
 const seconds = (value: number) => `${Number(value.toFixed(2))}s`;

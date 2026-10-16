@@ -1015,6 +1015,11 @@ pub fn changed_rigs(before: Option<&RigState>, after: Option<&RigState>) -> Rigs
 /// lights when `lights` say new ones came. Call it off the request path.
 pub fn queue_change(state: &Arc<AppState>, path: &str, before: Option<&RigState>, lights: bool) {
     let mut scope = Scope::flats(changed_rigs(before, rig_state_at(path).as_ref()));
+    if !scope.flats.is_empty() {
+        // New frames record their sites as they come; any whose header
+        // could not be read then is read by the frame-sites job.
+        crate::server::frame_sites::queue(state, path);
+    }
     if lights {
         scope.merge(Scope::lights(Rigs::All));
     }
@@ -1026,8 +1031,8 @@ pub fn queue_change(state: &Arc<AppState>, path: &str, before: Option<&RigState>
 
 /// What a change of settings asks of flat measuring: the rigs whose
 /// grouping limits or night zone changed and whose flats are grouped by
-/// measurement now, or every rig when the server-wide ones changed. Their book regroups
-/// from the stored measurements on its own; a pass only reads what the new
+/// measurement now, or every rig when the server-wide ones changed. Their
+/// book regroups from the stored measurements on its own; a pass only reads what the new
 /// grouping lacks, as the sessions of a rig switched from time to measured,
 /// and finds nothing to read for a rig that already had it.
 pub fn rigs_to_measure_after(before: &RuleBook, after: &RuleBook) -> Rigs {

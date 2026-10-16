@@ -103,6 +103,7 @@ import type { GuidFillReport, GuidReport,
   FlatGroupUseView,
   FlatSessionPlace,
   FlatMeasureStatus,
+  FrameSitesStatus,
   FlatRatioPreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
@@ -1816,6 +1817,25 @@ export const apiClient = {
       dbPath(dbId, '/calibrations/flat-measure/cancel')
     );
     if (!data.data) throw new Error(data.error || 'Failed to stop flat measuring');
+    return data.data;
+  },
+
+  /** Where reading frame sites stands, for the job line. */
+  getFrameSitesStatus: async (dbId: string): Promise<FrameSitesStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<FrameSitesStatus>>(
+      dbPath(dbId, '/calibrations/frame-sites')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read frame site progress');
+    return data.data;
+  },
+
+  cancelFrameSites: async (dbId: string): Promise<FrameSitesStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<FrameSitesStatus>>(
+      dbPath(dbId, '/calibrations/frame-sites/cancel')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to stop reading frame sites');
     return data.data;
   },
 

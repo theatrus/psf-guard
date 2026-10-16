@@ -28,11 +28,14 @@
   UTC, cutting dawn runs west of Greenwich in two. A rig taken to a star
   party keeps its home nights. A rig with no site in its frames can take a
   UTC offset under **Night starts at noon in** in its calibration settings.
-  After the upgrade the server reads each frame's site in the background,
-  grades the library again and plans flat groups again: sessions whose date
-  moved are renamed without measuring them again, and only runs that were
-  split are measured once more. Flat-group change windows and build times
-  read on the rig's clock with its offset, such as UTC−7, instead of UTC.
+  After the upgrade a **Reading frame sites** row in the job line reads
+  each frame's site in the background, with Stop, and tries again while
+  the server runs if the NAS is not mounted; the rigs it places are graded
+  again and their flat groups planned again: sessions whose date moved are
+  renamed without measuring them again, and only runs that were split are
+  measured once more. Times on the Calibration page, from flat-group change
+  windows to frames and masters, read on the rig's clock with its offset,
+  such as UTC−7.
 - The header's background jobs keep automatic work in view while your own
   work runs. A database quality analysis, an automatic stack refresh, or a
   re-apply of processing that steps aside for a build, scan, or solve you

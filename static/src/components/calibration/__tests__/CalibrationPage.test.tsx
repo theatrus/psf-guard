@@ -77,7 +77,11 @@ function serve({ manage = true }: { manage?: boolean } = {}): Seen {
     ])),
     http.get('/api/db/demo/calibrations', () => ok({
       schema_version: 9, frame_count: 5, master_count: 1,
-      rigs: [{ rig_uuid: 'rig', name: 'Askar · ASI2600', frame_count: 5, bias: 0, dark: 2, dark_flat: 0, flat: 3 }],
+      rigs: [{
+        rig_uuid: 'rig', name: 'Askar · ASI2600', frame_count: 5, bias: 0, dark: 2, dark_flat: 0, flat: 3,
+        // The rig computer keeps PDT.
+        clock: [{ from: 0, offset_seconds: -7 * 3600 }],
+      }],
     })),
     http.get('/api/db/demo/calibrations/sessions', ({ request }) => {
       const params = new URL(request.url).searchParams;
@@ -256,6 +260,10 @@ describe('CalibrationPage', () => {
     const panel = await screen.findByRole('complementary', { name: 'Frame' });
     expect(await within(panel).findByRole('heading', { name: 'f1.fits' })).toBeInTheDocument();
     expect(within(panel).getByRole('row', { name: /Level 42.0% 41.0%/ })).toBeInTheDocument();
+    // Its time, and its thumbnail's, read on the rig's clock: 04:00 UTC.
+    expect(await within(panel).findByText('Flat · 2025-09-10 21:00 UTC−7')).toBeInTheDocument();
+    expect(within(strip).getByRole('button', { name: 'Frame 1: f1.fits' }).getAttribute('title'))
+      .toContain('2025-09-10 21:00 UTC−7');
   });
 
   it('restores a shared view: session, frame, comparison and stretch', async () => {
@@ -509,6 +517,8 @@ describe('CalibrationPage', () => {
     expect(within(masters).getByText('Thin')).toBeInTheDocument();
     expect(within(masters).getByText('Poor · spots')).toBeInTheDocument();
     expect(within(masters).getByText('31 changing, 25 carried, 4 steady spots')).toBeInTheDocument();
+    // Built at 14:13 UTC: on the rig's clock, as flat groups read it.
+    expect(await within(masters).findByText('Askar · ASI2600 · built 2025-09-11 07:13 UTC−7')).toBeInTheDocument();
     fireEvent.click(within(masters).getByRole('button', { name: /View Flat master/ }));
     await waitFor(() => expect(params().get('calMaster')).toBe('m1'));
     const inspector = await screen.findByRole('dialog');
