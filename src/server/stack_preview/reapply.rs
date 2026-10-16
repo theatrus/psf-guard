@@ -43,6 +43,10 @@ const SETTLE: Duration = Duration::from_secs(3);
 pub(super) struct Reapply {
     pub database_id: String,
     pub project_id: i32,
+    /// The channel's target, and the channel as people read it, for the
+    /// header while the re-apply waits.
+    pub target_id: Option<i32>,
+    pub label: String,
     pub job_id: String,
     pub group_index: usize,
     pub revision: String,
@@ -105,7 +109,48 @@ fn source_key(job_id: &str, group_index: usize) -> String {
     format!("mono:{job_id}:{group_index}")
 }
 
+/// `M44 · R`, or `M44 · R · 300 s` with an exposure band.
+fn group_label(group: &StackGroupStatus) -> String {
+    let mut label = super::channel_label(&group.target_name, &group.filter_name);
+    if let Some(exposure) = &group.exposure_group {
+        label.push_str(" · ");
+        label.push_str(&exposure.label);
+    }
+    label
+}
+
 impl StackPreviewManager {
+    /// Re-applies waiting for their turn rather than queued as runs, with
+    /// when each began to wait. One whose run is stepping aside counts as
+    /// waiting already, so it is listed while its run winds down and after.
+    /// What each waits for is the caller's to say.
+    pub(super) fn waiting_reapplies(&self) -> Vec<(Instant, super::WaitingReapplyView)> {
+        let yielded = self.yielded.lock().unwrap().clone();
+        self.reapplies
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|reapply| {
+                reapply
+                    .run_id
+                    .as_ref()
+                    .is_none_or(|run_id| yielded.contains(run_id))
+            })
+            .map(|reapply| {
+                (
+                    reapply.since,
+                    super::WaitingReapplyView {
+                        database_id: reapply.database_id.clone(),
+                        project_id: reapply.project_id,
+                        target_id: reapply.target_id,
+                        label: reapply.label.clone(),
+                        waiting_for: None,
+                    },
+                )
+            })
+            .collect()
+    }
+
     fn reapply_for_run(&self, run_id: &str) -> Option<(String, Reapply)> {
         self.reapplies
             .lock()
@@ -197,6 +242,8 @@ pub(super) fn after_build(
                     Reapply {
                         database_id: ctx.id.clone(),
                         project_id,
+                        target_id: Some(current.group.target_id),
+                        label: group_label(&current.group),
                         job_id: current.job_id.clone(),
                         group_index: current.group.index,
                         revision: current.artifact_revision.clone(),
@@ -596,6 +643,8 @@ pub(super) fn restored(
         Reapply {
             database_id: database_id.into(),
             project_id,
+            target_id: Some(source.scope.target_id),
+            label: source.scope.label(),
             job_id: source.job_id.clone(),
             group_index: source.group_index,
             revision: source.revision.clone(),
@@ -652,6 +701,8 @@ pub(super) fn recover(state: &Arc<AppState>) {
                 Reapply {
                     database_id: ctx.id.clone(),
                     project_id: source.scope.project_id,
+                    target_id: Some(source.scope.target_id),
+                    label: source.scope.label(),
                     job_id,
                     group_index,
                     revision: waiting.revision,

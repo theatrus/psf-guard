@@ -45,10 +45,12 @@ function mockServer({
   scan = () => scanProgress(false, 0),
   stacks = () => [] as StackActivityEntry[],
   scheduled = () => [] as unknown[],
+  reapplies = () => [] as unknown[],
 }: {
   scan?: () => unknown;
   stacks?: () => StackActivityEntry[];
   scheduled?: () => unknown[];
+  reapplies?: () => unknown[];
 }) {
   server.use(
     http.get('/api/databases', () => ok([{ id: 'askar', name: 'Askar', database_path: '/x.sqlite' }])),
@@ -56,7 +58,16 @@ function mockServer({
       ok([{ id: 42, project_id: 1, name: 'Alpha M44', active: true, has_files: true }])
     ),
     http.get('/api/db/:dbId/analysis/quality-scan', () => ok(scan())),
-    http.get('/api/stack-activity', () => ok({ schema_version: 1, active: stacks(), scheduled: scheduled() }))
+    http.get('/api/stack-activity', () =>
+      ok({ schema_version: 1, active: stacks(), scheduled: scheduled(), waiting_reapplies: reapplies() })
+    )
+  );
+}
+
+/** The chip's or list's icon counts, by the words each stands for. */
+function counts(element: HTMLElement): string[] {
+  return Array.from(element.querySelectorAll('.activity-count')).map(
+    (count) => count.getAttribute('title') ?? ''
   );
 }
 
@@ -100,7 +111,8 @@ describe('ActivityChip', () => {
     });
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
-    await waitFor(() => expect(chip).toHaveTextContent('3 jobs'));
+    // A build a person queued is queued, not waiting: no icon, but said.
+    await waitFor(() => expect(counts(chip)).toEqual(['2 running']));
     // The scan is 40% and the running build 80%; the queued one waits.
     expect(chip).toHaveTextContent('60%');
     expect(chip).toHaveAccessibleName('Background jobs: 60% done, 2 running, 1 queued');
@@ -121,6 +133,88 @@ describe('ActivityChip', () => {
 
     await userEvent.unhover(chip);
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Background jobs' })).toBeNull());
+  });
+
+  it('lists automatic work waiting for a person\'s build, then shows it running once, after', async () => {
+    let personBuilding = true;
+    const refresh = {
+      database_id: 'askar', database_name: 'Askar', project_id: 1, project_name: 'Alpha',
+      reason: 'arrival', due_in_seconds: 0, channels: ['Alpha M44 · Ha'], waiting: true,
+      waiting_for: 'the stack build of Alpha M44 · R', last_progress: {
+        label: 'Alpha M44 · Ha', processed_units: 12, total_units: 40,
+      },
+    };
+    const settling = { ...refresh, project_id: 2, waiting: false, waiting_for: null, last_progress: null };
+    mockServer({
+      scan: () => ({
+        ...scanProgress(true, 4),
+        progress: {
+          ...scanProgress(true, 4).progress,
+          automatic: true,
+          waiting_for: personBuilding ? 'a stack build' : null,
+        },
+      }),
+      stacks: () => (personBuilding
+        ? [stack('R', 'running', 3, 10)]
+        : [{ ...stack('Ha', 'running', 13, 40), automatic: true }]),
+      scheduled: () => (personBuilding ? [refresh, settling] : [settling]),
+      reapplies: () => (personBuilding
+        ? [{ database_id: 'askar', project_id: 1, target_id: 42, label: 'Alpha M44 · G', waiting_for: 'a stack build' }]
+        : []),
+    });
+    renderChip();
+    const chip = () => screen.getByRole('button', { name: /Background jobs/ });
+    await waitFor(() => expect(counts(chip())).toEqual(['1 running', '3 waiting']));
+    // Icons with counts; the words are there for a screen reader.
+    expect(within(chip()).getByText('3 waiting')).toHaveClass('activity-count-name');
+    expect(within(chip()).getByTitle('3 waiting').querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    // Only the person's build counts toward the progress.
+    expect(chip()).toHaveAccessibleName('Background jobs: 30% done, 1 running, 3 waiting');
+    await userEvent.click(chip());
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(counts(list.querySelector('.activity-popover-head')!)).toEqual(['1 running', '3 waiting']);
+    let rows = within(list).getAllByRole('listitem');
+    // The person's build first; the settling refresh is not work yet.
+    expect(rows.map((row) => row.getAttribute('data-job-state'))).toEqual([
+      'running', 'waiting', 'waiting', 'waiting',
+    ]);
+    expect(rows[0]).toHaveTextContent('Alpha M44 · R');
+    expect(rows[1]).toHaveTextContent('Analyzing quality');
+    expect(rows[1]).toHaveTextContent('Waiting for a stack build · Solving 4/10 frames');
+    expect(rows[2]).toHaveTextContent('Refreshing stacks');
+    expect(rows[2]).toHaveTextContent('Askar · Alpha');
+    expect(rows[2]).toHaveTextContent(
+      'Waiting for the stack build of Alpha M44 · R · stopped at 12/40 frames'
+    );
+    expect(rows[2]).toHaveTextContent('automatic');
+    expect(within(rows[2]).getByText('waiting')).toHaveClass('activity-row-state');
+    // It cannot be stopped from here, and has no place in a line.
+    expect(within(rows[2]).queryByRole('button')).toBeNull();
+    expect(rows[3]).toHaveTextContent('Re-applying processing');
+    expect(rows[3]).toHaveTextContent('Waiting for a stack build');
+
+    // The person's build ends: the refresh runs as its build, listed once.
+    personBuilding = false;
+    await waitFor(() => expect(counts(chip())).toEqual(['2 running']), { timeout: 3000 });
+    rows = within(screen.getByRole('region', { name: 'Background jobs' })).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(rows.some((row) => row.textContent?.includes('Refreshing stacks'))).toBe(false);
+    expect(rows.find((row) => row.textContent?.includes('Alpha M44 · Ha'))).toHaveAttribute(
+      'data-job-state',
+      'running'
+    );
+  }, 10_000);
+
+  it('shows no running count when only waiting work is left', async () => {
+    mockServer({
+      reapplies: () => [
+        { database_id: 'askar', project_id: 1, target_id: 42, label: 'Alpha M44 · G', waiting_for: 'a preview' },
+      ],
+    });
+    renderChip();
+    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    await waitFor(() => expect(counts(chip)).toEqual(['1 waiting']));
+    expect(chip).toHaveAccessibleName('Background jobs: 1 waiting');
   });
 
   it('keeps the queue open after a click until a second click or Escape', async () => {
@@ -188,7 +282,7 @@ describe('ActivityChip', () => {
     await userEvent.click(within(list).getByRole('button', { name: 'Dismiss the quality scan errors in Askar' }));
     await waitFor(() => expect(chip()).not.toHaveAccessibleName(/had errors/));
     expect(within(list).queryByRole('note')).toBeNull();
-    expect(chip()).toHaveTextContent('1 job');
+    expect(counts(chip())).toEqual(['1 running']);
   }, 15_000);
 
   it('takes a row to the view showing what it works on', async () => {
@@ -228,10 +322,10 @@ describe('ActivityChip', () => {
     });
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
-    await waitFor(() => expect(chip).toHaveTextContent('2 jobs'));
+    await waitFor(() => expect(counts(chip)).toEqual(['2 running']));
     scanning = false;
     await waitFor(() => expect(chip).toHaveAccessibleName(/a quality scan had errors/), { timeout: 3000 });
-    expect(chip).toHaveTextContent('1 job');
+    expect(counts(chip)).toEqual(['1 running']);
     await userEvent.hover(chip);
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(within(list).getByRole('note')).toHaveTextContent('Askar: 2 frames failed — no stars found');
@@ -345,7 +439,7 @@ describe('ActivityChip', () => {
     // Once it starts, it is an automatic build like any other.
     building = true;
     const chip = await screen.findByRole('button', { name: /Background jobs/ }, { timeout: 7000 });
-    expect(chip).toHaveTextContent('1 job');
+    expect(counts(chip)).toEqual(['1 running']);
     await userEvent.click(chip);
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(list).not.toHaveTextContent('Automatic refresh');

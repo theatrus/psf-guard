@@ -4,9 +4,10 @@ use crate::server::database_context::DatabaseContext;
 use crate::server::slug::compute_default_slug;
 use anyhow::Result;
 use rusqlite::Connection;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -83,12 +84,14 @@ pub struct AppState {
     /// decides which rendition background pre-generation warms, so the warmed
     /// cache and the default view stay the same artifact.
     pub preview_color_default: RwLock<bool>,
-    /// Count of interactive (user-triggered) CPU-heavy jobs currently running,
-    /// process-wide. Background work reads this to yield: while it is nonzero,
-    /// pre-generation pauses so it doesn't compete for cores or memory with a
-    /// scan the user is waiting on. An `Arc` so a [`InteractiveJobGuard`] can
-    /// decrement it on drop from a `spawn_blocking` task.
-    active_interactive_jobs: Arc<AtomicUsize>,
+    /// Interactive (user-triggered) CPU-heavy jobs currently running,
+    /// process-wide, each with a name a person reads. Background work reads
+    /// this to yield: while any runs, pre-generation pauses so it doesn't
+    /// compete for cores or memory with a scan the user is waiting on, and
+    /// work that waits can say what it waits for. An `Arc` so an
+    /// [`InteractiveJobGuard`] can remove its job on drop from a
+    /// `spawn_blocking` task.
+    active_interactive_jobs: Arc<InteractiveJobs>,
     /// The interactive and background worker budgets every CPU-heavy job
     /// leases its workers from (see [`crate::concurrency::WorkerBudgets`]).
     worker_budgets: Arc<crate::concurrency::WorkerBudgets>,
@@ -139,14 +142,44 @@ pub struct AppState {
     pub shutdown: Arc<crate::server::shutdown::Shutdown>,
 }
 
-/// RAII marker that an interactive CPU-heavy job is running. Increments the
-/// process-wide gauge on creation and decrements on drop, so background work
-/// yields for exactly the job's lifetime even if it panics.
-pub struct InteractiveJobGuard(Arc<AtomicUsize>);
+/// The interactive jobs running now, oldest first, by the order they began.
+#[derive(Default)]
+pub struct InteractiveJobs {
+    next: AtomicU64,
+    running: Mutex<BTreeMap<u64, String>>,
+    /// When the last interactive job ended, so background work can wait for
+    /// a quiet moment rather than slip in between a person's jobs.
+    last_ended: Mutex<Option<Instant>>,
+}
+
+/// What background work waits for when nothing more specific is known.
+pub const INTERACTIVE_WORK: &str = "interactive work";
+
+/// How long background work waits before it says it is waiting. A preview
+/// takes a moment; a job that stepped aside for it is not worth listing as
+/// waiting and then as running again.
+pub const WAIT_NOTE_AFTER: Duration = Duration::from_secs(1);
+
+/// RAII marker that an interactive CPU-heavy job is running. Registers the
+/// job on creation and removes it on drop, so background work yields for
+/// exactly the job's lifetime even if it panics.
+pub struct InteractiveJobGuard {
+    jobs: Arc<InteractiveJobs>,
+    id: u64,
+}
 
 impl Drop for InteractiveJobGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.jobs
+            .running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.id);
+        *self
+            .jobs
+            .last_ended
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
     }
 }
 
@@ -488,7 +521,7 @@ impl AppState {
             configured_worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             preview_color_default: RwLock::new(true),
-            active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
+            active_interactive_jobs: Arc::default(),
             worker_budgets: Arc::default(),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
@@ -618,14 +651,95 @@ impl AppState {
     }
 
     pub fn begin_interactive_job(&self) -> InteractiveJobGuard {
-        self.active_interactive_jobs.fetch_add(1, Ordering::SeqCst);
-        InteractiveJobGuard(Arc::clone(&self.active_interactive_jobs))
+        self.begin_named_interactive_job(INTERACTIVE_WORK)
+    }
+
+    /// [`Self::begin_interactive_job`], named for the background work that
+    /// waits on it: `a stack build` reads as "Waiting for a stack build".
+    pub fn begin_named_interactive_job(&self, name: impl Into<String>) -> InteractiveJobGuard {
+        let jobs = &self.active_interactive_jobs;
+        let id = jobs.next.fetch_add(1, Ordering::SeqCst);
+        jobs.running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id, name.into());
+        InteractiveJobGuard {
+            jobs: Arc::clone(jobs),
+            id,
+        }
     }
 
     /// Whether any interactive CPU-heavy job is currently running. Background
     /// work checks this and pauses so it doesn't compete for cores or memory.
     pub fn interactive_job_active(&self) -> bool {
-        self.active_interactive_jobs.load(Ordering::SeqCst) > 0
+        !self
+            .active_interactive_jobs
+            .running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    }
+
+    /// The name of the oldest interactive job running, which background
+    /// work reports it waits for; `None` when none runs.
+    pub fn interactive_job_name(&self) -> Option<String> {
+        self.active_interactive_jobs
+            .running
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+            .next()
+            .cloned()
+    }
+
+    /// How long no interactive work has run: `None` while some runs, and
+    /// `Duration::MAX` when none has run since the server started.
+    pub fn interactive_quiet_for(&self) -> Option<Duration> {
+        if self.interactive_job_active() {
+            return None;
+        }
+        let ended = *self
+            .active_interactive_jobs
+            .last_ended
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Some(ended.map_or(Duration::MAX, |ended| ended.elapsed()))
+    }
+
+    /// Pretend the last interactive job ended `ago`, for a test of what
+    /// waits for a quiet moment.
+    #[cfg(test)]
+    pub fn interactive_ended_ago(&self, ago: Duration) {
+        *self.active_interactive_jobs.last_ended.lock().unwrap() = Some(Instant::now() - ago);
+    }
+
+    /// Block a background thread while interactive work runs, checking
+    /// every `nap`. `note` hears what it waits for once the wait has lasted
+    /// [`WAIT_NOTE_AFTER`] or the job it waits for changes, and `None` when
+    /// it may go on, so a job's status can list it as waiting rather than
+    /// running, but not for every passing preview. Returns false once the
+    /// server is stopping.
+    pub fn wait_for_interactive_work(
+        &self,
+        nap: Duration,
+        mut note: impl FnMut(Option<&str>),
+    ) -> bool {
+        let began = Instant::now();
+        let mut noted: Option<String> = None;
+        while let Some(name) = self.interactive_job_name() {
+            if self.shutdown.is_stopping() {
+                break;
+            }
+            if began.elapsed() >= WAIT_NOTE_AFTER && noted.as_deref() != Some(name.as_str()) {
+                note(Some(&name));
+                noted = Some(name);
+            }
+            std::thread::sleep(nap);
+        }
+        if noted.is_some() {
+            note(None);
+        }
+        !self.shutdown.is_stopping()
     }
 
     /// Convenience constructor for a single database. Computes a default slug
@@ -704,7 +818,7 @@ impl AppState {
             configured_worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
             preview_color_default: RwLock::new(true),
-            active_interactive_jobs: Arc::new(AtomicUsize::new(0)),
+            active_interactive_jobs: Arc::default(),
             worker_budgets: Arc::default(),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
@@ -787,6 +901,85 @@ mod tests {
         );
         drop(g2);
         assert!(!state.interactive_job_active());
+    }
+
+    #[test]
+    fn interactive_jobs_are_named_oldest_first() {
+        let state = test_state();
+        assert_eq!(state.interactive_job_name(), None);
+        let build = state.begin_named_interactive_job("a stack build");
+        let preview = state.begin_named_interactive_job("a preview");
+        assert_eq!(
+            state.interactive_job_name().as_deref(),
+            Some("a stack build")
+        );
+        drop(build);
+        assert_eq!(state.interactive_job_name().as_deref(), Some("a preview"));
+        drop(preview);
+        assert_eq!(state.interactive_job_name(), None);
+        let unnamed = state.begin_interactive_job();
+        assert_eq!(
+            state.interactive_job_name().as_deref(),
+            Some(INTERACTIVE_WORK)
+        );
+        drop(unnamed);
+    }
+
+    #[test]
+    fn background_work_hears_what_it_waits_for_and_when_it_may_go_on() {
+        let state = std::sync::Arc::new(test_state());
+        let person = state.begin_named_interactive_job("a stack build");
+        let heard = std::sync::Arc::new(Mutex::new(Vec::<Option<String>>::new()));
+        let waiter = {
+            let state = std::sync::Arc::clone(&state);
+            let heard = std::sync::Arc::clone(&heard);
+            std::thread::spawn(move || {
+                state.wait_for_interactive_work(Duration::from_millis(5), |name| {
+                    heard.lock().unwrap().push(name.map(str::to_string));
+                })
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while heard.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline, "the wait never began");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            !waiter.is_finished(),
+            "it waits while the person's job runs"
+        );
+        drop(person);
+        assert!(waiter.join().unwrap(), "it goes on once the job ends");
+        assert_eq!(
+            *heard.lock().unwrap(),
+            vec![Some("a stack build".to_string()), None]
+        );
+        // With nothing running, it neither waits nor says anything.
+        assert!(
+            state.wait_for_interactive_work(Duration::from_millis(5), |_| {
+                panic!("nothing to wait for")
+            })
+        );
+    }
+
+    #[test]
+    fn a_moment_of_interactive_work_is_waited_out_without_a_word() {
+        let state = std::sync::Arc::new(test_state());
+        assert_eq!(state.interactive_quiet_for(), Some(Duration::MAX));
+        let preview = state.begin_named_interactive_job("a preview");
+        assert_eq!(state.interactive_quiet_for(), None);
+        let waiter = {
+            let state = std::sync::Arc::clone(&state);
+            std::thread::spawn(move || {
+                state.wait_for_interactive_work(Duration::from_millis(5), |name| {
+                    panic!("a passing preview was reported: {name:?}")
+                })
+            })
+        };
+        std::thread::sleep(WAIT_NOTE_AFTER / 4);
+        drop(preview);
+        assert!(waiter.join().unwrap());
+        assert!(state.interactive_quiet_for().unwrap() < Duration::from_secs(5));
     }
 
     #[test]

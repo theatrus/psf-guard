@@ -195,6 +195,14 @@ pub struct SpatialScanProgress {
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
     pub last_error: Option<String>,
+    /// Started by background work (a database-wide analysis or new frames),
+    /// not by a person; it steps aside while interactive work runs.
+    #[serde(default)]
+    pub automatic: bool,
+    /// What an automatic scan waits for while it steps aside, such as
+    /// `a stack build`; `None` while it runs.
+    #[serde(default)]
+    pub waiting_for: Option<String>,
 }
 
 /// In-memory store + scan state for one database. Held on `DatabaseContext`.
@@ -350,6 +358,7 @@ pub fn try_begin_scan(
     filter_name: Option<String>,
     total: usize,
     skipped_cached: usize,
+    automatic: bool,
 ) -> bool {
     let mut s = store.write().unwrap();
     if s.progress.running {
@@ -363,9 +372,18 @@ pub fn try_begin_scan(
         total,
         skipped_cached,
         started_at: Some(chrono::Utc::now().timestamp()),
+        automatic,
         ..Default::default()
     };
     true
+}
+
+/// Say what a running automatic scan waits for, or `None` once it goes on.
+pub fn set_waiting_for(store: &RwLock<SpatialMetricsStore>, waiting_for: Option<&str>) {
+    let mut s = store.write().unwrap();
+    if s.progress.running {
+        s.progress.waiting_for = waiting_for.map(str::to_string);
+    }
 }
 
 /// Run the scan synchronously (call from `spawn_blocking`). `work` must only
@@ -497,6 +515,7 @@ pub fn finalize_scan(store: &RwLock<SpatialMetricsStore>) {
     s.progress.running = false;
     s.progress.stage = "complete".to_string();
     s.progress.current_file = None;
+    s.progress.waiting_for = None;
     s.progress.finished_at = Some(chrono::Utc::now().timestamp());
 }
 
@@ -1503,15 +1522,34 @@ mod tests {
     #[test]
     fn begin_scan_is_singleton() {
         let store = store_with(vec![]);
-        assert!(try_begin_scan(&store, 5, None, 10, 2));
+        assert!(try_begin_scan(&store, 5, None, 10, 2, false));
         assert!(
-            !try_begin_scan(&store, 6, None, 3, 0),
+            !try_begin_scan(&store, 6, None, 3, 0, true),
             "second scan must be refused while one is running"
         );
         let (progress, _) = progress_snapshot(&store);
         assert_eq!(progress.target_id, Some(5));
         assert_eq!(progress.total, 10);
         assert_eq!(progress.skipped_cached, 2);
+        assert!(!progress.automatic);
+    }
+
+    #[test]
+    fn an_automatic_scan_says_what_it_waits_for() {
+        let store = store_with(vec![]);
+        set_waiting_for(&store, Some("a stack build"));
+        assert_eq!(
+            progress_snapshot(&store).0.waiting_for,
+            None,
+            "no scan runs to wait"
+        );
+        assert!(try_begin_scan(&store, 5, None, 10, 0, true));
+        set_waiting_for(&store, Some("a stack build"));
+        let (progress, _) = progress_snapshot(&store);
+        assert!(progress.automatic);
+        assert_eq!(progress.waiting_for.as_deref(), Some("a stack build"));
+        set_waiting_for(&store, None);
+        assert_eq!(progress_snapshot(&store).0.waiting_for, None);
     }
 
     #[test]

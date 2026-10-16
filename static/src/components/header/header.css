@@ -139,8 +139,37 @@
   color: var(--color-text-primary);
 }
 
-.activity-chip-count {
+/* How many jobs run and wait: an icon and a count each, the words for a
+   screen reader and the tooltip. */
+.activity-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
   color: var(--color-text-secondary);
+}
+
+.activity-count[data-job-state='waiting'] {
+  color: var(--state-waiting-fg);
+}
+
+.activity-count-icon {
+  flex: 0 0 auto;
+}
+
+.activity-count-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .activity-chip.is-finished {
@@ -313,8 +342,27 @@ div.activity-error {
   font-size: 0.8rem;
 }
 
-.activity-row.is-queued {
+.activity-row[data-job-state='queued'] {
   opacity: 0.75;
+}
+
+/* Automatic work that stepped aside for a person's: it resumes on its own,
+   so it is marked, not dimmed. */
+.activity-row[data-job-state='waiting'] {
+  box-shadow: inset 3px 0 0 var(--state-waiting-border);
+}
+
+.activity-row[data-job-state='waiting'] .activity-row-state {
+  color: var(--state-waiting-fg);
+}
+
+/* What it waits for is the point of the row: it wraps rather than clips. */
+.activity-row[data-job-state='waiting'] .activity-row-detail {
+  white-space: normal;
+}
+
+.activity-row[data-job-state='waiting'] .activity-row-fill {
+  background: var(--state-waiting-fill);
 }
 
 .activity-row-head {
@@ -329,7 +377,10 @@ div.activity-error {
 }
 
 .activity-row-state {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 0.2rem;
   font-variant-numeric: tabular-nums;
   color: var(--color-text-secondary);
 }
@@ -474,8 +525,9 @@ div.activity-error {
     max-width: none;
   }
 
+  /* The percent says how running work goes; only how many wait shows. */
   .live-chip .utility-label,
-  .activity-chip-count {
+  .activity-chip .activity-count[data-job-state='running'] {
     display: none;
   }
 

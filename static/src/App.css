@@ -68,6 +68,12 @@
   --state-picked-ring: var(--color-warning-alpha-40);
   --state-cursor-ring: 0 0 0 3px var(--color-primary-alpha-50);
 
+  /* Waiting: automatic work that stepped aside for a person's, and resumes
+     on its own, in the header's job list. */
+  --state-waiting-fg: var(--color-warning-light);
+  --state-waiting-border: var(--color-warning);
+  --state-waiting-fill: var(--color-warning-alpha-40);
+
   /* New: a frame captured since the last visit from the Library, in the
      Library's own accent for its new frames. */
   --color-new: var(--color-primary);

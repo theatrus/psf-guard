@@ -640,7 +640,7 @@ fn enqueue_search(state: Arc<AppState>, prepared: PreparedSearch) {
         let Ok(_permit) = permit.acquire_owned().await else {
             return;
         };
-        let guard = state.begin_interactive_job();
+        let guard = state.begin_named_interactive_job("an artifact search");
         let state_for_job = Arc::clone(&state);
         let search_id = prepared.public.search_id.clone();
         let result = tokio::task::spawn_blocking(move || {

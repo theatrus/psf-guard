@@ -38,7 +38,8 @@ function busy(db: DatabaseActivity): boolean {
 
 /**
  * Every background job on the server, across databases: catalog refreshes,
- * quality scans and backfills, and stack builds, queued or running. The
+ * quality scans and backfills, and stack builds, queued or running, and
+ * automatic work waiting while a person's work runs. The
  * queries share their keys with the views that start the work, so starting
  * a job anywhere shows here at once.
  */
@@ -53,7 +54,7 @@ export function useHeaderActivity() {
     return (dbId, targetId) => projects.get(`${dbId}:${targetId}`);
   }, [targets]);
   const queryClient = useQueryClient();
-  const { active: stacks } = useStackActivity();
+  const { active: stacks, scheduled, waitingReapplies } = useStackActivity();
   const wbpp = useQuery<WbppActivity>({
     queryKey: WBPP_ACTIVITY_QUERY_KEY,
     queryFn: apiClient.getWbppActivity,
@@ -103,7 +104,10 @@ export function useHeaderActivity() {
     scan: scans[index]?.data,
     backfill: backfills[index]?.data,
   }));
-  const items = activityItems(perDb, stacks, wbpp.data, projectOf);
+  const items = activityItems(perDb, stacks, wbpp.data, projectOf, {
+    scheduled,
+    reapplies: waitingReapplies,
+  });
   const summary = summarize(items);
 
   // A database whose work just finished has new images, metrics and grades

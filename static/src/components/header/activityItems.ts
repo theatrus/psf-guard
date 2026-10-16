@@ -1,8 +1,10 @@
 import type {
   CacheRefreshProgress,
   QualityBackfillStatus,
+  ScheduledRefresh,
   SpatialScanStatus,
   StackActivityEntry,
+  WaitingReapply,
   WbppActivity,
 } from '../../api/types';
 
@@ -15,6 +17,13 @@ export type ActivityControl =
 /** The two lines a person can reorder. Each runs one job at a time. */
 export type ActivityQueue = 'stack' | 'wbpp';
 
+/**
+ * Where a job stands. `running`: at work now. `queued`: in a line a person
+ * can reorder. `waiting`: automatic work that has stepped aside for other
+ * work, such as a build a person started; it resumes on its own.
+ */
+export type ActivityStatus = 'running' | 'queued' | 'waiting';
+
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
@@ -25,10 +34,16 @@ export interface ActivityItem {
   scope: string;
   /** The progress in words: "1/3 frames", a stage, a file. */
   detail: string;
-  queued: boolean;
-  /** 0–100, or null when the work cannot say how far along it is. */
+  status: ActivityStatus;
+  /** What waiting work waits for, when the server says: "a stack build". */
+  waitingFor?: string;
+  /** 0–100, or null when the work cannot say how far along it is. Waiting
+   *  work keeps how far it had got. */
   percent: number | null;
   automatic?: boolean;
+  /** Background work, automatic or database-wide, which runs after
+   *  anything a person started. */
+  background?: boolean;
   /** The full current path or file, for a tooltip. */
   hint?: string;
   /** The line this job runs in, when it has one. */
@@ -80,6 +95,13 @@ export interface DatabaseActivity {
   backfill?: QualityBackfillStatus;
 }
 
+/** Automatic stack work out of the line, waiting for the worker. */
+export interface WaitingStackWork {
+  /** Refreshes the server lists; only those due and waiting are shown. */
+  scheduled?: ScheduledRefresh[];
+  reapplies?: WaitingReapply[];
+}
+
 const REFRESH_STAGES: Record<string, string> = {
   initializing_directory_tree: 'Scanning folders',
   loading_projects: 'Loading projects',
@@ -96,6 +118,14 @@ function fraction(done: number, total: number): number | null {
 function lastPart(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+/** `Waiting for a stack build · 2/8 targets`: what it waits for, then how
+ *  far it had got. */
+function waitingDetail(waitingFor: string | null | undefined, progress = ''): string {
+  return [waitingFor ? `Waiting for ${waitingFor}` : 'Waiting to start', progress]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 function refreshItem(db: DatabaseActivity, refresh: CacheRefreshProgress): ActivityItem {
@@ -119,14 +149,20 @@ function refreshItem(db: DatabaseActivity, refresh: CacheRefreshProgress): Activ
     title: 'Refreshing catalog',
     scope: db.dbName,
     detail,
-    queued: false,
+    status: 'running',
     percent: refresh.progress_percentage > 0 ? Math.min(refresh.progress_percentage, 100) : null,
     hint: refresh.current_directory_name ?? refresh.current_project_name ?? undefined,
     href: viewPath('grid', { db: db.dbId }),
   };
 }
 
-function qualityItem(db: DatabaseActivity, projectOf: ProjectOf): ActivityItem | null {
+/**
+ * A database's quality work: a scan, a database-wide analysis, or both. The
+ * analysis runs its scans one target at a time, so its row carries the scan
+ * under way. A scan a person started takes the database's scanner, and the
+ * analysis waits for it in a row of its own.
+ */
+function qualityItems(db: DatabaseActivity, projectOf: ProjectOf): ActivityItem[] {
   const backfill = db.backfill?.progress;
   const scan = db.scan?.progress;
   const verb = scan?.stage === 'astrometry' ? 'Solving' : 'Scanning';
@@ -136,34 +172,64 @@ function qualityItem(db: DatabaseActivity, projectOf: ProjectOf): ActivityItem |
         filterName: scan.filter_name,
       })
     : targetPath('sequence', db.dbId, backfill?.current_target_id, projectOf);
-  if (backfill?.running) {
-    const frames = scan?.running ? ` · ${verb} ${scan.processed}/${scan.total} frames` : '';
-    return {
-      key: `backfill:${db.dbId}`,
-      kind: 'quality',
-      title: 'Analyzing database quality',
-      scope: db.dbName,
-      detail: `${backfill.processed_targets}/${backfill.total_targets} targets${frames}`,
-      queued: false,
-      percent: fraction(backfill.processed_targets, backfill.total_targets),
-      hint: scan?.current_file ?? undefined,
-      href,
-    };
+  const frames = scan ? `${verb} ${scan.processed}/${scan.total} frames` : '';
+  // An automatic scan stepping aside for a person's work.
+  const scanWaitsFor = scan?.running && scan.automatic ? scan.waiting_for ?? undefined : undefined;
+  const scanItem = (key: string): ActivityItem | null => scan?.running
+    ? {
+        key,
+        kind: 'quality',
+        title: 'Analyzing quality',
+        scope: db.dbName,
+        detail: scanWaitsFor ? waitingDetail(scanWaitsFor, frames) : frames,
+        status: scanWaitsFor ? 'waiting' : 'running',
+        waitingFor: scanWaitsFor,
+        percent: fraction(scan.processed, scan.total),
+        background: !!scan.automatic,
+        hint: scan.current_file ?? undefined,
+        href,
+      }
+    : null;
+  if (!backfill?.running) {
+    const alone = scanItem(`scan:${db.dbId}`);
+    return alone ? [alone] : [];
   }
-  if (scan?.running) {
-    return {
-      key: `scan:${db.dbId}`,
-      kind: 'quality',
-      title: 'Analyzing quality',
-      scope: db.dbName,
-      detail: `${verb} ${scan.processed}/${scan.total} frames`,
-      queued: false,
-      percent: fraction(scan.processed, scan.total),
-      hint: scan.current_file ?? undefined,
-      href,
-    };
+  const targets = `${backfill.processed_targets}/${backfill.total_targets} targets`;
+  const analysis: ActivityItem = {
+    key: `backfill:${db.dbId}`,
+    kind: 'quality',
+    title: 'Analyzing database quality',
+    scope: db.dbName,
+    detail: targets,
+    status: 'running',
+    percent: fraction(backfill.processed_targets, backfill.total_targets),
+    background: true,
+    hint: scan?.current_file ?? undefined,
+    href,
+  };
+  if (scan?.running && scan.automatic === false) {
+    // A person's scan holds the scanner; the analysis waits its turn.
+    const persons = scanItem(`scan:${db.dbId}`)!;
+    const waitingFor = 'a quality scan';
+    return [
+      persons,
+      {
+        ...analysis,
+        detail: waitingDetail(waitingFor, targets),
+        status: 'waiting',
+        waitingFor,
+        hint: undefined,
+        href: targetPath('sequence', db.dbId, backfill.current_target_id, projectOf),
+      },
+    ];
   }
-  return null;
+  if (!scan?.running) return [analysis];
+  return [{
+    ...analysis,
+    detail: scanWaitsFor ? waitingDetail(scanWaitsFor, `${targets} · ${frames}`) : `${targets} · ${frames}`,
+    status: scanWaitsFor ? 'waiting' : 'running',
+    waitingFor: scanWaitsFor,
+  }];
 }
 
 /** A stretch, deconvolution or RC-Astro run on a finished stack. It waits in
@@ -196,10 +262,11 @@ function processingItem(entry: StackActivityEntry): ActivityItem {
     title: processing?.operation ?? 'Processing',
     scope: entry.label,
     detail,
-    queued,
+    status: queued ? 'queued' : 'running',
     percent: !queued && fractionDone != null ? Math.min(fractionDone * 100, 100) : null,
     // Re-applied by the server after its stack refreshed.
     automatic: entry.automatic,
+    background: entry.automatic,
     hint: processing?.waiting_for
       ? `${processing.operation} on ${entry.label}, waiting for ${processing.waiting_for}`
       : entry.detail,
@@ -231,9 +298,10 @@ function stackItem(entry: StackActivityEntry): ActivityItem {
         ?? (entry.total_units > 0
           ? `${entry.processed_units}/${entry.total_units} ${unit}`
           : entry.detail),
-    queued,
+    status: queued ? 'queued' : 'running',
     percent: queued ? null : fraction(entry.processed_units, entry.total_units),
     automatic: entry.automatic,
+    background: entry.automatic,
     hint: entry.detail,
     href: viewPath('stacks', {
       db: entry.database_id,
@@ -267,7 +335,7 @@ function wbppItems(wbpp: WbppActivity | undefined, projectOf: ProjectOf): Activi
       run.wbpp_stage,
       run.wbpp_steps > 0 ? `${run.wbpp_steps} steps done` : '',
     ].filter(Boolean).join(' · '),
-    queued: false,
+    status: 'running',
     percent: null,
     queue: 'wbpp',
     control: { kind: 'wbpp-running', dbId: run.db_id },
@@ -280,7 +348,7 @@ function wbppItems(wbpp: WbppActivity | undefined, projectOf: ProjectOf): Activi
     title: 'WBPP',
     scope: `${run.db_name} · ${run.scope}`,
     detail: 'Waiting for the run ahead',
-    queued: true,
+    status: 'queued',
     percent: null,
     queue: 'wbpp',
     position: index,
@@ -290,20 +358,78 @@ function wbppItems(wbpp: WbppActivity | undefined, projectOf: ProjectOf): Activi
   return [...running, ...queued];
 }
 
-/** Every job the header reports: each line's running work, then its waiting
- *  work in the order it will run. An automatic refresh still settling is not
- *  work yet; it shows once it starts, as an automatic build. */
+/** An automatic refresh that came due, or whose build stopped for a
+ *  person's, waiting for the stacking worker. */
+function waitingRefreshItem(refresh: ScheduledRefresh): ActivityItem {
+  const last = refresh.last_progress;
+  const stopped = last && last.total_units > 0
+    ? `stopped at ${last.processed_units}/${last.total_units} frames`
+    : '';
+  const project = refresh.project_id == null
+    ? 'every followed project'
+    : refresh.project_name ?? `project ${refresh.project_id}`;
+  const waitingFor = refresh.waiting_for ?? undefined;
+  return {
+    key: `refresh-waiting:${refresh.database_id}:${refresh.project_id ?? 'all'}`,
+    kind: 'stack',
+    title: 'Refreshing stacks',
+    scope: `${refresh.database_name} · ${project}`,
+    detail: waitingDetail(waitingFor, stopped),
+    status: 'waiting',
+    waitingFor,
+    percent: last ? fraction(last.processed_units, last.total_units) : null,
+    automatic: true,
+    background: true,
+    hint: refresh.channels?.length ? `Restacks ${refresh.channels.join(', ')}` : undefined,
+    href: refresh.project_id == null
+      ? viewPath('grid', { db: refresh.database_id })
+      : viewPath('stacks', { db: refresh.database_id, project: refresh.project_id }),
+  };
+}
+
+function waitingReapplyItem(reapply: WaitingReapply): ActivityItem {
+  const waitingFor = reapply.waiting_for ?? undefined;
+  return {
+    key: `reapply-waiting:${reapply.database_id}:${reapply.project_id}:${reapply.label}`,
+    kind: 'processing',
+    title: 'Re-applying processing',
+    scope: reapply.label,
+    detail: waitingDetail(waitingFor),
+    status: 'waiting',
+    waitingFor,
+    percent: null,
+    automatic: true,
+    background: true,
+    href: viewPath('stacks', {
+      db: reapply.database_id,
+      project: reapply.project_id,
+      target: reapply.target_id,
+    }),
+  };
+}
+
+/** A person's running work first, then running background work, then
+ *  everything waiting: lines in the order they will run, then automatic
+ *  work that stepped aside. */
+function rank(item: ActivityItem): number {
+  if (item.status !== 'running') return 2;
+  return item.background ? 1 : 0;
+}
+
+/** Every job the header reports: running work, then waiting work. Automatic
+ *  work that steps aside for a person's is listed as waiting. An automatic
+ *  refresh still settling is not work yet; it shows once it is due. */
 export function activityItems(
   databases: DatabaseActivity[],
   stacks: StackActivityEntry[],
   wbpp?: WbppActivity,
-  projectOf: ProjectOf = () => undefined
+  projectOf: ProjectOf = () => undefined,
+  waiting: WaitingStackWork = {}
 ): ActivityItem[] {
   const items: ActivityItem[] = [];
   for (const db of databases) {
     if (db.refresh?.is_refreshing) items.push(refreshItem(db, db.refresh));
-    const quality = qualityItem(db, projectOf);
-    if (quality) items.push(quality);
+    items.push(...qualityItems(db, projectOf));
   }
   // The server lists builds running first, then the line in order.
   const ordered = [...stacks].sort(
@@ -312,7 +438,10 @@ export function activityItems(
   );
   items.push(...ordered.map(stackItem));
   items.push(...wbppItems(wbpp, projectOf));
-  return items;
+  items.push(...(waiting.scheduled ?? []).filter((refresh) => refresh.waiting).map(waitingRefreshItem));
+  items.push(...(waiting.reapplies ?? []).map(waitingReapplyItem));
+  // Stable: each rank keeps the order above.
+  return items.sort((left, right) => rank(left) - rank(right));
 }
 
 /** How many jobs wait in each line, for the move buttons' limits. */
@@ -326,16 +455,23 @@ export function lineLengths(items: ActivityItem[]): Record<ActivityQueue, number
 
 export interface ActivitySummary {
   count: number;
+  running: number;
+  /** Automatic work that stepped aside and resumes on its own. */
+  waiting: number;
+  /** Jobs in a line a person can reorder, such as builds they asked for. */
   queued: number;
   /** The mean progress of the running jobs that report one, or null. */
   percent: number | null;
 }
 
 export function summarize(items: ActivityItem[]): ActivitySummary {
-  const measured = items.filter((item) => !item.queued && item.percent != null);
+  const running = items.filter((item) => item.status === 'running');
+  const measured = running.filter((item) => item.percent != null);
   return {
     count: items.length,
-    queued: items.filter((item) => item.queued).length,
+    running: running.length,
+    waiting: items.filter((item) => item.status === 'waiting').length,
+    queued: items.filter((item) => item.status === 'queued').length,
     percent: measured.length > 0
       ? measured.reduce((sum, item) => sum + (item.percent ?? 0), 0) / measured.length
       : null,
