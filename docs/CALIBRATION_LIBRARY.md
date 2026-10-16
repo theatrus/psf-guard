@@ -1123,7 +1123,8 @@ PSF Guard groups the frames and keeps the results in
 `psf_guard_calibration_frame_quality`. Each frame gets one of three grades:
 
 - **OK**: nothing crossed a limit.
-- **Suspect**: something crossed the first limit. The frame stays in use.
+- **Suspect**: something crossed the first limit. The frame stays in use,
+  but the lights its masters serve get a **Check** until someone looks.
 - **Poor**: something crossed the second limit. Masters, WBPP exports and
   calibration reports leave the frame out.
 
@@ -1193,13 +1194,20 @@ editor account, each frame offers:
   if a later grade would let it back in. Unlike **Forget**, the frame stays
   in the library, so a rescan does not bring it back. The frame shows
   **Kept out by hand**.
-- **Use anyway**: put a frame the library keeps out back in use.
+- **Use anyway**: put a frame the library keeps out back in use. On a
+  suspect frame, which is already in use, it says the frame is fine: the
+  frame then counts as OK everywhere. It shows **Used anyway** in place of
+  its suspect badge, the session counts it as OK, the **Suspect** filter
+  leaves it out, and it no longer makes the lights its masters serve worth
+  a check. Its masters do not change, since they already took it.
 - **Clear**: let the grade decide again.
 
 The choice survives regrading, rescans and database copies. A frame kept out
 counts for nothing in [calibration health](#calibration-health): a suspect
 frame kept out no longer makes the lights it would have served worth a
-check.
+check. Using a poor frame anyway raises no check of its own either. The
+spots a set of flats carries into its master are the set's finding, not one
+frame's grade, so **Use anyway** on its suspect flats leaves that finding.
 
 ### What leaving a frame out does
 
@@ -1532,7 +1540,7 @@ it, and what it would get is judged on two levels.
 - Its flats are from across a measured change, such as new dust, with
   nothing to stand in, or it was shot during the change and nothing tells
   which side it is on.
-- Its masters use frames graded suspect.
+- Its masters use frames graded suspect that no one chose to use anyway.
 - Frames kept out by hand leave its bias, darks or flats under five frames.
 - Its bias master would use fewer than five frames while a dark serves it,
   or a few changing spots sit in most of its flats.

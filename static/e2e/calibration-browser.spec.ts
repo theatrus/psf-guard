@@ -158,3 +158,54 @@ test('browses flats by session, flips frames and compares one with its session',
   await expect(page.getByRole('button', { name: 'Compare with session' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('calibration-frame-image')).toHaveAttribute('data-view', 'session', { timeout: 30_000 });
 });
+
+test('overrules a suspect flat with Use anyway, and Clear brings the grade back', async ({ page, request }) => {
+  fs.mkdirSync(path.join(root, 'FLAT'), { recursive: true });
+  // Twelve spots in every flat, fading from 16% to 3%: too few to make a
+  // flat poor, enough to make most of them suspect.
+  const depths = [0.16, 0.1, 0.05, 0.03];
+  for (let index = 0; index < 4; index++) {
+    writeFrame(
+      path.join(root, 'FLAT', `spotted-${index}.fits`),
+      { kind: 'FLAT', date: `2026-09-12T04:0${index}:00`, exposure: 2, filter: 'OIII' },
+      (x, y) => {
+        const spot = x >= 16 && x < 112 && y >= 16 && y < 88 && (x - 16) % 24 < 4 && (y - 16) % 24 < 4;
+        return 30000 * (spot ? 1 - depths[index] : 1) + noise(x, y, index + 7, 10);
+      },
+    );
+  }
+  const created = await request.post('/api/databases/create', {
+    data: { name: 'Suspect override', image_dirs: [root], slug: 'suspect-override-e2e' },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const dbId: string = (await created.json()).data.database.id;
+  const counts = async () => (await (await request.get(`/api/db/${dbId}/calibrations/quality`)).json()).data.counts;
+  await expect.poll(async () => (await counts()).measured, { timeout: 60_000 }).toBe(4);
+  await expect.poll(async () => (await counts()).suspect, { timeout: 30_000 }).toBeGreaterThan(0);
+  const suspect: number = (await counts()).suspect;
+
+  await page.goto(`/#/calibration?db=${dbId}&calKind=flat`);
+  const sessions = page.getByRole('navigation', { name: 'Sessions' });
+  await expect(sessions.getByText(`${suspect} suspect`)).toBeVisible();
+  await sessions.getByRole('button').first().click();
+  const strip = page.getByRole('list', { name: 'Frames' });
+  const checks = strip.getByRole('button').filter({ hasText: 'Check' });
+  await expect(checks).toHaveCount(suspect);
+  await checks.first().click();
+  const panel = page.getByRole('complementary', { name: 'Frame' });
+  await expect(panel.getByText(/^Suspect · /)).toBeVisible();
+
+  // Overruled, it reads as OK: Used anyway, no suspect badge, no Check.
+  await panel.getByRole('button', { name: 'Use anyway' }).click();
+  await expect(panel.getByText('Used anyway')).toBeVisible();
+  await expect(panel.getByText(/^Suspect · /)).toHaveCount(0);
+  await expect(checks).toHaveCount(suspect - 1);
+  await expect.poll(async () => (await counts()).used_anyway).toBe(1);
+  expect((await counts()).suspect).toBe(suspect - 1);
+  if (suspect > 1) await expect(sessions.getByText(`${suspect - 1} suspect`)).toBeVisible();
+  else await expect(sessions.getByText(/suspect/)).toHaveCount(0);
+
+  await panel.getByRole('button', { name: 'Clear' }).click();
+  await expect(panel.getByText(/^Suspect · /)).toBeVisible();
+  await expect(checks).toHaveCount(suspect);
+});

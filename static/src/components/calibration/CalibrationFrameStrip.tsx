@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef } from 'react';
 import { apiClient } from '../../api/client';
 import type { BrowsedCalibrationFrame, CalibrationFrameStretch, FlatClockRun } from '../../api/types';
 import { useAsyncImage } from '../../hooks/useAsyncImage';
-import { fileName, formatTime, gradeLabel } from './calibrationLabels';
+import { fileName, formatTime, gradeLabel, suspectOverruled } from './calibrationLabels';
 import { useRigClocks } from './useRigClocks';
 
 interface ThumbProps {
@@ -22,8 +22,9 @@ function Thumb({ dbId, frame, index, stretch, selected, onSelect, clock }: Thumb
     apiClient.getCalibrationFramePreviewUrl(dbId, frame.frame_uuid, options),
     { kind: 'calibration_frame', frameUuid: frame.frame_uuid, ...options }
   );
-  const grade = gradeLabel(frame);
-  const state = frame.kept_out ? 'kept-out' : frame.grade ?? 'ungraded';
+  const overruled = suspectOverruled(frame);
+  const grade = overruled ? 'Used anyway' : gradeLabel(frame);
+  const state = frame.kept_out ? 'kept-out' : overruled ? 'ok' : frame.grade ?? 'ungraded';
   return (
     <li>
       <button
@@ -59,7 +60,7 @@ function Thumb({ dbId, frame, index, stretch, selected, onSelect, clock }: Thumb
           <span>{index + 1}</span>
           {frame.kept_out ? <span className="calibration-badge calibration-badge-poor">Out</span>
             : frame.grade === 'poor' ? <span className="calibration-badge calibration-badge-poor">Poor</span>
-              : frame.grade === 'suspect' ? <span className="calibration-badge calibration-badge-suspect">Check</span>
+              : frame.grade === 'suspect' && !overruled ? <span className="calibration-badge calibration-badge-suspect">Check</span>
                 : null}
         </span>
       </button>

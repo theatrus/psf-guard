@@ -512,6 +512,53 @@ describe('CalibrationPage', () => {
     expect(screen.queryByText(/view frames, not change them/)).toBeNull();
   });
 
+  it('uses a suspect frame anyway, after which it reads as OK with no Check', async () => {
+    const seen = serve();
+    let choice: string | null = null;
+    const suspect = () => frame('f3', 's1', {
+      grade: 'suspect', grade_code: 'noise', grade_reason: 'noise 1.3 times that of its session',
+      quality_override: choice,
+    });
+    server.use(
+      http.get('/api/db/demo/calibrations/frames', () => {
+        const frames = [FRAMES.s1[0], FRAMES.s1[1], suspect()];
+        return ok({ frames, total: frames.length, page: 0, per_page: 500 });
+      }),
+      http.get('/api/db/demo/calibrations/frames/f3', () => ok(detail('f3', 's1', {
+        ...suspect(),
+        findings: [{ code: 'noise', grade: 'suspect', value: 1.3, limit: 1.2, text: 'noise 1.3 times that of its session' }],
+      }))),
+      http.put('/api/db/demo/calibrations/frames/quality', async ({ request }) => {
+        const body = await request.json() as { choice: string };
+        seen.choices.push(body);
+        choice = body.choice === 'clear' ? null : body.choice;
+        return ok({ updated: 1 });
+      }),
+    );
+    renderPage('/calibration?db=demo&calSession=s1&calFrame=f3');
+    const panel = await screen.findByRole('complementary', { name: 'Frame' });
+    await within(panel).findByRole('heading', { name: 'f3.fits' });
+    const thumb = await screen.findByRole('button', { name: 'Frame 3: f3.fits' });
+    // Suspect stays in masters but is flagged: a badge here, Check in the strip.
+    expect(within(panel).getByText('Suspect · noise')).toBeInTheDocument();
+    expect(within(thumb).getByText('Check')).toBeInTheDocument();
+    const use = within(panel).getByRole('button', { name: 'Use anyway' });
+    expect(use).toHaveAttribute('title', 'Use anyway: this frame is fine; ignore the suspect grade');
+    fireEvent.click(use);
+    await waitFor(() => expect(seen.choices).toEqual([{ frame_uuids: ['f3'], choice: 'use' }]));
+
+    // Overruled: Used anyway, no suspect badge, no Check; Clear restores.
+    await within(panel).findByText('Used anyway');
+    expect(within(panel).queryByText('Suspect · noise')).toBeNull();
+    expect(within(panel).getByText('Suspect grade overruled: noise 1.3 times that of its session')).toBeInTheDocument();
+    await waitFor(() => expect(within(screen.getByRole('button', { name: 'Frame 3: f3.fits' })).queryByText('Check')).toBeNull());
+    expect(within(panel).queryByRole('button', { name: 'Use anyway' })).toBeNull();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(seen.choices).toHaveLength(2));
+    expect(seen.choices[1]).toEqual({ frame_uuids: ['f3'], choice: 'clear' });
+    await within(panel).findByText('Suspect · noise');
+  });
+
   it('offers no writes to a viewer', async () => {
     serve();
     const frames = renderPage('/calibration?db=demo&calSession=s1&calFrame=f2', { canWrite: false });
