@@ -1928,6 +1928,7 @@ mod tests {
             bin: Some(10),
             algorithm_version: 1,
             error: None,
+            unread: Vec::new(),
         }
     }
 

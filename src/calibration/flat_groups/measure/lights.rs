@@ -713,6 +713,7 @@ mod tests {
             bin: None,
             algorithm_version: 1,
             error: None,
+            unread: Vec::new(),
         }
     }
 

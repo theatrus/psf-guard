@@ -29,6 +29,19 @@ pub struct ResponseRow {
     pub algorithm_version: u32,
     /// Why the session could not be measured.
     pub error: Option<String>,
+    /// The flats it combines that could not be read, and why. The session
+    /// is read again only when one whose file was away is back.
+    pub unread: Vec<UnreadFlat>,
+}
+
+/// A flat a session's response should have combined but could not read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnreadFlat {
+    pub frame_uuid: String,
+    /// No file at its path, as on a share that is away or a copy moved
+    /// elsewhere; false when the file was there but would not read.
+    pub missing: bool,
+    pub reason: String,
 }
 
 /// Two sessions' metrics as the catalog keeps them.

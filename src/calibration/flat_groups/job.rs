@@ -18,7 +18,7 @@
 use super::evidence::{self, EVIDENCE_ALGORITHM_VERSION};
 use super::metric::{self, Plane};
 use super::model::{canonical_filter, Book, Side};
-use super::store::{self, EvidenceFit, EvidenceRow, ResponseRow, Verdict};
+use super::store::{self, EvidenceFit, EvidenceRow, ResponseRow, UnreadFlat, Verdict};
 use super::{family_job, family_store};
 use crate::calibration::{CalibrationFrame, CalibrationKind, LibrarySnapshot, Nights};
 use anyhow::{Context, Result};
@@ -39,6 +39,8 @@ const COMPARE_ROUNDS: usize = 3;
 pub struct PassOutcome {
     pub sessions: usize,
     pub measured: usize,
+    /// Sessions left with flats whose files are away: the caller tries
+    /// them again later, and a pass reads them once the files are back.
     pub unreadable: usize,
     pub compared: usize,
     pub evidence: usize,
@@ -605,20 +607,22 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
                 .copied()
                 .collect();
             outcome.sessions += plans.len();
-            // A session is done when its response is on disk from every
-            // flat it combines, or could not be combined at all. One built
-            // while some files were away is read again until they are back.
-            let todo: Vec<(&SessionPlan, String)> = plans
-                .iter()
-                .map(|plan| (*plan, plan.response_key()))
-                .filter(|(plan, key)| {
-                    !known.get(key).is_some_and(|row| {
-                        row.error.is_some()
-                            || (super::response_path(pass.dir, key).is_file()
-                                && row.frames >= plan.combined().len())
-                    })
-                })
-                .collect();
+            // A session is done once its response is kept (see
+            // `response_is_current`). One left with flats away is read
+            // again when they are back, and keeps its rig on the retry
+            // ladder meanwhile; it is not read on every pass.
+            let mut todo: Vec<(&SessionPlan, String)> = Vec::new();
+            for plan in &plans {
+                let key = plan.response_key();
+                match known.get(&key) {
+                    Some(row) if response_is_current(pass.dir, plan, row) => {
+                        if row.unread.iter().any(|flat| flat.missing) {
+                            outcome.unreadable += 1;
+                        }
+                    }
+                    _ => todo.push((*plan, key)),
+                }
+            }
             for plan in &plans {
                 let key = plan.response_key();
                 // A dark-flat or bias that arrived since: the pedestal comes
@@ -845,7 +849,31 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
     Ok(outcome)
 }
 
-/// Read one flat session and keep its response.
+/// Whether a session's kept response stands, so the pass reads nothing for
+/// it: its plane is on disk and it combines every flat it could read, or it
+/// could not be combined at all. The flats it could not read count as done
+/// until one that was away has its file back. A flat whose file is there
+/// but will not read is not tried again until the file's fingerprint, and
+/// so the key, changes. An older row that names no unread flats but
+/// combines fewer than its session holds is read once more to name them.
+fn response_is_current(dir: &Path, plan: &SessionPlan, row: &ResponseRow) -> bool {
+    let combined = plan.combined();
+    let back = row.unread.iter().any(|flat| {
+        flat.missing
+            && combined
+                .iter()
+                .any(|frame| frame.frame_uuid == flat.frame_uuid && frame.source_path.is_file())
+    });
+    if back {
+        return false;
+    }
+    row.error.is_some()
+        || (super::response_path(dir, &row.response_key).is_file()
+            && row.frames + row.unread.len() >= combined.len())
+}
+
+/// Read one flat session and keep its response, with the flats it could
+/// not read and why.
 fn measure_session(
     pass: &Pass<'_>,
     plan: &SessionPlan,
@@ -866,12 +894,22 @@ fn measure_session(
             })
             .collect()
     });
-    let (planes, failures): (Vec<_>, Vec<_>) = read.into_iter().partition(|r| r.is_ok());
-    let planes: Vec<(Plane, usize)> = planes.into_iter().map(|r| r.expect("ok")).collect();
-    if !failures.is_empty() && planes.len() < metric::MIN_FRAMES {
-        // Files away, as on an unmounted share: the caller tries again.
+    let mut planes: Vec<(Plane, usize)> = Vec::new();
+    let mut unread: Vec<UnreadFlat> = Vec::new();
+    for (frame, result) in combined.iter().zip(read) {
+        match result {
+            Ok(plane) => planes.push(plane),
+            Err(error) => unread.push(UnreadFlat {
+                frame_uuid: frame.frame_uuid.clone(),
+                missing: !frame.source_path.is_file(),
+                reason: format!("{error:#}"),
+            }),
+        }
+    }
+    // Files away, as on an unmounted share or a copy moved elsewhere: the
+    // caller tries again, and a pass reads the session once they are back.
+    if unread.iter().any(|flat| flat.missing) {
         outcome.unreadable += 1;
-        return Ok(());
     }
     let bin = planes.first().map_or(1, |(_, bin)| *bin);
     let first = &plan.frames[0];
@@ -904,6 +942,7 @@ fn measure_session(
         bin: Some(bin),
         algorithm_version: metric::RESPONSE_ALGORITHM_VERSION,
         error: None,
+        unread,
     };
     match response {
         Some(response) => {
@@ -913,6 +952,14 @@ fn measure_session(
             row.width = Some(response.plane.width);
             row.height = Some(response.plane.height);
             outcome.measured += 1;
+        }
+        None if binned.len() < metric::MIN_FRAMES && !row.unread.is_empty() => {
+            row.error = Some(format!(
+                "{} of {} flats could not be read: {}",
+                row.unread.len(),
+                combined.len(),
+                row.unread[0].reason
+            ));
         }
         None => row.error = Some("the flats could not be combined".into()),
     }

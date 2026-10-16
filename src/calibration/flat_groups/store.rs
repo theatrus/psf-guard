@@ -13,7 +13,9 @@
 //! raising the calibration schema version, so older builds ignore them.
 
 use super::measure::metric::{Comparison, Spot};
-pub use super::measure::rows::{ComparisonRow, EvidenceFit, EvidenceRow, ResponseRow, Verdict};
+pub use super::measure::rows::{
+    ComparisonRow, EvidenceFit, EvidenceRow, ResponseRow, UnreadFlat, Verdict,
+};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -39,7 +41,8 @@ pub(crate) const TABLES_SQL: &str = r#"
         bin                INTEGER,
         algorithm_version  INTEGER NOT NULL,
         error              TEXT,
-        measured_at        INTEGER NOT NULL
+        measured_at        INTEGER NOT NULL,
+        unread             TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_psf_guard_flat_response_family
         ON psf_guard_flat_response(rig_uuid, family_key);
@@ -86,6 +89,7 @@ pub(crate) fn add_tables(conn: &Connection) -> Result<bool> {
     }
     if tables_exist(conn) {
         add_change_key(conn)?;
+        add_unread(conn)?;
         return Ok(false);
     }
     conn.execute_batch(TABLES_SQL)
@@ -110,6 +114,27 @@ fn add_change_key(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The flats a response could not read, beside the row: a column added
+/// after the table, NULL on older rows. An older row that combines fewer
+/// flats than its session holds is read once more to fill it in.
+fn add_unread(conn: &Connection) -> Result<()> {
+    crate::calibration::add_column_if_missing(conn, "psf_guard_flat_response", "unread", "TEXT")
+        .context("adding unread to the flat response table")?;
+    Ok(())
+}
+
+/// Whether the response table has the `unread` column yet: an older
+/// build's catalog opened read-only may not.
+fn has_unread(conn: &Connection) -> bool {
+    crate::calibration::table_column_names(conn, "psf_guard_flat_response")
+        .map(|columns| {
+            columns
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("unread"))
+        })
+        .unwrap_or(false)
+}
+
 /// One evidence row a pass asks for now: the imaging session, the change
 /// and the key it is fitted under.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,13 +145,14 @@ pub(crate) struct EvidenceWanted {
 }
 
 pub(crate) fn upsert_response(conn: &Connection, row: &ResponseRow) -> Result<()> {
+    add_unread(conn)?;
     conn.execute(
         "INSERT INTO psf_guard_flat_response (
             response_key, session_key, rig_uuid, family_key, night, filter_name, rotation,
             frame_uuids, frames, captured_first, captured_last, level_adu, pedestal_adu, noise,
-            width, height, bin, algorithm_version, error, measured_at)
+            width, height, bin, algorithm_version, error, measured_at, unread)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                 ?18, ?19, ?20)
+                 ?18, ?19, ?20, ?21)
          ON CONFLICT(response_key) DO UPDATE SET
             session_key = excluded.session_key, rig_uuid = excluded.rig_uuid,
             family_key = excluded.family_key, night = excluded.night,
@@ -136,7 +162,8 @@ pub(crate) fn upsert_response(conn: &Connection, row: &ResponseRow) -> Result<()
             level_adu = excluded.level_adu, pedestal_adu = excluded.pedestal_adu,
             noise = excluded.noise, width = excluded.width, height = excluded.height,
             bin = excluded.bin, algorithm_version = excluded.algorithm_version,
-            error = excluded.error, measured_at = excluded.measured_at",
+            error = excluded.error, measured_at = excluded.measured_at,
+            unread = excluded.unread",
         params![
             row.response_key,
             row.session_key,
@@ -158,6 +185,9 @@ pub(crate) fn upsert_response(conn: &Connection, row: &ResponseRow) -> Result<()
             row.algorithm_version,
             row.error,
             chrono::Utc::now().timestamp(),
+            (!row.unread.is_empty())
+                .then(|| serde_json::to_string(&row.unread))
+                .transpose()?,
         ],
     )?;
     Ok(())
@@ -167,12 +197,13 @@ pub(crate) fn load_responses(conn: &Connection) -> Result<Vec<ResponseRow>> {
     if !tables_exist(conn) {
         return Ok(Vec::new());
     }
-    let mut statement = conn.prepare(
+    let unread = if has_unread(conn) { "unread" } else { "NULL" };
+    let mut statement = conn.prepare(&format!(
         "SELECT response_key, session_key, rig_uuid, family_key, night, filter_name, rotation,
                 frame_uuids, frames, captured_first, captured_last, level_adu, pedestal_adu,
-                noise, width, height, bin, algorithm_version, error
-         FROM psf_guard_flat_response ORDER BY captured_first, response_key",
-    )?;
+                noise, width, height, bin, algorithm_version, error, {unread}
+         FROM psf_guard_flat_response ORDER BY captured_first, response_key"
+    ))?;
     let rows = statement
         .query_map([], |row| {
             let uuids: String = row.get(7)?;
@@ -196,6 +227,10 @@ pub(crate) fn load_responses(conn: &Connection) -> Result<Vec<ResponseRow>> {
                 bin: row.get::<_, Option<i64>>(16)?.map(|v| v as usize),
                 algorithm_version: row.get(17)?,
                 error: row.get(18)?,
+                unread: row
+                    .get::<_, Option<String>>(19)?
+                    .and_then(|text| serde_json::from_str(&text).ok())
+                    .unwrap_or_default(),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

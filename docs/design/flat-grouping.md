@@ -655,10 +655,17 @@ opens the rig's own value or the global one.
   every response built from those rows with its comparisons
   (`store::forget_frames`); the next pass measures the session again from
   the rows the library holds.
-- **Partial reads**: a session measured while some of its flats could not
-  be read is measured again on each pass until it combines all of them. A
-  session whose flats could not be combined at all stays recorded with its
-  error until its frames or the algorithm change its key.
+- **Partial reads**: a response records the flats it could not read
+  (`unread`), each with its reason and whether its file was missing. The
+  session is read again only when a missing file is back; until then its
+  rig stays on the retry ladder, and passes read none of its frames. A
+  flat whose file is there but will not read is tried again only when its
+  fingerprint changes the key. A session too few of whose flats read is
+  kept with that error and its unread flats, and is read again on the same
+  terms. A row from before `unread` that combines fewer flats than its
+  session holds is read once more to record them. A session whose flats
+  could not be combined at all stays recorded with its error until its
+  frames or the algorithm change its key.
 - **Evidence key**: the imaging session (its profile and first light),
   the event and the evidence algorithm version. A change's key is its rig
   and window, so new flats that narrow the window ask the lights again.

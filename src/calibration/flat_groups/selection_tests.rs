@@ -559,6 +559,157 @@ fn a_session_measured_while_a_flat_was_away_is_measured_again() {
     assert_eq!(third.measured, 0, "complete now: not read again");
 }
 
+/// A catalog of these flats with the grouping tables, not yet measured,
+/// and its response folder.
+fn unmeasured_catalog(dir: &Path, frames: &[FrameMeta]) -> (Connection, PathBuf) {
+    let mut conn = Connection::open(dir.join("catalog.sqlite")).unwrap();
+    let tx = conn.transaction().unwrap();
+    import_calibration_frames(&tx, frames, Some("profile")).unwrap();
+    tx.commit().unwrap();
+    super::store::add_tables(&conn).unwrap();
+    (conn, dir.join("responses"))
+}
+
+/// One morning of four flats: `four-0..2` and `four-more-0`.
+fn four_flats(dir: &Path) -> Vec<FrameMeta> {
+    let session = Session {
+        name: "four",
+        captured: "2026-09-10T14:00",
+        filter: "Ha",
+        rotation: Some(0.0),
+        dusty: false,
+    };
+    let mut frames = write_session(dir, &session, 1);
+    let extra = Session {
+        name: "four-more",
+        captured: "2026-09-10T14:01",
+        ..session
+    };
+    frames.push(write_session(dir, &extra, 2).remove(0));
+    frames
+}
+
+/// Live on Ultracat: flats catalogued twice, where an upload left them and
+/// where they were moved to, left about half of each session's files away
+/// for good. Every pass (each retry, each upload) read those sessions
+/// again, 176 frames at a time. Once kept, a session is read again only
+/// when a file comes back.
+#[test]
+fn a_flat_away_for_good_is_not_read_again_on_every_pass() {
+    let temp = tempfile::tempdir().unwrap();
+    let frames = four_flats(temp.path());
+    let (conn, dir) = unmeasured_catalog(temp.path(), &frames);
+    std::fs::remove_file(temp.path().join("four-more-0.fits")).unwrap();
+
+    let (first, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(
+        (first.measured, first.unreadable, first.frames_read),
+        (1, 1, 4),
+        "{first:?}"
+    );
+    assert_eq!(first.retry.len(), 1, "the rig waits for the file");
+    let row = super::store::load_responses(&conn).unwrap().remove(0);
+    assert_eq!(row.frames, 3);
+    assert_eq!(row.unread.len(), 1);
+    assert!(row.unread[0].missing, "{:?}", row.unread);
+    assert!(!row.unread[0].reason.is_empty());
+
+    let (second, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(
+        (second.measured, second.frames_read),
+        (0, 0),
+        "nothing changed: nothing is read; {second:?}"
+    );
+    assert_eq!(second.unreadable, 1, "still away");
+    assert_eq!(second.retry.len(), 1, "so tried again on the retry ladder");
+
+    // A row kept before the unread flats were recorded is read once more to
+    // record them, and then stands.
+    conn.execute("UPDATE psf_guard_flat_response SET unread = NULL", [])
+        .unwrap();
+    let (third, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(third.frames_read, 4, "{third:?}");
+    let (fourth, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(fourth.frames_read, 0, "{fourth:?}");
+}
+
+/// A flat whose file is there but will not read is recorded with why, and
+/// is not read again on each pass; nor does it keep the rig retrying.
+#[test]
+fn a_flat_that_will_not_read_is_recorded_and_not_read_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let frames = four_flats(temp.path());
+    let (conn, dir) = unmeasured_catalog(temp.path(), &frames);
+    std::fs::write(temp.path().join("four-more-0.fits"), b"not a FITS file").unwrap();
+
+    let (first, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!((first.measured, first.unreadable), (1, 0), "{first:?}");
+    assert!(first.retry.is_empty(), "a retry would not read it either");
+    let row = super::store::load_responses(&conn).unwrap().remove(0);
+    assert_eq!(row.frames, 3);
+    assert!(!row.unread[0].missing, "{:?}", row.unread);
+
+    let (second, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(second.frames_read, 0, "{second:?}");
+    assert!(second.retry.is_empty());
+}
+
+/// A session none of whose flats can be read is kept as such, with why,
+/// rather than left unmeasured for every pass to try; it is read once its
+/// files are back.
+#[test]
+fn a_session_whose_flats_are_away_is_kept_with_why_and_read_once_they_are_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let frames = write_session(temp.path(), &BEFORE_HA_0, 1);
+    let (conn, dir) = unmeasured_catalog(temp.path(), &frames);
+    let away: Vec<(PathBuf, PathBuf)> = (0..3)
+        .map(|index| {
+            let file = temp
+                .path()
+                .join(format!("{}-{index}.fits", BEFORE_HA_0.name));
+            (file.clone(), file.with_extension("away"))
+        })
+        .collect();
+    for (file, moved) in &away {
+        std::fs::rename(file, moved).unwrap();
+    }
+
+    let (first, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(
+        (first.measured, first.unreadable, first.frames_read),
+        (0, 1, 3),
+        "{first:?}"
+    );
+    assert_eq!(first.retry.len(), 1);
+    let row = super::store::load_responses(&conn).unwrap().remove(0);
+    let error = row.error.as_deref().unwrap_or_default();
+    assert!(
+        error.starts_with("3 of 3 flats could not be read"),
+        "{error}"
+    );
+    assert_eq!(row.unread.len(), 3);
+
+    let (second, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(second.frames_read, 0, "{second:?}");
+    assert_eq!((second.unreadable, second.retry.len()), (1, 1));
+
+    // The share is back: the next pass, a retry or any other, reads it.
+    for (file, moved) in &away {
+        std::fs::rename(moved, file).unwrap();
+    }
+    let (third, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(
+        (third.measured, third.unreadable, third.frames_read),
+        (1, 0, 3),
+        "{third:?}"
+    );
+    assert!(third.retry.is_empty());
+    let row = super::store::load_responses(&conn).unwrap().remove(0);
+    assert_eq!((row.error, row.unread.len()), (None, 0));
+    let (fourth, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(fourth.frames_read, 0, "{fourth:?}");
+}
+
 #[test]
 fn a_bias_that_arrives_later_is_taken_out_and_the_nights_compared_again() {
     let temp = tempfile::tempdir().unwrap();
