@@ -1142,7 +1142,8 @@ test('says what a processing run waits for, then its progress, and lists it in t
   // The header lists the run behind the build it waits for.
   const activity = page.getByRole('button', { name: /Background jobs/ });
   const queue = page.getByRole('region', { name: 'Background jobs' });
-  await expect(activity).toContainText('2 jobs');
+  // The chip counts the running build and the queued run (#869).
+  await expect(activity).toHaveAccessibleName(/1 running, 1 queued/);
   await activity.click();
   const rows = queue.getByRole('listitem');
   await expect(rows).toHaveCount(2);
