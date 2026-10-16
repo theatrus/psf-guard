@@ -78,6 +78,15 @@
   stack, a preview or anything else you start. Work it could not finish,
   such as flats on a share that is away, is tried again later, and Stop
   pauses measuring until those flats change, **Resume now**, or a restart.
+- A flat session some of whose files are gone, as flats catalogued both
+  where an upload left them and where they were moved, is measured once
+  from the flats that read and then left alone, instead of being read again
+  on every measuring pass. It is read again when a missing file comes back,
+  a file the share or its permissions refused opens again, or a file that
+  would not decode is replaced. A session none of whose flats read is no
+  longer tried on every pass either; the catalog's flat measurements
+  (`psf_guard_flat_response.unread`) keep which flats failed and why. The
+  app does not show these yet.
 
 - Images' **Date** groups are observing nights, split where the catalog's
   nights split, as calibration and the AstroBin export do: a night west of

@@ -29,6 +29,50 @@ pub struct ResponseRow {
     pub algorithm_version: u32,
     /// Why the session could not be measured.
     pub error: Option<String>,
+    /// The flats it combines that could not be read, and why. The session
+    /// is read again only when one of them may read now (see
+    /// [`UnreadKind`]).
+    pub unread: Vec<UnreadFlat>,
+}
+
+/// A flat a session's response should have combined but could not read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnreadFlat {
+    pub frame_uuid: String,
+    pub kind: UnreadKind,
+    pub reason: String,
+    /// The file's size and modification time when it failed, if it was
+    /// there: a file replaced at the same path differs.
+    pub stamp: Option<FileStamp>,
+}
+
+/// Why a flat could not be read, which decides when it is tried again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnreadKind {
+    /// No file at its path, as on a share that is away or a copy moved
+    /// elsewhere: tried again once a file is there.
+    Missing,
+    /// The file system would not give it up (permissions, a share that
+    /// dropped, an I/O error): tried again once the file opens.
+    Transient,
+    /// The file read but is not an image this can decode: tried again
+    /// only once the file at its path changes.
+    Undecodable,
+}
+
+impl UnreadKind {
+    /// Whether the rig waits on the retry ladder for this flat.
+    pub fn retries(self) -> bool {
+        matches!(self, UnreadKind::Missing | UnreadKind::Transient)
+    }
+}
+
+/// A file's size and modification time, in nanoseconds since 1970.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileStamp {
+    pub size: u64,
+    pub modified_ns: u64,
 }
 
 /// Two sessions' metrics as the catalog keeps them.

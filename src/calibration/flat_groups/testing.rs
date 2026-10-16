@@ -40,6 +40,7 @@ pub(crate) fn measure_as(conn: &Connection, dust: impl Fn(&ResponseRow, &Respons
                 bin: Some(1),
                 algorithm_version: super::metric::RESPONSE_ALGORITHM_VERSION,
                 error: None,
+                unread: Vec::new(),
             },
         )
         .unwrap();
