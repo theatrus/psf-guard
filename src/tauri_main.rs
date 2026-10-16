@@ -604,6 +604,7 @@ async fn start_server_for_tauri(
         keep_failed_uploads: false,
         astrometry_config,
         shutdown: Some(stop),
+        config_path: None,
     };
 
     crate::server::run_server_on_listener(server_config, shutdown_rx, listener, socket.ready).await
@@ -773,6 +774,7 @@ mod tests {
             storage: None,
             astrobin: None,
             pixinsight: None,
+            backups: None,
             peers: Vec::new(),
         }
     }

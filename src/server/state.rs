@@ -106,6 +106,9 @@ pub struct AppState {
     pub auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh,
     /// When each database's automatic import last ran, for the schedule.
     pub autoimport: crate::server::autoimport::AutoImportScheduler,
+    /// Backups from Settings and on a schedule: the run under way and the
+    /// last one.
+    pub backups: crate::server::backup_job::BackupManager,
     /// WBPP runs waiting for PixInsight, across every database.
     pub wbpp_queue: crate::server::wbpp_queue::WbppQueue,
     /// Process-global, single-flight Seiza catalog installation with progress
@@ -527,6 +530,7 @@ impl AppState {
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
             autoimport: crate::server::autoimport::AutoImportScheduler::default(),
+            backups: crate::server::backup_job::BackupManager::default(),
             wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
@@ -829,6 +833,7 @@ impl AppState {
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
             autoimport: crate::server::autoimport::AutoImportScheduler::default(),
+            backups: crate::server::backup_job::BackupManager::default(),
             wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(

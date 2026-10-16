@@ -1577,6 +1577,25 @@ pub fn main() -> Result<()> {
         Commands::Users { action } => {
             crate::commands::users::manage_users(action)?;
         }
+        Commands::Backup {
+            destination,
+            scope,
+            include_secrets,
+            dry_run,
+            registry,
+            config,
+            director_meta,
+        } => {
+            crate::commands::backup::run(crate::commands::backup::BackupArgs {
+                destination: destination.into(),
+                scope,
+                include_secrets,
+                dry_run,
+                registry: registry.map(Into::into),
+                config: config.map(Into::into),
+                director_meta: director_meta.map(Into::into),
+            })?;
+        }
         Commands::Calibration { action } => match action {
             crate::cli::CalibrationCommand::RepairDuplicates {
                 db,
@@ -1669,6 +1688,9 @@ pub fn main() -> Result<()> {
             }
 
             // 3) Load shared TOML config for port/cache_dir/pregeneration knobs.
+            let server_config_path = config
+                .as_ref()
+                .map(|path| std::path::absolute(path).unwrap_or_else(|_| PathBuf::from(path)));
             let mut app_config = if let Some(config_path) = config {
                 Config::from_file(&config_path)
                     .with_context(|| format!("Failed to load config file: {}", config_path))?
@@ -1755,6 +1777,7 @@ pub fn main() -> Result<()> {
                     keep_failed_uploads: app_config.server.keep_failed_uploads(),
                     astrometry_config,
                     shutdown: None,
+                    config_path: server_config_path,
                 })
                 .await
             })?;

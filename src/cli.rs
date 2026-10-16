@@ -1196,6 +1196,47 @@ pub enum Commands {
         kind: SyncKind,
     },
 
+    /// Back up PSF Guard's settings and, unless `--scope meta`, every
+    /// registered catalog into one zip archive in DESTINATION.
+    ///
+    /// Catalogs are copied with SQLite's online backup, a few pages at a
+    /// time, so N.I.N.A. and a running server may keep writing. Peer keys,
+    /// collaboration tokens and server tokens are left out unless
+    /// `--include-secrets`. See docs/BACKUPS.md, which also says how to
+    /// restore by hand.
+    Backup {
+        /// Folder the archive goes to. Created if missing.
+        destination: String,
+
+        /// What to back up: `meta` for the settings alone, `full` for the
+        /// settings and every catalog.
+        #[arg(long, value_enum, default_value_t = crate::backup::BackupScope::Full)]
+        scope: crate::backup::BackupScope,
+
+        /// Keep peer keys, collaboration tokens and server tokens in the
+        /// archive, in the clear.
+        #[arg(long)]
+        include_secrets: bool,
+
+        /// Say what would be copied and where, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// The database registry (defaults to the platform config
+        /// directory).
+        #[arg(long)]
+        registry: Option<String>,
+
+        /// The server's TOML configuration file, to back it up too.
+        #[arg(short, long)]
+        config: Option<String>,
+
+        /// Director's store, when the server keeps it somewhere other than
+        /// beside the registry.
+        #[arg(long)]
+        director_meta: Option<String>,
+    },
+
     /// Manage browser users for server mode.
     Users {
         #[command(subcommand)]
@@ -1897,6 +1938,46 @@ mod tests {
             }
             _ => panic!("parsed the wrong command"),
         }
+    }
+
+    #[test]
+    fn backup_parses_its_scope_and_dry_run() {
+        let cli = Cli::try_parse_from([
+            "psf-guard",
+            "backup",
+            "/backups",
+            "--scope",
+            "meta",
+            "--dry-run",
+            "--registry",
+            "/tmp/registry.json",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Backup {
+                destination,
+                scope,
+                include_secrets,
+                dry_run,
+                registry,
+                ..
+            } => {
+                assert_eq!(destination, "/backups");
+                assert_eq!(scope, crate::backup::BackupScope::Meta);
+                assert!(!include_secrets);
+                assert!(dry_run);
+                assert_eq!(registry.as_deref(), Some("/tmp/registry.json"));
+            }
+            _ => panic!("parsed the wrong command"),
+        }
+        let cli = Cli::try_parse_from(["psf-guard", "backup", "/backups"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Backup {
+                scope: crate::backup::BackupScope::Full,
+                ..
+            }
+        ));
     }
 
     #[test]

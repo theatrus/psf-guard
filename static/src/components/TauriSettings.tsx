@@ -24,6 +24,7 @@ import StackAutomationSettings from './StackAutomationSettings';
 import StackMethodSettings from './StackMethodSettings';
 import WorkerShareSettings from './WorkerShareSettings';
 import StorageSettings from './StorageSettings';
+import BackupSettings from './BackupSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
@@ -61,11 +62,11 @@ import PathField from './PathField';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'performance' | 'review' | 'rigs' | 'templates' | 'users' | 'agents' | 'server';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'backups' | 'performance' | 'review' | 'rigs' | 'templates' | 'users' | 'agents' | 'server';
 
 /** An intent that only picks a tab. */
 type TabIntent = Extract<SettingsIntent, SettingsTab>;
-const TAB_INTENTS: readonly TabIntent[] = ['rigs', 'templates', 'stacking', 'storage', 'review', 'calibration'];
+const TAB_INTENTS: readonly TabIntent[] = ['rigs', 'templates', 'stacking', 'storage', 'backups', 'review', 'calibration'];
 function isTabIntent(intent: SettingsIntent | null): intent is TabIntent {
   return TAB_INTENTS.includes(intent as TabIntent);
 }
@@ -918,6 +919,11 @@ export default function TauriSettings({
     // Where generated files live and how full their volumes may get; shown
     // to everyone, changes need database management.
     { id: 'storage', label: 'Storage' },
+    // An archive holds every catalog and the server's settings, so backups
+    // take an editor on a server that allows database management.
+    ...(canEdit && managementAllowed
+      ? ([{ id: 'backups', label: 'Backups' }] as const)
+      : []),
     // How much of the processor stacking, quality scans and previews may use
     // together; server-wide and not management-gated, like Stacking.
     { id: 'performance', label: 'Performance' },
@@ -1975,6 +1981,8 @@ export default function TauriSettings({
               <StorageSettings canManage={managementAllowed} />
             </div>
           )}
+
+          {currentTab === 'backups' && <BackupSettings />}
 
           {currentTab === 'server' && <DesktopServerSettings />}
           {currentTab === 'agents' && <AgentsSettings onServerSettings={isTauri ? () => setActiveTab('server') : undefined} />}

@@ -2,6 +2,7 @@ pub mod api;
 pub mod astrobin_export;
 pub mod auth;
 pub mod autoimport;
+pub mod backup_job;
 pub mod cache;
 pub mod cache_budget;
 pub mod calibration_browser;
@@ -124,6 +125,8 @@ pub struct ServerConfig {
     /// for: the desktop app does, to say why a restart is taking long.
     /// `None` makes a new one.
     pub shutdown: Option<Arc<shutdown::Shutdown>>,
+    /// The TOML file the server started with, which a backup copies.
+    pub config_path: Option<PathBuf>,
 }
 
 pub async fn run_server_with_config(config: ServerConfig) -> anyhow::Result<()> {
@@ -830,6 +833,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/sync/v1/exports", post(remote_sync::create_export))
         .route("/sync/v1/exports/{export_id}", get(remote_sync::get_export))
         .route("/sync/v1/jobs/{job_id}", get(remote_sync::get_preview_job))
+        .merge(backup_job::routes())
         .nest("/db/{db_id}", db_routes)
         .nest_service("/mcp", mcp::service(Arc::clone(&state)))
         .layer(axum::middleware::from_fn(json_no_store))
@@ -952,6 +956,9 @@ async fn run_server_internal(
             }
             tracing::info!("✅ Application state initialized successfully");
             state.set_registry_path(config.registry_path.clone());
+            state
+                .backups
+                .set_locations(config.config_path.clone(), director_meta.clone());
             state.set_allow_database_management(config.allow_database_management);
             state.set_site_banner(config.site_banner.clone());
             state.set_server_auth(config.auth.clone());
@@ -1075,6 +1082,8 @@ async fn run_server_internal(
 
     // Databases that asked for it import new frames on open and on schedule.
     crate::server::autoimport::spawn(Arc::clone(&state));
+    // Periodic backups, when Settings turned them on.
+    crate::server::backup_job::spawn(Arc::clone(&state));
     crate::server::director::spawn_collaboration(Arc::clone(&state));
 
     // Build PSF Guard's query indexes on each configured catalog, once, off

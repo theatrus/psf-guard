@@ -9,6 +9,7 @@ import type {
   StackActivityEntry,
 } from '../../../api/types';
 import { activityItems, frameSitesLabel, lineLengths, summarize } from '../activityItems';
+import type { BackupJob } from '../../../api/backupTypes';
 
 function scan(processed: number, total: number, stage = 'astrometry'): SpatialScanStatus {
   return {
@@ -489,5 +490,46 @@ describe('duplicate checks and repairs in the job line', () => {
     for (const state of ['idle', 'done', 'stopped', 'failed'] as const) {
       expect(activityItems([{ ...db, duplicates: { ...idle, state } }], [])).toEqual([]);
     }
+describe('backups in the job line', () => {
+  const job: BackupJob = {
+    trigger: 'manual', scope: 'full', include_secrets: false, destination: '/backups',
+    location: 'elsewhere', stage: 'copying', current: 'catalog imaging-rig', files_done: 2,
+    files_total: 8, bytes_done: 30, bytes_total: 120, waiting_for: null, started_at: 1700,
+    stopping: false,
+  };
+
+  it("shows a person's backup as running work with its progress and a stop", () => {
+    const [item] = activityItems([], [], undefined, undefined, {}, [], job);
+    expect(item).toMatchObject({
+      key: 'backup:1700',
+      kind: 'backup',
+      title: 'Backing up',
+      scope: 'Settings and catalogs',
+      detail: 'Copying catalog imaging-rig · 2/8 files',
+      status: 'running',
+      percent: 25,
+      automatic: false,
+      background: false,
+      stoppable: true,
+      control: { kind: 'backup' },
+      hint: '/backups',
+    });
+    expect(item.href).toBeUndefined();
+  });
+
+  it('lists a scheduled backup as automatic, and as waiting while it steps aside', () => {
+    const [item] = activityItems([], [], undefined, undefined, {}, [], {
+      ...job, trigger: 'schedule', scope: 'meta', waiting_for: 'a stack build',
+    });
+    expect(item).toMatchObject({
+      title: 'Scheduled backup',
+      scope: 'Settings',
+      status: 'waiting',
+      waitingFor: 'a stack build',
+      detail: 'Waiting for a stack build',
+      automatic: true,
+      background: true,
+    });
+    expect(activityItems([], [], undefined, undefined, {}, [], null)).toEqual([]);
   });
 });

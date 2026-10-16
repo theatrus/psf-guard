@@ -90,9 +90,14 @@ pub struct RemoteAuditLog {
 }
 
 impl RemoteAuditLog {
+    /// Where the log sits below a cache folder.
+    pub fn path_in(cache_root: impl AsRef<Path>) -> PathBuf {
+        cache_root.as_ref().join("remote-sync-audit.jsonl")
+    }
+
     pub fn new(cache_root: impl AsRef<Path>) -> Self {
         Self {
-            path: cache_root.as_ref().join("remote-sync-audit.jsonl"),
+            path: Self::path_in(cache_root),
             max_bytes: MAX_LOG_BYTES,
             write_lock: Mutex::new(()),
         }

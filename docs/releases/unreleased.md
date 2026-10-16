@@ -38,6 +38,20 @@
   to the strip, the frame panel and the duplicates list, reads on the rig's
   clock with its offset, such as UTC−7; when a master was built reads on
   your clock with its zone.
+
+- **Settings › Backups** backs up PSF Guard's settings, accounts, setups and
+  Planning's store, and every catalog with the tables PSF Guard adds to it,
+  into one zip archive with a manifest of versions and checksums. Catalogs
+  are copied safely while N.I.N.A. keeps writing. Download the archive in a
+  browser or save it to a folder in the desktop app, or turn on scheduled
+  backups: daily or weekly at a time you choose, to a folder you choose,
+  keeping the newest few or those younger than some days. Scheduled backups
+  run in the background, step aside for your own work, show in the job line
+  with Stop, and remove only their own older archives. Peer keys and tokens
+  are left out unless you ask for them. `psf-guard backup` does the same
+  from the command line, with `--dry-run`. Restoring is by hand; see
+  [Backups](../BACKUPS.md).
+
 - The header's background jobs keep automatic work in view while your own
   work runs. A database quality analysis, an automatic stack refresh, or a
   re-apply of processing that steps aside for a build, scan, or solve you

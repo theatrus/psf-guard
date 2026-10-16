@@ -67,6 +67,12 @@ pub(crate) fn default_meta_path(registry: &FilePath) -> std::path::PathBuf {
     registry.with_file_name(format!("{stem}.director-meta.sqlite"))
 }
 
+/// The collaboration credentials file beside a registry, which backups
+/// leave out unless asked to keep secrets.
+pub(crate) fn collaboration_credentials_path(registry: &FilePath) -> std::path::PathBuf {
+    collaboration_auth::credential_path(registry)
+}
+
 /// An explicit path always wins. Without one, a server that may manage its
 /// databases opens the default store; a read-only server leaves Director off,
 /// because planning writes into rig databases at activation.

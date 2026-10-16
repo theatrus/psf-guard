@@ -13,6 +13,9 @@ import type {
 import { useAllDatabases, useMergedTargets } from '../../hooks/useDatabases';
 import { useStackActivity } from '../../hooks/useStackActivity';
 import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
+import { BACKUP_STATUS_QUERY_KEY, type BackupJobView } from '../../api/backupTypes';
+import { useAccess } from '../../auth/access';
+import { isTauriApp } from '../../utils/tauri';
 import { flatMeasureKey, flatMeasurePollMs } from '../calibration/flatMeasureLabel';
 import { duplicatesKey, duplicatesPollMs } from '../calibration/duplicateJob';
 import { activityItems, summarize, type DatabaseActivity, type ProjectOf } from './activityItems';
@@ -83,6 +86,26 @@ export function useHeaderActivity() {
         ? 2000
         : 10_000,
     refetchIntervalInBackground: false,
+  });
+
+  // Backups need an editor on a server that allows database management. A
+  // scheduled one starts on its own, so a quiet server keeps a slow look;
+  // Settings › Backups reads the same query.
+  const access = useAccess();
+  const { data: serverInfo } = useQuery({
+    queryKey: ['serverInfo'],
+    queryFn: apiClient.getServerInfo,
+    staleTime: 5 * 60 * 1000,
+  });
+  const backupsAllowed =
+    access.canWrite && (isTauriApp() || (serverInfo?.allow_database_management ?? false));
+  const backup = useQuery<BackupJobView>({
+    queryKey: BACKUP_STATUS_QUERY_KEY,
+    queryFn: apiClient.getBackupStatus,
+    enabled: backupsAllowed,
+    refetchInterval: (query) => (query.state.data?.job ? 1000 : 30_000),
+    refetchIntervalInBackground: false,
+    retry: false,
   });
 
   const refreshes = useQueries({
@@ -169,7 +192,7 @@ export function useHeaderActivity() {
   const items = activityItems(perDb, stacks, wbpp.data, projectOf, {
     scheduled,
     reapplies: waitingReapplies,
-  }, transfers.data?.jobs);
+  }, transfers.data?.jobs, backupsAllowed ? backup.data?.job ?? null : null);
   const summary = summarize(items);
 
   // A database whose work just finished has new images, metrics and grades

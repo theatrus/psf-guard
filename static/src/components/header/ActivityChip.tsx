@@ -16,6 +16,7 @@ import { useHeaderActivity, WBPP_ACTIVITY_QUERY_KEY, type ScanErrorNote } from '
 import './header.css';
 import { TransferControls } from '../director/CollaborationTransfers';
 import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
+import { BACKUP_STATUS_QUERY_KEY } from '../../api/backupTypes';
 import type { TransferJob, TransferAction } from '../../api/transferTypes';
 
 /** How long the list stays after the pointer leaves, so it can be reached. */
@@ -69,6 +70,7 @@ function runAction(action: ActivityAction): Promise<unknown> {
   if (control.kind === 'flats') return apiClient.cancelFlatMeasure(control.dbId);
   if (control.kind === 'sites') return apiClient.cancelFrameSites(control.dbId);
   if (control.kind === 'duplicates') return apiClient.stopCalibrationDuplicates(control.dbId);
+  if (control.kind === 'backup') return apiClient.stopBackup();
   if (control.kind === 'wbpp-running') return apiClient.cancelWbppRun(control.dbId);
   return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
 }
@@ -309,6 +311,7 @@ export default function ActivityChip() {
       queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: WBPP_ACTIVITY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TRANSFER_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: BACKUP_STATUS_QUERY_KEY });
     },
   });
   const [pinned, setPinned] = useState(false);
