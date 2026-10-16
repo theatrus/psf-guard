@@ -61,6 +61,12 @@ pub const DEFAULT_NIGHT_BOUNDARY: i64 = 12 * 3600;
 /// share of the larger's: one filter's donut measures a little larger or
 /// smaller than another's, never a dozen times.
 pub const SAME_SHADOW_SIZE: f32 = 0.5;
+/// The shallowest spot that says which change a split shows, as a fraction
+/// of the background: a quarter of the default 1% dust limit. A comparison
+/// lists spots down to about 0.1%, where a large donut that moved a little
+/// covers some faint dip of every other change; matched on those, one
+/// filter's split across one change reads as spanning two.
+pub const MIN_SHADOW_PEAK: f32 = 0.0025;
 
 /// The limits one rig's sessions are held to.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1312,12 +1318,14 @@ impl Book {
         Self::spots_meet(&Self::changes(a), &Self::changes(b)) || Self::shares_vignetting(a, b)
     }
 
-    /// A boundary's spots that are changes: not moves within focus travel.
+    /// A boundary's spots that are changes: not moves within focus travel,
+    /// and deep enough to tell one change from another
+    /// ([`MIN_SHADOW_PEAK`]).
     fn changes(boundary: &Boundary) -> Vec<&Spot> {
         boundary
             .spots
             .iter()
-            .filter(|spot| !spot.within_tolerance)
+            .filter(|spot| !spot.within_tolerance && spot.peak >= MIN_SHADOW_PEAK)
             .collect()
     }
 
