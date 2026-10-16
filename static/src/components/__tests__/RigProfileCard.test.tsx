@@ -8,6 +8,7 @@ import { AccessContext, useAccess } from '../../auth/access';
 import RigProfileCard from '../director/RigProfileCard';
 import type { DirectorRigProfile, DirectorRigProfileEdit, DirectorRigProfileView } from '../../api/directorTypes';
 import { editFromForm, formFromProfile } from '../director/rigProfileForm';
+import { unsavedLabels } from '../../hooks/useUnsavedChanges';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const rig = { id: '22222222-2222-4222-8222-222222222222', name: 'RedCat', revision: 1 };
@@ -127,12 +128,17 @@ describe('Rig profile card', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Site' }));
     fireEvent.click(screen.getByRole('button', { name: 'Use frame headers' }));
     expect(screen.getByLabelText('Latitude')).toHaveValue(34.2);
+    // Not sent yet: the card says so, and Settings would ask before closing.
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(unsavedLabels()).toEqual([expect.stringMatching(/ setup$/)]);
     fireEvent.change(screen.getByLabelText('Bortle class'), { target: { value: '6' } });
     fireEvent.click(screen.getByRole('tab', { name: 'Limits and delivery' }));
     fireEvent.change(screen.getByLabelText('Stop before meridian'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
     expect(await screen.findByText('Saved rig profile revision 1.')).toBeInTheDocument();
     expect(saves).toHaveLength(1);
+    await waitFor(() => expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument());
+    expect(unsavedLabels()).toEqual([]);
     expect(saves[0].expected_revision).toBe(0);
     expect(saves[0].optics).toEqual({ value: optics, source: { kind: 'frame_headers', file_name: 'newest.fits' } });
     expect(saves[0].site?.value).toEqual(site);

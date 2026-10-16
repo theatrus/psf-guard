@@ -4,6 +4,12 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Settings asks before **Done**, **×** or a click outside closes it over
+  edits a form has not saved: a rig's setup, a site, calibration, scoring
+  defaults, storage folders, PixInsight, the desktop server port or the
+  backup schedule. The rig and site forms say **Unsaved changes** beside
+  Save, folding a rig's setup or opening another site keeps its edits, and
+  the browser asks before a reload drops them.
 - A suspect calibration frame can be overruled. **Use anyway** in
   Calibration › Frames now appears on a suspect frame as well as a kept-out
   one. The frame then counts as OK: it shows **Used anyway**, its session

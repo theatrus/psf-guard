@@ -379,6 +379,30 @@
   gap: 12px;
 }
 
+/* Done, × or a click outside with a form's edits unsaved: ask first. */
+.tauri-settings .unsaved-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-status-caution);
+  border-radius: 6px;
+  background: var(--color-status-caution-bg);
+  color: var(--color-text-primary);
+}
+
+.tauri-settings .unsaved-confirm p {
+  flex: 1 1 18rem;
+  margin: 0;
+}
+
+.tauri-settings .unsaved-confirm .unsaved-discard {
+  color: var(--color-status-bad);
+}
+
 .tauri-settings .cancel-button {
   padding: 10px 20px;
   background-color: var(--color-bg-button);

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { desktopServer, isTauriApp, tauriConfig } from '../utils/tauri';
 import OpenLogsButton from './OpenLogsButton';
 import './DesktopServerSettings.css';
+import UnsavedMark from './UnsavedMark';
 
 const KEY = ['desktopServerSettings'] as const;
 
@@ -73,6 +74,7 @@ export default function DesktopServerSettings({
   const clearError = () => { setValidation(''); save.reset(); restart.reset(); };
 
   return <section className="desktop-server-settings" aria-label="Desktop server">
+      <UnsavedMark label="server port" dirty={dirty} />
     <h3>Server</h3>
     <p>The desktop app, browser access, API, and agents share this localhost port.
       Choose Fixed port to keep the address across restarts.</p>

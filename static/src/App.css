@@ -7308,3 +7308,10 @@
   font-weight: 600;
   pointer-events: none;
 }
+
+/* Beside a Save button whose form holds edits it has not sent. */
+.unsaved-note {
+  align-self: center;
+  color: var(--color-status-caution);
+  font-size: 0.85rem;
+}

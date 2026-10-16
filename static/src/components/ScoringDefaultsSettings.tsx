@@ -10,6 +10,7 @@ import {
   type ScoringField,
   type ScoringPreferences,
 } from '../utils/scoring';
+import UnsavedMark from './UnsavedMark';
 
 type Texts = Record<ScoringField, string>;
 
@@ -156,6 +157,7 @@ export default function ScoringDefaultsSettings() {
 
   return (
     <section className="scoring-defaults" aria-labelledby={headingId}>
+      <UnsavedMark label="scoring defaults" dirty={edited} />
       <h3 id={headingId}>Sequence scoring</h3>
       <p className="scoring-defaults-intro">
         Every view's <strong>Scoring</strong> control starts from these. A

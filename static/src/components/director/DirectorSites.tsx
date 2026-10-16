@@ -9,6 +9,7 @@ import HorizonEditor from './HorizonEditor';
 import { identityId } from './identityId';
 import { describeSource } from './rigProfileForm';
 import { retryWhenBusy } from './retry';
+import { useUnsavedChanges } from '../../hooks/useUnsavedChanges';
 
 const message = (error: unknown) => isAxiosError(error)
   ? error.response?.data?.error || error.message
@@ -21,12 +22,19 @@ export default function DirectorSites() {
   const client = useQueryClient();
   const sites = useQuery({ queryKey: ['directorSites'], queryFn: () => apiClient.getDirectorIdentities('sites'), retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const [open, setOpen] = useState<string | null>(null);
+  // A site once opened stays mounted, hidden while folded, so opening
+  // another keeps its unsaved edits (and Settings still asks before closing).
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  const show = (id: string | null) => {
+    setOpen(id);
+    if (id) setOpened(current => current.has(id) ? current : new Set(current).add(id));
+  };
   const [name, setName] = useState('');
   const create = useMutation({
     mutationFn: (siteName: string) => apiClient.createDirectorIdentity('sites', { id: identityId(), name: siteName }),
     onSuccess: site => {
       setName('');
-      setOpen(site.id);
+      show(site.id);
       void client.invalidateQueries({ queryKey: ['directorSites'] });
       void client.invalidateQueries({ queryKey: ['observingDefaults'] });
     },
@@ -44,9 +52,9 @@ export default function DirectorSites() {
     <ul className="director-list">{sites.data?.items.map(site => <li key={site.id}>
       <div className="director-record director-record-wide">
         <div className="director-record-name"><strong>{site.name}</strong></div>
-        <button type="button" aria-expanded={open === site.id} aria-label={`Edit ${site.name}`} title={`Edit ${site.name}`} onClick={() => setOpen(open === site.id ? null : site.id)}>{open === site.id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Edit</button>
+        <button type="button" aria-expanded={open === site.id} aria-label={`Edit ${site.name}`} title={`Edit ${site.name}`} onClick={() => show(open === site.id ? null : site.id)}>{open === site.id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Edit</button>
       </div>
-      {open === site.id && <SiteProfileCard key={site.id} site={site} />}
+      {(open === site.id || opened.has(site.id)) && <div hidden={open !== site.id}><SiteProfileCard key={site.id} site={site} /></div>}
     </li>)}</ul>
     {canWrite && <form className="director-site-new" onSubmit={add}>
       <input aria-label="New site name" placeholder="Site name" value={name} maxLength={200} onChange={event => setName(event.target.value)} />
@@ -125,6 +133,9 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
   };
   const update = (patch: Partial<SiteForm>) => setForm(current => current ? { ...current, ...patch } : current);
   const data = loaded.data;
+  // Edits Save has not sent; Settings asks before closing over them.
+  const unsaved = !!data && !!form && canWrite && JSON.stringify(form) !== JSON.stringify(formFrom(data));
+  useUnsavedChanges(`site ${data?.site.name ?? site.name}`, unsaved);
   const disabled = !canWrite || save.isPending || stale;
   const field = (key: 'latitude' | 'longitude' | 'elevation', label: string, unit: string) => <label className="rig-profile-field" htmlFor={`${site.id}-${key}`}><span>{label}</span>
     <span className="rig-profile-input"><input id={`${site.id}-${key}`} aria-label={label} type="number" inputMode="decimal" step="any" value={form?.[key] ?? ''} onChange={event => update({ [key]: event.target.value })} /><small>{unit}</small></span>
@@ -154,7 +165,7 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
           onChange={horizon => update({ horizon })} />
       </fieldset>
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
-      {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save site'}</button></div>}
+      {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save site'}</button>{unsaved && !save.isPending && <span className="unsaved-note">Unsaved changes</span>}</div>}
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>}
   </section>;

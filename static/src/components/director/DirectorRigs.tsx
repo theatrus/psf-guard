@@ -22,6 +22,9 @@ export default function DirectorRigs() {
   const id = useId();
   const databases = useAllDatabases();
   const [openSetup, setOpenSetup] = useState<string | null>(null);
+  // A setup once opened stays mounted, hidden while folded, so folding it
+  // keeps its unsaved edits (and Settings still asks before closing).
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const profiles = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 30_000 });
   // Only needed to name a peer; most servers have none.
@@ -48,9 +51,9 @@ export default function DirectorRigs() {
             {status?.status && <span className="director-muted">Director plugin: {describeStatus(status.status.payload, status.status.reported_at_ms)}</span>}
           </div>
           <Link to={`/?${new URLSearchParams({ db: db.id, dbfilter: db.id })}`}><BookOpen size={16} aria-hidden="true" />Library</Link>
-          <button type="button" aria-expanded={expanded} aria-controls={setupId} aria-label={`Setup ${db.name}`} title={`Setup ${db.name}`} onClick={() => setOpenSetup(expanded ? null : db.id)}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Setup</button>
+          <button type="button" aria-expanded={expanded} aria-controls={setupId} aria-label={`Setup ${db.name}`} title={`Setup ${db.name}`} onClick={() => { setOpenSetup(expanded ? null : db.id); setOpened(current => current.has(db.id) ? current : new Set(current).add(db.id)); }}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Setup</button>
         </div>
-        <div id={setupId} hidden={!expanded}>{expanded && <RigProfileCard key={db.id} slug={db.id} />}</div>
+        <div id={setupId} hidden={!expanded}>{(expanded || opened.has(db.id)) && <RigProfileCard key={db.id} slug={db.id} />}</div>
       </li>;
     })}</ul>
   </section>

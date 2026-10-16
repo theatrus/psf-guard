@@ -8,6 +8,7 @@ import { AccessContext, useAccess } from '../../auth/access';
 import DirectorSites from '../director/DirectorSites';
 import type { DirectorSiteProfileEdit, DirectorSiteProfileView } from '../../api/directorTypes';
 import { horizonToHrz } from '../director/horizonFile';
+import { unsavedLabels } from '../../hooks/useUnsavedChanges';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const curve = { mode: 'custom' as const, points: [{ azimuth_degrees: 0, altitude_degrees: 12 }, { azimuth_degrees: 180, altitude_degrees: 30 }, { azimuth_degrees: 360, altitude_degrees: 12 }] };
@@ -55,6 +56,28 @@ function mount() {
 
 describe('Director sites', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps a site\'s unsaved edits while another is open, and says they are unsaved', async () => {
+    fixture();
+    mount();
+    for (const name of ['Folsom', 'Starfront']) {
+      fireEvent.change(await screen.findByLabelText('New site name'), { target: { value: name } });
+      fireEvent.click(screen.getByRole('button', { name: 'Add site' }));
+      await screen.findByRole('region', { name: `Site ${name}` });
+    }
+    // Starfront opened last; go back to Folsom and give it a location.
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Folsom' }));
+    const folsom = await screen.findByRole('region', { name: 'Site Folsom' });
+    fireEvent.change(within(folsom).getByLabelText('Latitude'), { target: { value: '38.66' } });
+    expect(within(folsom).getByText('Unsaved changes')).toBeInTheDocument();
+    expect(unsavedLabels()).toEqual(['site Folsom']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Starfront' }));
+    expect(screen.getByRole('region', { name: 'Site Folsom', hidden: true })).not.toBeVisible();
+    expect(unsavedLabels()).toEqual(['site Folsom']);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Folsom' }));
+    expect(within(screen.getByRole('region', { name: 'Site Folsom' })).getByLabelText('Latitude')).toHaveValue(38.66);
+  });
 
   it('adds a site, reads an uploaded horizon file, saves the location with it, and downloads it back', async () => {
     const { saves, parsed } = fixture();

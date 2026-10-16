@@ -11,6 +11,7 @@ import type {
 } from '../api/types';
 import { isTauriApp, tauriConfig } from '../utils/tauri';
 import PathField from './PathField';
+import UnsavedMark from './UnsavedMark';
 
 const QUERY_KEY = ['storage-settings'] as const;
 
@@ -155,6 +156,7 @@ function StorageFolders({ current, canManage }: { current: StorageSettingsData; 
 
   return (
     <div className="storage-folders">
+      <UnsavedMark label="storage folders" dirty={dirty} />
       <h3>Folders</h3>
       {current.folders.map((folder) => {
         const label = FOLDER_LABELS[folder.kind];
