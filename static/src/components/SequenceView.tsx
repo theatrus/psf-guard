@@ -32,6 +32,8 @@ import { useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useNightBoundary } from '../hooks/useNightBoundary';
 import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
 import TimeBreakMark from './TimeBreakMark';
+import TimeMarksChoice from './TimeMarksChoice';
+import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SequenceCutoffControl from './SequenceCutoffControl';
 import {
   cutoffMetricOf,
@@ -995,6 +997,7 @@ export default function SequenceView() {
               onChange={chooseOrder}
               title="The frames and the session tabs by capture time. The score chart keeps time left to right."
             />
+            <TimeMarksChoice id="sequence-time-marks" />
             <div className="toolbar-field">
               <span className="toolbar-caption">Chips</span>
               <SecondaryScoreToggle />
@@ -1528,9 +1531,14 @@ const SequenceStrip = memo(function SequenceStrip({
     });
   }, [currentImageId, imageSize, stripRef]);
 
+  const { timeMarks: marksChoice = 'nights-hours' } = useDisplayPreferences();
   const marks = useMemo(
-    () => timeMarks(images.map((quality) => imageMap.get(quality.image_id)?.acquired_date), nightBoundarySeconds),
-    [imageMap, images, nightBoundarySeconds],
+    () => marksChoice === 'off' ? null : timeMarks(
+      images.map((quality) => imageMap.get(quality.image_id) ?? { acquired_date: null }),
+      nightBoundarySeconds,
+      { hours: marksChoice === 'nights-hours' },
+    ),
+    [imageMap, images, marksChoice, nightBoundarySeconds],
   );
 
   return (

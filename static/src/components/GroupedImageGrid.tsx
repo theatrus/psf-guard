@@ -62,6 +62,7 @@ import FlatSideDialog from './FlatSideDialog';
 import { useFlatChoiceAccess } from './calibration/useFlatGroupChoices';
 import ScoringChangedNote from './ScoringChangedNote';
 import TimeBreakMark from './TimeBreakMark';
+import TimeMarksChoice from './TimeMarksChoice';
 import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
 
@@ -123,7 +124,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   // Initialize grading system with undo/redo
   const grading = useGrading(dbId!);
-  const { advanceOnGrade, showCalibrationChip } = useDisplayPreferences();
+  const { advanceOnGrade, showCalibrationChip, timeMarks: marksChoice = 'nights-hours' } = useDisplayPreferences();
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
   // The selected lights whose flat side is being chosen.
@@ -331,11 +332,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Where each group's frames cross into another night or hour, drawn in
   // the gaps between cards.
   const groupTimeMarks = useMemo(
-    () => new Map(imageGroups.map((group) => [
-      imageGroupKey(group),
-      timeMarks(group.images.map((image) => image.acquired_date), nightBoundarySeconds),
-    ])),
-    [imageGroups, nightBoundarySeconds],
+    () => marksChoice === 'off'
+      ? new Map<string, ReturnType<typeof timeMarks>>()
+      : new Map(imageGroups.map((group) => [
+        imageGroupKey(group),
+        timeMarks(group.images, nightBoundarySeconds, { hours: marksChoice === 'nights-hours' }),
+      ])),
+    [imageGroups, marksChoice, nightBoundarySeconds],
   );
 
   const visibleExpandedGroups = useMemo(
@@ -978,6 +981,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 onChange={chooseOrder}
                 title="The frames in each group by capture time. Date and Session groups always start with the newest night."
               />
+              <TimeMarksChoice id="grid-time-marks" />
               <div className="toolbar-field">
                 <span className="toolbar-caption">Chips</span>
                 <SecondaryScoreToggle />

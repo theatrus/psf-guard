@@ -679,3 +679,56 @@ async fn the_image_list_carries_each_frames_size_from_one_header() {
         );
     }
 }
+
+/// The image list names each light's night, split at its profile's rig's
+/// local noon, not where the catalog's quiet hours fall: 19:00 UTC at a
+/// site at 121° W is late morning there, still the night before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_image_list_names_each_lights_night_at_its_rigs_local_noon() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    seed_target_with_images(&conn, 1);
+    // 2024-01-16 19:00 UTC, the next day's late morning at the site.
+    conn.execute(
+        "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername, metadata)
+         VALUES (2, 1, 1, 1705431600, 'R', '{\"FileName\":\"frame_0001.fits\"}')",
+        [],
+    )
+    .unwrap();
+    let light = psf_guard::commands::import::headers::FrameMeta {
+        camera: Some("ASI2600MM".into()),
+        telescope: Some("C925".into()),
+        width: Some(6248),
+        height: Some(4176),
+        timestamp: Some(1705352400),
+        site_longitude: Some(-121.163),
+        site_latitude: Some(38.66),
+        ..Default::default()
+    };
+    psf_guard::calibration::note_light_rig(&conn, Some("default"), &light).unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let (app, _state) = create_test_app(conn, tmp.path());
+    let (status, json) =
+        get_json(app, "/api/db/test/images?project_id=1&target_id=1&limit=10").await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    let mut nights: Vec<(i64, String)> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|image| {
+            (
+                image["id"].as_i64().unwrap(),
+                image["night"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    nights.sort();
+    // 2024-01-15 21:00 UTC is that evening; 2024-01-16 19:00 UTC, before
+    // the site's 20:05 UTC noon, still belongs to it. The catalog's quiet
+    // hours would have put the second in the night of the 16th.
+    assert_eq!(
+        nights,
+        vec![(1, "2024-01-15".to_string()), (2, "2024-01-15".to_string())]
+    );
+}

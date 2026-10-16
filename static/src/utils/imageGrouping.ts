@@ -1,7 +1,7 @@
 import type { Image, ProjectMosaic } from '../api/types';
 import type { GroupingMode } from '../types/grouping';
 import type { ImageOrder } from './imageOrder';
-import { FALLBACK_NIGHT_BOUNDARY_SECONDS, nightOf } from './observingNight';
+import { FALLBACK_NIGHT_BOUNDARY_SECONDS, lightNight } from './observingNight';
 
 export interface ImageGroup {
   /** Stable identity for React and URL state. The label may change as a live session grows. */
@@ -143,9 +143,9 @@ export function groupGridImages(
     const db = image.db_id;
     const project = image.project_display_name || 'Unknown Project';
     const filter = image.filter_name || 'No Filter';
-    const date = image.acquired_date
-      ? nightOf(image.acquired_date, nightBoundaryFor(image, scope))
-      : 'Unknown Date';
+    const date = (image.acquired_date
+      ? lightNight(image, nightBoundaryFor(image, scope))
+      : null) ?? 'Unknown Date';
     const oldDate = image.acquired_date ? utcDate(image.acquired_date) : 'Unknown Date';
     let label: string;
     let key: string;

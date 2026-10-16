@@ -94,6 +94,9 @@ export interface Image {
   target_id: number;
   target_name: string;
   acquired_date: number | null;
+  /** The observing night, `YYYY-MM-DD`, split at its rig's local noon.
+   *  Absent from the single-image view and from older servers. */
+  night?: string;
   filter_name: string | null;
   grading_status: number;
   reject_reason: string | null;

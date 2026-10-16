@@ -204,6 +204,11 @@ pub struct ImageResponse {
     pub target_id: i32,
     pub target_name: String,
     pub acquired_date: Option<i64>,
+    /// The observing night the light belongs to, `YYYY-MM-DD`, split at its
+    /// rig's local noon ([`crate::calibration::LightNights`]). Absent for a
+    /// light with no capture time, and from the single-image view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub night: Option<String>,
     pub filter_name: String,
     pub grading_status: i32,
     pub reject_reason: Option<String>,

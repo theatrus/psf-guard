@@ -4561,6 +4561,12 @@ pub async fn get_images(
             .collect();
         let mut copies = crate::frame_derivatives::derivatives_for_lights(&conn, &guids)
             .map_err(|error| AppError::InternalError(format!("reading copies: {error:#}")))?;
+        // Each light's observing night, split at its rig's local noon, so every
+        // view groups and marks nights from this one answer.
+        let light_nights = crate::calibration::LightNights::load_with_catalog(
+            &conn,
+            crate::server::sky_coverage::cached_night_boundary(&ctx, &conn)?,
+        );
 
         // Each frame's camera setup, and a few frames of each to read the size
         // from. A delayed remote upload may still be arriving: not one of them.
@@ -4619,6 +4625,9 @@ pub async fn get_images(
                     project_display_name,
                     target_id: img.target_id,
                     target_name,
+                    night: img
+                        .acquired_date
+                        .map(|at| light_nights.night_of(img.profile_id.as_deref(), at)),
                     acquired_date: img.acquired_date,
                     filter_name: img.filter_name,
                     grading_status: img.grading_status,
@@ -4843,6 +4852,8 @@ pub async fn get_image(
         project_display_name,
         target_id: image.target_id,
         target_name,
+        // The grid's list carries the night; the detail walks its groups.
+        night: None,
         acquired_date: image.acquired_date,
         filter_name: image.filter_name,
         grading_status: image.grading_status,

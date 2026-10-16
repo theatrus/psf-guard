@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import SequenceView from '../SequenceView';
+import { getDisplayPreferences, setDisplayPreferences } from '../../hooks/useDisplayPreferences';
 import normalFixture from '../../__fixtures__/sequence-analysis-normal.json';
 import cloudsFixture from '../../__fixtures__/sequence-analysis-clouds.json';
 import multiSessionFixture from '../../__fixtures__/sequence-analysis-multi-session.json';
@@ -1105,6 +1106,44 @@ describe('SequenceView: selection rules', () => {
     expect(document.querySelectorAll(".sequence-strip > .time-slot[data-time-break='night']")).toHaveLength(0);
     expect(document.querySelectorAll('.sequence-strip > .time-slot')).toHaveLength(10);
     expect(document.querySelector('.time-break-label')?.textContent).toMatch(/^\d\d:00$/);
+  });
+
+  it('draws nights, nights only, or no marks as the View panel chooses', async () => {
+    setupDefaultHandlers();
+    server.use(http.get('/api/db/:dbId/images', () => HttpResponse.json({
+      success: true,
+      // Ten minutes apart, crossing an hour; the server names two nights.
+      data: mockImages.map((image, i) => ({
+        ...image,
+        acquired_date: 1705352400 + i * 600,
+        night: i < 5 ? '2024-01-15' : '2024-01-16',
+      })),
+      error: null,
+      status: 'ready',
+    })));
+    const before = getDisplayPreferences();
+    try {
+      const user = userEvent.setup();
+      renderWithLocation();
+      await cards();
+      const marks = (kind: string) =>
+        document.querySelectorAll(`.sequence-strip > .time-slot[data-time-break='${kind}']`).length;
+      // The night the image list names, not the catalog's split.
+      await waitFor(() => expect(marks('night')).toBe(1));
+      expect(document.querySelectorAll('.sequence-strip > .time-slot')[5]).toHaveAttribute('data-time-break', 'night');
+      expect(marks('hour')).toBeGreaterThan(0);
+
+      await user.selectOptions(screen.getByLabelText('Marks'), 'nights');
+      expect(getDisplayPreferences().timeMarks).toBe('nights');
+      await waitFor(() => expect(marks('hour')).toBe(0));
+      expect(marks('night')).toBe(1);
+
+      await user.selectOptions(screen.getByLabelText('Marks'), 'off');
+      await waitFor(() => expect(marks('night')).toBe(0));
+      expect(document.querySelector('.time-break-label')).toBeNull();
+    } finally {
+      setDisplayPreferences(before);
+    }
   });
 
   it('keeps the clicks a reloaded URL carries', async () => {

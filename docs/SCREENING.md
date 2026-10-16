@@ -345,12 +345,23 @@ before anything is written.
 
 The **Date**, **Filter + Date** and **Project + Date** groups in Images are
 observing nights. An evening and the small hours after it share the date the
-evening began, wherever the site is. Nights split where the catalog's nights
-split: the middle of the longest stretch of the day in which it never
-captured. Calibration and the AstroBin export split there too, and
-`/stats/overall` reports it as `night_boundary_seconds`, kept until the
-catalog next changes. The image detail's next and previous walk the same
-nights as the grid.
+evening began, wherever the site is. A light's night splits at its rig's
+local noon, as calibration splits its frames' nights (see
+[calibration libraries](CALIBRATION_LIBRARY.md)): the rig's **Night starts
+at noon in** setting, else the site longitude its frames record, else their
+clock. A light finds its rig through its Target Scheduler profile, which
+calibration and light imports bind to the rigs shot under it; where a
+profile's rigs disagree, a setting beats a site, a site beats a clock, then
+the split most of them share. A light whose profile no rig is bound to
+splits at the global night setting if there is one, else where every placed
+rig of the catalog agrees, else where the catalog's nights split: the middle
+of the longest stretch of the day in which it never captured, which
+`/stats/overall` reports as `night_boundary_seconds`.
+
+The image list names each light's night as `night`, so Images, Sequence's
+marks and the image detail's next and previous all walk the same nights,
+and a calibration report's nights link to the same lights. The AstroBin
+export and the sky coverage still split at the catalog's split.
 
 A link that names no group by today's keys but names one by the UTC date
 older versions used opens the nights holding that date's frames. A date that
@@ -367,12 +378,15 @@ Images and Sequence mark where the frames cross into another night or hour,
 so a long grid that wraps across many rows still shows the time passing. A
 line runs down the gap before the first frame of a night, with the night's
 date above it, and every other night takes a faint band behind its cards.
-Nights split where the catalog's nights split (see above), not at midnight.
+Nights split at each rig's local noon (see above), not at midnight.
 Thinner lines mark the hours, in the time the cards show: every hour while
 frames come every ten minutes or faster, every two or three hours for longer
 exposures, and none when even three hours would hold fewer than six frames.
 The marks sit in the gaps and behind the cards, so no card moves for them.
 Under a Date grouping each group is one night, so only the hours are marked.
+**Marks** in the View panel, or **Night and hour marks** in Settings ›
+Review, draws nights and hours, nights only, or no marks; the choice is kept
+with the other review preferences and changes both views.
 
 ### Order and new frames
 

@@ -30,8 +30,8 @@ pub use health::{
     ProjectHealth, ProjectLight, FLAT_CHECK_AGE_DAYS, HEALTH_ALGORITHM_VERSION,
 };
 pub use night::{
-    backfill_frame_sites, backfill_rig_sites, NightSource, Nights, RigNight, SiteBackfill,
-    SiteBackfillOutcome,
+    backfill_frame_sites, backfill_rig_sites, LightNights, NightSource, Nights, RigNight,
+    SiteBackfill, SiteBackfillOutcome,
 };
 pub use rules::{
     rule_book, rules_for_light, rules_for_rig, Check, CheckMode, RuleBook, RuleNote, RuleSource,
@@ -3467,8 +3467,14 @@ pub fn project_calibration_gaps(
         .query_images_scoped(None, Some(project_id), None, None, 0)
         .context("querying project lights")?;
     let nights = Nights::load(conn);
-    // Lights are named by the night Images groups them in.
-    let boundary = nights.catalog();
+    // Lights are named by the night Images groups them in: their profile's
+    // rig's local noon. A project's lights share its profile.
+    let profile = rows
+        .iter()
+        .find_map(|(image, _, _)| image.profile_id.as_deref());
+    let boundary = LightNights::from_nights(conn, &nights)
+        .of_profile(profile)
+        .boundary_seconds;
     let mut lights = Vec::new();
     let (mut checked, mut missing_files) = (0usize, 0usize);
     for (image, _project, _target) in &rows {
@@ -4379,9 +4385,15 @@ pub fn project_calibration_report(
 
     // Bucket lights by (night, filter) and pick the median exposure of each
     // bucket as its representative. Lights take the nights Images groups
-    // them by; calibration frames their own rig's.
+    // them by, their profile's rig's local noon (a project's lights share
+    // its profile); calibration frames their own rig's.
     let rig_nights = Nights::load(conn);
-    let boundary = rig_nights.catalog();
+    let profile = rows
+        .iter()
+        .find_map(|(image, _, _)| image.profile_id.as_deref());
+    let boundary = LightNights::from_nights(conn, &rig_nights)
+        .of_profile(profile)
+        .boundary_seconds;
     let frame_night = |frame: &CalibrationFrame| {
         frame
             .captured_at

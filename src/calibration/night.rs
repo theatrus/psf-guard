@@ -294,7 +294,13 @@ pub struct Nights {
 impl Nights {
     /// Every rig and frame of the catalog, as settings and sites say.
     pub fn load(conn: &Connection) -> Self {
-        let catalog = super::catalog_night_boundary(conn);
+        Self::load_with_catalog(conn, super::catalog_night_boundary(conn))
+    }
+
+    /// [`Nights::load`] with the catalog's split given, as a caller that
+    /// keeps it (`sky_coverage::cached_night_boundary`) has it, so the
+    /// load does not read every light's time again.
+    pub fn load_with_catalog(conn: &Connection, catalog: i64) -> Self {
         let dominant = read_dominant(conn);
         let mut rigs = HashMap::new();
         for rig in rig_uuids(conn) {
@@ -440,6 +446,133 @@ impl Nights {
         }
         digest
     }
+}
+
+/// Where lights split, for the views that group them by night: Images'
+/// date groups and night marks, Sequence's marks, the detail's next and
+/// previous. A light carries no site in the catalog, but its Target
+/// Scheduler profile is bound to the rigs it was shot with
+/// (`psf_guard_rig_binding`, written as calibration frames and lights are
+/// imported), and those rigs know their local noon ([`Nights`]).
+///
+/// A profile's lights split as its rigs do. Where its rigs disagree, as
+/// two cameras of one profile placed by different means, the surest source
+/// wins (a setting, then a site, then a clock), then the split most of
+/// them share. A light whose profile no rig is bound to splits at the
+/// global night setting if there is one, else where every placed rig of
+/// the catalog agrees, else at the catalog's quiet hours, as before.
+#[derive(Debug, Clone)]
+pub struct LightNights {
+    by_profile: HashMap<String, RigNight>,
+    unbound: RigNight,
+}
+
+impl LightNights {
+    pub fn load(conn: &Connection) -> Self {
+        Self::from_nights(conn, &Nights::load(conn))
+    }
+
+    /// [`LightNights::load`] with the catalog's split given.
+    pub fn load_with_catalog(conn: &Connection, catalog: i64) -> Self {
+        Self::from_nights(conn, &Nights::load_with_catalog(conn, catalog))
+    }
+
+    pub fn from_nights(conn: &Connection, nights: &Nights) -> Self {
+        let mut rigs_by_profile: HashMap<String, Vec<RigNight>> = HashMap::new();
+        if table_exists(conn, "psf_guard_rig_binding") {
+            let bindings: Vec<(String, String)> = conn
+                .prepare("SELECT profile_id, rig_uuid FROM psf_guard_rig_binding")
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap_or_default();
+            for (profile, rig) in bindings {
+                rigs_by_profile
+                    .entry(profile)
+                    .or_default()
+                    .push(nights.rig(&rig));
+            }
+        }
+        let by_profile = rigs_by_profile
+            .into_iter()
+            .filter_map(|(profile, splits)| Some((profile, surest(&splits)?)))
+            .collect();
+
+        // No rig is called "": its rules are the global ones.
+        let global = nights.rig("");
+        let placed: BTreeSet<i64> = nights
+            .rigs
+            .values()
+            .filter(|night| night.source != NightSource::Catalog)
+            .map(|night| night.boundary_seconds)
+            .collect();
+        let unbound = if global.source == NightSource::Setting {
+            global
+        } else if placed.len() == 1 {
+            nights
+                .rigs
+                .values()
+                .filter(|night| night.source != NightSource::Catalog)
+                .copied()
+                .min_by_key(|night| source_rank(night.source))
+                .unwrap_or(global)
+        } else {
+            RigNight {
+                boundary_seconds: nights.catalog,
+                source: NightSource::Catalog,
+            }
+        };
+        Self {
+            by_profile,
+            unbound,
+        }
+    }
+
+    /// The split of a light shot under `profile_id`.
+    pub fn of_profile(&self, profile_id: Option<&str>) -> RigNight {
+        profile_id
+            .and_then(|profile| self.by_profile.get(profile))
+            .copied()
+            .unwrap_or(self.unbound)
+    }
+
+    /// The night a light shot at `at` under `profile_id` belongs to.
+    pub fn night_of(&self, profile_id: Option<&str>, at: i64) -> String {
+        super::night_of(at, self.of_profile(profile_id).boundary_seconds)
+    }
+}
+
+fn source_rank(source: NightSource) -> u8 {
+    match source {
+        NightSource::Setting => 0,
+        NightSource::Site => 1,
+        NightSource::Clock => 2,
+        NightSource::Catalog => 3,
+    }
+}
+
+/// The split a profile's rigs give its lights: the surest source, then the
+/// split most of them share, then the earliest.
+fn surest(splits: &[RigNight]) -> Option<RigNight> {
+    let best = splits.iter().map(|night| source_rank(night.source)).min()?;
+    let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
+    for night in splits
+        .iter()
+        .filter(|night| source_rank(night.source) == best)
+    {
+        *counts.entry(night.boundary_seconds).or_default() += 1;
+    }
+    let (boundary_seconds, _) = counts
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))?;
+    splits
+        .iter()
+        .find(|night| {
+            night.boundary_seconds == *boundary_seconds && source_rank(night.source) == best
+        })
+        .copied()
 }
 
 /// From when a rig's clock kept an offset: the time of the first frame
@@ -1670,6 +1803,100 @@ mod tests {
         let longitude = Site::of(&meta).longitude.unwrap();
         assert!((longitude + 121.1632).abs() < 1e-6, "{longitude}");
         assert_eq!(solar_noon(longitude), 20 * HOUR + 5 * 60);
+    }
+
+    /// A light shot at `site`, as an import notes its rig: a camera of its
+    /// own per name, bound to `profile`.
+    fn note_light(conn: &Connection, profile: &str, camera: &str, site: Option<f64>) {
+        let light = FrameMeta {
+            camera: Some(camera.into()),
+            telescope: Some("scope".into()),
+            width: Some(6248),
+            height: Some(4176),
+            timestamp: Some(utc("2026-08-19T05:00:00")),
+            site_longitude: site,
+            site_latitude: site.map(|_| 38.66),
+            ..Default::default()
+        };
+        super::super::note_light_rig(conn, Some(profile), &light).unwrap();
+    }
+
+    /// Lights split at their profile's rig's local noon, not the catalog's
+    /// quiet hours: an evening at the C925's site west of Greenwich and
+    /// the small hours after it are one night, named by the evening.
+    #[test]
+    fn lights_split_where_their_profiles_rig_does() {
+        let _policy = super::super::tests::POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let conn = Connection::open_in_memory().unwrap();
+        super::super::ensure_schema(&conn).unwrap();
+        note_light(&conn, "c925", "ASI2600MM", Some(C925_LONGITUDE));
+        let lights = LightNights::load(&conn);
+        let split = lights.of_profile(Some("c925"));
+        assert_eq!(split.source, NightSource::Site);
+        assert_eq!(split.boundary_seconds, solar_noon(C925_LONGITUDE));
+        // 19:00 UTC is 11:55 at the site: still the night before.
+        assert_eq!(
+            lights.night_of(Some("c925"), utc("2026-08-19T19:00:00")),
+            "2026-08-18"
+        );
+        assert_eq!(
+            lights.night_of(Some("c925"), utc("2026-08-19T21:00:00")),
+            "2026-08-19"
+        );
+        assert_eq!(
+            lights.night_of(Some("c925"), utc("2026-08-20T11:00:00")),
+            "2026-08-19"
+        );
+        // A profile no rig is bound to splits where the catalog's one placed
+        // rig does.
+        assert_eq!(lights.of_profile(Some("other")), split);
+        assert_eq!(lights.of_profile(None), split);
+    }
+
+    /// Where the catalog's placed rigs disagree, a light no rig vouches for
+    /// keeps the catalog's split; each bound profile keeps its own.
+    #[test]
+    fn unbound_lights_keep_the_catalog_split_when_rigs_disagree() {
+        let _policy = super::super::tests::POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let conn = Connection::open_in_memory().unwrap();
+        super::super::ensure_schema(&conn).unwrap();
+        note_light(&conn, "home", "ASI2600MM", Some(C925_LONGITUDE));
+        note_light(&conn, "remote", "ASI6200MM", Some(149.07));
+        let lights = LightNights::load(&conn);
+        assert_eq!(
+            lights.of_profile(Some("home")).boundary_seconds,
+            solar_noon(C925_LONGITUDE)
+        );
+        assert_eq!(
+            lights.of_profile(Some("remote")).boundary_seconds,
+            solar_noon(149.07)
+        );
+        let unbound = lights.of_profile(Some("other"));
+        assert_eq!(unbound.source, NightSource::Catalog);
+        assert_eq!(
+            unbound.boundary_seconds,
+            super::super::catalog_night_boundary(&conn)
+        );
+    }
+
+    /// Two rigs of one profile placed by different means: the site wins
+    /// over a rig placed only by the catalog.
+    #[test]
+    fn a_profiles_surest_rig_sets_its_split() {
+        let catalog = RigNight {
+            boundary_seconds: 12 * HOUR,
+            source: NightSource::Catalog,
+        };
+        let site = by_longitude(C925_LONGITUDE);
+        let clock = by_clock(-7 * HOUR);
+        assert_eq!(surest(&[catalog, site, clock]), Some(site));
+        assert_eq!(surest(&[catalog, clock, clock]), Some(clock));
+        assert_eq!(surest(&[catalog]), Some(catalog));
+        assert_eq!(surest(&[]), None);
     }
 
     #[test]

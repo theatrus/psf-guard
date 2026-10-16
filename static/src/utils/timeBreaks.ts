@@ -1,4 +1,11 @@
-import { nightOf } from './observingNight';
+import { lightNight } from './observingNight';
+
+/** A frame as the marks read it: when it was shot, and the night the
+ *  image list names for it, if it names one. */
+export interface TimedFrame {
+  acquired_date: number | null | undefined;
+  night?: string | null;
+}
 
 /**
  * Where a run of frames in capture order crosses into another observing
@@ -31,19 +38,19 @@ const HOUR_STEPS = [1, 2, 3] as const;
 const FRAMES_PER_HOUR_MARK = 6;
 
 /**
- * Hours between hour marks for frames taken at `times` (seconds), from the
- * median gap between neighbours in the same night: every hour while frames
- * come every ten minutes or faster, every two or three hours for longer
- * exposures, and none when even three hours would hold too few frames to
- * be worth splitting.
+ * Hours between hour marks for `frames`, from the median gap between
+ * neighbours in the same night: every hour while frames come every ten
+ * minutes or faster, every two or three hours for longer exposures, and
+ * none when even three hours would hold too few frames to be worth
+ * splitting.
  */
-export function hourStepFor(times: readonly (number | null | undefined)[], boundarySeconds: number): number | null {
+export function hourStepFor(frames: readonly TimedFrame[], boundarySeconds: number): number | null {
   const gaps: number[] = [];
-  for (let i = 1; i < times.length; i += 1) {
-    const a = times[i - 1];
-    const b = times[i];
+  for (let i = 1; i < frames.length; i += 1) {
+    const a = frames[i - 1].acquired_date;
+    const b = frames[i].acquired_date;
     if (a == null || b == null || a === b) continue;
-    if (nightOf(a, boundarySeconds) !== nightOf(b, boundarySeconds)) continue;
+    if (lightNight(frames[i - 1], boundarySeconds) !== lightNight(frames[i], boundarySeconds)) continue;
     gaps.push(Math.abs(b - a));
   }
   if (gaps.length === 0) return null;
@@ -86,25 +93,29 @@ function hourBucket(seconds: number, step: number): { key: string; label: string
 
 /**
  * The night and hour breaks in a list of frames already in the order shown,
- * oldest or newest first. A frame without a capture time breaks nothing and
+ * oldest or newest first. A frame's night is the one the image list names,
+ * split at its rig's local noon, else the catalog's split at
+ * `boundarySeconds`. A frame without a capture time breaks nothing and
  * carries its neighbour's night.
  */
 export function timeMarks(
-  times: readonly (number | null | undefined)[],
+  frames: readonly TimedFrame[],
   boundarySeconds: number,
+  { hours = true }: { hours?: boolean } = {},
 ): TimeMarks {
   const breaks = new Map<number, TimeBreak>();
   const altNight = new Set<number>();
-  const hourStep = hourStepFor(times, boundarySeconds);
+  const hourStep = hours ? hourStepFor(frames, boundarySeconds) : null;
   let previousNight: string | null = null;
   let previousHour: string | null = null;
   let nightIndex = 0;
-  times.forEach((time, index) => {
-    if (time == null) {
+  frames.forEach((frame, index) => {
+    const time = frame.acquired_date;
+    const night = lightNight(frame, boundarySeconds);
+    if (time == null || night === null) {
       if (nightIndex % 2 === 1) altNight.add(index);
       return;
     }
-    const night = nightOf(time, boundarySeconds);
     const hour = hourStep ? hourBucket(time, hourStep) : null;
     if (previousNight !== null && night !== previousNight) {
       nightIndex += 1;

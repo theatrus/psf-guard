@@ -94,6 +94,10 @@ pub const KNOWN_KEYS: &[(&str, PreferenceKind)] = &[
     ),
     ("imageOrder", PreferenceKind::OneOf(&["oldest", "newest"])),
     (
+        "timeMarks",
+        PreferenceKind::OneOf(&["nights-hours", "nights", "off"]),
+    ),
+    (
         "imageGrouping",
         PreferenceKind::OneOf(&["filter", "session", "date", "both"]),
     ),
