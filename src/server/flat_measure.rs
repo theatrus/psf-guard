@@ -1015,6 +1015,11 @@ pub fn changed_rigs(before: Option<&RigState>, after: Option<&RigState>) -> Rigs
 /// lights when `lights` say new ones came. Call it off the request path.
 pub fn queue_change(state: &Arc<AppState>, path: &str, before: Option<&RigState>, lights: bool) {
     let mut scope = Scope::flats(changed_rigs(before, rig_state_at(path).as_ref()));
+    if !scope.flats.is_empty() {
+        // New frames record their sites as they come; any whose header
+        // could not be read then is read by the frame-sites job.
+        crate::server::frame_sites::queue(state, path);
+    }
     if lights {
         scope.merge(Scope::lights(Rigs::All));
     }
@@ -1025,21 +1030,26 @@ pub fn queue_change(state: &Arc<AppState>, path: &str, before: Option<&RigState>
 // Settings.
 
 /// What a change of settings asks of flat measuring: the rigs whose
-/// grouping limits changed and whose flats are grouped by measurement now,
-/// or every rig when the server-wide limits changed. Their book regroups
-/// from the stored measurements on its own; a pass only reads what the new
+/// grouping limits or night zone changed and whose flats are grouped by
+/// measurement now, or every rig when the server-wide ones changed. Their
+/// book regroups from the stored measurements on its own; a pass only reads what the new
 /// grouping lacks, as the sessions of a rig switched from time to measured,
 /// and finds nothing to read for a rig that already had it.
 pub fn rigs_to_measure_after(before: &RuleBook, after: &RuleBook) -> Rigs {
     let global = |book: &RuleBook| flat_groups::limits_of(&book.global());
-    if global(after).measured && global(before) != global(after) {
+    // Where nights split decides the sessions: a new split is planned
+    // again, renaming what was measured and measuring runs it joins.
+    let zone = |book: &RuleBook| book.global().night_offset_seconds;
+    if global(after).measured && (global(before) != global(after) || zone(before) != zone(after)) {
         return Rigs::All;
     }
     let rigs: BTreeSet<&str> = before.rig_uuids().chain(after.rig_uuids()).collect();
     Rigs::of(rigs.into_iter().filter(|rig| {
-        let was = flat_groups::limits_of(&before.for_rig(rig));
-        let now = flat_groups::limits_of(&after.for_rig(rig));
-        now.measured && was != now
+        let (was_rules, now_rules) = (before.for_rig(rig), after.for_rig(rig));
+        let was = flat_groups::limits_of(&was_rules);
+        let now = flat_groups::limits_of(&now_rules);
+        now.measured
+            && (was != now || was_rules.night_offset_seconds != now_rules.night_offset_seconds)
     }))
 }
 
@@ -1053,6 +1063,19 @@ pub fn settings_changed(state: &Arc<AppState>, before: &RuleBook, after: &RuleBo
         rigs_to_measure_after(before, after)
     };
     queue_all(state, Scope::flats(rigs));
+}
+
+/// Frames of these rigs found their sites after startup, so their nights
+/// may split elsewhere: grade the catalog again, since grading screens
+/// flats by session, and queue the rigs' measuring, which waits for grading
+/// and plans their sessions again. Reads nothing here.
+pub fn sites_found(state: &Arc<AppState>, path: &str, rigs: Vec<String>) {
+    let rigs = Rigs::of(rigs);
+    if rigs.is_empty() {
+        return;
+    }
+    crate::server::calibration_quality::request(state, path);
+    queue(state, path, Scope::flats(rigs));
 }
 
 // ---------------------------------------------------------------------------

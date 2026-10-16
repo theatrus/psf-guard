@@ -103,6 +103,175 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "default": "prefer"
   },
   {
+    "key": "night_zone",
+    "group": "matching",
+    "label": "Night starts at noon in",
+    "help": "Calibration splits a rig's frames into nights at local noon, so a dusk or dawn flat run stays one session. Automatic takes noon from the site longitude its frames record (the N.I.N.A. profile's), else from its computer's clock, else from when the catalog's lights are quiet. Pick the rig's standard offset when its frames record no site or a wrong one; daylight saving moves noon by an hour, which no night notices.",
+    "effect": "grades",
+    "kind": {
+      "type": "choice",
+      "options": [
+        {
+          "value": "auto",
+          "label": "From its frames' site"
+        },
+        {
+          "value": "-12",
+          "label": "UTC−12"
+        },
+        {
+          "value": "-11",
+          "label": "UTC−11"
+        },
+        {
+          "value": "-10",
+          "label": "UTC−10"
+        },
+        {
+          "value": "-9.5",
+          "label": "UTC−9:30"
+        },
+        {
+          "value": "-9",
+          "label": "UTC−9"
+        },
+        {
+          "value": "-8",
+          "label": "UTC−8"
+        },
+        {
+          "value": "-7",
+          "label": "UTC−7"
+        },
+        {
+          "value": "-6",
+          "label": "UTC−6"
+        },
+        {
+          "value": "-5",
+          "label": "UTC−5"
+        },
+        {
+          "value": "-4",
+          "label": "UTC−4"
+        },
+        {
+          "value": "-3.5",
+          "label": "UTC−3:30"
+        },
+        {
+          "value": "-3",
+          "label": "UTC−3"
+        },
+        {
+          "value": "-2",
+          "label": "UTC−2"
+        },
+        {
+          "value": "-1",
+          "label": "UTC−1"
+        },
+        {
+          "value": "0",
+          "label": "UTC"
+        },
+        {
+          "value": "1",
+          "label": "UTC+1"
+        },
+        {
+          "value": "2",
+          "label": "UTC+2"
+        },
+        {
+          "value": "3",
+          "label": "UTC+3"
+        },
+        {
+          "value": "3.5",
+          "label": "UTC+3:30"
+        },
+        {
+          "value": "4",
+          "label": "UTC+4"
+        },
+        {
+          "value": "4.5",
+          "label": "UTC+4:30"
+        },
+        {
+          "value": "5",
+          "label": "UTC+5"
+        },
+        {
+          "value": "5.5",
+          "label": "UTC+5:30"
+        },
+        {
+          "value": "5.75",
+          "label": "UTC+5:45"
+        },
+        {
+          "value": "6",
+          "label": "UTC+6"
+        },
+        {
+          "value": "6.5",
+          "label": "UTC+6:30"
+        },
+        {
+          "value": "7",
+          "label": "UTC+7"
+        },
+        {
+          "value": "8",
+          "label": "UTC+8"
+        },
+        {
+          "value": "8.75",
+          "label": "UTC+8:45"
+        },
+        {
+          "value": "9",
+          "label": "UTC+9"
+        },
+        {
+          "value": "9.5",
+          "label": "UTC+9:30"
+        },
+        {
+          "value": "10",
+          "label": "UTC+10"
+        },
+        {
+          "value": "10.5",
+          "label": "UTC+10:30"
+        },
+        {
+          "value": "11",
+          "label": "UTC+11"
+        },
+        {
+          "value": "12",
+          "label": "UTC+12"
+        },
+        {
+          "value": "12.75",
+          "label": "UTC+12:45"
+        },
+        {
+          "value": "13",
+          "label": "UTC+13"
+        },
+        {
+          "value": "14",
+          "label": "UTC+14"
+        }
+      ]
+    },
+    "default": "auto"
+  },
+  {
     "key": "dark_reach_days",
     "group": "darks",
     "label": "Dark reach",

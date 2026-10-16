@@ -20,6 +20,24 @@
   Calibration panel names the **Flat family** and how it was chosen.
   Nights of only two flats are measured and grouped too.
 
+- Calibration splits frames into nights at local noon where each was shot,
+  taken from the site longitude in its header (the N.I.N.A. profile's site),
+  else its computer's clock, so a dawn flat run that crosses noon UTC stays
+  one session and is graded as one. Before, every rig split where the
+  catalog's lights were quiet, and a catalog without lights split at noon
+  UTC, cutting dawn runs west of Greenwich in two. A rig taken to a star
+  party keeps its home nights; a frame with no site of its own splits where
+  its rig usually is. A rig with no site in its frames can take a
+  UTC offset under **Night starts at noon in** in its calibration settings.
+  After the upgrade a **Reading frame sites** row in the job line reads
+  each frame's site in the background, with Stop, and tries again while
+  the server runs if the NAS is not mounted; the rigs it places are graded
+  again and their flat groups planned again: sessions whose date moved are
+  renamed without measuring them again, and only runs that were split are
+  measured once more. When a frame was shot, from flat-group change windows
+  to the strip, the frame panel and the duplicates list, reads on the rig's
+  clock with its offset, such as UTC−7; when a master was built reads on
+  your clock with its zone.
 - The header's background jobs keep automatic work in view while your own
   work runs. A database quality analysis, an automatic stack refresh, or a
   re-apply of processing that steps aside for a build, scan, or solve you

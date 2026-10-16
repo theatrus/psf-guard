@@ -396,6 +396,56 @@ fn grade(
     }
 }
 
+/// The `night_zone` choices: automatic, then each UTC offset a zone keeps.
+const NIGHT_ZONES: &[(&str, &str)] = &[
+    ("auto", "From its frames' site"),
+    ("-12", "UTC−12"),
+    ("-11", "UTC−11"),
+    ("-10", "UTC−10"),
+    ("-9.5", "UTC−9:30"),
+    ("-9", "UTC−9"),
+    ("-8", "UTC−8"),
+    ("-7", "UTC−7"),
+    ("-6", "UTC−6"),
+    ("-5", "UTC−5"),
+    ("-4", "UTC−4"),
+    ("-3.5", "UTC−3:30"),
+    ("-3", "UTC−3"),
+    ("-2", "UTC−2"),
+    ("-1", "UTC−1"),
+    ("0", "UTC"),
+    ("1", "UTC+1"),
+    ("2", "UTC+2"),
+    ("3", "UTC+3"),
+    ("3.5", "UTC+3:30"),
+    ("4", "UTC+4"),
+    ("4.5", "UTC+4:30"),
+    ("5", "UTC+5"),
+    ("5.5", "UTC+5:30"),
+    ("5.75", "UTC+5:45"),
+    ("6", "UTC+6"),
+    ("6.5", "UTC+6:30"),
+    ("7", "UTC+7"),
+    ("8", "UTC+8"),
+    ("8.75", "UTC+8:45"),
+    ("9", "UTC+9"),
+    ("9.5", "UTC+9:30"),
+    ("10", "UTC+10"),
+    ("10.5", "UTC+10:30"),
+    ("11", "UTC+11"),
+    ("12", "UTC+12"),
+    ("12.75", "UTC+12:45"),
+    ("13", "UTC+13"),
+    ("14", "UTC+14"),
+];
+
+/// A `night_zone` value as an offset from UTC in seconds; `None` for
+/// automatic, or a value this build cannot read.
+fn night_offset_seconds(value: &Value) -> Option<i64> {
+    let hours: f64 = value.as_str()?.parse().ok()?;
+    Some((hours * 3600.0).round() as i64)
+}
+
 static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
     let tolerances = MatchTolerances::default();
     let mut thin_bias = check(
@@ -508,6 +558,29 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
                 ],
             },
             default: json!("prefer"),
+        },
+        FieldSpec {
+            key: "night_zone",
+            group: Group::Matching,
+            label: "Night starts at noon in",
+            help: "Calibration splits a rig's frames into nights at local noon, so a dusk or \
+                   dawn flat run stays one session. Automatic takes noon from the site \
+                   longitude its frames record (the N.I.N.A. profile's), else from its \
+                   computer's clock, else from when the catalog's lights are quiet. Pick the \
+                   rig's standard offset when its frames record no site or a wrong one; \
+                   daylight saving moves noon by an hour, which no night notices.",
+            // It picks no frames: grading screens flats by session, and
+            // sessions are nights, so a change grades again. Masters and
+            // stacks are keyed by the frames they take, which a new split
+            // changes only where a session's members change.
+            effect: Effect::Grades,
+            kind: FieldKind::Choice {
+                options: NIGHT_ZONES
+                    .iter()
+                    .map(|(value, label)| ChoiceOption { value, label })
+                    .collect(),
+            },
+            default: json!("auto"),
         },
         // Dark masters.
         number(
@@ -1068,6 +1141,10 @@ pub struct Rules {
     /// Percent of the sky background.
     pub flat_split_dust_pct: f64,
     pub flat_split_pattern_pct: f64,
+    /// The `night_zone` setting: where the rig's nights split, as an
+    /// offset from UTC in seconds, or `None` to follow its site
+    /// ([`super::night`]).
+    pub night_offset_seconds: Option<i64>,
     checks: [CheckMode; Check::ALL.len()],
     pub bias: BiasScreening,
     pub dark: DarkScreening,
@@ -1174,6 +1251,7 @@ impl Rules {
             },
             flat_split_dust_pct: number("flat_split_dust_pct"),
             flat_split_pattern_pct: number("flat_split_pattern_pct"),
+            night_offset_seconds: night_offset_seconds(value("night_zone")),
             checks,
             bias,
             dark,
@@ -1611,6 +1689,45 @@ mod tests {
     }
 
     #[test]
+    fn a_rig_names_its_night_zone_and_others_follow_the_global_or_their_site() {
+        assert_eq!(Rules::default().night_offset_seconds, None, "auto");
+        let global = values(&[("night_zone", json!("5.75"))]);
+        let rig = RigLayer {
+            name: Some("C925".into()),
+            values: values(&[("night_zone", json!("-8"))]),
+        };
+        let book = RuleBook::new(global, BTreeMap::from([("c925".to_string(), rig)]));
+        assert_eq!(book.for_rig("c925").night_offset_seconds, Some(-8 * 3600));
+        assert_eq!(
+            book.for_rig("other").night_offset_seconds,
+            Some(5 * 3600 + 45 * 60)
+        );
+        // A zone the list does not offer falls through, as any unreadable
+        // value does; "auto" at the rig beats a global offset.
+        let book = RuleBook::new(
+            values(&[("night_zone", json!("-8"))]),
+            BTreeMap::from([
+                (
+                    "odd".to_string(),
+                    RigLayer {
+                        name: None,
+                        values: values(&[("night_zone", json!("-7.25"))]),
+                    },
+                ),
+                (
+                    "auto".to_string(),
+                    RigLayer {
+                        name: None,
+                        values: values(&[("night_zone", json!("auto"))]),
+                    },
+                ),
+            ]),
+        );
+        assert_eq!(book.for_rig("odd").night_offset_seconds, Some(-8 * 3600));
+        assert_eq!(book.for_rig("auto").night_offset_seconds, None);
+    }
+
+    #[test]
     fn a_value_this_build_cannot_read_falls_through_to_the_next_layer() {
         let global = values(&[
             ("dark_choice", json!("by_gain")),
@@ -1720,6 +1837,28 @@ mod tests {
             "{refused}"
         );
         assert!(stacker_accepts("thin_master_frames", &json!(-1)).is_ok());
+    }
+
+    /// Grading screens flats by session, and sessions are nights, so a
+    /// night_zone change grades again; it picks no frames itself, so it
+    /// does not re-key every master and stack of the rig.
+    #[test]
+    fn a_night_zone_grades_again_and_keys_no_master() {
+        let base = RuleBook::new(BTreeMap::new(), BTreeMap::new());
+        let rig = RigLayer {
+            name: None,
+            values: values(&[("night_zone", json!("-8"))]),
+        };
+        let zoned = RuleBook::new(BTreeMap::new(), BTreeMap::from([("c925".to_string(), rig)]));
+        assert!(
+            base.grades_differ(&zoned),
+            "a new night split regroups flat grading sessions"
+        );
+        assert_eq!(
+            zoned.for_rig("c925").matching_digest(),
+            None,
+            "night_zone alone re-keys every master and stack of the rig"
+        );
     }
 
     #[test]

@@ -210,7 +210,8 @@ pub(crate) fn spawn_query_index_build(path: String, shutdown: &Arc<Shutdown>) {
 /// nothing logged. It runs here instead: its own connection with a short busy
 /// timeout, one commit per hundred frames, a progress line every chunk, and a
 /// clean stop if the capture software holds the catalog — the next start
-/// picks up where it left off.
+/// picks up where it left off. Frame sites are the frame-sites job's
+/// ([`crate::server::frame_sites`]).
 pub(crate) fn spawn_calibration_header_backfill(path: String, shutdown: &Arc<Shutdown>) {
     // A stop ends the pass at its next commit.
     let work = shutdown.hold(format!("readout mode backfill ({path})"));

@@ -22,6 +22,7 @@ pub mod flat_group_use;
 pub mod flat_groups;
 pub mod flat_history;
 pub mod flat_measure;
+pub mod frame_sites;
 pub mod handlers;
 pub mod import_job;
 pub mod master_cleanup;
@@ -272,6 +273,15 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/calibrations/flat-measure/cancel",
             post(flat_measure::post_cancel),
+        )
+        .route("/calibrations/frame-sites", get(frame_sites::get_status))
+        .route(
+            "/calibrations/frame-sites/cancel",
+            post(frame_sites::post_cancel),
+        )
+        .route(
+            "/calibrations/frame-sites/resume",
+            post(frame_sites::post_resume),
         )
         .route(
             "/calibrations/flat-groups/ratio",
@@ -1081,6 +1091,10 @@ async fn run_server_internal(
                 path.clone(),
                 &state.shutdown,
             );
+            // Frames imported before the catalog kept their sites: a rig
+            // whose sites it reads is graded again and its flats planned
+            // again as each chunk commits.
+            crate::server::frame_sites::queue(&state, &path);
             crate::server::calibration_quality::request(&state, &path);
             // Only what is unfinished or stale: a catalog that is up to date
             // reads no pixels.
@@ -1123,6 +1137,7 @@ async fn run_server_internal(
     tokio::spawn(stack_preview::run_janitor(Arc::clone(&state)));
     // Scan newly arrived frames where a database asks for it.
     tokio::spawn(quality_arrival::run(Arc::clone(&state)));
+    frame_sites::spawn_away_watch(&state);
 
     // Start background image pre-generation if enabled
     if config.pregeneration_config.is_enabled() {

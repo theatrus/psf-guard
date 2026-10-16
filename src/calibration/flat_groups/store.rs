@@ -338,6 +338,17 @@ pub(crate) fn set_family(
     Ok(())
 }
 
+/// A session's night was renamed, as when its rig's nights came to split
+/// at the rig's own noon: the same flats, so the plane and its comparisons
+/// stand.
+pub(crate) fn set_night(conn: &Connection, response_key: &str, night: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE psf_guard_flat_response SET night = ?2 WHERE response_key = ?1",
+        params![response_key, night],
+    )?;
+    Ok(())
+}
+
 /// A session's pedestal changed, as when a dark-flat arrived after it was
 /// measured: keep the new one, and forget its comparisons, which were made
 /// with the old one taken out, so the next pass makes them again.

@@ -394,9 +394,7 @@ fn library_revision(conn: &Connection, hasher: &mut Sha256) -> Result<()> {
     // Which family a light's own pixels chose, and the rotator angles the
     // job gathered, move a light's flats as much as the measurements do.
     super::flat_groups::family_store::digest(conn, hasher)?;
-    hasher.update(super::health::settings_digest(
-        super::catalog_night_boundary(conn),
-    ));
+    hasher.update(super::health::settings_digest(&super::Nights::load(conn)));
     hasher.update(b"\x1d");
     Ok(())
 }

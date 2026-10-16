@@ -3172,18 +3172,16 @@ fn prepare_whole(
             let directory_tree = ctx.get_directory_tree().map_err(AppError::db)?;
             let conn = ctx.db();
             let conn = conn.lock().map_err(AppError::db)?;
-            let night_boundary = (group_calibration != crate::calibration::CalibrationMode::Off
+            let nights = (group_calibration != crate::calibration::CalibrationMode::Off
                 && crate::calibration::exclude_uncalibrated_enabled())
-            .then(|| {
-                crate::server::sky_coverage::catalog_night_boundary(&conn).unwrap_or(12 * 3600)
-            });
+            .then(|| crate::calibration::Nights::load(&conn));
             for frame in &frames {
                 let (fingerprint, gap) = crate::calibration::light_calibration(
                     &conn,
                     &frame.path,
                     Some(&directory_tree),
                     flat_star_masking,
-                    night_boundary,
+                    nights.as_ref(),
                 )
                 .map_err(AppError::db)?;
                 fingerprints.insert(frame.image_id, fingerprint);

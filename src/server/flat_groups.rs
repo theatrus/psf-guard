@@ -197,6 +197,10 @@ pub struct RigView {
     pub own_limits: Vec<&'static str>,
     pub angle_term: Option<PairView>,
     pub angle_pairs: usize,
+    /// The rig's clock over time ([`crate::calibration::night::clock_runs`]):
+    /// its times are shown on it, and on the viewer's clock when it is
+    /// empty.
+    pub clock: Vec<crate::calibration::night::ClockRun>,
     /// Newest first.
     pub events: Vec<EventView>,
     pub families: Vec<FamilyView>,
@@ -405,6 +409,7 @@ pub(crate) fn build_view_with_frames(
         .map(|(session, _)| session.to_string())
         .collect();
     let rule_book = crate::calibration::rules::rule_book();
+    let nights = crate::calibration::Nights::load(conn);
     let mut rigs: BTreeMap<String, RigView> = BTreeMap::new();
     let rig_view = |rig: &str, book: &model::Book| {
         let rules = crate::calibration::rules_for_rig(rig);
@@ -425,6 +430,7 @@ pub(crate) fn build_view_with_frames(
                 broad_pct: pct(t.broad),
             }),
             angle_pairs: term.map_or(0, |t| t.pairs),
+            clock: crate::calibration::night::clock_runs(conn, rig),
             events: Vec::new(),
             families: Vec::new(),
             unmeasured: Vec::new(),
@@ -562,8 +568,7 @@ pub(crate) fn build_view_with_frames(
     }
     // Sessions the pass could not measure, or has not reached.
     let library = crate::calibration::LibrarySnapshot::load(conn)?;
-    let boundary = crate::calibration::catalog_night_boundary(conn);
-    for plan in job::plan_sessions(library.frames(), boundary) {
+    for plan in job::plan_sessions(library.frames(), &nights) {
         let key = plan.response_key();
         let measured = book.session_by_response(&key).is_some();
         if measured {
@@ -753,8 +758,8 @@ pub(crate) fn place_of(conn: &rusqlite::Connection, session: &str) -> anyhow::Re
             frame
         })
         .collect();
-    let boundary = crate::calibration::catalog_night_boundary(conn);
-    Ok(job::plan_sessions(&frames, boundary)
+    let nights = crate::calibration::Nights::load(conn);
+    Ok(job::plan_sessions(&frames, &nights)
         .into_iter()
         .find(|plan| {
             plan.frames

@@ -478,8 +478,7 @@ pub fn plan_export(
     let mut light_flat_sets: Vec<(usize, FlatSetKey)> = Vec::new();
     let mut flat_item_sets: Vec<(usize, FlatSetKey)> = Vec::new();
     let mut flat_changes = std::collections::BTreeSet::new();
-    let night_boundary = crate::server::sky_coverage::catalog_night_boundary(conn)
-        .context("reading capture times")?;
+    let nights = crate::calibration::Nights::load(conn);
     let mut notes = SettingsNotes::default();
 
     for (image, _project_name, target_name) in rows {
@@ -512,7 +511,7 @@ pub fn plan_export(
                 &target_name,
                 Some(&tree),
                 options.layout,
-                night_boundary,
+                &nights,
                 options.exclude_uncalibrated,
             )
             .context("matching export calibration frames")?;

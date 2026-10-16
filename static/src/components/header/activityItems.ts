@@ -1,6 +1,7 @@
 import type {
   CacheRefreshProgress,
   FlatMeasureStatus,
+  FrameSitesStatus,
   QualityBackfillStatus,
   ScheduledRefresh,
   SpatialScanStatus,
@@ -15,6 +16,7 @@ import { flatMeasureLabel } from '../calibration/flatMeasureLabel';
 export type ActivityControl =
   | { kind: 'stack'; jobId: string }
   | { kind: 'flats'; dbId: string }
+  | { kind: 'sites'; dbId: string }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string };
 
@@ -31,7 +33,7 @@ export type ActivityStatus = 'running' | 'queued' | 'waiting';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'stack' | 'processing' | 'wbpp' | 'transfer';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'stack' | 'processing' | 'wbpp' | 'transfer';
   transfer?: TransferJob;
   stateLabel?: string;
   /** What is happening: "Stacking", "Analyzing quality". */
@@ -100,6 +102,7 @@ export interface DatabaseActivity {
   scan?: SpatialScanStatus;
   backfill?: QualityBackfillStatus;
   flats?: FlatMeasureStatus;
+  sites?: FrameSitesStatus;
 }
 
 /** Automatic stack work out of the line, waiting for the worker. */
@@ -262,6 +265,36 @@ function flatsItem(db: DatabaseActivity, flats: FlatMeasureStatus): ActivityItem
     stoppable: true,
     control: { kind: 'flats', dbId: db.dbId },
     href: `/calibration?${search.toString()}`,
+  };
+}
+
+/** `Reading frame sites · 812 of 1,867 frames`. */
+export function frameSitesLabel(sites: Pick<FrameSitesStatus, 'done' | 'total'>): string {
+  if (sites.total <= 0) return 'Reading frame sites';
+  const total = sites.total.toLocaleString('en-US');
+  const done = Math.min(sites.done, sites.total).toLocaleString('en-US');
+  return `Reading frame sites · ${done} of ${total} ${sites.total === 1 ? 'frame' : 'frames'}`;
+}
+
+/** Reading the sites of calibration frames imported before the catalog
+ *  kept them, once a pass has frames to read. Automatic, stoppable. */
+function sitesItem(db: DatabaseActivity, sites: FrameSitesStatus): ActivityItem {
+  return {
+    key: `sites:${db.dbId}`,
+    kind: 'sites',
+    title: 'Reading frame sites',
+    scope: db.dbName,
+    detail: sites.waiting_for
+      ? waitingDetail(sites.waiting_for, frameSitesLabel(sites))
+      : frameSitesLabel(sites),
+    status: sites.waiting_for ? 'waiting' : 'running',
+    waitingFor: sites.waiting_for ?? undefined,
+    percent: fraction(sites.done, sites.total),
+    automatic: true,
+    background: true,
+    stoppable: true,
+    control: { kind: 'sites', dbId: db.dbId },
+    href: `/calibration?${new URLSearchParams({ db: db.dbId }).toString()}`,
   };
 }
 
@@ -465,6 +498,7 @@ export function activityItems(
     if (db.refresh?.is_refreshing) items.push(refreshItem(db, db.refresh));
     items.push(...qualityItems(db, projectOf));
     if (db.flats?.active) items.push(flatsItem(db, db.flats));
+    if (db.sites?.active) items.push(sitesItem(db, db.sites));
   }
   // The server lists builds running first, then the line in order.
   const ordered = [...stacks].sort(

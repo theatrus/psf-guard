@@ -240,7 +240,7 @@ fn a_light_before_new_dust_takes_its_side_at_another_angle() {
         "Target",
         None,
         crate::commands::export::ExportLayout::Standard,
-        crate::calibration::catalog_night_boundary(&conn),
+        &crate::calibration::Nights::load(&conn),
         false,
     )
     .unwrap();

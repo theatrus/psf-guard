@@ -46,7 +46,8 @@ pixels.
 
 ### 2.1 Responses
 
-A **session** is one night (at the catalog's night boundary) of one
+A **session** is one night (split at local noon where its flats were shot; see
+[Nights](../CALIBRATION_LIBRARY.md#nights)) of one
 family, with every frame's rotator angle within 2° of the first. A
 **family** is one rig, filter (case-folded), focal length class, frame
 size, binning, gain, offset and readout-mode name; a reducer swapped in at

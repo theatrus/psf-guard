@@ -20,9 +20,7 @@ use super::metric::{self, Plane};
 use super::model::{canonical_filter, Book, Side};
 use super::store::{self, EvidenceFit, EvidenceRow, ResponseRow, Verdict};
 use super::{family_job, family_store};
-use crate::calibration::{
-    catalog_night_boundary, night_of, CalibrationFrame, CalibrationKind, LibrarySnapshot,
-};
+use crate::calibration::{CalibrationFrame, CalibrationKind, LibrarySnapshot, Nights};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rusqlite::Connection;
@@ -385,8 +383,8 @@ pub fn focal_classes<'a>(
 /// Flat sessions in use: one night of one family, frames whose rotator
 /// angle lies within [`super::model::ROTATION_CLUSTER_DEG`] of the
 /// session's first.
-pub fn plan_sessions(frames: &[CalibrationFrame], boundary: i64) -> Vec<SessionPlan> {
-    plan_sessions_with(frames, boundary, |rig| {
+pub fn plan_sessions(frames: &[CalibrationFrame], nights: &Nights) -> Vec<SessionPlan> {
+    plan_sessions_with(frames, nights, |rig| {
         crate::calibration::rules::rules_for_rig(rig)
             .coherence_tolerances()
             .focal_length_mm
@@ -396,7 +394,7 @@ pub fn plan_sessions(frames: &[CalibrationFrame], boundary: i64) -> Vec<SessionP
 /// [`plan_sessions`], with each rig's focal length tolerance given.
 pub fn plan_sessions_with(
     frames: &[CalibrationFrame],
-    boundary: i64,
+    nights: &Nights,
     focal_tolerance: impl Fn(&str) -> f64,
 ) -> Vec<SessionPlan> {
     let mut flats: Vec<&CalibrationFrame> = frames
@@ -412,7 +410,11 @@ pub fn plan_sessions_with(
     let focal = focal_classes(flats.iter().copied(), focal_tolerance);
     let mut sessions: Vec<SessionPlan> = Vec::new();
     for frame in flats {
-        let night = night_of(frame.captured_at.unwrap_or_default(), boundary);
+        let night = nights.night_of_frame(
+            &frame.rig_uuid,
+            &frame.frame_uuid,
+            frame.captured_at.unwrap_or_default(),
+        );
         let family = family_key(frame, focal.get(&frame.frame_uuid).copied().flatten());
         let joins = |session: &SessionPlan| {
             session.family_key == family
@@ -553,9 +555,8 @@ fn write_plane(dir: &Path, key: &str, plane: &Plane) -> Result<()> {
 pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
     let conn = pass.conn;
     let mut outcome = PassOutcome::default();
-    let boundary = catalog_night_boundary(conn);
     let library = LibrarySnapshot::load(conn)?;
-    let plans = plan_sessions(library.frames(), boundary);
+    let plans = plan_sessions(library.frames(), &Nights::load(conn));
     let pedestal_table = pedestals(conn)?;
     let known: HashMap<String, ResponseRow> = store::load_responses(conn)?
         .into_iter()
@@ -644,6 +645,11 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
                     // renamed.
                     if row.family_key != plan.family_key || row.session_key != plan.session_key {
                         store::set_family(conn, &key, &plan.family_key, &plan.session_key)?;
+                    }
+                    // Measured before the rig's nights split at its own
+                    // noon: the same flats under another night's name.
+                    if row.night != plan.night {
+                        store::set_night(conn, &key, &plan.night)?;
                     }
                 }
                 current.push(key);

@@ -4,7 +4,7 @@
 use super::metric::{Comparison, Spot, SpotKind};
 use super::model::Book;
 use super::store::{self, ResponseRow};
-use crate::calibration::{catalog_night_boundary, LibrarySnapshot};
+use crate::calibration::{LibrarySnapshot, Nights};
 use rusqlite::Connection;
 
 /// Record every flat session of the library as measured, and compare every
@@ -13,7 +13,7 @@ use rusqlite::Connection;
 pub(crate) fn measure_as(conn: &Connection, dust: impl Fn(&ResponseRow, &ResponseRow) -> f64) {
     store::add_tables(conn).unwrap();
     let library = LibrarySnapshot::load(conn).unwrap();
-    let plans = super::job::plan_sessions(library.frames(), catalog_night_boundary(conn));
+    let plans = super::job::plan_sessions(library.frames(), &Nights::load(conn));
     for plan in plans
         .iter()
         .filter(|plan| plan.frames.len() >= super::metric::MIN_FRAMES)

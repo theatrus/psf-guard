@@ -329,6 +329,37 @@ fn a_grouping_limit_regroups_without_grading_or_reading() {
     );
 }
 
+#[test]
+fn a_rig_whose_night_zone_changes_is_planned_again() {
+    use crate::calibration::rules::{RigLayer, RuleBook};
+    let auto = RuleBook::new(Default::default(), Default::default());
+    let rig = |zone: &str| {
+        RuleBook::new(
+            Default::default(),
+            [(
+                "c925".to_string(),
+                RigLayer {
+                    name: None,
+                    values: [("night_zone".to_string(), json!(zone))]
+                        .into_iter()
+                        .collect(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        )
+    };
+    assert_eq!(rigs_to_measure_after(&auto, &rig("-8")), Rigs::of(["c925"]));
+    assert_eq!(rigs_to_measure_after(&rig("-8"), &rig("-8")), Rigs::None);
+    let global = RuleBook::new(
+        [("night_zone".to_string(), json!("9"))]
+            .into_iter()
+            .collect(),
+        Default::default(),
+    );
+    assert_eq!(rigs_to_measure_after(&auto, &global), Rigs::All);
+}
+
 /// A pass over rig A leaves rig B's stale rows for B's own pass, which
 /// measures them again rather than finding them gone.
 #[test]
@@ -669,6 +700,36 @@ fn a_pass_waits_for_the_persons_work_at_either_tier() {
         waiter.join().unwrap();
         assert_eq!(job.status.read().unwrap().waiting_for, None);
     }
+}
+
+/// Rigs whose frames found their sites are graded again and measured
+/// again; none found asks for nothing.
+#[test]
+fn rigs_that_find_their_sites_are_graded_and_planned_again() {
+    let library = library();
+    let state = Arc::new(test_state());
+    let path = library.path.as_str();
+    sites_found(&state, path, Vec::new());
+    assert!(job(path).queue().pending.is_empty());
+    assert!(!crate::server::calibration_quality::progress(path).running);
+    sites_found(&state, path, vec![library.a.clone()]);
+    assert_eq!(
+        job(path).queue().pending,
+        Scope::flats(Rigs::of([library.a.clone()]))
+    );
+    // Grading ran, or is running, for the catalog.
+    let started = std::time::Instant::now();
+    while crate::server::calibration_quality::progress(path)
+        .finished_at
+        .is_none()
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "grading never ran"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    job(path).queue().pending = Scope::default();
 }
 
 /// A page's look queues a check of its rig at most every

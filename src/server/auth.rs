@@ -1137,6 +1137,11 @@ mod tests {
                 &format!("/db/test/calibrations/flat-measure/{action}"),
                 true,
             ));
+            assert!(requires_write(
+                &Method::POST,
+                &format!("/db/test/calibrations/frame-sites/{action}"),
+                true,
+            ));
         }
         assert!(requires_write(
             &Method::POST,
