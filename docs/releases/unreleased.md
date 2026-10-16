@@ -19,6 +19,12 @@
 - Collaboration imports preserve Starfront's physical-filter/data-band mapping
   and OSC camera and Bortle limits in reviewed plans. Reports carry the data
   bands explicitly, and work for bands disabled by the project stays held.
+- Collaboration **Reports > Contribution files** prepares raw accepted lights
+  with the same matched calibration inputs as exports, or an existing PSF Guard
+  or WBPP stack. Review and upload manually, or opt into automatic raw/PSF Guard
+  stack delivery for the rig's database. **Transfers** in background activity
+  shows progress, Pause, Resume, Retry and Cancel. Completed-file receipts
+  survive restart; interrupted files retry without duplicating server files.
 
 - Images' **Date** groups are observing nights, split where the catalog's
   nights split, as calibration and the AstroBin export do: a night west of

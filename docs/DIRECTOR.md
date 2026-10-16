@@ -14,6 +14,38 @@ The app marks what the plugin drives **Early beta**: the **Live** table, the
 rig's plugin status and its camera modes. Pairing does not allocate work or
 enable acquisition, and PSF Guard Sync stays separate from it.
 
+## Contribution File Uploads
+
+In a rig's **Collaboration > Reports > Contribution files**, select accepted
+images from an activated visit, then choose **Raw lights and matched calibration**
+or an existing PSF Guard/WBPP stack. **Prepare file package** runs in the
+background. Inspect its manifest and warnings, then **Upload reviewed package**.
+Raw packages take exactly the calibration inputs an export selects, including
+measured flat groups and the matched dark-flat dependencies. A package requiring
+corrected flats asks for an existing stack instead of sending unsuitable raws.
+WBPP stacks require confirmation of their input images because WBPP does not
+currently record their exact membership here. File delivery creates no extra
+exposure credit and does not submit a contribution report.
+
+**Upload accepted collaboration files automatically** is a separate opt-in,
+off by default. It uses the rig's bound database and can send raw packages or
+matching PSF Guard stacks. WBPP delivery is manual. Keep grading and file
+availability up to date; a source or calibration change holds the package for
+review. Starfront must enable file collection for the project, and the telescope
+credential must have a Discord owner.
+
+The header's background activity shows **Transfers**, with file/byte progress
+and Pause, Resume, Retry and Cancel. Completed-file receipts survive app or
+service restarts. An interrupted file restarts from its beginning because the
+current server has no byte-range resume. An outage does not block check-ins or
+local acquisition. Paused and attention states remain visible without a spinner.
+
+Starfront currently receives files, not the per-light calibration manifest;
+PSF Guard retains that manifest locally and warns during review. The coordinator
+must still preserve the correct calibration associations. Original image files
+are never changed. A temporary immutable copy of one upload file uses catalog
+cache space while it is sent.
+
 ## Collaboration Sign-In
 
 Collaboration is an early beta. The app marks a rig's **Collaboration** section

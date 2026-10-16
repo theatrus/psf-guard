@@ -9,6 +9,7 @@ import type {
 } from '../../api/types';
 import { useAllDatabases, useMergedTargets } from '../../hooks/useDatabases';
 import { useStackActivity } from '../../hooks/useStackActivity';
+import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
 import { activityItems, summarize, type DatabaseActivity, type ProjectOf } from './activityItems';
 
 export const WBPP_ACTIVITY_QUERY_KEY = ['wbpp-activity'] as const;
@@ -55,6 +56,9 @@ export function useHeaderActivity() {
   }, [targets]);
   const queryClient = useQueryClient();
   const { active: stacks, scheduled, waitingReapplies } = useStackActivity();
+  const transfers = useQuery({ queryKey: TRANSFER_QUERY_KEY, queryFn: apiClient.getTransfers,
+    refetchInterval: (q) => q.state.data?.jobs.some(j => ['preparing', 'queued', 'uploading'].includes(j.state)) ? 2000 : 10_000,
+    refetchIntervalInBackground: false });
   const wbpp = useQuery<WbppActivity>({
     queryKey: WBPP_ACTIVITY_QUERY_KEY,
     queryFn: apiClient.getWbppActivity,
@@ -107,7 +111,7 @@ export function useHeaderActivity() {
   const items = activityItems(perDb, stacks, wbpp.data, projectOf, {
     scheduled,
     reapplies: waitingReapplies,
-  });
+  }, transfers.data?.jobs);
   const summary = summarize(items);
 
   // A database whose work just finished has new images, metrics and grades

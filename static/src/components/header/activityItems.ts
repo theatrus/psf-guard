@@ -7,6 +7,7 @@ import type {
   WaitingReapply,
   WbppActivity,
 } from '../../api/types';
+import type { TransferJob } from '../../api/transferTypes';
 
 /** What a row can do: stop its job, and move it in its line. */
 export type ActivityControl =
@@ -27,7 +28,9 @@ export type ActivityStatus = 'running' | 'queued' | 'waiting';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'stack' | 'processing' | 'wbpp';
+  kind: 'refresh' | 'quality' | 'stack' | 'processing' | 'wbpp' | 'transfer';
+  transfer?: TransferJob;
+  stateLabel?: string;
   /** What is happening: "Stacking", "Analyzing quality". */
   title: string;
   /** What it happens to: a database, or a target and channel. */
@@ -424,7 +427,8 @@ export function activityItems(
   stacks: StackActivityEntry[],
   wbpp?: WbppActivity,
   projectOf: ProjectOf = () => undefined,
-  waiting: WaitingStackWork = {}
+  waiting: WaitingStackWork = {},
+  transfers: TransferJob[] = []
 ): ActivityItem[] {
   const items: ActivityItem[] = [];
   for (const db of databases) {
@@ -438,10 +442,21 @@ export function activityItems(
   );
   items.push(...ordered.map(stackItem));
   items.push(...wbppItems(wbpp, projectOf));
+  items.push(...transfers.filter(j => !['complete', 'cancelled'].includes(j.state)).map(transferItem));
   items.push(...(waiting.scheduled ?? []).filter((refresh) => refresh.waiting).map(waitingRefreshItem));
   items.push(...(waiting.reapplies ?? []).map(waitingReapplyItem));
   // Stable: each rank keeps the order above.
   return items.sort((left, right) => rank(left) - rank(right));
+}
+
+export function transferItem(job: TransferJob): ActivityItem {
+  const active = job.state === 'uploading' || job.state === 'preparing';
+  const labels = { preparing: 'Preparing', review: 'Awaiting review', queued: 'Queued', uploading: 'Uploading', paused: 'Paused', retry: 'Retry scheduled', needs_review: 'Needs attention', complete: 'Delivered', cancelled: 'Cancelled' };
+  return { key: `transfer:${job.id}`, kind: 'transfer', title: 'Transfers', scope: `${job.catalog} · ${job.label}`,
+    detail: job.error ?? `${job.completed_files}/${job.total_files} files · ${((job.completed_bytes + job.sent_bytes) / 1024 / 1024).toFixed(1)} MiB`,
+    status: active ? 'running' : job.state === 'queued' ? 'queued' : 'waiting', stateLabel: labels[job.state], transfer: job, background: true,
+    percent: active && job.total_bytes > 0 ? Math.min(100, 100 * (job.completed_bytes + job.sent_bytes) / job.total_bytes) : null,
+    hint: job.current_file || undefined };
 }
 
 /** How many jobs wait in each line, for the move buttons' limits. */

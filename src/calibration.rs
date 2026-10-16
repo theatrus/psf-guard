@@ -8224,6 +8224,18 @@ pub struct FlatChoice {
     pub change: String,
 }
 
+/// The same coherent inputs for exports and collaboration delivery. The
+/// caller applies gap checks before remapping missing paths, as exports do.
+pub(crate) fn delivery_selection(mut selected: CalibrationSelection) -> CalibrationSelection {
+    let rules = &selected.rules;
+    selected.bias = coherent_master_subset(CalibrationKind::Bias, &selected.bias, rules);
+    selected.dark = coherent_master_subset(CalibrationKind::Dark, &selected.dark, rules);
+    selected.dark_flat =
+        coherent_master_subset(CalibrationKind::DarkFlat, &selected.dark_flat, rules);
+    selected.flat = coherent_master_subset(CalibrationKind::Flat, &selected.flat, rules);
+    selected
+}
+
 /// One light's dark master, as an export names it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DarkSet {
@@ -8267,18 +8279,7 @@ pub fn export_destinations(
         .iter()
         .map(|frame| frame.source_path.clone())
         .collect();
-    let rules = &selected.rules;
-    let selected = CalibrationSelection {
-        bias: coherent_master_subset(CalibrationKind::Bias, &selected.bias, rules),
-        dark: coherent_master_subset(CalibrationKind::Dark, &selected.dark, rules),
-        dark_flat: coherent_master_subset(CalibrationKind::DarkFlat, &selected.dark_flat, rules),
-        flat: coherent_master_subset(CalibrationKind::Flat, &selected.flat, rules),
-        kept_out: Vec::new(),
-        library: selected.library,
-        rules: Arc::clone(rules),
-        flat_basis: selected.flat_basis.clone(),
-        flat_held_back: selected.flat_held_back.clone(),
-    };
+    let selected = delivery_selection(selected);
     let flat_session = flat_session_label(&selected.flat, night_boundary);
     let flat_set = flat_session.clone().map(|night| {
         let mut frame_uuids: Vec<String> = selected
@@ -8461,7 +8462,7 @@ fn gain_group(gain: Option<i64>) -> String {
     }
 }
 
-fn remap_missing_sources(
+pub(crate) fn remap_missing_sources(
     selection: &mut CalibrationSelection,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
 ) -> usize {

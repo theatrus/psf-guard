@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 30;
+const SCHEMA_VERSION: i32 = 31;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -54,6 +54,7 @@ impl MetaStore {
         super::collaboration_connection::create_automation_table(&tx)?;
         super::collaboration_connection::create_pending_night_table(&tx)?;
         super::draft_import::create_table(&tx)?;
+        super::transfer::create_table(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -157,6 +158,9 @@ impl MetaStore {
             // were shot with, an optional field older drafts read without:
             // nothing to rewrite. The bump keeps a build that cannot read
             // the field from opening a store that may hold it.
+            if version < 31 {
+                super::transfer::create_table(&tx)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -363,6 +367,9 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
     }
     if version >= 28 {
         super::collaboration_connection::validate_pending_night_table(conn)?;
+    }
+    if version >= 31 {
+        super::transfer::validate_tables(conn)?;
     }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",

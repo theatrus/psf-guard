@@ -179,7 +179,7 @@ fn observing_date(timestamp: i64, longitude: f64) -> Result<String, Failure> {
     .ok_or_else(held)
 }
 
-fn selections(
+pub(in crate::server::director::collaboration_auth) fn selections(
     catalog: &DatabaseContext,
     import: Uuid,
     longitude: f64,

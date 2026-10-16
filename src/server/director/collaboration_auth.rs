@@ -23,6 +23,7 @@ pub(super) mod background;
 mod credentials;
 #[cfg(test)]
 mod tests;
+pub(super) mod transfers;
 mod workflows;
 
 #[derive(Default)]
@@ -31,6 +32,7 @@ pub(super) struct SessionState {
     pending: Mutex<HashMap<Uuid, Pending>>,
     last_delivery: Mutex<HashMap<Uuid, Instant>>,
     background: Mutex<HashMap<Uuid, background::Record>>,
+    transfers: Mutex<transfers::Progress>,
 }
 pub(super) fn forward_status(state: Arc<AppState>, rig: Uuid) {
     workflows::forward_status(state, rig);
@@ -72,6 +74,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/rigs/{rig}/collaboration", get(list).post(create))
         .route("/collaboration/{id}/{action}", axum::routing::post(action))
         .merge(workflows::routes())
+        .merge(transfers::routes())
 }
 pub(super) fn credential_path(registry: &FilePath) -> PathBuf {
     credentials::path(registry)
@@ -665,10 +668,16 @@ impl Remote {
             .strip_prefix("agent/projects/")
             .and_then(|s| s.strip_suffix("/join"))
             .is_some_and(psf_guard_director_interop::workflow::valid_remote_id);
+        let files = route
+            .strip_prefix("projects/")
+            .and_then(|s| s.strip_suffix("/files"))
+            .is_some_and(psf_guard_director_interop::workflow::valid_remote_id);
         if !join
+            && !files
             && !matches!(
                 route,
                 "health"
+                    | "files/projects"
                     | "auth"
                     | "auth/login"
                     | "auth/poll"
@@ -701,6 +710,9 @@ impl Remote {
             request = request.bearer_auth(token);
         }
         request = request.query(query);
+        if files {
+            request = request.timeout(Duration::from_secs(120));
+        }
         let mut response = request.send().await.map_err(|_| Failure(StatusCode::BAD_GATEWAY, "Collaboration request failed; a token-producing request may have completed remotely. Reload before retrying"))?;
         if !response.status().is_success() {
             return Err(match response.status() {
@@ -726,7 +738,12 @@ impl Remote {
         }
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|_| invalid())? {
-            if bytes.len().saturating_add(chunk.len()) > astrocollab::MAX_BODY_BYTES {
+            let limit = if files {
+                32 * 1024 * 1024
+            } else {
+                astrocollab::MAX_BODY_BYTES
+            };
+            if bytes.len().saturating_add(chunk.len()) > limit {
                 return Err(invalid());
             }
             bytes.extend_from_slice(&chunk);

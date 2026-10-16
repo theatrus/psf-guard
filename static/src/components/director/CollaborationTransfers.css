@@ -1,0 +1,10 @@
+.collaboration-transfers { min-width: 0; }
+.collaboration-transfers .rig-profile-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 0.75rem; margin: 0.75rem 0; }
+.collaboration-transfers select { width: 100%; min-width: 0; }
+.collaboration-transfers pre { max-height: 20rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.collaboration-transfers p { overflow-wrap: anywhere; }
+.collaboration-transfers .director-actions { flex-wrap: wrap; }
+.collaboration-transfer-files { max-height: 18rem; overflow: auto; margin: 0.75rem 0; }
+.collaboration-transfer-files table { width: 100%; table-layout: fixed; }
+.collaboration-transfer-files th:first-child { width: 60%; }
+.collaboration-transfer-files td { overflow-wrap: anywhere; }

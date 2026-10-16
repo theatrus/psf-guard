@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod automatic;
 mod measurements;
 pub(in crate::server::director::collaboration_auth) use automatic::{
-    automatic, AutomaticCursor, AutomaticResult,
+    automatic, selections as transfer_selections, AutomaticCursor, AutomaticResult,
 };
 
 struct CatalogFrames {
@@ -76,7 +76,7 @@ fn image_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::models::Acquire
     })
 }
 
-fn saved_path(
+pub(in crate::server::director::collaboration_auth) fn saved_path(
     catalog: &DatabaseContext,
     image: &crate::models::AcquiredImage,
     target: &str,
@@ -90,9 +90,9 @@ fn saved_path(
     crate::server::handlers::find_fits_file(catalog, image, target, filename).map_err(|_| held())
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Selection {
+pub(in crate::server::director::collaboration_auth) struct Selection {
     pub import_id: Uuid,
     pub catalog: String,
     pub panel: u32,
@@ -183,7 +183,9 @@ pub(super) async fn candidates(
         Ok(json!({"images":result}))
     }).await?
 }
-fn night_bounds(night: &str) -> Result<(i64, i64), Failure> {
+pub(in crate::server::director::collaboration_auth) fn night_bounds(
+    night: &str,
+) -> Result<(i64, i64), Failure> {
     psf_guard_director_interop::astrocollab::validate_night(night).map_err(|_| invalid())?;
     let date = chrono::NaiveDate::parse_from_str(night, "%Y-%m-%d")
         .map_err(|_| invalid())?
@@ -469,9 +471,13 @@ fn frames(
     Ok(CatalogFrames { frames, director })
 }
 
-type SelectedRow = (Uuid, (crate::models::AcquiredImage, String, Option<String>));
+pub(in crate::server::director::collaboration_auth) type SelectedRow =
+    (Uuid, (crate::models::AcquiredImage, String, Option<String>));
 
-fn selected_rows(conn: &rusqlite::Connection, guids: &[Uuid]) -> Result<Vec<SelectedRow>, Failure> {
+pub(in crate::server::director::collaboration_auth) fn selected_rows(
+    conn: &rusqlite::Connection,
+    guids: &[Uuid],
+) -> Result<Vec<SelectedRow>, Failure> {
     let selected = guids.iter().copied().collect::<BTreeSet<_>>();
     if selected.len() != guids.len()
         || selected.is_empty()
