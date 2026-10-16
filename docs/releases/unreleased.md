@@ -543,5 +543,6 @@
   frame selected just as another was, two groups opened or closed in a
   row, Sequence putting back a frame it had just dropped from the
   selection, or the frame Calibration sets aside when you switch between
-  Sessions and Groups. Forgetting a calibration frame now always shows the
-  next one, not sometimes the first.
+  Sessions and Groups.
+- Forgetting a calibration frame now always shows the next one, not
+  sometimes the first.

@@ -91,14 +91,23 @@ export function useLatestUrl(): () => LatestUrl | null {
       }
       return null;
     }
-    return { pathname: withoutBasename(location.pathname, basename), search: location.search };
+    // A location outside the basename is not one this app can write to;
+    // the caller falls back to the rendered URL.
+    const pathname = withoutBasename(location.pathname, basename);
+    return pathname === null ? null : { pathname, search: location.search };
   }, [basename, navigator, router]);
 }
 
-function withoutBasename(pathname: string, basename: string): string {
+/** The path within the app: React Router's own stripBasename, which it
+ *  does not export. A basename matches whole segments, with or without a
+ *  trailing slash; null when the path lies outside it. */
+function withoutBasename(pathname: string, basename: string): string | null {
   if (!basename || basename === '/') return pathname;
-  if (!pathname.toLowerCase().startsWith(basename.toLowerCase())) return pathname;
-  return pathname.slice(basename.length) || '/';
+  if (!pathname.toLowerCase().startsWith(basename.toLowerCase())) return null;
+  const startIndex = basename.endsWith('/') ? basename.length - 1 : basename.length;
+  const nextChar = pathname.charAt(startIndex);
+  if (nextChar && nextChar !== '/') return null;
+  return pathname.slice(startIndex) || '/';
 }
 
 /**

@@ -506,25 +506,25 @@ export default function SequenceView() {
     };
   }, [activeSequence, isAnalyzing, location.state]);
 
+  // Write the cursor this render settled on, unless the address has moved
+  // on since: a `current` written a moment ago, such as by an arrow key,
+  // that this render does not show yet is newer than what it worked out.
   useEffect(() => {
-    if (activeImageId !== null && activeImageId !== urlCurrentImageId) {
-      if (activeScoreScope === 'target_filter' && !requestedScoreScope) {
-        updateParams({
-          current: activeImageId,
-          scoreScope: `target-filter:${activeSequence?.filter_name ?? ''}`,
-          groupIndex: null,
-          imageIndex: null,
-        });
-      } else {
-        setCurrentImageId(activeImageId);
-      }
-    }
+    if (activeImageId === null || activeImageId === urlCurrentImageId) return;
+    const scoreScope = activeScoreScope === 'target_filter' && !requestedScoreScope
+      ? { scoreScope: `target-filter:${activeSequence?.filter_name ?? ''}` }
+      : {};
+    updateParams((latest) => {
+      const current = latest.get('current');
+      // Parsed as useGridState reads it, so an unreadable one still counts as the one shown.
+      if (!Object.is(current ? parseInt(current, 10) : null, urlCurrentImageId)) return null;
+      return { current: activeImageId, ...scoreScope, groupIndex: null, imageIndex: null };
+    });
   }, [
     activeImageId,
     activeScoreScope,
     activeSequence?.filter_name,
     requestedScoreScope,
-    setCurrentImageId,
     updateParams,
     urlCurrentImageId,
   ]);
