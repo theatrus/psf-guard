@@ -4080,6 +4080,8 @@ export interface FlatChangeEvent {
   /** The pair whose ratio picture shows it. */
   before_response: string;
   after_response: string;
+  /** The window is shorter than one flat run: it landed between one twilight's flats, or two changes met there. */
+  within_flat_run?: boolean;
 }
 
 /** A shadow that came, went or moved; position and radius in sensor pixels. */

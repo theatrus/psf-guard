@@ -213,11 +213,21 @@ describe('Flat groups in Frames', () => {
     expect(event).toHaveTextContent('Change · All filters and angles: camera side');
     expect(event).toHaveTextContent('dust 1.6% · pattern 0.20% · seen in R, G at 3°, 54°');
     expect(event).toHaveTextContent('2026-09-16 14:02 – 2026-09-20 14:00 UTC');
+    expect(within(event).queryByTestId('flat-change-within-run')).toBeNull();
     const split = screen.getByTestId('flat-split');
     expect(split).toHaveAccessibleName('Split in G · 3°');
     expect(split).toHaveTextContent('the light pattern changed by 2.6% (limit 2%)');
     expect(within(split).getByRole('button', { name: 'Compare 2026-09-13 with 2026-09-10' }))
       .toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('says when a change\'s window is narrower than one flat run', async () => {
+    const narrow = { ...RIG.events[0], start: at('09-20'), end: at('09-20') + 300, within_flat_run: true };
+    serve({ available: true, rigs: [{ ...RIG, events: [narrow, RIG.events[1]] }] });
+    renderPage('/calibration?db=demo&calKind=flat');
+    await rows();
+    expect(within(screen.getByTestId('flat-change-event')).getByTestId('flat-change-within-run'))
+      .toHaveTextContent('Narrower than one flat run');
   });
 
   it('sums up each rig and its limits, with a link to edit them', async () => {

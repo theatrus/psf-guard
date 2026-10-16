@@ -2,7 +2,11 @@
 //! what the catalog keeps. Nothing here reads pixels.
 //!
 //! - A **family** is the measured sessions of one rig, filter, sensor mode
-//!   and rotation cluster: the sessions that could ever share a master.
+//!   and rotation cluster: the sessions that could ever share a master. A
+//!   rotation cluster is single-linkage: angles split only where a gap
+//!   between them is wider than the rig's rotation tolerance. A session
+//!   whose flats record no angle, on a rig whose other flats do, joins the
+//!   cluster it measures alike with, else stays on its own.
 //! - Within a family, sessions merge into **groups** in time order: the
 //!   neighbouring pair with the smallest linkage first, while it stays
 //!   within the limits. Linkage is the largest difference between any two
@@ -24,10 +28,15 @@ use super::rows::{ComparisonRow, EvidenceRow, ResponseRow, Verdict};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
 
-/// Sessions of a family whose rotator angles lie within this of the
-/// cluster's first angle are one rotation cluster: the coherence tolerance
-/// one master's flats are held to.
+/// Flats of one night whose rotator angles lie within this of the session's
+/// first are one session: the coherence tolerance one master's flats are
+/// held to. Also the gap that separates rotation clusters on a rig without
+/// limits of its own.
 pub const ROTATION_CLUSTER_DEG: f64 = 2.0;
+/// One flat run: a twilight's flats, filter after filter, are shot within
+/// this. A change whose window is shorter landed between the flats of one
+/// run, or is two changes that met there.
+pub const FLAT_RUN_SECONDS: i64 = 3600;
 /// Lights of one profile closer than this in time are one continuous
 /// imaging session. A night's pauses are shorter; a day is longer.
 pub const IMAGING_GAP_SECONDS: i64 = 3 * 3600;
@@ -41,6 +50,10 @@ pub struct Limits {
     pub broad: f64,
     /// The flat session window, in seconds: a master spans at most twice it.
     pub window: i64,
+    /// The rotation tolerance one master's flats are held to, degrees: a
+    /// gap in the rig's flat angles wider than this separates two rotation
+    /// clusters. Never taken above [`ROTATION_CLUSTER_DEG`].
+    pub rotation: f64,
 }
 
 impl Limits {
@@ -58,6 +71,9 @@ pub struct Session {
     pub row: ResponseRow,
     pub first: i64,
     pub last: i64,
+    /// For flats that record no angle: the angle of the rotation cluster
+    /// they measure alike with, when they do.
+    pub inferred_rotation: Option<f64>,
 }
 
 /// Why two neighbouring groups stay apart.
@@ -102,6 +118,10 @@ pub struct Event {
     pub broad: f64,
     /// The spots of the member with the most dust.
     pub spots: Vec<Spot>,
+    /// The window is shorter than one flat run ([`FLAT_RUN_SECONDS`]): the
+    /// change landed between the flats of one twilight, or its members
+    /// are two changes that met there.
+    pub within_flat_run: bool,
 }
 
 impl Event {
@@ -136,8 +156,11 @@ pub struct AngleTerm {
 pub struct Family {
     pub key: String,
     pub rig_uuid: String,
+    /// The sessions' family key: rig, filter, optics and sensor mode,
+    /// rotation aside.
+    pub family_key: String,
     pub filter: Option<String>,
-    /// The cluster's first angle; absent for a rig that records none.
+    /// The cluster's middle angle; absent for flats that record none.
     pub rotation: Option<f64>,
     /// Session indices in time order.
     pub sessions: Vec<usize>,
@@ -212,8 +235,13 @@ pub struct Book {
     /// which measure alike with each other: a hazy dawn, not a change.
     /// They split groups but make no event, so no light is flagged for them.
     pub outliers: BTreeSet<usize>,
+    /// Splits across two changes another family tells apart: they date
+    /// neither, and make no event of their own.
+    pub spanning: BTreeSet<usize>,
     pub angle_terms: HashMap<String, AngleTerm>,
     pub imaging: Vec<ImagingSession>,
+    /// Each session's family, by index.
+    family_of: Vec<usize>,
     by_response: HashMap<String, usize>,
     by_frame: HashMap<String, usize>,
     comparisons: HashMap<(usize, usize), ComparisonRow>,
@@ -229,6 +257,42 @@ pub fn canonical_filter(filter: &str) -> String {
 fn rotation_gap(a: f64, b: f64) -> f64 {
     let difference = (a - b).rem_euclid(360.0);
     difference.min(360.0 - difference)
+}
+
+/// Single-linkage rotation clusters of `(session, angle)`: around the
+/// circle, a gap wider than `tolerance` between neighbouring angles starts
+/// a new cluster, and nothing else does. Each cluster in angle order.
+fn rotation_clusters(mut angled: Vec<(usize, f64)>, tolerance: f64) -> Vec<Vec<(usize, f64)>> {
+    let n = angled.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let around = |v: f64| v.rem_euclid(360.0);
+    angled.sort_by(|a, b| around(a.1).total_cmp(&around(b.1)).then(a.0.cmp(&b.0)));
+    // The gap from each angle to the next, the last wrapping to the first.
+    let gaps: Vec<f64> = (0..n)
+        .map(|i| {
+            let (a, b) = (around(angled[i].1), around(angled[(i + 1) % n].1));
+            if i + 1 < n {
+                b - a
+            } else {
+                b + 360.0 - a
+            }
+        })
+        .collect();
+    let Some(first_cut) = (0..n).find(|i| gaps[*i] > tolerance) else {
+        return vec![angled];
+    };
+    let mut clusters = Vec::new();
+    let mut current = Vec::new();
+    for step in 1..=n {
+        let i = (first_cut + step) % n;
+        current.push(angled[i]);
+        if gaps[i] > tolerance {
+            clusters.push(std::mem::take(&mut current));
+        }
+    }
+    clusters
 }
 
 impl Book {
@@ -254,7 +318,12 @@ impl Book {
             for uuid in &row.frame_uuids {
                 book.by_frame.insert(uuid.clone(), index);
             }
-            book.sessions.push(Session { row, first, last });
+            book.sessions.push(Session {
+                row,
+                first,
+                last,
+                inferred_rotation: None,
+            });
         }
         for comparison in comparisons {
             let (Some(&a), Some(&b)) = (
@@ -281,6 +350,7 @@ impl Book {
         book.build_families();
         book.build_groups();
         book.find_outliers();
+        book.find_spanning();
         book.build_events();
         book.build_angle_terms();
         book
@@ -316,36 +386,52 @@ impl Book {
         }
         let mut keys: Vec<_> = by_key.keys().cloned().collect();
         keys.sort();
+        self.family_of = vec![usize::MAX; self.sessions.len()];
         for key in keys {
-            let mut members = by_key.remove(&key).unwrap_or_default();
-            // Rotation clusters: by angle, each starting at its first angle.
-            members.sort_by(|a, b| {
-                let (ra, rb) = (
-                    self.sessions[*a].row.rotation,
-                    self.sessions[*b].row.rotation,
-                );
-                ra.partial_cmp(&rb)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then(self.sessions[*a].first.cmp(&self.sessions[*b].first))
+            let members = by_key.remove(&key).unwrap_or_default();
+            // The rig's tolerance, capped at the coherence tolerance one
+            // master's flats are held to: a wide match setting lets lights
+            // reach further for flats, it does not make two angles one.
+            let tolerance = self.limits(&key.0).map_or(ROTATION_CLUSTER_DEG, |limits| {
+                limits.rotation.min(ROTATION_CLUSTER_DEG)
             });
-            let mut clusters: Vec<(Option<f64>, Vec<usize>)> = Vec::new();
-            for index in members {
-                let rotation = self.sessions[index].row.rotation;
-                let joins = |cluster: &(Option<f64>, Vec<usize>)| match (cluster.0, rotation) {
-                    (None, None) => true,
-                    (Some(start), Some(angle)) => {
-                        rotation_gap(start, angle) <= ROTATION_CLUSTER_DEG
+            let (angled, unknown): (Vec<usize>, Vec<usize>) = members
+                .into_iter()
+                .partition(|index| self.angle(*index).is_some());
+            let mut clusters: Vec<(Option<f64>, Vec<usize>)> = rotation_clusters(
+                angled
+                    .into_iter()
+                    .filter_map(|index| Some((index, self.angle(index)?)))
+                    .collect(),
+                tolerance,
+            )
+            .into_iter()
+            .map(|cluster| {
+                let middle = cluster[cluster.len() / 2].1;
+                (Some(middle), cluster.into_iter().map(|(i, _)| i).collect())
+            })
+            .collect();
+            // Flats that record no angle join the cluster they measure
+            // alike with; the rest stay together on their own.
+            let mut alone = Vec::new();
+            for index in unknown {
+                match self.measured_cluster(index, &clusters) {
+                    Some((cluster, angle)) => {
+                        self.sessions[index].inferred_rotation = Some(angle);
+                        clusters[cluster].1.push(index);
                     }
-                    _ => false,
-                };
-                match clusters.iter_mut().find(|cluster| joins(cluster)) {
-                    Some(cluster) => cluster.1.push(index),
-                    None => clusters.push((rotation, vec![index])),
+                    None => alone.push(index),
                 }
+            }
+            if !alone.is_empty() {
+                clusters.push((None, alone));
             }
             for (rotation, mut sessions) in clusters {
                 sessions.sort_by_key(|index| (self.sessions[*index].first, *index));
                 let filter = self.sessions[sessions[0]].row.filter.clone();
+                for index in &sessions {
+                    self.family_of[*index] = self.families.len();
+                }
                 self.families.push(Family {
                     key: format!(
                         "{}:{}",
@@ -353,6 +439,7 @@ impl Book {
                         rotation.map_or_else(|| "none".to_string(), |r| format!("{r:.1}"))
                     ),
                     rig_uuid: key.0.clone(),
+                    family_key: key.1.clone(),
                     filter,
                     rotation,
                     sessions,
@@ -361,6 +448,62 @@ impl Book {
                 });
             }
         }
+    }
+
+    /// A session's recorded rotator angle, when it has a usable one.
+    fn angle(&self, index: usize) -> Option<f64> {
+        self.sessions[index].row.rotation.filter(|r| r.is_finite())
+    }
+
+    /// The sessions of `cluster` (angled ones only) just before and just
+    /// after `session` in time.
+    fn neighbours_in(&self, session: usize, cluster: &[usize]) -> Vec<usize> {
+        let at = (self.sessions[session].first, session);
+        let key = |i: usize| (self.sessions[i].first, i);
+        let angled = cluster.iter().copied().filter(|i| self.angle(*i).is_some());
+        let before = angled
+            .clone()
+            .filter(|i| key(*i) < at)
+            .max_by_key(|i| key(*i));
+        let after = angled.filter(|i| key(*i) > at).min_by_key(|i| key(*i));
+        before.into_iter().chain(after).collect()
+    }
+
+    /// For a session whose flats record no angle: the rotation cluster one
+    /// of whose neighbours in time it measures alike with, and that
+    /// neighbour's angle. Only when the measurements single the cluster
+    /// out: every other cluster measured, and unlike. On a rig whose angles
+    /// barely matter a night alike with several clusters says nothing of
+    /// its angle, and stays unknown.
+    fn measured_cluster(
+        &self,
+        session: usize,
+        clusters: &[(Option<f64>, Vec<usize>)],
+    ) -> Option<(usize, f64)> {
+        let limits = self.limits(&self.sessions[session].row.rig_uuid)?;
+        let mut alike = None;
+        for (c, (_, members)) in clusters.iter().enumerate() {
+            let closest = self
+                .neighbours_in(session, members)
+                .into_iter()
+                .filter_map(|n| {
+                    let comparison = self.comparison(session, n)?;
+                    Some((limits.distance(comparison), self.angle(n)?))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            match closest {
+                // Never compared: nothing rules this cluster out.
+                None => return None,
+                Some((distance, angle)) if distance <= 1.0 => {
+                    if alike.is_some() {
+                        return None;
+                    }
+                    alike = Some((c, angle));
+                }
+                Some(_) => {}
+            }
+        }
+        alike
     }
 
     /// Whether two sessions of one family are compared: within twice the
@@ -462,8 +605,104 @@ impl Book {
     }
 
     fn shares_spot(a: &Boundary, b: &Boundary) -> bool {
-        a.spots.iter().any(|sa| {
-            b.spots.iter().any(|sb| {
+        Self::spots_meet(
+            &a.spots.iter().collect::<Vec<_>>(),
+            &b.spots.iter().collect::<Vec<_>>(),
+        )
+    }
+
+    /// Whether `member` shows a shadow of `split`: one of the split's
+    /// strong spots, in `member` at least half as deep. A comparison lists
+    /// faint spots down to 5σ, and one of them landing near another's is
+    /// no shared shadow; a shallower shadow beside a deeper one is.
+    fn shows_shadow(member: &Boundary, split: &Boundary) -> bool {
+        Self::strong_spots(split).iter().any(|shadow| {
+            member.spots.iter().any(|spot| {
+                spot.darker == shadow.darker
+                    && spot.peak >= 0.5 * shadow.peak
+                    && ((spot.x - shadow.x).powi(2) + (spot.y - shadow.y).powi(2)).sqrt()
+                        <= spot.radius.max(shadow.radius)
+            })
+        })
+    }
+
+    /// Groups with a split on either side, as `(split before, split
+    /// after)`: each proves two changes, one in either split.
+    fn bounded_groups(&self) -> Vec<(usize, usize)> {
+        let mut bounded = Vec::new();
+        for family in &self.families {
+            for g in 1..family.groups.len().saturating_sub(1) {
+                let (left, right) = (family.boundaries[g - 1], family.boundaries[g]);
+                if !self.outliers.contains(&left) && !self.outliers.contains(&right) {
+                    bounded.push((left, right));
+                }
+            }
+        }
+        bounded
+    }
+
+    /// Whether some family of the rig saw two changes inside `span` (give
+    /// or take one flat run, as one morning's filters are shot minutes
+    /// apart), and `shows` holds of the splits of both.
+    fn two_changes_within(
+        &self,
+        bounded: &[(usize, usize)],
+        rig: &str,
+        span: (i64, i64),
+        shows: impl Fn(usize) -> bool,
+    ) -> bool {
+        bounded.iter().any(|(before, after)| {
+            let (before_split, after_split) = (&self.boundaries[*before], &self.boundaries[*after]);
+            self.families[before_split.family].rig_uuid == rig
+                && before_split.start >= span.0 - FLAT_RUN_SECONDS
+                && after_split.end <= span.1 + FLAT_RUN_SECONDS
+                && shows(*before)
+                && shows(*after)
+        })
+    }
+
+    /// Splits across two changes: another family saw both inside the
+    /// split's window, and the split shows the shadows of both. Such a
+    /// split dates neither change; it joins no event and only confirms,
+    /// after, which filters and angles saw the changes it shows.
+    fn find_spanning(&mut self) {
+        let bounded = self.bounded_groups();
+        let spanning: BTreeSet<usize> = (0..self.boundaries.len())
+            .filter(|b| !self.outliers.contains(b))
+            .filter(|b| {
+                let split = &self.boundaries[*b];
+                let family = &self.families[split.family];
+                self.two_changes_within(
+                    &bounded,
+                    &family.rig_uuid,
+                    (split.start, split.end),
+                    |other| {
+                        self.boundaries[other].family != split.family
+                            && Self::shows_shadow(split, &self.boundaries[other])
+                    },
+                )
+            })
+            .collect();
+        self.spanning = spanning;
+    }
+
+    /// A boundary's spots at least half as deep as its deepest.
+    fn strong_spots(boundary: &Boundary) -> Vec<&Spot> {
+        let deepest = boundary
+            .spots
+            .iter()
+            .map(|spot| spot.peak)
+            .fold(0f32, f32::max);
+        boundary
+            .spots
+            .iter()
+            .filter(|spot| spot.peak >= 0.5 * deepest)
+            .collect()
+    }
+
+    fn spots_meet(a: &[&Spot], b: &[&Spot]) -> bool {
+        a.iter().any(|sa| {
+            b.iter().any(|sb| {
                 sa.darker == sb.darker && {
                     let distance = ((sa.x - sb.x).powi(2) + (sa.y - sb.y).powi(2)).sqrt();
                     distance <= sa.radius.max(sb.radius)
@@ -513,9 +752,15 @@ impl Book {
         }
         let mut windows: Vec<(i64, i64)> =
             self.boundaries.iter().map(|b| (b.start, b.end)).collect();
+        // The span the members of each merge reach over, first to last.
+        let mut spans = windows.clone();
+        // Each merge's members, by its root.
+        let mut merged: Vec<Vec<usize>> = (0..self.boundaries.len()).map(|i| vec![i]).collect();
+        let bounded = self.bounded_groups();
+        let apart = |i: usize| self.outliers.contains(&i) || self.spanning.contains(&i);
         for i in 0..self.boundaries.len() {
             for j in (i + 1)..self.boundaries.len() {
-                if self.outliers.contains(&i) || self.outliers.contains(&j) {
+                if apart(i) || apart(j) {
                     continue;
                 }
                 let (a, b) = (&self.boundaries[i], &self.boundaries[j]);
@@ -532,12 +777,28 @@ impl Book {
                 if start >= end || !Self::shares_spot(a, b) {
                     continue;
                 }
+                // One change, or two that another family tells apart: a
+                // group of its sessions with a split on either side, both
+                // splits inside the span the members reach over, and the
+                // members showing the shadows of both.
+                let span = (spans[ri].0.min(spans[rj].0), spans[ri].1.max(spans[rj].1));
+                let members: Vec<usize> = merged[ri].iter().chain(&merged[rj]).copied().collect();
+                let seen = |split: usize| {
+                    members
+                        .iter()
+                        .any(|m| Self::shows_shadow(&self.boundaries[*m], &self.boundaries[split]))
+                };
+                if self.two_changes_within(&bounded, &fa.rig_uuid, span, seen) {
+                    continue;
+                }
                 parent[rj] = ri;
                 windows[ri] = (start, end);
+                spans[ri] = span;
+                merged[ri] = members;
             }
         }
         let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
-        for i in (0..self.boundaries.len()).filter(|i| !self.outliers.contains(i)) {
+        for i in (0..self.boundaries.len()).filter(|i| !apart(*i)) {
             let root = find(&mut parent, i);
             members.entry(root).or_default().push(i);
         }
@@ -593,23 +854,50 @@ impl Book {
                 broad,
                 spots: self.boundaries[strongest].spots.clone(),
                 boundaries,
+                within_flat_run: end - start < FLAT_RUN_SECONDS,
             });
+        }
+        // A split across two changes still saw each change it shows: its
+        // filter and angle count toward the camera side, its window toward
+        // nothing.
+        for b in self.spanning.clone() {
+            let split = &self.boundaries[b];
+            let family = &self.families[split.family];
+            for event in &mut self.events {
+                let inside = event.start >= split.start - FLAT_RUN_SECONDS
+                    && event.end <= split.end + FLAT_RUN_SECONDS;
+                if event.rig_uuid != family.rig_uuid
+                    || !inside
+                    || !event
+                        .boundaries
+                        .iter()
+                        .any(|m| Self::shows_shadow(split, &self.boundaries[*m]))
+                {
+                    continue;
+                }
+                if let Some(filter) = &family.filter {
+                    event.filters.insert(canonical_filter(filter));
+                }
+                let known = event.rotations.iter().any(|r| match (r, family.rotation) {
+                    (None, None) => true,
+                    (Some(x), Some(y)) => rotation_gap(*x, y) <= ROTATION_CLUSTER_DEG,
+                    _ => false,
+                });
+                if !known {
+                    event.rotations.push(family.rotation);
+                }
+                event.camera_side = event.filters.len() >= 2 || event.rotations.len() >= 2;
+            }
         }
     }
 
     fn build_angle_terms(&mut self) {
         for i in 0..self.sessions.len() {
             for j in (i + 1)..self.sessions.len() {
+                if !self.across_clusters(i, j) {
+                    continue;
+                }
                 let (a, b) = (&self.sessions[i], &self.sessions[j]);
-                if a.row.rig_uuid != b.row.rig_uuid || a.row.family_key != b.row.family_key {
-                    continue;
-                }
-                let (Some(ra), Some(rb)) = (a.row.rotation, b.row.rotation) else {
-                    continue;
-                };
-                if rotation_gap(ra, rb) <= ROTATION_CLUSTER_DEG {
-                    continue;
-                }
                 let Some(limits) = self.limits(&a.row.rig_uuid) else {
                     continue;
                 };
@@ -629,10 +917,24 @@ impl Book {
         }
     }
 
+    /// Whether two sessions are of one rig and family key but different
+    /// rotation clusters, each with its angle recorded: a pair at two
+    /// angles.
+    fn across_clusters(&self, a: usize, b: usize) -> bool {
+        let (sa, sb) = (&self.sessions[a].row, &self.sessions[b].row);
+        sa.rig_uuid == sb.rig_uuid
+            && sa.family_key == sb.family_key
+            && self.family_of[a] != self.family_of[b]
+            && self.angle(a).is_some()
+            && self.angle(b).is_some()
+    }
+
     /// Pairs the measurement pass should compare: within each family, every
-    /// pair within twice the window and every pair of neighbours; and across
+    /// pair within twice the window and every pair of neighbours; across
     /// rotation clusters of one filter, pairs shot within one window, which
-    /// give the rig's angle term. Earlier first.
+    /// give the rig's angle term; and a session whose flats record no angle
+    /// against its neighbours in time in every cluster of its filter, which
+    /// tell its angle. Earlier first.
     pub fn pairs_to_compare(&self) -> Vec<(usize, usize)> {
         let mut pairs = BTreeSet::new();
         for family in &self.families {
@@ -655,24 +957,46 @@ impl Book {
                 if i == j
                     || a.first > b.first
                     || (a.first == b.first && i > j)
-                    || a.row.rig_uuid != b.row.rig_uuid
-                    || a.row.family_key != b.row.family_key
+                    || !self.across_clusters(i, j)
                 {
                     continue;
                 }
-                let (Some(ra), Some(rb)) = (a.row.rotation, b.row.rotation) else {
-                    continue;
-                };
                 let Some(limits) = self.limits(&a.row.rig_uuid) else {
                     continue;
                 };
-                if rotation_gap(ra, rb) > ROTATION_CLUSTER_DEG && b.first - a.first <= limits.window
-                {
+                if b.first - a.first <= limits.window {
                     pairs.insert((i, j));
                 }
             }
         }
+        let earlier_first = |a: usize, b: usize| {
+            if (self.sessions[a].first, a) <= (self.sessions[b].first, b) {
+                (a, b)
+            } else {
+                (b, a)
+            }
+        };
+        for session in (0..self.sessions.len()).filter(|i| self.angle(*i).is_none()) {
+            let row = &self.sessions[session].row;
+            for family in &self.families {
+                if family.rotation.is_none()
+                    || family.rig_uuid != row.rig_uuid
+                    || family.family_key != row.family_key
+                {
+                    continue;
+                }
+                for neighbour in self.neighbours_in(session, &family.sessions) {
+                    pairs.insert(earlier_first(session, neighbour));
+                }
+            }
+        }
         pairs.into_iter().collect()
+    }
+
+    /// The angle a flat that records none was measured to share, from the
+    /// rotation cluster its session joined.
+    pub fn inferred_rotation(&self, frame_uuid: &str) -> Option<f64> {
+        self.sessions[self.session_of_frame(frame_uuid)?].inferred_rotation
     }
 
     /// Whether every session in `sessions` was measured and each pair was
@@ -719,7 +1043,10 @@ impl Book {
                     end: session.end,
                 };
             }
-            if let Some(evidence) = self.evidence.get(&(session.key.clone(), event.key.clone())) {
+            if let Some(evidence) = self
+                .evidence
+                .get(&(session.key.clone(), self.evidence_key(event, session)))
+            {
                 let decided: Vec<_> = evidence
                     .fits
                     .iter()
@@ -769,12 +1096,54 @@ impl Book {
 
     /// The before and after sessions a correction map for `filter` is
     /// measured from: the event's member in that filter when it has one,
-    /// else (for a camera-side change) its strongest member.
+    /// else (for a camera-side change) its strongest member. Only a member
+    /// that spans this change alone serves: one whose window another change
+    /// of the rig also falls in would carry that change too. `None` when no
+    /// member does.
     pub fn map_source(&self, event_index: usize, filter: Option<&str>) -> Option<(String, String)> {
+        self.map_source_for(event_index, filter, None)
+    }
+
+    /// [`Self::map_source`] for the flat `flat_uuid` and the flats of its
+    /// family: a member whose window holds another split of that family
+    /// would carry that split's change across too, so it does not serve.
+    pub fn map_source_for(
+        &self,
+        event_index: usize,
+        filter: Option<&str>,
+        flat_uuid: Option<&str>,
+    ) -> Option<(String, String)> {
+        let flats = flat_uuid.and_then(|uuid| self.session_of_frame(uuid));
+        let chosen = self.map_member_for(event_index, filter, flats)?;
+        let boundary = &self.boundaries[chosen];
+        Some((
+            self.sessions[boundary.before].row.response_key.clone(),
+            self.sessions[boundary.after].row.response_key.clone(),
+        ))
+    }
+
+    /// The member boundary [`Self::map_source`] measures from.
+    pub fn map_member(&self, event_index: usize, filter: Option<&str>) -> Option<usize> {
+        self.map_member_for(event_index, filter, None)
+    }
+
+    /// [`Self::map_member`] for flats of the session `flats`.
+    pub fn map_member_for(
+        &self,
+        event_index: usize,
+        filter: Option<&str>,
+        flats: Option<usize>,
+    ) -> Option<usize> {
         let event = self.events.get(event_index)?;
         let filter = filter.map(canonical_filter);
-        let chosen = event
+        let alone: Vec<usize> = event
             .boundaries
+            .iter()
+            .copied()
+            .filter(|b| self.spans_one_change(event_index, *b))
+            .filter(|b| flats.is_none_or(|flats| self.state_matches(event_index, *b, flats)))
+            .collect();
+        alone
             .iter()
             .copied()
             .find(|b| {
@@ -786,22 +1155,107 @@ impl Book {
             })
             .or_else(|| {
                 event.camera_side.then(|| {
-                    event.boundaries.iter().copied().max_by(|a, b| {
+                    alone.iter().copied().max_by(|a, b| {
                         let d = |i: usize| self.boundaries[i].dust.unwrap_or(0.0);
                         d(*a).total_cmp(&d(*b))
                     })
                 })?
-            })?;
-        let boundary = &self.boundaries[chosen];
-        Some((
-            self.sessions[boundary.before].row.response_key.clone(),
-            self.sessions[boundary.after].row.response_key.clone(),
-        ))
+            })
     }
 
-    /// Imaging sessions inside an event's window with no evidence yet: what
-    /// the light-evidence pass should read.
-    pub fn sessions_needing_evidence(&self) -> Vec<(usize, usize)> {
+    /// Whether the flats of session `flats` are in the state the member's
+    /// session on their side of the change shows: no other change of the
+    /// rig that reaches the member's filter falls between the two. Else
+    /// the map would carry the flats from a state they are not in.
+    fn state_matches(&self, event_index: usize, boundary: usize, flats: usize) -> bool {
+        let event = &self.events[event_index];
+        let member = &self.boundaries[boundary];
+        let flats_session = &self.sessions[flats];
+        let ours = if flats_session.last <= event.start {
+            &self.sessions[member.before]
+        } else {
+            &self.sessions[member.after]
+        };
+        let (low, high) = (
+            flats_session.first.min(ours.first),
+            flats_session.last.max(ours.last),
+        );
+        let family = &self.families[member.family];
+        !self.events.iter().enumerate().any(|(index, other)| {
+            index != event_index
+                && other.rig_uuid == family.rig_uuid
+                && other.applies_to(family.filter.as_deref())
+                && other.start < high
+                && other.end > low
+        })
+    }
+
+    /// Whether no other change of the rig that reaches the boundary's
+    /// filter falls in its window: then its two sessions differ by this
+    /// change alone.
+    fn spans_one_change(&self, event_index: usize, boundary: usize) -> bool {
+        let member = &self.boundaries[boundary];
+        let family = &self.families[member.family];
+        !self.events.iter().enumerate().any(|(index, other)| {
+            index != event_index
+                && other.rig_uuid == family.rig_uuid
+                && other.applies_to(family.filter.as_deref())
+                && other.start < member.end
+                && other.end > member.start
+        })
+    }
+
+    /// The flat session a light-evidence fit in `filter` divides by: the
+    /// nearest in time to `at` with a known side of the change, any angle.
+    pub fn evidence_reference(&self, event: &Event, filter: &str, at: i64) -> Option<usize> {
+        let filter = canonical_filter(filter);
+        (0..self.sessions.len())
+            .filter(|i| {
+                let s = &self.sessions[*i];
+                s.row.rig_uuid == event.rig_uuid
+                    && s.row.filter.as_deref().map(canonical_filter).as_ref() == Some(&filter)
+                    && event.side_of(s.first).is_some()
+                    && event.side_of(s.last).is_some()
+            })
+            .min_by_key(|i| ((self.sessions[*i].first - at).abs(), *i))
+    }
+
+    /// The key an imaging session's evidence about a change is kept under:
+    /// the change, and for each filter of its rig the map's two sessions
+    /// and the reference flat the fit would use. A map or reference that
+    /// changes asks the lights again.
+    pub fn evidence_key(&self, event: &Event, session: &ImagingSession) -> String {
+        use sha2::Digest;
+        let Some(index) = self.events.iter().position(|e| std::ptr::eq(e, event)) else {
+            return event.key.clone();
+        };
+        let filters: BTreeSet<String> = self
+            .families
+            .iter()
+            .filter(|family| family.rig_uuid == event.rig_uuid)
+            .filter_map(|family| family.filter.as_deref().map(canonical_filter))
+            .collect();
+        let response = |session: Option<usize>| {
+            session.map_or("-", |i| self.sessions[i].row.response_key.as_str())
+        };
+        let mut text = event.key.clone();
+        for filter in &filters {
+            let member = self
+                .map_member(index, Some(filter))
+                .map(|b| &self.boundaries[b]);
+            text.push_str(&format!(
+                "\u{1f}{filter}:{}:{}:{}",
+                response(member.map(|b| b.before)),
+                response(member.map(|b| b.after)),
+                response(self.evidence_reference(event, filter, session.start))
+            ));
+        }
+        let digest = sha2::Sha256::digest(text.as_bytes());
+        digest.iter().take(12).map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Imaging sessions inside an event's window, with their evidence keys.
+    pub fn sessions_in_windows(&self) -> Vec<(usize, usize, String)> {
         let mut out = Vec::new();
         for (event_index, event) in self.events.iter().enumerate() {
             let measured = self.limits(&event.rig_uuid).is_some_and(|l| l.measured);
@@ -812,15 +1266,30 @@ impl Book {
                 if session.rigs.contains(&event.rig_uuid)
                     && session.start > event.start
                     && session.end < event.end
-                    && !self
-                        .evidence
-                        .contains_key(&(session.key.clone(), event.key.clone()))
                 {
-                    out.push((event_index, session_index));
+                    out.push((
+                        event_index,
+                        session_index,
+                        self.evidence_key(event, session),
+                    ));
                 }
             }
         }
         out
+    }
+
+    /// Imaging sessions inside an event's window with no evidence yet: what
+    /// the light-evidence pass should read.
+    pub fn sessions_needing_evidence(&self) -> Vec<(usize, usize)> {
+        self.sessions_in_windows()
+            .into_iter()
+            .filter(|(_, session, key)| {
+                !self
+                    .evidence
+                    .contains_key(&(self.imaging[*session].key.clone(), key.clone()))
+            })
+            .map(|(event, session, _)| (event, session))
+            .collect()
     }
 }
 
@@ -930,7 +1399,312 @@ mod tests {
             dust: 0.01,
             broad: 0.02,
             window: 86_400,
+            rotation: 2.0,
         }
+    }
+
+    fn new_dust(x: f32) -> Spot {
+        Spot { x, ..spot(x, true) }
+    }
+
+    #[test]
+    fn rotation_clusters_split_only_at_wide_gaps() {
+        let clusters = |angles: &[f64]| -> Vec<Vec<f64>> {
+            let mut clusters: Vec<Vec<f64>> =
+                rotation_clusters(angles.iter().copied().enumerate().collect(), 2.0)
+                    .into_iter()
+                    .map(|cluster| cluster.into_iter().map(|(_, a)| a).collect())
+                    .collect();
+            clusters.sort_by(|a, b| a[0].total_cmp(&b[0]));
+            clusters
+        };
+        // C925: 104.0° and 104.22° were two clusters when each grew from
+        // its lowest angle; every gap from 100.1° to 104.4° is under 2°.
+        assert_eq!(
+            clusters(&[104.22, 101.3, 104.0, 82.2, 103.2, 100.1, 102.2, 104.4]),
+            vec![
+                vec![82.2],
+                vec![100.1, 101.3, 102.2, 103.2, 104.0, 104.22, 104.4]
+            ]
+        );
+        // Around zero.
+        assert_eq!(
+            clusters(&[359.5, 0.8, 180.0]),
+            vec![vec![180.0], vec![359.5, 0.8]]
+        );
+        assert_eq!(clusters(&[10.0, 11.0]), vec![vec![10.0, 11.0]]);
+    }
+
+    #[test]
+    fn sessions_a_small_angle_apart_are_one_family_and_compared() {
+        // C925's G flats: 104.0° on 05-19 and 103.2° on 08-10, with the
+        // donut between them; 101.5° on 08-11, after the donut left.
+        let responses = vec![
+            row("may", "G", "G", Some(104.0), 0),
+            row("aug10", "G", "G", Some(103.2), 83 * DAY),
+            row("aug11", "G", "G", Some(101.5), 84 * DAY),
+        ];
+        let book = Book::build(responses.clone(), vec![], vec![], vec![], |_| rules());
+        assert_eq!(book.families.len(), 1);
+        let pairs = book.pairs_to_compare();
+        assert!(pairs.contains(&(0, 1)), "{pairs:?}");
+        let book = Book::build(
+            responses,
+            vec![
+                cmp("may", "aug10", 0.021, 0.006, vec![new_dust(500.0)]),
+                cmp("aug10", "aug11", 0.023, 0.001, vec![spot(3500.0, false)]),
+                cmp("may", "aug11", 0.004, 0.006, vec![]),
+            ],
+            vec![],
+            vec![],
+            |_| rules(),
+        );
+        // The window ends at the first flat that shows the change.
+        assert_eq!(book.families[0].groups.len(), 3);
+        assert_eq!(book.boundaries[0].end, 83 * DAY);
+        // A night unlike two nights that agree is one odd night.
+        assert_eq!(book.outliers.len(), 2);
+    }
+
+    /// C925's two corner-shadow changes, May→Aug and Aug→Sep. OIII at 104°
+    /// sees each apart, with a group between; R at 104° has no flats
+    /// between and splits once across both; OIII at 82° sees only the
+    /// second.
+    fn two_changes() -> Book {
+        let responses = vec![
+            row("oiii104-may", "OIII", "OIII", Some(104.0), 0),
+            row("oiii104-aug18", "OIII", "OIII", Some(104.2), 91 * DAY),
+            row("oiii104-aug24", "OIII", "OIII", Some(104.2), 97 * DAY),
+            row("oiii104-sep15", "OIII", "OIII", Some(104.3), 119 * DAY),
+            row("r104-may", "R", "R", Some(104.0), 300),
+            row("r104-aug25", "R", "R", Some(104.2), 98 * DAY + 400),
+            row("oiii82-aug21", "OIII", "OIII", Some(82.2), 94 * DAY),
+            row("oiii82-sep25", "OIII", "OIII", Some(82.2), 129 * DAY),
+        ];
+        let (first, second) = (new_dust(500.0), new_dust(219.0));
+        let comparisons = vec![
+            cmp(
+                "oiii104-may",
+                "oiii104-aug18",
+                0.02,
+                0.009,
+                vec![first.clone()],
+            ),
+            cmp("oiii104-aug18", "oiii104-aug24", 0.002, 0.001, vec![]),
+            cmp(
+                "oiii104-aug24",
+                "oiii104-sep15",
+                0.018,
+                0.004,
+                vec![second.clone()],
+            ),
+            cmp(
+                "oiii104-aug18",
+                "oiii104-sep15",
+                0.018,
+                0.004,
+                vec![second.clone()],
+            ),
+            // R shows the second shadow at half the depth of the first:
+            // still a shadow of the second change.
+            cmp(
+                "r104-may",
+                "r104-aug25",
+                0.021,
+                0.008,
+                vec![
+                    Spot {
+                        peak: 0.021,
+                        ..first
+                    },
+                    Spot {
+                        peak: 0.009,
+                        ..second.clone()
+                    },
+                ],
+            ),
+            cmp("oiii82-aug21", "oiii82-sep25", 0.011, 0.002, vec![second]),
+        ];
+        Book::build(responses, comparisons, vec![], vec![], |_| rules())
+    }
+
+    #[test]
+    fn a_split_across_two_changes_never_joins_the_second() {
+        let book = two_changes();
+        let r = book
+            .boundaries
+            .iter()
+            .position(|b| book.families[b.family].filter.as_deref() == Some("R"))
+            .unwrap();
+        // OIII at 104° proves both changes lie inside R's long split, and
+        // R shows the shadows of both: R does not join the second change,
+        // nor narrow it to the five minutes of 08-25 its flats share.
+        let second = book
+            .events
+            .iter()
+            .find(|event| event.filters.len() == 1 && event.rotations.len() == 2)
+            .expect("OIII at two angles");
+        assert!(!second.boundaries.contains(&r), "{:?}", book.events);
+        assert_eq!((second.start, second.end), (97 * DAY + 600, 119 * DAY));
+        assert!(second.camera_side);
+        assert!(book.events.iter().all(|event| !event.within_flat_run));
+        // R may join the first: no family shows a second change inside
+        // the span of that merge.
+        let first = book
+            .events
+            .iter()
+            .find(|event| event.boundaries.contains(&r))
+            .unwrap();
+        assert_eq!((first.start, first.end), (900, 91 * DAY));
+    }
+
+    #[test]
+    fn a_window_shorter_than_one_flat_run_is_flagged() {
+        // R's flats after the change were shot five minutes after G's
+        // flats before it, on one morning.
+        let responses = vec![
+            row("g-before", "G", "G", Some(3.2), 10 * DAY),
+            row("g-after", "G", "G", Some(3.2), 20 * DAY),
+            row("r-before", "R", "R", Some(3.2), 0),
+            row("r-after", "R", "R", Some(3.2), 10 * DAY + 900),
+        ];
+        let comparisons = vec![
+            cmp("g-before", "g-after", 0.016, 0.0, vec![new_dust(1460.0)]),
+            cmp("r-before", "r-after", 0.016, 0.0, vec![new_dust(1460.0)]),
+        ];
+        let book = Book::build(responses, comparisons, vec![], vec![], |_| rules());
+        assert_eq!(book.events.len(), 1);
+        let event = &book.events[0];
+        assert_eq!((event.start, event.end), (10 * DAY + 600, 10 * DAY + 900));
+        assert!(event.within_flat_run);
+    }
+
+    /// A donut between May and August 11, seen by L and B. A corner
+    /// shadow later, seen by SII from May to September and by OIII from
+    /// August 21: SII's pair spans the donut as well.
+    fn map_book() -> Book {
+        let responses = vec![
+            row("l-may", "L", "L", Some(103.2), 0),
+            row("l-aug11", "L", "L", Some(101.9), 84 * DAY),
+            row("b-may", "B", "B", Some(103.2), 300),
+            row("b-aug11", "B", "B", Some(101.7), 84 * DAY + 300),
+            row("sii-may", "SII", "SII", Some(104.0), 600),
+            row("sii-sep15", "SII", "SII", Some(104.0), 119 * DAY),
+            row("oiii-aug21", "OIII", "OIII", Some(101.3), 94 * DAY),
+            row("oiii-sep25", "OIII", "OIII", Some(101.3), 129 * DAY),
+        ];
+        let (donut, corner) = (new_dust(3500.0), new_dust(219.0));
+        let comparisons = vec![
+            cmp("l-may", "l-aug11", 0.02, 0.001, vec![donut.clone()]),
+            cmp("b-may", "b-aug11", 0.02, 0.001, vec![donut]),
+            cmp("sii-may", "sii-sep15", 0.033, 0.012, vec![corner.clone()]),
+            cmp("oiii-aug21", "oiii-sep25", 0.011, 0.002, vec![corner]),
+        ];
+        Book::build(responses, comparisons, vec![], vec![], |_| rules())
+    }
+
+    #[test]
+    fn a_map_is_borrowed_only_from_a_member_that_spans_its_change_alone() {
+        let book = map_book();
+        assert_eq!(book.events.len(), 2, "{:?}", book.events);
+        let corner_event = book
+            .events
+            .iter()
+            .position(|event| event.filters.contains("sii"))
+            .unwrap();
+        assert!(book.events[corner_event].camera_side);
+        // An L light: L has no member; SII is the strongest, but its pair
+        // carries the donut too. OIII's pair spans the corner alone.
+        let source = book.map_source(corner_event, Some("L")).unwrap();
+        assert_eq!(source, ("oiii-aug21".into(), "oiii-sep25".into()));
+        // SII's own lights: no member of theirs spans it alone either.
+        let sii = book.map_source(corner_event, Some("SII")).unwrap();
+        assert_eq!(sii.0, "oiii-aug21");
+    }
+
+    #[test]
+    fn a_map_is_never_borrowed_for_flats_in_another_state() {
+        // The same rig as above. OIII's pair is clean, from 08-21 to 09-25,
+        // but L's flats of May lie across the donut from its 08-21 side:
+        // carried with the corner's map alone, they would keep that
+        // difference. L's flats of 08-11 are in OIII's 08-21 state.
+        let book = map_book();
+        let corner_event = book
+            .events
+            .iter()
+            .position(|event| event.filters.contains("sii"))
+            .unwrap();
+        assert_eq!(
+            book.map_source_for(corner_event, Some("L"), Some("l-may-f1")),
+            None
+        );
+        assert_eq!(
+            book.map_source_for(corner_event, Some("L"), Some("l-aug11-f1")),
+            Some(("oiii-aug21".into(), "oiii-sep25".into()))
+        );
+    }
+
+    #[test]
+    fn flats_without_an_angle_join_the_cluster_they_measure_alike_with() {
+        // C925's 08-18 flats record no angle. G at 101.5° the nights
+        // either side, and at 81.2° three days before.
+        let mut responses = vec![
+            row("g101-aug16", "G", "G", Some(101.5), 0),
+            row("g-none-aug18", "G", "G", None, 2 * DAY),
+            row("g101-aug22", "G", "G", Some(101.5), 6 * DAY),
+            row("g81-aug14", "G", "G", Some(81.2), -2 * DAY),
+        ];
+        responses.sort_by_key(|row| row.captured_first);
+        let unmeasured = Book::build(responses.clone(), vec![], vec![], vec![], |_| rules());
+        let pairs: Vec<(String, String)> = unmeasured
+            .pairs_to_compare()
+            .into_iter()
+            .map(|(a, b)| {
+                (
+                    unmeasured.sessions[a].row.response_key.clone(),
+                    unmeasured.sessions[b].row.response_key.clone(),
+                )
+            })
+            .collect();
+        for pair in [
+            ("g101-aug16", "g-none-aug18"),
+            ("g-none-aug18", "g101-aug22"),
+            ("g81-aug14", "g-none-aug18"),
+        ] {
+            assert!(
+                pairs.contains(&(pair.0.into(), pair.1.into())),
+                "{pair:?} in {pairs:?}"
+            );
+        }
+        let measured = |alike: f64| {
+            Book::build(
+                responses.clone(),
+                vec![
+                    cmp("g101-aug16", "g-none-aug18", alike, 0.002, vec![]),
+                    cmp("g-none-aug18", "g101-aug22", alike, 0.002, vec![]),
+                    cmp("g81-aug14", "g-none-aug18", 0.03, 0.02, vec![]),
+                    cmp("g101-aug16", "g101-aug22", 0.002, 0.001, vec![]),
+                ],
+                vec![],
+                vec![],
+                |_| rules(),
+            )
+        };
+        let book = measured(0.002);
+        let family = book
+            .families
+            .iter()
+            .find(|family| family.rotation == Some(101.5))
+            .unwrap();
+        assert_eq!(family.sessions.len(), 3, "the night joins 101.5°");
+        assert_eq!(family.groups.len(), 1);
+        assert_eq!(book.inferred_rotation("g-none-aug18-f1"), Some(101.5));
+        assert!(book.families.iter().all(|family| family.rotation.is_some()));
+
+        // Unlike either: it stays on its own, at no angle.
+        let book = measured(0.03);
+        assert_eq!(book.inferred_rotation("g-none-aug18-f1"), None);
+        assert!(book.families.iter().any(|family| family.rotation.is_none()));
     }
 
     #[test]
@@ -1139,7 +1913,16 @@ mod tests {
             vec![(1, Some("p".into()), DAY), (2, Some("p".into()), DAY + 600)],
             |_| vec!["rig".into()],
         );
-        let key = event_key("rig", 600, 4 * DAY);
+        // The key the pass stores it under, from the book it reads with.
+        let unread = Book::build(
+            responses.clone(),
+            comparisons.clone(),
+            vec![],
+            imaging.clone(),
+            |_| rules(),
+        );
+        assert_eq!(unread.sessions_needing_evidence(), vec![(0, 0)]);
+        let key = unread.evidence_key(&unread.events[0], &unread.imaging[0]);
         let evidence = vec![EvidenceRow {
             session_key: imaging[0].key.clone(),
             event_key: key,
@@ -1153,7 +1936,14 @@ mod tests {
                 verdict: Verdict::Before,
             }],
         }];
-        let book = Book::build(responses, comparisons, evidence, imaging, |_| rules());
+        let book = Book::build(
+            responses.clone(),
+            comparisons.clone(),
+            evidence.clone(),
+            imaging.clone(),
+            |_| rules(),
+        );
+        assert!(book.sessions_needing_evidence().is_empty());
         let placement = book.place(&book.events[0], DAY + 300);
         assert!(
             matches!(
@@ -1165,6 +1955,20 @@ mod tests {
             ),
             "{placement:?}"
         );
+
+        // The morning before is measured again from other flats (one was
+        // kept out): the window stands, but the map and the reference the
+        // fit divides by are new, so the lights are asked again.
+        let mut nearer = responses;
+        nearer[0].response_key = "a-again".into();
+        let comparisons = vec![cmp("a-again", "b", 0.016, 0.0, vec![spot(1.0, true)])];
+        let book = Book::build(nearer, comparisons, evidence, imaging, |_| rules());
+        assert_eq!(book.events[0].key, unread.events[0].key);
+        assert_eq!(book.sessions_needing_evidence().len(), 1);
+        assert!(matches!(
+            book.place(&book.events[0], DAY + 300),
+            Placement::Undetermined { .. }
+        ));
     }
 
     #[test]
@@ -1184,5 +1988,143 @@ mod tests {
         assert_eq!(term.pairs, 3);
         assert!((term.broad - 0.0071).abs() < 1e-9);
         assert_eq!(book.pairs_to_compare().len(), 3);
+    }
+
+    #[test]
+    fn a_wide_match_tolerance_keeps_two_angles_apart() {
+        // A rig whose lights may take flats up to 90° off their angle: the
+        // stacker accepts it, but 0° and 90° are still two angles.
+        let responses = vec![
+            row("ha0", "Ha", "Ha", Some(0.0), 0),
+            row("ha90", "Ha", "Ha", Some(90.0), DAY),
+        ];
+        let wide = Limits {
+            rotation: 90.0,
+            ..rules()
+        };
+        let book = Book::build(responses, vec![], vec![], vec![], |_| wide);
+        assert_eq!(book.families.len(), 2, "0° and 90° are two angles");
+    }
+
+    #[test]
+    fn a_night_with_no_angle_takes_the_angle_it_measured_alike_with() {
+        // One cluster chained from 100.0° to 105.7°. The night with no
+        // angle is compared with its neighbour in time, at 100.0°, and is
+        // alike with it: it is at 100.0°, not at the cluster's middle.
+        let responses = vec![
+            row("none", "G", "G", None, -DAY),
+            row("g100", "G", "G", Some(100.0), 0),
+            row("g101", "G", "G", Some(101.9), 10 * DAY),
+            row("g103", "G", "G", Some(103.8), 20 * DAY),
+            row("g105", "G", "G", Some(105.7), 30 * DAY),
+        ];
+        let book = Book::build(
+            responses,
+            vec![cmp("none", "g100", 0.002, 0.001, vec![])],
+            vec![],
+            vec![],
+            |_| rules(),
+        );
+        assert_eq!(book.inferred_rotation("none-f1"), Some(100.0));
+    }
+
+    #[test]
+    fn a_night_alike_with_two_angles_keeps_no_angle() {
+        // Clean optics: the night with no angle measures alike with its
+        // neighbours at 10° and at 100°. That says nothing of its angle.
+        let responses = vec![
+            row("g10", "G", "G", Some(10.0), 0),
+            row("g100", "G", "G", Some(100.0), 300),
+            row("none", "G", "G", None, DAY),
+        ];
+        let measured = |at_100: f64| {
+            Book::build(
+                responses.clone(),
+                vec![
+                    cmp("g10", "none", 0.002, 0.001, vec![]),
+                    cmp("g100", "none", at_100, 0.001, vec![]),
+                ],
+                vec![],
+                vec![],
+                |_| rules(),
+            )
+        };
+        assert_eq!(measured(0.003).inferred_rotation("none-f1"), None);
+        // Unlike 100°: then it is at 10°.
+        assert_eq!(measured(0.03).inferred_rotation("none-f1"), Some(10.0));
+    }
+
+    #[test]
+    fn a_split_across_both_changes_makes_no_change_of_its_own() {
+        // two_changes(), but R's later flats come after the second change:
+        // its one split spans both, which OIII at 104° tells apart. It
+        // dates neither, and is no R change four months wide, but it does
+        // show both changes in R.
+        let responses = vec![
+            row("oiii104-may", "OIII", "OIII", Some(104.0), 0),
+            row("oiii104-aug18", "OIII", "OIII", Some(104.2), 91 * DAY),
+            row("oiii104-aug24", "OIII", "OIII", Some(104.2), 97 * DAY),
+            row("oiii104-sep15", "OIII", "OIII", Some(104.3), 119 * DAY),
+            row("r104-may", "R", "R", Some(104.0), 300),
+            row("r104-sep20", "R", "R", Some(104.2), 124 * DAY),
+            row("oiii82-aug21", "OIII", "OIII", Some(82.2), 94 * DAY),
+            row("oiii82-sep25", "OIII", "OIII", Some(82.2), 129 * DAY),
+        ];
+        let (first, second) = (new_dust(500.0), new_dust(219.0));
+        let comparisons = vec![
+            cmp(
+                "oiii104-may",
+                "oiii104-aug18",
+                0.02,
+                0.009,
+                vec![first.clone()],
+            ),
+            cmp("oiii104-aug18", "oiii104-aug24", 0.002, 0.001, vec![]),
+            cmp(
+                "oiii104-aug24",
+                "oiii104-sep15",
+                0.018,
+                0.004,
+                vec![second.clone()],
+            ),
+            cmp(
+                "oiii104-aug18",
+                "oiii104-sep15",
+                0.018,
+                0.004,
+                vec![second.clone()],
+            ),
+            cmp(
+                "r104-may",
+                "r104-sep20",
+                0.021,
+                0.008,
+                vec![second.clone(), first],
+            ),
+            cmp("oiii82-aug21", "oiii82-sep25", 0.011, 0.002, vec![second]),
+        ];
+        let book = Book::build(responses, comparisons, vec![], vec![], |_| rules());
+        let windows: Vec<(i64, i64, usize, bool)> = book
+            .events
+            .iter()
+            .map(|e| {
+                (
+                    e.start / DAY,
+                    e.end / DAY,
+                    e.boundaries.len(),
+                    e.camera_side,
+                )
+            })
+            .collect();
+        assert_eq!(book.events.len(), 2, "{windows:?}");
+        assert_eq!(book.spanning.len(), 1);
+        for event in &book.events {
+            assert!(event.filters.contains("r"), "{:?}", event.filters);
+            assert!(event.camera_side, "{windows:?}");
+            assert!(
+                event.boundaries.iter().all(|b| !book.spanning.contains(b)),
+                "{windows:?}"
+            );
+        }
     }
 }

@@ -26,6 +26,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+/// Rounds of comparisons one pass makes at most: the pairs the stored
+/// comparisons ask for, then those the families they formed ask for.
+const COMPARE_ROUNDS: usize = 3;
+
 /// What one pass did.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct PassOutcome {
@@ -113,17 +117,19 @@ fn hex(text: &str) -> String {
         .collect()
 }
 
-/// The family a flat belongs to, rotation aside: rig, filter, frame size,
-/// binning and sensor mode.
-pub fn family_key(frame: &CalibrationFrame) -> String {
+/// The family a flat belongs to, rotation aside: rig, filter, focal length
+/// class (a reducer swapped in at the same gain is another light path, not
+/// new dust; see [`focal_classes`]), frame size, binning and sensor mode.
+pub fn family_key(frame: &CalibrationFrame, focal: Option<f64>) -> String {
     hex(&format!(
-        "{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{}",
         frame.rig_uuid,
         frame
             .filter
             .as_deref()
             .map(canonical_filter)
             .unwrap_or_default(),
+        focal.map(|mm| (mm * 10.0).round() as i64),
         frame.width,
         frame.height,
         frame.binning_x,
@@ -138,10 +144,68 @@ pub fn family_key(frame: &CalibrationFrame) -> String {
     ))
 }
 
+/// Each flat's focal length class, by frame uuid: per rig, recorded focal
+/// lengths chained while each is within `tolerance(rig)` of the next (what
+/// selection holds one master's flats to), named by the class's shortest.
+/// A flat that records none joins the rig's only class when it has
+/// exactly one, and is a class of its own otherwise.
+pub fn focal_classes<'a>(
+    flats: impl IntoIterator<Item = &'a CalibrationFrame>,
+    tolerance: impl Fn(&str) -> f64,
+) -> HashMap<String, Option<f64>> {
+    let mut by_rig: BTreeMap<&str, Vec<&CalibrationFrame>> = BTreeMap::new();
+    for frame in flats {
+        by_rig
+            .entry(frame.rig_uuid.as_str())
+            .or_default()
+            .push(frame);
+    }
+    let mut out = HashMap::new();
+    for (rig, frames) in by_rig {
+        let tolerance = tolerance(rig);
+        let mut known: Vec<f64> = frames
+            .iter()
+            .filter_map(|frame| frame.focal_length_mm.filter(|mm| mm.is_finite()))
+            .collect();
+        known.sort_by(f64::total_cmp);
+        known.dedup();
+        // The shortest of each chain.
+        let mut classes: Vec<f64> = Vec::new();
+        for (i, mm) in known.iter().enumerate() {
+            if i == 0 || mm - known[i - 1] > tolerance {
+                classes.push(*mm);
+            }
+        }
+        let class_of = |mm: f64| classes.iter().rev().find(|start| **start <= mm).copied();
+        for frame in frames {
+            let class = match frame.focal_length_mm.filter(|mm| mm.is_finite()) {
+                Some(mm) => class_of(mm),
+                None if classes.len() == 1 => Some(classes[0]),
+                None => None,
+            };
+            out.insert(frame.frame_uuid.clone(), class);
+        }
+    }
+    out
+}
+
 /// Flat sessions in use: one night of one family, frames whose rotator
 /// angle lies within [`super::model::ROTATION_CLUSTER_DEG`] of the
 /// session's first.
 pub fn plan_sessions(frames: &[CalibrationFrame], boundary: i64) -> Vec<SessionPlan> {
+    plan_sessions_with(frames, boundary, |rig| {
+        crate::calibration::rules::rules_for_rig(rig)
+            .coherence_tolerances()
+            .focal_length_mm
+    })
+}
+
+/// [`plan_sessions`], with each rig's focal length tolerance given.
+pub fn plan_sessions_with(
+    frames: &[CalibrationFrame],
+    boundary: i64,
+    focal_tolerance: impl Fn(&str) -> f64,
+) -> Vec<SessionPlan> {
     let mut flats: Vec<&CalibrationFrame> = frames
         .iter()
         .filter(|frame| {
@@ -152,10 +216,11 @@ pub fn plan_sessions(frames: &[CalibrationFrame], boundary: i64) -> Vec<SessionP
         })
         .collect();
     flats.sort_by_key(|frame| (frame.captured_at, frame.id));
+    let focal = focal_classes(flats.iter().copied(), focal_tolerance);
     let mut sessions: Vec<SessionPlan> = Vec::new();
     for frame in flats {
         let night = night_of(frame.captured_at.unwrap_or_default(), boundary);
-        let family = family_key(frame);
+        let family = family_key(frame, focal.get(&frame.frame_uuid).copied().flatten());
         let joins = |session: &SessionPlan| {
             session.family_key == family
                 && session.night == night
@@ -341,6 +406,11 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
             if moved {
                 store::set_pedestal(conn, &key, pedestal)?;
             }
+            // Measured when the family key named less, as before it took
+            // the focal length: the plane stands, the family is renamed.
+            if row.family_key != plan.family_key || row.session_key != plan.session_key {
+                store::set_family(conn, &key, &plan.family_key, &plan.session_key)?;
+            }
         }
         current.push(key);
     }
@@ -417,38 +487,52 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
     store::retain_responses(conn, &current)?;
     remove_stale_planes(pass.dir, &current);
 
-    // Comparisons.
-    let book = Book::build(
-        store::load_responses(conn)?,
-        store::load_comparisons(conn)?,
-        Vec::new(),
-        Vec::new(),
-        super::rig_limits,
-    );
-    let pairs: Vec<(usize, usize)> = book
-        .pairs_to_compare()
-        .into_iter()
-        .filter(|(a, b)| book.comparison(*a, *b).is_none())
-        .collect();
-    let total = pairs.len();
-    for (done, (a, b)) in pairs.iter().enumerate() {
-        if !(pass.keep_going)() {
-            return Ok(outcome);
+    // Comparisons. A session whose flats record no angle joins a rotation
+    // cluster only once compared with it, and then has that family's pairs
+    // to make: a second round makes them.
+    let mut tried: std::collections::HashSet<(String, String)> = Default::default();
+    for _round in 0..COMPARE_ROUNDS {
+        let book = Book::build(
+            store::load_responses(conn)?,
+            store::load_comparisons(conn)?,
+            Vec::new(),
+            Vec::new(),
+            super::rig_limits,
+        );
+        let pairs: Vec<(usize, usize)> = book
+            .pairs_to_compare()
+            .into_iter()
+            .filter(|(a, b)| book.comparison(*a, *b).is_none())
+            .filter(|(a, b)| {
+                tried.insert((
+                    book.sessions[*a].row.response_key.clone(),
+                    book.sessions[*b].row.response_key.clone(),
+                ))
+            })
+            .collect();
+        if pairs.is_empty() {
+            break;
         }
-        (pass.progress)("comparing flat sessions", done, total);
-        (pass.yield_now)();
-        let (sa, sb) = (&book.sessions[*a].row, &book.sessions[*b].row);
-        let (Some(pa), Some(pb)) = (session_plane(pass.dir, sa), session_plane(pass.dir, sb))
-        else {
-            continue;
-        };
-        let bin = sa.bin.unwrap_or(1);
-        if let Some(comparison) = pass.in_pool(|| metric::compare(&pa, &pb, bin)) {
-            store::insert_comparison(conn, &sa.response_key, &sb.response_key, &comparison)?;
-            outcome.compared += 1;
+        let total = pairs.len();
+        for (done, (a, b)) in pairs.iter().enumerate() {
+            if !(pass.keep_going)() {
+                return Ok(outcome);
+            }
+            (pass.progress)("comparing flat sessions", done, total);
+            (pass.yield_now)();
+            let (sa, sb) = (&book.sessions[*a].row, &book.sessions[*b].row);
+            let (Some(pa), Some(pb)) = (session_plane(pass.dir, sa), session_plane(pass.dir, sb))
+            else {
+                continue;
+            };
+            let bin = sa.bin.unwrap_or(1);
+            if let Some(comparison) = pass.in_pool(|| metric::compare(&pa, &pb, bin)) {
+                store::insert_comparison(conn, &sa.response_key, &sb.response_key, &comparison)?;
+                outcome.compared += 1;
+            }
         }
+        (pass.progress)("comparing flat sessions", total, total);
     }
-    (pass.progress)("comparing flat sessions", total, total);
 
     // Light evidence.
     let book = super::load_book(conn)?;
@@ -468,6 +552,14 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         }
     }
     (pass.progress)("reading lights shot during a change", total, total);
+    // Evidence no session in a window asks for any more, or kept by an
+    // older fit, goes.
+    let keep: Vec<(String, String)> = book
+        .sessions_in_windows()
+        .into_iter()
+        .map(|(_, session, key)| (book.imaging[session].key.clone(), key))
+        .collect();
+    store::retain_evidence(conn, &keep, EVIDENCE_ALGORITHM_VERSION)?;
     Ok(outcome)
 }
 
@@ -499,35 +591,16 @@ fn remove_stale_planes(dir: &Path, current: &[String]) {
     }
 }
 
-/// The change map of an event, from its member boundary in `filter` when
-/// it has one, else (for a camera-side change) its strongest member. With
-/// the before and after response keys it was measured from.
+/// The change map of an event, from the member [`Book::map_source`]
+/// chooses for `filter`. With the before and after response keys it was
+/// measured from.
 pub fn event_map(
     dir: &Path,
     book: &Book,
     event_index: usize,
     filter: Option<&str>,
 ) -> Option<(Plane, String, String)> {
-    let event = &book.events[event_index];
-    let filter = filter.map(canonical_filter);
-    let same_filter = event.boundaries.iter().copied().find(|b| {
-        let family = &book.families[book.boundaries[*b].family];
-        family.filter.as_deref().map(canonical_filter) == filter
-    });
-    let chosen = same_filter.or_else(|| {
-        event.camera_side.then(|| {
-            event
-                .boundaries
-                .iter()
-                .copied()
-                .max_by(|a, b| {
-                    let d = |i: usize| book.boundaries[i].dust.unwrap_or(0.0);
-                    d(*a).total_cmp(&d(*b))
-                })
-                .expect("events have boundaries")
-        })
-    })?;
-    let boundary = &book.boundaries[chosen];
+    let boundary = &book.boundaries[book.map_member(event_index, filter)?];
     let before = &book.sessions[boundary.before].row;
     let after = &book.sessions[boundary.after].row;
     let map = metric::change_map(&session_plane(dir, before)?, &session_plane(dir, after)?)?;
@@ -608,16 +681,8 @@ fn session_evidence(
         // A reference flat response of this filter with a known side: the
         // nearest in time, any angle.
         let reference = book
-            .sessions
-            .iter()
-            .filter(|s| {
-                s.row.rig_uuid == event.rig_uuid
-                    && s.row.filter.as_deref().map(canonical_filter)
-                        == Some(canonical_filter(&filter))
-                    && event.side_of(s.first).is_some()
-                    && event.side_of(s.last).is_some()
-            })
-            .min_by_key(|s| (s.first - session.start).abs());
+            .evidence_reference(event, &filter, session.start)
+            .map(|index| &book.sessions[index]);
         let Some(reference) = reference else {
             tracing::debug!("light evidence {filter}: no flat session on either side");
             continue;
@@ -682,13 +747,13 @@ fn session_evidence(
             verdict: fit.verdict,
         });
     }
-    if fits.is_empty() {
-        return Ok(None);
-    }
+    // Lights found but nothing to fit, as when no map spans the change
+    // alone: kept as undecided, so the pass does not read them again until
+    // a map or reference changes the key.
     let verdicts: Vec<Verdict> = fits.iter().map(|fit| fit.verdict).collect();
     Ok(Some(EvidenceRow {
         session_key: session.key.clone(),
-        event_key: event.key.clone(),
+        event_key: book.evidence_key(event, session),
         verdict: evidence::combine(&verdicts),
         fits,
     }))

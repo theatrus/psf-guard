@@ -2132,7 +2132,16 @@ impl LibrarySnapshot {
                         && dark_within_reach(candidate, light.timestamp, &rules)
                 }
                 CalibrationKind::DarkFlat => false,
-                CalibrationKind::Flat => flat_matches(light, candidate, &rules),
+                CalibrationKind::Flat => match self.measured_angle(candidate, &rules) {
+                    // Flats that record no angle, measured alike with a
+                    // rotation cluster: matched at its angle.
+                    Some(angle) if candidate.rotation.is_none() => {
+                        let mut at_angle = candidate.clone();
+                        at_angle.rotation = Some(angle);
+                        flat_matches(light, &at_angle, &rules)
+                    }
+                    _ => flat_matches(light, candidate, &rules),
+                },
             };
             if matches && candidate.kept_out.is_some() {
                 selected.kept_out.push(candidate.clone());
@@ -2151,6 +2160,7 @@ impl LibrarySnapshot {
         sort_candidates(&mut selected.bias, light.timestamp);
         sort_candidates(&mut selected.dark, light.timestamp);
         sort_candidates(&mut selected.flat, light.timestamp);
+        self.keep_unknown_angles_last(light, &rules, &mut selected.flat);
         self.choose_flats_around_changes(light, &rules, &mut selected);
         if let Some(flat) = selected.flat.first() {
             for candidate in self.of_kind(CalibrationKind::DarkFlat) {
@@ -2176,6 +2186,75 @@ impl LibrarySnapshot {
 }
 
 impl LibrarySnapshot {
+    /// A flat's rotator angle: the one it records, or, with measured
+    /// grouping, the angle of the rotation cluster its session measured
+    /// alike with.
+    fn measured_angle(&self, frame: &CalibrationFrame, rules: &Rules) -> Option<f64> {
+        frame
+            .rotation
+            .filter(|angle| angle.is_finite())
+            .or_else(|| {
+                (rules.flat_grouping == rules::FlatGrouping::Measured)
+                    .then(|| self.flat_book.inferred_rotation(&frame.frame_uuid))
+                    .flatten()
+            })
+    }
+
+    /// With measured grouping, a raw flat whose angle is unknown (none
+    /// recorded, none measured) is a last resort for a light that records
+    /// one: it stays only when no flat of a known angle matches, or when
+    /// it is alone on the light's side of a measured change. Seiza
+    /// matches an unknown angle to any, for rigs without a rotator; a rig
+    /// whose other flats record angles has one, and the flat may have been
+    /// shot at any of them.
+    fn keep_unknown_angles_last(
+        &self,
+        light: &FrameMeta,
+        rules: &Rules,
+        flats: &mut Vec<CalibrationFrame>,
+    ) {
+        if rules.flat_grouping != rules::FlatGrouping::Measured
+            || light
+                .rotator_position
+                .is_none_or(|angle| !angle.is_finite())
+        {
+            return;
+        }
+        let unknown = |frame: &CalibrationFrame| {
+            !frame.is_master && self.measured_angle(frame, rules).is_none()
+        };
+        // The light's side of every measured change it stands clear of.
+        let book = &self.flat_book;
+        let rig = rules::light_rig_uuid(light);
+        let sides: Vec<(&flat_groups::model::Event, flat_groups::model::Side)> =
+            match light.timestamp {
+                Some(at) => book
+                    .events_for(&rig, light.filter.as_deref())
+                    .filter_map(|event| Some((event, book.place(event, at).side()?)))
+                    .collect(),
+                None => Vec::new(),
+            };
+        let on_side = |frame: &CalibrationFrame| {
+            sides.iter().all(|(event, side)| {
+                frame
+                    .captured_at
+                    .and_then(|captured| event.side_of(captured))
+                    == Some(*side)
+            })
+        };
+        let known: Vec<&CalibrationFrame> = flats
+            .iter()
+            .filter(|frame| !frame.is_master && !unknown(frame))
+            .collect();
+        // Unknown-angle flats that are alone on the light's side of a
+        // change are its own side's flats: the change logic weighs them.
+        let alone_on_side = !known.iter().any(|frame| on_side(frame))
+            && flats.iter().any(|frame| unknown(frame) && on_side(frame));
+        if !known.is_empty() && !alone_on_side {
+            flats.retain(|frame| !unknown(frame));
+        }
+    }
+
     /// Give a light flats from its own side of every measured change near
     /// it, or the closest stand-in this rig's measurements allow, and say
     /// why (see [`flat_groups`]). A light no change touches keeps the
@@ -2298,6 +2377,16 @@ impl LibrarySnapshot {
                 }
                 continue;
             }
+            // The nearest flat, which its master is built around, lies on
+            // its side of this change: another change keeps it from the
+            // light, and the fallback is that one's to choose.
+            if selected
+                .flat
+                .first()
+                .is_some_and(|frame| side_of(frame, event) == Some(side))
+            {
+                continue;
+            }
             // Nothing at its angle on its side. First: its side at the
             // nearest other angle, when the rig's angle term is measured
             // and within the limits.
@@ -2336,10 +2425,20 @@ impl LibrarySnapshot {
             }
             // Then: the flats at its angle from the other side, carried
             // across by the change's map, when the change is on the camera
-            // side and so the same at every angle.
+            // side and so the same at every angle. One map only: flats
+            // across a second change would need it carried too, so a light
+            // already corrected, or already left with the other side's
+            // flats, is left with them and keeps its Check.
+            if selected.flat_basis.lacks_same_side() {
+                continue;
+            }
             if event.camera_side
-                && let Some((before_key, after_key)) =
-                    book.map_source(*index, light.filter.as_deref())
+                && selected.flat_basis.correction().is_none()
+                && let Some((before_key, after_key)) = book.map_source_for(
+                    *index,
+                    light.filter.as_deref(),
+                    selected.flat.first().map(|frame| frame.frame_uuid.as_str()),
+                )
                 && self.can_correct(&before_key, &after_key)
             {
                 let pedestal = |key: &str| {
@@ -2400,7 +2499,17 @@ impl LibrarySnapshot {
                     && keep(frame)
             })
             .collect();
-        let gap = |frame: &CalibrationFrame| match (light.rotator_position, frame.rotation) {
+        // A flat of unknown angle is no nearer one angle than another.
+        let candidates: Vec<&CalibrationFrame> = candidates
+            .into_iter()
+            .filter(|frame| {
+                light.rotator_position.is_none() || self.measured_angle(frame, rules).is_some()
+            })
+            .collect();
+        let gap = |frame: &CalibrationFrame| match (
+            light.rotator_position,
+            self.measured_angle(frame, rules),
+        ) {
             (Some(a), Some(b)) => rotation_gap(a, b),
             _ => 0.0,
         };
@@ -2414,16 +2523,18 @@ impl LibrarySnapshot {
         let rotation = candidates
             .iter()
             .find(|frame| gap(frame) == nearest)
-            .and_then(|frame| frame.rotation);
+            .and_then(|frame| self.measured_angle(frame, rules));
         let mut frames: Vec<CalibrationFrame> = candidates
             .into_iter()
-            .filter(|frame| match (rotation, frame.rotation) {
-                (Some(a), Some(b)) => {
-                    rotation_gap(a, b) <= rules.coherence_tolerances().rotation_deg
-                }
-                (None, None) => true,
-                _ => false,
-            })
+            .filter(
+                |frame| match (rotation, self.measured_angle(frame, rules)) {
+                    (Some(a), Some(b)) => {
+                        rotation_gap(a, b) <= rules.coherence_tolerances().rotation_deg
+                    }
+                    (None, None) => true,
+                    _ => false,
+                },
+            )
             .cloned()
             .collect();
         if frames.is_empty() {

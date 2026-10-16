@@ -171,6 +171,40 @@ pub(crate) fn load_responses(conn: &Connection) -> Result<Vec<ResponseRow>> {
     Ok(rows)
 }
 
+/// Drop evidence rows of an older fit, and those no imaging session in a
+/// change's window asks for under its current key.
+pub(crate) fn retain_evidence(
+    conn: &Connection,
+    keep: &[(String, String)],
+    version: u32,
+) -> Result<usize> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS evidence_keep (session_key TEXT, event_key TEXT,
+         PRIMARY KEY (session_key, event_key))",
+    )?;
+    tx.execute("DELETE FROM evidence_keep", [])?;
+    {
+        let mut insert = tx.prepare(
+            "INSERT OR IGNORE INTO evidence_keep (session_key, event_key) VALUES (?1, ?2)",
+        )?;
+        for (session, event) in keep {
+            insert.execute([session, event])?;
+        }
+    }
+    let removed = tx.execute(
+        "DELETE FROM psf_guard_flat_light_evidence
+         WHERE algorithm_version != ?1
+            OR NOT EXISTS (SELECT 1 FROM evidence_keep k
+                           WHERE k.session_key = psf_guard_flat_light_evidence.session_key
+                             AND k.event_key = psf_guard_flat_light_evidence.event_key)",
+        [version],
+    )?;
+    tx.execute("DELETE FROM evidence_keep", [])?;
+    tx.commit()?;
+    Ok(removed)
+}
+
 /// Drop response rows no current session has, with their comparisons.
 pub(crate) fn retain_responses(conn: &Connection, keep: &[String]) -> Result<usize> {
     let tx = conn.unchecked_transaction()?;
@@ -196,6 +230,22 @@ pub(crate) fn retain_responses(conn: &Connection, keep: &[String]) -> Result<usi
     tx.execute("DELETE FROM flat_keep", [])?;
     tx.commit()?;
     Ok(removed)
+}
+
+/// Rename a measured session's family and session keys. Its plane and its
+/// comparisons stand: they are keyed by the frames, not the family.
+pub(crate) fn set_family(
+    conn: &Connection,
+    response_key: &str,
+    family_key: &str,
+    session_key: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE psf_guard_flat_response SET family_key = ?2, session_key = ?3
+         WHERE response_key = ?1",
+        params![response_key, family_key, session_key],
+    )?;
+    Ok(())
 }
 
 /// A session's pedestal changed, as when a dark-flat arrived after it was

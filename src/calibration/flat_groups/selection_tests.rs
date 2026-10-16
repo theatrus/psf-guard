@@ -21,15 +21,26 @@ struct Session {
     name: &'static str,
     captured: &'static str,
     filter: &'static str,
-    rotation: f64,
+    /// `None`: the flats record no angle.
+    rotation: Option<f64>,
     dusty: bool,
 }
 
 fn write_session(dir: &Path, session: &Session, seed: u64) -> Vec<FrameMeta> {
+    let dust: &[(f32, f32, f32, f32)] = if session.dusty { &[DUST] } else { &[] };
+    write_session_with(dir, session, seed, dust)
+}
+
+/// [`write_session`] with the shadows given.
+fn write_session_with(
+    dir: &Path,
+    session: &Session,
+    seed: u64,
+    dust: &[(f32, f32, f32, f32)],
+) -> Vec<FrameMeta> {
     (0..3)
         .map(|index| {
             let path = dir.join(format!("{}-{index}.fits", session.name));
-            let dust: &[(f32, f32, f32, f32)] = if session.dusty { &[DUST] } else { &[] };
             let plane = metric::tests::synthetic(
                 SIZE.0,
                 SIZE.1,
@@ -41,13 +52,16 @@ fn write_session(dir: &Path, session: &Session, seed: u64) -> Vec<FrameMeta> {
             );
             // Frames a second apart.
             let captured = format!("{}:0{index}", session.captured);
-            let angle = format!("ROTATANG= {:20.1}", session.rotation);
-            write_frame_with(&path, "FLAT", SIZE, &captured, &[angle.as_str()], |x, y| {
+            let angle = session
+                .rotation
+                .map(|rotation| format!("ROTATANG= {rotation:20.1}"));
+            let cards: Vec<&str> = angle.iter().map(String::as_str).collect();
+            write_frame_with(&path, "FLAT", SIZE, &captured, &cards, |x, y| {
                 30_000.0 * f64::from(plane.data[y * SIZE.0 + x])
             });
             let mut meta = read_frame_meta(&path);
             meta.filter = Some(session.filter.to_string());
-            meta.rotator_position = Some(session.rotation);
+            meta.rotator_position = session.rotation;
             meta
         })
         .collect()
@@ -60,10 +74,15 @@ fn measured_library(dir: &Path, sessions: &[Session]) -> (Connection, PathBuf) {
         .enumerate()
         .flat_map(|(seed, session)| write_session(dir, session, seed as u64 + 1))
         .collect();
+    measured_frames(dir, &frames)
+}
+
+/// A catalog of these flats, measured.
+fn measured_frames(dir: &Path, frames: &[FrameMeta]) -> (Connection, PathBuf) {
     let path = dir.join("catalog.sqlite");
     let mut conn = Connection::open(&path).unwrap();
     let tx = conn.transaction().unwrap();
-    import_calibration_frames(&tx, &frames, Some("profile")).unwrap();
+    import_calibration_frames(&tx, frames, Some("profile")).unwrap();
     tx.commit().unwrap();
     super::store::add_tables(&conn).unwrap();
     let responses = dir.join("responses");
@@ -117,28 +136,28 @@ const BEFORE_HA_0: Session = Session {
     name: "before-ha-0",
     captured: "2026-09-10T14:00",
     filter: "Ha",
-    rotation: 0.0,
+    rotation: Some(0.0),
     dusty: false,
 };
 const BEFORE_OIII_0: Session = Session {
     name: "before-oiii-0",
     captured: "2026-09-10T14:10",
     filter: "OIII",
-    rotation: 0.0,
+    rotation: Some(0.0),
     dusty: false,
 };
 const BEFORE_OIII_90: Session = Session {
     name: "before-oiii-90",
     captured: "2026-09-10T14:20",
     filter: "OIII",
-    rotation: 90.0,
+    rotation: Some(90.0),
     dusty: false,
 };
 const AFTER_HA_0: Session = Session {
     name: "after-ha-0",
     captured: "2026-09-14T14:00",
     filter: "Ha",
-    rotation: 0.0,
+    rotation: Some(0.0),
     dusty: true,
 };
 const AFTER_HA_90: Session = Session {
@@ -146,14 +165,14 @@ const AFTER_HA_90: Session = Session {
     // Days later, so no pair at two angles measures the rig.
     captured: "2026-09-17T14:00",
     filter: "Ha",
-    rotation: 90.0,
+    rotation: Some(90.0),
     dusty: true,
 };
 const AFTER_OIII_0: Session = Session {
     name: "after-oiii-0",
     captured: "2026-09-14T14:20",
     filter: "OIII",
-    rotation: 0.0,
+    rotation: Some(0.0),
     dusty: true,
 };
 
@@ -458,7 +477,7 @@ fn a_session_measured_while_a_flat_was_away_is_measured_again() {
         name: "four",
         captured: "2026-09-10T14:00",
         filter: "Ha",
-        rotation: 0.0,
+        rotation: Some(0.0),
         dusty: false,
     };
     let mut frames = write_session(temp.path(), &session, 1);
@@ -627,4 +646,354 @@ fn forgetting_a_flat_has_its_session_measured_again() {
     let (outcome, _) = pass_counting_yields(&conn, &dir);
     // Two flats are too few to measure: the session waits for more.
     assert_eq!((outcome.measured, outcome.compared), (0, 0));
+}
+
+/// Three mornings of Ha flats: at 101.5° on either side of a morning whose
+/// flats record no angle, as C925's 2026-08-18 flats. `dusty` puts new dust
+/// on that morning alone.
+fn unknown_angle_library(dir: &Path, dusty: bool) -> Connection {
+    let sessions = [
+        Session {
+            name: "angled-1",
+            captured: "2026-08-16T13:00",
+            filter: "Ha",
+            rotation: Some(101.5),
+            dusty: false,
+        },
+        Session {
+            name: "no-angle",
+            captured: "2026-08-19T02:20",
+            filter: "Ha",
+            rotation: None,
+            dusty,
+        },
+        Session {
+            name: "angled-2",
+            captured: "2026-08-22T12:20",
+            filter: "Ha",
+            rotation: Some(101.5),
+            dusty: false,
+        },
+    ];
+    measured_library(dir, &sessions).0
+}
+
+#[test]
+fn flats_with_no_angle_serve_the_angle_they_measure_alike_with() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = unknown_angle_library(temp.path(), false);
+    let book = super::load_book(&conn).unwrap();
+    let uuid: String = conn
+        .query_row(
+            "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE source_path LIKE '%no-angle-0.fits'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(book.inferred_rotation(&uuid), Some(101.5));
+
+    // A light at 101.5° that night takes them, nearest first.
+    let near = light(temp.path(), "2026-08-19T06:00:00", 101.5);
+    let selected = select_for_light(&conn, &near).unwrap();
+    assert_eq!(names(&selected.flat)[0], "no-angle");
+
+    // A light at 11.1° does not: they were shot at 101.5°. Nothing else
+    // matches it, so it has no flats rather than another angle's.
+    let far = light(temp.path(), "2026-08-19T06:30:00", 11.1);
+    let selected = select_for_light(&conn, &far).unwrap();
+    assert!(selected.flat.is_empty(), "{:?}", names(&selected.flat));
+
+    // Grouping by time leaves Seiza's rule alone: no angle matches any.
+    let _rules = crate::calibration::tests::RulesInForce::global(&[(
+        "flat_grouping",
+        serde_json::json!("time"),
+    )]);
+    let selected = select_for_light(&conn, &far).unwrap();
+    assert_eq!(names(&selected.flat), ["no-angle"]);
+}
+
+#[test]
+fn flats_of_unknown_angle_are_a_last_resort() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = unknown_angle_library(temp.path(), true);
+    let book = super::load_book(&conn).unwrap();
+    assert!(
+        book.sessions
+            .iter()
+            .all(|session| session.inferred_rotation.is_none()),
+        "unlike both neighbours, the morning is at no angle"
+    );
+
+    // A light at 101.5° has flats of its angle: the unknown ones go,
+    // though they are the nearest.
+    let near = light(temp.path(), "2026-08-19T06:00:00", 101.5);
+    let selected = select_for_light(&conn, &near).unwrap();
+    assert!(!selected.flat.is_empty());
+    assert!(
+        !names(&selected.flat).contains(&"no-angle".to_string()),
+        "{:?}",
+        names(&selected.flat)
+    );
+
+    // A light at 11.1° has nothing else: they stay.
+    let far = light(temp.path(), "2026-08-19T06:30:00", 11.1);
+    let selected = select_for_light(&conn, &far).unwrap();
+    assert_eq!(names(&selected.flat), ["no-angle"]);
+}
+
+#[test]
+fn a_reducer_swap_is_another_family_not_new_dust() {
+    let temp = tempfile::tempdir().unwrap();
+    // The same filter, angle and gain, a week apart: the native focal
+    // length, then a reducer.
+    let mut frames = write_session(temp.path(), &BEFORE_HA_0, 1);
+    let mut reduced = write_session(temp.path(), &AFTER_HA_0, 2);
+    for meta in &mut frames {
+        meta.focal_length_mm = Some(2350.0);
+    }
+    for meta in &mut reduced {
+        meta.focal_length_mm = Some(1645.0);
+    }
+    frames.extend(reduced);
+    let (conn, dir) = measured_frames(temp.path(), &frames);
+    let rows = super::store::load_responses(&conn).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_ne!(rows[0].family_key, rows[1].family_key);
+    assert!(super::store::load_comparisons(&conn).unwrap().is_empty());
+    assert!(super::load_book(&conn).unwrap().events.is_empty());
+
+    // A catalog measured before the key took the focal length: its rows
+    // are renamed on the next pass, and nothing is read again.
+    conn.execute("UPDATE psf_guard_flat_response SET family_key = 'old'", [])
+        .unwrap();
+    let (outcome, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!((outcome.measured, outcome.compared), (0, 0));
+    let renamed = super::store::load_responses(&conn).unwrap();
+    assert!(renamed.iter().all(|row| row.family_key != "old"));
+    assert_ne!(renamed[0].family_key, renamed[1].family_key);
+}
+
+/// A second shadow, for a second change.
+const SECOND: (f32, f32, f32, f32) = (60.0, 110.0, 14.0, 0.03);
+
+/// Shadows `(x, y, radius, depth)` on a session's flats.
+type Shadows = &'static [(f32, f32, f32, f32)];
+
+/// Ha and OIII at 0° on four mornings: clean, a shadow twice, then a second
+/// shadow too. Ha at 90° on the mornings given (name, time, shadows), days
+/// from any other angle, so the rig's angle term is unmeasured.
+fn two_changes(dir: &Path, ninety: &[(&'static str, &'static str, Shadows)]) -> Connection {
+    let at_zero: [(&'static str, &'static str, &'static str, Shadows); 8] = [
+        ("ha-clean", "2026-09-10T14:00", "Ha", &[]),
+        ("oiii-clean", "2026-09-10T14:10", "OIII", &[]),
+        ("ha-one", "2026-09-14T14:00", "Ha", &[DUST]),
+        ("oiii-one", "2026-09-14T14:10", "OIII", &[DUST]),
+        ("ha-one-again", "2026-09-15T14:00", "Ha", &[DUST]),
+        ("oiii-one-again", "2026-09-15T14:10", "OIII", &[DUST]),
+        ("ha-two", "2026-09-18T14:00", "Ha", &[DUST, SECOND]),
+        ("oiii-two", "2026-09-18T14:10", "OIII", &[DUST, SECOND]),
+    ];
+    let sessions = at_zero
+        .iter()
+        .map(|(name, captured, filter, dust)| (*name, *captured, *filter, 0.0, *dust))
+        .chain(
+            ninety
+                .iter()
+                .map(|(name, captured, dust)| (*name, *captured, "Ha", 90.0, *dust)),
+        );
+    let mut frames = Vec::new();
+    for (seed, (name, captured, filter, rotation, dust)) in sessions.enumerate() {
+        let session = Session {
+            name,
+            captured,
+            filter,
+            rotation: Some(rotation),
+            dusty: false,
+        };
+        frames.extend(write_session_with(dir, &session, seed as u64 + 1, dust));
+    }
+    measured_frames(dir, &frames).0
+}
+
+#[test]
+fn flats_across_two_changes_are_never_carried_across_one() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = two_changes(
+        temp.path(),
+        &[("ha-90", "2026-09-22T14:00", &[DUST, SECOND])],
+    );
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(book.events.len(), 2, "{:?}", book.events);
+    assert!(book.events.iter().all(|event| event.camera_side));
+
+    // Shot before both: its only flats at 90° carry both shadows, and one
+    // change's map would take out one of them.
+    let before = light(temp.path(), "2026-09-09T04:00:00", 90.0);
+    let selected = select_for_light(&conn, &before).unwrap();
+    assert_eq!(names(&selected.flat), ["ha-90"]);
+    assert!(
+        matches!(selected.flat_basis, FlatBasis::NoSameSide { .. }),
+        "{:?}",
+        selected.flat_basis
+    );
+    assert!(selected.flat_basis.correction().is_none());
+    assert!(selected.flat_basis.flags());
+
+    // Shot between them: one change away, it is carried across that one.
+    let between = light(temp.path(), "2026-09-15T04:00:00", 90.0);
+    let selected = select_for_light(&conn, &between).unwrap();
+    let correction = selected.flat_basis.correction().expect("corrected");
+    assert_eq!(correction.light_side, Side::Before);
+    assert!(!selected.flat_basis.flags());
+}
+
+#[test]
+fn older_flats_across_another_change_leave_the_nearest_corrected() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    // As NGC 7331's L lights on C925: the nearest flats at its angle are
+    // one change away, and older ones further back lie across another.
+    let conn = two_changes(
+        temp.path(),
+        &[
+            ("ha-90-early", "2026-09-09T02:00", &[]),
+            ("ha-90-mid", "2026-09-17T02:00", &[DUST]),
+        ],
+    );
+    let after = light(temp.path(), "2026-09-25T04:00:00", 90.0);
+    let selected = select_for_light(&conn, &after).unwrap();
+    assert_eq!(names(&selected.flat)[0], "ha-90-mid");
+    let correction = selected
+        .flat_basis
+        .correction()
+        .unwrap_or_else(|| panic!("{:?}", selected.flat_basis));
+    assert_eq!(correction.light_side, Side::After);
+    assert!(!selected.flat_basis.flags());
+}
+
+#[test]
+fn flats_of_unknown_angle_alone_on_the_lights_side_are_kept() {
+    // A camera-side change between 09-10 and 09-14, seen by OIII at 0° and
+    // 90°. Ha's only flats after it record no angle (the rig's newest
+    // flats, so no later 0° night to measure them alike with). A 0° Ha
+    // light of 09-15 takes them: they are the only flats on its side. A
+    // 0° Ha flat from before the change must not push them out as the
+    // last resort and leave the light corrected from before it.
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let sessions = [
+        ("ha-0-clean", "2026-09-10T14:00", "Ha", Some(0.0), false),
+        ("oiii-0-clean", "2026-09-10T14:10", "OIII", Some(0.0), false),
+        (
+            "oiii-90-clean",
+            "2026-09-10T14:20",
+            "OIII",
+            Some(90.0),
+            false,
+        ),
+        ("oiii-0-dusty", "2026-09-14T14:10", "OIII", Some(0.0), true),
+        (
+            "oiii-90-dusty",
+            "2026-09-14T14:20",
+            "OIII",
+            Some(90.0),
+            true,
+        ),
+        ("no-angle", "2026-09-14T14:30", "Ha", None, true),
+    ];
+    let mut frames = Vec::new();
+    for (seed, (name, captured, filter, rotation, dusty)) in sessions.into_iter().enumerate() {
+        let session = Session {
+            name,
+            captured,
+            filter,
+            rotation,
+            dusty,
+        };
+        frames.extend(write_session(temp.path(), &session, seed as u64 + 1));
+    }
+    let (conn, _) = measured_frames(temp.path(), &frames);
+    let book = super::load_book(&conn).unwrap();
+    assert!(
+        book.events.iter().any(|event| event.camera_side),
+        "{:?}",
+        book.events
+    );
+    let after = light(temp.path(), "2026-09-15T04:00:00", 0.0);
+    let selected = select_for_light(&conn, &after).unwrap();
+    assert_eq!(
+        names(&selected.flat).first().map(String::as_str),
+        Some("no-angle"),
+        "{:?} {:?}",
+        names(&selected.flat),
+        selected.flat_basis
+    );
+}
+
+#[test]
+fn focal_lengths_within_the_tolerance_are_one_class() {
+    let temp = tempfile::tempdir().unwrap();
+    let focal = |session: &Session, seed, mm: Option<f64>| {
+        let mut metas = write_session(temp.path(), session, seed);
+        for meta in &mut metas {
+            meta.focal_length_mm = mm;
+        }
+        metas
+    };
+    let class_of = |conn: &Connection| {
+        let library = crate::calibration::LibrarySnapshot::load(conn).unwrap();
+        let classes = super::job::focal_classes(library.frames(), |_| 1.0);
+        let mut named: Vec<(String, Option<f64>)> = library
+            .frames()
+            .iter()
+            .map(|frame| {
+                let name = frame.source_path.file_stem().unwrap().to_string_lossy();
+                (
+                    name.rsplit_once('-').unwrap().0.to_string(),
+                    classes[&frame.frame_uuid],
+                )
+            })
+            .collect();
+        named.sort_by(|a, b| a.0.cmp(&b.0));
+        named.dedup();
+        named
+    };
+    // 2,350 mm and 2,350.6 mm, and a session that records none: one rig,
+    // one focal length.
+    let mut frames = focal(&BEFORE_HA_0, 1, Some(2350.0));
+    frames.extend(focal(&AFTER_HA_0, 2, Some(2350.6)));
+    frames.extend(focal(&BEFORE_OIII_0, 3, None));
+    let (conn, _) = measured_frames(temp.path(), &frames);
+    assert_eq!(
+        class_of(&conn),
+        [
+            ("after-ha-0".to_string(), Some(2350.0)),
+            ("before-ha-0".to_string(), Some(2350.0)),
+            ("before-oiii-0".to_string(), Some(2350.0)),
+        ]
+    );
+    let rows = super::store::load_responses(&conn).unwrap();
+    let ha: Vec<&String> = rows
+        .iter()
+        .filter(|row| row.filter.as_deref() == Some("Ha"))
+        .map(|row| &row.family_key)
+        .collect();
+    assert_eq!(ha.len(), 2);
+    assert_eq!(ha[0], ha[1], "0.6 mm apart is one light path");
+
+    // With a reducer at 1,645 mm too, a flat with no focal length could be
+    // either: it keeps to itself.
+    let more = focal(&AFTER_OIII_0, 4, Some(1645.0));
+    {
+        let tx = conn.unchecked_transaction().unwrap();
+        crate::calibration::import_calibration_frames(&tx, &more, Some("profile")).unwrap();
+        tx.commit().unwrap();
+    }
+    let classes = class_of(&conn);
+    assert!(classes.contains(&("after-oiii-0".to_string(), Some(1645.0))));
+    assert!(classes.contains(&("before-oiii-0".to_string(), None)));
+    assert!(classes.contains(&("before-ha-0".to_string(), Some(2350.0))));
 }
