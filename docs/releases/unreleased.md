@@ -44,9 +44,10 @@
   change follows; ↑ and ↓ move between them. A group shows its nights,
   each opening its session, how alike they measured against the rig's
   limits, the change on each side with Compare, and what it feeds: its
-  flat masters and the lights that take it, by project, with links to
-  them in Images. The group lives in the address, and scoped to a project
-  the list holds that project's groups with their neighbours dimmed.
+  flat masters and the lights that take it, by project, each linking to
+  Images on exactly those lights. The group lives in the address, and
+  scoped to a project the list holds that project's groups with their
+  neighbours dimmed.
 
 - **Settings › Server** can fix the desktop app's localhost port, so browser,
   API, and agent connections keep the same address across restarts. A port

@@ -46,8 +46,10 @@ export interface GroupEntry {
   /** Flat sessions of its filter and angle within its nights (or after
    *  them, for the current group) that are not measured. */
   unmeasured: FlatUnmeasuredSession[];
-  /** Outside the project in scope: a neighbour shown for its edge. */
-  context: boolean;
+  /** In a project scope, a group listed that the project's lights do not
+   *  take: a neighbour shown for the edge it shares, or one the scope holds
+   *  only for a correction's map. */
+  context: false | 'neighbour' | 'map';
 }
 
 /** One rig's filter at one angle, with its groups newest first. */
@@ -67,6 +69,11 @@ export interface GroupBrowse {
   navigable: GroupEntry[];
   /** The group a key names, or the one now holding the session it names. */
   find: (key: string | null | undefined) => GroupEntry | undefined;
+  /** The group of a flat session's rig, filter and angle around its
+   *  night: the one spanning it, else the nearest. For a session no group
+   *  holds, such as one whose flats were all kept out. */
+  near: (session: { rig_uuid: string; filter: string | null; rotation: number | null; night: string | null }) =>
+    GroupEntry | undefined;
 }
 
 export interface GroupBrowseOptions {
@@ -78,6 +85,9 @@ export interface GroupBrowseOptions {
    *  only groups holding one are listed, with each one's neighbours for
    *  context. */
   scopeSessions?: ReadonlySet<string>;
+  /** The groups the project's own lights take, when known. A group the
+   *  scope holds that is not one of them holds a correction's map. */
+  projectGroups?: ReadonlySet<string>;
 }
 
 function angleGap(a: number, b: number): number {
@@ -202,7 +212,11 @@ export function browseGroups(rigs: FlatGroupsRig[], options: GroupBrowseOptions 
         if (!holds.some(Boolean)) continue;
         // Its neighbours stay, dimmed: each is the other side of an edge.
         kept = entries.filter((_, index) => holds[index] || holds[index - 1] || holds[index + 1]);
-        for (const entry of kept) entry.context = !holds[entries.indexOf(entry)];
+        for (const entry of kept) {
+          entry.context = !holds[entries.indexOf(entry)] ? 'neighbour'
+            : options.projectGroups && !options.projectGroups.has(entry.key) ? 'map'
+              : false;
+        }
       }
       families.push({ key: `${rig.rig_uuid}:${family.key}`, rig, label, groups: kept });
       all.push(...kept);
@@ -215,7 +229,30 @@ export function browseGroups(rigs: FlatGroupsRig[], options: GroupBrowseOptions 
       ?? all.find((entry) => entry.group.sessions.some((session) =>
         session.response_key === key || (session.sessions ?? []).includes(key)));
   };
-  return { families, entries: all, navigable: all.filter((entry) => !entry.context), find };
+  const near: GroupBrowse['near'] = (session) => {
+    if (!session.night) return undefined;
+    const night = session.night;
+    const days = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
+    let best: GroupEntry | undefined;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const entry of all) {
+      const { family, group } = entry;
+      if (entry.rig.rig_uuid !== session.rig_uuid || !sameFilter(family.filter, session.filter)) continue;
+      const angle = family.rotation === null || session.rotation === null
+        ? (family.rotation === session.rotation ? 0 : Number.POSITIVE_INFINITY)
+        : angleGap(family.rotation, session.rotation);
+      if (angle > ANGLE_TOLERANCE) continue;
+      const distance = night >= group.first_night && night <= group.last_night
+        ? 0
+        : Math.min(days(night, group.first_night), days(night, group.last_night));
+      if (distance < bestDistance) {
+        best = entry;
+        bestDistance = distance;
+      }
+    }
+    return best;
+  };
+  return { families, entries: all, navigable: all.filter((entry) => !entry.context), find, near };
 }
 
 /** A group in words: "Group 3 · G · 3.2° · 09-20 → 09-23 · 2 nights · 6 flats". */

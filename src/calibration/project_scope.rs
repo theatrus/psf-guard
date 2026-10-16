@@ -297,6 +297,67 @@ fn digest_query(
 /// - this project's lights, and no other project's.
 pub fn scope_revision(conn: &Connection, project_id: i32) -> Result<String> {
     let mut hasher = Sha256::new();
+    library_revision(conn, &mut hasher)?;
+    // One project's lights, as health reads them: rejected or not, when,
+    // with what filter and file.
+    digest_query(
+        conn,
+        "SELECT Id, gradingStatus = 2, acquireddate, filtername,
+                CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.FileName') END
+         FROM acquiredimage WHERE projectId = ?1 ORDER BY Id",
+        [project_id],
+        &mut hasher,
+    )?;
+    Ok(short_hex(hasher))
+}
+
+/// What matching every project's lights against the library depends on,
+/// as a digest: [`scope_revision`]'s library inputs, with every project's
+/// lights and names. Grading the library in the background changes it only
+/// where a grade keeps a frame out or lets one back in.
+pub fn catalog_revision(conn: &Connection) -> Result<String> {
+    let mut hasher = Sha256::new();
+    library_revision(conn, &mut hasher)?;
+    let has = |table: &str| {
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |_| Ok(()),
+        )
+        .is_ok()
+    };
+    if has("acquiredimage") {
+        digest_query(
+            conn,
+            "SELECT projectId, Id, gradingStatus = 2, acquireddate, filtername,
+                    CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.FileName') END
+             FROM acquiredimage ORDER BY Id",
+            [],
+            &mut hasher,
+        )?;
+    }
+    if has("project") {
+        digest_query(
+            conn,
+            "SELECT Id, name FROM project ORDER BY Id",
+            [],
+            &mut hasher,
+        )?;
+    }
+    Ok(short_hex(hasher))
+}
+
+fn short_hex(hasher: Sha256) -> String {
+    hasher.finalize()[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The library's part of a revision: each frame's identity, file, validity
+/// mark and whether it is kept out; the recorded masters by count and
+/// newest; flat grouping's measurements; the settings and night boundary.
+fn library_revision(conn: &Connection, hasher: &mut Sha256) -> Result<()> {
     if super::schema_exists(conn) {
         let kept = if super::quality::table_exists(conn) {
             "CASE WHEN q.override_choice = 'use' THEN 0
@@ -317,34 +378,21 @@ pub fn scope_revision(conn: &Connection, project_id: i32) -> Result<String> {
                  ORDER BY f.frame_uuid"
             ),
             [],
-            &mut hasher,
+            hasher,
         )?;
         digest_query(
             conn,
             "SELECT COUNT(*), MAX(created_at) FROM psf_guard_calibration_master",
             [],
-            &mut hasher,
+            hasher,
         )?;
     }
-    super::flat_groups::store::digest_rows(conn, &mut hasher)?;
+    super::flat_groups::store::digest_rows(conn, hasher)?;
     hasher.update(super::health::settings_digest(
         super::catalog_night_boundary(conn),
     ));
     hasher.update(b"\x1d");
-    // One project's lights, as health reads them: rejected or not, when,
-    // with what filter and file.
-    digest_query(
-        conn,
-        "SELECT Id, gradingStatus = 2, acquireddate, filtername,
-                CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.FileName') END
-         FROM acquiredimage WHERE projectId = ?1 ORDER BY Id",
-        [project_id],
-        &mut hasher,
-    )?;
-    Ok(hasher.finalize()[..12]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1736,10 +1736,11 @@ export const apiClient = {
   },
 
   /** What each flat group feeds: its flat masters and the lights that take it. */
-  getFlatGroupUse: async (dbId: string): Promise<FlatGroupUseView> => {
+  getFlatGroupUse: async (dbId: string, group?: string): Promise<FlatGroupUseView> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<FlatGroupUseView>>(
-      dbPath(dbId, '/calibrations/flat-groups/use')
+      dbPath(dbId, '/calibrations/flat-groups/use'),
+      { params: group === undefined ? {} : { group } }
     );
     if (!data.data) throw new Error(data.error || 'Failed to read what the flat groups feed');
     return data.data;

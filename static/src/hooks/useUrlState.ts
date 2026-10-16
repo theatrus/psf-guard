@@ -314,6 +314,8 @@ export function useFilters() {
     flags: listFilterOf(getParam('flag'), (value) => value.toLowerCase()),
     // Calibration levels or finding codes to keep; see utils/calibrationFilter.
     calibration: listFilterOf(getParam('calib'), (value) => value.toLowerCase()),
+    // One flat group's lights; see utils/flatGroupFilter.
+    flatGroup: getParam('flatGroup') || null,
   }), [getParam]);
   
   const updateFilters = useCallback((updates: {
@@ -347,6 +349,7 @@ export function useFilters() {
       search: null,
       flag: null,
       calib: null,
+      flatGroup: null,
     });
   }, [updateParams]);
   

@@ -55,6 +55,7 @@ const RIG: FlatGroupsRig = {
           earlier_response: 'r-0907', later_response: 'r-0916', earlier_night: '2026-09-07', later_night: '2026-09-16',
           dust_pct: 0.46, broad_pct: 1.05,
         }],
+        widest: { dust_pct: 0.46, broad_pct: 1.05, compared: 1 },
       },
     ],
     splits: [{
@@ -83,11 +84,11 @@ const USE: FlatGroupUseView = {
     masters: [{ id: 'm1', label: 'flat-R-0907.fits', created_at: 1, sources: 20, in_group: 20 }],
     lights: { total: 14, own: 10, other_angle: 1, corrected: 0, undetermined: 3, no_same_side: 0 },
     projects: [
-      { project_id: 7, name: 'M 44', lights: { total: 12, own: 8, other_angle: 1, corrected: 0, undetermined: 3, no_same_side: 0 }, filters: ['R'], first: at('09-08'), last: at('09-17') },
-      { project_id: 8, name: 'Heart', lights: { total: 2, own: 2, other_angle: 0, corrected: 0, undetermined: 0, no_same_side: 0 }, filters: ['R'], first: at('09-09'), last: at('09-09') },
+      { project_id: 7, name: 'M 44', lights: { total: 12, own: 8, other_angle: 1, corrected: 0, undetermined: 3, no_same_side: 0 } },
+      { project_id: 8, name: 'Heart', lights: { total: 2, own: 2, other_angle: 0, corrected: 0, undetermined: 0, no_same_side: 0 } },
     ],
   }],
-  lights: 20, pending: 4, unread: 0, refreshing: false,
+  computed: true, lights: 20, pending: 4, unread: 2, refreshing: false,
 };
 
 function listed(id: string, night: string, filter: string, overrides: Partial<CalibrationSession> = {}): CalibrationSession {
@@ -140,6 +141,7 @@ function serve(): Seen {
       const filter = params.get('filter');
       let sessions = SESSIONS.filter((entry) => (!kind || entry.kind === kind) && (!filter || entry.filter === filter));
       if (params.get('project')) sessions = sessions.filter((entry) => entry.id === 's-r0920');
+      if (params.get('session')) sessions = SESSIONS.filter((entry) => entry.id === params.get('session'));
       // Two to a page, so a session can sit on a later one.
       const perPage = 2;
       const locate = params.get('locate');
@@ -305,7 +307,7 @@ describe('browsing flat groups', () => {
 
     // Why: the widest pair against the rig's limits, and a way to change them.
     expect(within(detail).getByTestId('flat-group-widest')).toHaveTextContent(
-      'At most 0.46% dust (limit 1%) and 1.1% light pattern (limit 2%) between any two of its nights.');
+      'At most 0.46% dust (limit 1%) and 1.1% light pattern (limit 2%) between any two of its nights, over 1 pair measured.');
     expect(within(detail).getByTestId('flat-group-pairs')).toHaveTextContent('2026-09-16 ÷ 2026-09-07');
     fireEvent.click(within(detail).getByTestId('flat-group-edit-limits'));
     expect(opened.at(-1)).toEqual({ intent: 'calibration', field: 'flat_split_dust_pct' });
@@ -332,9 +334,16 @@ describe('browsing flat groups', () => {
     const href = new URL(links[0].getAttribute('href')!, 'http://x');
     expect(href.pathname).toBe('/grid');
     expect(href.searchParams.get('project')).toBe('7');
-    expect(href.searchParams.get('filter')).toBe('R');
-    expect(href.searchParams.get('dateStart')).toBe(new Date(at('09-08') * 1000 - 15 * 60_000).toISOString());
-    expect(within(feeds).getByRole('link', { name: 'the 3 flagged' }).getAttribute('href')).toContain('calib=flats_differ');
+    // Exactly the counted lights: the grid's flat-group filter, with the
+    // database in it; no filter or date span that could catch others.
+    expect(href.searchParams.get('db')).toBe('demo');
+    expect(href.searchParams.get('flatGroup')).toBe('demo:s-r0907');
+    expect(href.searchParams.get('filter')).toBeNull();
+    expect(href.searchParams.get('dateStart')).toBeNull();
+    const flagged = new URL(within(feeds).getByRole('link', { name: 'the 3 flagged' }).getAttribute('href')!, 'http://x');
+    expect(flagged.searchParams.get('flatGroup')).toBe('demo:s-r0907:flagged');
+    expect(flagged.searchParams.get('calib')).toBeNull();
+    expect(within(feeds).getByTestId('flat-group-unread')).toHaveTextContent('2 lights in the catalog could not be read');
     expect(feeds).toHaveTextContent('4 lights not read by the calibration check yet');
     expect(seen.use).toBe(1);
   });
@@ -379,7 +388,7 @@ describe('browsing flat groups', () => {
     // for the edge between them. G holds none.
     await waitFor(() => expect(entries()).toHaveLength(2));
     expect(entries()[0].closest('li')).not.toHaveAttribute('data-context');
-    expect(entries()[1].closest('li')).toHaveAttribute('data-context', 'true');
+    expect(entries()[1].closest('li')).toHaveAttribute('data-context', 'neighbour');
     expect(entries()[1]).toHaveTextContent('Neighbour');
     expect(screen.getByText('1 group · 1 filter and angle')).toBeInTheDocument();
     // The keys stay on the groups in scope.
@@ -392,5 +401,73 @@ describe('browsing flat groups', () => {
     await waitFor(() => expect(params().get('calProject')).toBeNull());
     await waitFor(() => expect(entries()).toHaveLength(4));
     expect(params().get('calBrowse')).toBe('groups');
+  });
+  // Review repro: while the server works out a newer answer, the detail of
+  // a group the stale answer does not name says it feeds nothing, as fact.
+  it('review: says the counts are being refreshed rather than that nothing uses the group', async () => {
+    serve();
+    server.use(http.get('/api/db/demo/calibrations/flat-groups/use', () => ok({ ...USE, refreshing: true })));
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0920');
+    const feeds = await screen.findByTestId('flat-group-feeds');
+    await waitFor(() => expect(feeds).not.toHaveTextContent('Working out'));
+    expect(feeds).not.toHaveTextContent('No light takes its flats.');
+    expect(feeds).toHaveTextContent(/refresh|updating|newer/i);
+  });
+
+  it('says it is working the counts out, not that nothing uses the group, before the first answer', async () => {
+    serve();
+    server.use(http.get('/api/db/demo/calibrations/flat-groups/use', () => ok({
+      computed: false, groups: [], lights: 0, pending: 0, unread: 0, refreshing: true,
+    })));
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907');
+    const feeds = await screen.findByTestId('flat-group-feeds');
+    expect(feeds).toHaveTextContent('Working out which masters and lights use it');
+    expect(feeds).not.toHaveTextContent('No flat master');
+    expect(feeds).not.toHaveTextContent('No light takes its flats');
+  });
+
+  it('holds a Groups link until the groups are in, without the session list or a session', async () => {
+    serve();
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    server.use(http.get('/api/db/demo/calibrations/flat-groups', async () => {
+      await held;
+      return ok({ available: true, rigs: [RIG] });
+    }));
+    renderPage('/calibration?db=demo&calBrowse=groups');
+    expect(await screen.findByText('Loading groups…')).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole('navigation', { name: 'Sessions' })).toBeNull();
+    expect(params().get('calSession')).toBeNull();
+    release();
+    await groupList();
+    await waitFor(() => expect(params().get('calGroup')).toBe('s-r0920'));
+    expect(params().get('calSession')).toBeNull();
+  });
+
+  it('finds the group of a session no group holds, as when its night was kept out', async () => {
+    serve();
+    // R 09-14 has too few flats to measure: it lies inside R's group 1.
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0914');
+    await waitFor(() => expect(params().get('calGroup')).toBe('s-r0907'));
+    expect(within(await screen.findByTestId('flat-group-detail')).getByRole('heading', { level: 2 }))
+      .toHaveTextContent('Group 1 of 2 · R · 3°');
+  });
+
+  it('in a project scope dims a group the scope holds only for a correction map', async () => {
+    serve();
+    server.use(
+      http.get('/api/db/demo/calibrations/project-scope', () => ok({
+        project_id: 7, lights: 12, unread: 0, sessions: ['s-r0907', 's-g0913'], frames: 20, masters: [],
+        rigs: [{ rig_uuid: 'rig', name: 'UltraCat' }], pending: 0, revision: 'r7', refreshing: false,
+      })),
+      http.get('/api/db/demo/calibrations/flat-groups/use', () => ok({ ...USE, pending: 0 })),
+    );
+    renderPage('/calibration?db=demo&project=7&calProject=7&calBrowse=groups');
+    await groupList();
+    await waitFor(() => expect(entries().map((entry) => entry.closest('li')?.getAttribute('data-context') ?? 'own'))
+      .toEqual(['neighbour', 'own', 'map', 'neighbour']));
+    expect(entries()[2]).toHaveTextContent('Correction map');
+    await waitFor(() => expect(params().get('calGroup')).toBe('s-r0907'));
   });
 });

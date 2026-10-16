@@ -632,30 +632,57 @@ Choosing a group shows it in the main column:
 - **Members**: its nights, oldest first, as a strip. Each opens its
   session in the session list, on the page that holds it; a filter that
   hides the session gives way, then the project scope.
-- **Why they belong together**: every pair of its nights measured against
-  each other, with dust and light pattern against the rig's limits, the
-  widest of each, and **Edit limits**.
+- **Why they belong together**: the most any two of its nights measured
+  apart in dust and light pattern, against the rig's limits, over every
+  pair measured; each night against the next and the pairs furthest apart,
+  with bars against the limits; and **Edit limits**.
 - **Its edges**: the split or change on each side, with **Compare**, the
   same ratio picture as a split in the session list.
 - **What it feeds**: the recorded flat masters with sources in it, each
   linking to Masters, and the lights whose flat master it is, by project.
-  A project's line opens Images on those lights' filter and the time they
-  were shot. Lights shot during a change whose side is unknown
-  (undetermined), lights given its flats from another angle, carried
-  across a change, or from the far side of one are counted apart, and the
-  flagged ones have a link of their own. The counts come from the light
-  headers the calibration check keeps; until it has read them all, the
-  page says how many it has not.
+  A light whose master takes flats of two groups counts in both; one
+  calibrated with a master from other software counts in none. A
+  project's line opens Images on exactly those lights. Lights shot during
+  a change whose side is unknown (undetermined), lights given its flats
+  from another angle, carried across a change, or from the far side of
+  one are counted apart, and the flagged ones (undetermined, or every flat
+  from the far side) have a link of their own. The counts come from the
+  light headers the calibration check keeps; until it has read them all,
+  the page says how many it has not, and how many lights could not be
+  read or found. The server works the counts out in the background, never
+  in a request: until the first answer the section says it is working
+  them out, and while a newer one is worked out it keeps the last counts
+  and says **Updating…**, rather than saying the group feeds nothing.
 
 The address names the group as `calGroup=<key>`. The key is the first,
 by id, of the sessions holding the group's oldest night, so it survives a
 regroup that keeps that night, and a key naming any session of a group
-opens that group: a link still lands after nights join or split.
+opens that group: a link still lands after nights join or split. When one
+session holds flats of two families, as a night shot at two gains may,
+each group's key also carries a digest of its family's key. A key that
+names no group's session any more, as when every flat of that night was
+kept out, opens the group of that session's rig, filter and angle around
+its night. A Groups link holds the sidebar at **Loading groups…** until
+the groups (and a project's scope) are in, rather than showing the
+session list for a moment.
+
+**Images on one group's lights.** A project's line in **What it feeds**
+opens Images with `flatGroup=<db>:<key>` (or `…:flagged` for the flagged
+link) beside the database and project. The grid then keeps exactly the
+lights the group counts, by id: not other rigs' lights, other angles' or
+other filters' lights shot the same nights. The summary line says
+**Lights of one flat group**, the filter counts as one of the Images
+filters, and **Clear** removes it. A value made in another database does
+nothing. Until the lights are known the grid hides none and says
+*(updating)*.
 
 In a project scope, Groups lists the groups holding the project's
 sessions, each with its neighbour on either side, dimmed and marked
 **Neighbour**: a group's edges are where its flats stop being right, and
-the group across an edge is what Compare sets it against. Groups further
+the group across an edge is what Compare sets it against. A group the
+scope holds only because a correction's map is measured from it, and
+whose flats none of the project's lights take, is dimmed too and marked
+**Correction map**, once every light of the catalog has been read. Groups further
 off are left out, and a gap row counts them. ↑ and ↓ keep to the
 project's own groups. **✕** on the chip widens to the rig's whole
 library, still in Groups.
@@ -686,17 +713,27 @@ sessions. `GET /api/db/{db}/calibrations/flat-groups/ratio?earlier=&later=&stret
 answers `202` while the picture is queued and the PNG once it is ready;
 `POST /api/db/{db}/calibrations/generation-status` reports on it with
 `{"target": "ratio", …}`. In a light's calibration explanation the flat
-kind gains `chosen_by`, `basis` and `alike`. Each group carries its `key`
-and `pairs`, the pairs of its sessions measured against each other.
+kind gains `chosen_by`, `basis` and `alike`. Each group carries its `key`.
 
 `GET /api/db/{db}/calibrations/flat-groups/use` returns, by group key, the
 recorded flat masters with sources in it and the lights whose flat master
 it is, by project and by how their flats were chosen, with how many
-lights the calibration check has not read yet (`pending`). It matches
-lights from the headers that check keeps, on a read-only connection of its
-own, and keeps the answer until a project's calibration key or kept
-headers change; after a change it serves the last answer, marked
-`refreshing`, while one refresh works out the next.
+lights the calibration check has not read yet (`pending`) and how many
+could not be read (`unread`). `group=<key>` adds that group's lights by
+id (`image_ids`, `flagged_ids`) for the Images filter. No request works
+the answer out: one that finds none, or an older one, starts a single
+background refresh and gets what is kept, marked `refreshing`, with
+`computed` false until the first answer exists. The refresh matches
+lights from the headers the calibration check keeps, on a read-only
+connection of its own and a pool sized at background priority that waits
+while interactive work runs. The answer is kept until something matching
+depends on changes: a frame, its validity mark or whether it is kept out,
+the recorded masters, flat grouping's measurements, the settings, any
+project's lights or name, or a project's kept headers. Grading the
+library again in the background changes none of these unless it keeps a
+frame out or lets one back in. Each group in `flat-groups` also carries
+`widest`: the most any two of its sessions measured apart, and over how
+many pairs; `pairs` holds each session against the next and the widest.
 `calibrations/sessions?locate=<session>` lists the page holding that
 session and says whether the filters keep it (`located`).
 

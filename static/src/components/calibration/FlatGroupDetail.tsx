@@ -4,7 +4,8 @@ import type { FlatGroupLightCounts, FlatGroupUseView, FlatSession } from '../../
 import type { GroupEdge, GroupEntry } from './flatGroupBrowse';
 import { splitShortReason } from './flatGroupBrowse';
 import { GroupMarks } from './FlatGroupList';
-import { calibrationMasterHref, lightsGridHref, spanDates } from './calibrationLinks';
+import { calibrationMasterHref, lightsGridHref } from './calibrationLinks';
+import { flatGroupFilterValue } from '../../utils/flatGroupFilter';
 import { editFlatLimits } from './flatLimitsLink';
 import {
   eventSeenIn,
@@ -154,11 +155,12 @@ export default function FlatGroupDetail({
   const { rig, group } = entry;
   const members = [...group.sessions].reverse();
   const pairs = group.pairs ?? [];
-  const widest = pairs.reduce(
-    (worst, pair) => ({ dust: Math.max(worst.dust, pair.dust_pct), broad: Math.max(worst.broad, pair.broad_pct) }),
-    { dust: 0, broad: 0 },
-  );
+  const widest = group.widest ?? null;
   const fed = use?.groups.find((candidate) => candidate.key === entry.key);
+  // The counts are being worked out again: the last ones stay, said to be
+  // updating, and none is shown as fact until the first are in.
+  const updating = !!use && (use.refreshing || !use.computed);
+  const known = !!use?.computed;
   const projects = [...(fed?.projects ?? [])].sort((a, b) =>
     Number(b.project_id === scope?.projectId) - Number(a.project_id === scope?.projectId)
     || b.lights.total - a.lights.total);
@@ -224,13 +226,15 @@ export default function FlatGroupDetail({
         </p>
         {group.sessions.length === 1 ? (
           <p className="calibration-muted">One night: nothing within it to compare.</p>
-        ) : pairs.length === 0 ? (
+        ) : !widest || pairs.length === 0 ? (
           <p className="calibration-muted">Its nights were grouped without a measurement between them.</p>
         ) : (
           <>
             <p data-testid="flat-group-widest">
-              At most {percent(widest.dust)} dust (limit {limitPercent(rig.dust_limit_pct)}) and {percent(widest.broad)} light
-              pattern (limit {limitPercent(rig.pattern_limit_pct)}) between any two of its nights.
+              At most {percent(widest.dust_pct)} dust (limit {limitPercent(rig.dust_limit_pct)}) and {percent(widest.broad_pct)} light
+              pattern (limit {limitPercent(rig.pattern_limit_pct)}) between any two of its nights,
+              over {plural(widest.compared, 'pair')} measured. Below, each night against the next, and the pairs
+              furthest apart.
             </p>
             <table className="flat-group-pairs" data-testid="flat-group-pairs">
               <thead>
@@ -272,10 +276,15 @@ export default function FlatGroupDetail({
         <h3 id="flat-group-feeds">What it feeds</h3>
         {useError ? (
           <p className="calibration-error">Could not work out what it feeds: {useError.message}</p>
-        ) : !use ? (
-          <p className="calibration-muted">Working out which masters and lights use it…</p>
+        ) : !use || !known ? (
+          <p className="calibration-muted" role="status">Working out which masters and lights use it…</p>
         ) : (
           <>
+            {updating && (
+              <p className="calibration-muted" role="status" data-testid="flat-group-updating">
+                Updating… these are the last counts while newer ones are worked out.
+              </p>
+            )}
             {fed && fed.masters.length > 0 ? (
               <ul className="flat-group-masters" aria-label="Flat masters built from it">
                 {(allMasters ? fed.masters : fed.masters.slice(0, MASTERS_SHOWN)).map((master) => (
@@ -298,7 +307,7 @@ export default function FlatGroupDetail({
                   </li>
                 )}
               </ul>
-            ) : (
+            ) : !updating && (
               <p className="calibration-muted">No flat master has been built from it yet.</p>
             )}
             {fed && fed.lights.total > 0 ? (
@@ -309,14 +318,13 @@ export default function FlatGroupDetail({
                 </p>
                 <ul className="flat-group-projects">
                   {projects.map((project) => {
-                    const dates = project.first !== null && project.last !== null
-                      ? spanDates(project.first, project.last) : undefined;
-                    const filterNames = project.filters;
                     const name = project.name ?? `Project ${project.project_id}`;
                     const flagged = project.lights.undetermined + project.lights.no_same_side;
+                    // Exactly these lights: the grid's flat-group filter.
+                    const filter = (flaggedOnly: boolean) => flatGroupFilterValue({ dbId, key: entry.key, flagged: flaggedOnly });
                     return (
                       <li key={project.project_id}>
-                        <Link to={lightsGridHref(search, dbId, project.project_id, { filterNames, dates })}
+                        <Link to={lightsGridHref(search, dbId, project.project_id, { flatGroup: filter(false) })}
                           data-testid="flat-group-lights-link">
                           {name}: {plural(project.lights.total, 'light')}
                         </Link>
@@ -326,7 +334,8 @@ export default function FlatGroupDetail({
                         {flagged > 0 && (
                           <>
                             {' · '}
-                            <Link to={lightsGridHref(search, dbId, project.project_id, { filterNames, dates, calib: 'flats_differ' })}>
+                            <Link to={lightsGridHref(search, dbId, project.project_id, { flatGroup: filter(true) })}
+                              data-testid="flat-group-flagged-link">
                               the {flagged} flagged
                             </Link>
                           </>
@@ -336,12 +345,17 @@ export default function FlatGroupDetail({
                   })}
                 </ul>
               </>
-            ) : (
+            ) : !updating && (
               <p className="calibration-muted">No light takes its flats{use.pending > 0 ? ' yet' : ''}.</p>
             )}
             {use.pending > 0 && (
               <p className="calibration-muted">
                 {plural(use.pending, 'light')} not read by the calibration check yet; these counts grow as it reads them.
+              </p>
+            )}
+            {use.unread > 0 && (
+              <p className="calibration-muted" data-testid="flat-group-unread">
+                {plural(use.unread, 'light')} in the catalog could not be read or found, so are not counted.
               </p>
             )}
           </>

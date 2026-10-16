@@ -4120,8 +4120,12 @@ export interface FlatGroup {
   frames: number;
   /** Newest first. */
   sessions: FlatSession[];
-  /** Every pair of its sessions measured against each other, oldest first. */
+  /** Why they share a group: each session against the next in time, and
+   *  the pairs that differ most in dust and in light pattern, oldest first. */
   pairs?: FlatMemberPair[];
+  /** The most any two of its sessions measured apart, over every pair
+   *  measured, with how many were. */
+  widest?: { dust_pct: number; broad_pct: number; compared: number } | null;
 }
 
 /** Two sessions of one group, measured against each other. */
@@ -4154,20 +4158,23 @@ export interface FlatGroupUse {
     project_id: number;
     name: string | null;
     lights: FlatGroupLightCounts;
-    filters: string[];
-    /** Unix seconds: the first and last of those lights. */
-    first: number | null;
-    last: number | null;
+    /** The lights by id, sent only for the group asked for. */
+    image_ids?: number[];
+    /** Of them, those flagged for their flats. */
+    flagged_ids?: number[];
   }[];
 }
 
 export interface FlatGroupUseView {
+  /** False until the first answer is worked out: nothing else is known. */
+  computed: boolean;
   /** Groups something uses; one not listed feeds nothing. */
   groups: FlatGroupUse[];
   lights: number;
   /** Lights the calibration check has not read yet. */
   pending: number;
   unread: number;
+  /** A newer answer is being worked out; this is the last one kept. */
   refreshing: boolean;
 }
 

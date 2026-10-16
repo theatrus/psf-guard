@@ -23,6 +23,7 @@ import { matchesFlagFilter } from '../utils/flagFilter';
 import { matchesCalibrationFilter } from '../utils/calibrationFilter';
 import { useScopedQuality } from './useSequenceAnalysis';
 import { useCalibrationMarks } from './useCalibrationMarks';
+import { useFlatGroupLights } from './useFlatGroupLights';
 import { useNavigateNow } from './useNavigateNow';
 
 /**
@@ -54,6 +55,8 @@ export function useImageNavigation(currentImageId?: number) {
   );
   // And by calibration, read only when that filter is on.
   const calibration = useCalibrationMarks(dbId, projectId, filters.calibration.length > 0);
+  // And by one flat group's lights.
+  const flatGroup = useFlatGroupLights(dbId, filters.flatGroup);
 
   // Fetch all images for navigation context
   const { data: allImages = [] } = useQuery({
@@ -111,6 +114,10 @@ export function useImageNavigation(currentImageId?: number) {
         && !matchesCalibrationFilter(filters.calibration, calibration.marks.get(image.id))) {
         return false;
       }
+
+      if (flatGroup.ready && !flatGroup.ids.has(image.id)) {
+        return false;
+      }
       
       return true;
     });
@@ -123,6 +130,8 @@ export function useImageNavigation(currentImageId?: number) {
     calibration.isLoading,
     calibration.error,
     calibration.marks,
+    flatGroup.ready,
+    flatGroup.ids,
   ]);
 
   // The grid's own groups, in the order it shows them, by the same helper

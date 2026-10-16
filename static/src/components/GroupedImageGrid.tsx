@@ -55,6 +55,7 @@ import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
 import { useNavigateNow } from '../hooks/useNavigateNow';
 import { chipFocus } from '../utils/calibrationFocus';
 import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
+import { useFlatGroupLights } from '../hooks/useFlatGroupLights';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import ScoringChangedNote from './ScoringChangedNote';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
@@ -171,6 +172,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const calibrationFilterActive = filters.calibration.length > 0;
   const calibration = useCalibrationMarks(dbId, projectId, calibrationFilterActive || showCalibrationChip);
   const calibrationFilterReady = !calibration.isLoading && !calibration.error;
+  // One flat group's lights, from the Calibration page's group detail.
+  const flatGroup = useFlatGroupLights(dbId ?? null, filters.flatGroup);
 
   // Filter images based on current filters
   const filteredImages = useMemo(() => {
@@ -219,6 +222,11 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         && !matchesCalibrationFilter(filters.calibration, calibration.marks.get(image.id))) {
         return false;
       }
+
+      // Flat group filter, the same way.
+      if (flatGroup.ready && !flatGroup.ids.has(image.id)) {
+        return false;
+      }
       
       return true;
     });
@@ -231,6 +239,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     calibrationFilterActive,
     calibrationFilterReady,
     calibration.marks,
+    flatGroup.ready,
+    flatGroup.ids,
   ]);
 
   const availableFlagsForScope = useMemo(
@@ -712,6 +722,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     filters.searchTerm,
     filters.flags,
     filters.calibration,
+    filters.flatGroup ?? '',
   ].join('\u0000');
   const previousSelectionFilterKey = useRef(selectionFilterKey);
   useEffect(() => {
@@ -1030,6 +1041,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               {filters.searchTerm && ` • "${filters.searchTerm}"`}
               {calibrationFilterActive && ` • ${filters.calibration.map(calibrationFilterLabel).join(', ')}`}
               {calibrationFilterActive && calibration.updating && ' (updating)'}
+              {flatGroup.active && ` • ${flatGroup.flagged ? 'Flagged lights of one flat group' : 'Lights of one flat group'}`}
+              {flatGroup.active && flatGroup.updating && ' (updating)'}
               {' • '}
               <span className="grid-quality-state" title={qualityStatus.title}>
                 {qualityStatus.label}

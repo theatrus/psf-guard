@@ -53,7 +53,7 @@ export function nightDates(night: string, boundarySeconds: number): NightDates |
 }
 
 /** Grid keys a link to some lights clears, so the grid shows exactly them. */
-const GRID_FILTER_KEYS = ['target', 'mosaic', 'status', 'filter', 'flag', 'calib', 'dateStart', 'dateEnd', 'search', 'selected', 'current', 'expanded'];
+const GRID_FILTER_KEYS = ['target', 'mosaic', 'status', 'filter', 'flag', 'calib', 'flatGroup', 'dateStart', 'dateEnd', 'search', 'selected', 'current', 'expanded'];
 
 /**
  * The Images grid for one project's lights that a calibration level or
@@ -77,6 +77,8 @@ export interface LightsGridFilters {
   calib?: string;
   filterNames?: readonly string[];
   dates?: NightDates;
+  /** One flat group's lights (utils/flatGroupFilter). */
+  flatGroup?: string;
 }
 
 /** The Images grid for one project's lights, narrowed by `filters`, with
@@ -85,13 +87,14 @@ export function lightsGridHref(
   search: string,
   dbId: string,
   projectId: number,
-  { calib, filterNames = [], dates }: LightsGridFilters,
+  { calib, filterNames = [], dates, flatGroup }: LightsGridFilters,
 ): string {
   const params = withoutPlanningParams(search);
   for (const key of GRID_FILTER_KEYS) params.delete(key);
   params.set('db', dbId);
   params.set('project', String(projectId));
   if (calib) params.set('calib', calib);
+  if (flatGroup) params.set('flatGroup', flatGroup);
   // Each value encoded on its own, as the grid's list filters write them.
   if (filterNames.length > 0) params.set('filter', filterNames.map(encodeURIComponent).join(','));
   if (dates) {
@@ -99,18 +102,6 @@ export function lightsGridHref(
     params.set('dateEnd', dates.dateEnd);
   }
   return `/grid?${keepScoringInScope(search, params)}`;
-}
-
-/** Slack either side of a span of lights' times: a light's catalog time
- *  and its header's can differ by a moment. */
-const SPAN_SLACK_MS = 15 * 60 * 1000;
-
-/** The grid's date filter for lights shot from `first` to `last`, Unix seconds. */
-export function spanDates(first: number, last: number): NightDates {
-  return {
-    dateStart: new Date(first * 1000 - SPAN_SLACK_MS).toISOString(),
-    dateEnd: new Date(last * 1000 + SPAN_SLACK_MS).toISOString(),
-  };
 }
 
 /** One master in the Calibration page's Masters list. */

@@ -25,7 +25,8 @@ import { fileName, nightLabel, plural, sessionDetails, sessionTitle } from './ca
 import { browseGroups } from './flatGroupBrowse';
 import { indexFlatGroups } from './flatGroupIndex';
 import { findPair } from './flatGroupLabels';
-import { flatGroupsKey, useFlatGroups } from './useFlatGroups';
+import { useFlatGroups } from './useFlatGroups';
+import { useFlatGroupUse } from '../../hooks/useFlatGroupLights';
 import { scopeRigsLabel, useProjectScope, widenText, type CalibrationScope } from './calibrationScope';
 import { useCalibrationActions } from './useCalibrationActions';
 import type { ValidityChoice } from './useCalibrationActions';
@@ -298,7 +299,8 @@ function CalibrationLibrary({
         </p>
       ) : (
         <CalibrationFrames dbId={dbId} canManage={canManage} actions={actions}
-          rigs={summary.data?.rigs ?? []} state={state} scope={scope} scopeChip={scopeChip} scopeRevision={scopeRevision} />
+          rigs={summary.data?.rigs ?? []} state={state} scope={scope} scopeFailed={scopeError !== null}
+          scopeChip={scopeChip} scopeRevision={scopeRevision} />
       )}
     </>
   );
@@ -311,6 +313,7 @@ function CalibrationFrames({
   rigs,
   state,
   scope,
+  scopeFailed,
   scopeChip,
   scopeRevision,
 }: {
@@ -320,6 +323,8 @@ function CalibrationFrames({
   rigs: NonNullable<Awaited<ReturnType<typeof apiClient.getCalibrationLibrary>>>['rigs'];
   state: ReturnType<typeof useCalibrationUrlState>;
   scope: CalibrationScope | null;
+  /** The scope could not be worked out: Groups stops waiting for it. */
+  scopeFailed: boolean;
   scopeChip?: ReactNode;
   scopeRevision?: string;
 }) {
@@ -342,34 +347,57 @@ function CalibrationFrames({
   // Groups: the sidebar lists flat groups instead of sessions. It is
   // offered whenever there are groups to list: the list can hold flats
   // (Type All or Flat) and the rigs in view have measured some.
+  const wantsGroups = state.browse === 'groups';
+  const scoped = filters.project !== undefined;
+  // A Groups link holds the sidebar until the groups, and the scope they
+  // are narrowed to, are in: it neither shows the session list for a
+  // moment nor chooses a session in the address.
+  const groupsLoading = wantsGroups && flatsListed
+    && (flat.groups.isLoading || (scoped && !scope?.use && !scopeFailed));
+  const groupsOffered = flatsListed && !!flat.groups.data?.available
+    && rigsInView.some((rig) => rig.families.length > 0);
+  const browse = wantsGroups && (groupsOffered || groupsLoading) ? 'groups' : 'sessions';
+  const groupUse = useFlatGroupUse(dbId, browse === 'groups');
   const scopeSessions = useMemo(
     () => (scope?.use ? new Set(scope.use.sessions) : undefined),
     [scope?.use],
   );
+  // The groups the project's own lights take. A group the scope holds only
+  // for a correction's map is not one; known once every light is read.
+  const useData = groupUse.data;
+  const projectGroups = useMemo(() => {
+    if (!scope || !useData?.computed || useData.pending > 0) return undefined;
+    return new Set(useData.groups
+      .filter((group) => group.projects.some((project) => project.project_id === scope.projectId))
+      .map((group) => group.key));
+  }, [scope, useData]);
   const groupBrowse = useMemo(
-    () => browseGroups(rigsInView, { filter: filters.filter, rotation: filters.rotation, scopeSessions }),
-    [filters.filter, filters.rotation, rigsInView, scopeSessions],
+    () => browseGroups(rigsInView, { filter: filters.filter, rotation: filters.rotation, scopeSessions, projectGroups }),
+    [filters.filter, filters.rotation, projectGroups, rigsInView, scopeSessions],
   );
-  const groupsOffered = flatsListed && !!flat.groups.data?.available
-    && rigsInView.some((rig) => rig.families.length > 0);
-  const browse = groupsOffered ? state.browse : 'sessions';
   const groupEntry = browse === 'groups' ? groupBrowse.find(state.group) : undefined;
+  // A key no group answers to, as when its oldest night was kept out: the
+  // session it names finds the group of its filter and angle around its night.
+  const lost = browse === 'groups' && !groupsLoading && !!flat.groups.data && !!state.group && !groupEntry;
+  const lostSession = useQuery({
+    queryKey: ['db', dbId, 'calibrations', 'sessions', 'one', state.group],
+    queryFn: () => apiClient.getCalibrationSessions(dbId, { session: state.group!, per_page: 1 }),
+    enabled: lost,
+    staleTime: Infinity,
+  });
   // The first group is chosen until a person chooses; a key that now
   // names a regrouped group by one of its sessions is put in its own name.
   useEffect(() => {
-    if (browse !== 'groups' || !flat.groups.data) return;
-    const chosen = groupBrowse.find(state.group);
+    if (browse !== 'groups' || groupsLoading || !flat.groups.data) return;
+    let chosen = groupBrowse.find(state.group);
+    if (!chosen && state.group) {
+      if (lostSession.isLoading) return;
+      const session = lostSession.data?.sessions[0];
+      chosen = session ? groupBrowse.near(session) : undefined;
+    }
     const next = chosen?.key ?? (groupBrowse.navigable[0] ?? groupBrowse.entries[0])?.key;
     if (next && next !== state.group) selectGroup(next);
-  }, [browse, flat.groups.data, groupBrowse, selectGroup, state.group]);
-  const groupUse = useQuery({
-    queryKey: [...flatGroupsKey(dbId), 'use'],
-    queryFn: () => apiClient.getFlatGroupUse(dbId),
-    enabled: browse === 'groups',
-    placeholderData: keepPreviousData,
-    // Asked again while a newer answer is worked out.
-    refetchInterval: (query) => (query.state.data?.refreshing ? 5_000 : false),
-  });
+  }, [browse, flat.groups.data, groupBrowse, groupsLoading, lostSession.data, lostSession.isLoading, selectGroup, state.group]);
   // Closing the comparison hands focus back to the Compare that opened it,
   // which also brings the list back to where it was.
   const opener = useRef<HTMLElement | null>(null);
@@ -568,7 +596,7 @@ function CalibrationFrames({
       )}
       <div className="calibration-layout">
         <div className="calibration-sessions-column" ref={listRef}>
-          {groupsOffered && (
+          {(groupsOffered || groupsLoading) && (
             <div className="tool-segmented calibration-browse-toggle" role="group" aria-label="List">
               <button type="button" aria-pressed={browse === 'sessions'} data-testid="calibration-browse-sessions"
                 onClick={() => state.setBrowse('sessions')}>
@@ -583,9 +611,11 @@ function CalibrationFrames({
           {browse === 'groups' ? (
             <>
               <p className="calibration-muted calibration-count">
-                {`${plural(groupBrowse.navigable.length, 'group')} · ${plural(groupBrowse.families.length, 'filter and angle', 'filters and angles')}`}
+                {groupsLoading
+                  ? 'Loading groups…'
+                  : `${plural(groupBrowse.navigable.length, 'group')} · ${plural(groupBrowse.families.length, 'filter and angle', 'filters and angles')}`}
               </p>
-              {groupBrowse.entries.length === 0 && (
+              {!groupsLoading && groupBrowse.entries.length === 0 && (
                 <p className="calibration-empty">No flat groups match these filters.</p>
               )}
               <FlatGroupList families={groupBrowse.families} selected={groupEntry?.key}

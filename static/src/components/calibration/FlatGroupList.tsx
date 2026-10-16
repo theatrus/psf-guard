@@ -48,10 +48,16 @@ export function GroupMarks({ entry, scopeName }: { entry: GroupEntry; scopeName?
         <span className="calibration-badge flat-group-mark" data-mark="change"
           title={`A change came after it: ${entry.newer.event.what}`}>Change after</span>
       )}
-      {entry.context && (
+      {entry.context === 'neighbour' && (
         <span className="calibration-badge flat-group-mark" data-mark="context"
           title={scopeName ? `Not used by ${scopeName}: shown for the edge it shares` : 'Shown for the edge it shares'}>
           Neighbour
+        </span>
+      )}
+      {entry.context === 'map' && (
+        <span className="calibration-badge flat-group-mark" data-mark="context"
+          title={`${scopeName ?? 'The project'}'s lights take none of its flats; a correction's map is measured from it`}>
+          Correction map
         </span>
       )}
     </span>
