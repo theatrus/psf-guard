@@ -368,6 +368,21 @@ describe('CalibrationPage', () => {
 
   it('writes filters to the URL and asks the server for them', async () => {
     const seen = serve();
+    // Requests can reach MSW out of order: on a CI runner the request for
+    // Type and Grade alone landed after the one with the temperature too.
+    // Hold it back until that one has landed, so every run meets the order
+    // that failed there.
+    let temperatureLanded = () => {};
+    const landed = new Promise<void>((resolve) => { temperatureLanded = resolve; });
+    server.use(
+      http.get('/api/db/demo/calibrations/sessions', async ({ request }) => {
+        const query = new URL(request.url).searchParams;
+        if (query.has('temp_min')) temperatureLanded();
+        else if (query.get('grade') === 'poor') await landed;
+        // Nothing returned: serve()'s handler answers.
+      }),
+    );
+    const asked = vi.spyOn(apiClient, 'getCalibrationSessions');
     renderPage('/calibration?db=demo');
     await waitFor(() => expect(params().get('calSession')).toBe('s1'));
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'dark' } });
@@ -378,8 +393,14 @@ describe('CalibrationPage', () => {
     const from = screen.getByLabelText('From °C');
     fireEvent.change(from, { target: { value: '-12' } });
     fireEvent.blur(from);
-    await waitFor(() => expect(seen.sessions.at(-1)?.get('temp_min')).toBe('-12'));
-    expect(seen.sessions.at(-1)?.get('grade')).toBe('poor');
+    // The page's latest query carries every filter, read at its call site
+    // since the server may hear an older one last…
+    await waitFor(() =>
+      expect(asked.mock.calls.at(-1)?.[1]).toMatchObject({ kind: 'dark', grade: 'poor', temp_min: -12 }));
+    // …and the server was asked for all of them at once.
+    await waitFor(() => expect(seen.sessions.some((request) =>
+      request.get('kind') === 'dark' && request.get('grade') === 'poor' && request.get('temp_min') === '-12',
+    )).toBe(true));
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     await waitFor(() => expect(params().get('calKind')).toBeNull());
     expect(params().get('calGrade')).toBeNull();
@@ -548,38 +569,103 @@ describe('CalibrationPage', () => {
       masters: groups.length ? [{ master_uuid: 'dc6ba609-0000', kind: 'bias', source_count: 12, created_at: 1757600000, direct: true, doubled: true }] : [],
       token,
     });
+    const IDLE = {
+      state: 'idle', action: null, stage: null, done: 0, total: 0, run: 0, started_at: null, finished_at: null,
+      report: null, checked_at: null, repaired: null, changed: null, error: null,
+    };
+    // The server's polls are a second apart.
+    const POLL = { timeout: 4000 };
 
-    function serveDuplicates({ manage = true, stale = false }: { manage?: boolean; stale?: boolean } = {}) {
+    /**
+     * The duplicates job as the server runs it: a POST starts a run, which
+     * the next status read finishes unless `hold` keeps it going. `changed`
+     * makes the first repair find the plan moved on.
+     */
+    function serveDuplicates({ manage = true, changed = false, stale = false }: { manage?: boolean; changed?: boolean; stale?: boolean } = {}) {
       serve({ manage });
-      const repaired: unknown[] = [];
-      let reads = 0;
+      const seen = { checks: 0, repairs: [] as unknown[], stops: 0, automatic: [] as boolean[] };
+      const job = { hold: false };
+      // `stale`: the server kept a plan from before a sync changed the rows.
+      let status: Record<string, unknown> = stale
+        ? { ...IDLE, state: 'done', action: 'check', run: 1, report: report('t0'), checked_at: Date.now() / 1000 - 3600, stale: true }
+        : { ...IDLE };
+      let finish: (() => void) | null = null;
       let applied = false;
+      let plans = 0;
+      const plan = () => {
+        plans += 1;
+        return applied ? report(`t${plans}`, []) : report(`t${plans}`);
+      };
+      const begin = (action: 'check' | 'repair', stage: string, total: number, then: () => void) => {
+        status = {
+          ...status, state: 'running', action, stage, done: Math.floor(total / 2), total,
+          run: (status.run as number) + 1, changed: null, error: null,
+        };
+        finish = then;
+      };
       server.use(
         http.get('/api/db/demo/calibrations/duplicates', () => {
-          reads += 1;
-          return ok(applied ? report(`t${reads}`, []) : report(`t${reads}`));
+          if (finish && !job.hold) {
+            const then = finish;
+            finish = null;
+            then();
+          }
+          return ok(status);
+        }),
+        http.post('/api/db/demo/calibrations/duplicates/check', ({ request }) => {
+          seen.checks += 1;
+          seen.automatic.push(new URL(request.url).searchParams.get('automatic') === 'true');
+          if (status.state !== 'running') {
+            begin('check', 'checking_files', 2140, () => {
+              status = { ...status, state: 'done', stage: null, done: 2140, report: plan(), checked_at: Date.now() / 1000 - 120, stale: false };
+            });
+          }
+          return HttpResponse.json({ success: true, data: status }, { status: 202 });
         }),
         http.post('/api/db/demo/calibrations/duplicates/repair', async ({ request }) => {
-          const body = await request.json();
-          repaired.push(body);
-          if (stale && repaired.length === 1) {
-            return HttpResponse.json(
-              { success: false, data: null, error: 'The calibration library changed since the preview. Preview the repair again.' },
-              { status: 409 },
-            );
-          }
-          applied = true;
-          return ok({ groups: 2, rows_removed: 2, repointed: 0, masters_removed: 1 });
+          seen.repairs.push(await request.json());
+          begin('repair', 'merging', 2, () => {
+            if (changed && seen.repairs.length === 1) {
+              status = {
+                ...status, state: 'done', stage: null, report: plan(),
+                changed: {
+                  groups_before: 2, groups_after: 2, rows_before: 2, rows_after: 2,
+                  added: [], added_count: 0, dropped: [], dropped_count: 0,
+                  altered: ['dark_0003.fits'], altered_count: 1,
+                },
+              };
+              return;
+            }
+            applied = true;
+            status = {
+              ...status, state: 'done', stage: null, done: 2, report: null, checked_at: null,
+              repaired: { run: status.run, finished_at: 1757600100, outcome: { groups: 2, rows_removed: 2, repointed: 0, masters_removed: 1 } },
+            };
+          });
+          return HttpResponse.json({ success: true, data: status }, { status: 202 });
+        }),
+        http.post('/api/db/demo/calibrations/duplicates/stop', () => {
+          seen.stops += 1;
+          finish = null;
+          status = { ...status, state: 'stopped', stage: null, report: status.action === 'check' ? null : status.report };
+          return ok(status);
         }),
       );
-      return { repaired };
+      return { seen, job };
     }
 
-    it('shows each exposure recorded twice with the row kept, from the URL', async () => {
-      serveDuplicates();
+    it('checks the library on arrival, with its progress, then lists each exposure recorded twice', async () => {
+      const { seen, job } = serveDuplicates();
+      job.hold = true;
       renderPage('/calibration?db=demo&calDupes=true');
       const section = await screen.findByRole('region', { name: 'Duplicates' });
-      expect(await within(section).findByText('2 exposures recorded more than once')).toBeInTheDocument();
+      const progress = await within(section).findByRole('progressbar', { name: 'Checking for duplicates' });
+      expect(progress).toHaveAttribute('aria-valuetext', 'Checking files 1,070 of 2,140');
+      expect(within(section).getByText(/Checking files 1,070 of 2,140/)).toBeInTheDocument();
+      expect(seen.checks).toBe(1);
+      job.hold = false;
+      expect(await within(section).findByText('2 exposures recorded more than once', {}, POLL)).toBeInTheDocument();
+      expect(within(section).queryByRole('progressbar')).toBeNull();
       const flat = within(section).getByRole('listitem', { name: 'flat_0007.fits' });
       expect(within(flat).getByText('Keep')).toBeInTheDocument();
       expect(within(flat).getByText('Missing')).toBeInTheDocument();
@@ -593,46 +679,110 @@ describe('CalibrationPage', () => {
       // The type filter narrows the groups shown.
       fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'dark' } });
       await waitFor(() => expect(within(section).getByText('1 of 2 exposures recorded more than once')).toBeInTheDocument());
+      expect(seen.checks).toBe(1);
       // Turning the filter off goes back to sessions.
       fireEvent.click(screen.getByRole('checkbox', { name: 'Duplicates' }));
       await waitFor(() => expect(params().get('calDupes')).toBeNull());
       expect(await screen.findByRole('navigation', { name: 'Sessions' })).toBeInTheDocument();
     });
 
-    it('previews the repair, then applies the previewed plan', async () => {
-      const { repaired } = serveDuplicates();
+    it('previews the repair, applies it with its progress, and shows what it did', async () => {
+      const { seen, job } = serveDuplicates();
       renderPage('/calibration?db=demo&calDupes=true');
-      fireEvent.click(await screen.findByRole('button', { name: 'Repair duplicates…' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Repair duplicates…' }, POLL));
       const dialog = await screen.findByRole('dialog', { name: 'Repair duplicates' });
       const preview = within(dialog).getByRole('region', { name: 'Repair preview' });
-      expect(within(preview).getByText('2 exposures recorded more than once')).toBeInTheDocument();
+      expect(await within(preview).findByText('2 exposures recorded more than once', {}, POLL)).toBeInTheDocument();
+      expect(seen.checks).toBe(2);
       expect(within(preview).getByText(/1 master built again, 1 of them averaged an exposure twice/)).toBeInTheDocument();
       expect(within(preview).getByText(/covers every rig and type in this library/)).toBeInTheDocument();
+
+      job.hold = true;
       fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
-      await waitFor(() => expect(repaired).toEqual([{ token: 't2' }]));
-      expect(await screen.findByText(/Repaired 2 exposures: 2 rows merged, 1 master to build again/)).toBeInTheDocument();
+      const merging = await within(dialog).findByRole('progressbar', { name: 'Repairing duplicates' });
+      expect(merging).toHaveAttribute('aria-valuetext', 'Merging 1 of 2');
+      expect(within(dialog).getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+      expect(seen.repairs).toEqual([{ token: 't2' }]);
+      job.hold = false;
+      expect(await screen.findByText(/Repaired 2 exposures: 2 rows merged, 1 master to build again/, {}, POLL)).toBeInTheDocument();
       expect(screen.queryByRole('dialog')).toBeNull();
-      expect(await screen.findByText('No exposure is recorded more than once.')).toBeInTheDocument();
+      // The plan is spent, so the view checks again and finds nothing.
+      expect(await screen.findByText('No exposure is recorded more than once.', {}, POLL)).toBeInTheDocument();
     });
 
-    it('refuses a stale preview and offers a fresh one', async () => {
-      const { repaired } = serveDuplicates({ stale: true });
+    it('says what changed when the plan moved on, and applies the new plan', async () => {
+      const { seen } = serveDuplicates({ changed: true });
       renderPage('/calibration?db=demo&calDupes=true');
-      fireEvent.click(await screen.findByRole('button', { name: 'Repair duplicates…' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Repair duplicates…' }, POLL));
       const dialog = await screen.findByRole('dialog', { name: 'Repair duplicates' });
+      fireEvent.click(await within(dialog).findByRole('button', { name: 'Apply' }, POLL));
+      const alert = await within(dialog).findByRole('alert', {}, POLL);
+      expect(alert).toHaveTextContent('The plan changed since the preview, so nothing was applied.');
+      expect(alert).toHaveTextContent('1 exposure whose rows or files changed: dark_0003.fits');
       fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
-      expect(await within(dialog).findByRole('alert')).toHaveTextContent('changed since the preview');
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Preview again' }));
-      await waitFor(() => expect(within(dialog).queryByRole('alert')).toBeNull());
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
-      await waitFor(() => expect(repaired).toEqual([{ token: 't2' }, { token: 't3' }]));
+      await waitFor(() => expect(seen.repairs).toEqual([{ token: 't2' }, { token: 't3' }]));
+      expect(await screen.findByText(/Repaired 2 exposures/, {}, POLL)).toBeInTheDocument();
+    });
+
+    it('stops a check, and checks again when asked', async () => {
+      const { seen, job } = serveDuplicates();
+      job.hold = true;
+      renderPage('/calibration?db=demo&calDupes=true');
+      const section = await screen.findByRole('region', { name: 'Duplicates' });
+      fireEvent.click(await within(section).findByRole('button', { name: 'Stop' }));
+      expect(await within(section).findByText('The check for duplicates was stopped.')).toBeInTheDocument();
+      expect(seen.stops).toBe(1);
+      expect(seen.checks).toBe(1);
+      job.hold = false;
+      fireEvent.click(within(section).getByRole('button', { name: 'Check again' }));
+      expect(await within(section).findByText('2 exposures recorded more than once', {}, POLL)).toBeInTheDocument();
+      expect(seen.checks).toBe(2);
     });
 
     it('keeps the repair behind database management', async () => {
       serveDuplicates({ manage: false });
       renderPage('/calibration?db=demo&calDupes=true');
-      expect(await screen.findByText(/needs database management/)).toBeInTheDocument();
+      expect(await screen.findByText(/needs database management/, {}, POLL)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Repair duplicates…' })).toBeNull();
+    });
+
+    it('checks in the background on arrival, and at once when asked', async () => {
+      const { seen } = serveDuplicates();
+      renderPage('/calibration?db=demo&calDupes=true');
+      const section = await screen.findByRole('region', { name: 'Duplicates' });
+      expect(await within(section).findByText('2 exposures recorded more than once', {}, POLL)).toBeInTheDocument();
+      expect(seen.automatic).toEqual([true]);
+      expect(within(section).getByText('Checked 2 min ago')).toBeInTheDocument();
+      fireEvent.click(within(section).getByRole('button', { name: 'Check again' }));
+      await waitFor(() => expect(seen.automatic).toEqual([true, false]));
+    });
+
+    it('keeps a plan the catalog has not moved on from, and checks again one it has', async () => {
+      const { seen } = serveDuplicates({ stale: true });
+      renderPage('/calibration?db=demo&calDupes=true');
+      const section = await screen.findByRole('region', { name: 'Duplicates' });
+      // The old plan shows while a background check makes the new one.
+      expect(await within(section).findByRole('listitem', { name: 'flat_0007.fits' })).toBeInTheDocument();
+      await waitFor(() => expect(seen.automatic).toEqual([true]));
+      expect(await within(section).findByText('Checked 2 min ago', {}, POLL)).toBeInTheDocument();
+      // The fresh plan is not stale: no further check.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(seen.checks).toBe(1);
+    });
+
+    // REVIEW #877: a read-only account without compute gets 403 from
+    // POST …/duplicates/check (auth.rs requires_write). Before the PR the
+    // GET computed the list, so such an account saw the duplicates.
+    it('does not leave a read-only viewer on "Checking the library…" forever', async () => {
+      serveDuplicates({ manage: false });
+      server.use(
+        http.post('/api/db/demo/calibrations/duplicates/check', () =>
+          HttpResponse.json({ success: false, data: null, error: 'This account has read-only access' }, { status: 403 })),
+      );
+      renderPage('/calibration?db=demo&calDupes=true');
+      const section = await screen.findByRole('region', { name: 'Duplicates' });
+      await waitFor(() => expect(within(section).getByRole('alert')).toBeInTheDocument(), POLL);
+      expect(within(section).queryByText('Checking the library…')).toBeNull();
     });
   });
 });

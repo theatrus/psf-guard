@@ -1,5 +1,6 @@
 import type {
   CacheRefreshProgress,
+  CalibrationDuplicateStatus,
   FlatMeasureStatus,
   FrameSitesStatus,
   QualityBackfillStatus,
@@ -11,12 +12,14 @@ import type {
 } from '../../api/types';
 import type { TransferJob } from '../../api/transferTypes';
 import { flatMeasureLabel } from '../calibration/flatMeasureLabel';
+import { duplicateJobLabel, duplicateJobPercent, duplicateJobTitle } from '../calibration/duplicateJob';
 
 /** What a row can do: stop its job, and move it in its line. */
 export type ActivityControl =
   | { kind: 'stack'; jobId: string }
   | { kind: 'flats'; dbId: string }
   | { kind: 'sites'; dbId: string }
+  | { kind: 'duplicates'; dbId: string }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string };
 
@@ -33,7 +36,7 @@ export type ActivityStatus = 'running' | 'queued' | 'waiting';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'stack' | 'processing' | 'wbpp' | 'transfer';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'stack' | 'processing' | 'wbpp' | 'transfer';
   transfer?: TransferJob;
   stateLabel?: string;
   /** What is happening: "Stacking", "Analyzing quality". */
@@ -103,6 +106,7 @@ export interface DatabaseActivity {
   backfill?: QualityBackfillStatus;
   flats?: FlatMeasureStatus;
   sites?: FrameSitesStatus;
+  duplicates?: CalibrationDuplicateStatus;
 }
 
 /** Automatic stack work out of the line, waiting for the worker. */
@@ -295,6 +299,30 @@ function sitesItem(db: DatabaseActivity, sites: FrameSitesStatus): ActivityItem 
     stoppable: true,
     control: { kind: 'sites', dbId: db.dbId },
     href: `/calibration?${new URLSearchParams({ db: db.dbId }).toString()}`,
+  };
+}
+
+/** A duplicate check or repair on the Calibration page: a person's, or the
+ *  check the page starts on its own, which runs as background work and is
+ *  listed as waiting while it steps aside for a person's. */
+function duplicatesItem(db: DatabaseActivity, duplicates: CalibrationDuplicateStatus): ActivityItem {
+  const search = new URLSearchParams({ db: db.dbId, calDupes: 'true' });
+  const background = duplicates.priority === 'background';
+  const waitingFor = duplicates.waiting_for ?? undefined;
+  return {
+    key: `duplicates:${db.dbId}`,
+    kind: 'duplicates',
+    title: duplicateJobTitle(duplicates),
+    scope: db.dbName,
+    detail: waitingFor ? waitingDetail(waitingFor, duplicateJobLabel(duplicates)) : duplicateJobLabel(duplicates),
+    status: waitingFor ? 'waiting' : 'running',
+    waitingFor,
+    automatic: background,
+    background,
+    percent: duplicateJobPercent(duplicates),
+    stoppable: true,
+    control: { kind: 'duplicates', dbId: db.dbId },
+    href: `/calibration?${search.toString()}`,
   };
 }
 
@@ -499,6 +527,7 @@ export function activityItems(
     items.push(...qualityItems(db, projectOf));
     if (db.flats?.active) items.push(flatsItem(db, db.flats));
     if (db.sites?.active) items.push(sitesItem(db, db.sites));
+    if (db.duplicates?.state === 'running') items.push(duplicatesItem(db, db.duplicates));
   }
   // The server lists builds running first, then the line in order.
   const ordered = [...stacks].sort(

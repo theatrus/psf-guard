@@ -5,6 +5,7 @@ import { Hourglass, Play } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
+import { duplicatesKey } from '../calibration/duplicateJob';
 import {
   lineLengths,
   type ActivityControl,
@@ -67,6 +68,7 @@ function runAction(action: ActivityAction): Promise<unknown> {
   if (control.kind === 'stack') return apiClient.cancelStackJob(control.jobId);
   if (control.kind === 'flats') return apiClient.cancelFlatMeasure(control.dbId);
   if (control.kind === 'sites') return apiClient.cancelFrameSites(control.dbId);
+  if (control.kind === 'duplicates') return apiClient.stopCalibrationDuplicates(control.dbId);
   if (control.kind === 'wbpp-running') return apiClient.cancelWbppRun(control.dbId);
   return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
 }
@@ -297,6 +299,8 @@ export default function ActivityChip() {
       if (!result || typeof result !== 'object') return;
       if (variables.control.kind === 'stack') {
         queryClient.setQueryData(STACK_ACTIVITY_QUERY_KEY, result);
+      } else if (variables.control.kind === 'duplicates') {
+        queryClient.setQueryData(duplicatesKey(variables.control.dbId), result);
       } else if (variables.type === 'move') {
         queryClient.setQueryData(WBPP_ACTIVITY_QUERY_KEY, result);
       }

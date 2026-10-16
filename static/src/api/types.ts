@@ -3066,6 +3066,55 @@ export interface CalibrationRepairOutcome {
   masters_removed: number;
 }
 
+/** How the plan a repair found differs from the plan previewed. */
+export interface CalibrationPlanChange {
+  groups_before: number;
+  groups_after: number;
+  rows_before: number;
+  rows_after: number;
+  /** Exposures the new plan repairs that the preview did not, by file name
+   *  (the first 20); the count says how many in all. */
+  added: string[];
+  added_count: number;
+  /** Exposures the preview repaired that the new plan leaves. */
+  dropped: string[];
+  dropped_count: number;
+  /** Exposures in both whose rows or files differ. */
+  altered: string[];
+  altered_count: number;
+}
+
+/** The catalog's duplicate check or repair: a job, polled while it runs. */
+export interface CalibrationDuplicateStatus {
+  /** `idle` before the first run. */
+  state: 'idle' | 'running' | 'done' | 'stopped' | 'failed';
+  action: 'check' | 'repair' | null;
+  /** `checking_files`, `comparing_copies` or `merging`, while it runs. */
+  stage: string | null;
+  done: number;
+  total: number;
+  /** Counts up with each run, so a page knows which result is its own. */
+  run: number;
+  started_at: number | null;
+  finished_at: number | null;
+  /** The latest plan. None after a repair applied, until the next check. */
+  report: CalibrationDuplicateReport | null;
+  checked_at: number | null;
+  /** The last repair that applied, and its run. */
+  repaired: { run: number; finished_at: number; outcome: CalibrationRepairOutcome } | null;
+  /** A repair that found the plan changed: what changed; `report` is the
+   *  new plan. */
+  changed: CalibrationPlanChange | null;
+  error: string | null;
+  /** `interactive` for a run a person asked for, `background` for the
+   *  check a page starts on its own; while it runs. */
+  priority?: 'interactive' | 'background' | null;
+  /** What a person started that a background check waits for. */
+  waiting_for?: string | null;
+  /** The catalog's calibration rows changed since the plan was made. */
+  stale?: boolean;
+}
+
 /** Progress of the singleton per-DB import job (poll ~1s while running). */
 export interface ImportJobProgress {
   running: boolean;

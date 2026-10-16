@@ -234,8 +234,16 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(calibration_duplicates::get_duplicates),
         )
         .route(
+            "/calibrations/duplicates/check",
+            post(calibration_duplicates::check_duplicates),
+        )
+        .route(
             "/calibrations/duplicates/repair",
             post(calibration_duplicates::repair_duplicates),
+        )
+        .route(
+            "/calibrations/duplicates/stop",
+            post(calibration_duplicates::stop_duplicates),
         )
         .route(
             "/calibrations/generation-status",

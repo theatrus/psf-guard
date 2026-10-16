@@ -277,7 +277,7 @@ function CalibrationLibrary({
           <CalibrationFilters filters={state.filters} facets={undefined} rigs={summary.data?.rigs ?? []}
             onChange={state.setFilters} onClear={state.clearFilters} />
           <CalibrationDuplicates dbId={dbId} filters={state.filters}
-            canRepair={canManage && managementAllowed}
+            canRepair={canManage && managementAllowed} canStop={canManage}
             repairNote={!canManage ? null
               : 'Repairing duplicates needs database management: the desktop app, or a server started with --allow-database-management.'} />
         </>

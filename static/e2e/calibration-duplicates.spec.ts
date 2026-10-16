@@ -93,6 +93,25 @@ test('finds exposures recorded twice, previews the repair and applies it', async
   }
   for (const name of flats) fs.rmSync(path.join(drop, name));
 
+  // A repair is a job: the request answers 202 at once. One that names no
+  // previewed plan applies nothing, and leaves the plan it found and what
+  // changed in the status.
+  const refused = await request.post(`/api/db/${dbId}/calibrations/duplicates/repair`, {
+    data: { token: 'not-a-preview' },
+  });
+  expect(refused.status()).toBe(202);
+  const refusedRun: number = (await refused.json()).data.run;
+  await expect
+    .poll(async () => {
+      const status = (await (await request.get(`/api/db/${dbId}/calibrations/duplicates`)).json()).data;
+      return status.run === refusedRun ? status.state : 'other';
+    })
+    .toBe('done');
+  const afterRefused = (await (await request.get(`/api/db/${dbId}/calibrations/duplicates`)).json()).data;
+  expect(afterRefused.repaired).toBeNull();
+  expect(afterRefused.changed.groups_after).toBe(5);
+  expect(afterRefused.report.groups).toHaveLength(5);
+
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/#/calibration?db=${dbId}&calDupes=true`);
   const section = page.getByRole('region', { name: 'Duplicates' });
@@ -112,12 +131,6 @@ test('finds exposures recorded twice, previews the repair and applies it', async
 
   await page.setViewportSize({ width: 390, height: 844 });
   await shot(page, testInfo, 'duplicates-390');
-
-  // An apply that names no previewed plan is refused.
-  const refused = await request.post(`/api/db/${dbId}/calibrations/duplicates/repair`, {
-    data: { token: 'not-a-preview' },
-  });
-  expect(refused.status()).toBe(409);
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await section.getByRole('button', { name: 'Repair duplicates…' }).click();
@@ -143,6 +156,10 @@ test('finds exposures recorded twice, previews the repair and applies it', async
   expect(frames.frames.every((frame: { source_exists: boolean }) => frame.source_exists)).toBe(true);
   for (const name of [...flats, ...darks]) expect(fs.existsSync(path.join(library, name))).toBe(true);
   for (const name of darks) expect(fs.existsSync(path.join(drop, name))).toBe(true);
-  const again = (await (await request.get(`/api/db/${dbId}/calibrations/duplicates`)).json()).data;
-  expect(again.groups).toHaveLength(0);
+  await expect
+    .poll(async () => {
+      const status = (await (await request.get(`/api/db/${dbId}/calibrations/duplicates`)).json()).data;
+      return status.report ? status.report.groups.length : 'checking';
+    })
+    .toBe(0);
 });
