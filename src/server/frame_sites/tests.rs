@@ -32,6 +32,48 @@ fn requests_settle_and_unfinished_passes_wait_longer_each_time() {
     assert_eq!(queue.attempts, 0);
 }
 
+/// The hourly watch neither undoes Stop nor resets a retry in flight.
+#[test]
+fn the_watch_respects_stop_and_a_waiting_retry() {
+    let now = Instant::now();
+    let mut queue = Queue::default();
+    queue.add(now);
+    queue.stop();
+    queue.nudge(now);
+    assert!(queue.stopped && !queue.pending, "Stop holds");
+    // A retry waits after an unfinished pass: the watch leaves it be.
+    let mut queue = Queue::default();
+    queue.add(now);
+    assert_eq!(queue.next_step(now + SETTLE), Step::Run);
+    assert!(queue.retry(now));
+    assert!(queue.retry(now));
+    let due = queue.due;
+    queue.nudge(now);
+    assert_eq!((queue.attempts, queue.due, queue.pending), (2, due, false));
+    // At rest, it queues a pass.
+    let mut queue = Queue::default();
+    queue.nudge(now);
+    assert!(queue.pending);
+    assert_eq!(queue.next_step(now + SETTLE), Step::Run);
+}
+
+/// A stopped job is not started by the watch's request either.
+#[test]
+fn the_watch_starts_no_runner_for_a_stopped_job() {
+    let temp = tempfile::tempdir().unwrap();
+    let (path, _files) = library(temp.path(), 1);
+    let state = test_state();
+    {
+        let job = job(&path);
+        let mut queue = job.queue();
+        queue.stopped = true;
+    }
+    nudge(&state, &path);
+    let job = job(&path);
+    let queue = job.queue();
+    assert!(!queue.worker && !queue.pending && queue.stopped);
+}
+
 #[test]
 fn stop_pauses_until_resume_or_a_change() {
     let now = Instant::now();

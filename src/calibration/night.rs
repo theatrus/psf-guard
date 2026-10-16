@@ -794,6 +794,8 @@ struct ReadFrame {
     path: String,
     captured_at: Option<i64>,
     site: Option<Site>,
+    /// Whether no pass had read it before: not yet marked away.
+    never_read: bool,
 }
 
 /// Whether frames marked away are due to be read again: the frame-sites
@@ -822,7 +824,10 @@ pub fn away_frames_due(conn: &Connection) -> bool {
 /// Files that cannot be read before any file of the pass was read are held
 /// back unmarked: once one is read, they are marked away with the rest;
 /// if none ever is, as when the volume is not mounted, nothing is marked
-/// and the pass reports `volume_away`. A commit the catalog is too busy for
+/// and the pass reports `volume_away`. A pass of frames that were all
+/// marked away already, and still cannot be read (files deleted, most
+/// likely), marks them away again, to wait another week, rather than
+/// calling the volume away. A commit the catalog is too busy for
 /// is tried again; one that still fails ends the pass with its `error`,
 /// keeping what earlier chunks committed. A write lands only on a row an
 /// import has not rewritten since it was read.
@@ -845,14 +850,21 @@ fn backfill_with(
         return Ok(SiteBackfillOutcome::default());
     }
     let now = chrono::Utc::now().timestamp();
-    let pending: Vec<(i64, String, String, Option<i64>)> = conn
+    let pending: Vec<(i64, String, String, Option<i64>, bool)> = conn
         .prepare(
-            "SELECT id, rig_uuid, source_path, captured_at FROM psf_guard_calibration_frame
+            "SELECT id, rig_uuid, source_path, captured_at, site_read_at IS NULL
+             FROM psf_guard_calibration_frame
              WHERE site_read_at IS NULL OR (site_read_at < 0 AND -site_read_at <= ?1)
              ORDER BY rig_uuid, captured_at DESC, id DESC",
         )?
         .query_map([now - SITE_RETRY_SECONDS], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })?
         .collect::<rusqlite::Result<_>>()?;
     let mut outcome = SiteBackfillOutcome {
@@ -875,7 +887,7 @@ fn backfill_with(
         }
         let read: Vec<ReadFrame> = chunk
             .iter()
-            .map(|(id, rig, path, captured_at)| {
+            .map(|(id, rig, path, captured_at, never_read)| {
                 let meta = crate::commands::import::headers::read_frame_meta(Path::new(path));
                 ReadFrame {
                     id: *id,
@@ -883,6 +895,7 @@ fn backfill_with(
                     path: path.clone(),
                     captured_at: *captured_at,
                     site: meta.readable.then(|| Site::of(&meta)),
+                    never_read: *never_read,
                 }
             })
             .collect();
@@ -930,9 +943,22 @@ fn backfill_with(
         (hooks.progress)(outcome.done, pending.len());
     }
     if !held.is_empty() && held.len() == outcome.done {
-        // Nothing of the pass could be read: leave it all to a later pass.
-        outcome.volume_away = true;
-        outcome.done = 0;
+        if held.iter().any(|frame| frame.never_read) {
+            // Nothing of the pass could be read, some of it never read
+            // before: the volume is away. Leave it all to a later pass.
+            outcome.volume_away = true;
+            outcome.done = 0;
+        } else {
+            // Only frames already marked away, still unreadable: most
+            // likely deleted. They wait another week.
+            match write_chunk(conn, &held, now) {
+                Ok(_) => outcome.unreadable += held.len(),
+                Err(error) => {
+                    outcome.done = 0;
+                    outcome.error = Some(format!("{error}"));
+                }
+            }
+        }
     }
     if !unflushed.is_empty() {
         let rigs: Vec<String> = unflushed.into_iter().collect();
@@ -1947,6 +1973,61 @@ mod tests {
         );
     }
 
+    /// A file marked away a week ago and since deleted: the pass that
+    /// comes for it reads nothing, yet that is no volume away. It is marked
+    /// away again, to wait another week, so the watch does not queue it
+    /// every hour.
+    #[test]
+    fn a_deleted_file_waits_another_week_and_is_no_volume_away() {
+        let _policy = super::super::tests::POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, _rig, _path) = unread_library(temp.path(), 2);
+        std::fs::remove_file(temp.path().join("f1.fits")).unwrap();
+        let first = backfill_rig_sites(&conn, || true, || {}).unwrap();
+        assert_eq!((first.clocked, first.unreadable), (1, 1));
+        // A week on, only the deleted file is due.
+        let week_ago = chrono::Utc::now().timestamp() - SITE_RETRY_SECONDS - 60;
+        conn.execute(
+            "UPDATE psf_guard_calibration_frame SET site_read_at = ?1 WHERE site_read_at < 0",
+            [-week_ago],
+        )
+        .unwrap();
+        assert!(away_frames_due(&conn));
+        let again = backfill_rig_sites(&conn, || true, || {}).unwrap();
+        assert_eq!(
+            (again.pending, again.unreadable, again.volume_away),
+            (1, 1, false)
+        );
+        assert!(!away_frames_due(&conn), "it waits another week");
+        let stamped: i64 = conn
+            .query_row(
+                "SELECT site_read_at FROM psf_guard_calibration_frame
+                 WHERE source_path LIKE '%f1.fits'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(stamped < -week_ago);
+        // With a frame never read among them, nothing read means the volume.
+        conn.execute(
+            "UPDATE psf_guard_calibration_frame SET site_read_at = ?1 WHERE site_read_at < 0",
+            [-week_ago],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE psf_guard_calibration_frame SET site_read_at = NULL
+             WHERE source_path LIKE '%f0.fits'",
+            [],
+        )
+        .unwrap();
+        std::fs::remove_file(temp.path().join("f0.fits")).unwrap();
+        let away = backfill_rig_sites(&conn, || true, || {}).unwrap();
+        assert!(away.volume_away);
+        assert!(away_frames_due(&conn), "nothing marked");
+    }
+
     #[test]
     fn a_row_an_import_rewrote_while_it_was_read_is_left_alone() {
         let _policy = super::super::tests::POLICY_LOCK
@@ -1976,6 +2057,7 @@ mod tests {
                 longitude: None,
                 utc_offset_s: Some(-7 * HOUR),
             }),
+            never_read: true,
         }];
         assert!(write_chunk(&conn, &read, 1).unwrap().is_empty());
         let stamped: Option<i64> = conn

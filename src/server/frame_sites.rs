@@ -109,6 +109,16 @@ fn backoff(attempt: u32) -> Duration {
 }
 
 impl Queue {
+    /// The hourly watch's request: frames marked away are due again. It
+    /// respects Stop, and leaves a retry in flight and its tries alone.
+    fn nudge(&mut self, now: Instant) {
+        if self.stopped || self.running || self.due.is_some() {
+            return;
+        }
+        self.pending = true;
+        self.last = Some(now);
+    }
+
     /// A change, a start or Resume: tries start again and Stop is undone.
     fn add(&mut self, now: Instant) {
         self.pending = true;
@@ -220,13 +230,26 @@ pub fn status(path: &str) -> FrameSitesStatus {
 
 /// Read the sites of the catalog at `path`'s frames that have none yet.
 pub fn queue(state: &Arc<AppState>, path: &str) {
+    request(state, path, Queue::add);
+}
+
+/// [`queue`] for the hourly watch: nothing while Stop holds, or while a
+/// retry waits, whose tries it leaves alone ([`Queue::nudge`]).
+pub fn nudge(state: &Arc<AppState>, path: &str) {
+    request(state, path, Queue::nudge);
+}
+
+fn request(state: &Arc<AppState>, path: &str, ask: fn(&mut Queue, Instant)) {
     if state.shutdown.is_stopping() {
         return;
     }
     let job = job(path);
     let spawn = {
         let mut queue = job.queue();
-        queue.add(Instant::now());
+        ask(&mut queue, Instant::now());
+        if !queue.pending && queue.due.is_none() {
+            return;
+        }
         !std::mem::replace(&mut queue.worker, true)
     };
     if !spawn {
@@ -469,7 +492,7 @@ pub fn spawn_away_watch(state: &Arc<AppState>) {
             .await
             .unwrap_or_default();
             for path in due {
-                queue(&state, &path);
+                nudge(&state, &path);
             }
         }
     });
