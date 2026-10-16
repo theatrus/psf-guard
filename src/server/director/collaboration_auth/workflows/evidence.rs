@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod automatic;
 mod measurements;
 pub(in crate::server::director::collaboration_auth) use automatic::{
-    automatic, selections as transfer_selections, AutomaticCursor, AutomaticResult,
+    automatic, transfer_selections, AutomaticCursor, AutomaticResult,
 };
 
 struct CatalogFrames {

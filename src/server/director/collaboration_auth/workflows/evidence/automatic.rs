@@ -184,6 +184,25 @@ pub(in crate::server::director::collaboration_auth) fn selections(
     import: Uuid,
     longitude: f64,
 ) -> Result<Vec<(String, Selection)>, Failure> {
+    selections_with_limit(catalog, import, longitude, collaboration::MAX_REPORT_FRAMES)
+}
+
+pub(in crate::server::director::collaboration_auth) fn transfer_selections(
+    catalog: &DatabaseContext,
+    import: Uuid,
+    longitude: f64,
+) -> Result<Vec<(String, Selection)>, Failure> {
+    // Transfers subtract admitted images, then bound each new package. A busy
+    // night must not stop uploading just because its full cohort exceeds a report.
+    selections_with_limit(catalog, import, longitude, 65536)
+}
+
+fn selections_with_limit(
+    catalog: &DatabaseContext,
+    import: Uuid,
+    longitude: f64,
+    max_frames: usize,
+) -> Result<Vec<(String, Selection)>, Failure> {
     let conn = crate::server::database_context::open_scheduler_connection_with_flags(
         &catalog.database_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -247,11 +266,7 @@ pub(in crate::server::director::collaboration_auth) fn selections(
             observing_date(time, longitude)?,
         );
         groups.entry(key).or_default().push(guid);
-        if groups.len() > 256
-            || groups
-                .values()
-                .any(|images| images.len() > collaboration::MAX_REPORT_FRAMES)
-        {
+        if groups.len() > 256 || groups.values().any(|images| images.len() > max_frames) {
             return Err(held());
         }
     }
@@ -336,6 +351,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selections(&catalog, import, -105.0).unwrap().len(), 1);
+        conn.execute(
+            "UPDATE acquiredimage SET acquireddate=?1 WHERE acquireddate>=?1",
+            [start],
+        )
+        .unwrap();
+        assert!(selections(&catalog, import, -105.0).is_err());
+        let transfer = transfer_selections(&catalog, import, -105.0).unwrap();
+        assert_eq!(transfer.len(), 1);
+        assert_eq!(transfer[0].1.image_guids.len(), 5000);
     }
     #[test]
     fn reports_follow_the_capture_night_at_the_rig_not_the_import_date() {

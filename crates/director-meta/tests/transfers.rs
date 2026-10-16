@@ -177,6 +177,78 @@ fn manual_retry_of_an_automatic_package_requires_review() {
 }
 
 #[test]
+fn reprepare_does_not_reuse_a_previous_owners_receipts() {
+    let (dir, mut store, connection) = setup();
+    let mut job = store
+        .create_transfer(connection, json!({"automatic":true}), 100)
+        .unwrap();
+    job.state = State::Uploading;
+    job.package = Some(
+        json!({"owner":"first-owner", "artifacts":[{"name":"same-content.fits","bytes":100}]}),
+    );
+    let job = store.save_transfer(job).unwrap();
+    store
+        .acknowledge_transfer_file(job.id, job.revision, "same-content.fits", 100)
+        .unwrap();
+    let mut job = store.transfer(job.id).unwrap().unwrap();
+    job.state = State::NeedsReview;
+    let job = store.save_transfer(job).unwrap();
+    let retried = store
+        .control_transfer(job.id, job.revision, "retry")
+        .unwrap();
+    assert!(retried.completed.is_empty());
+    assert!(retried.package.is_none());
+    drop(store);
+    let store = MetaStore::open(&dir.path().join("meta.sqlite")).unwrap();
+    assert!(store
+        .transfer(job.id)
+        .unwrap()
+        .unwrap()
+        .completed
+        .is_empty());
+    assert_eq!(store.transfer_activity().unwrap()[0]["completed_files"], 0);
+}
+
+#[test]
+fn raw_admission_excludes_old_images_without_bypassing_held_work() {
+    let (_dir, mut store, connection) = setup();
+    let import = Uuid::new_v4();
+    let delivered = Uuid::new_v4();
+    let held = Uuid::new_v4();
+    let cancelled = Uuid::new_v4();
+    for (image, state, panel, task, output) in [
+        (delivered, State::Complete, 0, import, None),
+        (held, State::NeedsReview, 0, import, None),
+        (cancelled, State::Cancelled, 0, import, None),
+        (Uuid::new_v4(), State::Queued, 1, import, None),
+        (Uuid::new_v4(), State::Queued, 0, Uuid::new_v4(), None),
+        (
+            Uuid::new_v4(),
+            State::Complete,
+            0,
+            import,
+            Some(json!({"job_id":"stack"})),
+        ),
+    ] {
+        let mut job = store.create_transfer(connection, json!({"selection":{"import_id":task,"panel":panel,"image_guids":[image]},"output":output}), 100).unwrap();
+        job.state = state;
+        store.save_transfer(job).unwrap();
+    }
+    let claimed = store.raw_transfer_images(connection, import, 0).unwrap();
+    assert_eq!(claimed, [delivered, held, cancelled].into_iter().collect());
+    assert!(store
+        .raw_transfer_images(Uuid::new_v4(), import, 0)
+        .unwrap()
+        .is_empty());
+    let new = Uuid::new_v4();
+    let remaining: Vec<_> = [delivered, held, cancelled, new]
+        .into_iter()
+        .filter(|id| !claimed.contains(id))
+        .collect();
+    assert_eq!(remaining, [new]);
+}
+
+#[test]
 fn receipts_are_small_idempotent_writes_and_do_not_rewrite_package_data() {
     let (dir, mut store, id) = setup();
     let mut job = store

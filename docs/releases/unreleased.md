@@ -25,6 +25,9 @@
   stack delivery for the rig's database. **Transfers** in background activity
   shows progress, Pause, Resume, Retry and Cancel. Completed-file receipts
   survive restart; interrupted files retry without duplicating server files.
+  Automatic raw delivery queues only new exposures. Re-preparing a package checks
+  the current remote owner's receipts, and automation settings wait for their
+  saved policy before allowing edits.
 
 - Images' **Date** groups are observing nights, split where the catalog's
   nights split, as calibration and the AstroBin export do: a night west of

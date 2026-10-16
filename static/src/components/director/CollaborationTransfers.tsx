@@ -40,12 +40,13 @@ export default function CollaborationTransfers({ connection, selection, canWrite
   const output = outputs.data?.outputs?.find(o => `${o.job_id}:${o.group_index}:${o.revision}` === outputKey);
   const jobs = activity.data?.jobs.filter(j => j.connection_id === connection) ?? [];
   const policy = activity.data?.policies?.find(p => p.connection_id === connection);
+  const policyBusy = !canWrite || mutation.isPending || !activity.data?.policies || activity.isError;
   const validOutput = !outputKey || !!output;
   return <section className="collaboration-transfers" aria-label="Contribution files">
     <h4>Contribution files</h4>
     <div className="rig-profile-grid">
-      <label><input type="checkbox" disabled={!canWrite || mutation.isPending} checked={policy?.automatic ?? false} onChange={e => mutation.mutate({ operation: 'transfer_policy', automatic: e.target.checked, mode: policy?.mode ?? 'raw' })} />Upload accepted collaboration files automatically</label>
-      <label className="rig-profile-field"><span>Automatic files</span><select disabled={!canWrite || mutation.isPending} value={policy?.mode ?? 'raw'} onChange={e => mutation.mutate({ operation: 'transfer_policy', automatic: policy?.automatic ?? false, mode: e.target.value })}><option value="raw">Raw lights and matched calibration</option><option value="psf_guard">PSF Guard stacks</option></select></label>
+      <label><input type="checkbox" disabled={policyBusy} checked={policy?.automatic ?? false} onChange={e => mutation.mutate({ operation: 'transfer_policy', automatic: e.target.checked, mode: policy?.mode ?? 'raw' })} />Upload accepted collaboration files automatically</label>
+      <label className="rig-profile-field"><span>Automatic files</span><select disabled={policyBusy} value={policy?.mode ?? 'raw'} onChange={e => mutation.mutate({ operation: 'transfer_policy', automatic: policy?.automatic ?? false, mode: e.target.value })}><option value="raw">Raw lights and matched calibration</option><option value="psf_guard">PSF Guard stacks</option></select></label>
     </div>
     <div className="rig-profile-grid"><label className="rig-profile-field"><span>Files to send</span>
       <select value={outputKey} disabled={!canWrite || mutation.isPending} onChange={e => { setOutput(e.target.value); setConfirmed(null); }}>

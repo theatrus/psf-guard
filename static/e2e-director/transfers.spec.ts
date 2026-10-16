@@ -31,6 +31,7 @@ test('file packages offer stacks and remain visible and controllable in backgrou
       case 'transfer_manifest': data = { transfer_manifest: { version: 1, task: 'test-task', night: '2026-10-05', panel: 0, lights: [image], calibration: ['matched-flat'], output: 'PSF Guard stack', files: [{ kind: 'light', source: { path: 'C:/catalog/stacks/matched-flat-stack.fits', bytes: 10485760 } }] } }; break;
       case 'transfer_control':
         jobs[0].revision++; jobs[0].state = input.action === 'approve' || input.action === 'resume' ? 'uploading' : input.action === 'pause' ? 'paused' : 'cancelled';
+        if (jobs[0].state === 'uploading') { jobs[0].sent_bytes = 3145728; jobs[0].current_file = 'matched-flat-stack.fits'; }
         data = { transfer: jobs[0] }; break;
     }
     await route.fulfill({ json: { success: true, data } });
@@ -42,10 +43,16 @@ test('file packages offer stacks and remain visible and controllable in backgrou
   await collaboration.getByRole('tab', { name: 'Reports' }).click();
   await collaboration.getByLabel('Imported visit').selectOption(visit); await collaboration.getByLabel('Remote panel').selectOption('0');
   await collaboration.getByLabel('Select M31-OIII.fits').check();
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await settings.locator('.modal-body').evaluate(el => { el.scrollTop = 0; });
+  await page.screenshot({ path: testInfo.outputPath('settings-context-1440.png') });
   const files = collaboration.getByRole('region', { name: 'Contribution files' });
   await expect(files.getByLabel('Upload accepted collaboration files automatically')).not.toBeChecked();
   await files.getByLabel('Files to send').selectOption({ label: 'WBPP · M31 · OIII' });
   await expect(files.getByRole('button', { name: 'Prepare file package' })).toBeDisabled();
+  await files.evaluate(el => el.scrollIntoView({ block: 'start' }));
+  await settings.locator('.modal-body').evaluate(el => { el.scrollTop -= 200; });
+  await page.screenshot({ path: testInfo.outputPath('wbpp-confirmation-1440.png') });
   await files.getByLabel('I confirm this WBPP stack contains the selected images').check();
   await expect(files.getByRole('button', { name: 'Prepare file package' })).toBeEnabled();
   await files.getByLabel('Files to send').selectOption({ label: 'PSF Guard · M31 · OIII' });
@@ -54,7 +61,9 @@ test('file packages offer stacks and remain visible and controllable in backgrou
   expect(operations.find(o => o.operation === 'prepare_transfer')).toMatchObject({ request: { output: { job_id: 'a'.repeat(64) }, selection: { image_guids: [image], catalog: slug, import_id: visit } } });
   await files.getByRole('button', { name: 'Inspect package' }).click(); await expect(files).toContainText('matched-flat');
   for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 1000 }); await files.scrollIntoViewIfNeeded();
+    await page.setViewportSize({ width, height: 1100 });
+    await files.evaluate(el => el.scrollIntoView({ block: 'start' }));
+    if (width >= 800) await settings.locator('.modal-body').evaluate(el => { el.scrollTop -= 200; });
     expect(await files.evaluate(el => el.scrollWidth <= el.clientWidth)).toBeTruthy();
     await page.screenshot({ path: testInfo.outputPath(`transfers-${width}.png`) });
   }
@@ -63,7 +72,10 @@ test('file packages offer stacks and remain visible and controllable in backgrou
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: /^Background jobs:/ }).click();
   const activity = page.getByRole('region', { name: 'Background jobs' }); await expect(activity).toContainText('Transfers');
+  await expect(activity).toContainText('3.0 MiB');
+  await page.screenshot({ path: testInfo.outputPath('background-uploading-1440.png') });
   await activity.getByRole('button', { name: 'Pause transfer' }).click(); await expect(activity).toContainText('Paused');
+  await page.screenshot({ path: testInfo.outputPath('background-paused-1440.png') });
   await expect(activity.locator('.activity-row').filter({ hasText: 'Transfers' }).locator('.is-indeterminate')).toHaveCount(0);
   await page.reload(); await page.getByRole('button', { name: /^Background jobs:/ }).click();
   const restored = page.getByRole('region', { name: 'Background jobs' }); await expect(restored).toContainText('Paused');

@@ -33,6 +33,8 @@ matching PSF Guard stacks. WBPP delivery is manual. Keep grading and file
 availability up to date; a source or calibration change holds the package for
 review. Starfront must enable file collection for the project, and the telescope
 credential must have a Discord owner.
+Raw automation queues only new exposures. Held and cancelled packages stay
+reserved; use **Retry** to prepare them again for manual review.
 
 The header's background activity shows **Transfers**, with file/byte progress
 and Pause, Resume, Retry and Cancel. Completed-file receipts survive app or

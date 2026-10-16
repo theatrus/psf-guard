@@ -61,6 +61,27 @@ pub(crate) fn validate_tables(conn: &Connection) -> Result<(), Error> {
 }
 
 impl MetaStore {
+    /// Raw frames already admitted for this assignment, including held and
+    /// cancelled work. A later exposure must not silently replace that work.
+    pub fn raw_transfer_images(
+        &self,
+        connection: Uuid,
+        import: Uuid,
+        panel: u32,
+    ) -> Result<std::collections::BTreeSet<Uuid>, Error> {
+        let mut stmt = self.connection.prepare("SELECT DISTINCT image.value FROM collaboration_transfer t JOIN collaboration_transfer_definition d ON d.id=t.id, json_each(d.request,'$.selection.image_guids') image WHERE t.connection_id=?1 AND json_extract(d.request,'$.selection.import_id')=?2 AND json_extract(d.request,'$.selection.panel')=?3 AND json_extract(d.request,'$.output') IS NULL")?;
+        let images = stmt
+            .query_map(
+                params![connection.to_string(), import.to_string(), panel],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        images
+            .into_iter()
+            .map(|id| Uuid::parse_str(&id).map_err(|_| Error::CorruptDatabase))
+            .collect()
+    }
+
     pub fn transfer_activity(&self) -> Result<Vec<Value>, Error> {
         let mut stmt=self.connection.prepare("SELECT s.payload FROM collaboration_transfer_summary s JOIN collaboration_transfer t ON t.id=s.id WHERE json_extract(t.payload,'$.state') NOT IN ('complete','cancelled') OR t.rowid IN (SELECT rowid FROM collaboration_transfer ORDER BY rowid DESC LIMIT 50) ORDER BY t.rowid")?;
         let rows = stmt
@@ -329,6 +350,9 @@ impl MetaStore {
             }
             ("retry", State::NeedsReview | State::Cancelled) => {
                 job.package = None;
+                // Re-preparation can change the remote owner. Rebuild receipts
+                // from that destination's listing rather than trusting old ones.
+                job.completed.clear();
                 if let Some(request) = job.request.as_object_mut() {
                     request.insert("automatic".into(), Value::Bool(false));
                 }

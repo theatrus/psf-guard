@@ -739,6 +739,12 @@ byte ranges: an interrupted file restarts, not the entire package.
 Manual re-preparation always returns to review, including jobs first created by
 an automatic policy. Disabling automatic uploads stops admitting new packages;
 pause or cancel already queued work separately.
+Re-preparation clears local receipts and checks the current owner's remote file
+listing; acknowledgments from another owner cannot skip delivery. Automatic raw
+packages contain only image GUIDs not already admitted for that assignment and
+panel, capped at 4,096 per package. Held and cancelled requests stay reserved
+until an operator retries them, rather than being silently replaced by each new
+exposure. Stack selection keeps its full input cohort.
 
 Use the existing shutdown guard, stop claiming work when shutdown begins, and
 cancel a stalled HTTP stream while retaining the queue. Preparation observes

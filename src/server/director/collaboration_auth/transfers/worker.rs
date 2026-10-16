@@ -318,9 +318,23 @@ async fn automatic(state: &Arc<AppState>, service: Arc<Service>) -> Result<(), F
                     continue;
                 }
             };
-            for (_, selection) in selections {
+            for (_, mut selection) in selections {
                 if remaining == 0 {
                     break;
+                }
+                if policy["mode"] == "raw" {
+                    let (connection, import, panel) = (b.id, selection.import_id, selection.panel);
+                    let claimed = service
+                        .clone()
+                        .query(move |s| s.raw_transfer_images(connection, import, panel))
+                        .await?;
+                    selection.image_guids.retain(|id| !claimed.contains(id));
+                    selection
+                        .image_guids
+                        .truncate(psf_guard_director_interop::collaboration::MAX_REPORT_FRAMES);
+                    if selection.image_guids.is_empty() {
+                        continue;
+                    }
                 }
                 let output = if policy["mode"] == "psf_guard" {
                     let (catalog, plan) = match prepare::context(
