@@ -873,3 +873,127 @@ fn older_flats_across_another_change_leave_the_nearest_corrected() {
     assert_eq!(correction.light_side, Side::After);
     assert!(!selected.flat_basis.flags());
 }
+
+#[test]
+fn flats_of_unknown_angle_alone_on_the_lights_side_are_kept() {
+    // A camera-side change between 09-10 and 09-14, seen by OIII at 0° and
+    // 90°. Ha's only flats after it record no angle (the rig's newest
+    // flats, so no later 0° night to measure them alike with). A 0° Ha
+    // light of 09-15 takes them: they are the only flats on its side. A
+    // 0° Ha flat from before the change must not push them out as the
+    // last resort and leave the light corrected from before it.
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let sessions = [
+        ("ha-0-clean", "2026-09-10T14:00", "Ha", Some(0.0), false),
+        ("oiii-0-clean", "2026-09-10T14:10", "OIII", Some(0.0), false),
+        (
+            "oiii-90-clean",
+            "2026-09-10T14:20",
+            "OIII",
+            Some(90.0),
+            false,
+        ),
+        ("oiii-0-dusty", "2026-09-14T14:10", "OIII", Some(0.0), true),
+        (
+            "oiii-90-dusty",
+            "2026-09-14T14:20",
+            "OIII",
+            Some(90.0),
+            true,
+        ),
+        ("no-angle", "2026-09-14T14:30", "Ha", None, true),
+    ];
+    let mut frames = Vec::new();
+    for (seed, (name, captured, filter, rotation, dusty)) in sessions.into_iter().enumerate() {
+        let session = Session {
+            name,
+            captured,
+            filter,
+            rotation,
+            dusty,
+        };
+        frames.extend(write_session(temp.path(), &session, seed as u64 + 1));
+    }
+    let (conn, _) = measured_frames(temp.path(), &frames);
+    let book = super::load_book(&conn).unwrap();
+    assert!(
+        book.events.iter().any(|event| event.camera_side),
+        "{:?}",
+        book.events
+    );
+    let after = light(temp.path(), "2026-09-15T04:00:00", 0.0);
+    let selected = select_for_light(&conn, &after).unwrap();
+    assert_eq!(
+        names(&selected.flat).first().map(String::as_str),
+        Some("no-angle"),
+        "{:?} {:?}",
+        names(&selected.flat),
+        selected.flat_basis
+    );
+}
+
+#[test]
+fn focal_lengths_within_the_tolerance_are_one_class() {
+    let temp = tempfile::tempdir().unwrap();
+    let focal = |session: &Session, seed, mm: Option<f64>| {
+        let mut metas = write_session(temp.path(), session, seed);
+        for meta in &mut metas {
+            meta.focal_length_mm = mm;
+        }
+        metas
+    };
+    let class_of = |conn: &Connection| {
+        let library = crate::calibration::LibrarySnapshot::load(conn).unwrap();
+        let classes = super::job::focal_classes(library.frames(), |_| 1.0);
+        let mut named: Vec<(String, Option<f64>)> = library
+            .frames()
+            .iter()
+            .map(|frame| {
+                let name = frame.source_path.file_stem().unwrap().to_string_lossy();
+                (
+                    name.rsplit_once('-').unwrap().0.to_string(),
+                    classes[&frame.frame_uuid],
+                )
+            })
+            .collect();
+        named.sort_by(|a, b| a.0.cmp(&b.0));
+        named.dedup();
+        named
+    };
+    // 2,350 mm and 2,350.6 mm, and a session that records none: one rig,
+    // one focal length.
+    let mut frames = focal(&BEFORE_HA_0, 1, Some(2350.0));
+    frames.extend(focal(&AFTER_HA_0, 2, Some(2350.6)));
+    frames.extend(focal(&BEFORE_OIII_0, 3, None));
+    let (conn, _) = measured_frames(temp.path(), &frames);
+    assert_eq!(
+        class_of(&conn),
+        [
+            ("after-ha-0".to_string(), Some(2350.0)),
+            ("before-ha-0".to_string(), Some(2350.0)),
+            ("before-oiii-0".to_string(), Some(2350.0)),
+        ]
+    );
+    let rows = super::store::load_responses(&conn).unwrap();
+    let ha: Vec<&String> = rows
+        .iter()
+        .filter(|row| row.filter.as_deref() == Some("Ha"))
+        .map(|row| &row.family_key)
+        .collect();
+    assert_eq!(ha.len(), 2);
+    assert_eq!(ha[0], ha[1], "0.6 mm apart is one light path");
+
+    // With a reducer at 1,645 mm too, a flat with no focal length could be
+    // either: it keeps to itself.
+    let more = focal(&AFTER_OIII_0, 4, Some(1645.0));
+    {
+        let tx = conn.unchecked_transaction().unwrap();
+        crate::calibration::import_calibration_frames(&tx, &more, Some("profile")).unwrap();
+        tx.commit().unwrap();
+    }
+    let classes = class_of(&conn);
+    assert!(classes.contains(&("after-oiii-0".to_string(), Some(1645.0))));
+    assert!(classes.contains(&("before-oiii-0".to_string(), None)));
+    assert!(classes.contains(&("before-ha-0".to_string(), Some(2350.0))));
+}

@@ -225,7 +225,7 @@ pub fn limits_of(rules: &super::Rules) -> model::Limits {
         dust: rules.flat_split_dust_pct / 100.0,
         broad: rules.flat_split_pattern_pct / 100.0,
         window: rules.flat_session_seconds as i64,
-        rotation: rules.rotation_deg,
+        rotation: rules.coherence_tolerances().rotation_deg,
     }
 }
 

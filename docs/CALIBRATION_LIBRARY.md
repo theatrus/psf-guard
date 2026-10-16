@@ -432,8 +432,11 @@ own side of each change.
 
 After each grading pass, a background stage reads every flat session once
 more: one night of one rig, filter, focal length, sensor mode and rotator
-angle, with at least three flats in use. Flats shot through a reducer are
-never compared with flats shot without it. It takes at most 16 of them, bins each to at most
+angle, with at least three flats in use. Focal lengths within the rig's
+tolerance (1 mm by default) count as one; flats shot through a reducer
+are never compared with flats shot without it, and flats that record no
+focal length join the rig's only one, or keep to themselves when it has
+several. It takes at most 16 flats of a session, bins each to at most
 1,024 px on the long side, divides each by its median and keeps the
 sigma-clipped median of them: the session's **response**. Stars that move
 between frames drop out. Stars that sit still, as in tracked sky flats,
@@ -471,11 +474,14 @@ session it was compared with, so a slow drift cannot chain nights that
 differ into one master.
 
 Angles count as one while the rig's flats step between them in gaps no
-wider than its rotation tolerance (2° by default): flats at 101.3°, 102.2°
-and 104.0° are one angle; flats at 82° and 104° are two. Flats that record
-no angle, on a rig whose other flats do, are compared with that filter's
-flats either side of them in time at every angle, and join the angle they
-measure alike with. Alike with none, they keep to themselves at no angle.
+wider than its rotation tolerance, at most 2°: flats at 101.3°, 102.2° and
+104.0° are one angle; flats at 82° and 104° are two. A wider match
+tolerance lets a light reach further for flats; it does not make two
+angles one. Flats that record no angle, on a rig whose other flats do,
+are compared with that filter's flats either side of them in time at
+every angle. When they measure alike with one angle and unlike every
+other, they take the angle of the flats they matched. Alike with none, or
+with several, they keep to themselves at no angle.
 
 Between two groups lies a **split**, a window from the last flat before it
 to the first flat after it. Splits of one rig whose windows overlap and
@@ -488,12 +494,14 @@ of it, which measure alike, as after a hazy dawn, keeps to a group of its
 own but is no change: no light is flagged or kept from flats for it.
 
 Two changes stay two. A filter with no flats between two changes splits
-once across both. When another filter's flats show a group between
-them, with a split on either side, and the long split shows the shadows
-of both, the long split joins at most one of the two changes, so they
-never collapse into one change with a window of a few minutes. A change whose window
-is shorter than an hour, one flat run, says so in Frames: it landed
-between one twilight's flats, or two changes met there.
+once across both. When another filter's flats show a group between them,
+with a split on either side, and the long split shows the shadows of
+both, the long split dates neither change: it makes no change of its own
+and joins neither, though it still counts as one more filter that saw
+each. Two changes never collapse into one with a window of a few minutes.
+A change whose window is shorter than an hour, one flat run, says so in
+Frames: it landed between one twilight's flats, or two changes met
+there.
 
 ### Which side a light is on
 
@@ -508,9 +516,12 @@ A light stands before or after a change:
    stage takes the median of up to eight of the run's lights, divides it by
    a flat from one side, and fits what is left against the change's map,
    one shadow at a time. Each shadow's fit is weighed against the same fit
-   at places around it where nothing changed, and the shadows are then
-   weighed together. Over a smooth field this decides, however far apart
-   the shadows lie. Over a nebula it is usually undecided.
+   at places around it where nothing changed, clear of the change's other
+   shadows, and the shadows are then weighed together. Over a smooth field
+   this decides, however far apart the shadows lie. Over a nebula it is
+   usually undecided. A session whose lights could not be fitted, as when
+   no map spans the change alone, is kept as undecided and read again
+   only when the change's map or the flat it divides by changes.
 4. Otherwise it is **undetermined**.
 
 ### Which flats a light takes
@@ -528,14 +539,17 @@ in this order:
    later ÷ earlier, measured from a pair of sessions in the light's
    filter, or another filter when its own has none. Only a pair with no
    other change between them serves, and a light takes one correction at
-   most: flats from across two changes are kept as shot, and flagged. The corrected master is written beside the original and reused.
+   most: flats from across two changes are kept as shot, and flagged. The
+   corrected master is written beside the original and reused.
 4. Otherwise its own angle's flats from the other side, and the light is
    flagged: no flats from before (or after) the change at its angle.
 
-Flats that record no angle serve the angle they joined. Flats whose angle
-is still unknown are a last resort: a light that records an angle takes
-them only when no flat of a known angle matches it. Grouping by time
-leaves both as before, where a missing angle matches any.
+Flats that record no angle serve the angle they were measured at. Flats
+whose angle is still unknown are a last resort: a light that records an
+angle takes them only when no flat of a known angle matches it, or when
+they are the only flats on its side of a change. Grouping by time leaves
+both as before, where a missing angle matches any. A light whose flats
+change this way takes a new master: its stack's key changes.
 
 An undetermined light keeps the nearest flats and is flagged. The light's
 Calibration panel says which of these chose its flats, under **Chosen

@@ -45,26 +45,34 @@ stands (§8). Only the background job (`job.rs`) reads pixels.
 
 A **session** is one night (at the catalog's night boundary) of one
 family, with every frame's rotator angle within 2° of the first. A
-**family** is one rig, filter (case-folded), focal length (to the
-millimetre), frame size, binning, gain, offset and readout-mode name; a
-reducer swapped in at the same gain is another family, never new dust.
-A catalog measured before the key took the focal length has its rows
-renamed on the next pass; nothing is read again.
+**family** is one rig, filter (case-folded), focal length class, frame
+size, binning, gain, offset and readout-mode name; a reducer swapped in at
+the same gain is another family, never new dust. Focal length classes
+(`job::focal_classes`) chain a rig's recorded focal lengths while each is
+within the coherence tolerance one master's flats are held to (1 mm by
+default) of the next; a flat with none joins the rig's only class, or is
+a class of its own when the rig has several. A catalog measured before
+the key took the focal length has its rows renamed on the next pass;
+nothing is read again.
 
 Rotation clusters are formed on load, by single linkage: the angles of a
 family's sessions, around the circle, split only where the gap between
-neighbouring angles is wider than the rig's rotation tolerance
-(`rotation_tolerance_deg`, 2° by default). On C925, sessions at 100.1° to
+neighbouring angles is wider than the rig's coherence tolerance for
+rotation: `rotation_tolerance_deg`, capped at 2°. The match setting may
+be widened to 180° so lights reach further for flats; that must not chain
+0° and 90° into one family. On C925, sessions at 100.1° to
 104.4° are one cluster: no gap between them reaches 1°. Grown from the
 lowest angle instead, 104.00° and 104.22° fell into two clusters and were
 never compared. The family's angle is its middle session's.
 
 A session whose flats record no angle, on a rig whose other flats of that
 family do, is compared with its neighbours in time in every cluster
-(`Book::pairs_to_compare`) and joins the cluster one of them measures
-alike with, the closest when several do; its flats then serve lights at
-that angle (`Session::inferred_rotation`). Unlike all of them, it stays in
-a family of its own, at no angle. The pass makes comparisons in rounds,
+(`Book::pairs_to_compare`). It joins a cluster only when exactly one
+measures alike and every other was measured and is unlike, and takes the
+angle of the neighbour it matched, not the cluster's middle; its flats
+then serve lights at that angle (`Session::inferred_rotation`). Alike
+with none, or with several, as on optics where the angle barely matters,
+it stays in a family of its own, at no angle. The pass makes comparisons in rounds,
 at most three, so a session that joined a cluster is compared within it
 in the same pass.
 
@@ -149,13 +157,19 @@ unchanged.
   coincide merge. The window is the overlap. An event seen in two filters
   or at two angles is **camera side** and applies to every light of the
   rig; otherwise it applies only to its filter.
-- **Two changes are not one.** A merge is refused when some family of
-  the rig holds a group with a split on either side, both splits inside
-  the span the merged boundaries reach over (first flat to last, give or
-  take one flat run), and the members show the shadows of both splits
-  (a spot at least half as deep as each one's deepest; a comparison
-  lists faint spots down to 5σ, which say nothing of a shared shadow):
-  that family saw two changes there, and some member spans both. On main
+- **Splits across two changes.** A split is **spanning**
+  (`Book::spanning`) when another family of the rig holds a group with a
+  split on either side, both splits inside the split's window (give or
+  take one flat run), and the split shows the shadows of both. It dates
+  neither change: it makes no event and joins none, so it cannot demote
+  a change to one filter or leave a change months wide that no map can
+  serve. Each event inside its window whose shadow it shows still counts
+  its filter and angle toward the camera side. A shadow is shown when a
+  spot of the split's, at least half as deep as its deepest (a comparison
+  lists faint spots down to 5σ), sits in the other at least half as deep.
+- **Two changes are not one.** A merge is likewise refused when some
+  family holds such a group inside the span the merged boundaries reach
+  over, and the members together show the shadows of both splits. On main
   before this rule, R at 104° had flats in May and on 08-25 only, and its
   one split, carrying both corner shadows, merged with the Aug→Sep change
   while OIII at 104° held a group from 08-18 to 08-24 between the two.
@@ -189,22 +203,33 @@ unchanged.
    split into **shadows**, its connected pieces (pieces within 3 response
    pixels are one shadow), and each shadow is fitted on its own. Its fit
    is repeated at placebo positions, the shadow moved by whole multiples
-   of its own size; a shadow with fewer than six such places (too large,
-   or pressed into a corner) takes them on rings around it at 1, 1.5 and
-   2 times its longer side instead, each at least half inside the frame.
+   of its own size, never onto the change's other shadows; a shadow with
+   fewer than six such places (too large, or pressed into a corner) takes
+   them on rings around it at 1, 1.5 and 2 times its longer side instead,
+   each at least half inside the frame.
    Each weight is taken against its placebos' median, and their spread is
    1.4826 × the median absolute deviation. The shadows' weights combine
    by inverse variance (no spread below 0.02); when they disagree beyond
    their spreads, the combined spread grows by the Birge ratio. A side is
    chosen when the weight lies within two spreads of it and at least
-   three from the other, with a spread of at most 0.3. Filters that
+   four from the other, with a spread of at most 0.3. Filters that
    decide must agree. Over smooth fields this decides; over nebulae it
-   usually does not, and it never takes the wrong side in the tests. The
+   usually does not. Thirty nebulae of 2–8% structure, one shadow and
+   four, 480 fits each: at three spreads from the other side two fits of
+   each took the wrong side, both with spreads near 0.3; at four, none
+   did, and about a third still decide. A sweep is not a proof, so a
+   decision over a nebula remains evidence, not certainty. The
    pedestal must come off first: left in, it damps the change and every
    light looks like it predates it. Before shadows were fitted apart, a
    change of four shadows spread from x 191 to x 6,108 on C925 left the
    whole template no room to move, and every fit was undecided
-   (`EVIDENCE_ALGORITHM_VERSION` 2).
+   (`EVIDENCE_ALGORITHM_VERSION` 2). A session whose lights were read but
+   could not be fitted (no map spans the change alone, no reference) is
+   stored as undecided, so it is not read on every pass. Its key
+   (`Book::evidence_key`) names the change and, per filter of the rig,
+   the map's two sessions and the reference flat, so a borrowed map or a
+   reference that changes asks the lights again; rows of older keys and
+   fit versions are dropped at the end of the pass.
 4. **Undetermined** otherwise.
 
 Pixel evidence is evidence about the lights; a comparison between flats is
@@ -218,11 +243,17 @@ for any, for rigs without a rotator. A flat that records no angle but
 whose session joined a rotation cluster is matched at that cluster's
 angle. One whose angle stays unknown is a last resort
 (`LibrarySnapshot::keep_unknown_angles_last`): a light that records an
-angle takes it only when no raw flat of a known angle matches. On C925,
-the 2026-08-18 dusk flats record no angle. Measured, the Hα and SII ones
-match the rig's 11.1° flats (0.90% and 0.96% dust) and differ from its
-102° flats by 3–4%, so they join 11.1°, and lights at 102° that night no
-longer take them. B, G and OIII have no 11.1° flats of their own to
+angle takes it only when no raw flat of a known angle matches, or when it
+is alone on the light's side of the changes the light is placed against
+(else the light would be corrected from flats before a change when its
+own side's flats exist). Lights on rigs that mix flats with and without
+angles can take different flats than before, so their stack keys change
+and their masters rebuild. On C925,
+the 2026-08-18 dusk flats record no angle. Measured, the SII ones match
+only the rig's 11.06° SII flats (0.96% dust) and differ from its 82° and
+102° flats by 2.6–3.2%, so they take 11.06°. The Hα ones match both 11.1°
+(0.90%) and 7.8° (0.91%), so their angle stays unknown. Lights at 102°
+that night no longer take any of them. B, G and OIII have no 11° flats to
 measure against: their 08-18 flats stay of unknown angle, and the 96
 Bubble Nebula lights at 11.1° that took them still do, as the last
 resort, since nothing else matches. Grouping by time keeps Seiza's rule.
@@ -458,13 +489,13 @@ frames from the archive in place:
   first flats that show them, 08-11 13:05; the donut gone by 08-12 13:06;
   a corner shadow between 08-25 and 09-16. Before these fixes the first
   window ran to 08-19, two corner-shadow changes met in a five-minute
-  window on 08-25, all 94 fits over the donut were undecided (no room for
-  placebos), and 3,054 lights were flagged. Now 37 of 87 fits decide and
-  1,463 lights are flagged: 913 shot during a change with nothing to
-  place them, 550 whose flats lie across two changes. The 1,045 Question
-  Mark Galaxy lights of May are placed before the donut by their own
-  pixels. The same rerun leaves UltraCat131 (one change, 84 lights
-  flagged, 23 at the other angle) and RedCat61 (no change) as they were.
+  window on 08-25, 94 of 99 fits had no room for placebos, and 3,054
+  lights were flagged. Now 31 of 87 fits decide and 1,586 lights are
+  flagged: 1,036 shot during a change with nothing to place them, 550
+  whose nearest flats lie across two changes. The 1,045 Question Mark
+  Galaxy lights of May are placed before the donut by their own pixels.
+  The same rerun leaves UltraCat131 (one change, 84 lights flagged, 23 at
+  the other angle) and RedCat61 (no change) as they were.
 
 The prototype behind these numbers, its pictures and the method are kept
 with the PR's working notes; the Rust metric reproduced them.

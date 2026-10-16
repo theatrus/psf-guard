@@ -118,9 +118,9 @@ fn hex(text: &str) -> String {
 }
 
 /// The family a flat belongs to, rotation aside: rig, filter, focal length
-/// (to the millimetre: a reducer swapped in at the same gain is another
-/// light path, not new dust), frame size, binning and sensor mode.
-pub fn family_key(frame: &CalibrationFrame) -> String {
+/// class (a reducer swapped in at the same gain is another light path, not
+/// new dust; see [`focal_classes`]), frame size, binning and sensor mode.
+pub fn family_key(frame: &CalibrationFrame, focal: Option<f64>) -> String {
     hex(&format!(
         "{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{}",
         frame.rig_uuid,
@@ -129,10 +129,7 @@ pub fn family_key(frame: &CalibrationFrame) -> String {
             .as_deref()
             .map(canonical_filter)
             .unwrap_or_default(),
-        frame
-            .focal_length_mm
-            .filter(|mm| mm.is_finite())
-            .map(|mm| mm.round() as i64),
+        focal.map(|mm| (mm * 10.0).round() as i64),
         frame.width,
         frame.height,
         frame.binning_x,
@@ -147,10 +144,68 @@ pub fn family_key(frame: &CalibrationFrame) -> String {
     ))
 }
 
+/// Each flat's focal length class, by frame uuid: per rig, recorded focal
+/// lengths chained while each is within `tolerance(rig)` of the next (what
+/// selection holds one master's flats to), named by the class's shortest.
+/// A flat that records none joins the rig's only class when it has
+/// exactly one, and is a class of its own otherwise.
+pub fn focal_classes<'a>(
+    flats: impl IntoIterator<Item = &'a CalibrationFrame>,
+    tolerance: impl Fn(&str) -> f64,
+) -> HashMap<String, Option<f64>> {
+    let mut by_rig: BTreeMap<&str, Vec<&CalibrationFrame>> = BTreeMap::new();
+    for frame in flats {
+        by_rig
+            .entry(frame.rig_uuid.as_str())
+            .or_default()
+            .push(frame);
+    }
+    let mut out = HashMap::new();
+    for (rig, frames) in by_rig {
+        let tolerance = tolerance(rig);
+        let mut known: Vec<f64> = frames
+            .iter()
+            .filter_map(|frame| frame.focal_length_mm.filter(|mm| mm.is_finite()))
+            .collect();
+        known.sort_by(f64::total_cmp);
+        known.dedup();
+        // The shortest of each chain.
+        let mut classes: Vec<f64> = Vec::new();
+        for (i, mm) in known.iter().enumerate() {
+            if i == 0 || mm - known[i - 1] > tolerance {
+                classes.push(*mm);
+            }
+        }
+        let class_of = |mm: f64| classes.iter().rev().find(|start| **start <= mm).copied();
+        for frame in frames {
+            let class = match frame.focal_length_mm.filter(|mm| mm.is_finite()) {
+                Some(mm) => class_of(mm),
+                None if classes.len() == 1 => Some(classes[0]),
+                None => None,
+            };
+            out.insert(frame.frame_uuid.clone(), class);
+        }
+    }
+    out
+}
+
 /// Flat sessions in use: one night of one family, frames whose rotator
 /// angle lies within [`super::model::ROTATION_CLUSTER_DEG`] of the
 /// session's first.
 pub fn plan_sessions(frames: &[CalibrationFrame], boundary: i64) -> Vec<SessionPlan> {
+    plan_sessions_with(frames, boundary, |rig| {
+        crate::calibration::rules::rules_for_rig(rig)
+            .coherence_tolerances()
+            .focal_length_mm
+    })
+}
+
+/// [`plan_sessions`], with each rig's focal length tolerance given.
+pub fn plan_sessions_with(
+    frames: &[CalibrationFrame],
+    boundary: i64,
+    focal_tolerance: impl Fn(&str) -> f64,
+) -> Vec<SessionPlan> {
     let mut flats: Vec<&CalibrationFrame> = frames
         .iter()
         .filter(|frame| {
@@ -161,10 +216,11 @@ pub fn plan_sessions(frames: &[CalibrationFrame], boundary: i64) -> Vec<SessionP
         })
         .collect();
     flats.sort_by_key(|frame| (frame.captured_at, frame.id));
+    let focal = focal_classes(flats.iter().copied(), focal_tolerance);
     let mut sessions: Vec<SessionPlan> = Vec::new();
     for frame in flats {
         let night = night_of(frame.captured_at.unwrap_or_default(), boundary);
-        let family = family_key(frame);
+        let family = family_key(frame, focal.get(&frame.frame_uuid).copied().flatten());
         let joins = |session: &SessionPlan| {
             session.family_key == family
                 && session.night == night
@@ -496,6 +552,14 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         }
     }
     (pass.progress)("reading lights shot during a change", total, total);
+    // Evidence no session in a window asks for any more, or kept by an
+    // older fit, goes.
+    let keep: Vec<(String, String)> = book
+        .sessions_in_windows()
+        .into_iter()
+        .map(|(_, session, key)| (book.imaging[session].key.clone(), key))
+        .collect();
+    store::retain_evidence(conn, &keep, EVIDENCE_ALGORITHM_VERSION)?;
     Ok(outcome)
 }
 
@@ -617,16 +681,8 @@ fn session_evidence(
         // A reference flat response of this filter with a known side: the
         // nearest in time, any angle.
         let reference = book
-            .sessions
-            .iter()
-            .filter(|s| {
-                s.row.rig_uuid == event.rig_uuid
-                    && s.row.filter.as_deref().map(canonical_filter)
-                        == Some(canonical_filter(&filter))
-                    && event.side_of(s.first).is_some()
-                    && event.side_of(s.last).is_some()
-            })
-            .min_by_key(|s| (s.first - session.start).abs());
+            .evidence_reference(event, &filter, session.start)
+            .map(|index| &book.sessions[index]);
         let Some(reference) = reference else {
             tracing::debug!("light evidence {filter}: no flat session on either side");
             continue;
@@ -691,13 +747,13 @@ fn session_evidence(
             verdict: fit.verdict,
         });
     }
-    if fits.is_empty() {
-        return Ok(None);
-    }
+    // Lights found but nothing to fit, as when no map spans the change
+    // alone: kept as undecided, so the pass does not read them again until
+    // a map or reference changes the key.
     let verdicts: Vec<Verdict> = fits.iter().map(|fit| fit.verdict).collect();
     Ok(Some(EvidenceRow {
         session_key: session.key.clone(),
-        event_key: event.key.clone(),
+        event_key: book.evidence_key(event, session),
         verdict: evidence::combine(&verdicts),
         fits,
     }))

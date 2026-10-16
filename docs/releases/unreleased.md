@@ -175,15 +175,17 @@
   the lights WBPP cannot calibrate as a stack would.
 - Flat groups hold up on rigs whose rotator wanders: flats a degree or two
   apart are one angle and are compared, so a change's window ends at the
-  first flats that show it. Flats that record no angle join the angle they
-  measure alike with, and otherwise serve a light only when no flat of its
-  angle does. Flats shot through a reducer are never compared with flats
-  shot without it. A light's own pixels now place it against a change of
-  several shadows spread across the frame, so far fewer lights shot during
-  a change are flagged. One filter's split across two changes no longer
-  merges them into a window of minutes, a change narrower than one flat
-  run says so in Frames, and flats from across two changes are flagged
-  rather than corrected across one.
+  first flats that show it. Flats that record no angle take the angle
+  they measure alike with when only one fits, and otherwise serve a light
+  only when no flat of its angle does, or when they are the only flats on
+  its side of a change; lights on such rigs may take new flats, and their
+  masters rebuild. Flats shot through a reducer are never compared with
+  flats shot without it. A light's own pixels now place it against a
+  change of several shadows spread across the frame, so far fewer lights
+  shot during a change are flagged. One filter's split across two changes
+  no longer merges them into a window of minutes or makes a change of its
+  own, a change narrower than one flat run says so in Frames, and flats
+  from across two changes are flagged rather than corrected across one.
 - Tracked sky flats with stars no longer read as dew or frost: the flat-set
   check counts only spots that take light away, and **Compare with
   session** draws stars at neutral grey.

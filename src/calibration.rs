@@ -2202,7 +2202,8 @@ impl LibrarySnapshot {
 
     /// With measured grouping, a raw flat whose angle is unknown (none
     /// recorded, none measured) is a last resort for a light that records
-    /// one: it stays only when no flat of a known angle matches. Seiza
+    /// one: it stays only when no flat of a known angle matches, or when
+    /// it is alone on the light's side of a measured change. Seiza
     /// matches an unknown angle to any, for rigs without a rotator; a rig
     /// whose other flats record angles has one, and the flat may have been
     /// shot at any of them.
@@ -2222,10 +2223,34 @@ impl LibrarySnapshot {
         let unknown = |frame: &CalibrationFrame| {
             !frame.is_master && self.measured_angle(frame, rules).is_none()
         };
-        if flats
+        // The light's side of every measured change it stands clear of.
+        let book = &self.flat_book;
+        let rig = rules::light_rig_uuid(light);
+        let sides: Vec<(&flat_groups::model::Event, flat_groups::model::Side)> =
+            match light.timestamp {
+                Some(at) => book
+                    .events_for(&rig, light.filter.as_deref())
+                    .filter_map(|event| Some((event, book.place(event, at).side()?)))
+                    .collect(),
+                None => Vec::new(),
+            };
+        let on_side = |frame: &CalibrationFrame| {
+            sides.iter().all(|(event, side)| {
+                frame
+                    .captured_at
+                    .and_then(|captured| event.side_of(captured))
+                    == Some(*side)
+            })
+        };
+        let known: Vec<&CalibrationFrame> = flats
             .iter()
-            .any(|frame| !frame.is_master && !unknown(frame))
-        {
+            .filter(|frame| !frame.is_master && !unknown(frame))
+            .collect();
+        // Unknown-angle flats that are alone on the light's side of a
+        // change are its own side's flats: the change logic weighs them.
+        let alone_on_side = !known.iter().any(|frame| on_side(frame))
+            && flats.iter().any(|frame| unknown(frame) && on_side(frame));
+        if !known.is_empty() && !alone_on_side {
             flats.retain(|frame| !unknown(frame));
         }
     }

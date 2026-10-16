@@ -36,7 +36,7 @@ const SUPPORT_SHARE: f32 = 0.25;
 /// A side is chosen when the weight lies within this many spreads of it...
 const NEAR_SPREADS: f64 = 2.0;
 /// ...and at least this many from the other side...
-const FAR_SPREADS: f64 = 3.0;
+const FAR_SPREADS: f64 = 4.0;
 /// ...and the spread is at most this: the sides are 1 apart.
 const MAX_SPREAD: f64 = 0.3;
 /// Fewest placebo positions a spread needs.
@@ -160,13 +160,27 @@ struct ShadowFit {
     spread: f64,
 }
 
+/// Fit one shadow. `others` marks the change's other shadows: a placebo
+/// that lands on one would weigh the change, not the sky.
 fn fit_shadow(
     residual: &[f32],
     excluded: &[bool],
+    others: &[bool],
     width: usize,
     template: &[(usize, f32)],
 ) -> Option<ShadowFit> {
     let height = residual.len() / width;
+    let clear = |(dx, dy): (isize, isize)| {
+        template.iter().all(|(index, _)| {
+            let x = (index % width) as isize + dx;
+            let y = (index / width) as isize + dy;
+            x < 0
+                || y < 0
+                || x >= width as isize
+                || y >= height as isize
+                || !others[y as usize * width + x as usize]
+        })
+    };
     let alpha = weight(residual, excluded, width, template, (0, 0))?;
     let (min_x, max_x, min_y, max_y) = template.iter().fold(
         (usize::MAX, 0usize, usize::MAX, 0usize),
@@ -190,6 +204,9 @@ fn fit_shadow(
             if x0 < 0 || y0 < 0 || x1 >= width as isize || y1 >= height as isize {
                 continue;
             }
+            if !clear((dx, dy)) {
+                continue;
+            }
             if let Some(w) = weight(residual, excluded, width, template, (dx, dy)) {
                 placebos.push(w);
             }
@@ -205,7 +222,7 @@ fn fit_shadow(
                 let angle = std::f64::consts::TAU * step as f64 / RING_DIRECTIONS as f64;
                 let dx = (radius * side * angle.cos()).round() as isize;
                 let dy = (radius * side * angle.sin()).round() as isize;
-                if dx.abs() < span_x && dy.abs() < span_y {
+                if (dx.abs() < span_x && dy.abs() < span_y) || !clear((dx, dy)) {
                     continue;
                 }
                 if let Some(w) = weight(residual, excluded, width, template, (dx, dy)) {
@@ -287,7 +304,18 @@ pub fn fit(
     };
     let fits: Vec<ShadowFit> = shadows
         .iter()
-        .filter_map(|template| fit_shadow(&residual, &excluded, map.width, template))
+        .enumerate()
+        .filter_map(|(i, template)| {
+            let mut others = vec![false; map.data.len()];
+            for (j, shadow) in shadows.iter().enumerate() {
+                if j != i {
+                    for (index, _) in shadow {
+                        others[*index] = true;
+                    }
+                }
+            }
+            fit_shadow(&residual, &excluded, &others, map.width, template)
+        })
         .collect();
     let Some(combined) = combine_shadows(&fits) else {
         // No shadow could be weighed against placebos: say what the whole
@@ -444,6 +472,38 @@ mod tests {
         }
     }
 
+    /// The nebula tests above use one structure each; here thirty, for one
+    /// shadow and for four. At three spreads from the other side two of
+    /// these 960 fits took the wrong side, one each, both with spreads near
+    /// the limit: four spreads leave none.
+    #[test]
+    fn many_nebulae_never_take_the_wrong_side() {
+        for (before, after, map) in [setup(), spread_out()] {
+            let (mut wrong, mut decided) = (Vec::new(), 0);
+            for k in 0..30u64 {
+                for nebula in [0.02f32, 0.03, 0.05, 0.08] {
+                    for (truth, other) in [(&before, Verdict::After), (&after, Verdict::Before)] {
+                        let lights: Vec<Plane> = (0..5)
+                            .map(|seed| sky(truth, nebula, 1000 * (k + 1) + seed))
+                            .collect();
+                        let background = background(&lights, 0.0, 10).expect("background");
+                        for (reference, side) in [(&before, Side::Before), (&after, Side::After)] {
+                            let fitted = fit(&background, reference, side, &map).expect("fit");
+                            if fitted.verdict == other {
+                                wrong.push((k, nebula, fitted));
+                            } else if fitted.verdict != Verdict::Undecided {
+                                decided += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(wrong.is_empty(), "{wrong:?}");
+            // Light structure still decides, the right way, often.
+            assert!(decided > 100, "{decided}");
+        }
+    }
+
     #[test]
     fn a_shadow_with_no_room_is_weighed_on_a_ring() {
         // A shadow over half the frame's height, near its left edge: two
@@ -464,7 +524,9 @@ mod tests {
             residual[*index] += t;
         }
         let excluded = vec![false; width * height];
-        let fitted = fit_shadow(&residual, &excluded, width, &template).expect("ring placebos");
+        let others = vec![false; width * height];
+        let fitted =
+            fit_shadow(&residual, &excluded, &others, width, &template).expect("ring placebos");
         assert!((fitted.weight - 1.0).abs() < 0.1, "{fitted:?}");
         assert!(fitted.spread < 0.2, "{fitted:?}");
     }
