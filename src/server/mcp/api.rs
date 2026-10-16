@@ -238,6 +238,11 @@ pub(super) fn readable_path(path: &str) -> Result<(), String> {
     {
         return Err("The path may not contain `.` or `..` segments".into());
     }
+    // An archive holds every catalog and, perhaps, the server's secrets: it
+    // is a person's to download, never an agent's.
+    if route.starts_with("/backups/files") {
+        return Err("Backup archives are not handed to agents; get_backups lists them".into());
+    }
     Ok(())
 }
 
@@ -251,7 +256,10 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "Stack builds running and queued across databases",
     ),
     ("/wbpp/activity", "WBPP runs running and queued"),
-    ("/settings/calibration", "Calibration matching settings"),
+    (
+        "/settings/calibration",
+        "Calibration matching settings, global and per rig, with night_zone (where a rig's nights split)",
+    ),
     ("/settings/stacking", "Stack automation settings"),
     ("/settings/stacking/method", "Default stacking method"),
     (
@@ -272,6 +280,14 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
     ),
     ("/processing-setups", "Saved stack processing setups"),
     ("/update-notice", "Newer release notice"),
+    (
+        "/backups",
+        "Backups: schedule, archives, the run under way (editor, database management)",
+    ),
+    (
+        "/backups/status",
+        "The backup under way and the last one (editor, database management)",
+    ),
     ("/db/{db}/projects", "Projects (plain list)"),
     (
         "/db/{db}/projects/overview",
@@ -352,6 +368,10 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "/db/{db}/analysis/quality-backfill",
         "Quality scan progress",
     ),
+    (
+        "/db/{db}/analysis/quality-scan",
+        "Quality scan progress",
+    ),
     ("/db/{db}/import", "Import progress"),
     ("/db/{db}/import/folders", "Image folders to import from"),
     ("/db/{db}/autoimport", "Automatic import status"),
@@ -372,11 +392,15 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
     ),
     (
         "/db/{db}/calibrations/frames",
-        "Calibration frames a page at a time; ?rig&kind&filter&exposure&temp_min&temp_max&night_from&night_to&grade&kept_out&session&sort&page&per_page",
+        "Calibration frames a page at a time; ?rig&kind&filter&exposure&temp_min&temp_max&night_from&night_to&grade&kept_out&rotation&session&project&group&sort&page&per_page",
     ),
     (
         "/db/{db}/calibrations/sessions",
-        "Calibration sessions (night, kind, settings) with counts by grade; the frame filters",
+        "Calibration sessions (night, kind, settings) with counts by grade, and the values the filters take; ?project and the frame filters",
+    ),
+    (
+        "/db/{db}/calibrations/project-scope",
+        "What one project's lights use from the library: sessions, masters, rigs; ?project",
     ),
     (
         "/db/{db}/calibrations/frames/{frame_uuid}",
@@ -388,11 +412,27 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
     ),
     (
         "/db/{db}/calibrations/flat-groups",
-        "Flat groups per rig: families, groups, splits and joins (measured or by hand, with any conflict), change events; ?project",
+        "Flat groups per rig: families, groups, splits and joins (measured or by hand, with any conflict), change events with their dust and vignetting, rig clocks; ?project",
+    ),
+    (
+        "/db/{db}/calibrations/flat-groups/use",
+        "What each flat group feeds: its masters and the lights that take it; ?group",
+    ),
+    (
+        "/db/{db}/calibrations/flat-groups/place",
+        "The family, night and angle a flat session would take among the groups; ?session",
+    ),
+    (
+        "/db/{db}/calibrations/flat-measure",
+        "Flat measuring progress: rig, stage, stopped rigs, retry",
+    ),
+    (
+        "/db/{db}/calibrations/frame-sites",
+        "Progress reading where older calibration frames were shot",
     ),
     (
         "/db/{db}/calibrations/duplicates",
-        "Calibration exposures recorded more than once, and what a repair would merge",
+        "The duplicate check or repair, and its plan: exposures recorded more than once, what a repair would merge, its token",
     ),
     (
         "/db/{db}/calibration-health",
@@ -533,6 +573,8 @@ mod tests {
         assert!(readable_path("/mcp").is_err());
         assert!(readable_path("/mcp/anything").is_err());
         assert!(readable_path("/db/../settings").is_err());
+        assert!(readable_path("/backups").is_ok());
+        assert!(readable_path("/backups/files/downloads/psf-guard-backup.zip").is_err());
         assert_eq!(
             with_query("/x", [("q", Some("NGC 7635".into())), ("skip", None)]),
             "/x?q=NGC%207635"
