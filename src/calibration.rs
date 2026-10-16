@@ -2112,6 +2112,11 @@ impl LibrarySnapshot {
         let serving = family
             .as_ref()
             .filter(|choice| choice.at_recorded || choice.by_pixels());
+        // Flats of the serving family at another angle than the light's,
+        // admitted by measurement: they stay candidates only where nothing
+        // at the light's own angle can serve it (below), so a light that
+        // never needs them keeps the candidates, and the stack key, it had.
+        let mut off_angle: HashSet<String> = HashSet::new();
         for candidate in &self.frames {
             if candidate.is_master && policy == ExternalMasterPolicy::Ignore {
                 continue;
@@ -2148,6 +2153,9 @@ impl LibrarySnapshot {
                 CalibrationKind::Flat => {
                     match self.family_admits(serving, light, candidate, &rules) {
                         Some(admitted) => {
+                            if admitted && !self.at_lights_angle(light, candidate, &rules) {
+                                off_angle.insert(candidate.frame_uuid.clone());
+                            }
                             admitted && {
                                 // Its family was chosen for the light: matched at
                                 // the light's angle, every other gate as always.
@@ -2183,6 +2191,23 @@ impl LibrarySnapshot {
             }
         }
 
+        if !off_angle.is_empty() {
+            // One at the light's own angle that can reach it leaves them
+            // nothing to do; one across a known change from the light
+            // could serve it only as its own angle's flats would, carried
+            // or flagged, which they are not.
+            let own_angle_serves = selected.flat.iter().any(|frame| {
+                !off_angle.contains(&frame.frame_uuid)
+                    && self.at_lights_angle(light, frame, &rules)
+                    && self.not_across_a_known_change(light, frame)
+            });
+            let keep = |frame: &CalibrationFrame| {
+                !off_angle.contains(&frame.frame_uuid)
+                    || (!own_angle_serves && self.not_across_a_known_change(light, frame))
+            };
+            selected.flat.retain(|frame| keep(frame));
+            selected.kept_out.retain(|frame| keep(frame));
+        }
         sort_candidates(&mut selected.bias, light.timestamp);
         sort_candidates(&mut selected.dark, light.timestamp);
         sort_candidates(&mut selected.flat, light.timestamp);
@@ -2409,6 +2434,37 @@ impl LibrarySnapshot {
             None if family.moved() => Some(false),
             None => None,
         }
+    }
+
+    /// Whether a flat lies at the light's recorded angle, within the rig's
+    /// tolerance.
+    fn at_lights_angle(&self, light: &FrameMeta, frame: &CalibrationFrame, rules: &Rules) -> bool {
+        match (light.rotator_position, self.measured_angle(frame, rules)) {
+            (Some(light), Some(flat)) => rotation_gap(light, flat) <= rules.rotation_deg,
+            _ => false,
+        }
+    }
+
+    /// Whether a flat lies on no known other side of a measured change from
+    /// the light: on its side of every change whose side for the light is
+    /// known.
+    fn not_across_a_known_change(&self, light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
+        let book = &self.flat_book;
+        let rig = rules::light_rig_uuid(light);
+        let Some(at) = light.timestamp else {
+            return true;
+        };
+        book.events
+            .iter()
+            .filter(|event| event.rig_uuid == rig && event.applies_to(light.filter.as_deref()))
+            .all(
+                |event| match flat_groups::place_light(book, event, at).side() {
+                    Some(side) => candidate
+                        .captured_at
+                        .is_none_or(|captured| event.side_of(captured) == Some(side)),
+                    None => true,
+                },
+            )
     }
 
     /// Whether a flat lies on the light's side of every measured change of

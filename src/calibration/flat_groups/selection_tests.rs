@@ -1061,10 +1061,11 @@ fn focal_lengths_within_the_tolerance_are_one_class() {
 }
 
 /// Flats at 82.2° and 72.6° shot one morning, alike, as C925's OIII: one
-/// response family. A light at either angle takes its own angle's flats
-/// first and the other angle's after them, since their sessions measured
-/// alike. A light at 77°, between them, has no flats at its angle: the
-/// header alone hands it none, as before families.
+/// response family. A light at 72.6° has its own angle's flats on its side,
+/// so the 82.2° flats, though measured alike, stay out of its candidates:
+/// its stack key is the one grouping by time gives it. A light at 77°,
+/// between them, has no flats at its angle: the header alone hands it
+/// none, as before families.
 #[test]
 fn a_light_takes_its_familys_other_angle_only_where_measured_alike() {
     let _settings = settings_lock();
@@ -1094,7 +1095,7 @@ fn a_light_takes_its_familys_other_angle_only_where_measured_alike() {
 
     let at_72 = light(temp.path(), "2026-09-12T05:00:00", 72.6);
     let selected = select_for_light(&conn, &at_72).unwrap();
-    assert_eq!(names(&selected.flat), ["ha-72", "ha-82"]);
+    assert_eq!(names(&selected.flat), ["ha-72"]);
     let family = selected.flat_family.as_ref().expect("its family");
     assert_eq!(family.label, "Ha at 72.6° & 82.2°");
     assert!(selected.match_tolerances().light_rotation.is_recorded());
@@ -1117,6 +1118,52 @@ fn a_light_takes_its_familys_other_angle_only_where_measured_alike() {
     let selected = select_for_light(&conn, &at_72).unwrap();
     assert_eq!(names(&selected.flat), ["ha-72"]);
     assert!(selected.flat_family.is_none());
+}
+
+/// A light whose family's candidates grow by measurement (flats at another
+/// angle measured alike with its own) while its master stays keeps its
+/// stack key: before the flats were measured, and after, it names the same
+/// frames.
+#[test]
+fn a_light_whose_master_stays_keeps_its_stack_key() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let frames: Vec<FrameMeta> = [
+        Session {
+            name: "ha-82",
+            captured: "2026-09-10T14:00",
+            filter: "Ha",
+            rotation: Some(82.2),
+            dusty: false,
+        },
+        Session {
+            name: "ha-72",
+            captured: "2026-09-10T14:30",
+            filter: "Ha",
+            rotation: Some(72.6),
+            dusty: false,
+        },
+    ]
+    .iter()
+    .enumerate()
+    .flat_map(|(seed, session)| write_session(temp.path(), session, seed as u64 + 1))
+    .collect();
+    let mut conn = Connection::open(temp.path().join("catalog.sqlite")).unwrap();
+    let tx = conn.transaction().unwrap();
+    import_calibration_frames(&tx, &frames, Some("profile")).unwrap();
+    tx.commit().unwrap();
+    let at_72 = light(temp.path(), "2026-09-12T05:00:00", 72.6);
+    let unmeasured = select_for_light(&conn, &at_72).unwrap();
+    assert!(unmeasured.flat_family.is_none());
+
+    super::testing::measure_as(&conn, |_, _| 0.002);
+    let measured = select_for_light(&conn, &at_72).unwrap();
+    assert!(measured.flat_family.is_some(), "one family of two angles");
+    assert_eq!(names(&measured.flat), names(&unmeasured.flat));
+    assert_eq!(
+        crate::calibration::selection_hash(&measured, false),
+        crate::calibration::selection_hash(&unmeasured, false)
+    );
 }
 
 /// Flats at 0° and at 8° of `filter`, one morning, apart: a shadow ahead of

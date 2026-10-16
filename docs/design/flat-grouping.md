@@ -405,7 +405,16 @@ stacker's gate then reads the light at the flats' angle, and the light's
 `FlatFamily::alike_range` names the range, its pairs and nights for the
 panel ("Flats at 104.0°: this family's flats at 101.5–102.2° and
 104.2–104.4° measure alike (10 pairs over 9 nights, measured across a
-change of dust on the camera side only)"). Within the family, flats at the angle the
+change of dust on the camera side only)").
+
+Flats admitted at another angle than the light's (by its pixels, by a
+measured-alike session or by a range) stay candidates only where they can
+do something: when no flat at the light's own angle lies on no known
+other side of a change from it, and only those on no known other side
+themselves. A stack's key names every candidate flat
+(`selection_hash`), and its master may fall back on the next set, so
+the candidates must stay; but a light whose own angle serves it keeps
+exactly the candidates, and the stack key, grouping by time gives it. Within the family, flats at the angle the
 light recorded sort first, as before families: measured alike is not
 identical; then those within the angle prior, then the rest, each in
 time order. The family's far angles serve where nothing nearer lies on
@@ -813,12 +822,12 @@ frames from the archive in place:
   230.9–231.3°` in every filter (tracked sky flats behind a refractor do
   not depend on the angle), no change, no flag; every master is main's,
   since every light has flats at its own angle.
-- **Rebuilds**: a session key names every candidate flat, so a light
-  whose candidates change rebuilds even when its master does not. On
-  C925, 3,586 lights keep main's master and basis but gain or lose
-  candidates (most from flats measured alike with their own angle's,
-  `Book::alike_with_angle`); UltraCat131 1,369 and RedCat61 1,154. Each
-  rebuilds once.
+- **Rebuilds**: a stack key names every candidate flat, so a light
+  whose candidates change rebuilds even when its master does not. With
+  other-angle flats admitted only where nothing at the light's own angle
+  can serve it, no light on the three catalogs keeps main's master and
+  basis with other candidates (by the nights the reports list); on C925
+  the 170 lights whose master changes rebuild, and no others.
 
 The prototype behind these numbers, its pictures and the method are kept
 with the PR's working notes; the Rust metric reproduced them.
