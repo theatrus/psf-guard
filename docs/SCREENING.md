@@ -163,18 +163,21 @@ scanned, and the values it wrote back are replaced.
 How hard event evidence hits the score is adjustable. The **Scoring**
 control in the Sequence view scales the score hit from satellite trails,
 pointing failures, and temporal anomalies between 0% (ignore that evidence),
-100% (the calibrated default), and 200% (double the hit).
+100% (the calibrated default), and 200% (double the hit). Setting the
+satellite penalty to 0% turns satellite-trail checking off: trails neither
+lower the score nor drive reject recommendations, though a pixel-confirmed
+trail still shows as a warning — useful when trails are removed during
+stacking anyway. The CLI equivalent is `screen-fits --ignore-satellites`.
 
 **HFR rise** and **Star loss** set, the same way, how hard a frame is marked
 down for an HFR above, or fewer stars than, the sequence's good frames. The
 scale divides both ends of the band above: at 200% a frame loses score from
 2.5% more HFR and reaches zero at 15%, at 50% the band doubles, and at 0%
-HFR or star count no longer separates frames. Unlike the Max HFR and Min
-stars limits below, these keep the score graded and relative to the night. Setting the
-satellite penalty to 0% turns satellite-trail checking off: trails neither
-lower the score nor drive reject recommendations, though a pixel-confirmed
-trail still shows as a warning — useful when trails are removed during
-stacking anyway. The CLI equivalent is `screen-fits --ignore-satellites`.
+standing behind the good frames costs nothing. A sudden drop in stars or
+jump in HFR from one frame to the next is a temporal anomaly, which the
+**Temporal anomalies** penalty scales, whatever these are set to. Unlike
+the Max HFR and Min stars limits below, these keep the score graded and
+relative to the night.
 
 The same control sets optional **reject limits**, fixed cut-offs like
 N.I.N.A. subframe selection: **Max HFR** rejects any frame whose measured
@@ -313,13 +316,17 @@ The **Cutoff** in the Sequence toolbar measures the **Score** (0 to 100, as
 the chips show it), **Stars** or **HFR**. The chart's bars, its dashed line,
 the slider and the marked cards follow the measure chosen. The Stars and HFR
 sliders run over the readings in the session on screen, and their cutoff
-starts where the score's own star or HFR term reaches zero at the calibrated
-penalty: 40% fewer stars than the session's 90th percentile, or an HFR 30%
-over its 10th. Fewer stars and a lower score fall below the cutoff; a larger
-HFR falls above it. The address keeps the measure as `cutoffBy` and each
-measure's cutoff on its own key, `cutoff` (the score as 0 to 1, as older
-links hold it), `starCutoff` and `hfrCutoff`, so switching back finds the
-cutoff where you left it.
+starts where the score's own star or HFR term reaches zero under the view's
+**Star loss** or **HFR rise** penalty: at 100%, 40% fewer stars than the
+session's 90th percentile, or an HFR 30% over its 10th. Fewer stars and a
+lower score fall below the cutoff; a larger HFR falls above it. The address
+keeps the measure as `cutoffBy` and each measure's cutoff on its own key, so
+switching back finds the cutoff where you left it: `cutoff` holds the score
+as 0 to 1, as older links do, and `starCutoff` and `hfrCutoff` hold a share
+of that reference, such as `starCutoff=0.75` for three quarters of the
+90th-percentile star count. A Stars or HFR cutoff therefore means the same
+on every session tab and filter, however their readings differ, and one
+left at its default stays out of the address.
 
 Use the **Select** pill to pick frames by a rule: past the cutoff, clouds or
 obstruction, off target, failed plate solve, recommended rejects, or poor

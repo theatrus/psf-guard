@@ -150,6 +150,19 @@ describe('a view\'s scoring in the link', () => {
       .toEqual({ ...defaults, pointing: 2, temporal: 0.3 });
   });
 
+  it('scores a link from before HFR rise and star loss as it scored then', () => {
+    const mine: ScoringPreferences = { ...defaults, hfrRise: 2, starLoss: 0 };
+    // Names the five values links held then, and not the two added since.
+    const old = params('penaltySatellite=0&penaltyPointing=1&penaltyTemporal=1&maxHfr=off&minStars=505');
+    expect(scoringFromParams(old, mine)).toEqual({
+      ...DEFAULTS, satellite: 0, hfrRejectAbove: null, starCountRejectBelow: 505,
+    });
+    // A link naming nothing still takes the opener's own.
+    expect(scoringFromParams(params('db=a'), mine)).toEqual(mine);
+    expect(scoringFromParams(params('penaltyHfrRise=1.5&minStars=505'), mine))
+      .toMatchObject({ hfrRise: 1.5, starLoss: 1, starCountRejectBelow: 505 });
+  });
+
   it('ignores a value it may not hold, by the rules Settings uses', () => {
     expect(scoringFromParams(params('penaltySatellite=lots&maxHfr=-1&minStars='), defaults))
       .toEqual(defaults);

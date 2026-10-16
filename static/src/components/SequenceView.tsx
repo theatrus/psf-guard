@@ -15,6 +15,7 @@ import { apiClient } from '../api/client';
 import { useSequenceAnalysis } from '../hooks/useSequenceAnalysis';
 import { useSpatialScan } from '../hooks/useSpatialScan';
 import ScoringPenaltyControl from './ScoringPenaltyControl';
+import { useScoringPreferences } from '../hooks/useScoringPreferences';
 import { useGrading } from '../hooks/useGrading';
 import {
   useDbProjectTarget,
@@ -34,11 +35,11 @@ import TimeBreakMark from './TimeBreakMark';
 import SequenceCutoffControl from './SequenceCutoffControl';
 import {
   cutoffMetricOf,
-  cutoffScale,
-  defaultCutoff,
   formatCutoff,
   metricValue,
   pastCutoff,
+  resolveCutoff,
+  storedCutoff,
   type CutoffMetric,
   type CutoffScale,
 } from '../utils/sequenceCutoff';
@@ -400,12 +401,18 @@ export default function SequenceView() {
     () => [...metricValues.values()].filter((value): value is number => value !== null),
     [metricValues],
   );
-  const cutoffRange = useMemo(() => cutoffScale(cutoffMetric, observedValues), [cutoffMetric, observedValues]);
-  const threshold = useMemo(() => {
-    const wanted = urlCutoff ?? defaultCutoff(cutoffMetric, observedValues);
-    if (wanted === null || !cutoffRange) return null;
-    return Math.min(cutoffRange.max, Math.max(cutoffRange.min, wanted));
-  }, [cutoffMetric, cutoffRange, observedValues, urlCutoff]);
+  // A Stars or HFR cutoff is kept relative to the frames on screen, so it
+  // means the same on another session tab or filter; its default moves
+  // with the view's HFR-rise and star-loss penalties.
+  const { hfrRise, starLoss } = useScoringPreferences();
+  const cutoffPenalties = useMemo(() => ({ hfrRise, starLoss }), [hfrRise, starLoss]);
+  const { scale: cutoffRange, value: threshold } = useMemo(
+    () => resolveCutoff(cutoffMetric, urlCutoff, observedValues, cutoffPenalties),
+    [cutoffMetric, cutoffPenalties, observedValues, urlCutoff],
+  );
+  const chooseCutoff = useCallback((value: number) => {
+    setCutoff(storedCutoff(cutoffMetric, value, observedValues, cutoffPenalties));
+  }, [cutoffMetric, cutoffPenalties, observedValues, setCutoff]);
   const pastCutoffIds = useMemo(() => {
     const ids = new Set<number>();
     if (threshold === null) return ids;
@@ -929,7 +936,7 @@ export default function SequenceView() {
               scale={cutoffRange}
               value={threshold}
               onMetricChange={setCutoffMetric}
-              onChange={setCutoff}
+              onChange={chooseCutoff}
             />
             <ScoringPenaltyControl />
           </>

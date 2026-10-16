@@ -192,11 +192,11 @@ export default function ScoringPenaltyControl() {
         )}
         {slider(
           'hfrRise',
-          'How hard a frame is marked down for an HFR above the sequence\'s sharpest frames. At 100% the hit starts 5% over and reaches the full drop at 30% over; 200% halves both, 50% doubles them, 0% ignores HFR rises.'
+          'How hard a frame is marked down for an HFR above the sequence\'s sharpest frames. At 100% the hit starts 5% over and reaches the full drop at 30% over; 200% halves both, 50% doubles them, at 0% standing behind costs nothing. A sudden jump from one frame to the next is a temporal anomaly.'
         )}
         {slider(
           'starLoss',
-          'How hard a frame is marked down for fewer stars than the sequence\'s best frames. At 100% the hit starts 10% under and reaches the full drop at 40% under; 200% halves both, 50% doubles them, 0% ignores star loss.'
+          'How hard a frame is marked down for fewer stars than the sequence\'s best frames. At 100% the hit starts 10% under and reaches the full drop at 40% under; 200% halves both, 50% doubles them, at 0% standing behind costs nothing. A sudden drop from one frame to the next is a temporal anomaly.'
         )}
         <span className="penalty-section">Reject limits</span>
         {limitInput(

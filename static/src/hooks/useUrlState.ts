@@ -17,7 +17,6 @@ import {
   CUTOFF_METRIC_PARAM,
   CUTOFF_PARAMS,
   DEFAULT_CUTOFF_METRIC,
-  DEFAULT_SCORE_CUTOFF,
   parseCutoff,
   parseCutoffMetric,
   serializeCutoff,
@@ -614,8 +613,9 @@ export function useGridState(view: ThumbnailView = 'grid') {
  * the URL so a reload, a trip to Detail and back, or a shared link opens
  * with the same rule still selecting. `cutoffBy` names what the cutoff
  * measures, and each measure keeps its own cutoff (see sequenceCutoff.ts).
- * `cutoff` is null when the URL names none and the view's default applies.
- * The score, its default cutoff and no rule leave the URL clean.
+ * `cutoff` is what the URL holds, the score 0 to 100 or a Stars or HFR
+ * ratio, or null when it names none and the view's default applies. The
+ * score, a default cutoff and no rule leave the URL clean.
  */
 export function useSequenceSelectionRule() {
   const { getParam, updateParams } = useUrlParams();
@@ -623,10 +623,10 @@ export function useSequenceSelectionRule() {
   const cutoff = parseCutoff(metric, getParam(CUTOFF_PARAMS[metric]));
   const rule = parseSelectionRule(getParam('selectRule'));
 
-  /** Set the cutoff in the measure's own units: the score 0 to 100. */
-  const setCutoff = useCallback((value: number) => {
-    const clean = metric === 'score' && Math.round(value) === DEFAULT_SCORE_CUTOFF;
-    updateParams({ [CUTOFF_PARAMS[metric]]: clean ? null : serializeCutoff(metric, value) });
+  /** Keep a cutoff as `parseCutoff` reads it (see resolveCutoff and
+   *  storedCutoff), or null to take the default and leave the URL clean. */
+  const setCutoff = useCallback((stored: number | null) => {
+    updateParams({ [CUTOFF_PARAMS[metric]]: stored === null ? null : serializeCutoff(metric, stored) });
   }, [metric, updateParams]);
 
   const setMetric = useCallback((next: CutoffMetric) => {

@@ -1063,7 +1063,8 @@ describe('SequenceView: selection rules', () => {
     expect(document.querySelector('.sequence-timeline svg')).toHaveAttribute('data-metric', 'hfr');
 
     fireEvent.change(slider, { target: { value: '2.65' } });
-    await waitFor(() => expect(params().get('hfrCutoff')).toBe('2.65'));
+    // Kept as a share of the sharp frames' 10th-percentile HFR, 2.09.
+    await waitFor(() => expect(params().get('hfrCutoff')).toBe('1.2679'));
     expect(screen.getByRole('option', { name: 'HFR above the cutoff (3)' })).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
     await waitFor(() => expect(screen.getByText('3 selected')).toBeInTheDocument());
@@ -1081,8 +1082,9 @@ describe('SequenceView: selection rules', () => {
     await user.selectOptions(screen.getByLabelText('Cutoff measure'), 'score');
     await waitFor(() => expect(params().get('cutoffBy')).toBeNull());
     expect(screen.getByLabelText('Score cutoff')).toHaveAttribute('max', '100');
-    expect(params().get('hfrCutoff')).toBe('2.65');
-    expect(params().get('starCutoff')).toBe('720');
+    expect(params().get('hfrCutoff')).toBe('1.2679');
+    // 720 of the 90th-percentile 955 stars.
+    expect(params().get('starCutoff')).toBe('0.7539');
   });
 
   it('marks where the frames cross into another hour without moving a card', async () => {

@@ -293,15 +293,32 @@ function paramValue(key: ScoringField, text: string | null): number | null | und
   return scoringValue(key, Number(text));
 }
 
-/** The view's scoring: each value the link names, over the defaults. */
+/** Values added after links began naming every value: a link from before
+ *  them names the rest but not these. */
+const SCORING_ADDED_LATER: readonly ScoringField[] = ['hfrRise', 'starLoss'];
+
+/** The view's scoring: each value the link names, over the defaults. A
+ *  link that names any value but not one added since was made before it
+ *  existed, and scored with its built-in value; it takes that, not the
+ *  opener's default, so the link still scores as it did. */
 export function scoringFromParams(
   params: { get(name: string): string | null },
   defaults: ScoringPreferences,
 ): ScoringPreferences {
   const scoring = { ...defaults };
+  let namesAny = false;
   for (const key of SCORING_KEYS) {
     const value = paramValue(key, params.get(SCORING_PARAMS[key]));
-    if (value !== undefined) (scoring as Record<ScoringField, number | null>)[key] = value;
+    if (value === undefined) continue;
+    namesAny = true;
+    (scoring as Record<ScoringField, number | null>)[key] = value;
+  }
+  if (namesAny) {
+    for (const key of SCORING_ADDED_LATER) {
+      if (paramValue(key, params.get(SCORING_PARAMS[key])) === undefined) {
+        (scoring as Record<ScoringField, number | null>)[key] = SCORING_DEFAULTS[key];
+      }
+    }
   }
   return scoring;
 }

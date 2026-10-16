@@ -47,7 +47,9 @@ export const DEFAULT_CUTOFF_METRIC: CutoffMetric = 'score';
 
 /** The URL keys: `cutoffBy` names the measure (score leaves it off), and
  *  each measure keeps its own cutoff, so switching back finds it again.
- *  `cutoff` stays the score as a fraction, as links have always held it. */
+ *  `cutoff` stays the score as a fraction, as links have always held it;
+ *  `starCutoff` and `hfrCutoff` are ratios to the reference (see
+ *  `resolveCutoff`), such as 0.6 for 40% fewer stars than the best frames. */
 export const CUTOFF_METRIC_PARAM = 'cutoffBy';
 export const CUTOFF_PARAMS: Record<CutoffMetric, string> = {
   score: 'cutoff',
@@ -102,8 +104,14 @@ export function cutoffScale(metric: CutoffMetric, values: readonly number[]): Cu
   if (metric === 'score') return { min: 0, max: 100, step: 1 };
   if (values.length === 0) return null;
   const step = metric === 'hfr' ? 0.01 : 1;
-  const low = Math.min(...values);
-  const high = Math.max(...values);
+  // A loop, not Math.min(...values): a long all-sessions view would pass
+  // more arguments than an engine takes.
+  let low = Infinity;
+  let high = -Infinity;
+  for (const value of values) {
+    if (value < low) low = value;
+    if (value > high) high = value;
+  }
   const min = metric === 'hfr' ? Math.floor(low * 100) / 100 : Math.floor(low);
   const max = metric === 'hfr' ? Math.ceil(high * 100) / 100 : Math.ceil(high);
   // One reading, or all alike: leave the thumb somewhere to go.
@@ -120,37 +128,109 @@ function percentile(values: readonly number[], quantile: number): number {
 }
 
 /**
- * The cutoff when the URL names none. The score's is 50. For stars and HFR
- * it is where the quality score's own star and HFR terms reach zero at the
- * calibrated penalty: 40% fewer stars than the session's good frames (its
- * 90th percentile), or an HFR 30% over its sharp ones (its 10th), the
- * references `sequence_analysis.rs` scores against.
+ * What a Stars or HFR cutoff is kept relative to: the reading the quality
+ * score measures the frames on screen against in `sequence_analysis.rs`,
+ * their 90th-percentile star count or their 10th-percentile HFR. Null for
+ * the score, and when the frames give no reference to divide by.
  */
-export const DEFAULT_SCORE_CUTOFF = 50;
-const STAR_DROP_CUTOFF = 0.6;
-const HFR_RISE_CUTOFF = 1.3;
-
-export function defaultCutoff(metric: CutoffMetric, values: readonly number[]): number | null {
-  if (metric === 'score') return DEFAULT_SCORE_CUTOFF;
-  if (values.length === 0) return null;
-  return metric === 'stars'
-    ? Math.round(percentile(values, 0.9) * STAR_DROP_CUTOFF)
-    : Math.round(percentile(values, 0.1) * HFR_RISE_CUTOFF * 100) / 100;
+export function cutoffReference(metric: CutoffMetric, values: readonly number[]): number | null {
+  if (metric === 'score' || values.length === 0) return null;
+  const reference = percentile(values, metric === 'stars' ? 0.9 : 0.1);
+  return reference > 0 ? reference : null;
 }
 
-/** A cutoff in the measure's units as the URL keeps it, or null for none.
- *  The score reads its fraction and answers 0 to 100. */
+/** The HFR-rise and star-loss penalties the view scores with (see
+ *  utils/scoring.ts): they move where the score's own term reaches zero. */
+export interface CutoffPenalties {
+  hfrRise: number;
+  starLoss: number;
+}
+
+/** Where the score's star and HFR terms reach zero at the calibrated
+ *  penalty: 40% fewer stars, or 30% more HFR, than the reference. The
+ *  server's STAR_COUNT_TOLERANCE and HFR_TOLERANCE. */
+const STAR_ZERO_SCORE_DROP = 0.4;
+const HFR_ZERO_SCORE_RISE = 0.3;
+
+export const DEFAULT_SCORE_CUTOFF = 50;
+
+/**
+ * The default Stars or HFR cutoff, as a ratio to the reference: where the
+ * score's own term reaches zero under the view's penalty, which divides
+ * the band. At 0% that term never reaches zero, and the cutoff sits past
+ * every reading.
+ */
+function defaultCutoffRatio(metric: 'stars' | 'hfr', penalties: CutoffPenalties): number {
+  if (metric === 'stars') {
+    return penalties.starLoss > 0 ? 1 - STAR_ZERO_SCORE_DROP / penalties.starLoss : -Infinity;
+  }
+  return penalties.hfrRise > 0 ? 1 + HFR_ZERO_SCORE_RISE / penalties.hfrRise : Infinity;
+}
+
+/** A cutoff on the slider's own steps: HFR to hundredths, the rest whole. */
+function onSlider(metric: CutoffMetric, value: number): number {
+  return metric === 'hfr' ? Math.round(value * 100) / 100 : Math.round(value);
+}
+
+export interface ResolvedCutoff {
+  /** The slider's travel, or null while no frame on screen has a reading. */
+  scale: CutoffScale | null;
+  /** The cutoff in the measure's units, on the slider. */
+  value: number | null;
+}
+
+/**
+ * The cutoff the view shows. `stored` is what the URL holds (see
+ * `parseCutoff`): the score 0 to 100, or a Stars or HFR ratio to the
+ * reference, so one cutoff means the same on every session tab and
+ * filter, whose readings differ. Null takes the default.
+ */
+export function resolveCutoff(
+  metric: CutoffMetric,
+  stored: number | null,
+  values: readonly number[],
+  penalties: CutoffPenalties,
+): ResolvedCutoff {
+  const scale = cutoffScale(metric, values);
+  if (!scale) return { scale: null, value: null };
+  const clamp = (value: number) => Math.min(scale.max, Math.max(scale.min, value));
+  if (metric === 'score') return { scale, value: clamp(onSlider(metric, stored ?? DEFAULT_SCORE_CUTOFF)) };
+  const reference = cutoffReference(metric, values);
+  if (reference === null) return { scale, value: null };
+  const ratio = stored ?? defaultCutoffRatio(metric, penalties);
+  return { scale, value: clamp(onSlider(metric, ratio * reference)) };
+}
+
+/** What the URL keeps for a cutoff the slider set: null at the default,
+ *  so a link stays clean and every tab takes its own default. */
+export function storedCutoff(
+  metric: CutoffMetric,
+  value: number,
+  values: readonly number[],
+  penalties: CutoffPenalties,
+): number | null {
+  const shown = onSlider(metric, value);
+  if (shown === resolveCutoff(metric, null, values, penalties).value) return null;
+  if (metric === 'score') return shown;
+  const reference = cutoffReference(metric, values);
+  return reference === null ? null : shown / reference;
+}
+
+/** A cutoff as the URL keeps it, or null for none: the score read from
+ *  its fraction as 0 to 100, Stars and HFR as a ratio to the reference. */
 export function parseCutoff(metric: CutoffMetric, raw: string | null | undefined): number | null {
   if (raw === null || raw === undefined || raw.trim() === '') return null;
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 0) return null;
-  return metric === 'score' ? Math.min(100, value * 100) : value;
+  if (metric === 'score') return Math.min(100, value * 100);
+  return value > 0 ? value : null;
 }
 
-/** A cutoff as the URL keeps it: the score as a fraction. */
+/** A cutoff as the URL keeps it: the score as a fraction, as links have
+ *  always held it, and a Stars or HFR ratio to four places. */
 export function serializeCutoff(metric: CutoffMetric, value: number): string {
   if (metric === 'score') return (Math.round(value) / 100).toFixed(2);
-  return metric === 'hfr' ? (Math.round(value * 100) / 100).toFixed(2) : String(Math.round(value));
+  return String(Math.round(value * 10_000) / 10_000);
 }
 
 export function formatCutoff(metric: CutoffMetric, value: number): string {
