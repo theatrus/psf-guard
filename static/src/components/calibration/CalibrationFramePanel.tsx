@@ -22,7 +22,9 @@ interface CalibrationFramePanelProps {
   error: string | null;
   canManage: boolean;
   actions: ReturnType<typeof useCalibrationActions>;
-  onForgotten: () => void;
+  /** Forget this frame, once confirmed. The browser sends the request
+   *  and chooses the frame to show after it. */
+  onForget: (frameUuid: string) => void;
 }
 
 const VALIDITY: { value: CalibrationValidDirection | 'both'; label: string; title: string }[] = [
@@ -40,7 +42,7 @@ export default function CalibrationFramePanel({
   error,
   canManage,
   actions,
-  onForgotten,
+  onForget,
 }: CalibrationFramePanelProps) {
   if (!detail) {
     return (
@@ -54,7 +56,7 @@ export default function CalibrationFramePanel({
   const uuids = [detail.frame_uuid];
   const forget = () => {
     if (window.confirm(`Forget ${name}? Its catalog record and the masters built from it go. The file stays.`)) {
-      actions.forget.mutate(uuids, { onSuccess: onForgotten });
+      onForget(detail.frame_uuid);
     }
   };
   return (
