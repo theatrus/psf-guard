@@ -47,6 +47,12 @@ export function gradeLabel(frame: Pick<CalibrationFrameSummary, 'grade' | 'grade
   return reason ? `${grade} · ${reason}` : grade;
 }
 
+/** Graded suspect, but a person chose to use it anyway: it reads as OK
+ *  everywhere, with no suspect badge or Check. */
+export function suspectOverruled(frame: Pick<CalibrationFrameSummary, 'grade' | 'quality_override'>): boolean {
+  return frame.grade === 'suspect' && frame.quality_override === 'use';
+}
+
 export const VALIDITY_LABELS: Record<CalibrationValidDirection, string> = {
   forward: '▸ after only',
   backward: '◂ before only',

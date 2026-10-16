@@ -374,10 +374,14 @@ impl HealthLibrary {
             let mut rows = statement.query([FRAME_QUALITY_ALGORITHM_VERSION])?;
             while let Some(row) = rows.next()? {
                 let uuid: String = row.get(0)?;
-                if row.get::<_, Option<String>>(1)?.as_deref() == Some("suspect") {
+                let choice = row.get::<_, Option<String>>(2)?;
+                // A suspect frame a person chose to use anyway reads as ok.
+                if row.get::<_, Option<String>>(1)?.as_deref() == Some("suspect")
+                    && choice.as_deref() != Some("use")
+                {
                     suspect.insert(uuid.clone());
                 }
-                if row.get::<_, Option<String>>(2)?.as_deref() == Some("exclude") {
+                if choice.as_deref() == Some("exclude") {
                     by_hand.insert(uuid.clone());
                 }
                 if let Some(json) = row.get::<_, Option<String>>(3)?
@@ -1599,6 +1603,177 @@ mod tests {
         let health = fixture.health(1);
         assert_eq!(codes(&health), Vec::new(), "{health:?}");
         assert_eq!(health.level, None);
+    }
+
+    /// A light whose dark master takes a suspect frame shows the suspect
+    /// Check. Once a person uses that frame anyway, the light reads exactly
+    /// as it would with the frame graded ok: no Check, no flag, nothing
+    /// that says a grade was overruled.
+    #[test]
+    fn a_suspect_frame_used_anyway_scores_as_an_ok_one() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        let darks = fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        measure_and_grade(&fixture.conn).unwrap();
+        let uuid = fixture.uuid(&darks[0]);
+        let ok = fixture.health(1);
+        assert_eq!(ok.level, None, "{ok:?}");
+        let ok_findings = fixture.explain(1).findings;
+        assert!(ok_findings.is_empty(), "{ok_findings:?}");
+
+        fixture
+            .conn
+            .execute(
+                "UPDATE psf_guard_calibration_frame_quality
+                 SET grade = 'suspect', reason = 'noise' WHERE frame_uuid = ?1",
+                [&uuid],
+            )
+            .unwrap();
+        let flagged = fixture.health(1);
+        assert_eq!(flagged.level, Some(HealthLevel::Check));
+        assert_eq!(flagged.check_lights, 1);
+        assert_eq!(
+            codes(&flagged),
+            [(HealthCode::SuspectFrames, HealthLevel::Check)]
+        );
+
+        set_overrides(
+            &fixture.conn,
+            std::slice::from_ref(&uuid),
+            Some(QualityOverride::Use),
+        )
+        .unwrap();
+        let used = fixture.health(1);
+        assert_eq!(used, ok, "scores as the ok frame did");
+        assert_eq!((used.check_lights, used.poor_lights), (0, 0));
+        assert!(used
+            .findings
+            .iter()
+            .all(|finding| finding.image_ids.is_empty()));
+        assert_eq!(fixture.explain(1).findings, ok_findings);
+    }
+
+    /// Using suspect flats anyway overrules their grade: the light loses
+    /// its suspect finding and its view stops listing them, while the
+    /// masters, which took them already, keep their keys. A regrade keeps
+    /// the choice; clearing it brings the finding back.
+    #[test]
+    fn suspect_frames_used_anyway_no_longer_flag_the_lights() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        // The spotted flats of the test above: suspect, none poor.
+        let depths = [0.16, 0.10, 0.05, 0.03];
+        fixture.frames_with("FLAT", 4, "2026-09-10T02:00:00", |index, x, y| {
+            let spot = (16..112).contains(&x)
+                && (16..88).contains(&y)
+                && (x - 16) % 24 < 4
+                && (y - 16) % 24 < 4;
+            30_000.0 * if spot { 1.0 - depths[index] } else { 1.0 }
+        });
+        let graded = measure_and_grade(&fixture.conn).unwrap().1;
+        assert_eq!(graded.poor, 0, "{graded:?}");
+        let suspect: Vec<String> = fixture
+            .conn
+            .prepare(
+                "SELECT frame_uuid FROM psf_guard_calibration_frame_quality
+                 WHERE grade = 'suspect' ORDER BY frame_uuid",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(suspect.len() >= 3, "{graded:?}");
+        let flagged = |fixture: &Fixture| {
+            codes(&fixture.health(1)).contains(&(HealthCode::SuspectFrames, HealthLevel::Check))
+        };
+        let listed = |fixture: &Fixture| {
+            fixture
+                .explain(1)
+                .kinds
+                .iter()
+                .find(|kind| kind.kind == "flat")
+                .unwrap()
+                .suspect
+                .len()
+        };
+        let light = fixture.path("light-1.fits");
+        let cache = fixture.temp.path().join("cache");
+        let build = |fixture: &Fixture| {
+            super::super::resolve_or_build_masters(
+                &fixture.conn,
+                &cache,
+                std::slice::from_ref(&light),
+                None,
+                None,
+                super::super::CalibrationMode::Auto,
+            )
+            .unwrap()
+            .1
+        };
+        assert!(flagged(&fixture));
+        assert_eq!(listed(&fixture), suspect.len());
+        let before = build(&fixture);
+        assert_eq!(before.flat_frames, 4, "a suspect flat stays in");
+        let scope = super::super::project_scope::scope_revision(&fixture.conn, 1).unwrap();
+        let keys = current_keys(&fixture.conn).unwrap();
+
+        assert_eq!(
+            set_overrides(&fixture.conn, &suspect, Some(QualityOverride::Use)).unwrap(),
+            suspect.len()
+        );
+        assert!(!flagged(&fixture));
+        assert_eq!(listed(&fixture), 0);
+        // The spots the set carries into its master are the set's finding,
+        // not a frame's grade, so they still show.
+        assert!(codes(&fixture.health(1)).contains(&(HealthCode::FlatSpots, HealthLevel::Poor)));
+        let counts = quality::quality_counts(&fixture.conn).unwrap();
+        assert_eq!(
+            (counts.suspect, counts.used_anyway),
+            (0, suspect.len()),
+            "{counts:?}"
+        );
+        // Health is judged again, but nothing a master or a light's scope
+        // reads has moved.
+        assert_ne!(current_keys(&fixture.conn).unwrap(), keys);
+        assert_eq!(
+            super::super::project_scope::scope_revision(&fixture.conn, 1).unwrap(),
+            scope
+        );
+        let after = build(&fixture);
+        assert_eq!(
+            (
+                &after.bias_master,
+                &after.dark_master,
+                &after.flat_master,
+                &after.masters_signature
+            ),
+            (
+                &before.bias_master,
+                &before.dark_master,
+                &before.flat_master,
+                &before.masters_signature
+            )
+        );
+
+        // A regrade leaves the grade suspect and the choice standing.
+        let regraded = quality::grade_library(&fixture.conn).unwrap();
+        assert_eq!(regraded.suspect, suspect.len(), "{regraded:?}");
+        assert!(!flagged(&fixture));
+
+        // Cleared, the grade decides again.
+        set_overrides(&fixture.conn, &suspect, None).unwrap();
+        assert!(flagged(&fixture));
+        assert_eq!(listed(&fixture), suspect.len());
+        assert_eq!(
+            quality::quality_counts(&fixture.conn).unwrap().used_anyway,
+            0
+        );
     }
 
     #[test]

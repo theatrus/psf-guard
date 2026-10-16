@@ -11,6 +11,7 @@ import {
   gradeLabel,
   metricLabel,
   plural,
+  suspectOverruled,
 } from './calibrationLabels';
 import type { useCalibrationActions } from './useCalibrationActions';
 
@@ -56,6 +57,9 @@ export default function CalibrationFramePanel({
   }
   const name = fileName(detail.source_path);
   const grade = gradeLabel(detail);
+  // A suspect frame used anyway reads as OK: its grade gives way to the
+  // person's choice.
+  const overruled = suspectOverruled(detail);
   const uuids = [detail.frame_uuid];
   const forget = () => {
     if (window.confirm(`Forget ${name}? Its catalog record and the masters built from it go. The file stays.`)) {
@@ -73,11 +77,16 @@ export default function CalibrationFramePanel({
       </header>
 
       <div className="calibration-badges">
-        {grade && <span className={`calibration-badge calibration-badge-${detail.grade}`} title={detail.grade_reason ?? 'Nothing crossed a limit.'}>{grade}</span>}
+        {grade && !overruled && <span className={`calibration-badge calibration-badge-${detail.grade}`} title={detail.grade_reason ?? 'Nothing crossed a limit.'}>{grade}</span>}
         {!detail.grade && detail.stray_light && <span className="calibration-badge calibration-badge-poor" title={detail.stray_light}>Stray light</span>}
         {!detail.grade && !detail.stray_light && <span className="calibration-badge">Not graded</span>}
         {detail.quality_override === 'exclude' && <span className="calibration-badge calibration-badge-poor">Kept out by hand</span>}
-        {detail.quality_override === 'use' && <span className="calibration-badge calibration-badge-ok">Used anyway</span>}
+        {detail.quality_override === 'use' && (
+          <span className="calibration-badge calibration-badge-ok"
+            title={overruled ? 'Graded suspect; a person found it fine, so it counts as OK' : 'Used in masters and exports whatever its grade'}>
+            Used anyway
+          </span>
+        )}
         {detail.valid_direction && (
           <span className="calibration-badge calibration-badge-suspect" title={VALIDITY_TITLES[detail.valid_direction]}>
             {VALIDITY_LABELS[detail.valid_direction]}
@@ -87,7 +96,11 @@ export default function CalibrationFramePanel({
         {!detail.source_exists && <span className="calibration-badge calibration-badge-poor">Missing file</span>}
       </div>
       {detail.kept_out && <p className="calibration-reason">Left out of masters: {detail.kept_out}</p>}
-      {!detail.kept_out && detail.grade_reason && <p className="calibration-reason">{detail.grade_reason}</p>}
+      {!detail.kept_out && detail.grade_reason && (
+        <p className={overruled ? 'calibration-muted' : 'calibration-reason'}>
+          {overruled ? `Suspect grade overruled: ${detail.grade_reason}` : detail.grade_reason}
+        </p>
+      )}
       {detail.measure_error && <p className="calibration-reason">Not measured: {detail.measure_error}</p>}
 
       {detail.metrics.length > 0 && (
@@ -113,10 +126,18 @@ export default function CalibrationFramePanel({
       {detail.findings.length > 0 && (
         <ul className="calibration-findings" aria-label="Findings">
           {detail.findings.map((finding, index) => (
-            <li key={`${finding.code}:${index}`} className={`calibration-finding-${finding.grade}`}>
-              <strong>{finding.grade === 'poor' ? 'Poor' : 'Suspect'}</strong> {finding.text}
-              <span className="calibration-muted"> · limit {formatLimit(finding)}</span>
-            </li>
+            // Overruled, the numbers stay as plain evidence, with no grade
+            // word or colour to read as a flag.
+            overruled ? (
+              <li key={`${finding.code}:${index}`} className="calibration-muted">
+                {finding.text} · limit {formatLimit(finding)}
+              </li>
+            ) : (
+              <li key={`${finding.code}:${index}`} className={`calibration-finding-${finding.grade}`}>
+                <strong>{finding.grade === 'poor' ? 'Poor' : 'Suspect'}</strong> {finding.text}
+                <span className="calibration-muted"> · limit {formatLimit(finding)}</span>
+              </li>
+            )
           ))}
         </ul>
       )}
@@ -140,9 +161,13 @@ export default function CalibrationFramePanel({
                 Keep out
               </button>
             )}
-            {detail.quality_override !== 'use' && detail.kept_out && (
+            {/* A suspect frame stays in masters, but is flagged: Use anyway
+                overrules the flag, as it overrules a grade that keeps one out. */}
+            {detail.quality_override !== 'use' && (detail.kept_out || detail.grade === 'suspect') && (
               <button type="button" className="tool-button" disabled={actions.pending || stale}
-                title="Use in masters and exports whatever its grade"
+                title={detail.kept_out
+                  ? 'Use in masters and exports whatever its grade'
+                  : 'Use anyway: this frame is fine; ignore the suspect grade'}
                 onClick={() => actions.choose.mutate({ frameUuids: uuids, choice: 'use' })}>
                 Use anyway
               </button>

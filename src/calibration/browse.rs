@@ -449,7 +449,7 @@ impl FrameFilter {
             }
         }
         if let Some(grade) = self.grade {
-            let actual = frame.quality.grade.as_deref();
+            let actual = frame.quality.standing();
             let keeps = match grade {
                 GradeFilter::Ok => actual == Some("ok"),
                 GradeFilter::Suspect => actual == Some("suspect"),
@@ -476,7 +476,7 @@ fn rotation_gap(left: f64, right: f64) -> f64 {
 }
 
 fn grade_rank(frame: &CalibrationFrameSummary) -> u8 {
-    match frame.quality.grade.as_deref() {
+    match frame.quality.standing() {
         Some("poor") => 0,
         Some("suspect") => 1,
         Some("ok") => 2,
@@ -735,7 +735,8 @@ fn sessions_of<'a>(
                 kept_out: 0,
             });
         session.frames += 1;
-        match frame.quality.grade.as_deref() {
+        // A suspect frame a person chose to use anyway counts as ok.
+        match frame.quality.standing() {
             Some("ok") => session.ok += 1,
             Some("suspect") => session.suspect += 1,
             Some("poor") => session.poor += 1,
@@ -1194,6 +1195,7 @@ pub fn recorded_master(
 
 #[cfg(test)]
 mod tests {
+    use super::quality::QualityOverride;
     use super::*;
 
     fn summary(kind: CalibrationKind) -> CalibrationFrameSummary {
@@ -1313,6 +1315,55 @@ mod tests {
         // Two sets just over a step apart keep apart ids.
         let apart = sessions(vec![at(-10.0), at(-8.4)]);
         assert_ne!(apart[0], apart[1]);
+    }
+
+    /// A suspect frame a person chose to use anyway reads as ok: in its
+    /// session's counts, the grade filter and the grade sort. A poor one
+    /// used anyway stays poor.
+    #[test]
+    fn a_suspect_frame_used_anyway_reads_as_ok() {
+        let graded = |name: &str, grade: &str, choice: Option<QualityOverride>| {
+            let mut frame = summary(CalibrationKind::Dark);
+            frame.frame_uuid = name.into();
+            frame.source_path = format!("/frames/{name}.fits");
+            frame.quality.grade = Some(grade.into());
+            frame.quality.quality_override = choice;
+            frame
+        };
+        let rows = assign_sessions(
+            vec![
+                graded("ok", "ok", None),
+                graded("flagged", "suspect", None),
+                graded("overruled", "suspect", Some(QualityOverride::Use)),
+                graded("poor-used", "poor", Some(QualityOverride::Use)),
+            ],
+            &Nights::fixed(12 * 3600),
+        );
+        let session = sessions_of(rows.iter(), &HashMap::new()).remove(0);
+        assert_eq!(
+            (session.frames, session.ok, session.suspect, session.poor),
+            (4, 2, 1, 1)
+        );
+        let kept = |grade: GradeFilter| -> Vec<&str> {
+            let filter = FrameFilter {
+                grade: Some(grade),
+                ..Default::default()
+            };
+            rows.iter()
+                .filter(|row| filter.keeps(row))
+                .map(|row| row.frame.frame_uuid.as_str())
+                .collect()
+        };
+        assert_eq!(kept(GradeFilter::Suspect), ["flagged"]);
+        assert_eq!(kept(GradeFilter::Ok), ["ok", "overruled"]);
+        assert_eq!(kept(GradeFilter::Poor), ["poor-used"]);
+        let mut sorted = rows.clone();
+        sort_frames(&mut sorted, FrameSort::Grade);
+        let order: Vec<&str> = sorted
+            .iter()
+            .map(|row| row.frame.frame_uuid.as_str())
+            .collect();
+        assert_eq!(order[..2], ["poor-used", "flagged"]);
     }
 
     #[test]

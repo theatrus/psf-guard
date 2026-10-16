@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
@@ -329,6 +329,28 @@ describe('CalibrationPanel', () => {
     expect(screen.getByText('No findings')).toBeInTheDocument();
     expect(document.querySelectorAll('.light-calibration-kind.is-folded')).toHaveLength(0);
     expect(asked).toEqual([8]);
+  });
+
+  it('shows no Check once the suspect frame its master takes is used anyway', async () => {
+    const suspectFlat = { file: 'flat-1.fits', night: '2026-10-06', reason: 'noise 1.3 times that of its session' };
+    const flagged: ImageCalibrationExplanation = {
+      ...explanation,
+      findings: [{ code: 'suspect_frames', level: 'check', reason: 'Its masters use 1 suspect frame', kinds: ['flat'] }],
+      kinds: explanation.kinds.map((entry) => (entry.kind === 'flat' ? { ...entry, suspect: [suspectFlat] } : entry)),
+    };
+    show('/detail/8?db=c925&project=1', flagged, [{ image_id: 8, level: 'check', codes: ['suspect_frames'] }]);
+    expect(await screen.findByText('Suspect frames it takes')).toBeInTheDocument();
+    expect(screen.getByTestId('calibration-panel')).toHaveTextContent('Check');
+    cleanup();
+
+    // Used anyway, the server counts the frame as OK: no finding, no
+    // suspect list, no mark, so nothing here says Check.
+    show('/detail/8?db=c925&project=1', { ...explanation, findings: [] }, []);
+    await waitFor(() => expect(heading()).toHaveAccessibleName('Calibration no findings'));
+    fireEvent.click(heading());
+    expect(await screen.findByText(/calibrates this light with no findings/)).toBeInTheDocument();
+    expect(screen.queryByText('Suspect frames it takes')).toBeNull();
+    expect(screen.getByTestId('calibration-panel')).not.toHaveTextContent('Check');
   });
 
   it('opens on a marked light and folds on a light with no finding, asking only when open', async () => {

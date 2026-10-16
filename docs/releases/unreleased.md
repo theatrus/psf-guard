@@ -4,6 +4,12 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- A suspect calibration frame can be overruled. **Use anyway** in
+  Calibration › Frames now appears on a suspect frame as well as a kept-out
+  one. The frame then counts as OK: it shows **Used anyway**, its session
+  counts it as OK, and the lights its masters serve lose the suspect
+  frames Check. Its masters stay as they were. **Clear** brings the grade
+  back, and a regrade keeps the choice.
 - Images and Sequence mark where frames cross into another night or hour.
   A line and the night's date sit in the gap before a night's first frame,
   every other night takes a faint band, and thinner lines mark the hours

@@ -5,7 +5,8 @@
 //! into the sets Seiza judges, and stores each frame's grade: ok, suspect or
 //! poor. A poor frame, or one a person keeps out, stays out of masters and
 //! exports; a person can also put a poor frame back. A suspect frame stays
-//! in.
+//! in but is flagged; a person who uses it anyway overrules the flag, and
+//! it then reads as ok everywhere.
 //!
 //! A frame is read once. Later passes read only frames that are new, whose
 //! file changed, or that an older algorithm measured. Grading needs no
@@ -82,13 +83,15 @@ pub(super) fn add_quality_table(conn: &Connection) -> Result<bool> {
     Ok(true)
 }
 
-/// The frames graded suspect, each with its grade's reason.
+/// The frames graded suspect that no one chose to use anyway, each with its
+/// grade's reason. A suspect frame used anyway reads as ok.
 pub(super) fn suspect_reasons(conn: &Connection) -> Result<HashMap<String, String>> {
     if !table_exists(conn) {
         return Ok(HashMap::new());
     }
     let mut statement = conn.prepare(&format!(
-        "SELECT frame_uuid, COALESCE(reason, '') FROM {QUALITY_TABLE} WHERE grade = 'suspect'"
+        "SELECT frame_uuid, COALESCE(reason, '') FROM {QUALITY_TABLE}
+         WHERE grade = 'suspect' AND override_choice IS NOT 'use'"
     ))?;
     let rows = statement
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -1090,6 +1093,18 @@ pub struct FrameGrade {
     pub quality_override: Option<QualityOverride>,
 }
 
+impl FrameGrade {
+    /// The grade as the library treats it: a suspect frame a person chose
+    /// to use anyway reads as ok. A poor one used anyway stays poor, so it
+    /// can still be found and counted as an exception.
+    pub fn standing(&self) -> Option<&str> {
+        match (self.grade.as_deref(), self.quality_override) {
+            (Some("suspect"), Some(QualityOverride::Use)) => Some("ok"),
+            (grade, _) => grade,
+        }
+    }
+}
+
 /// Library-wide counts for the job's route.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct QualityCounts {
@@ -1097,12 +1112,14 @@ pub struct QualityCounts {
     pub frames: usize,
     /// Raw frames with a current measurement.
     pub measured: usize,
+    /// Frames graded ok, with suspect frames a person chose to use anyway.
     pub ok: usize,
+    /// Frames graded suspect that no one chose to use anyway.
     pub suspect: usize,
     pub poor: usize,
     /// Frames a person chose to keep out.
     pub kept_out_by_hand: usize,
-    /// Poor frames a person chose to use anyway.
+    /// Poor or suspect frames a person chose to use anyway.
     pub used_anyway: usize,
 }
 
@@ -1125,9 +1142,11 @@ pub fn quality_counts(conn: &Connection) -> Result<QualityCounts> {
         "SELECT
             SUM(q.measurement_json IS NOT NULL AND q.algorithm_version = ?1
                 AND q.source_fingerprint IS f.source_fingerprint),
-            SUM(q.grade = 'ok'), SUM(q.grade = 'suspect'), SUM(q.grade = 'poor'),
+            SUM(q.grade = 'ok' OR (q.grade = 'suspect' AND q.override_choice IS 'use')),
+            SUM(q.grade = 'suspect' AND q.override_choice IS NOT 'use'),
+            SUM(q.grade = 'poor'),
             SUM(q.override_choice = 'exclude'),
-            SUM(q.override_choice = 'use' AND q.grade = 'poor')
+            SUM(q.override_choice = 'use' AND q.grade IN ('poor', 'suspect'))
          FROM psf_guard_calibration_frame f
          JOIN psf_guard_calibration_frame_quality q ON q.frame_uuid = f.frame_uuid",
         [FRAME_QUALITY_ALGORITHM_VERSION],
@@ -1839,6 +1858,46 @@ pub(super) mod tests {
             .unwrap()
             .kept_out
             .is_empty());
+    }
+
+    /// Using a suspect frame anyway travels like any other choice: the sync
+    /// counts it, and on the copy the frame reads as ok.
+    #[test]
+    fn sync_carries_a_suspect_frame_used_anyway() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source, _) = dark_library(temp.path());
+        measure_and_grade(&source).unwrap();
+        let flagged = uuid_of(&source, "dark-1.fits");
+        source
+            .execute(
+                "UPDATE psf_guard_calibration_frame_quality
+                 SET grade = 'suspect', reason = 'noise' WHERE frame_uuid = ?1",
+                [&flagged],
+            )
+            .unwrap();
+        assert_eq!(suspect_reasons(&source).unwrap().len(), 1);
+        set_overrides(
+            &source,
+            std::slice::from_ref(&flagged),
+            Some(QualityOverride::Use),
+        )
+        .unwrap();
+        assert!(suspect_reasons(&source).unwrap().is_empty());
+
+        let mut destination = Connection::open(temp.path().join("copy.sqlite")).unwrap();
+        let tx = destination.transaction().unwrap();
+        let outcome = sync_library(&source, &tx).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            outcome.choices,
+            CalibrationChoiceCounts {
+                used_anyway: 1,
+                ..Default::default()
+            }
+        );
+        assert!(suspect_reasons(&destination).unwrap().is_empty());
+        let counts = quality_counts(&destination).unwrap();
+        assert_eq!((counts.suspect, counts.used_anyway), (0, 1), "{counts:?}");
     }
 
     #[test]
