@@ -538,3 +538,7 @@
   pressed quickly in a row could step one image instead of two; and →
   pressed just as the detail closed opened the next image again instead of
   moving the Images cursor.
+- Two changes to a view made in the same moment both stay in its address.
+  Before, one could be lost: a frame selected just as another was, a group
+  expanded or a filter chosen while the view was still updating, or the
+  frame Calibration sets aside when you switch between Sessions and Groups.

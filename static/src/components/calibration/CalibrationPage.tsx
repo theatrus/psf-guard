@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { useLocation } from 'react-router-dom';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { CalibrationSession } from '../../api/types';
@@ -91,12 +90,6 @@ export default function CalibrationPage() {
   const shownDb = useRef(dbId);
   const openedFor = useRef<string | null>(null);
   const defaultRig = useRef<string | null>(null);
-  // Whether the rig chosen for the project has reached the address. A URL
-  // update made in the same moment as another can be lost; until it lands,
-  // the rig is asked for again.
-  const rigLanded = useRef(true);
-  // Every change to the address, so a lost rig is asked for again.
-  const { search } = useLocation();
   useEffect(() => {
     let rig = filters.rig;
     if (shownDb.current !== dbId) {
@@ -117,14 +110,8 @@ export default function CalibrationPage() {
     const rigs = summary.data?.rigs;
     // Once per project and scope.
     const opened = `${dbId}:${projectId}:${filters.project ?? ''}`;
-    if (rig !== undefined && rig === defaultRig.current) rigLanded.current = true;
     if (!dbId || !rigs || rigs.length < 2) return;
-    if (openedFor.current === opened) {
-      if (!rigLanded.current && rig === undefined && defaultRig.current && search) {
-        setFilters({ rig: defaultRig.current });
-      }
-      return;
-    }
+    if (openedFor.current === opened) return;
     // Removing the scope, or Clear, leaves the rig as it is.
     if (filters.project === undefined && openedFor.current?.startsWith(`${dbId}:${projectId}:`)) return;
     // A scoped page waits for the rigs its own project's lights use, not
@@ -138,9 +125,8 @@ export default function CalibrationPage() {
       ? used
       : rigs.filter((entry) => entry.profile_ids?.includes(profile!)).map((entry) => entry.rig_uuid);
     defaultRig.current = own.length === 1 ? own[0] : ALL_RIGS;
-    rigLanded.current = false;
     setFilters({ rig: defaultRig.current });
-  }, [dbId, filters.project, filters.rig, profile, projectId, resetForDatabase, scopeUse, search, setFilters, summary.data]);
+  }, [dbId, filters.project, filters.rig, profile, projectId, resetForDatabase, scopeUse, setFilters, summary.data]);
 
   // Another project chosen in the header while scoped: the scope follows
   // it, and All projects widens to the whole library. A page a person

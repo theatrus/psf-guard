@@ -196,21 +196,22 @@ export function useCalibrationUrlState() {
     () => updateParams({ calTab: null, calKind: 'flat' }),
     [updateParams]
   );
-  // The frame each list had chosen while the other is shown: a session's
-  // frame is not a group's, so switching hands each back its own.
-  const sessionFrame = getParam('calSessionFrame');
-
-  const groupFrame = getParam('calGroupFrame');
   /** List sessions or flat groups, each with the frame it last showed. A
-   *  comparison open in one stays open. */
+   *  comparison open in one stays open. The list not shown keeps its frame
+   *  aside (calSessionFrame, calGroupFrame): a session's frame is not a
+   *  group's. Frames are read as the URL holds them now, so one chosen a
+   *  moment before goes with the list it was chosen in. */
   const setBrowse = useCallback(
     (next: CalibrationBrowse) => {
       if (next === browse) return;
-      updateParams(next === 'groups'
-        ? { calBrowse: 'groups', calSessionFrame: frame, calFrame: groupFrame, calGroupFrame: null }
-        : { calBrowse: null, calGroupFrame: frame, calFrame: sessionFrame, calSessionFrame: null });
+      updateParams((latest) => {
+        const shown = latest.get('calFrame');
+        return next === 'groups'
+          ? { calBrowse: 'groups', calSessionFrame: shown, calFrame: latest.get('calGroupFrame'), calGroupFrame: null }
+          : { calBrowse: null, calGroupFrame: shown, calFrame: latest.get('calSessionFrame'), calSessionFrame: null };
+      });
     },
-    [browse, frame, groupFrame, sessionFrame, updateParams]
+    [browse, updateParams]
   );
   /** Name the shown group by its key, as when a key now names a regrouped
    *  group by one of its sessions: the frame stays. */
@@ -225,23 +226,27 @@ export function useCalibrationUrlState() {
    *  Groups opens on it again. */
   const openGroupSession = useCallback(
     (id: string, sessionPage: number, filterChanges: Partial<CalibrationFilterState> = {}) => {
-      const updates: Record<string, string | null> = {
-        calBrowse: null,
-        calSession: id,
-        calFrame: null,
-        calGroupFrame: frame,
-        calSessionFrame: null,
-        calView: null,
-        calPage: sessionPage > 0 ? String(sessionPage) : null,
-        calEarlier: null,
-        calLater: null,
-      };
-      for (const [key, value] of Object.entries(filterChanges) as [keyof CalibrationFilterState, unknown][]) {
-        updates[FILTER_KEYS[key]] = value === undefined || value === null || value === '' ? null : String(value);
-      }
-      updateParams(updates);
+      updateParams((latest) => {
+        const updates: Record<string, string | null> = {
+          calBrowse: null,
+          calSession: id,
+          calFrame: null,
+          // The group's frame as it is now: the session it opens may have
+          // been looked up while another frame was chosen.
+          calGroupFrame: latest.get('calFrame'),
+          calSessionFrame: null,
+          calView: null,
+          calPage: sessionPage > 0 ? String(sessionPage) : null,
+          calEarlier: null,
+          calLater: null,
+        };
+        for (const [key, value] of Object.entries(filterChanges) as [keyof CalibrationFilterState, unknown][]) {
+          updates[FILTER_KEYS[key]] = value === undefined || value === null || value === '' ? null : String(value);
+        }
+        return updates;
+      });
     },
-    [frame, updateParams]
+    [updateParams]
   );
   /** Open the ratio picture of two flat sessions, or close it. */
   const openRatio = useCallback(

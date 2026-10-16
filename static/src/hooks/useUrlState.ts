@@ -1,5 +1,10 @@
-import { useLocation, useSearchParams } from 'react-router-dom';
-import { useCallback, useMemo, useRef } from 'react';
+import {
+  UNSAFE_DataRouterContext,
+  UNSAFE_NavigationContext,
+  useLocation,
+  useSearchParams,
+} from 'react-router-dom';
+import { useCallback, useContext, useMemo, useRef } from 'react';
 import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE, MULTI_PROJECT_MODES } from '../types/grouping';
 import { parseStatusFilter } from '../utils/statusFilter';
 import { listFilterOf } from '../utils/listFilter';
@@ -35,16 +40,69 @@ export interface UpdateParamsOptions {
   immediate?: boolean;
 }
 
+/** A param's new value; null, undefined, '', `all` and [] remove it. */
+export type ParamUpdates = Record<string, string | number | boolean | string[] | number[] | null | undefined>;
+
+/** An array param's items, as `updateParams` writes them. */
+function arrayParamOf(value: string | null): string[] {
+  return value
+    ? value.split(',').filter(Boolean).map((item) => decodeURIComponent(item))
+    : [];
+}
+
+/** A number array param's items; ones that are not numbers are left out. */
+function numberArrayParamOf(value: string | null): number[] {
+  return value ? value.split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : [];
+}
+
 /**
- * Hook for managing URL search parameters as state
+ * The search the router holds now, read when called rather than when the
+ * caller last rendered.
+ *
+ * The router takes a navigation at once but shows it as a transition, so
+ * for a while every component still renders the search before it. A write
+ * built from a rendered search drops any write made since: an effect's
+ * rig, then another component's session, and the rig is gone. Both kinds
+ * of router the app and its tests use hold the latest location
+ * synchronously: a data router in its state, a history-backed one in its
+ * history. Null for a router that shows neither.
+ */
+function useLatestSearch(): () => string | null {
+  const router = useContext(UNSAFE_DataRouterContext)?.router;
+  const { navigator } = useContext(UNSAFE_NavigationContext);
+  return useCallback(() => {
+    if (router) return router.state.location.search;
+    const history = navigator as { location?: { search?: unknown } };
+    const search = history.location?.search;
+    return typeof search === 'string' ? search : null;
+  }, [navigator, router]);
+}
+
+/**
+ * Hook for managing URL search parameters as state.
+ *
+ * The getters read the params this render shows. `updateParams` writes to
+ * the URL as it stands when called, so writes compose: two in one tick,
+ * from this hook or any other, or one made after another view was pushed
+ * in the same moment, all land. Each write replaces the current history
+ * entry.
  */
 export function useUrlParams() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const latestSearch = useLatestSearch();
   const setSearchParamsRef = useRef(setSearchParams);
-  const searchParamsRef = useRef(searchParams);
+  const latestSearchRef = useRef(latestSearch);
   setSearchParamsRef.current = setSearchParams;
-  searchParamsRef.current = searchParams;
-  
+  latestSearchRef.current = latestSearch;
+  // Only for a router that does not show its latest location: the params
+  // this hook last wrote, until a render shows newer ones.
+  const fallbackRef = useRef(searchParams);
+  const renderedRef = useRef(searchParams);
+  if (renderedRef.current !== searchParams) {
+    renderedRef.current = searchParams;
+    fallbackRef.current = searchParams;
+  }
+
   const getParam = useCallback((key: string): string | null => {
     return searchParams.get(key);
   }, [searchParams]);
@@ -59,25 +117,25 @@ export function useUrlParams() {
   }, [searchParams]);
   
   const getArrayParam = useCallback((key: string): string[] => {
-    const value = searchParams.get(key);
-    return value
-      ? value.split(',').filter(Boolean).map((item) => decodeURIComponent(item))
-      : [];
+    return arrayParamOf(searchParams.get(key));
   }, [searchParams]);
-  
+
   const getNumberArrayParam = useCallback((key: string): number[] => {
-    const value = searchParams.get(key);
-    return value ? value.split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : [];
+    return numberArrayParamOf(searchParams.get(key));
   }, [searchParams]);
-  
+
+  /** Write `updates` over the URL as it stands. Pass a function of those
+   *  params to change a value from what it is now rather than from what
+   *  the caller last rendered, which may be a write behind. */
   const updateParams = useCallback((
-    updates: Record<string, string | number | boolean | string[] | number[] | null | undefined>,
+    updates: ParamUpdates | ((latest: URLSearchParams) => ParamUpdates),
     options: UpdateParamsOptions = {},
   ) => {
-    const newParams = new URLSearchParams(searchParamsRef.current);
+    const newParams = new URLSearchParams(latestSearchRef.current() ?? fallbackRef.current);
     const scope = scopeKey(newParams);
+    const changes = typeof updates === 'function' ? updates(new URLSearchParams(newParams)) : updates;
 
-    Object.entries(updates).forEach(([key, value]) => {
+    Object.entries(changes).forEach(([key, value]) => {
       if (value === null || value === undefined || value === '' || value === 'all') {
         newParams.delete(key);
       } else if (Array.isArray(value)) {
@@ -93,7 +151,7 @@ export function useUrlParams() {
 
     // A view's own scoring stays with the database and project it was set in.
     if (scopeKey(newParams) !== scope) dropScoringParams(newParams);
-    searchParamsRef.current = newParams;
+    fallbackRef.current = newParams;
     setSearchParamsRef.current(newParams, { replace: true, flushSync: options.immediate === true });
   }, []);
   
@@ -395,9 +453,7 @@ export function useGridState(view: ThumbnailView = 'grid') {
   const expandedGroups = useMemo(() => new Set(getArrayParam('expanded')), [getArrayParam]);
   const currentImageId = useMemo(() => getNumberParam('current'), [getNumberParam]);
   const selectedImages = useMemo(() => new Set(getNumberArrayParam('selected')), [getNumberArrayParam]);
-  const selectedImagesRef = useRef(selectedImages);
-  selectedImagesRef.current = selectedImages;
-  
+
   /** Choose a grouping, and keep it as the default for links that name
    *  none, for one project or for All projects as the mode says. */
   const setGroupingMode = useCallback((mode: GroupingMode) => {
@@ -428,15 +484,24 @@ export function useGridState(view: ThumbnailView = 'grid') {
     updateParams({ stats: show ? true : null });
   }, [updateParams]);
   
+  // An updater gets the groups and selection as the URL holds them now,
+  // with any change not yet rendered.
   const setExpandedGroups = useCallback((groups: Set<string> | ((prev: Set<string>) => Set<string>)) => {
-    const newGroups = typeof groups === 'function' ? groups(expandedGroups) : groups;
-    updateParams({ expanded: Array.from(newGroups) });
-  }, [updateParams, expandedGroups]);
-  
+    updateParams((latest) => {
+      const newGroups = typeof groups === 'function'
+        ? groups(new Set(arrayParamOf(latest.get('expanded'))))
+        : groups;
+      return { expanded: Array.from(newGroups) };
+    });
+  }, [updateParams]);
+
   const setSelectedImages = useCallback((images: Set<number> | ((prev: Set<number>) => Set<number>)) => {
-    const newImages = typeof images === 'function' ? images(selectedImagesRef.current) : images;
-    selectedImagesRef.current = new Set(newImages);
-    updateParams({ selected: Array.from(selectedImagesRef.current) });
+    updateParams((latest) => {
+      const newImages = typeof images === 'function'
+        ? images(new Set(numberArrayParamOf(latest.get('selected'))))
+        : images;
+      return { selected: Array.from(newImages) };
+    });
   }, [updateParams]);
 
   const setCurrentImageId = useCallback((imageId: number) => {
@@ -448,7 +513,6 @@ export function useGridState(view: ThumbnailView = 'grid') {
   }, [updateParams]);
 
   const setCurrentImageSelection = useCallback((imageId: number) => {
-    selectedImagesRef.current = new Set([imageId]);
     updateParams({
       current: imageId,
       groupIndex: null,
@@ -492,9 +556,7 @@ export function useSequenceSelectionRule() {
   }, [updateParams]);
 
   /** Turn a rule on or off, and with `selection` set the selected images
-   *  in the same write. Each URL hook writes from the params it last saw,
-   *  so a rule and a selection written by two hooks in one turn would lose
-   *  the first write. */
+   *  in the same write, so the address never holds one without the other. */
   const setRule = useCallback((next: SelectionRuleId | null, selection?: ReadonlySet<number>) => {
     updateParams({
       selectRule: next,
@@ -519,8 +581,8 @@ export function useImageOrder() {
     ?? DEFAULT_IMAGE_ORDER;
 
   /** Choose an order. `alongside` writes other keys in the same change,
-   *  such as the new `current`: each URL hook writes from the params it
-   *  last saw, so two writes in one turn would lose the first. */
+   *  such as the new `current`, so the address never holds the new order
+   *  with the old frame. */
   const setOrder = useCallback((
     next: ImageOrder,
     alongside: Record<string, string | number | null> = {},
