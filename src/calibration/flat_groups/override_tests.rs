@@ -1164,3 +1164,42 @@ fn one_light_outside_a_change_takes_a_side_only_of_a_change_its_panel_offers() {
         crate::server::flat_choices::apply_light_choices(&conn, &request, Some(&offered)).unwrap();
     assert_eq!((set.lights, set.skipped), (1, 0));
 }
+
+#[test]
+fn a_split_by_hand_never_joins_a_measured_change_through_a_shared_spot() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let mut frames = Vec::new();
+    for night in NIGHTS {
+        frames.extend(flats(temp.path(), "Ha", night));
+        frames.extend(flats(temp.path(), "OIII", night));
+    }
+    let mut conn = Connection::open(temp.path().join("catalog.sqlite")).unwrap();
+    crate::ts_schema::apply_schema(&conn).unwrap();
+    let tx = conn.transaction().unwrap();
+    import_calibration_frames(&tx, &frames, Some("profile")).unwrap();
+    tx.commit().unwrap();
+    // OIII measures new dust across the change; Ha shows the same shadow,
+    // under its limit, so its nights stay one group.
+    super::testing::measure_as(&conn, |a: &ResponseRow, b: &ResponseRow| {
+        let after = |row: &ResponseRow| row.captured_first.unwrap() > CHANGE_AT;
+        match (after(a) != after(b), a.filter.as_deref()) {
+            (true, Some("OIII")) => 0.02,
+            (true, _) => 0.008,
+            _ => 0.0,
+        }
+    });
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(book.events.len(), 1, "{:?}", book.events);
+    // A person splits Ha at the same change: their split is a change of its
+    // own, not a member of the measured one, though the shadow is shared.
+    group_choice(&conn, "Ha", Some(GroupChoice::Split), NIGHTS[2], None, 100);
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(book.events.len(), 2, "{:?}", book.events);
+    let by_hand: Vec<_> = book.events.iter().filter(|event| event.by_hand).collect();
+    assert_eq!(by_hand.len(), 1, "{:?}", book.events);
+    assert_eq!(by_hand[0].filters.len(), 1);
+    assert!(by_hand[0].filters.contains("ha"), "{:?}", by_hand[0]);
+    let measured = book.events.iter().find(|event| !event.by_hand).unwrap();
+    assert!(!measured.filters.contains("ha"), "{measured:?}");
+}

@@ -312,7 +312,11 @@ unchanged.
    lights, less the pedestal, divided by the nearest flat response with a
    known side, fitted against the change's map. Stars are masked by their
    cores only: a few dithered lights keep their stars, and grown as far as
-   in a flat they would cover most of a star field. The map's support is
+   in a flat they would cover most of a star field. The map is the
+   change's dust alone: a change of vignetting is set to 1 where it lies
+   (a quarter disc in its corner, a band along its edge, half again its
+   area), since a light's sky is least like a flat at the border and a
+   corner fitted there decides nothing. The map's support is
    split into **shadows**, its connected pieces (pieces within 3 response
    pixels are one shadow), and each shadow is fitted on its own. Its fit
    is repeated at placebo positions, the shadow moved by whole multiples

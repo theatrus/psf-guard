@@ -2327,8 +2327,9 @@ impl Book {
         };
         // The map the fit divides by is Seiza's change map: a new one asks
         // the lights again.
+        // The fit reads the map's dust alone, vignetting taken out.
         let mut text = format!(
-            "{}\u{1f}map-v{}",
+            "{}\u{1f}map-v{}-dust",
             event.key,
             super::metric::CHANGE_MAP_ALGORITHM_VERSION
         );
@@ -2508,6 +2509,52 @@ mod tests {
 
     fn new_dust(x: f32) -> Spot {
         Spot { x, ..spot(x, true) }
+    }
+
+    /// An edge holding `spots`, for the shadow-matching rules.
+    fn edge_with(spots: Vec<Spot>) -> Boundary {
+        Boundary {
+            family: 0,
+            before: 0,
+            after: 1,
+            start: 0,
+            end: 1,
+            dust: None,
+            broad: None,
+            vignetting: None,
+            vignetting_changes: Vec::new(),
+            drift: None,
+            spots,
+            opens: 1,
+            by_hand: None,
+        }
+    }
+
+    #[test]
+    fn faint_or_unlike_spots_do_not_say_which_change_a_split_shows() {
+        let at = |x: f32, y: f32, radius: f32, peak: f32| Spot {
+            x,
+            y,
+            radius,
+            peak,
+            ..spot(x, true)
+        };
+        // C925 OIII across 05-20: a large donut that moved a little, 0.28%.
+        let member = edge_with(vec![Spot {
+            kind: SpotKind::Moved,
+            ..at(2988.0, 1560.0, 402.0, 0.0028)
+        }]);
+        // A faint dip of another change inside it: not that donut.
+        let faint = edge_with(vec![at(3178.0, 1456.0, 204.0, 0.001)]);
+        assert!(!Book::shows_shadow(&member, &faint));
+        // A small spot inside it, deep enough: still not that donut.
+        let small = edge_with(vec![at(3296.0, 1364.0, 13.0, 0.004)]);
+        assert!(!Book::shows_shadow(&member, &small));
+        // A shadow of like size and depth on the same place is the same one.
+        let like = edge_with(vec![at(3000.0, 1550.0, 380.0, 0.003)]);
+        assert!(Book::shows_shadow(&member, &like));
+        assert!(Book::shares_spot(&member, &like));
+        assert!(!Book::shares_spot(&member, &faint));
     }
 
     fn alike(a: &str, b: &str) -> ComparisonRow {

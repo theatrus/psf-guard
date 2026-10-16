@@ -1247,8 +1247,58 @@ pub fn event_map(
     let boundary = &book.boundaries[book.map_member(event_index, filter)?];
     let before = &book.sessions[boundary.before].row;
     let after = &book.sessions[boundary.after].row;
-    let map = metric::change_map(&session_plane(dir, before)?, &session_plane(dir, after)?)?;
+    let mut map = metric::change_map(&session_plane(dir, before)?, &session_plane(dir, after)?)?;
+    without_vignetting(
+        &mut map,
+        &boundary.vignetting_changes,
+        before.bin.unwrap_or(1),
+    );
     Some((map, before.response_key.clone(), after.response_key.clone()))
+}
+
+/// The map a light's evidence is fitted against: its changes of dust alone.
+/// A change of vignetting is a large shadow at the border, where a light's
+/// own sky (a nebula, a gradient its background did not lose) is least like
+/// the flats; fitted shadow by shadow it decides nothing and drowns what the
+/// dust says. Each vignetting change is taken out of the map where it lies:
+/// a quarter disc in its corner, a band along its edge, half again as large
+/// as the area it covers.
+fn without_vignetting(
+    map: &mut Plane,
+    changes: &[seiza_calibration::dust::VignettingChange],
+    bin: usize,
+) {
+    use seiza_calibration::dust::Edge;
+    let (width, height) = (map.width as f32, map.height as f32);
+    let scale = bin.max(1) as f32;
+    for change in changes {
+        let area = change.vignetting.area / (scale * scale) * 1.5;
+        let corner = match change.vignetting.edge {
+            Edge::TopLeft => Some((0.0, 0.0)),
+            Edge::TopRight => Some((width, 0.0)),
+            Edge::BottomLeft => Some((0.0, height)),
+            Edge::BottomRight => Some((width, height)),
+            _ => None,
+        };
+        let radius = (4.0 * area / std::f32::consts::PI).sqrt();
+        let band = |along: f32| (area / along.max(1.0)).max(1.0);
+        for y in 0..map.height {
+            for x in 0..map.width {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let inside = match (corner, change.vignetting.edge) {
+                    (Some((cx, cy)), _) => (px - cx).hypot(py - cy) <= radius,
+                    (None, Edge::Top) => py <= band(width),
+                    (None, Edge::Bottom) => py >= height - band(width),
+                    (None, Edge::Left) => px <= band(height),
+                    (None, Edge::Right) => px >= width - band(height),
+                    _ => false,
+                };
+                if inside {
+                    map.data[y * map.width + x] = 1.0;
+                }
+            }
+        }
+    }
 }
 
 fn session_evidence(
@@ -1418,6 +1468,37 @@ pub fn session_side(book: &Book, event_index: usize, session_index: usize) -> Op
 #[cfg(test)]
 mod stale_dust_tests {
     use super::*;
+
+    /// The map a light's evidence is fitted against keeps its dust and
+    /// loses the vignetting: a bottom-left corner shadow of a 4,000 x
+    /// 3,000 px frame binned by 10.
+    #[test]
+    fn the_evidence_map_reads_the_dust_alone() {
+        use seiza_calibration::dust::{Edge, Vignetting, VignettingChange};
+        let (width, height) = (400, 300);
+        let mut map = Plane {
+            width,
+            height,
+            data: vec![0.98; width * height],
+        };
+        let corner = VignettingChange {
+            darker: true,
+            vignetting: Vignetting {
+                edge: Edge::BottomLeft,
+                x: 300.0,
+                y: 2700.0,
+                // A quarter disc 40 binned pixels in radius.
+                area: std::f32::consts::PI * 400.0 * 400.0 / 4.0,
+                depth: 0.02,
+            },
+        };
+        without_vignetting(&mut map, &[corner], 10);
+        let at = |x: usize, y: usize| map.data[y * width + x];
+        assert_eq!(at(5, height - 5), 1.0, "the corner is out");
+        assert_eq!(at(30, height - 30), 1.0, "with its margin");
+        assert_eq!(at(200, 150), 0.98, "the dust stays");
+        assert_eq!(at(width - 5, height - 5), 0.98, "another corner stays");
+    }
 
     /// Once DUST_ALGORITHM_VERSION moves, a session's dust of the older
     /// version goes rather than staying beside the current one.
