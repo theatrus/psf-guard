@@ -151,6 +151,14 @@ pub fn run(
     }
     crate::calibration::migrate_existing(&conn)?;
     flat_groups::store::add_tables(&conn)?;
+    // Where each rig is, so its nights split at its own noon.
+    let sites = crate::calibration::backfill_rig_sites(&conn, || true)?;
+    if sites.pending > 0 {
+        println!(
+            "rig sites: {} located, {} by clock, {} unplaced, {} unreadable",
+            sites.located, sites.clocked, sites.unplaced, sites.unreadable
+        );
+    }
     let dir = work.join(flat_groups::CACHE_CATEGORY);
     flat_groups::register_response_dir(&copy, dir.clone());
     let roots: Vec<&Path> = images.iter().map(Path::new).collect();
@@ -329,7 +337,8 @@ fn light_reports(
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
-    let boundary = crate::calibration::catalog_night_boundary(conn);
+    let nights = crate::calibration::Nights::load(conn);
+    let boundary = nights.catalog();
     let mut out = Vec::new();
     for (id, target, filter, metadata) in rows {
         let Some(name) = crate::utils::extract_filename(&metadata) else {
@@ -343,8 +352,7 @@ fn light_reports(
         let mut nights: Vec<String> = selected
             .flat
             .iter()
-            .filter_map(|f| f.captured_at)
-            .map(|at| crate::calibration::night_of(at, boundary))
+            .filter_map(|f| Some(nights.night_of(&f.rig_uuid, f.captured_at?)))
             .collect();
         nights.sort();
         nights.dedup();

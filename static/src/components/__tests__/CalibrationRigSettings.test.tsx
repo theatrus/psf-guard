@@ -97,6 +97,31 @@ describe('CalibrationRigSettings', () => {
     expect(within(editor).getByRole('button', { name: 'Save rig' })).toBeEnabled();
   });
 
+  it('gives a rig whose frames record no site the offset its nights split by', async () => {
+    let saved: { name?: string; rules: Record<string, unknown> } | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current([rig(ASKAR, 'C925 · ASI2600MM')]))),
+      http.put(`/api/settings/calibration/rigs/${ASKAR}`, async ({ request }) => {
+        saved = (await request.json()) as typeof saved;
+        return HttpResponse.json(current([rig(ASKAR, 'C925 · ASI2600MM', { night_zone: '-8' })]));
+      }),
+    );
+    render(<CalibrationRigSettings />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole('button', { name: /C925/ }));
+    const editor = screen.getByRole('region', { name: /calibration settings/ });
+    const own = within(editor).getByRole('button', { name: 'Night starts at noon in: own value' });
+    // Automatic until the rig says otherwise.
+    expect(own.closest('.calibration-rule-row')).toHaveTextContent("From its frames' site · default");
+    fireEvent.click(own);
+    const zone = within(editor).getByLabelText('Night starts at noon in');
+    expect(zone).toHaveValue('auto');
+    fireEvent.change(zone, { target: { value: '-8' } });
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save rig' }));
+    await waitFor(() => expect(saved).toEqual({ name: 'C925 · ASI2600MM', rules: { night_zone: '-8' } }));
+    await waitFor(() => expect(within(editor).getByLabelText('Night starts at noon in')).toHaveValue('-8'));
+    expect(within(editor).getByRole('option', { name: 'UTC−8' })).toBeInTheDocument();
+  });
+
   it('starts from a preset, which only fills the form', async () => {
     let saved: { rules: Record<string, unknown> } | null = null;
     server.use(

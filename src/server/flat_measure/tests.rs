@@ -329,6 +329,37 @@ fn a_grouping_limit_regroups_without_grading_or_reading() {
     );
 }
 
+#[test]
+fn a_rig_whose_night_zone_changes_is_planned_again() {
+    use crate::calibration::rules::{RigLayer, RuleBook};
+    let auto = RuleBook::new(Default::default(), Default::default());
+    let rig = |zone: &str| {
+        RuleBook::new(
+            Default::default(),
+            [(
+                "c925".to_string(),
+                RigLayer {
+                    name: None,
+                    values: [("night_zone".to_string(), json!(zone))]
+                        .into_iter()
+                        .collect(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        )
+    };
+    assert_eq!(rigs_to_measure_after(&auto, &rig("-8")), Rigs::of(["c925"]));
+    assert_eq!(rigs_to_measure_after(&rig("-8"), &rig("-8")), Rigs::None);
+    let global = RuleBook::new(
+        [("night_zone".to_string(), json!("9"))]
+            .into_iter()
+            .collect(),
+        Default::default(),
+    );
+    assert_eq!(rigs_to_measure_after(&auto, &global), Rigs::All);
+}
+
 /// A pass over rig A leaves rig B's stale rows for B's own pass, which
 /// measures them again rather than finding them gone.
 #[test]

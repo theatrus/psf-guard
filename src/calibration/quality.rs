@@ -12,10 +12,9 @@
 //! pixels, so it runs again after every pass.
 
 use super::{
-    catalog_night_boundary, exposure_matches, frame_select, night_of, row_to_frame, rules_for_rig,
-    schema_supports_current_reads, signature_sensor_consistent, signature_sensor_matches,
-    temperature_matches, CalibrationChoiceCounts, CalibrationFrame, CalibrationKind,
-    CalibrationSyncCounts,
+    exposure_matches, frame_select, row_to_frame, rules_for_rig, schema_supports_current_reads,
+    signature_sensor_consistent, signature_sensor_matches, temperature_matches,
+    CalibrationChoiceCounts, CalibrationFrame, CalibrationKind, CalibrationSyncCounts, Nights,
 };
 use anyhow::{Context, Result};
 use rusqlite::types::Value;
@@ -470,7 +469,7 @@ pub fn grade_library(conn: &Connection) -> Result<GradeOutcome> {
     let measured = load_measured(conn)?;
     let mut judged: HashMap<String, Judged> = HashMap::new();
     judge_darks(&measured, &mut judged);
-    judge_flats(&measured, catalog_night_boundary(conn), &mut judged);
+    judge_flats(&measured, &Nights::load(conn), &mut judged);
     store_grades(conn, &measured, &judged)
 }
 
@@ -606,8 +605,8 @@ struct FlatSessionKey {
 }
 
 /// Flats by session, each session screened as one set.
-fn judge_flats(measured: &[Measured], boundary: i64, judged: &mut HashMap<String, Judged>) {
-    for set in flat_sessions(measured, boundary) {
+fn judge_flats(measured: &[Measured], nights: &Nights, judged: &mut HashMap<String, Judged>) {
+    for set in flat_sessions(measured, nights) {
         let measurements: Vec<FlatMeasurement> = set
             .iter()
             .filter_map(|entry| match &entry.measurement {
@@ -639,7 +638,7 @@ fn judge_flats(measured: &[Measured], boundary: i64, judged: &mut HashMap<String
 /// Measured flats split into sessions: one night, rig and filter, one frame
 /// size, and sensor and optical settings that do not contradict the first
 /// frame of the session. Frames arrive in capture order.
-fn flat_sessions(measured: &[Measured], boundary: i64) -> Vec<Vec<&Measured>> {
+fn flat_sessions<'a>(measured: &'a [Measured], nights: &Nights) -> Vec<Vec<&'a Measured>> {
     let mut sessions: Vec<(FlatSessionKey, Vec<&Measured>)> = Vec::new();
     for entry in measured {
         let StoredMeasurement::Flat(flat) = &entry.measurement else {
@@ -653,7 +652,7 @@ fn flat_sessions(measured: &[Measured], boundary: i64) -> Vec<Vec<&Measured>> {
             night: entry
                 .frame
                 .captured_at
-                .map(|at| night_of(at, boundary))
+                .map(|at| nights.night_of(&entry.frame.rig_uuid, at))
                 .unwrap_or_else(|| "unknown".into()),
             filter: entry
                 .frame
@@ -1434,7 +1433,7 @@ pub(super) mod tests {
             "Target",
             None,
             crate::commands::export::ExportLayout::Wbpp,
-            12 * 3600,
+            &Nights::fixed(12 * 3600),
             false,
         )
         .unwrap();
@@ -1612,7 +1611,7 @@ pub(super) mod tests {
         assert!(selected.flat.is_empty());
         assert!(selected.library.flat, "the library holds flats for it");
         assert_eq!(
-            super::super::calibration_gap(&conn, &light, &selected, 12 * 3600)
+            super::super::calibration_gap(&conn, &light, &selected, &Nights::fixed(12 * 3600))
                 .unwrap()
                 .as_deref(),
             Some("No matching flat")

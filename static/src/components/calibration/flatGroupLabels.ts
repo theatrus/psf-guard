@@ -15,14 +15,39 @@ export function angleLabel(rotation: number | null): string {
   return rotation === null ? 'no rotator' : `${Math.round(rotation * 10) / 10}°`;
 }
 
-/** A Unix time in UTC, `2026-09-18 08:30`. */
-function utc(seconds: number): string {
-  return new Date(seconds * 1000).toISOString().slice(0, 16).replace('T', ' ');
+/**
+ * A Unix time on the viewer's clock, `2026-09-18 08:30`, as the frames'
+ * times show elsewhere in Calibration. `timeZone` is for tests.
+ */
+function clock(seconds: number, timeZone?: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone,
+  }).formatToParts(new Date(seconds * 1000));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}`;
 }
 
-/** The window a change happened in, `2026-09-18 08:30 – 2026-09-21 12:28 UTC`. */
-export function windowLabel(start: number, end: number): string {
-  return `${utc(start)} – ${utc(end)} UTC`;
+/** The viewer's zone at that time, `PDT` in summer and `PST` in winter. */
+function zone(seconds: number, timeZone?: string): string {
+  return new Intl.DateTimeFormat('en-US', { timeZoneName: 'short', timeZone })
+    .formatToParts(new Date(seconds * 1000))
+    .find((part) => part.type === 'timeZoneName')?.value ?? '';
+}
+
+/** A Unix time with its zone, `2026-10-12 08:30 PDT`. */
+export function timeLabel(seconds: number, timeZone?: string): string {
+  return `${clock(seconds, timeZone)} ${zone(seconds, timeZone)}`;
+}
+
+/**
+ * The window a change happened in, `2026-09-18 08:30 – 2026-09-21 12:28 PDT`;
+ * each end names its zone when the clocks changed in between.
+ */
+export function windowLabel(start: number, end: number, timeZone?: string): string {
+  const [from, to] = [zone(start, timeZone), zone(end, timeZone)];
+  return from === to
+    ? `${clock(start, timeZone)} – ${clock(end, timeZone)} ${to}`
+    : `${timeLabel(start, timeZone)} – ${timeLabel(end, timeZone)}`;
 }
 
 /** `2026-09-07 – 2026-09-16`, or one night. */

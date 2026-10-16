@@ -20,6 +20,18 @@
   Calibration panel names the **Flat family** and how it was chosen.
   Nights of only two flats are measured and grouped too.
 
+- Calibration splits each rig's frames into nights at its own local noon,
+  taken from the site longitude in its frames (the N.I.N.A. profile's site),
+  else its computer's clock, so a dawn flat run that crosses noon UTC stays
+  one session. Before, every rig split where the catalog's lights were
+  quiet, and a catalog without lights split at noon UTC, cutting dawn runs
+  west of Greenwich in two. A rig with no site in its frames can take a UTC
+  offset under **Night starts at noon in** in its calibration settings.
+  After the upgrade the server reads each rig's site from a few of its
+  frames; flat groups rename sessions whose date moved without measuring
+  them again, and measure once more only runs that were split. Flat-group
+  change windows and build times show on your clock with its zone, such as
+  PDT, instead of UTC.
 - The header's background jobs keep automatic work in view while your own
   work runs. A database quality analysis, an automatic stack refresh, or a
   re-apply of processing that steps aside for a build, scan, or solve you

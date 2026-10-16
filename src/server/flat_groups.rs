@@ -562,8 +562,8 @@ pub(crate) fn build_view_with_frames(
     }
     // Sessions the pass could not measure, or has not reached.
     let library = crate::calibration::LibrarySnapshot::load(conn)?;
-    let boundary = crate::calibration::catalog_night_boundary(conn);
-    for plan in job::plan_sessions(library.frames(), boundary) {
+    let nights = crate::calibration::Nights::load(conn);
+    for plan in job::plan_sessions(library.frames(), &nights) {
         let key = plan.response_key();
         let measured = book.session_by_response(&key).is_some();
         if measured {
@@ -753,8 +753,8 @@ pub(crate) fn place_of(conn: &rusqlite::Connection, session: &str) -> anyhow::Re
             frame
         })
         .collect();
-    let boundary = crate::calibration::catalog_night_boundary(conn);
-    Ok(job::plan_sessions(&frames, boundary)
+    let nights = crate::calibration::Nights::load(conn);
+    Ok(job::plan_sessions(&frames, &nights)
         .into_iter()
         .find(|plan| {
             plan.frames

@@ -43,6 +43,68 @@ with that rig. Target Scheduler row IDs are not used as calibration identity.
 Settings shows each rig and its bias, dark, dark-flat, and flat coverage. A
 database copy carries this catalog with its projects and grades.
 
+### Nights
+
+Calibration groups a rig's frames by night: an evening's darks, the flats
+shot at dusk and those shot at the following dawn. A rig's night runs from
+local noon at its site to the next local noon, as N.I.N.A.'s `DATEMINUS12`
+folders date it, and takes the date its evening began. A dusk or dawn flat
+run never straddles the split, so it stays one session. Sessions, flat
+groups, the coverage report, masters' source nights and export folders all
+use these nights.
+
+Where a rig's noon falls, first found wins:
+
+1. The rig's **Night starts at noon in** setting, then the global one: a UTC
+   offset (`night_zone`, below). Automatic by default.
+2. The site longitude its frames record (`SITELONG`, the N.I.N.A. profile's
+   site): mean solar noon there, 12:00 UTC plus four minutes for each
+   degree west. The C925 at 121.16° W splits at 20:05 UTC, 13:05 PDT or
+   12:05 PST.
+3. The rig computer's clock (`DATE-LOC` less `DATE-OBS`): noon on that
+   clock.
+4. The hours in which the catalog's lights are never captured, as Images
+   splits nights ([Sky coverage](SKY_COVERAGE.md)). A catalog with no
+   lights splits at noon UTC.
+
+The server's own time zone never counts; it often runs on UTC or somewhere
+else. Daylight saving moves civil noon by an hour, which leaves the split
+in the middle of the day, so no rule follows it. A rig whose frames record
+no site, or a site of 0°, 0° (an unset profile), takes its computer's
+clock; set its offset when that clock is wrong too, as on a remote rig kept
+on UTC.
+
+Lights keep the nights Images groups them by, so a link from a calibration
+report opens the lights Images shows under that date.
+
+An import records each rig's site from its frames' headers. For rigs
+imported before, the server reads up to five of each rig's newest frames
+after it starts, in the background, and the CLI's `flat-groups` reads them
+on its copy. Until then, and for a rig whose files are away, the rig splits
+as the catalog's lights do. A rig that finds its site, or whose **Night
+starts at noon in** changes, is queued for flat measuring, which plans its
+sessions again. After an upgrade:
+
+- A session whose frames stay together keeps its id when its date does
+  not change. Where only the date changes, flat groups rename the measured
+  session in place: its measurement and comparisons stand and nothing is
+  read again.
+- A run that was split in two becomes one session. Flat groups measure it
+  once, drop the two halves and compare it again, and masters and stacks
+  that took those flats build again. Masters are keyed by their frames, so
+  nothing else rebuilds.
+- A link to a session whose id changed opens the first page of its list.
+
+On the C925, PSF Guard's catalog copy already split at 20:00 UTC, its
+lights' quiet hours, so nothing moved. A copy of that catalog without its
+lights split at noon UTC: three dawn flat runs were cut in two (OIII at
+104.2° from 04:58 to 05:00 PDT on 2026-08-19 among them) and eight dark
+runs crossed noon. Split at the site's noon, none are.
+
+Change windows and build times in flat groups read on the viewer's clock
+with its zone, `2026-08-19 04:58 – 05:00 PDT`, as frame times do
+elsewhere on the page.
+
 ## Browse the library
 
 The **Calibration** page shows one database's library: its sessions, the
@@ -125,8 +187,8 @@ filter and rotator angle, for darks and dark-flats the exposure and sensor
 temperature, and for bias the exposure. A temperature or an angle drifts
 while a set is shot, so a frame joins a session while it sits within 1.5 °C
 (darks) or 1° (flats) of the next; bias is not split by temperature, since
-a bias set is often shot while the sensor cools. Nights split as in
-[Validity boundaries](#validity-boundaries). A session's address carries
+a bias set is often shot while the sensor cools. Nights split at the rig's
+local noon ([Nights](#nights)). A session's address carries
 its middle temperature or angle rounded to a whole degree, so a link to it
 keeps working when a colder or warmer frame joins it, unless that frame moves
 the middle across a half degree.
@@ -686,7 +748,8 @@ Flat):
 - A **change** on the camera side reaches every filter and angle of the
   rig, so it shows once, as one row above the newest flat shot before it:
   what it is, its depth, the filters and angles it was seen in, and its
-  window, with a note when the window is narrower than one flat run. Its
+  window on the viewer's clock, with a note when the window is narrower
+  than one flat run. Its
   splits do not repeat in each filter.
 - **Compare**, on a split or a change, opens the ratio of the two
   sessions above the session view: later ÷ earlier, at ±3%, ±1% or
@@ -1112,11 +1175,10 @@ cleaning, a re-spaced imaging train, or any other change that makes older
 calibration wrong for newer lights. When nights lack their own frames, mark
 the boundary yourself on the [Calibration page](#browse-the-library): a
 session's header marks every frame of the session, and the frame panel one
-frame. A night splits where the catalog's lights are never captured, as in
-[Sky coverage](SKY_COVERAGE.md), so dusk and dawn flats share the date of
-the night between them, as N.I.N.A.'s `DATEMINUS12` folders do. The coverage
-report and export folders use the same nights. A catalog with no lights
-splits at noon UTC. The session header can also **Forget session**,
+frame. A rig's nights split at its local noon ([Nights](#nights)), so dusk
+and dawn flats share the date of the night between them, as N.I.N.A.'s
+`DATEMINUS12` folders do. The coverage report and export folders use the
+same nights. The session header can also **Forget session**,
 removing its records (and dependent masters) in one step without touching
 the FITS files. Mark frames usable **After only** (a set shot right after
 the change) or **Before only** (the final set shot before it). Marked frames
@@ -1486,6 +1548,7 @@ ASI2600MM)`. An editor can open the rig's settings from there.
 | `flat_session_hours` | Flat session: how far apart one master's flats may be | 24 h | 1–720 | matching |
 | `use_darks` | Use darks | on | on, off | matching |
 | `external_masters` | Masters from other software | use whenever one matches | prefer, fallback, ignore | matching |
+| `night_zone` | Night starts at noon in: where a rig's nights split ([Nights](#nights)) | automatic | `auto`, or a UTC offset in hours from `-12` to `14` (`-9.5`, `5.75` and the other half and quarter hours zones keep) | matching |
 | `dark_reach_days` | Dark reach | 183 days | 1–3650 | matching |
 | `complete_dark_frames` | Complete night | 10 darks | 2–64 | matching |
 | `dark_choice` | Dark choice | complete set first | complete, nearest | matching |

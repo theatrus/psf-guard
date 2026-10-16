@@ -14,8 +14,7 @@
 
 use super::quality::{self, StoredMeasurement};
 use super::{
-    catalog_night_boundary, frame_summaries, night_of, schema_exists, CalibrationFrameSummary,
-    CalibrationKind, FrameSpan,
+    frame_summaries, schema_exists, CalibrationFrameSummary, CalibrationKind, FrameSpan, Nights,
 };
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
@@ -227,10 +226,10 @@ pub struct FrameDetail {
 /// Every frame of the library, with its night and session, oldest catalog
 /// version tolerated.
 fn browsed(conn: &Connection) -> Result<(Vec<BrowsedFrame>, i64)> {
-    let boundary = catalog_night_boundary(conn);
+    let nights = Nights::load(conn);
     Ok((
-        assign_sessions(frame_summaries(conn, "", &[])?, boundary),
-        boundary,
+        assign_sessions(frame_summaries(conn, "", &[])?, &nights),
+        nights.catalog(),
     ))
 }
 
@@ -247,7 +246,7 @@ fn browsed_like(
         "WHERE f.rig_uuid = ?1 AND f.kind = ?2",
         &[&rig_uuid, &kind],
     )?;
-    Ok(assign_sessions(rows, catalog_night_boundary(conn)))
+    Ok(assign_sessions(rows, &Nights::load(conn)))
 }
 
 /// A temperature or an angle that drifts while a set is shot: frames join
@@ -304,11 +303,16 @@ fn digest(text: &str) -> String {
         .collect()
 }
 
-/// Give each frame its night and session.
-fn assign_sessions(rows: Vec<CalibrationFrameSummary>, boundary: i64) -> Vec<BrowsedFrame> {
+/// Give each frame its night, split at its rig's local noon, and its
+/// session.
+fn assign_sessions(rows: Vec<CalibrationFrameSummary>, by_rig: &Nights) -> Vec<BrowsedFrame> {
     let nights: Vec<Option<String>> = rows
         .iter()
-        .map(|frame| frame.captured_at.map(|at| night_of(at, boundary)))
+        .map(|frame| {
+            frame
+                .captured_at
+                .map(|at| by_rig.night_of(&frame.rig_uuid, at))
+        })
         .collect();
     let bases: Vec<String> = rows
         .iter()
@@ -1100,7 +1104,7 @@ pub fn recorded_masters(conn: &Connection) -> Result<Vec<RecordedLibraryMaster>>
     if !schema_exists(conn) {
         return Ok(Vec::new());
     }
-    let boundary = catalog_night_boundary(conn);
+    let nights = Nights::load(conn);
     let rigs = rig_names(conn)?;
     let frames: HashMap<String, (Option<f64>, Option<i64>)> = conn
         .prepare("SELECT frame_uuid, camera_temp, captured_at FROM psf_guard_calibration_frame")?
@@ -1150,7 +1154,7 @@ pub fn recorded_masters(conn: &Connection) -> Result<Vec<RecordedLibraryMaster>>
                 let known: Vec<_> = sources
                     .iter()
                     .filter_map(|uuid| frames.get(uuid))
-                    .map(|(temp, at)| (*temp, at.map(|at| night_of(at, boundary))))
+                    .map(|(temp, at)| (*temp, at.map(|at| nights.night_of(&rig_uuid, at))))
                     .collect();
                 Some(RecordedLibraryMaster {
                     rig_name: rigs.get(&rig_uuid).cloned(),
@@ -1222,7 +1226,7 @@ mod tests {
 
     /// The session of each frame, in order.
     fn sessions(rows: Vec<CalibrationFrameSummary>) -> Vec<String> {
-        assign_sessions(rows, 12 * 3600)
+        assign_sessions(rows, &Nights::fixed(12 * 3600))
             .into_iter()
             .map(|row| row.session)
             .collect()
@@ -1312,7 +1316,7 @@ mod tests {
         frame.quality.grade = Some("poor".into());
         frame.kept_out = Some("noise".into());
         frame.rotation = Some(359.2);
-        let row = assign_sessions(vec![frame], 12 * 3600).remove(0);
+        let row = assign_sessions(vec![frame], &Nights::fixed(12 * 3600)).remove(0);
         let keeps = |filter: FrameFilter| filter.keeps(&row);
         assert!(keeps(FrameFilter::default()));
         assert!(keeps(FrameFilter {
@@ -1382,7 +1386,7 @@ mod tests {
                 // A dark's angle is no flat's.
                 at(200.0, CalibrationKind::Dark),
             ],
-            12 * 3600,
+            &Nights::fixed(12 * 3600),
         );
         assert_eq!(facets(&rows).rotations, vec![1.0, 114.0]);
     }
@@ -1396,7 +1400,7 @@ mod tests {
             frame
         };
         let library = LibraryFrames {
-            frames: assign_sessions((0..5).map(night).collect(), 12 * 3600),
+            frames: assign_sessions((0..5).map(night).collect(), &Nights::fixed(12 * 3600)),
             rigs: HashMap::new(),
             night_boundary_seconds: 12 * 3600,
         };
@@ -1441,7 +1445,7 @@ mod tests {
             at("b3", 2, 2),
         ];
         let library = LibraryFrames {
-            frames: assign_sessions(rows, 12 * 3600),
+            frames: assign_sessions(rows, &Nights::fixed(12 * 3600)),
             rigs: HashMap::new(),
             night_boundary_seconds: 12 * 3600,
         };

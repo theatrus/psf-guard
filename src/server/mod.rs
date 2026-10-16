@@ -1077,9 +1077,23 @@ async fn run_server_internal(
             .unwrap_or_default();
         for path in paths {
             crate::server::database_context::spawn_query_index_build(path.clone(), &state.shutdown);
+            // A rig whose site this reads may split its nights elsewhere:
+            // flat measuring plans it again, renaming what it measured and
+            // measuring runs a new split joins.
+            let for_sites = Arc::clone(&state);
+            let site_path = path.clone();
             crate::server::database_context::spawn_calibration_header_backfill(
                 path.clone(),
                 &state.shutdown,
+                move |rigs| {
+                    crate::server::flat_measure::queue(
+                        &for_sites,
+                        &site_path,
+                        crate::calibration::flat_groups::job::Scope::flats(
+                            crate::calibration::flat_groups::job::Rigs::of(rigs),
+                        ),
+                    );
+                },
             );
             crate::server::calibration_quality::request(&state, &path);
             // Only what is unfinished or stale: a catalog that is up to date

@@ -8,6 +8,7 @@ import { server } from '../../../test/msw-server';
 import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from '../../../utils/settingsIntent';
 import { AccessContext, type AccessContextValue } from '../../../auth/access';
 import CalibrationPage from '../CalibrationPage';
+import { windowLabel } from '../flatGroupLabels';
 import { FLAT_POLL_MS } from '../useFlatGroups';
 
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
@@ -230,7 +231,7 @@ describe('Flat groups in Frames', () => {
     expect(event).toHaveAccessibleName('Change in UltraCat · ASI6200: new dust: 2 shadows near (1418, 3540)');
     expect(event).toHaveTextContent('Change · All filters and angles: camera side');
     expect(event).toHaveTextContent('dust 1.6% · pattern 0.20% · seen in R, G at 3°, 54°');
-    expect(event).toHaveTextContent('2026-09-16 14:02 – 2026-09-20 14:00 UTC');
+    expect(event).toHaveTextContent(windowLabel(at('09-16', 2), at('09-20')));
     expect(within(event).queryByTestId('flat-change-within-run')).toBeNull();
     const split = screen.getByTestId('flat-split');
     expect(split).toHaveAccessibleName('Split in G · 3°');

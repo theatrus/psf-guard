@@ -175,7 +175,7 @@ fn fits_observer(headers: &[(String, HeaderValue)]) -> Option<Provenanced<FitsOb
     ))
 }
 
-fn parse_longitude_deg(input: &str) -> Option<f64> {
+pub(crate) fn parse_longitude_deg(input: &str) -> Option<f64> {
     let value = input.trim();
     if let Ok(degrees) = value.parse::<f64>() {
         return (degrees.is_finite() && (-360.0..=360.0).contains(&degrees))

@@ -587,7 +587,7 @@ fn master_sources(
 ) -> Option<crate::calibration::FrameSpan> {
     let mut statement = conn
         .prepare(
-            "SELECT frame.camera_temp, frame.captured_at
+            "SELECT frame.camera_temp, frame.captured_at, frame.rig_uuid
              FROM psf_guard_calibration_master master
              JOIN json_each(master.source_frame_uuids) source
              JOIN psf_guard_calibration_frame frame ON frame.frame_uuid = source.value
@@ -596,7 +596,11 @@ fn master_sources(
         .ok()?;
     let frames = statement
         .query_map([path.to_string_lossy().as_ref()], |row| {
-            Ok((row.get::<_, Option<f64>>(0)?, row.get::<_, Option<i64>>(1)?))
+            Ok((
+                row.get::<_, Option<f64>>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })
         .ok()?
         .collect::<rusqlite::Result<Vec<_>>>()
@@ -604,14 +608,10 @@ fn master_sources(
     if frames.is_empty() {
         return None;
     }
-    let boundary = crate::server::sky_coverage::catalog_night_boundary(conn).unwrap_or(12 * 3600);
+    // Each frame's night as its rig splits them.
+    let nights = crate::calibration::Nights::load(conn);
     Some(crate::calibration::FrameSpan::of(frames.into_iter().map(
-        |(temp, at)| {
-            (
-                temp,
-                at.map(|at| crate::server::sky_coverage::night_of(at, boundary)),
-            )
-        },
+        |(temp, at, rig)| (temp, at.map(|at| nights.night_of(&rig, at))),
     )))
 }
 

@@ -14,6 +14,7 @@ import {
   nightRange,
   percent,
   plural,
+  timeLabel,
   windowLabel,
 } from './flatGroupLabels';
 
@@ -43,10 +44,6 @@ interface FlatGroupDetailProps {
   opening: string | null;
 }
 
-/** When a master was built, `2026-10-12 08:30 UTC`. */
-function builtAt(seconds: number): string {
-  return `${new Date(seconds * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-}
 
 /** The lights by how their flats were chosen, beyond those on their own side. */
 function lightsBreakdown(lights: FlatGroupLightCounts): string[] {
@@ -327,7 +324,7 @@ export default function FlatGroupDetail({
                 {(allMasters ? fed.masters : fed.masters.slice(0, MASTERS_SHOWN)).map((master) => (
                   <li key={master.id}>
                     <Link to={calibrationMasterHref(search, dbId, master.id)} title={master.label}>
-                      Master built {builtAt(master.created_at)}
+                      Master built {timeLabel(master.created_at)}
                     </Link>
                     <span className="calibration-muted">
                       {' · '}{plural(master.sources, 'flat')}

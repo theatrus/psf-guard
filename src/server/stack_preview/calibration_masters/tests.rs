@@ -350,9 +350,10 @@ fn a_master_reports_the_temperatures_and_nights_of_its_source_frames() {
             "CREATE TABLE psf_guard_calibration_master (master_uuid TEXT, cache_path TEXT,
                  source_count INTEGER, source_frame_uuids TEXT, statistics_json TEXT);
              CREATE TABLE psf_guard_calibration_frame (frame_uuid TEXT, camera_temp REAL,
-                 captured_at INTEGER);
+                 captured_at INTEGER, rig_uuid TEXT);
              INSERT INTO psf_guard_calibration_frame VALUES
-                 ('warm', -7.9, 1787097600), ('warmer', -8.3, 1787184000), ('other', -10.0, 1787184000);",
+                 ('warm', -7.9, 1787097600, 'rig'), ('warmer', -8.3, 1787184000, 'rig'),
+                 ('other', -10.0, 1787184000, 'rig');",
         )
         .unwrap();
         // Three frames recorded, one since forgotten.

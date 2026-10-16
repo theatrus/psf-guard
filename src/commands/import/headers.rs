@@ -3,7 +3,7 @@
 //! Only headers are read — never pixel data — so scanning thousands of frames
 //! stays I/O bound. Field names follow N.I.N.A.'s FITS writer.
 
-use crate::astrometry_headers::{parse_dec_deg, parse_ra_deg};
+use crate::astrometry_headers::{parse_dec_deg, parse_longitude_deg, parse_ra_deg};
 use seiza_fits::HeaderValue;
 use std::path::{Path, PathBuf};
 
@@ -73,6 +73,13 @@ pub struct FrameMeta {
     pub rotator_position: Option<f64>,
     pub pier_side: Option<String>,
     pub airmass: Option<f64>,
+    /// SITELONG: the site's longitude in degrees, east positive, as the
+    /// N.I.N.A. profile records it. Calibration splits a rig's nights at
+    /// its site's local noon ([`crate::calibration::night`]).
+    pub site_longitude: Option<f64>,
+    /// SITELAT, in degrees. Only read to tell an unset profile (0°, 0°)
+    /// from a real site.
+    pub site_latitude: Option<f64>,
 }
 
 impl FrameMeta {
@@ -221,6 +228,11 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
     meta.rotator_position = f64_of(&["ROTATANG", "ROTATOR"]);
     meta.pier_side = text(&["PIERSIDE"]);
     meta.airmass = f64_of(&["AIRMASS"]).filter(|v| *v >= 1.0);
+    meta.site_latitude = coordinate(&["SITELAT", "LAT-OBS", "OBSGEO-B"], parse_dec_deg);
+    meta.site_longitude = coordinate(
+        &["SITELONG", "SITELON", "LONG-OBS", "OBSGEO-L"],
+        parse_longitude_deg,
+    );
     meta
 }
 
