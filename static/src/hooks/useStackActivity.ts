@@ -12,11 +12,12 @@ export function useStackActivity() {
   const query = useQuery<StackActivity>({
     queryKey: STACK_ACTIVITY_QUERY_KEY,
     queryFn: () => apiClient.getStackActivity(),
-    // Fast only while a build runs or automatic work waits to resume.
-    // Starting one here invalidates this query, so the idle poll exists to
-    // notice jobs another client began — a few seconds' lag is fine, and the
-    // endpoint is an in-memory list.
-    refetchInterval: (query) => (busy(query.state.data) ? 1000 : 5_000),
+    // Fast only while a build runs or waits in the line. Automatic work
+    // waiting to resume can wait for hours, so it is looked at slowly, as
+    // when nothing runs. Starting work here invalidates this query, so the
+    // slow poll exists to notice jobs another client began — a few seconds'
+    // lag is fine, and the endpoint is an in-memory list.
+    refetchInterval: (query) => (query.state.data?.active.length ? 1000 : 5_000),
     refetchIntervalInBackground: false,
   });
   return {
@@ -28,13 +29,6 @@ export function useStackActivity() {
   };
 }
 
-function busy(data: StackActivity | undefined): boolean {
-  return !!data && (
-    data.active.length > 0
-    || !!data.waiting_reapplies?.length
-    || !!data.scheduled?.some((refresh) => refresh.waiting)
-  );
-}
 
 /**
  * The build a panel should re-attach to when it mounts without a job of its

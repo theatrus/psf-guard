@@ -10,9 +10,11 @@
   started is listed as **waiting**, with what it waits for and how far it
   had got, below your work. The chip counts running and waiting jobs with
   a play and an hourglass icon each, so it stays as small as before; a
-  phone shows the waiting count only. An automatic build your build
-  stopped resumes as soon as yours is done, and its row turns into the
-  running build without appearing twice.
+  phone shows the waiting count only. Builds you queued count as queued,
+  not waiting. An automatic build your build stopped starts again once
+  your work has been quiet for 30 seconds, from where it stopped when no
+  frame or grade changed meanwhile, and its row turns into the running
+  build without appearing twice. One you stopped yourself stays stopped.
 - Images' **Date** groups are observing nights, split where the catalog's
   nights split, as calibration and the AstroBin export do: a night west of
   Greenwich no longer lands on the next day's date or across two dates.

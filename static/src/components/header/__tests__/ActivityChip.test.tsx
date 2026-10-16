@@ -111,10 +111,11 @@ describe('ActivityChip', () => {
     });
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
-    await waitFor(() => expect(counts(chip)).toEqual(['2 running', '1 waiting']));
+    // A build a person queued is queued, not waiting: no icon, but said.
+    await waitFor(() => expect(counts(chip)).toEqual(['2 running']));
     // The scan is 40% and the running build 80%; the queued one waits.
     expect(chip).toHaveTextContent('60%');
-    expect(chip).toHaveAccessibleName('Background jobs: 60% done, 2 running, 1 waiting');
+    expect(chip).toHaveAccessibleName('Background jobs: 60% done, 2 running, 1 queued');
     expect(chip).toHaveAttribute('aria-expanded', 'false');
 
     await userEvent.hover(chip);
@@ -464,7 +465,7 @@ describe('ActivityChip', () => {
     });
     renderChip({ showLocation: true });
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
-    await waitFor(() => expect(chip).toHaveAccessibleName('Background jobs: 30% done, 1 running, 1 waiting'));
+    await waitFor(() => expect(chip).toHaveAccessibleName('Background jobs: 30% done, 1 running, 1 queued'));
     await userEvent.click(chip);
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     const rows = within(list).getAllByRole('listitem');

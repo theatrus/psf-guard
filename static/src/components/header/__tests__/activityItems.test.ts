@@ -141,8 +141,8 @@ describe('header activity items', () => {
       [{ dbId: 'a', dbName: 'Askar', scan: scan(4, 10) }],
       [stack('R', 'running', 9, 10), stack('B', 'queued')]
     );
-    expect(summarize(items)).toEqual({ count: 3, running: 2, waiting: 1, percent: 65 });
-    expect(summarize([])).toEqual({ count: 0, running: 0, waiting: 0, percent: null });
+    expect(summarize(items)).toEqual({ count: 3, running: 2, waiting: 0, queued: 1, percent: 65 });
+    expect(summarize([])).toEqual({ count: 0, running: 0, waiting: 0, queued: 0, percent: null });
   });
 
   it('orders the stack line as the server does and carries each place', () => {
@@ -252,7 +252,7 @@ describe('header activity items', () => {
     expect(deconvolving[0]).toMatchObject({
       status: 'running', percent: null, stoppable: false, detail: 'Reading the stack',
     });
-    expect(summarize(items)).toEqual({ count: 3, running: 1, waiting: 2, percent: 42 });
+    expect(summarize(items)).toEqual({ count: 3, running: 1, waiting: 0, queued: 2, percent: 42 });
     // A re-apply the server queued after its stack refreshed is marked.
     expect(activityItems([], [{ ...blur, automatic: true }])[0]).toMatchObject({ automatic: true });
     expect(items[0].automatic).toBeFalsy();
@@ -323,7 +323,7 @@ describe('header activity items', () => {
 
     const summary = summarize(items);
     // Waiting work's last progress does not count toward the chip's.
-    expect(summary).toEqual({ count: 5, running: 2, waiting: 3, percent: 40 });
+    expect(summary).toEqual({ count: 5, running: 2, waiting: 3, queued: 0, percent: 40 });
     expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 0 });
   });
 

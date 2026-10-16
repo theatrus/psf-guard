@@ -147,10 +147,18 @@ pub struct AppState {
 pub struct InteractiveJobs {
     next: AtomicU64,
     running: Mutex<BTreeMap<u64, String>>,
+    /// When the last interactive job ended, so background work can wait for
+    /// a quiet moment rather than slip in between a person's jobs.
+    last_ended: Mutex<Option<Instant>>,
 }
 
 /// What background work waits for when nothing more specific is known.
 pub const INTERACTIVE_WORK: &str = "interactive work";
+
+/// How long background work waits before it says it is waiting. A preview
+/// takes a moment; a job that stepped aside for it is not worth listing as
+/// waiting and then as running again.
+pub const WAIT_NOTE_AFTER: Duration = Duration::from_secs(1);
 
 /// RAII marker that an interactive CPU-heavy job is running. Registers the
 /// job on creation and removes it on drop, so background work yields for
@@ -167,6 +175,11 @@ impl Drop for InteractiveJobGuard {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(&self.id);
+        *self
+            .jobs
+            .last_ended
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Instant::now());
     }
 }
 
@@ -679,22 +692,45 @@ impl AppState {
             .cloned()
     }
 
+    /// How long no interactive work has run: `None` while some runs, and
+    /// `Duration::MAX` when none has run since the server started.
+    pub fn interactive_quiet_for(&self) -> Option<Duration> {
+        if self.interactive_job_active() {
+            return None;
+        }
+        let ended = *self
+            .active_interactive_jobs
+            .last_ended
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Some(ended.map_or(Duration::MAX, |ended| ended.elapsed()))
+    }
+
+    /// Pretend the last interactive job ended `ago`, for a test of what
+    /// waits for a quiet moment.
+    #[cfg(test)]
+    pub fn interactive_ended_ago(&self, ago: Duration) {
+        *self.active_interactive_jobs.last_ended.lock().unwrap() = Some(Instant::now() - ago);
+    }
+
     /// Block a background thread while interactive work runs, checking
-    /// every `nap`. `note` hears what it waits for when the wait begins or
-    /// the job it waits for changes, and `None` when it may go on, so a job's
-    /// status can list it as waiting rather than running. Returns false once
-    /// the server is stopping.
+    /// every `nap`. `note` hears what it waits for once the wait has lasted
+    /// [`WAIT_NOTE_AFTER`] or the job it waits for changes, and `None` when
+    /// it may go on, so a job's status can list it as waiting rather than
+    /// running, but not for every passing preview. Returns false once the
+    /// server is stopping.
     pub fn wait_for_interactive_work(
         &self,
         nap: Duration,
         mut note: impl FnMut(Option<&str>),
     ) -> bool {
+        let began = Instant::now();
         let mut noted: Option<String> = None;
         while let Some(name) = self.interactive_job_name() {
             if self.shutdown.is_stopping() {
                 break;
             }
-            if noted.as_deref() != Some(name.as_str()) {
+            if began.elapsed() >= WAIT_NOTE_AFTER && noted.as_deref() != Some(name.as_str()) {
                 note(Some(&name));
                 noted = Some(name);
             }
@@ -924,6 +960,26 @@ mod tests {
                 panic!("nothing to wait for")
             })
         );
+    }
+
+    #[test]
+    fn a_moment_of_interactive_work_is_waited_out_without_a_word() {
+        let state = std::sync::Arc::new(test_state());
+        assert_eq!(state.interactive_quiet_for(), Some(Duration::MAX));
+        let preview = state.begin_named_interactive_job("a preview");
+        assert_eq!(state.interactive_quiet_for(), None);
+        let waiter = {
+            let state = std::sync::Arc::clone(&state);
+            std::thread::spawn(move || {
+                state.wait_for_interactive_work(Duration::from_millis(5), |name| {
+                    panic!("a passing preview was reported: {name:?}")
+                })
+            })
+        };
+        std::thread::sleep(WAIT_NOTE_AFTER / 4);
+        drop(preview);
+        assert!(waiter.join().unwrap());
+        assert!(state.interactive_quiet_for().unwrap() < Duration::from_secs(5));
     }
 
     #[test]

@@ -1109,6 +1109,21 @@ impl StackPreviewManager {
         self.origins.lock().unwrap().remove(job_id);
     }
 
+    /// Forget a job's stop flag and origin, but only while they are still
+    /// this task's. A refresh that resumes a stopped build asks for the same
+    /// job id, so the stopped task, finishing late, must not clear the new
+    /// one's flag.
+    fn forget_cancel_of(&self, job_id: &str, flag: &Arc<AtomicBool>) {
+        let mut cancels = self.cancels.lock().unwrap();
+        if cancels
+            .get(job_id)
+            .is_some_and(|current| Arc::ptr_eq(current, flag))
+        {
+            cancels.remove(job_id);
+            self.origins.lock().unwrap().remove(job_id);
+        }
+    }
+
     fn remember_origin(&self, job_id: &str, origin: journal::JournaledStackJob) {
         self.origins
             .lock()
@@ -1209,6 +1224,17 @@ impl StackPreviewManager {
 
     /// Ask a queued or running job to stop. Returns false when the job is not
     /// in flight, which includes a job that already finished.
+    /// Ask a job to stop, and say whether this asked first: false when it
+    /// was already asked, or has no stop flag.
+    fn newly_cancel(&self, job_id: &str) -> bool {
+        let Some(flag) = self.cancels.lock().unwrap().get(job_id).cloned() else {
+            return false;
+        };
+        let first = !flag.swap(true, Ordering::Relaxed);
+        self.turn.notify_waiters();
+        first
+    }
+
     pub fn request_cancel(&self, job_id: &str) -> bool {
         let Some(flag) = self.cancels.lock().unwrap().get(job_id).cloned() else {
             return false;
@@ -1274,9 +1300,9 @@ impl StackPreviewManager {
                 stopped.push(color_activity(job));
             }
         }
-        for entry in &stopped {
-            self.request_cancel(&entry.job_id);
-        }
+        // A build already stopped, by a person's Stop, stays stopped: only
+        // the builds this call stops come back.
+        stopped.retain(|entry| self.newly_cancel(&entry.job_id));
         // A re-apply steps aside too, and waits for its turn again.
         self.yield_automatic_processing();
         interrupted_builds(stopped)
@@ -2087,32 +2113,68 @@ pub async fn get_stack_activity(
             .unwrap_or_default()
     };
     let waiting_reapplies = waiting_reapplies(&state, &scheduled);
-    // Read after the refreshes, so a refresh that started meanwhile is in
-    // the line by now; it is listed once, as its build.
+    // Read after the refreshes and re-applies, so one that started
+    // meanwhile is in the line by now; it is listed once, as its build or
+    // run.
     let active = state.stack_previews.active();
     Json(ApiResponse::success(StackActivity {
         schema_version: 1,
         scheduled: without_started(scheduled, &active),
+        waiting_reapplies: reapplies_not_started(waiting_reapplies, &active),
         active,
-        waiting_reapplies,
     }))
 }
 
 /// What automatic stack work waits for, in words that fit "Waiting for …":
-/// the build or run holding the worker, a person's work, or a quality
-/// analysis of its database. `None` when it is free to start at the
-/// scheduler's next look.
-fn automatic_work_waits_for(state: &AppState, database_id: &str) -> Option<String> {
+/// the build or run holding the worker, or the line ahead of it, a
+/// person's work, a quiet moment after it, or a quality analysis of its
+/// database. `None` when it is free to start at the scheduler's next look.
+/// A refresh is not held off by a re-apply; a re-apply waits for anything
+/// in the line.
+fn automatic_work_waits_for(state: &AppState, database_id: &str, reapply: bool) -> Option<String> {
     let manager = &state.stack_previews;
-    let holder = automatic::holds_off_refreshes(manager)
-        .then(|| manager.worker_holder(""))
-        .flatten();
-    holder.or_else(|| state.interactive_job_name()).or_else(|| {
-        let ctx = state.get_database(database_id)?;
-        crate::server::quality_backfill::snapshot(&ctx.quality_backfill)
-            .running
-            .then(|| format!("the quality analysis of {}", ctx.name))
-    })
+    let held = if reapply {
+        !manager.active().is_empty()
+    } else {
+        automatic::holds_off_refreshes(manager)
+    };
+    let holder = held.then(|| {
+        manager
+            .worker_holder("")
+            .unwrap_or_else(|| "the work in the stack line".to_string())
+    });
+    holder
+        .or_else(|| state.interactive_job_name())
+        .or_else(|| {
+            (!automatic::quiet_for_automatic_work(state))
+                .then(|| "a quiet moment after your work".to_string())
+        })
+        .or_else(|| {
+            let ctx = state.get_database(database_id)?;
+            crate::server::quality_backfill::snapshot(&ctx.quality_backfill)
+                .running
+                .then(|| format!("the quality analysis of {}", ctx.name))
+        })
+}
+
+/// A re-apply whose run has just joined the line is listed as that run,
+/// not twice.
+fn reapplies_not_started(
+    waiting: Vec<WaitingReapplyView>,
+    active: &[StackActivityEntry],
+) -> Vec<WaitingReapplyView> {
+    waiting
+        .into_iter()
+        .filter(|reapply| {
+            !active.iter().any(|entry| {
+                entry.automatic
+                    && entry.kind == StackActivityKind::Processing
+                    && entry.database_id == reapply.database_id
+                    && entry.project_id == reapply.project_id
+                    && entry.label == reapply.label
+            })
+        })
+        .collect()
 }
 
 /// A waiting refresh whose build has just joined the line is listed as that
@@ -2147,18 +2209,19 @@ fn waiting_reapplies(
     waiting
         .into_iter()
         .map(|(_, mut view)| {
-            view.waiting_for = automatic_work_waits_for(state, &view.database_id).or_else(|| {
-                // A refresh of its project may bring a newer stack first.
-                scheduled
-                    .iter()
-                    .any(|refresh| {
-                        refresh.database_id == view.database_id
-                            && refresh
-                                .project_id
-                                .is_none_or(|project_id| project_id == view.project_id)
-                    })
-                    .then(|| "its project's stacks to refresh".to_string())
-            });
+            view.waiting_for =
+                automatic_work_waits_for(state, &view.database_id, true).or_else(|| {
+                    // A refresh of its project may bring a newer stack first.
+                    scheduled
+                        .iter()
+                        .any(|refresh| {
+                            refresh.database_id == view.database_id
+                                && refresh
+                                    .project_id
+                                    .is_none_or(|project_id| project_id == view.project_id)
+                        })
+                        .then(|| "its project's stacks to refresh".to_string())
+                });
             view
         })
         .collect()
@@ -2185,7 +2248,18 @@ fn name_scheduled(
                 .into_iter()
                 .map(|(_, name)| name)
                 .collect::<Vec<_>>();
-            (fresh > 0).then_some((refresh, channels))
+            // A stopped build is listed even when what it would restack
+            // cannot be told, as for a color composition.
+            let channels = if channels.is_empty() {
+                refresh
+                    .last_progress
+                    .iter()
+                    .map(|last| last.label.clone())
+                    .collect()
+            } else {
+                channels
+            };
+            (fresh > 0 || (refresh.waiting && refresh.interrupted)).then_some((refresh, channels))
         })
         .map(|(refresh, channels)| {
             let ctx = state.get_database(&refresh.database_id);
@@ -2202,7 +2276,7 @@ fn name_scheduled(
             };
             let waiting_for = refresh
                 .waiting
-                .then(|| automatic_work_waits_for(state, &refresh.database_id))
+                .then(|| automatic_work_waits_for(state, &refresh.database_id, false))
                 .flatten();
             ScheduledRefreshView {
                 database_name: ctx
@@ -3493,7 +3567,7 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob, origin: journal::Jou
         // never starts.
         let permit = state.stack_previews.wait_turn(&job_id, &cancel).await;
         if permit.is_none() && !cancel.load(Ordering::Relaxed) {
-            state.stack_previews.forget_cancel(&job_id);
+            state.stack_previews.forget_cancel_of(&job_id, &cancel);
             return;
         }
         let _permit = permit;
@@ -3502,7 +3576,7 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob, origin: journal::Jou
                 cancel_unfinished_groups(job);
                 job.state = StackJobState::Cancelled;
             });
-            state.stack_previews.forget_cancel(&job_id);
+            state.stack_previews.forget_cancel_of(&job_id, &cancel);
             return;
         }
         // Only a build a person asked for outranks pre-generation and
@@ -3522,7 +3596,7 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob, origin: journal::Jou
                 job.error = Some(format!("Stack worker panicked: {error}"));
             });
         }
-        state.stack_previews.forget_cancel(&job_id);
+        state.stack_previews.forget_cancel_of(&job_id, &cancel);
     });
 }
 
@@ -7839,6 +7913,69 @@ mod tests {
                     last_progress: None,
                 },
             ]
+        );
+    }
+
+    /// A person pressed Stop on an automatic build and, before the worker
+    /// settles it into `cancelled`, starts a build of their own. The build
+    /// they stopped stays stopped: it does not come back as a refresh due at
+    /// once.
+    #[test]
+    fn an_automatic_build_a_person_stopped_stays_stopped() {
+        let manager = StackPreviewManager::new();
+        let mut job = running_build("auto");
+        job.automatic = true;
+        assert!(manager.insert(job));
+        manager.track_cancel("auto");
+        // The person's Stop: the flag is set, the job still reads Running.
+        assert!(manager.request_cancel("auto"));
+        // The person's own build then interrupts automatic work.
+        let interrupted = manager.cancel_automatic();
+        assert!(
+            interrupted.is_empty(),
+            "a build the person stopped comes back as {interrupted:?}"
+        );
+    }
+
+    #[test]
+    fn a_stopped_task_finishing_late_keeps_the_new_jobs_stop_flag() {
+        let manager = StackPreviewManager::new();
+        let stopped = manager.track_cancel("same");
+        // A resumed refresh asks for the same job id.
+        let resumed = manager.track_cancel("same");
+        manager.forget_cancel_of("same", &stopped);
+        assert!(manager.request_cancel("same"), "the new flag was forgotten");
+        assert!(resumed.load(Ordering::Relaxed));
+        assert!(!stopped.load(Ordering::Relaxed));
+        manager.forget_cancel_of("same", &resumed);
+        assert!(!manager.request_cancel("same"));
+    }
+
+    #[test]
+    fn a_reapply_whose_run_joined_the_line_is_listed_once() {
+        let waiting = |label: &str| WaitingReapplyView {
+            database_id: "db".into(),
+            project_id: 1,
+            target_id: Some(42),
+            label: label.into(),
+            waiting_for: None,
+        };
+        let mut run = mono_activity(&running_build("run"));
+        run.kind = StackActivityKind::Processing;
+        run.database_id = "db".into();
+        run.project_id = 1;
+        run.label = "M44 · R".into();
+        run.automatic = true;
+        let listed = reapplies_not_started(
+            vec![waiting("M44 · R"), waiting("M44 · G")],
+            std::slice::from_ref(&run),
+        );
+        assert_eq!(
+            listed
+                .iter()
+                .map(|view| view.label.as_str())
+                .collect::<Vec<_>>(),
+            ["M44 · G"]
         );
     }
 

@@ -456,8 +456,10 @@ export function lineLengths(items: ActivityItem[]): Record<ActivityQueue, number
 export interface ActivitySummary {
   count: number;
   running: number;
-  /** Jobs queued in a line or waiting to resume. */
+  /** Automatic work that stepped aside and resumes on its own. */
   waiting: number;
+  /** Jobs in a line a person can reorder, such as builds they asked for. */
+  queued: number;
   /** The mean progress of the running jobs that report one, or null. */
   percent: number | null;
 }
@@ -468,7 +470,8 @@ export function summarize(items: ActivityItem[]): ActivitySummary {
   return {
     count: items.length,
     running: running.length,
-    waiting: items.length - running.length,
+    waiting: items.filter((item) => item.status === 'waiting').length,
+    queued: items.filter((item) => item.status === 'queued').length,
     percent: measured.length > 0
       ? measured.reduce((sum, item) => sum + (item.percent ?? 0), 0) / measured.length
       : null,

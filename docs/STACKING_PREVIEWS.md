@@ -643,17 +643,22 @@ first stack this way gets no first color preview; once one is composed, it
 follows its channels.
 
 A refresh still settling is not in the header's queue or its job count: it
-is not work yet. Once it is due it is work. If the stacker is free it starts
-at the scheduler's next look, within 15 seconds, as one build per channel
-marked `automatic`. If a build of yours, other work you started, another
-build, or a quality analysis of its database holds it back, the header lists
-it as **Refreshing stacks**, marked **waiting**, with what it waits for, and
-counts it with an hourglass beside the running count. A build you start stops a
-running automatic build; that refresh is listed as waiting at once, with how
-far its build had got, and resumes from the build's checkpoint as soon as
-yours is done, without settling again. New frames that arrive while it waits
-join it rather than pushing it back. When it starts, its row becomes its
-builds; it is never listed twice. A refresh that would find only cache hits does
+is not work yet. Once it is due it is work. If the stacker is free, and
+nothing you started has run for the last 30 seconds, it starts at the
+scheduler's next look, within 15 seconds, as one build per channel marked
+`automatic`. The quiet period keeps it out of the short gap between two
+builds you start one after the other. If a build of yours, other work you
+started, another build, or a quality analysis of its database holds it
+back, the header lists it as **Refreshing stacks**, marked **waiting**, with
+what it waits for, and counts it with an hourglass beside the running
+count. Builds you queued count as queued, not waiting. A build you start
+stops a running automatic build; that refresh is listed as waiting at once,
+with how far its build had got, and starts again once your work is done and
+quiet, without settling again. When no frame or grade changed meanwhile, it
+resumes from the stopped build's checkpoint; otherwise it restacks what
+changed. New frames that arrive while it waits join it rather than pushing
+it back. An automatic build you stop yourself stays stopped. When it starts,
+its row becomes its builds; it is never listed twice. A refresh that would find only cache hits does
 not start a build, nor does one whose channels an earlier refresh of the same
 database already covers. When a refresh finds an older finished build of the
 same frames, the card points back at it instead of stacking again.

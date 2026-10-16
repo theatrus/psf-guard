@@ -371,11 +371,12 @@ export default function ActivityChip() {
   };
 
   const percent = summary.percent == null ? null : Math.round(summary.percent);
-  const { running, waiting } = summary;
+  const { running, waiting, queued } = summary;
   const label = [
     percent != null ? `${percent}% done` : running > 0 ? 'Working' : '',
     running > 0 ? `${running} running` : '',
     waiting > 0 ? `${waiting} waiting` : '',
+    queued > 0 ? `${queued} queued` : '',
     scanError ? 'a quality scan had errors' : '',
   ].filter(Boolean).join(', ');
 

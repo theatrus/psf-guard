@@ -49,6 +49,12 @@ pub const MAX_DELAY_MINUTES: u32 = 24 * 60;
 const MAX_DEFERRALS: u32 = 4;
 /// How often the scheduler looks for due refreshes.
 const TICK: Duration = Duration::from_secs(15);
+/// How long no interactive work must have run before a due refresh starts:
+/// two of the scheduler's looks. A person building channel after channel
+/// leaves a short gap between builds; a refresh that slipped into it would
+/// only be stopped again, and hold up their next build by the frame in
+/// hand.
+pub const RESUME_QUIET: Duration = Duration::from_secs(30);
 /// Granularity of journaled due times, in seconds.
 const JOURNAL_DUE_STEP: i64 = 30;
 
@@ -230,6 +236,9 @@ pub struct ScheduledRefresh {
     pub waiting: bool,
     /// How far its build had got when a person's build stopped it.
     pub last_progress: Option<LastProgress>,
+    /// A person's build stopped its build. It is listed even when what it
+    /// expects to restack cannot be told, such as a color composition.
+    pub interrupted: bool,
 }
 
 /// Where an automatic build stood when it stepped aside for a person's.
@@ -266,6 +275,8 @@ struct Pending {
     touches: u64,
     /// Where its build stood when a person's build stopped it.
     last: Option<LastProgress>,
+    /// A person's build stopped its build.
+    interrupted: bool,
 }
 
 impl Pending {
@@ -329,6 +340,7 @@ impl AutomaticStackRefresh {
             reason,
             touches: 0,
             last: None,
+            interrupted: false,
         });
         entry.touches = TOUCHES.fetch_add(1, Ordering::Relaxed) + 1;
         if entry.waiting(now) {
@@ -370,6 +382,7 @@ impl AutomaticStackRefresh {
                 if entry.last.is_none() {
                     entry.last = pending.last;
                 }
+                entry.interrupted |= pending.interrupted;
             }
             std::collections::hash_map::Entry::Vacant(vacant) => {
                 vacant.insert(pending);
@@ -378,8 +391,10 @@ impl AutomaticStackRefresh {
     }
 
     /// A person's build stopped this project's automatic build. Its refresh
-    /// is due at once, waiting for the worker, and keeps where the build
-    /// stood; the stopped build's checkpoint resumes when it runs.
+    /// is due at once, listed as waiting, and keeps where the build stood.
+    /// It starts once the person's work has been quiet for
+    /// [`RESUME_QUIET`], and resumes from the stopped build's checkpoint
+    /// when no frame or grade changed meanwhile.
     pub fn interrupted(&self, build: InterruptedBuild) {
         if !ENABLED.load(Ordering::Relaxed) {
             return;
@@ -397,9 +412,11 @@ impl AutomaticStackRefresh {
             reason: RefreshReason::Arrival,
             touches,
             last: None,
+            interrupted: true,
         });
         entry.due_at = entry.due_at.min(now);
         entry.touches = touches;
+        entry.interrupted = true;
         if build.last_progress.is_some() {
             entry.last = build.last_progress;
         }
@@ -450,6 +467,7 @@ impl AutomaticStackRefresh {
                 reason: entry.reason,
                 touches: entry.touches,
                 last_progress: entry.last,
+                interrupted: entry.interrupted,
             })
             .collect::<Vec<_>>();
         scheduled.sort_by(|left, right| {
@@ -502,6 +520,7 @@ impl AutomaticStackRefresh {
             reason: refresh.reason,
             touches: 0,
             last: None,
+            interrupted: false,
         });
         entry.due_at = entry.due_at.min(due_at);
     }
@@ -575,11 +594,11 @@ async fn tick(state: &Arc<AppState>) {
     }
     let _starting = Starting(refreshes);
     // One stacking worker, and the user comes first on it: while a build
-    // runs, or interactive work is in flight, everything due waits, listed
-    // as waiting. A re-apply of processing does not hold a refresh off: the
-    // refresh may bring a newer stack, which the re-apply would only be
-    // redone for.
-    if state.interactive_job_active() || holds_off_refreshes(&state.stack_previews) {
+    // runs, or interactive work is in flight or ended only moments ago,
+    // everything due waits, listed as waiting. A re-apply of processing
+    // does not hold a refresh off: the refresh may bring a newer stack,
+    // which the re-apply would only be redone for.
+    if !quiet_for_automatic_work(state) || holds_off_refreshes(&state.stack_previews) {
         for (key, pending) in due {
             refreshes.hold(key, pending);
         }
@@ -627,6 +646,7 @@ async fn tick(state: &Arc<AppState>) {
                             },
                             Pending {
                                 last: None,
+                                interrupted: false,
                                 ..pending.clone()
                             },
                         );
@@ -654,6 +674,15 @@ async fn tick(state: &Arc<AppState>) {
             }
         }
     }
+}
+
+/// Whether a person's work has left the worker alone long enough for
+/// automatic work to start: none runs, and none ended within
+/// [`RESUME_QUIET`].
+pub(super) fn quiet_for_automatic_work(state: &AppState) -> bool {
+    state
+        .interactive_quiet_for()
+        .is_some_and(|quiet| quiet >= RESUME_QUIET)
 }
 
 /// Whether queued or running work keeps due refreshes waiting: anything but
@@ -1594,12 +1623,21 @@ mod tests {
             CREATE TABLE psf_guard_project_processing(project_key TEXT PRIMARY KEY,split_exposure_groups INTEGER NOT NULL,split_chosen INTEGER);
             INSERT INTO psf_guard_project_processing VALUES('guid:project-one',0,1);").unwrap();
         let now = chrono::Utc::now().timestamp();
+        // The frames are on disk, so a refresh can start a build of them;
+        // it fails once it reads them, which no test here waits for.
+        let images = directory.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
         for id in 1..=3 {
+            let name = format!("r{id}.fits");
+            std::fs::write(images.join(&name), b"not a fits").unwrap();
+            let metadata = serde_json::json!({ "FileName": name }).to_string();
             conn.execute("INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
-                VALUES(?1,1,1,1,'{}',?2,'R')", rusqlite::params![id, now]).unwrap();
+                VALUES(?1,1,1,1,?2,?3,'R')", rusqlite::params![id, metadata, now]).unwrap();
         }
         let mut ctx = DatabaseContext::new_for_test(conn);
         ctx.use_storage_for_test(directory.path());
+        ctx.image_dirs = vec![images.to_string_lossy().into_owned()];
+        ctx.image_dir_paths = vec![images];
         let mut stacked = remembered(1, "R", 10, crate::calibration::CalibrationMode::Auto, true);
         stacked["group"]["input_images"] = serde_json::json!([
             {"image_id": 1, "grading_status": 1},
@@ -1680,14 +1718,98 @@ mod tests {
             .touch_projects(&ctx.id, [1], RefreshReason::Arrival);
         assert!(state.auto_stacks.scheduled()[0].waiting);
 
-        // The person's work ends: it waits only for the scheduler's next
-        // look, still listed once.
+        // The person's work ends: it waits for a quiet moment, still listed
+        // once.
         drop(person);
         let json = stack_activity(&state).await;
         let scheduled = json["data"]["scheduled"].as_array().unwrap();
         assert_eq!(scheduled.len(), 1);
         assert_eq!(scheduled[0]["waiting"], true);
-        assert!(scheduled[0].get("waiting_for").is_none(), "{json}");
+        assert_eq!(
+            scheduled[0]["waiting_for"],
+            "a quiet moment after your work"
+        );
+
+        // A person building channel after channel leaves a gap between
+        // builds. The scheduler looks inside it: the refresh does not slip
+        // in, to be stopped again by the next build.
+        tick(&state).await;
+        let started = |state: &AppState| {
+            state
+                .stack_previews
+                .jobs
+                .lock()
+                .unwrap()
+                .values()
+                .any(|job| job.automatic && job.project_id == 1)
+        };
+        assert!(!started(&state), "it started in the gap between builds");
+        assert!(state.auto_stacks.scheduled()[0].waiting);
+
+        // Quiet for long enough: the next look starts its build, and the
+        // refresh leaves the list, starting set and all.
+        state.interactive_ended_ago(RESUME_QUIET);
+        tick(&state).await;
+        assert!(started(&state), "the refresh did not start");
+        assert!(state.auto_stacks.scheduled().is_empty());
+        assert!(state.auto_stacks.starting.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_refresh_being_started_is_still_listed_and_listed_once() {
+        let _policy = enabled(5, 15);
+        let refresh = AutomaticStackRefresh::default();
+        refresh.interrupted(InterruptedBuild {
+            database_id: "db-a".into(),
+            project_id: 7,
+            last_progress: None,
+        });
+        // The scheduler takes it to start: until its build is in the line,
+        // the list still shows it, waiting.
+        let taken = refresh.take_due(Instant::now());
+        refresh
+            .starting
+            .lock()
+            .unwrap()
+            .extend(taken.iter().cloned());
+        let listed = refresh.scheduled();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].waiting && listed[0].interrupted);
+        // Put back while still marked as starting, it is listed once.
+        for (key, pending) in taken {
+            refresh.hold(key, pending);
+        }
+        assert_eq!(refresh.scheduled().len(), 1);
+        refresh.starting.lock().unwrap().clear();
+        assert_eq!(refresh.scheduled().len(), 1);
+        configure(AutomationPolicy::default());
+    }
+
+    #[test]
+    fn a_stopped_color_composition_is_listed_though_no_channel_would_restack() {
+        let _policy = enabled(5, 15);
+        let (_directory, ctx) = project_with_a_stale_channel();
+        let state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+        state
+            .databases
+            .write()
+            .unwrap()
+            .insert(ctx.id.clone(), Arc::clone(&ctx));
+        // Project 2 has no cards: no channel is expected to restack.
+        state.auto_stacks.interrupted(InterruptedBuild {
+            database_id: ctx.id.clone(),
+            project_id: 2,
+            last_progress: Some(LastProgress {
+                label: "T · RGB".into(),
+                processed_units: 1,
+                total_units: 3,
+            }),
+        });
+        let listed = super::super::name_scheduled(&state, state.auto_stacks.scheduled());
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].waiting);
+        assert_eq!(listed[0].channels, ["T · RGB"]);
+        configure(AutomationPolicy::default());
     }
 
     #[test]

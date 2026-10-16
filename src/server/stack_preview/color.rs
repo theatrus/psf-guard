@@ -1703,7 +1703,7 @@ pub(super) fn enqueue_color_job(
         let _work = work;
         let permit = state.stack_previews.wait_turn(&job_id, &cancel).await;
         if permit.is_none() && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            state.stack_previews.forget_cancel(&job_id);
+            state.stack_previews.forget_cancel_of(&job_id, &cancel);
             return;
         }
         let _permit = permit;
@@ -1712,7 +1712,7 @@ pub(super) fn enqueue_color_job(
                 job.state = StackJobState::Cancelled;
                 job.phase = "Stopped before composing".into();
             });
-            state.stack_previews.forget_cancel(&job_id);
+            state.stack_previews.forget_cancel_of(&job_id, &cancel);
             return;
         }
         // Only a composition a person asked for outranks pre-generation and
@@ -1734,7 +1734,7 @@ pub(super) fn enqueue_color_job(
                 job.error = Some(format!("Color worker panicked: {error}"));
             });
         }
-        state.stack_previews.forget_cancel(&job_id);
+        state.stack_previews.forget_cancel_of(&job_id, &cancel);
     });
 }
 

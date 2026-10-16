@@ -121,13 +121,21 @@ fn group_label(group: &StackGroupStatus) -> String {
 
 impl StackPreviewManager {
     /// Re-applies waiting for their turn rather than queued as runs, with
-    /// when each began to wait. What each waits for is the caller's to say.
+    /// when each began to wait. One whose run is stepping aside counts as
+    /// waiting already, so it is listed while its run winds down and after.
+    /// What each waits for is the caller's to say.
     pub(super) fn waiting_reapplies(&self) -> Vec<(Instant, super::WaitingReapplyView)> {
+        let yielded = self.yielded.lock().unwrap().clone();
         self.reapplies
             .lock()
             .unwrap()
             .values()
-            .filter(|reapply| reapply.run_id.is_none())
+            .filter(|reapply| {
+                reapply
+                    .run_id
+                    .as_ref()
+                    .is_none_or(|run_id| yielded.contains(run_id))
+            })
             .map(|reapply| {
                 (
                     reapply.since,
