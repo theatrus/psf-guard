@@ -41,8 +41,9 @@
   **Sessions | Groups** at the top of the sidebar. Groups run newest first
   by filter and angle, with the split between neighbours and its reason
   in between, and mark the current group, one partly measured and one a
-  change follows; ↑ and ↓ move between them. A group shows its nights,
-  each opening its session, how alike they measured against the rig's
+  change follows; ↑ and ↓ move between them. A group shows its flats in
+  the same image browser as a session, night by night with each night
+  marked, then its nights, how alike they measured against the rig's
   limits, the change on each side with Compare, and what it feeds: its
   flat masters and the lights that take it, by project, each linking to
   Images on exactly those lights. The group lives in the address, and

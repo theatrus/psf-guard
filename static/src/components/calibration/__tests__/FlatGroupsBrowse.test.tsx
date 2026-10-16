@@ -276,8 +276,8 @@ describe('browsing flat groups', () => {
   it('restores the group from the address and moves through groups with the arrow keys', async () => {
     serve();
     renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907');
-    const detail = await screen.findByTestId('flat-group-detail');
-    expect(within(detail).getByRole('heading', { level: 2 })).toHaveTextContent('Group 1 of 2 · R · 3°');
+    await screen.findByTestId('flat-group-detail');
+    expect(within(screen.getByTestId('flat-group-header')).getByRole('heading', { level: 2 })).toHaveTextContent('Group 1 of 2 · R · 3°');
     expect(entries()[1]).toHaveAttribute('aria-current', 'true');
 
     fireEvent.keyDown(document, { key: 'ArrowDown', code: 'ArrowDown' });
@@ -295,7 +295,7 @@ describe('browsing flat groups', () => {
     serve();
     renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0916');
     await waitFor(() => expect(params().get('calGroup')).toBe('s-r0907'));
-    expect(within(await screen.findByTestId('flat-group-detail')).getByRole('heading', { level: 2 }))
+    expect(within(await screen.findByTestId('flat-group-header')).getByRole('heading', { level: 2 }))
       .toHaveTextContent('Group 1 of 2');
   });
 
@@ -361,7 +361,7 @@ describe('browsing flat groups', () => {
     // Filter G hides R's groups, so G's newest is chosen.
     await screen.findByTestId('flat-group-detail');
     expect(params().get('calGroup')).toBe('s-g0913');
-    fireEvent.click(within(screen.getByTestId('flat-group-detail')).getAllByTestId('flat-group-member')[0]);
+    fireEvent.click(within(screen.getByTestId('flat-group-detail')).getAllByTestId('flat-group-open-session')[0]);
     await waitFor(() => expect(params().get('calSession')).toBe('s-g0913'));
     expect(params().get('calBrowse')).toBeNull();
     expect(params().get('calGroup')).toBe('s-g0913');
@@ -379,7 +379,7 @@ describe('browsing flat groups', () => {
     renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907');
     const detail = await screen.findByTestId('flat-group-detail');
     // 09-07 R is the sixth session of all: page 2 at two to a page.
-    fireEvent.click(within(detail).getAllByTestId('flat-group-member')[0]);
+    fireEvent.click(within(detail).getAllByTestId('flat-group-open-session')[0]);
     await waitFor(() => expect(params().get('calSession')).toBe('s-r0907'));
     expect(params().get('calPage')).toBe('2');
     const list = await screen.findByRole('navigation', { name: 'Sessions' });
@@ -457,7 +457,7 @@ describe('browsing flat groups', () => {
     // R 09-14 has too few flats to measure: it lies inside R's group 1.
     renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0914');
     await waitFor(() => expect(params().get('calGroup')).toBe('s-r0907'));
-    expect(within(await screen.findByTestId('flat-group-detail')).getByRole('heading', { level: 2 }))
+    expect(within(await screen.findByTestId('flat-group-header')).getByRole('heading', { level: 2 }))
       .toHaveTextContent('Group 1 of 2 · R · 3°');
   });
 
@@ -505,5 +505,93 @@ describe('browsing flat groups', () => {
     await waitFor(() => expect(within(feeds).getByTestId('flat-group-use-error'))
       .toHaveTextContent('Could not work out what it feeds: the catalog could not be read'));
     expect(feeds).not.toHaveTextContent('Working out');
+  });
+});
+
+describe('the frames of a flat group', () => {
+  beforeAll(() => configure({ asyncUtilTimeout: 10_000 }));
+  afterAll(() => configure({ asyncUtilTimeout: 1_000 }));
+
+  /** Two flats on each of R group 1's nights, 09-07 and 09-16. */
+  const flat = (uuid: string, session: string, night: string, minute: number) => ({
+    frame_uuid: uuid, rig_uuid: 'rig', kind: 'flat', source_path: `/cal/${uuid}.fits`, source_exists: true,
+    captured_at: at(night.slice(5), minute), exposure_s: 2, camera_temp: -10, filter: 'R', grade: 'ok',
+    grade_code: null, grade_reason: null, quality_override: null, kept_out: null, valid_direction: null,
+    night, session,
+  });
+  const FLATS = [
+    flat('a1', 's-r0907', '2026-09-07', 0), flat('a2', 's-r0907', '2026-09-07', 1),
+    flat('b1', 's-r0916', '2026-09-16', 0), flat('b2', 's-r0916', '2026-09-16', 1),
+  ];
+
+  function serveFrames(asked: URLSearchParams[]) {
+    serve();
+    server.use(
+      http.get('/api/db/demo/calibrations/frames', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        asked.push(params);
+        const wanted = params.get('sessions')?.split(',') ?? [params.get('session') ?? ''];
+        const frames = FLATS.filter((entry) => wanted.includes(entry.session));
+        return ok({ frames, total: frames.length, page: 0, per_page: 500 });
+      }),
+      http.get('/api/db/demo/calibrations/frames/:uuid', ({ params }) => {
+        const own = FLATS.find((entry) => entry.frame_uuid === params.uuid)!;
+        return ok({
+          ...own, measurement: null, measure_error: null, findings: [], metrics: [],
+          session_frames: 2, session_measured: 2, compare: true, masters: 0,
+        });
+      }),
+    );
+  }
+
+  const strip = () => screen.findByRole('list', { name: 'Frames' });
+
+  it('holds every flat of the group, night by night, each night marked where it begins', async () => {
+    const asked: URLSearchParams[] = [];
+    serveFrames(asked);
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907');
+    const list = await strip();
+    await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(4));
+    const request = asked.find((params) => params.get('sessions'));
+    expect(request?.get('sessions')).toBe('s-r0907,s-r0916');
+    expect(request?.get('sort')).toBe('oldest');
+    // The order in the strip: a night's mark, then its flats.
+    expect([...list.children].map((item) =>
+      item.getAttribute('data-run') ?? item.querySelector('[data-frame-uuid]')?.getAttribute('data-frame-uuid')))
+      .toEqual(['s-r0907', 'a1', 'a2', 's-r0916', 'b1', 'b2']);
+    expect(within(list).getAllByTestId('calibration-strip-run').map((run) => run.textContent))
+      .toEqual(['2026-09-072 flats', '2026-09-162 flats']);
+    // The first flat is chosen, in the address beside the group, and the
+    // viewer and its numbers show it.
+    await waitFor(() => expect(params().get('calFrame')).toBe('a1'));
+    expect(params().get('calGroup')).toBe('s-r0907');
+    expect(await screen.findByText('Frame 1 of 4 · ← → frames · ↑ ↓ groups · C compare')).toBeInTheDocument();
+  });
+
+  it('steps from one night to the next with the arrow keys, and a member card brings its night', async () => {
+    serveFrames([]);
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907&calFrame=a2');
+    const list = await strip();
+    await waitFor(() => expect(within(list).getByRole('button', { pressed: true }))
+      .toHaveAttribute('data-frame-uuid', 'a2'));
+    fireEvent.keyDown(document, { key: 'ArrowRight', code: 'ArrowRight' });
+    await waitFor(() => expect(params().get('calFrame')).toBe('b1'));
+    expect(screen.getByText(/^Frame 3 of 4/)).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'ArrowLeft', code: 'ArrowLeft' });
+    await waitFor(() => expect(params().get('calFrame')).toBe('a2'));
+    // ↑ ↓ stay with the groups.
+    fireEvent.keyDown(document, { key: 'ArrowUp', code: 'ArrowUp' });
+    await waitFor(() => expect(params().get('calGroup')).toBe('s-r0920'));
+    fireEvent.keyDown(document, { key: 'ArrowDown', code: 'ArrowDown' });
+    await waitFor(() => expect(params().get('calGroup')).toBe('s-r0907'));
+
+    // The 09-16 card shows that night's first flat, and stays in the group.
+    const detail = await screen.findByTestId('flat-group-detail');
+    const cards = within(detail).getAllByTestId('flat-group-member');
+    fireEvent.click(cards[1]);
+    await waitFor(() => expect(params().get('calFrame')).toBe('b1'));
+    expect(params().get('calBrowse')).toBe('groups');
+    await waitFor(() => expect(within(detail).getAllByTestId('flat-group-member')[1])
+      .toHaveAttribute('aria-current', 'true'));
   });
 });

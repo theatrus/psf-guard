@@ -569,3 +569,72 @@ button.flat-group-member:hover {
     display: none;
   }
 }
+
+/* A flat group's frames in the strip: each night marked where it begins,
+   in the group's colour. */
+.calibration-strip-run {
+  display: flex;
+  align-items: stretch;
+}
+
+.calibration-strip-run:not(:first-child) {
+  margin-left: 0.5rem;
+}
+
+.calibration-strip-run[data-flat-tone='1'] {
+  --flat-group-tone: var(--color-flat-group-1);
+}
+
+.calibration-strip-run[data-flat-tone='2'] {
+  --flat-group-tone: var(--color-flat-group-2);
+}
+
+.calibration-strip-run[data-flat-tone='3'] {
+  --flat-group-tone: var(--color-flat-group-3);
+}
+
+.calibration-strip-run[data-flat-tone='4'] {
+  --flat-group-tone: var(--color-flat-group-4);
+}
+
+.calibration-strip-run-label {
+  display: grid;
+  align-content: center;
+  gap: 0.15rem;
+  width: 5.4rem;
+  padding: 0 0.45rem;
+  border-left: 3px solid var(--flat-group-tone, var(--color-border-tertiary));
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.calibration-strip-run-label strong {
+  color: var(--color-text-primary);
+  font-size: 0.75rem;
+}
+
+/* A group's name above its frames, with its colour. */
+.flat-group-detail-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+/* A member night: its card shows it in the strip; the link opens it. */
+.flat-group-member-card {
+  display: grid;
+  justify-items: start;
+  gap: 0.2rem;
+}
+
+.flat-group-member[aria-current='true'] {
+  border-color: var(--state-on-border);
+  border-top-color: var(--flat-group-tone, var(--state-on-border));
+  background: var(--state-on-bg);
+}
+
+.flat-group-open-session {
+  padding-left: 0.2rem;
+  font-size: 0.75rem;
+}

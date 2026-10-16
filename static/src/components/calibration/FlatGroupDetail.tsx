@@ -35,6 +35,10 @@ interface FlatGroupDetailProps {
   onCompare: (earlier: string, later: string, opener: HTMLElement) => void;
   /** Leave for one of its sessions in the session list. */
   onOpenSession: (id: string) => void;
+  /** Bring the strip above to one of its nights. */
+  onShowNight: (id: string) => void;
+  /** The night of the frame in the viewer, by its session. */
+  shownSession: string | null;
   /** The session being found in the list, while it is. */
   opening: string | null;
 }
@@ -111,25 +115,57 @@ function LimitBar({ value, limit }: { value: number; limit: number }) {
 }
 
 /** A member session's button: its night, flats and how it measured against the night before. */
-function MemberButton({
+function MemberCard({
   session,
   id,
+  shown,
   opening,
+  onShow,
   onOpen,
 }: {
   session: FlatSession;
   id: string;
+  /** Its night is the one in the viewer. */
+  shown: boolean;
   opening: boolean;
+  onShow: (id: string) => void;
   onOpen: (id: string) => void;
 }) {
   return (
-    <button type="button" className="flat-group-member" data-testid="flat-group-member"
-      aria-busy={opening || undefined} onClick={() => onOpen(id)}
-      title="Open this session's frames">
-      <strong>{session.night}</strong>
-      <span>{plural(session.frames, 'flat')}</span>
-      {session.noise_pct !== null && <span className="calibration-muted">noise {percent(session.noise_pct)}</span>}
-    </button>
+    <div className="flat-group-member-card">
+      <button type="button" className="flat-group-member" data-testid="flat-group-member"
+        aria-current={shown || undefined} onClick={() => onShow(id)}
+        title="Show this night's flats in the strip above">
+        <strong>{session.night}</strong>
+        <span>{plural(session.frames, 'flat')}</span>
+        {session.noise_pct !== null && <span className="calibration-muted">noise {percent(session.noise_pct)}</span>}
+      </button>
+      <button type="button" className="calibration-link-button flat-group-open-session"
+        data-testid="flat-group-open-session" aria-busy={opening || undefined}
+        aria-label={`Open the session of ${session.night}`} onClick={() => onOpen(id)}>
+        Open session
+      </button>
+    </div>
+  );
+}
+
+/** A flat group's name above its frames, as a session's title is. */
+export function FlatGroupHeader({ entry, scopeName }: { entry: GroupEntry; scopeName?: string }) {
+  const { rig, group } = entry;
+  return (
+    <div className="calibration-session-bar flat-group-detail-head" data-flat-tone={entry.tone}
+      data-testid="flat-group-header">
+      <div>
+        <h2 id="flat-group-detail-title">
+          <span className="flat-group-swatch" aria-hidden="true" />
+          Group {entry.number} of {entry.groups} · {entry.familyLabel}
+        </h2>
+        <p className="calibration-muted">
+          {[rig.name, nightRange(group.first_night, group.last_night), plural(group.sessions.length, 'night'), plural(group.frames, 'flat')].join(' · ')}
+        </p>
+        <GroupMarks entry={entry} scopeName={scopeName} />
+      </div>
+    </div>
   );
 }
 
@@ -148,6 +184,8 @@ export default function FlatGroupDetail({
   open,
   onCompare,
   onOpenSession,
+  onShowNight,
+  shownSession,
   opening,
 }: FlatGroupDetailProps) {
   const { search } = useLocation();
@@ -168,17 +206,6 @@ export default function FlatGroupDetail({
 
   return (
     <section className="flat-group-detail" aria-labelledby="flat-group-detail-title" data-testid="flat-group-detail">
-      <header className="flat-group-detail-head" data-flat-tone={entry.tone}>
-        <span className="flat-group-swatch" aria-hidden="true" />
-        <div>
-          <h2 id="flat-group-detail-title">Group {entry.number} of {entry.groups} · {entry.familyLabel}</h2>
-          <p className="calibration-muted">
-            {[rig.name, nightRange(group.first_night, group.last_night), plural(group.sessions.length, 'night'), plural(group.frames, 'flat')].join(' · ')}
-          </p>
-          <GroupMarks entry={entry} scopeName={scope?.name} />
-        </div>
-      </header>
-
       <section className="flat-group-section" aria-labelledby="flat-group-members">
         <h3 id="flat-group-members">Members</h3>
         <ul className="flat-group-members" data-flat-tone={entry.tone}>
@@ -188,7 +215,8 @@ export default function FlatGroupDetail({
               ? [<li key={session.response_key} className="flat-group-member is-static"><strong>{session.night}</strong><span>{plural(session.frames, 'flat')}</span></li>]
               : ids.map((id) => (
                   <li key={id}>
-                    <MemberButton session={session} id={id} opening={opening === id} onOpen={onOpenSession} />
+                    <MemberCard session={session} id={id} shown={shownSession === id} opening={opening === id}
+                      onShow={onShowNight} onOpen={onOpenSession} />
                   </li>
                 ));
           })}

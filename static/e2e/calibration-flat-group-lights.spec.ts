@@ -117,7 +117,7 @@ test('a flat group links to exactly the lights that take its flats', async ({ pa
 
   await page.goto(`/#/calibration?db=${dbId}&calBrowse=groups&calFilter=Ha`);
   const detail = page.getByTestId('flat-group-detail');
-  await expect(detail.getByRole('heading', { level: 2 })).toHaveText(/ · ha · /i);
+  await expect(page.getByTestId('flat-group-header').getByRole('heading', { level: 2 })).toHaveText(/ · ha · /i);
   const feeds = detail.getByTestId('flat-group-feeds');
   await expect(feeds.getByTestId('flat-group-lights')).toHaveText('2 lights take its flats.');
   const link = feeds.getByTestId('flat-group-lights-link');

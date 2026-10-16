@@ -627,11 +627,21 @@ neighbours sits between them with its reason: **Change · new dust 1.6%**,
 **Angle** narrow the list; the other filters are about frames and leave
 it alone.
 
-Choosing a group shows it in the main column:
+Choosing a group shows it in the main column the way a session is shown:
+its name, then its flats in the same image browser, the strip of small
+pictures with the chosen one large beside its numbers. The strip holds
+every flat of the group's nights, oldest first, and marks where each
+night begins with its date and how many flats it holds, in the group's
+colour. ← and → step from flat to flat across the nights while ↑ and ↓
+keep moving between groups; the chosen flat lives in the address as
+`calFrame`, beside `calGroup`. The page's filters narrow the strip as
+they narrow a session's frames; a project scope does not, since a group
+is the same whoever uses it. Below the browser:
 
-- **Members**: its nights, oldest first, as a strip. Each opens its
-  session in the session list, on the page that holds it; a filter that
-  hides the session gives way, then the project scope.
+- **Members**: its nights, oldest first, as cards. A card brings the
+  strip to that night's first flat; **Open session** under it opens the
+  session in the session list, on the page that holds it, where a filter
+  that hides the session gives way, then the project scope.
 - **Why they belong together**: the most any two of its nights measured
   apart in dust and light pattern, against the rig's limits, over every
   pair measured; each night against the next and the pairs furthest apart,
@@ -751,6 +761,8 @@ and angle a flat session's flats would take, measured or not. Each group in `fla
 many pairs; `pairs` holds each session against the next and the widest.
 `calibrations/sessions?locate=<session>` lists the page holding that
 session and says whether the filters keep it (`located`).
+`calibrations/frames?sessions=<a,b,…>` keeps only those sessions' frames,
+within a project scope when one is named: a flat group's flats.
 
 `project=<id>` on `calibrations/sessions`, `calibrations/frames`,
 `calibrations/masters` and `calibrations/flat-groups` keeps what that

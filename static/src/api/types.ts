@@ -2621,6 +2621,8 @@ export interface CalibrationListFilters {
   per_page?: number;
   /** Sessions only: the page holding this session, in place of `page`. */
   locate?: string;
+  /** Keep only these sessions, comma-separated: a flat group's nights. */
+  sessions?: string;
 }
 
 /** A calibration rig in a project's scope. */
