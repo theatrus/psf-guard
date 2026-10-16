@@ -509,6 +509,15 @@ pub struct DbRegistry {
     /// within registry v2; absent means the standard install path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pixinsight: Option<PixInsightSettings>,
+    /// The periodic backup, edited in Settings › Backups. Additive within
+    /// registry v2; absent means off. A block this version cannot read
+    /// reads as absent.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub backups: Option<crate::backup::schedule::BackupSettings>,
 }
 
 /// What the AstroBin CSV export needs from the person: which equipment
@@ -803,6 +812,7 @@ impl Default for DbRegistry {
             storage: None,
             astrobin: None,
             pixinsight: None,
+            backups: None,
         }
     }
 }

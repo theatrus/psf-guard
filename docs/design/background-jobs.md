@@ -134,6 +134,10 @@ Then:
     job line with Stop.
   - A run that ends frees the runner in the same step that records its end,
     so a page that sees the end can start the next run at once.
+- Backups (`backup_job.rs`) run one at a time server-wide rather than one per
+  catalog. A scheduled run is `Background` and yields between files and
+  SQLite steps; a run a person starts does not wait. Stop ends the run
+  rather than pausing it: the schedule tries again at its next time.
 - Calibration grading (`calibration_quality.rs`) is a Background runner per
   catalog with a status route, but it has no row in the job line yet.
 - Calibration health (`calibration_health.rs`), quality backfill and scans

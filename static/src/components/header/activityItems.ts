@@ -11,6 +11,8 @@ import type {
   WbppActivity,
 } from '../../api/types';
 import type { TransferJob } from '../../api/transferTypes';
+import type { BackupJob } from '../../api/backupTypes';
+import { describeJob, jobPercent } from '../../utils/backupJob';
 import { flatMeasureLabel } from '../calibration/flatMeasureLabel';
 import { duplicateJobLabel, duplicateJobPercent, duplicateJobTitle } from '../calibration/duplicateJob';
 
@@ -20,6 +22,7 @@ export type ActivityControl =
   | { kind: 'flats'; dbId: string }
   | { kind: 'sites'; dbId: string }
   | { kind: 'duplicates'; dbId: string }
+  | { kind: 'backup' }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string };
 
@@ -36,7 +39,7 @@ export type ActivityStatus = 'running' | 'queued' | 'waiting';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'stack' | 'processing' | 'wbpp' | 'transfer';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup';
   transfer?: TransferJob;
   stateLabel?: string;
   /** What is happening: "Stacking", "Analyzing quality". */
@@ -519,7 +522,8 @@ export function activityItems(
   wbpp?: WbppActivity,
   projectOf: ProjectOf = () => undefined,
   waiting: WaitingStackWork = {},
-  transfers: TransferJob[] = []
+  transfers: TransferJob[] = [],
+  backup: BackupJob | null = null
 ): ActivityItem[] {
   const items: ActivityItem[] = [];
   for (const db of databases) {
@@ -539,8 +543,32 @@ export function activityItems(
   items.push(...transfers.filter(j => !['complete', 'cancelled'].includes(j.state)).map(transferItem));
   items.push(...(waiting.scheduled ?? []).filter((refresh) => refresh.waiting).map(waitingRefreshItem));
   items.push(...(waiting.reapplies ?? []).map(waitingReapplyItem));
+  if (backup) items.push(backupItem(backup));
   // Stable: each rank keeps the order above.
   return items.sort((left, right) => rank(left) - rank(right));
+}
+
+/** A backup: a person's from Settings, or the schedule's, which steps aside
+ *  for a person's work and is listed as waiting meanwhile. Settings is a
+ *  dialog, not a view, so the row links nowhere. */
+export function backupItem(job: BackupJob): ActivityItem {
+  const scheduled = job.trigger === 'schedule';
+  const waitingFor = job.waiting_for ?? undefined;
+  return {
+    key: `backup:${job.started_at}`,
+    kind: 'backup',
+    title: scheduled ? 'Scheduled backup' : 'Backing up',
+    scope: job.scope === 'full' ? 'Settings and catalogs' : 'Settings',
+    detail: describeJob(job),
+    status: waitingFor ? 'waiting' : 'running',
+    waitingFor,
+    percent: jobPercent(job),
+    automatic: scheduled,
+    background: scheduled,
+    stoppable: !job.stopping,
+    control: { kind: 'backup' },
+    hint: job.location === 'downloads' ? 'For download' : job.destination,
+  };
 }
 
 export function transferItem(job: TransferJob): ActivityItem {

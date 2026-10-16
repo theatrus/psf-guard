@@ -15,6 +15,7 @@ export type SettingsIntent =
   | 'templates'
   | 'stacking'
   | 'storage'
+  | 'backups'
   | 'review'
   | 'calibration';
 

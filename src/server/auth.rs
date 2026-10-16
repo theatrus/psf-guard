@@ -882,6 +882,11 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
     if path.contains("/wbpp/runs/current/files/") && *method != Method::OPTIONS {
         return true;
     }
+    // A backup holds every catalog and the server's settings: even listing
+    // or downloading one is an editor's.
+    if (path == "/backups" || path.starts_with("/backups/")) && *method != Method::OPTIONS {
+        return true;
+    }
     if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
         return false;
     }
@@ -1103,6 +1108,15 @@ mod tests {
 
     #[test]
     fn read_only_rules_allow_derived_views_but_block_catalog_changes() {
+        // A backup holds every catalog: listing and downloading are an
+        // editor's, as is starting one.
+        assert!(requires_write(&Method::GET, "/backups", false));
+        assert!(requires_write(
+            &Method::GET,
+            "/backups/files/downloads/psf-guard-backup-2026-10-16T130005Z-meta.zip",
+            true,
+        ));
+        assert!(!requires_write(&Method::OPTIONS, "/backups", false));
         assert!(!requires_write(
             &Method::POST,
             "/db/test/images/generation-status",

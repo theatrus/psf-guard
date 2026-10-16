@@ -4,6 +4,7 @@ pub mod astrobin;
 pub mod astrometry;
 pub mod astrometry_headers;
 pub mod auth_registry;
+pub mod backup;
 pub mod calibration;
 pub mod catalog_identity;
 pub mod cli;

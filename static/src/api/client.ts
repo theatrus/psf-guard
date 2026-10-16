@@ -2,6 +2,13 @@ import axios from 'axios';
 import type { AxiosInstance, AxiosResponse } from 'axios';
 import type { CollaborationAction, CollaborationConnection, CollaborationReply, CollaborationWork, CollaborationWorkInput, CollaborationBackgroundInput, CollaborationBackgroundReply } from './collaborationTypes';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
+import type {
+  BackupDestinationCheck,
+  BackupJobView,
+  BackupRunRequest,
+  BackupSettings,
+  BackupsOverview,
+} from './backupTypes';
 import { getServerUrl } from '../utils/tauri';
 import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
@@ -1040,6 +1047,57 @@ export const apiClient = {
     if (!data.data) throw new Error(data.error || 'Failed to update export settings');
     return data.data;
   },
+
+  /** Settings › Backups: the schedule, the run under way, the archives. */
+  getBackups: async (): Promise<BackupsOverview> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<BackupsOverview>>('/backups');
+    if (!data.data) throw new Error(data.error || 'Failed to read backups');
+    return data.data;
+  },
+
+  /** The run under way and the last one, for the job line. */
+  getBackupStatus: async (): Promise<BackupJobView> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<BackupJobView>>('/backups/status');
+    if (!data.data) throw new Error(data.error || 'Failed to read the backup');
+    return data.data;
+  },
+
+  updateBackupSettings: async (settings: BackupSettings): Promise<BackupsOverview> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<BackupsOverview>>('/backups/settings', settings);
+    if (!data.data) throw new Error(data.error || 'Failed to save the backup schedule');
+    return data.data;
+  },
+
+  /** Queue a backup now; the server answers 202 while it runs. */
+  runBackup: async (request: BackupRunRequest): Promise<BackupJobView> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<BackupJobView>>('/backups/run', request);
+    if (!data.data) throw new Error(data.error || 'Failed to start the backup');
+    return data.data;
+  },
+
+  stopBackup: async (): Promise<BackupJobView> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<BackupJobView>>('/backups/stop');
+    if (!data.data) throw new Error(data.error || 'Failed to stop the backup');
+    return data.data;
+  },
+
+  checkBackupDestination: async (path: string): Promise<BackupDestinationCheck> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<BackupDestinationCheck>>(
+      '/backups/check-destination',
+      { path }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to check the folder');
+    return data.data;
+  },
+
+  /** Where the browser downloads an archive, from its path below `/api`. */
+  backupDownloadUrl: (downloadPath: string): string => withServerUrl(`/api${downloadPath}`),
 
   getPixInsightSettings: async (): Promise<PixInsightSettings> => {
     const apiInstance = await getApi();

@@ -12,6 +12,7 @@ Use this index for detailed behavior and engineering records.
 - [AstroBin acquisition export](ASTROBIN_EXPORT.md)
 - [Stacking with PixInsight's WBPP](WBPP.md)
 - [Statistical grading](STATISTICAL_GRADING.md)
+- [Backups](BACKUPS.md)
 
 ## Quality and sky analysis
 
