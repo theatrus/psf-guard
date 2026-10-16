@@ -173,6 +173,8 @@ fn group_choice(
             chosen_at: at,
             night: Some(after.to_string()),
             before_night: before_night.map(str::to_string),
+            rotation: Some(0.0),
+            before_rotation: before_night.map(|_| 0.0),
         },
     )
     .unwrap();
@@ -491,6 +493,8 @@ fn a_choice_whose_change_or_flats_are_gone_is_kept_and_shown_not_applied() {
             chosen_at: 300,
             night: Some("2026-08-01".into()),
             before_night: None,
+            rotation: Some(0.0),
+            before_rotation: None,
         },
     )
     .unwrap();
@@ -830,6 +834,7 @@ fn the_bulk_side_moves_only_lights_shot_during_the_change() {
             change_key: Some(event.key.clone()),
             group_response: None,
         },
+        None,
     )
     .unwrap();
     let selected = select_for_light(&conn, &before).unwrap();
@@ -915,6 +920,7 @@ fn a_side_for_a_light_the_change_does_not_reach_is_refused() {
             change_key: Some(event.key.clone()),
             group_response: None,
         },
+        None,
     );
     assert!(
         matches!(
@@ -926,4 +932,235 @@ fn a_side_for_a_light_the_change_does_not_reach_is_refused() {
     assert!(override_store::light_choices_of(&conn, &["g-5".into()])
         .unwrap()
         .is_empty());
+}
+
+// A split's night does not reach another angle, and one night's two sessions.
+
+fn angled_flats(dir: &Path, night: &str, angle: f64, hour: u32) -> Vec<FrameMeta> {
+    (0..3)
+        .map(|index| {
+            let path = dir.join(format!("flat-Ha-{night}-a{angle}-{index}.fits"));
+            let captured = format!("{night}T{hour:02}:0{index}:00");
+            write_frame_with(
+                &path,
+                "FLAT",
+                SIZE,
+                &captured,
+                &[&format!("ROTATANG= {angle:.1}")],
+                |_, _| 30_000.0,
+            );
+            let mut meta = read_frame_meta(&path);
+            meta.filter = Some("Ha".to_string());
+            meta.rotator_position = Some(angle);
+            meta
+        })
+        .collect()
+}
+
+fn angled_catalog(dir: &Path, frames: &[FrameMeta]) -> Connection {
+    let mut conn = Connection::open(dir.join("catalog.sqlite")).unwrap();
+    crate::ts_schema::apply_schema(&conn).unwrap();
+    let tx = conn.transaction().unwrap();
+    import_calibration_frames(&tx, frames, Some("profile")).unwrap();
+    tx.commit().unwrap();
+    conn
+}
+
+fn split_at(conn: &Connection, session: usize) -> Vec<String> {
+    let book = super::load_book(conn).unwrap();
+    let family = book
+        .families
+        .iter()
+        .position(|f| f.sessions.contains(&session))
+        .unwrap();
+    let row = &book.sessions[session].row;
+    override_store::set_group_override(
+        conn,
+        &GroupOverrideRow {
+            anchor_frame: row.frame_uuids[0].clone(),
+            session_key: row.session_key.clone(),
+            family_key: book.families[family].key.clone(),
+            rig_uuid: row.rig_uuid.clone(),
+            choice: Some(GroupChoice::Split),
+            before_frame: None,
+            before_session_key: None,
+            label: "split".into(),
+            chosen_at: 100,
+            night: Some(row.night.clone()),
+            before_night: None,
+            rotation: row.rotation,
+            before_rotation: None,
+        },
+    )
+    .unwrap();
+    row.frame_uuids.clone()
+}
+
+#[test]
+fn the_night_fallback_does_not_move_a_split_to_another_angle() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let mut frames = Vec::new();
+    for night in NIGHTS {
+        frames.extend(angled_flats(dir, night, 0.0, 14));
+    }
+    for night in &NIGHTS[1..] {
+        frames.extend(angled_flats(dir, night, 90.0, 15));
+    }
+    let conn = angled_catalog(dir, &frames);
+    let measure = |conn: &Connection| {
+        super::testing::measure_as(
+            conn,
+            |a: &ResponseRow, b: &ResponseRow| {
+                if a.rotation != b.rotation {
+                    0.05
+                } else {
+                    0.0
+                }
+            },
+        )
+    };
+    measure(&conn);
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(book.families.len(), 2, "two angles measure apart");
+    let anchor_session = book
+        .sessions
+        .iter()
+        .position(|s| s.row.night == NIGHTS[2] && s.row.rotation == Some(0.0))
+        .unwrap();
+    let zero_frames = split_at(&conn, anchor_session);
+    // Keep out the whole 0° session of that night.
+    crate::calibration::set_overrides(
+        &conn,
+        &zero_frames,
+        Some(crate::calibration::QualityOverride::Exclude),
+    )
+    .unwrap();
+    conn.execute_batch(
+        "DELETE FROM psf_guard_flat_response; DELETE FROM psf_guard_flat_comparison;",
+    )
+    .unwrap();
+    measure(&conn);
+    let book = super::load_book(&conn).unwrap();
+    let state = &book.overrides[0];
+    if let OverrideStatus::Applied { .. } = state.status {
+        let edge = &book.boundaries[state.boundaries[0]];
+        let after = &book.sessions[edge.after].row;
+        panic!(
+            "split anchored on the 0° session now applies before the {:?}° session on {}",
+            after.rotation, after.night
+        );
+    }
+}
+
+#[test]
+fn a_same_night_split_falls_at_the_later_sessions_first_flat() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let mut frames = Vec::new();
+    for night in &NIGHTS[..2] {
+        frames.extend(angled_flats(dir, night, 0.0, 14));
+    }
+    // Two sessions that night: an earlier one recording no angle, alike.
+    frames.extend(
+        angled_flats(dir, NIGHTS[2], 7.0, 14)
+            .into_iter()
+            .map(|mut m| {
+                m.rotator_position = None;
+                m
+            }),
+    );
+    frames.extend(angled_flats(dir, NIGHTS[2], 0.0, 20));
+    let conn = angled_catalog(dir, &frames);
+    super::testing::measure_as(&conn, |_, _| 0.0);
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(book.families.len(), 1, "alike: one family");
+    let later = book
+        .sessions
+        .iter()
+        .position(|s| s.row.night == NIGHTS[2] && s.row.rotation == Some(0.0))
+        .unwrap();
+    let earlier = book
+        .sessions
+        .iter()
+        .position(|s| s.row.night == NIGHTS[2] && s.row.rotation.is_none())
+        .unwrap();
+    assert_eq!(
+        book.sessions[later].row.night,
+        book.sessions[earlier].row.night
+    );
+    split_at(&conn, later);
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(book.events.len(), 1, "{:?}", book.overrides);
+    let event = &book.events[0];
+    assert!(event.by_hand);
+    assert_eq!(event.start, book.sessions[later].first);
+    assert_eq!(event.end, book.sessions[later].first);
+    assert!(event.start > book.sessions[earlier].last);
+    assert!(!event.within_flat_run);
+}
+
+/// A catalog that records when a light was saved, not when its exposure
+/// began, still finds the light's choice: N.I.N.A.'s `ExposureStartTime`,
+/// which its header's DATE-OBS records too, is read first.
+#[test]
+fn a_light_saved_minutes_after_it_began_still_finds_its_choice() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = catalog(temp.path(), false, &["Ha"]);
+    let inside = light(temp.path(), &conn, 1, "2026-09-16T04:00:00", "g-1");
+    let began = inside.timestamp.unwrap();
+    conn.execute(
+        "UPDATE acquiredimage SET acquireddate = ?1,
+             metadata = json_set(metadata, '$.ExposureStartTime', '2026-09-16T04:00:00Z')
+         WHERE Id = 1",
+        [began + 305],
+    )
+    .unwrap();
+    let event = super::load_book(&conn).unwrap().events[0].clone();
+    override_store::set_light_choices(
+        &conn,
+        &[side_choice("g-1", &event, Some(LightChoice::After), 100)],
+    )
+    .unwrap();
+    let selected = select_for_light(&conn, &inside).unwrap();
+    assert_eq!(
+        selected.flat_choices.len(),
+        1,
+        "{:?}",
+        selected.flat_choices
+    );
+    assert_eq!(nights(&selected.flat), [NIGHTS[2]]);
+}
+
+/// One light alone may take a side of a change it was not shot during only
+/// when its panel offers that change (its flats were chosen around it).
+#[test]
+fn one_light_outside_a_change_takes_a_side_only_of_a_change_its_panel_offers() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = catalog(temp.path(), false, &["Ha"]);
+    light(temp.path(), &conn, 2, "2026-09-11T04:00:00", "g-2");
+    let event = super::load_book(&conn).unwrap().events[0].clone();
+    let request = crate::server::flat_choices::LightChoiceRequest {
+        image_ids: vec![2],
+        whole_session: false,
+        choice: "after".into(),
+        change_key: Some(event.key.clone()),
+        group_response: None,
+    };
+    let refused = crate::server::flat_choices::apply_light_choices(&conn, &request, None);
+    assert!(
+        matches!(
+            refused,
+            Err(crate::server::handlers::AppError::BadRequest(_))
+        ),
+        "{refused:?}"
+    );
+    let offered: std::collections::HashSet<String> = [event.key.clone()].into();
+    let set =
+        crate::server::flat_choices::apply_light_choices(&conn, &request, Some(&offered)).unwrap();
+    assert_eq!((set.lights, set.skipped), (1, 0));
 }

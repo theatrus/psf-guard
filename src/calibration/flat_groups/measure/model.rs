@@ -1011,6 +1011,7 @@ impl Book {
                 Some(&row.anchor_frame),
                 Some(&row.session_key),
                 row.night.as_deref(),
+                row.rotation,
             );
             let family = after
                 .and_then(|session| self.family_of.get(session).copied())
@@ -1037,6 +1038,7 @@ impl Book {
                             row.before_frame.as_deref(),
                             row.before_session_key.as_deref(),
                             row.before_night.as_deref(),
+                            row.before_rotation,
                         );
                         match before {
                             None => orphaned(

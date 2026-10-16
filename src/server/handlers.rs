@@ -5060,7 +5060,7 @@ fn apply_grades(
 
 /// Shared DB lookup for the image handlers: the acquired-image row, the FITS
 /// basename (from `metadata.FileName`), and the target name.
-fn resolve_image_meta(
+pub(crate) fn resolve_image_meta(
     ctx: &DatabaseContext,
     image_id: i32,
 ) -> Result<(crate::models::AcquiredImage, String, String), AppError> {

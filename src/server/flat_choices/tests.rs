@@ -32,6 +32,8 @@ fn fixture(dir: &std::path::Path) -> (Arc<AppState>, Arc<DatabaseContext>) {
             chosen_at: 10,
             night: Some("2026-09-12".into()),
             before_night: None,
+            rotation: Some(0.0),
+            before_rotation: None,
         },
     )
     .unwrap();

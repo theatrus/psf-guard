@@ -858,11 +858,14 @@ read and write them.
 (`anchor_frame`) of the session the edge comes before, with that session's
 key, the family's key and rig at the time, and for a join the session on
 the earlier side (`before_frame`, `before_session_key`), and both sessions'
-nights (`night`, `before_night`). No row id, family index or response key
+nights and recorded angles (`night`, `before_night`, `rotation`,
+`before_rotation`). No row id, family index or response key
 is kept: those change with a regroup or a new measuring algorithm. A
 session is found again by its flat, else its session key, else as the one
-session of the row's rig and family settings on its night
-(`Book::override_session`): keeping out a session's first flat renames it,
+session of the row's rig and family settings on its night at its angle,
+within `ROTATION_CLUSTER_DEG`, a row with no angle matching only a session
+with none (`Book::override_session`): the night alone could name another
+angle's session of the family key: keeping out a session's first flat renames it,
 since its key hashes its first flat in use, and the night still finds it.
 The family is the one that session is in now, so a family that a later
 change to family formation splits or renames takes its edges with it.
@@ -925,8 +928,13 @@ resets the light's group choice, and a group resets its sides.
 `LibrarySnapshot::select_with` finds a light's rows by the file name it is
 read from (as the image routes find its file from `FileName`), its filter,
 its rig (by its profile's bindings) and its capture time, which must lie
-within 2 s of the catalog's (`LIGHT_TIME_TOLERANCE_SECONDS`: both record
-the exposure's start). A light with no time matches none, so a light of
+within 2 s of the catalog's (`LIGHT_TIME_TOLERANCE_SECONDS`). The
+catalog's time is N.I.N.A.'s `ExposureStartTime` from the light's
+metadata, which its header's DATE-OBS records too, else `acquireddate`,
+which some catalogs fill with when the frame was saved
+(`override_store::exposure_start`); the side route's window gate and the
+Images counts read the same time. Matching by the light's GUID would need
+every caller of `select_for_light` to carry it, so it is left for later. A light with no time matches none, so a light of
 another target that shares a file name never takes another's choice
 (`Book::light_choices`):
 
@@ -967,9 +975,10 @@ another target that shares a file name never takes another's choice
   sessions whose change key moved are read; a split by hand asks none. Health is judged again;
   nothing is regraded. A light choice judges health again only.
 - A side is written only for lights the change reaches: of its rig, a
-  filter it applies to, and shot inside its window; or one light alone,
-  named by its Calibration panel, which also offers the changes its flats
-  were chosen around. The rest are skipped and counted (`skipped`); none
+  filter it applies to, and shot inside its window; or one light alone, for
+  a change its Calibration panel offers it (`offered_flat_changes`: the
+  changes its flats were chosen around, or that it already has a side of),
+  worked out from its own file as the panel does. The rest are skipped and counted (`skipped`); none
   reached is a 400. Images' bulk action sends each change only the lights
   the options found shot during it (`image_ids`), and a whole imaging
   session takes only its lights inside the window. A group is written only

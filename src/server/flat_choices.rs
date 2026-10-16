@@ -23,7 +23,7 @@ use axum::extract::State;
 use axum::Json;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 fn open(ctx: &DatabaseContext, write: bool) -> Result<Connection, AppError> {
@@ -141,7 +141,7 @@ pub(crate) fn group_override_row(
         .ok_or(AppError::NotFound)?;
     let row = &book.sessions[after].row;
     let anchor_frame = row.frame_uuids.first().cloned().ok_or(AppError::NotFound)?;
-    let (before_frame, before_session_key, before_night, label) = match choice {
+    let (before_frame, before_session_key, before_night, before_rotation, label) = match choice {
         Some(overrides::GroupChoice::Join) => {
             let before = session_of(&request.before_response).ok_or_else(|| {
                 AppError::BadRequest("a join names the session before it: before_response".into())
@@ -156,6 +156,7 @@ pub(crate) fn group_override_row(
                 before_row.frame_uuids.first().cloned(),
                 Some(before_row.session_key.clone()),
                 Some(before_row.night.clone()),
+                before_row.rotation,
                 format!(
                     "{} joined with {}",
                     session_label(&book, after),
@@ -164,6 +165,7 @@ pub(crate) fn group_override_row(
             )
         }
         _ => (
+            None,
             None,
             None,
             None,
@@ -183,6 +185,8 @@ pub(crate) fn group_override_row(
             chosen_at: now(),
             night: Some(row.night.clone()),
             before_night,
+            rotation: row.rotation,
+            before_rotation,
         },
         row.rig_uuid.clone(),
     ))
@@ -286,7 +290,7 @@ fn named_lights(
         .flat_map(|session| session.lights.iter().map(move |id| (*id, &session.rigs)))
         .collect();
     let mut statement = conn
-        .prepare("SELECT guid, filtername, acquireddate FROM acquiredimage WHERE Id = ?1")
+        .prepare("SELECT guid, filtername, acquireddate, metadata FROM acquiredimage WHERE Id = ?1")
         .map_err(|_| AppError::BadRequest("this catalog's lights keep no GUID".into()))?;
     let mut out = Vec::new();
     for id in ids {
@@ -295,7 +299,10 @@ fn named_lights(
                 Ok((
                     row.get::<_, Option<String>>(0)?,
                     row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
+                    override_store::exposure_start(
+                        row.get::<_, Option<String>>(3)?.as_deref(),
+                        row.get::<_, Option<i64>>(2)?,
+                    ),
                 ))
             })
             .optional()
@@ -317,13 +324,19 @@ fn named_lights(
 
 /// Whether a person may put `light` on a side of `event`: the change is of
 /// its rig and reaches its filter, and the light was shot inside its
-/// window, or the request names this one light alone (its Calibration
-/// panel offers the changes its flats were chosen around too). A side for
-/// any other light would move it against its own time.
-fn side_reaches(event: &model::Event, light: &NamedLight, alone: bool) -> bool {
+/// window, or the request names this one light alone and its Calibration
+/// panel offers the change (`offered`: the changes its flats were chosen
+/// around, or that it already has a side of). A side for any other light
+/// would move it against its own time.
+fn side_reaches(
+    event: &model::Event,
+    light: &NamedLight,
+    offered: Option<&HashSet<String>>,
+) -> bool {
     light.of_rig(&event.rig_uuid)
         && event.applies_to(light.filter.as_deref())
-        && (alone || light.at.is_some_and(|at| event.side_of(at).is_none()))
+        && (light.at.is_some_and(|at| event.side_of(at).is_none())
+            || offered.is_some_and(|keys| keys.contains(&event.key)))
 }
 
 /// When a change began, on its rig's clock: "2026-08-11 06:23 UTC−7".
@@ -354,9 +367,12 @@ fn on_rig_clock(conn: &Connection, rig: &str, at: i64) -> String {
 }
 
 /// Work out and record the rows a light choice request makes.
+/// `offered` holds the changes the Calibration panel offers the one light a
+/// request names, when it names one.
 pub(crate) fn apply_light_choices(
     conn: &Connection,
     request: &LightChoiceRequest,
+    offered: Option<&HashSet<String>>,
 ) -> Result<LightChoiceResponse, AppError> {
     if request.image_ids.is_empty() {
         return Err(AppError::BadRequest("no lights named".into()));
@@ -366,7 +382,7 @@ pub(crate) fn apply_light_choices(
     if named.is_empty() {
         return Err(AppError::NotFound);
     }
-    let alone = named.len() == 1 && request.image_ids.len() == 1;
+    let offered = offered.filter(|_| named.len() == 1 && request.image_ids.len() == 1);
     // The lights the choice can apply to; the rest are skipped.
     let lights: Vec<&NamedLight> = match request.choice.as_str() {
         "before" | "after" => {
@@ -380,7 +396,7 @@ pub(crate) fn apply_light_choices(
                 .ok_or(AppError::NotFound)?;
             named
                 .iter()
-                .filter(|light| side_reaches(event, light, alone))
+                .filter(|light| side_reaches(event, light, offered))
                 .collect()
         }
         "group" => {
@@ -529,10 +545,31 @@ pub async fn put_light_choices(
     Json(request): Json<LightChoiceRequest>,
 ) -> Result<Json<ApiResponse<LightChoiceResponse>>, AppError> {
     require_database_management_allowed(&state)?;
+    // One light on a side: the changes its panel offers it, from its own
+    // file, as the panel works them out.
+    let one_light = match (request.image_ids.as_slice(), request.choice.as_str()) {
+        ([id], "before" | "after") if !request.whole_session => i32::try_from(*id)
+            .ok()
+            .and_then(|id| crate::server::handlers::resolve_image_meta(&ctx, id).ok())
+            .and_then(|(image, filename, target)| {
+                crate::server::handlers::find_fits_file(&ctx, &image, &target, &filename).ok()
+            }),
+        _ => None,
+    };
     let context = Arc::clone(&ctx.0);
     let response = blocking(move || {
         let conn = open(&context, true)?;
-        apply_light_choices(&conn, &request)
+        let offered = match one_light {
+            Some(path) => Some(
+                crate::calibration::offered_flat_changes(
+                    &conn,
+                    &crate::commands::import::headers::read_frame_meta(&path),
+                )
+                .map_err(AppError::db)?,
+            ),
+            None => None,
+        };
+        apply_light_choices(&conn, &request, offered.as_ref())
     })
     .await?;
     if response.without_guid > 0 && response.lights == 0 {
@@ -596,9 +633,9 @@ pub(crate) fn light_choice_options(
         .prepare("SELECT guid FROM acquiredimage LIMIT 0")
         .is_ok();
     let sql = if has_guid {
-        "SELECT filtername, acquireddate, guid FROM acquiredimage WHERE Id = ?1"
+        "SELECT filtername, acquireddate, guid, metadata FROM acquiredimage WHERE Id = ?1"
     } else {
-        "SELECT filtername, acquireddate, NULL FROM acquiredimage WHERE Id = ?1"
+        "SELECT filtername, acquireddate, NULL, metadata FROM acquiredimage WHERE Id = ?1"
     };
     let mut statement = conn.prepare(sql).map_err(AppError::db)?;
     let mut changes: BTreeMap<usize, BulkChangeOption> = BTreeMap::new();
@@ -607,7 +644,10 @@ pub(crate) fn light_choice_options(
             .query_row([id], |row| {
                 Ok((
                     row.get::<_, Option<String>>(0)?,
-                    row.get::<_, Option<i64>>(1)?,
+                    override_store::exposure_start(
+                        row.get::<_, Option<String>>(3)?.as_deref(),
+                        row.get::<_, Option<i64>>(1)?,
+                    ),
                     row.get::<_, Option<String>>(2)?,
                 ))
             })

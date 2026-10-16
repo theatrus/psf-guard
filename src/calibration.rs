@@ -3969,6 +3969,27 @@ pub struct RefusedFrames {
     pub reason: String,
 }
 
+/// The changes a light's Calibration panel offers it a side of: those it
+/// was shot during, those its flats were chosen around, and those it has a
+/// side of already (see [`LibrarySnapshot::flat_choice_options`]).
+pub(crate) fn offered_flat_changes(
+    conn: &Connection,
+    light: &FrameMeta,
+) -> Result<HashSet<String>> {
+    let snapshot = LibrarySnapshot::load(conn)?;
+    let selected = snapshot.select(light);
+    Ok(snapshot
+        .flat_choice_options(light, &selected)
+        .map(|options| {
+            options
+                .changes
+                .into_iter()
+                .map(|change| change.key)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<CalibrationExplanation> {
     let nights = Nights::load(conn);
     let night = |frame: &CalibrationFrame| {

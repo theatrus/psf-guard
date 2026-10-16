@@ -80,6 +80,7 @@
   change says so. Choices whose flats or change are gone are kept and
   shown as no longer applied. They travel with Merge catalogs and
   `sync pull`, and need database management to change.
+
 - The header's background jobs keep automatic work in view while your own
   work runs. A database quality analysis, an automatic stack refresh, or a
   re-apply of processing that steps aside for a build, scan, or solve you

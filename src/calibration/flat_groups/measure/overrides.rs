@@ -65,6 +65,10 @@ pub struct GroupOverrideRow {
     /// kept out or forgotten, which renames it.
     pub night: Option<String>,
     pub before_night: Option<String>,
+    /// The rotator angles those sessions record, beside their nights: the
+    /// night alone could name another angle's session of the family key.
+    pub rotation: Option<f64>,
+    pub before_rotation: Option<f64>,
 }
 
 /// Which side of a change, or which group, a person put a light on.
@@ -228,9 +232,21 @@ impl Book {
         frame: Option<&str>,
         session_key: Option<&str>,
         night: Option<&str>,
+        rotation: Option<f64>,
     ) -> Option<usize> {
         self.session_named(frame, session_key).or_else(|| {
             let night = night?;
+            // One rotation cluster: within the cluster gap of the angle the
+            // session recorded; a session that recorded none matches only
+            // one that records none.
+            let same_angle = |angle: Option<f64>| match (rotation, angle) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    let gap = (a - b).rem_euclid(360.0);
+                    gap.min(360.0 - gap) <= super::model::ROTATION_CLUSTER_DEG
+                }
+                _ => false,
+            };
             // The family's key is its settings and its first flat.
             let settings = row
                 .family_key
@@ -240,6 +256,7 @@ impl Book {
                 session.row.rig_uuid == row.rig_uuid
                     && session.row.family_key == settings
                     && session.row.night == night
+                    && same_angle(session.row.rotation.filter(|a| a.is_finite()))
             });
             match (found.next(), found.next()) {
                 (Some((index, _)), None) => Some(index),

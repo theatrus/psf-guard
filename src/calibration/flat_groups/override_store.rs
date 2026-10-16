@@ -36,7 +36,9 @@ pub(crate) const TABLES_SQL: &str = r#"
         label               TEXT NOT NULL DEFAULT '',
         chosen_at           INTEGER NOT NULL,
         night               TEXT,
-        before_night        TEXT
+        before_night        TEXT,
+        rotation            REAL,
+        before_rotation     REAL
     );
     CREATE TABLE IF NOT EXISTS psf_guard_flat_light_choice (
         light_guid          TEXT NOT NULL,
@@ -56,7 +58,7 @@ pub(crate) const TABLES_SQL: &str = r#"
 const GROUP_TABLE: &str = "psf_guard_flat_group_override";
 const LIGHT_TABLE: &str = "psf_guard_flat_light_choice";
 
-const GROUP_COLUMNS: [&str; 11] = [
+const GROUP_COLUMNS: [&str; 13] = [
     "anchor_frame",
     "session_key",
     "family_key",
@@ -68,6 +70,8 @@ const GROUP_COLUMNS: [&str; 11] = [
     "chosen_at",
     "night",
     "before_night",
+    "rotation",
+    "before_rotation",
 ];
 
 const LIGHT_COLUMNS: [&str; 10] = [
@@ -113,11 +117,16 @@ pub fn add_tables(conn: &Connection) -> Result<bool> {
     Ok(true)
 }
 
-/// The nights a split or join was made at: columns added after the table,
-/// NULL on older rows.
+/// The nights and angles a split or join was made at: columns added after
+/// the table, NULL on older rows.
 fn add_night_columns(conn: &Connection) -> Result<()> {
-    for column in ["night", "before_night"] {
-        crate::calibration::add_column_if_missing(conn, GROUP_TABLE, column, "TEXT")
+    for (column, kind) in [
+        ("night", "TEXT"),
+        ("before_night", "TEXT"),
+        ("rotation", "REAL"),
+        ("before_rotation", "REAL"),
+    ] {
+        crate::calibration::add_column_if_missing(conn, GROUP_TABLE, column, kind)
             .context("adding the night to the flat group choice table")?;
     }
     Ok(())
@@ -150,6 +159,8 @@ fn group_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupOverrideRow> {
         chosen_at: row.get(8)?,
         night: row.get(9)?,
         before_night: row.get(10)?,
+        rotation: row.get(11)?,
+        before_rotation: row.get(12)?,
     })
 }
 
@@ -213,11 +224,25 @@ pub fn load_light_choices(conn: &Connection) -> Result<HashMap<String, Vec<Light
                 light_id: row.get(LIGHT_COLUMNS.len())?,
                 file_name,
                 filter: row.get(LIGHT_COLUMNS.len() + 2)?,
-                at: row.get(LIGHT_COLUMNS.len() + 3)?,
+                at: exposure_start(metadata.as_deref(), row.get(LIGHT_COLUMNS.len() + 3)?),
                 row: choice,
             });
     }
     Ok(out)
+}
+
+/// When a light's exposure began: N.I.N.A.'s `ExposureStartTime` in its
+/// metadata, which its header's DATE-OBS records too, else `acquireddate`,
+/// which a catalog may fill with when the frame was saved instead.
+pub fn exposure_start(metadata: Option<&str>, acquired: Option<i64>) -> Option<i64> {
+    metadata
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|json| {
+            json.get("ExposureStartTime")?
+                .as_str()
+                .and_then(crate::commands::import::headers::parse_fits_datetime)
+        })
+        .or(acquired)
 }
 
 fn light_guids_exist(conn: &Connection) -> bool {
@@ -250,14 +275,15 @@ pub fn set_group_override(conn: &Connection, row: &GroupOverrideRow) -> Result<(
     require_tables(conn)?;
     conn.execute(
         &format!(
-            "INSERT INTO {GROUP_TABLE} ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            "INSERT INTO {GROUP_TABLE} ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(anchor_frame) DO UPDATE SET
                 session_key = excluded.session_key, family_key = excluded.family_key,
                 rig_uuid = excluded.rig_uuid, choice = excluded.choice,
                 before_frame = excluded.before_frame,
                 before_session_key = excluded.before_session_key,
                 label = excluded.label, chosen_at = excluded.chosen_at,
-                night = excluded.night, before_night = excluded.before_night",
+                night = excluded.night, before_night = excluded.before_night,
+                rotation = excluded.rotation, before_rotation = excluded.before_rotation",
             GROUP_COLUMNS.join(", ")
         ),
         params![
@@ -272,6 +298,8 @@ pub fn set_group_override(conn: &Connection, row: &GroupOverrideRow) -> Result<(
             row.chosen_at,
             row.night,
             row.before_night,
+            row.rotation,
+            row.before_rotation,
         ],
     )?;
     Ok(())
