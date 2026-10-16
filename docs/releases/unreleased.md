@@ -9,9 +9,9 @@
   family**, named in Calibration › Frames by its measured angle range
   (`72.6° & 82.2°`). A light takes its family's flats at its own angle
   first, and another angle's only where they measured alike with its own
-  angle's, the family's flats measure alike across a span holding both
-  angles (from the light's side of every change), or its own pixels chose
-  the family; a stack then reads it at its flats' angle instead of
+  angle's, the family's flats at the two angles measure alike on several
+  sessions and nights (from the light's side of every change), or its own
+  pixels chose the family; a stack then reads it at its flats' angle instead of
   refusing them, and the panel says which span and how many pairs. Where two families lie within
   10° of a light's angle, as after a rotator re-homed, the light's own
   pixels choose between them. They move a light off its recorded angle

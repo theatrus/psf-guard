@@ -2214,15 +2214,25 @@ impl LibrarySnapshot {
             // Its flats lie at another angle that the family measures
             // alike with the light's: say over which span, and on what.
             if let flat_groups::LightRotation::Measured { degrees } = family.light_rotation {
-                family.alike_range = self
-                    .flat_book
-                    .alike_range(
-                        choice.family,
-                        choice.light_angle,
-                        degrees,
-                        rules.rotation_deg,
-                    )
-                    .map(|range| flat_groups::AlikeRangeNote::of(range, degrees));
+                let book = &self.flat_book;
+                family.alike_range = selected
+                    .flat
+                    .iter()
+                    .filter(|frame| frame.rotation.is_some_and(|r| (r - degrees).abs() < 1e-6))
+                    .find_map(|frame| book.session_of_frame(&frame.frame_uuid))
+                    .and_then(|session| {
+                        let range = book.alike_range_for(
+                            choice.family,
+                            session,
+                            choice.light_angle,
+                            rules.rotation_deg,
+                        )?;
+                        let group = book.families[choice.family]
+                            .groups
+                            .iter()
+                            .position(|group| group.contains(&session));
+                        Some(flat_groups::AlikeRangeNote::of(range, degrees, group))
+                    });
             }
             family
         });
@@ -2366,10 +2376,17 @@ impl LibrarySnapshot {
                     rotation_gap(family.light_angle, flat) <= rules.rotation_deg
                 });
                 let in_range = || {
-                    angle.is_some_and(|flat| {
-                        book.alike_range(of, family.light_angle, flat, rules.rotation_deg)
-                            .is_some()
-                    }) && self.on_lights_side_of_changes(light, candidate)
+                    book.session_of_frame(&candidate.frame_uuid)
+                        .and_then(|session| {
+                            book.alike_range_for(
+                                of,
+                                session,
+                                family.light_angle,
+                                rules.rotation_deg,
+                            )
+                        })
+                        .is_some()
+                        && self.on_lights_side_of_changes(light, candidate)
                 };
                 Some(
                     at_angle
@@ -2407,10 +2424,12 @@ impl LibrarySnapshot {
         book.events
             .iter()
             .filter(|event| event.rig_uuid == rig && event.applies_to(light.filter.as_deref()))
-            .all(|event| match book.place(event, at).side() {
-                Some(side) => event.side_of(captured) == Some(side),
-                None => false,
-            })
+            .all(
+                |event| match flat_groups::place_light(book, event, at).side() {
+                    Some(side) => event.side_of(captured) == Some(side),
+                    None => false,
+                },
+            )
     }
 
     /// A flat's rotator angle: the one it records, or, with measured
@@ -2512,7 +2531,7 @@ impl LibrarySnapshot {
         }
         let placements: Vec<(usize, flat_groups::model::Placement)> = events
             .iter()
-            .map(|(index, event)| (*index, book.place(event, at)))
+            .map(|(index, event)| (*index, flat_groups::place_light(&book, event, at)))
             .collect();
         let side_of = |frame: &CalibrationFrame, event: &flat_groups::model::Event| {
             frame

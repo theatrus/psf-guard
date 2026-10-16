@@ -528,6 +528,14 @@ pub struct FlatFamily {
     pub alike_range: Option<AlikeRangeNote>,
 }
 
+/// Where a light stands against a change, as selection reads it: the one
+/// place choosing flats asks.
+// TODO(#878): a person's choice of side for the light's session comes
+// first; route it through here (`place_light(book, choices, …)`).
+pub fn place_light(book: &Book, event: &model::Event, at: i64) -> model::Placement {
+    book.place(event, at)
+}
+
 /// A family's [`model::AlikeRange`] as a light's account names it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AlikeRangeNote {
@@ -535,14 +543,17 @@ pub struct AlikeRangeNote {
     pub flats_angle: f64,
     pub low: f64,
     pub high: f64,
-    /// "101.9–104.2°".
+    /// "101.9–102.2° and 104.2°": the angles at its two ends.
     pub label: String,
     pub pairs: usize,
     pub nights: usize,
+    /// Its pairs were all measured in other groups of the family than the
+    /// flats', across camera-side dust changes only.
+    pub carried: bool,
 }
 
 impl AlikeRangeNote {
-    pub fn of(range: &model::AlikeRange, flats_angle: f64) -> Self {
+    pub fn of(range: &model::AlikeRange, flats_angle: f64, flats_group: Option<usize>) -> Self {
         Self {
             flats_angle,
             low: range.span.low,
@@ -550,6 +561,7 @@ impl AlikeRangeNote {
             label: range.label(),
             pairs: range.pairs,
             nights: range.nights,
+            carried: flats_group.is_some_and(|group| !range.groups.contains(&group)),
         }
     }
 }
@@ -676,13 +688,23 @@ pub fn describe_family(family: &FlatFamily) -> Option<String> {
 }
 
 /// Why a light's flats at another angle serve it through its family's
-/// measured angle term: "Flats at 104.0°: this family measures 101.9–104.2°
-/// alike (5 pairs over 3 nights), so the stack reads the light at 104.0°".
+/// measured angle term: "Flats at 104.0°: this family's flats at 101.9–102.2°
+/// and 104.2° measure alike (4 pairs over 4 nights), so the stack reads the
+/// light at 104.0°".
 pub fn describe_alike_range(range: &AlikeRangeNote) -> String {
     format!(
-        "Flats at {:.1}°: this family measures {} alike ({} pairs over {} nights), so the \
-         stack reads the light at {:.1}°",
-        range.flats_angle, range.label, range.pairs, range.nights, range.flats_angle
+        "Flats at {:.1}°: this family's flats at {} measure alike ({} pairs over {} nights{}), \
+         so the stack reads the light at {:.1}°",
+        range.flats_angle,
+        range.label,
+        range.pairs,
+        range.nights,
+        if range.carried {
+            ", measured across a change of dust on the camera side only"
+        } else {
+            ""
+        },
+        range.flats_angle
     )
 }
 

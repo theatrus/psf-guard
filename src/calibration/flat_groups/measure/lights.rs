@@ -451,25 +451,20 @@ impl Book {
     }
 
     /// The families a light at `angle` has flats of at that angle, within
-    /// the rig's `tolerance`, or whose flats measure alike across a span
-    /// that holds it ([`super::model::AlikeRange`]): measured to be its
-    /// light path either way.
+    /// the rig's `tolerance`. An alike range never counts here: it hands a
+    /// light flats only through `family_admits`, from its own side.
     pub(crate) fn at_recorded(&self, families: &[usize], angle: f64, tolerance: f64) -> Vec<usize> {
         families
             .iter()
             .copied()
             .filter(|family| {
-                self.families[*family]
-                    .alike_ranges
-                    .iter()
-                    .any(|range| range.holds(angle, tolerance))
-                    || self.families[*family].sessions.iter().any(|index| {
-                        self.sessions[*index]
-                            .row
-                            .rotation
-                            .filter(|r| r.is_finite())
-                            .is_some_and(|flat| wrap(angle - flat).abs() <= tolerance)
-                    })
+                self.families[*family].sessions.iter().any(|index| {
+                    self.sessions[*index]
+                        .row
+                        .rotation
+                        .filter(|r| r.is_finite())
+                        .is_some_and(|flat| wrap(angle - flat).abs() <= tolerance)
+                })
             })
             .collect()
     }
@@ -838,6 +833,88 @@ mod tests {
         book.family_evidence
             .insert(row.session_key.clone(), vec![row]);
         book
+    }
+
+    // Regression from the review of bc5d5286 (Medium, Q3/Q4): `at_recorded` now counts a family
+    // whose alike range holds the light though none of its flats lie at
+    // the light's angle. A pixel choice of it is then "confirmed" with no
+    // corroboration, and `by_pixels()` makes `family_admits` admit every
+    // flat of the family, at any angle and from either side of a change,
+    // bypassing the range's own rules. Before this commit it was Disputed.
+    #[test]
+    fn review_repro_a_range_alone_does_not_confirm_a_pixel_move() {
+        let limits = Limits {
+            measured: true,
+            dust: 0.01,
+            broad: 0.02,
+            window: DAY,
+            rotation: 2.0,
+        };
+        let on = |key: &str, rotation: f64, day: i64| ResponseRow {
+            night: format!("2026-09-{:02}", day + 1),
+            ..row(key, rotation, day * DAY)
+        };
+        let alike = |a: &str, b: &str| ComparisonRow {
+            dust: 0.002,
+            broad: 0.002,
+            ..apart(a, b)
+        };
+        let imaging = imaging_sessions(
+            vec![
+                (1, Some("p".into()), 10 * DAY),
+                (2, Some("p".into()), 10 * DAY + 600),
+            ],
+            |_| vec!["rig".into()],
+        );
+        let book = Book::build(
+            vec![
+                on("f90", 90.0, 0),
+                on("f110", 110.0, 1),
+                on("f90b", 90.0, 2),
+                on("e95", 95.0, 3),
+                on("f110b", 110.0, 4),
+            ],
+            vec![
+                alike("f90", "f110"),
+                alike("f110", "f90b"),
+                // A second 110° session, so the range stands under the
+                // two-sessions-per-end rule.
+                alike("f90b", "f110b"),
+                apart("f90b", "e95"),
+                apart("f110", "e95"),
+            ],
+            vec![],
+            imaging,
+            |_| limits,
+        );
+        assert_eq!(book.families.len(), 2, "{:?}", book.families);
+        let f = book
+            .families
+            .iter()
+            .position(|family| {
+                family
+                    .sessions
+                    .iter()
+                    .any(|s| book.sessions[*s].row.response_key == "f90")
+            })
+            .unwrap();
+        assert_eq!(book.families[f].alike_ranges.len(), 1);
+        let mut row = said(&book, 100.0, 95.0);
+        row.chosen = Some(book.families[f].key.clone());
+        let book = with(book, row);
+        let all: Vec<usize> = (0..book.families.len()).collect();
+        let choice = book
+            .choose_family(
+                "rig",
+                Some("OIII"),
+                Some(10 * DAY + 300),
+                Some(100.0),
+                &all,
+                2.0,
+            )
+            .unwrap();
+        assert_eq!(choice.family, f);
+        assert!(!choice.by_pixels(), "{choice:?}");
     }
 
     #[test]

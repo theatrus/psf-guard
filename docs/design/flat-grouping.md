@@ -166,20 +166,48 @@ has a measured neighbourhood whatever its header says (C925: 216
 comparisons became 436).
 
 **Alike ranges** (`Book::build_alike_ranges`, `model::AlikeRange`): a
-family's own angle term. Its pairs at two angles further apart than the
-rig's tolerance, in one group with no change of the rig that reaches its
-filter between them, are its evidence. The alike ones span a range; a
-range is the span they connect, gaps no wider than the tolerance, the
-short way round. A pair measured apart whose two angles lie in the range
-(within the tolerance around it) rules it out, so only narrower ranges
-that leave the pair out stand. A range needs `ALIKE_RANGE_MIN_PAIRS` (2)
-alike pairs reaching `ALIKE_RANGE_MIN_NIGHTS` (2) flat nights: one pair
-can be one twilight's accident, which a second pair on another night
-repeats or not. Only measured pairs count; a header's angle never makes
-or widens one. Families never chain (step 2), so a range never reaches
-past its family.
+family's own angle term, from pairs of its sessions compared directly.
 
-A family's **measured angle range** is its clusters' recorded angles
+- **Evidence**: pairs at two angles further apart than the rig's
+  tolerance, in one group, with no change of the rig that reaches the
+  filter between them. Only measured pairs count; a header's angle never
+  makes or widens a range.
+- **A range** gathers the alike pairs whose two ends each lie within the
+  tolerance of one pair's ends. It needs `ALIKE_RANGE_MIN_SESSIONS` (2)
+  distinct sessions on `ALIKE_RANGE_MIN_NIGHTS` (2) nights at each end:
+  one session at an end can make a range alone (a gradient of its
+  twilight, a header that changed while the rotator did not), so pairs
+  sharing it do not count twice.
+- **Serving** (`AlikeRange::serves`): a light at L may take flats at F
+  only when one pair's own arc, within the tolerance at either end,
+  holds both, and L and F lie no further apart than that arc plus the
+  tolerance, which so counts once. A chain of pairs never bridges angles
+  no pair compared: 100°↔104°↔108° alike does not hand a 100° light 108°
+  flats. Ranges may overlap, sharing an end, and stay apart.
+- **Veto**: a pair of the family measured apart that a range would serve
+  rules the range out.
+- **Across changes** (`Book::carries_angle_term`, `Family::carry_class`):
+  a range is built per group, and may gather pairs from, and serve flats
+  of, other groups of the family only across changes that are
+  camera-side dust: seen in two filters or two families, with spots, and
+  no broad change over the limit. The argument: how flats depend on the
+  angle comes from the telescope side (vignetting, reflections, the
+  light path through a rotating camera's optics); dust on the camera's
+  window or filter moves with the camera, adds the same shadows at every
+  angle, and leaves that dependence as it was. A broad change
+  (vignetting), a change seen in one filter alone (filter or telescope
+  side), a split that makes no change, or a split made by hand carries
+  nothing (a seam is left for #878's choices).
+- **What it brings back**: this carrying is what serves C925's lights
+  shot before the 05-20 dust their own side's 05-19 flats at 104.0°: no
+  pair at two angles was shot before that change, so the ranges come
+  from flats after it. The data can test the argument only across the
+  later changes. Hα's and OIII's ranges hold pairs on both sides of the
+  09-16 corner shadow, each side alike on its own, so the angle term
+  survived that camera-side change; across the 05-20 change itself it is
+  an inference from the argument, not a measurement.
+
+A family's **measured angle range** is its clusters' recorded anglesA family's **measured angle range** is its clusters' recorded angles
 (`Family::angles`, `Book::angle_label`): `100.1–104.4°`, or
 `72.6° & 82.2°`. Its `rotation` is the middle angle of its largest
 cluster. Its key is the family key and its earliest session's first flat, so a
@@ -343,9 +371,9 @@ light that records its angle:
    session within `ANGLE_PRIOR_DEG` (10°) of the light's angle, recorded
    or turned.
 4. **One candidate**: it (`Angle`), only when it has flats at the light's
-   recorded angle, within the rig's tolerance, or an alike range that
-   holds that angle. A header or an epoch alone never hands a light
-   another angle's flats.
+   recorded angle, within the rig's tolerance. An alike range never
+   counts as the recorded angle; a header or an epoch alone never hands a
+   light another angle's flats.
 5. **Two or more**: the light's imaging session's own pixels, when the
    pass has read them. They **confirm** the family at the light's
    recorded angle freely (`FamilyBasis::Pixels`, `moved: false`). They
@@ -366,15 +394,18 @@ the light to another angle (`LibrarySnapshot::family_admits`). A flat of
 the family at another angle than the light's is admitted only when the
 light's pixels chose the family, when its session measured alike with
 a session of the family at the light's recorded angle
-(`Book::alike_with_angle`), or when an alike range of the family holds
-both angles and the flat lies on the light's side of every change of its
-rig that reaches its filter, the light's side known for each
-(`Book::alike_range`, `LibrarySnapshot::on_lights_side_of_changes`). A
+(`Book::alike_with_angle`), or when an alike range of the family, of the
+flat's own carrying class, serves both angles and the flat lies on the
+light's side of every change of its rig that reaches its filter, the
+light's side known for each (`Book::alike_range_for`,
+`LibrarySnapshot::on_lights_side_of_changes`, which asks
+`flat_groups::place_light`, the one placement hook selection uses). A
 light shot while a change happened takes nothing through a range. The
 stacker's gate then reads the light at the flats' angle, and the light's
 `FlatFamily::alike_range` names the range, its pairs and nights for the
-panel ("Flats at 104.0°: this family measures 101.9–104.2° alike (5
-pairs over 3 nights)"). Within the family, flats at the angle the
+panel ("Flats at 104.0°: this family's flats at 101.5–102.2° and
+104.2–104.4° measure alike (10 pairs over 9 nights, measured across a
+change of dust on the camera side only)"). Within the family, flats at the angle the
 light recorded sort first, as before families: measured alike is not
 identical; then those within the angle prior, then the rest, each in
 time order. The family's far angles serve where nothing nearer lies on
@@ -759,27 +790,35 @@ frames from the archive in place:
   flats at 82.2° and 72.6°, and at 79.7–82.3°, are one family
   (`72.4–72.6° & 79.7–82.3°`); 140.9° stays a family of its own, since a
   neighbour pair measured it apart from 81.2°. The three changes and their
-  windows stand. Alike ranges: Hα 100.1–104.4° (7 pairs, 8 nights), OIII
-  101.5–104.4° (10, 9), SII 101.5–104.3° (2, 3), G and R 101.9–104.2°
-  (2, 3), OIII 72.4–82.2° (11, 10); B and L have none, since after the
-  changes their flats sit within 2° of each other. 430 lights change from
-  main, all NGC 6543 and Hercules lights at 100.6–101.7° shot before the
-  first change: they take the 05-19 flats at 104.0° from their own side
-  through their family's range, read at 104.0° by the stacker's gate.
-  369 were flagged on main as having no flats on their side, 61 were
-  corrected across the change. Flagged lights fall from 1,586 to 1,217.
-  No direct pair measured apart on the same side of a change contradicts
-  any of them: the only measured pairs between their flats and flats at
-  their own angle cross the dust change. 48 lights were chosen by their
-  own pixels, all at their recorded angle; none was moved or disputed.
-- **UltraCat131**: 9 families, ranges in every filter (Hα 0.0–163.8°,
-  12 pairs on 7 nights). Every light's master is main's; the 23 Heart of
-  the Soul R lights take the 09-16 R flats at 3.2° by the rig's measured
-  angle term, as on main.
-- **RedCat61**: 13 families, ranges such as 180.3–311.2° (tracked sky
-  flats behind a refractor do not depend on the angle), no change, no
-  flag; every master is main's, since every light has flats at its own
-  angle.
+  windows stand. Alike ranges: Hα `100.1–102.2° and 104.2–104.4°` (7
+  pairs, 4 and 5 sessions), OIII `101.5–102.2° and 104.2–104.4°` (10
+  pairs), and three overlapping OIII ranges between 72.4–72.6° and
+  79.7–82.2°. G, R and SII have none: one end rests on a single session
+  (08-24 at 104.2° for G and R, 10-03 at 101.5° for SII); B and L have no
+  pair further apart than 2°. 170 lights change from main, all NGC 6543
+  lights at 100.8–101.7° shot before the first change: they take the
+  05-19 flats at 104.0° from their own side through a range carried
+  across camera-side dust, read at 104.0° by the stacker's gate. 153 were
+  flagged on main as having no flats on their side, 17 were corrected
+  across the change. Flagged lights fall from 1,586 to 1,433. No direct
+  pair measured apart on the same side of a change contradicts any of
+  them: the only measured pairs between their flats and flats at their
+  own angle cross the dust change. 48 lights were chosen by their own
+  pixels, all at their recorded angle; none was moved or disputed.
+- **UltraCat131**: 9 families; one range (Hα `53.4–53.5° and 163.8°`,
+  measured after the 09-17 change). Every light's master, basis and flag
+  is main's; the 23 Heart of the Soul R lights take the 09-16 R flats at
+  3.2° by the rig's measured angle term, as on main.
+- **RedCat61**: 13 families, ranges such as `180.3–181.0° and
+  230.9–231.3°` in every filter (tracked sky flats behind a refractor do
+  not depend on the angle), no change, no flag; every master is main's,
+  since every light has flats at its own angle.
+- **Rebuilds**: a session key names every candidate flat, so a light
+  whose candidates change rebuilds even when its master does not. On
+  C925, 3,586 lights keep main's master and basis but gain or lose
+  candidates (most from flats measured alike with their own angle's,
+  `Book::alike_with_angle`); UltraCat131 1,369 and RedCat61 1,154. Each
+  rebuilds once.
 
 The prototype behind these numbers, its pictures and the method are kept
 with the PR's working notes; the Rust metric reproduced them.

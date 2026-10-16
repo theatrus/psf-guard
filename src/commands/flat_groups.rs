@@ -297,10 +297,14 @@ fn families(book: &Book) -> Vec<FamilyReport> {
                     .iter()
                     .map(|range| {
                         format!(
-                            "{} ({} pairs, {} nights)",
+                            "{} ({} pairs, {}+{} sessions, {}+{} nights, groups {:?})",
                             range.label(),
                             range.pairs,
-                            range.nights
+                            range.sessions[0],
+                            range.sessions[1],
+                            range.ends_nights[0],
+                            range.ends_nights[1],
+                            range.groups
                         )
                     })
                     .collect(),
@@ -411,8 +415,12 @@ fn light_reports(
                 .and_then(|family| family.alike_range.as_ref())
                 .map(|range| {
                     format!(
-                        "{} at {:.1}° ({} pairs, {} nights)",
-                        range.label, range.flats_angle, range.pairs, range.nights
+                        "{} at {:.1}° ({} pairs, {} nights{})",
+                        range.label,
+                        range.flats_angle,
+                        range.pairs,
+                        range.nights,
+                        if range.carried { ", carried" } else { "" }
                     )
                 }),
         });

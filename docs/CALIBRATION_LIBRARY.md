@@ -612,12 +612,14 @@ those within 10° of it, then the rest; the family's far angles serve
 where nothing nearer lies on its side of a change. A flat at another
 angle serves only when the light's own pixels chose the family, when
 its session measured alike with the family's flats at the light's
-angle, or when the family's own flats measure alike across a span of
-angles that holds both. Such a span needs two pairs of the family's
-flats at two angles, on two nights or more, measured alike with no
-change between them; a pair measured apart inside it narrows it. A flat
-served through it must come from the light's side of every change, and
-the panel names the span and its pairs. A light whose flats sit at another angle than it recorded is read
+angle, or when the family's own flats at the two angles measure alike.
+That needs pairs compared directly, with two sessions on two nights at
+each angle, and no change between the two flats of a pair; a pair
+measured apart that it would serve rules it out. It reaches across a
+change only when that change is dust on the camera side, which leaves
+how flats depend on the angle as it was. A flat served this way must
+come from the light's side of every change, and the panel names the
+angles and their pairs. A light whose flats sit at another angle than it recorded is read
 at its flats' angle when a stack judges it against its masters, so the
 stacker does not refuse the master its family chose.
 

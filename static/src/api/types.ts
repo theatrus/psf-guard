@@ -2882,10 +2882,13 @@ export interface FlatAlikeRangeNote {
   flats_angle: number;
   low: number;
   high: number;
-  /** "101.9–104.2°". */
+  /** The angles at its two ends: "101.5–102.2° and 104.2–104.4°". */
   label: string;
   pairs: number;
   nights: number;
+  /** Its pairs were all measured in other groups of the family, across
+   *  camera-side dust changes only. */
+  carried: boolean;
 }
 
 /** A measured change near a light, as its account names it. Fractions. */
