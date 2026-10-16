@@ -32,6 +32,9 @@ export interface CollaborationNight { night: string; moon: number; moon_up: numb
 export interface RemoteProject { project_id: string; name: string; joined: boolean; compatible: boolean | null }
 export interface RemoteShare { task_id: string; name: string | null; version: number; review_reasons: string[]; demands: { panel_index: number; filter: string; exposure_ms: number; requested_frames: number }[] }
 export interface CollaborationWork {
+  transfer_manifest?: import('./transferTypes').TransferManifest;
+  transfer?: import('./transferTypes').TransferJob;
+  outputs?: import('./transferTypes').TransferOutput[];
   night?: CollaborationNight;
   projects?: RemoteProject[];
   shares?: RemoteShare[];
@@ -54,6 +57,12 @@ export interface CollaborationActivationContext {
   imports: { import_id: string; rig_id: string; rig_name: string; night: string; task_id: string; version: number; source_digest: string; demands: RemoteShare['demands'] }[];
 }
 export type CollaborationWorkInput =
+  | { operation: 'transfer_manifest'; id: string; revision: number }
+  | { operation: 'transfer_policy'; automatic: boolean; mode: string }
+  | { operation: 'transfer_outputs'; selection: ContributionSelection }
+  | { operation: 'prepare_transfer'; request: import('./transferTypes').TransferRequest }
+  | { operation: 'upload_pending'; request: import('./transferTypes').TransferRequest }
+  | { operation: 'transfer_control'; id: string; revision: number; action: import('./transferTypes').TransferAction }
   | { operation: 'report_inputs' }
   | { operation: 'report_candidates'; import_id: string; catalog: string; observing_night?: string }
   | { operation: 'preview_report'; selection: ContributionSelection }

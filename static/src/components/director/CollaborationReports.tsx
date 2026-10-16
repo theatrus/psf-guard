@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Check, RefreshCw, Upload } from 'lucide-react';
 import { apiClient } from '../../api/client';
+import CollaborationTransfers from './CollaborationTransfers';
 import type { CollaborationWork, CollaborationWorkInput, ContributionSelection } from '../../api/collaborationTypes';
 
 export default function CollaborationReports({ connection, canWrite, embedded = false, active = true }: { connection: string; canWrite: boolean; embedded?: boolean; active?: boolean }) {
@@ -63,6 +64,7 @@ export default function CollaborationReports({ connection, canWrite, embedded = 
       {(inputs.isFetching || candidates.isFetching || operation.isPending) && <p role="status">Loading contribution evidence...</p>}
       {[inputs.error, candidates.error, operation.error].filter(Boolean).map((error, i) => <p key={i} role="alert">{error!.message}</p>)}
       {notice && <p role="status">{notice}</p>}
+      <CollaborationTransfers connection={connection} selection={selection} canWrite={canWrite} active={active && show} selectionReady={!!selectedImages.length && !!catalog && !!importId && !!observingNight && panel !== '' && !candidates.isFetching && !candidates.isError} />
       {reviewed?.result.report && <section aria-label="Review contribution"><h4>Review contribution</h4><p>{reviewed.result.report.frames} frames; {reviewed.result.report.seconds} seconds; {reviewed.result.report.filterName}; {reviewed.result.report.calibrated ? 'calibrated' : 'uncalibrated'}</p>
         <dl className="collaboration-evidence">
           <div><dt>Observing night</dt><dd>{reviewed.selection.observing_night}</dd></div>

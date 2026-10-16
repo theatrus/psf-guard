@@ -345,6 +345,12 @@ export type StackPreviewStartRequest = {
 };
 
 export const apiClient = {
+  getTransfers: async (): Promise<import('./transferTypes').TransferActivity> => {
+    const api = await getApi();
+    const result = await api.get<ApiResponse<import('./transferTypes').TransferActivity>>('/director/v1/transfers');
+    if (!result.data.data) throw new Error(result.data.error || 'Could not load transfers');
+    return result.data.data;
+  },
   getCollaborationConnections: async (rig: string): Promise<CollaborationConnection[]> => {
     const api = await getApi();
     const result = await api.get<ApiResponse<CollaborationConnection[]>>(`/director/v1/rigs/${encodeURIComponent(rig)}/collaboration`);

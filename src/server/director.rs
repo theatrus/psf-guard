@@ -160,6 +160,7 @@ pub struct Service {
 }
 
 pub(crate) fn spawn_collaboration(state: Arc<AppState>) {
+    collaboration_auth::transfers::spawn(state.clone());
     collaboration_auth::background::spawn(state);
 }
 

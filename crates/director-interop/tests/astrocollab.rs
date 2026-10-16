@@ -72,6 +72,80 @@ fn both_servers_normalize_to_the_same_nightly_visits_not_season_hours() {
 }
 
 #[test]
+fn starfront_disabled_osc_bands_are_held_even_when_listed_as_filters() {
+    for (band, flag) in [
+        ("osc-rgb", "acceptOscRgb"),
+        ("osc-ha+oiii", "acceptOscNarrowband"),
+        ("OSC-Ha", "acceptColour"),
+        ("OSC-Ha", "acceptOscRgb"),
+    ] {
+        let mut v = changed(|t| {
+            t["filters"] = json!([{"filter":band,"exposure":300}]);
+            t["visit"]["frames"] = json!({band:11});
+            t["visit"].as_object_mut().unwrap().remove("filter");
+        });
+        v.as_object_mut().unwrap().remove("requirementsByProject");
+        v["requirements"]["filters"] = json!({band:7});
+        assert!(read(&v).unwrap().shares[0].review_reasons.is_empty());
+        v["requirements"][flag] = json!(false);
+        let nightly = read(&v).unwrap();
+        assert!(nightly.shares[0].demands.is_empty());
+        assert!(nightly.shares[0]
+            .review_reasons
+            .contains(&ReviewReason::FilterOutsideRequirements));
+    }
+}
+
+#[test]
+fn physical_task_filters_keep_their_delivered_starfront_bands() {
+    for (physical, band) in [
+        ("L", "OSC-RGB"),
+        ("L-eXtreme", "OSC-Ha+OIII"),
+        ("Dual", "Ha+OIII"),
+    ] {
+        let mut v = changed(|t| {
+            t["filters"] = json!([{"filter":physical,"exposure":300,"channels":[band]}]);
+            t["visit"] = json!({"frames":{physical:11}});
+        });
+        v.as_object_mut().unwrap().remove("requirementsByProject");
+        v["requirements"]["filters"] = json!({band:7});
+        let work = read(&v).unwrap();
+        assert!(work.shares[0].review_reasons.is_empty());
+        assert_eq!(work.shares[0].demands[0].filter, physical);
+        assert_eq!(work.shares[0].demands[0].channels, vec![band]);
+        v["requirements"]["filters"] = json!({"H":7});
+        assert!(read(&v).unwrap().shares[0].demands.is_empty());
+        v["tasks"][0]["filters"][0]["channels"] = json!([band, band]);
+        v["task"] = v["tasks"][0].clone();
+        assert_eq!(read(&v), Err(Error::AmbiguousFilter));
+    }
+}
+
+#[test]
+fn starfront_bortle_limits_are_bounded_and_unreadable_limits_need_review() {
+    for value in [json!(0), json!(10), json!(5.5)] {
+        let mut v = fixture();
+        v.as_object_mut().unwrap().remove("requirementsByProject");
+        v["requirements"]["maxBortle"] = value;
+        assert!(read(&v).is_err());
+    }
+    let mut v = fixture();
+    v.as_object_mut().unwrap().remove("requirementsByProject");
+    v["requirements"]["maxBortle"] = json!("unknown");
+    let nightly = read(&v).unwrap();
+    assert!(nightly.shares[0].demands.is_empty());
+    assert!(nightly.shares[0]
+        .review_reasons
+        .contains(&ReviewReason::UnresolvedRequirements));
+    assert!(nightly.shares[0]
+        .requirements
+        .as_ref()
+        .unwrap()
+        .unresolved_fields
+        .contains(&"maxBortle".into()));
+}
+
+#[test]
 fn source_scopes_host_base_path_and_agent_and_rejects_credentials() {
     assert_eq!(source().base_url(), "https://collab.example/community/");
     assert_eq!(source().agent_id(), "000000000001");

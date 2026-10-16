@@ -13,6 +13,9 @@ import {
 } from './activityItems';
 import { useHeaderActivity, WBPP_ACTIVITY_QUERY_KEY, type ScanErrorNote } from './useHeaderActivity';
 import './header.css';
+import { TransferControls } from '../director/CollaborationTransfers';
+import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
+import type { TransferJob, TransferAction } from '../../api/transferTypes';
 
 /** How long the list stays after the pointer leaves, so it can be reached. */
 const HOVER_CLOSE_MS = 200;
@@ -49,10 +52,12 @@ function ProgressRing({ percent, idle }: { percent: number | null; idle: boolean
 }
 
 type ActivityAction =
+  | { type: 'transfer'; job: TransferJob; action: TransferAction }
   | { type: 'move'; control: ActivityControl; position: number }
   | { type: 'stop'; control: ActivityControl };
 
 function runAction(action: ActivityAction): Promise<unknown> {
+  if (action.type === 'transfer') return apiClient.collaborationWork(action.job.connection_id, { operation: 'transfer_control', id: action.job.id, revision: action.job.revision, action: action.action });
   const { control } = action;
   if (action.type === 'move') {
     if (control.kind === 'stack') return apiClient.moveStackJob(control.jobId, action.position);
@@ -112,6 +117,7 @@ function ScanErrorRow({
 
 /** The row's corner: its place in a line, waiting, or its progress. */
 function stateText(item: ActivityItem): ReactNode {
+  if (item.stateLabel) return item.stateLabel;
   if (item.status === 'queued') {
     return item.position != null && item.queue ? `queued · ${item.position + 1}` : 'queued';
   }
@@ -194,6 +200,8 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
       )}
       <div className="activity-row-foot">
         <div className="activity-row-detail">{item.detail}</div>
+        {item.transfer && controls.allowed(item) && <TransferControls job={item.transfer} busy={controls.busy}
+          run={action => controls.run({ type: 'transfer', job: item.transfer!, action })} />}
         {allowed && control && (queued || (item.status === 'running' && item.stoppable)) && (
           <div className="activity-row-actions">
             {inLine && (
@@ -283,6 +291,7 @@ export default function ActivityChip() {
     // Every route answers with the line as it now stands; showing it at
     // once keeps a second click from acting on the old positions.
     onSuccess: (result, variables) => {
+      if (variables.type === 'transfer') return;
       if (!result || typeof result !== 'object') return;
       if (variables.control.kind === 'stack') {
         queryClient.setQueryData(STACK_ACTIVITY_QUERY_KEY, result);
@@ -293,6 +302,7 @@ export default function ActivityChip() {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: WBPP_ACTIVITY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: TRANSFER_QUERY_KEY });
     },
   });
   const [pinned, setPinned] = useState(false);

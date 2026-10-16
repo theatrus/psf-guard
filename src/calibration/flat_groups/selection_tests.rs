@@ -217,6 +217,33 @@ fn a_light_before_new_dust_takes_its_side_at_another_angle() {
         other => panic!("{other:?}"),
     }
     assert!(!selected.flat_basis.flags());
+    let delivery =
+        crate::calibration::delivery_selection(select_for_light(&conn, &before).unwrap());
+    let export = crate::calibration::export_destinations(
+        &conn,
+        &before,
+        "Target",
+        None,
+        crate::commands::export::ExportLayout::Standard,
+        crate::calibration::catalog_night_boundary(&conn),
+        false,
+    )
+    .unwrap();
+    let delivered = delivery
+        .flat
+        .iter()
+        .map(|f| f.frame_uuid.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let exported = export
+        .items
+        .iter()
+        .filter(|(kind, _, _)| *kind == crate::calibration::CalibrationKind::Flat)
+        .map(|(_, f, _)| f.frame_uuid.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        delivered, exported,
+        "other-angle flat delivery must match export exactly"
+    );
 
     // The stacker holds a light to its flats' angle within 2°; the
     // light's gate is wide enough for these flats.

@@ -7,8 +7,9 @@ use axum::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tower::ServiceExt;
 mod background;
+mod starfront;
 
-async fn fixture() -> (tempfile::TempDir, Arc<AppState>, Router, Uuid) {
+pub(super) async fn fixture() -> (tempfile::TempDir, Arc<AppState>, Router, Uuid) {
     let dir = tempfile::tempdir().unwrap();
     credentials::private_file::private_test_directory(dir.path()).unwrap();
     let mut state = AppState::from_databases(
@@ -64,7 +65,7 @@ async fn call(
         serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     )
 }
-async fn mock(app: Router) -> (String, tokio::task::JoinHandle<()>) {
+pub(super) async fn mock(app: Router) -> (String, tokio::task::JoinHandle<()>) {
     let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = tcp.local_addr().unwrap();
     let task = tokio::spawn(async move {
@@ -432,7 +433,7 @@ async fn work_describes_rig_joins_and_requires_current_review_before_import() {
         .all(|v| v["profile"]["focalLength"] == 530.0 && v["presence"].is_null()));
     remote.abort();
 }
-async fn add(app: &Router, rig: Uuid, endpoint: &str, headers: &[(&str, &str)]) -> Uuid {
+pub(super) async fn add(app: &Router, rig: Uuid, endpoint: &str, headers: &[(&str, &str)]) -> Uuid {
     let id = Uuid::new_v4();
     let (status, body) = call(
         app,

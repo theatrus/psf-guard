@@ -7,14 +7,15 @@ Activation to write ordinary Target Scheduler rows, with GUID-based capture
 association and actual-observing-night credit. Neither remote registration nor
 import grants acquisition. Direct Starfront intake is not a requirement of
 Director or PSF Guard Sync. Reporting-owner handoff remains planned.
-Last reviewed: 2026-10-07.
+Last reviewed: 2026-10-15.
 
 ## Sources and scope
 
 Reviewed AstroCollab **0.2.0-draft.1**, wire protocol **1**, at
 [`35a6f06`](https://github.com/theatrus/astrocollab-api/tree/35a6f068c6015367b4dbb69c1c4de5b7a0747d90),
 and Starfront at
-[`4cfa896`](https://github.com/bray-sfro/starfront/tree/4cfa8961c9fb98098645896a19c59b5f5ec3b976).
+[`60f87d0`](https://github.com/bray-sfro/starfront/tree/60f87d016c65798ec244b161f722587004af5d18)
+(server version **0.2.43**, wire protocol **1**).
 The public [protocol](https://github.com/theatrus/astrocollab-api/blob/35a6f068c6015367b4dbb69c1c4de5b7a0747d90/spec/protocol.md),
 [OpenAPI](https://github.com/theatrus/astrocollab-api/blob/35a6f068c6015367b4dbb69c1c4de5b7a0747d90/openapi/astrocollab.yaml),
 and [conformance scenarios](https://github.com/theatrus/astrocollab-api/blob/35a6f068c6015367b4dbb69c1c4de5b7a0747d90/spec/conformance.md)
@@ -22,18 +23,82 @@ own the wire contract. Do not maintain a second API specification here.
 
 This draft adopts Starfront's hello, tonight and report routes. It is not the
 earlier draft's capacity, revision-sync and calibrated-upload API. Core credit
-comes from per-night reports; the optional `files` extension has **no defined
-upload routes**. Monthly commitments, file delivery and coordinator project
-administration are not part of this client contract.
+comes from per-night reports. The draft's optional `files` extension has no
+standard upload routes; current Starfront defines its own opt-in file API.
+Monthly commitments and coordinator project administration are not part of
+this client contract. File delivery uses the Starfront-specific extension below.
 
 Starfront's useful reference points are `astrocontrol/collabclient.py` for
 polling/reporting, `astrocontrol/main.py` for adopting work into a local plan,
 `astrocontrol/collab.py` for requirements, tiling and allocation, and
 `server/app.py` / `server/store.py` for routes and report persistence. Its
 capture software and collaboration server are in the same repository.
-AstroCollab publishes an MIT license. This Starfront checkout has no license
-file and GitHub reports no license: use it to inspect interoperability, not to
-copy its implementation into the core without permission.
+Current upstream also supplies a NINA acquisition plugin under `nina/`;
+the standalone Target Scheduler adapter remains a separate integration.
+AstroCollab publishes an MIT license. Starfront now publishes its source under
+[MPL-2.0](https://github.com/bray-sfro/starfront/blob/60f87d016c65798ec244b161f722587004af5d18/LICENSE).
+PSF Guard's client implements the wire contract independently; no Starfront
+implementation is copied into this Apache-2.0 core.
+
+### Current Starfront compatibility
+
+The standalone plugin and PSF Guard are checked independently. A passing
+standalone check is not evidence that PSF Guard's host, durable outbox or
+saved-image review passed. Both checks use a throwaway loopback server; no
+synthetic contribution is sent to a shared collaboration service.
+
+| Operation | Current routes and behavior |
+| --- | --- |
+| Authentication | `/api/v1/auth`, `/auth/login`, `/auth/poll`, and `/agents`; person and telescope credentials remain separate. Current Starfront does not expose the draft's pairing-code route. |
+| Hello and presence | `/api/v1/agent/hello` still replaces the full equipment profile. Presence RA remains hours; task/footprint RA remains degrees. |
+| Browse and join | `/api/v1/agent/projects` and `/agent/projects/{id}/join`; joining an existing share is idempotent and returns that share. |
+| Tonight | `/api/v1/agent/task?night=...&moon=...&moonUp=...`; multiple tasks, per-project requirements, fixed nightly panel order and visit frame counts remain supported. |
+| Reports | `/api/v1/agent/report`; metadata/integration reports, positional receipts, cumulative totals and duplicate replies remain supported. This is not an image upload. |
+| Files | Starfront-specific `GET /api/v1/files/projects`, `GET /api/v1/projects/{id}/files`, and `PUT /api/v1/projects/{id}/files/{name}`. Opt-in `collectFiles` does not authorize PSF Guard to transfer image files. Not implemented in either client. |
+
+Starfront now distinguishes mono channels from data bands such as `OSC-RGB`,
+`OSC-Ha+OIII` and `Ha+OIII`. Task `filters[].filter` and `visit.frames` still
+name physical filters; `filters[].channels` names the data bands they deliver.
+Readers retain that mapping and normalize known band spellings without
+turning them into mono credit. They retain `acceptOscRgb`,
+`acceptOscNarrowband` and `maxBortle`; PSF Guard includes these rules in its
+canonical reviewed snapshot and digest. Explicitly disabled OSC bands are held
+even when still listed under `filters`. The guards follow Starfront's current
+classification: OSC names with `+` use its narrowband switch, other OSC names
+use its broadband switch. An unreadable sky limit requires review.
+
+The server can infer familiar physical filters such as `Clear` and
+`L-eXtreme` from the hello profile. Acquisition retains the physical name and
+its sub length; report credit carries the assigned channels explicitly.
+PSF Guard preserves channels in reviewed snapshots and requires saved-frame
+camera evidence to agree with the OSC/mono band. The standalone host saves
+channels beside each nightly TS plan so delayed reports do not depend on a
+later server reply; conflicting same-night mappings are held, not relabeled.
+Neither host invents a selectable NINA wheel filter from a band name.
+
+**Remaining commissioning gaps:** neither host offers custom channel mapping
+for physical filters Starfront cannot infer, or sends a commissioned Bortle
+rating. These values remain unknown; do not manufacture them from a project's
+requirements. Explicit file delivery remains unimplemented. Existing saved
+reports without channels retain their payload rather than being silently
+rewritten or credited differently on upgrade. Reviewed legacy snapshots keep
+their digest when the new extension fields are absent or at default values.
+
+Run PSF Guard's real-server host check with a fresh Starfront server bound to
+`127.0.0.1`, isolated `STARFRONT_DATA`, and its generated owner-token file:
+
+```powershell
+$env:STARFRONT_TEST_URL = 'http://127.0.0.1:18880/'
+$env:STARFRONT_TEST_OWNER_FILE = '<isolated-data>/admin-token.txt'
+cargo test --lib starfront_server_hello_join_import_report_and_replay -- --ignored --exact server::director::collaboration_auth::tests::starfront::starfront_server_hello_join_import_report_and_replay
+```
+
+The test enrolls through the owner's API, then uses PSF Guard's private config
+credential store and normal browse/join/import/check-in routes. It verifies
+reviewed import grants no acquisition, delivers synthetic test evidence once,
+and checks duplicate replay. It does not exercise a real Discord browser
+approval or drive NINA hardware. The standalone host's independent check is
+`tools/InteropCheck` in its repository.
 
 ## Integration ownership
 
@@ -316,7 +381,7 @@ contribution is a delivered receipt, not a local grade change or endless retry.
 | Presence | Optional projection of Director live status | Opt-in position/name sharing; no commands and no replay of stale presence after reconnect. |
 | Night report and verdict | Durable contribution outbox and remote assessment history | Report actual attributable data; remote accepted/rejected/unverified is separate from local per-frame grades. |
 | Depth map | Advisory combined coverage in the existing project workspace | Never subtract another telescope's remote integration from local authorized attempts or overwrite local capture progress. |
-| Optional files | Future artifact transport adapter | No implementation until upload and artifact identity contracts exist; PSF Guard remote intake is a separate service. |
+| Optional files | Durable Starfront transfer queue | Raw or stack files travel independently of credit, using content-addressed names. Per-light calibration associations stay local until an upstream manifest API exists. |
 
 ## Shared Rust boundary
 
@@ -615,6 +680,117 @@ also distinct: protocol null means angle-adjustable, not "we do not know".
 Credential ownership, config-file permissions, repair and transport rules are
 defined in [Authentication and credential ownership](#authentication-and-credential-ownership).
 
+## File delivery
+
+Status: Starfront file delivery, durable queue, exception review and opt-in
+automatic delivery implemented. The draft still has no standard file routes.
+Remote calibration manifests and server-computed checksums remain upstream work.
+Director and Sync do not gain collaboration clients or upload credentials.
+
+**Selection.** A package names one existing rig/catalog binding, imported
+assignment revision, observing night, panel and filter, and accepted image GUIDs.
+Activation provenance must associate every image with that assignment. Source
+paths come from the catalog, never the request. The raw mode loads one
+`LibrarySnapshot`, uses its per-light selection and the shared
+`delivery_selection` coherent input reduction that exports call. It retains the
+selected bias, dark, dark-flat and flat UUIDs, measured flat basis, matching-rule
+digest, source stamps and SHA-256 file hashes. Dark flats match the selected
+flats' exposure, not the lights'. Kept-out and unrelated candidates do not travel.
+Shared calibration sets are stored once and referenced by each light. Unrelated
+quality-cache metadata and image previews are not copied into the manifest.
+The configured exclusion of uncalibratable lights applies. Missing image or
+calibration files wait for retry. Sources and selections are revalidated before
+delivery and after it; a changed cohort is held, not silently relabeled.
+
+**Stacks.** If flats require an across-change correction, raw delivery is held
+and the operator can choose an existing PSF Guard or WBPP stack. Resolve only
+recorded ready artifacts for the selected catalog, target and filter, and pin
+the artifact revision. PSF Guard stacks require exactly the selected integrated
+input IDs. WBPP's imported artifacts do not record those IDs, so their membership
+requires explicit operator confirmation and is labeled unverified. A stack is
+an integrated artifact, never an extra exposure or additional contribution
+credit. Automatic stack delivery selects PSF Guard artifacts only; WBPP remains
+manual until input provenance is available.
+
+**Transport.** Probe `/api/v1/files/projects` and the project's file listing
+using the existing agent credential. Require an open, collecting project and a
+Discord-associated owner. Remember the remote owner with the package and hold a
+change in owner for review. Stream each file through
+`PUT /api/v1/projects/{id}/files/{name}?kind=...`, sending Content-Length and the
+explicit light/flat/dark/bias/darkflat kind. Names contain the full SHA-256 and
+artifact role, so same-size files from different rigs cannot collide. Check
+the reply's name, kind, size and owner. This verifies receipt identity, not a
+server-computed checksum: current Starfront only deduplicates name and size.
+Stage one immutable file in the catalog cache during sending, hash-check it,
+and discard the temporary copy afterwards. Never rewrite an original or put an
+entire night's data in memory. The transfer worker is separate from control
+check-ins and never holds a database writer across file or network work.
+
+**Durability and controls.** Meta schema 32 adds a shared delivery ledger to
+transfer jobs, policies, package definitions, indexed artifacts, job receipts
+and activity summaries. The ledger key is canonical server URL, project, remote
+owner, kind and SHA-256 content hash; bytes must also match. Record it atomically
+with the job acknowledgment. Reuse it across jobs and calibration sets, never
+across different destinations or file revisions. Job-local receipts remain for
+progress and restart. Legacy receipts are preserved during migration; current
+remote listings can populate the ledger without sending those bytes again.
+Requests and prepared packages are durable;
+each file acknowledgment is committed before the next file. Compare-and-swap
+revisions keep an in-flight worker from undoing Pause or Cancel. Startup recovers
+Uploading to Queued and retains acknowledged files, while Paused/Review/Cancelled
+stay unchanged. Network errors, rate limits and full storage back off; credential,
+collection-policy, source or provenance conflicts need attention. Retry after an
+ambiguous receipt uses the same content name. Current Starfront does not resume
+byte ranges: an interrupted file restarts, not the entire package.
+Normal manual requests use **Upload pending** and authorize background preparation
+followed by upload. Automatic requests behave the same. Only exceptional
+calibration/provenance/destination conditions require review. WBPP retains its
+explicit input-membership confirmation. The legacy `prepare_transfer` operation
+still requires approval; opening an old prepared job never grants consent.
+Retrying an exception returns to review, including jobs first created by
+an automatic policy. A fresh manual request on the same held images also requires
+review. Disabling automatic uploads stops admitting new work;
+pause or cancel already queued work separately.
+Re-preparation clears local receipts and checks the current owner's remote file
+listing and destination-scoped ledger; acknowledgments from another owner cannot
+skip delivery. Automatic raw admission uses catalog GUIDs and cheap source stamps
+(path, size and modification time); only new or changed sources are hashed.
+Actual delivery identity is still the SHA-256 of the bytes, not a stamp. Completed
+sources whose stamps change become eligible again. New jobs are capped at 4,096
+images. Unfinished work stays reserved while running or paused. Held and
+cancelled requests need an operator retry, rather than being silently replaced
+by each new exposure. Stack selection keeps its full input cohort.
+
+Use the existing shutdown guard, stop claiming work when shutdown begins, and
+cancel a stalled HTTP stream while retaining the queue. Preparation observes
+shutdown between sources and hashing chunks. A forced exit is also recoverable
+because state does not depend on the last in-memory progress update.
+
+**UI and policy.** Contribution files sits beside the existing report review,
+not in a new catalog hierarchy. Automatic uploads default off and bind to the
+rig's current catalog identity; a replaced or ambiguous database cannot become
+the upload source. The same candidate grouping supplies manual and automatic
+work. The header adds a Transfers activity kind with file/byte progress and the
+same controls. Review, Paused, Retry and Needs attention are not running work and
+do not spin. Activity polling returns summaries, not every package's potentially
+large manifest; explicit inspection fetches one manifest. File delivery and
+scientific report delivery remain independent, with separate receipts.
+
+**Known upstream gap.** The current file API collects bytes by project/person/
+kind; it cannot associate a light with its flat/dark set or represent a corrected
+master dependency. Keep the versioned manifest locally and show that limitation
+with the transfer status. Do not claim the remote coordinator will reproduce PSF Guard's
+calibration merely because the selected files were delivered. A future upstream
+manifest extension can publish these relationships without changing acquisition
+or credit ownership. Do not automatically delete remote files after regrading;
+report corrections and withdrawals still need their own protocol.
+
+`POST /collaboration/{id}/work` adds `transfer_outputs`, `upload_pending`, `prepare_transfer`,
+`transfer_manifest`, `transfer_control` and `transfer_policy`. Mutations retain
+the operator and database-management gates. Preparation is queued rather than
+hashing within the request. `GET /transfers` returns durable activity summaries
+and non-secret policies for the header and rig setup.
+
 ## Delivery and validation
 
 This is an additive backlog, not a replacement for unfinished local Director
@@ -659,9 +835,12 @@ Starfront dependency.
    mixed-revision aggregates, precise polygon credit,
    and plugin-to-PSF Guard ownership handoff. Unattended report creation stays off
    for unresolved geometry or evidence-correction cases.
-5. **Future files extension.** Implement only after public routes, artifact
-   identity, retries and calibration/stack provenance are specified. Keep raw
-   image intake and collaborative contribution transport separate.
+5. **Starfront files (implemented).** Durable packages and file receipts,
+   exact export calibration selection, user-selected stack delivery, opt-in
+   background delivery and shutdown recovery. Remaining upstream: remote
+   calibration manifests, cryptographic receipts and byte-range resume. WBPP
+   automatic delivery awaits exact input provenance. Raw image intake and
+   collaborative contribution transport remain separate.
 
 Use AstroCollab's reference server, client proxy and conformance suite, plus an
 isolated Starfront server with copied fixtures. Then run the actual plugin and

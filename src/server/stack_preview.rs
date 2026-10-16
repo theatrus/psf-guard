@@ -2658,6 +2658,34 @@ fn validate_processing_revision(expected: Option<&str>, actual: &str) -> Result<
     Ok(())
 }
 
+/// Finished, catalog-owned artifacts; never resolve a caller-supplied path.
+pub(crate) fn contribution_outputs(
+    ctx: &DatabaseContext,
+    project: i32,
+    target: i32,
+) -> Vec<(LatestStackPreviewGroup, PathBuf)> {
+    let mut groups = std::fs::read(latest_path(&ctx.stack_root, project))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<LatestStackPreviews>(&bytes).ok())
+        .filter(|i| i.database_id == ctx.id && i.project_id == project)
+        .and_then(|i| current_project_latest_stacks(ctx, project, i).ok())
+        .map(|i| i.groups)
+        .unwrap_or_default();
+    groups.extend(wbpp_stacks::load_index(ctx, project).groups);
+    groups
+        .into_iter()
+        .filter(|g| g.group.target_id == target && g.group.state == StackGroupState::Ready)
+        .filter_map(|mut g| {
+            if validate_job_id(&g.job_id).is_err() {
+                return None;
+            }
+            let path = fits_path(&ctx.stack_root, &g.job_id, g.group.index);
+            g.group.strip_for_client();
+            path.is_file().then_some((g, path))
+        })
+        .collect()
+}
+
 fn stack_processing_source(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,

@@ -57,6 +57,28 @@ enum Input {
     },
     BackgroundRun {},
     ReportInputs {},
+    TransferOutputs {
+        selection: evidence::Selection,
+    },
+    PrepareTransfer {
+        request: transfers::Request,
+    },
+    UploadPending {
+        request: transfers::Request,
+    },
+    TransferControl {
+        id: Uuid,
+        revision: u64,
+        action: String,
+    },
+    TransferPolicy {
+        automatic: bool,
+        mode: String,
+    },
+    TransferManifest {
+        id: Uuid,
+        revision: u64,
+    },
     ReportCandidates {
         import_id: Uuid,
         catalog: String,
@@ -204,6 +226,26 @@ async fn execute(
             return background::status(state, service, &b).await;
         }
         Input::ReportInputs {} => return evidence::inputs(state, service, &b).await,
+        Input::TransferOutputs { selection } => {
+            return transfers::outputs(state, service, &b, selection.clone()).await
+        }
+        Input::PrepareTransfer { request } => {
+            return transfers::start(state, service, &b, request.clone(), false).await
+        }
+        Input::UploadPending { request } => {
+            return transfers::start(state, service, &b, request.clone(), true).await
+        }
+        Input::TransferControl {
+            id,
+            revision,
+            action,
+        } => return transfers::control(service, &b, *id, *revision, action.clone()).await,
+        Input::TransferPolicy { automatic, mode } => {
+            return transfers::policy(state, service, &b, *automatic, mode.clone()).await
+        }
+        Input::TransferManifest { id, revision } => {
+            return transfers::manifest_view(service, &b, *id, *revision).await
+        }
         Input::ReportCandidates {
             import_id,
             catalog,
@@ -408,6 +450,12 @@ async fn connected(
         | Input::PreviewReport { .. }
         | Input::QueueReport { .. }
         | Input::ReportInputs {}
+        | Input::TransferOutputs { .. }
+        | Input::PrepareTransfer { .. }
+        | Input::UploadPending { .. }
+        | Input::TransferControl { .. }
+        | Input::TransferPolicy { .. }
+        | Input::TransferManifest { .. }
         | Input::ReportCandidates { .. } => Err(invalid()),
         Input::Browse {} => {
             hello(service, b, remote, token).await?;

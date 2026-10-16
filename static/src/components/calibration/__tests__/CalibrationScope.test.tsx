@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { server } from '../../../test/msw-server';
 import CalibrationPage from '../CalibrationPage';
 import { listFilters } from '../useCalibrationUrlState';
@@ -105,6 +105,15 @@ function Header() {
   );
 }
 
+const pages: { client: QueryClient; unmount: () => void }[] = [];
+afterEach(async () => {
+  for (const { client, unmount } of pages.splice(0)) {
+    unmount();
+    await client.cancelQueries();
+    client.clear();
+  }
+});
+
 function renderPage(entry: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const wrapper = ({ children }: { children: ReactNode }) => (
@@ -116,7 +125,9 @@ function renderPage(entry: string) {
       </MemoryRouter>
     </QueryClientProvider>
   );
-  return render(<CalibrationPage />, { wrapper });
+  const page = render(<CalibrationPage />, { wrapper });
+  pages.push({ client, unmount: page.unmount });
+  return page;
 }
 
 const params = () => new URLSearchParams(screen.getByRole('status', { name: 'location' }).textContent ?? '');
@@ -141,9 +152,11 @@ describe('the Calibration page scoped to a project', () => {
     expect(await screen.findByRole('group', { name: 'Scope: M 44 on Demo' }, { timeout: 10_000 })).toHaveClass('is-set');
     // The one rig its lights use is the Rig filter's choice.
     await waitFor(() => expect(params().get('calRig')).toBe('askar'), { timeout: 10_000 });
-    await waitFor(() => expect(seen.sessions.at(-1)?.get('project')).toBe('7'));
-    expect(seen.sessions.at(-1)?.get('rig')).toBe('askar');
-    expect(seen.groups.at(-1)?.get('project')).toBe('7');
+    await waitFor(() => {
+      expect(seen.sessions.at(-1)?.get('project')).toBe('7');
+      expect(seen.sessions.at(-1)?.get('rig')).toBe('askar');
+    });
+    await waitFor(() => expect(seen.groups.at(-1)?.get('project')).toBe('7'));
     expect(await screen.findByTestId('calibration-scope-heading')).toHaveTextContent('· for M 44 · Askar 120');
     expect(screen.getByText(/What its 40 lights use: 1 session, 1 master/)).toBeInTheDocument();
     // The chip comes first in the filter bar, before Filters and the Rig pill.

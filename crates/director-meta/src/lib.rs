@@ -27,6 +27,7 @@ pub mod project;
 pub mod site_profile;
 mod storage;
 pub mod templates;
+pub mod transfer;
 pub mod workload;
 
 /// The most plans the plan list shows and a project order can rank. Every

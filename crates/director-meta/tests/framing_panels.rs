@@ -157,7 +157,7 @@ fn stored_grids_from_every_older_shape_become_their_panels_in_place() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        30
+        32
     );
     for (index, project) in projects[..4].iter().enumerate() {
         let stored = raw(&conn, *project);
@@ -467,7 +467,7 @@ fn a_schema_29_store_opens_unchanged_and_keeps_measured_panels() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        30
+        32
     );
     assert_eq!([raw(&conn, project), raw(&conn, plain)], before);
     assert_eq!(store.framing_draft(project).unwrap().unwrap(), saved);
