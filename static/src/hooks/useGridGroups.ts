@@ -10,6 +10,7 @@ import { useNightBoundary } from './useNightBoundary';
  * next and previous walk them: one helper for both, so they cannot drift.
  * `groupsIn(order)` gives the groups in either order; `ready` stays false in
  * a date grouping until the catalog's night boundary is in.
+ * `nightBoundarySeconds` is that boundary, for the night marks between cards.
  */
 export function useGridGroups(
   dbId: string | null | undefined,
@@ -23,5 +24,5 @@ export function useGridGroups(
     (order: ImageOrder) => groupImagesForGrid(images, groupingMode, order, { mosaic, nightBoundarySeconds }),
     [images, groupingMode, mosaic, nightBoundarySeconds],
   );
-  return { groupsIn, ready: !isDateGrouping(groupingMode) || night.ready };
+  return { groupsIn, nightBoundarySeconds, ready: !isDateGrouping(groupingMode) || night.ready };
 }

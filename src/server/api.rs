@@ -1186,6 +1186,11 @@ pub struct SequenceAnalysisQuery {
     pub penalty_satellite: Option<f64>,
     pub penalty_pointing: Option<f64>,
     pub penalty_temporal: Option<f64>,
+    /// How hard an HFR above, or a star count below, the sequence's good
+    /// frames marks a frame down: 0 not at all, 1 (default) the calibrated
+    /// tolerance band, up to 2 a band half as wide.
+    pub penalty_hfr_rise: Option<f64>,
+    pub penalty_star_loss: Option<f64>,
     /// Absolute reject limits: recommend rejection when measured HFR
     /// exceeds this value or the star count falls below it. Absent (the
     /// default) or non-positive disables the check.
@@ -1230,6 +1235,8 @@ pub struct ScoringOverrideQuery {
     pub penalty_satellite: Option<f64>,
     pub penalty_pointing: Option<f64>,
     pub penalty_temporal: Option<f64>,
+    pub penalty_hfr_rise: Option<f64>,
+    pub penalty_star_loss: Option<f64>,
     pub hfr_reject_above: Option<f64>,
     pub star_count_reject_below: Option<f64>,
 }
@@ -1246,6 +1253,12 @@ impl ScoringOverrideQuery {
         }
         if let Some(scale) = self.penalty_temporal {
             config.penalty_scales.temporal = scale;
+        }
+        if let Some(scale) = self.penalty_hfr_rise {
+            config.penalty_scales.hfr_rise = scale;
+        }
+        if let Some(scale) = self.penalty_star_loss {
+            config.penalty_scales.star_loss = scale;
         }
         if self.hfr_reject_above.is_some() {
             config.hfr_reject_above = self.hfr_reject_above;
@@ -1264,6 +1277,8 @@ impl SequenceAnalysisQuery {
             penalty_satellite: self.penalty_satellite,
             penalty_pointing: self.penalty_pointing,
             penalty_temporal: self.penalty_temporal,
+            penalty_hfr_rise: self.penalty_hfr_rise,
+            penalty_star_loss: self.penalty_star_loss,
             hfr_reject_above: self.hfr_reject_above,
             star_count_reject_below: self.star_count_reject_below,
         }

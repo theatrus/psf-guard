@@ -28,6 +28,20 @@ import { cardIsOnScreen, useReorderAnchor, viewIsAtRest } from '../hooks/useReor
 import { useNewFrameIds } from '../hooks/useNewFrames';
 import { inImageOrder, type ImageOrder } from '../utils/imageOrder';
 import { useProjectMosaic } from '../hooks/useProjectMosaic';
+import { useNightBoundary } from '../hooks/useNightBoundary';
+import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
+import TimeBreakMark from './TimeBreakMark';
+import SequenceCutoffControl from './SequenceCutoffControl';
+import {
+  cutoffMetricOf,
+  cutoffScale,
+  defaultCutoff,
+  formatCutoff,
+  metricValue,
+  pastCutoff,
+  type CutoffMetric,
+  type CutoffScale,
+} from '../utils/sequenceCutoff';
 import MosaicSequence from './MosaicSequence';
 import UndoRedoToolbar from './UndoRedoToolbar';
 import ImageCard from './ImageCard';
@@ -163,9 +177,11 @@ export default function SequenceView() {
   const requestedScoreScope = searchParams.get('scoreScope');
   const { order, setOrder } = useImageOrder();
   const {
-    cutoff: threshold,
+    metric: cutoffMetric,
+    cutoff: urlCutoff,
     rule: selectionRule,
-    setCutoff: setThreshold,
+    setCutoff,
+    setMetric: setCutoffMetric,
     setRule: setSelectionRule,
   } = useSequenceSelectionRule();
   const [showRejectReview, setShowRejectReview] = useState(false);
@@ -178,6 +194,7 @@ export default function SequenceView() {
   // from it were clicked by hand since. Null until the rule first runs.
   const ruleBaseRef = useRef<{ key: string; picks: Set<number> } | null>(null);
   const spatialScan = useSpatialScan(dbId, targetId ?? undefined, filterName);
+  const { boundarySeconds: nightBoundarySeconds } = useNightBoundary(dbId);
 
   // Fetch targets for the project to allow selection
   const { data: targets = [] } = useQuery({
@@ -370,6 +387,33 @@ export default function SequenceView() {
     [activeSequence, order],
   );
   const activeScoreScope: QualityScoreScope = activeChoice?.scoreScope ?? 'capture_sequence';
+  // The cutoff in the measure chosen: each frame's reading, the slider's
+  // travel over the readings on screen, and the frames past the cutoff,
+  // which the chart, the strip and the Below the cutoff rule share.
+  const metricValues = useMemo(() => new Map(
+    (activeSequence?.images ?? []).map(image => [
+      image.image_id,
+      metricValue(cutoffMetric, image, imageMap.get(image.image_id)),
+    ]),
+  ), [activeSequence, cutoffMetric, imageMap]);
+  const observedValues = useMemo(
+    () => [...metricValues.values()].filter((value): value is number => value !== null),
+    [metricValues],
+  );
+  const cutoffRange = useMemo(() => cutoffScale(cutoffMetric, observedValues), [cutoffMetric, observedValues]);
+  const threshold = useMemo(() => {
+    const wanted = urlCutoff ?? defaultCutoff(cutoffMetric, observedValues);
+    if (wanted === null || !cutoffRange) return null;
+    return Math.min(cutoffRange.max, Math.max(cutoffRange.min, wanted));
+  }, [cutoffMetric, cutoffRange, observedValues, urlCutoff]);
+  const pastCutoffIds = useMemo(() => {
+    const ids = new Set<number>();
+    if (threshold === null) return ids;
+    metricValues.forEach((value, id) => {
+      if (pastCutoff(cutoffMetric, value, threshold)) ids.add(id);
+    });
+    return ids;
+  }, [cutoffMetric, metricValues, threshold]);
   // Every basis score per frame, for the always-on chips: the session
   // score, and the all-sessions score for filters with several sessions.
   // Built for every filter in view so the chips never depend on which
@@ -559,8 +603,8 @@ export default function SequenceView() {
   // rule selects nothing until the pass that replaces them.
   const calibrationStale = projectId != null && calibration.staleProjects.has(projectId);
   const ruleInputs = useMemo(
-    () => ({ cutoff: threshold, calibration: calibration.marks, calibrationStale }),
-    [calibration.marks, calibrationStale, threshold],
+    () => ({ pastCutoff: pastCutoffIds, calibration: calibration.marks, calibrationStale }),
+    [calibration.marks, calibrationStale, pastCutoffIds],
   );
   const ruleCounts = useMemo(() => new Map(SELECTION_RULES.map(rule => [
     rule.id,
@@ -880,23 +924,13 @@ export default function SequenceView() {
               onChange={setImageSize}
               icons
             />
-            <span
-              className="toolbar-range"
-              title="Frames scoring under the cutoff are marked; the Below the cutoff rule selects them"
-            >
-              <label htmlFor="sequence-threshold">Cutoff</label>
-              <input
-                id="sequence-threshold"
-                aria-label="Score cutoff"
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={threshold}
-                onChange={(e) => setThreshold(parseFloat(e.target.value))}
-              />
-              <output htmlFor="sequence-threshold">{threshold.toFixed(2)}</output>
-            </span>
+            <SequenceCutoffControl
+              metric={cutoffMetric}
+              scale={cutoffRange}
+              value={threshold}
+              onMetricChange={setCutoffMetric}
+              onChange={setCutoff}
+            />
             <ScoringPenaltyControl />
           </>
         )}
@@ -909,7 +943,7 @@ export default function SequenceView() {
               pillClassName="sequence-select-rule"
               active={!!selectionRule}
               pillTitle={selectionRule
-                ? `${selectionRuleOf(selectionRule).description}. The rule stays on: it selects again when the cutoff or the scores change.`
+                ? `${selectionRuleOf(selectionRule, cutoffMetric).description}. The rule stays on: it selects again when the cutoff or the scores change.`
                 : 'Choose a rule to select frames. It stays on, and selects again when the cutoff or the scores change.'}
               value={selectionRule ?? ''}
               onChange={(e) => chooseRule(parseSelectionRule(e.target.value))}
@@ -923,8 +957,12 @@ export default function SequenceView() {
                     </option>
                   )
                   : (
-                    <option key={rule.id} value={rule.id} title={rule.description}>
-                      {rule.label} ({ruleCounts.get(rule.id) ?? 0})
+                    <option
+                      key={rule.id}
+                      value={rule.id}
+                      title={selectionRuleOf(rule.id, cutoffMetric).description}
+                    >
+                      {selectionRuleOf(rule.id, cutoffMetric).label} ({ruleCounts.get(rule.id) ?? 0})
                     </option>
                   )
               ))}
@@ -981,17 +1019,21 @@ export default function SequenceView() {
         )}
         // On a phone the cutoff slider folds away; its value stays in sight.
         menu={grading.canWrite ? <RescanImageFolders dbId={dbId ?? null} /> : undefined}
-        summary={<span className="toolbar-phone-only">Cutoff {threshold.toFixed(2)}</span>}
+        summary={threshold !== null && (
+          <span className="toolbar-phone-only">
+            {cutoffMetricOf(cutoffMetric).label} cutoff {formatCutoff(cutoffMetric, threshold)}
+          </span>
+        )}
         selection={(
           <SelectionBar
             className="sequence-selection-bar"
             count={selectedForReview.length}
             hint={selectionRule
-              ? `No frames match “${selectionRuleOf(selectionRule).label}”`
+              ? `No frames match “${selectionRuleOf(selectionRule, cutoffMetric).label}”`
               : 'Click frames, or choose a rule under Select frames'}
             note={selectionRule && (
               <>
-                Rule: {selectionRuleOf(selectionRule).label}
+                Rule: {selectionRuleOf(selectionRule, cutoffMetric).label}
                 {ruleHandChanges > 0 && ` · ${ruleHandChanges} changed by hand`}
               </>
             )}
@@ -1095,7 +1137,11 @@ export default function SequenceView() {
                 images={activeSequence.images}
                 imageMap={imageMap}
                 scoreScope={activeScoreScope}
+                metric={cutoffMetric}
+                metricValues={metricValues}
+                scale={cutoffRange}
                 threshold={threshold}
+                pastCutoffIds={pastCutoffIds}
                 currentImageId={activeImageId}
                 selectedImages={selectedImages}
                 onSelect={selectImage}
@@ -1119,8 +1165,9 @@ export default function SequenceView() {
                 filterName={activeSequence.filter_name}
                 currentImageId={activeImageId}
                 selectedImages={selectedImages}
-                threshold={threshold}
+                pastCutoffIds={pastCutoffIds}
                 imageSize={imageSize}
+                nightBoundarySeconds={nightBoundarySeconds}
                 stripRef={sequenceStripRef}
                 onSelect={selectImage}
                 onOpen={openImage}
@@ -1164,7 +1211,7 @@ export default function SequenceView() {
         <div className="reject-review-list">
           {selectedForReview.map(image => (
             <div key={image.image_id} className="reject-review-item">
-              <strong>Image {image.image_id}</strong> · score {image.quality_score.toFixed(2)}
+              <strong>Image {image.image_id}</strong> · score {Math.round(image.quality_score * 100)}
               <div className={image.regrade_reason ? 'reject-review-reason' : 'reject-review-warning'}>
                 {image.regrade_reason ?? 'Manually selected; no automatic rejection recommendation'}
               </div>
@@ -1230,7 +1277,11 @@ const SequenceTimeline = memo(function SequenceTimeline({
   images,
   imageMap,
   scoreScope,
+  metric,
+  metricValues,
+  scale,
   threshold,
+  pastCutoffIds,
   currentImageId,
   selectedImages,
   onSelect,
@@ -1239,7 +1290,15 @@ const SequenceTimeline = memo(function SequenceTimeline({
   /** The catalog rows, for each frame's grade; they reload after grading. */
   imageMap: ReadonlyMap<number, Image>;
   scoreScope: QualityScoreScope;
-  threshold: number;
+  /** What the bars measure, and each frame's reading in it. */
+  metric: CutoffMetric;
+  metricValues: ReadonlyMap<number, number | null>;
+  /** The slider's travel, which the Stars and HFR axis spans. */
+  scale: CutoffScale | null;
+  /** The cutoff in the measure's units, or null when no frame has a
+   *  reading to set one from. */
+  threshold: number | null;
+  pastCutoffIds: ReadonlySet<number>;
   currentImageId: number | null;
   selectedImages: Set<number>;
   onSelect: (id: number, event: React.MouseEvent) => void;
@@ -1267,9 +1326,21 @@ const SequenceTimeline = memo(function SequenceTimeline({
 
   const chartWidth = Math.max(400, viewportWidth);
   const chartHeight = 120;
-  const padding = { top: 10, right: 10, bottom: 20, left: 30 };
+  const padding = { top: 10, right: 10, bottom: 20, left: 36 };
   const innerWidth = chartWidth - padding.left - padding.right;
   const innerHeight = chartHeight - padding.top - padding.bottom;
+
+  // The score runs 0 to 100. Stars and HFR span the slider's range, with
+  // room below the lowest reading so its bar still shows: a session's HFR
+  // moves a few tenths, which bars from zero would flatten. The axis
+  // labels say where it starts.
+  const span = scale ? scale.max - scale.min : 0;
+  const axisMin = metric === 'score' || !scale ? 0 : Math.max(0, scale.min - span * 0.25);
+  const axisMax = metric === 'score' ? 100 : scale ? scale.max + span * 0.05 : 1;
+  const axisLabel = (value: number) => metric === 'hfr' ? value.toFixed(2) : String(Math.round(value));
+  const yOf = (value: number) => padding.top
+    + innerHeight * (1 - Math.min(1, Math.max(0, (value - axisMin) / (axisMax - axisMin))));
+  const measureLabel = metric === 'score' ? 'scores' : metric === 'stars' ? 'detected stars' : 'HFR';
 
   const barStep = innerWidth / images.length;
   const barWidth = Math.max(0.75, Math.min(10, barStep * 0.8));
@@ -1288,37 +1359,37 @@ const SequenceTimeline = memo(function SequenceTimeline({
           height={chartHeight}
           viewBox={`0 0 ${chartWidth} ${chartHeight}`}
           role="img"
-          aria-label={scoreScope === 'target_filter'
-            ? 'Target and filter stack comparison scores'
-            : 'Capture sequence comparison scores'}
+          aria-label={metric !== 'score'
+            ? `Frame ${measureLabel} through the sequence`
+            : scoreScope === 'target_filter'
+              ? 'Target and filter stack comparison scores'
+              : 'Capture sequence comparison scores'}
+          data-metric={metric}
         >
-        {/* Threshold line */}
-        <line
-          x1={padding.left}
-          y1={padding.top + innerHeight * (1 - threshold)}
-          x2={chartWidth - padding.right}
-          y2={padding.top + innerHeight * (1 - threshold)}
-          stroke="var(--color-warning)"
-          strokeWidth="1"
-          strokeDasharray="4,4"
-          opacity="0.6"
-        />
-
         {/* Y-axis labels */}
-        <text x={padding.left - 4} y={padding.top + 4} fontSize="9" fill="var(--color-text-muted)" textAnchor="end">1.0</text>
-        <text x={padding.left - 4} y={padding.top + innerHeight / 2 + 3} fontSize="9" fill="var(--color-text-muted)" textAnchor="end">0.5</text>
-        <text x={padding.left - 4} y={padding.top + innerHeight + 3} fontSize="9" fill="var(--color-text-muted)" textAnchor="end">0.0</text>
+        <text x={padding.left - 4} y={padding.top + 4} fontSize="9" fill="var(--color-text-muted)" textAnchor="end">{axisLabel(axisMax)}</text>
+        <text x={padding.left - 4} y={padding.top + innerHeight / 2 + 3} fontSize="9" fill="var(--color-text-muted)" textAnchor="end">{axisLabel((axisMin + axisMax) / 2)}</text>
+        <text x={padding.left - 4} y={padding.top + innerHeight + 3} fontSize="9" fill="var(--color-text-muted)" textAnchor="end">{axisLabel(axisMin)}</text>
 
         {/* Bars */}
         {images.map((img, i) => {
           const x = padding.left + i * barStep + (barStep - barWidth) / 2;
-          const barHeight = img.quality_score * innerHeight;
+          const reading = metricValues.get(img.image_id) ?? null;
+          const barHeight = reading === null ? 0 : padding.top + innerHeight - yOf(reading);
           const y = padding.top + innerHeight - barHeight;
+          // The score keeps its good, fair and poor colours. Stars and HFR
+          // show the frames past the cutoff in the poor colour.
+          const barFill = metric === 'score'
+            ? qualityColor(img.quality_score)
+            : pastCutoffIds.has(img.image_id) ? 'var(--color-score-poor)' : 'var(--color-chart-line)';
           const isSelected = selectedImages.has(img.image_id);
           const isCurrent = currentImageId === img.image_id;
           const image = imageMap.get(img.image_id);
           const mark = image ? gradeMark(image) : null;
-          const title = `${mark ? `${mark.label}. ` : ''}${qualityScoreDescription(img, scoreScope)}${
+          const readingText = metric === 'score'
+            ? ''
+            : ` ${metric === 'stars' ? 'Stars' : 'HFR'} ${reading === null ? 'not recorded' : formatCutoff(metric, reading)}.`;
+          const title = `${mark ? `${mark.label}. ` : ''}${qualityScoreDescription(img, scoreScope)}${readingText}${
             img.category ? ` ${formatCategory(img.category)}.` : ''
           }`;
 
@@ -1330,7 +1401,7 @@ const SequenceTimeline = memo(function SequenceTimeline({
                 y={y}
                 width={barWidth}
                 height={Math.max(1, barHeight)}
-                fill={qualityColor(img.quality_score)}
+                fill={barFill}
                 opacity={isSelected || isCurrent ? 1 : 0.7}
                 stroke={isCurrent
                   ? 'var(--state-on-border)'
@@ -1362,6 +1433,21 @@ const SequenceTimeline = memo(function SequenceTimeline({
             </g>
           );
         })}
+        {/* The cutoff line, over the bars so it shows where they cross it */}
+        {threshold !== null && (
+          <line
+            className="sequence-cutoff-line"
+            x1={padding.left}
+            y1={yOf(threshold)}
+            x2={chartWidth - padding.right}
+            y2={yOf(threshold)}
+            stroke="var(--color-warning)"
+            strokeWidth="1"
+            strokeDasharray="4,4"
+            opacity="0.8"
+            pointerEvents="none"
+          />
+        )}
         </svg>
       </div>
     </div>
@@ -1382,8 +1468,9 @@ const SequenceStrip = memo(function SequenceStrip({
   filterName,
   currentImageId,
   selectedImages,
-  threshold,
+  pastCutoffIds,
   imageSize,
+  nightBoundarySeconds,
   stripRef,
   onSelect,
   onOpen,
@@ -1403,8 +1490,11 @@ const SequenceStrip = memo(function SequenceStrip({
   filterName: string;
   currentImageId: number | null;
   selectedImages: Set<number>;
-  threshold: number;
+  /** Frames past the cutoff in the measure chosen, marked on their cards. */
+  pastCutoffIds: ReadonlySet<number>;
   imageSize: number;
+  /** Where the catalog's nights split, for the night marks between cards. */
+  nightBoundarySeconds: number;
   stripRef: RefObject<HTMLDivElement | null>;
   onSelect: (id: number, event: React.MouseEvent) => void;
   /** Open a light, on its calibration account with a finding chosen. */
@@ -1431,6 +1521,11 @@ const SequenceStrip = memo(function SequenceStrip({
     });
   }, [currentImageId, imageSize, stripRef]);
 
+  const marks = useMemo(
+    () => timeMarks(images.map((quality) => imageMap.get(quality.image_id)?.acquired_date), nightBoundarySeconds),
+    [imageMap, images, nightBoundarySeconds],
+  );
+
   return (
     <div
       ref={stripRef}
@@ -1439,7 +1534,7 @@ const SequenceStrip = memo(function SequenceStrip({
         gridTemplateColumns: thumbnailGridColumns(imageSize),
       }}
     >
-      {images.map(quality => {
+      {images.map((quality, index) => {
         const image = imageMap.get(quality.image_id) ?? {
           id: quality.image_id,
           project_id: projectId,
@@ -1454,28 +1549,31 @@ const SequenceStrip = memo(function SequenceStrip({
           metadata: {},
           filesystem_path: null,
         };
-        const belowThreshold = quality.quality_score < threshold;
+        const belowThreshold = pastCutoffIds.has(quality.image_id);
+        const slot = timeSlotAttributes(marks, index);
         return (
-          <ImageCard
-            key={quality.image_id}
-            dbId={dbId}
-            image={image}
-            quality={quality}
-            qualityScoreScope={scoreScope}
-            basisScores={basisScoresByImage.get(quality.image_id)}
-            calibration={calibrationByImage.get(quality.image_id)}
-            onCalibrationClick={(mark) => onOpen(quality.image_id, mark.codes[0])}
-            isSelected={selectedImages.has(quality.image_id)}
-            isNew={newImageIds.has(quality.image_id)}
-            onClick={(event) => onSelect(quality.image_id, event)}
-            onDoubleClick={() => onOpen(quality.image_id)}
-            lazyPreview
-            selectionEffects={false}
-            showTarget={false}
-            className={`sequence-image-card${
-              currentImageId === quality.image_id ? ' current-selection' : ''
-            }${belowThreshold ? ' below-threshold' : ''}`}
-          />
+          <div key={quality.image_id} className={slot.className} data-time-break={slot['data-time-break']}>
+            <TimeBreakMark marks={marks} index={index} />
+            <ImageCard
+              dbId={dbId}
+              image={image}
+              quality={quality}
+              qualityScoreScope={scoreScope}
+              basisScores={basisScoresByImage.get(quality.image_id)}
+              calibration={calibrationByImage.get(quality.image_id)}
+              onCalibrationClick={(mark) => onOpen(quality.image_id, mark.codes[0])}
+              isSelected={selectedImages.has(quality.image_id)}
+              isNew={newImageIds.has(quality.image_id)}
+              onClick={(event) => onSelect(quality.image_id, event)}
+              onDoubleClick={() => onOpen(quality.image_id)}
+              lazyPreview
+              selectionEffects={false}
+              showTarget={false}
+              className={`sequence-image-card${
+                currentImageId === quality.image_id ? ' current-selection' : ''
+              }${belowThreshold ? ' below-threshold' : ''}`}
+            />
+          </div>
         );
       })}
     </div>

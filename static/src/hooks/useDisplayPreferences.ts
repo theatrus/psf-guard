@@ -86,6 +86,8 @@ export interface DisplayPreferences {
   scoringPenaltySatellite?: number;
   scoringPenaltyPointing?: number;
   scoringPenaltyTemporal?: number;
+  scoringPenaltyHfrRise?: number;
+  scoringPenaltyStarLoss?: number;
   scoringHfrRejectAbove?: number | null;
   scoringStarCountRejectBelow?: number | null;
 }

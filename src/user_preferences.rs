@@ -148,6 +148,22 @@ pub const KNOWN_KEYS: &[(&str, PreferenceKind)] = &[
         },
     ),
     (
+        "scoringPenaltyHfrRise",
+        PreferenceKind::Number {
+            min: 0.0,
+            max: MAX_SCORING_PENALTY,
+            step: SCORING_PENALTY_STEP,
+        },
+    ),
+    (
+        "scoringPenaltyStarLoss",
+        PreferenceKind::Number {
+            min: 0.0,
+            max: MAX_SCORING_PENALTY,
+            step: SCORING_PENALTY_STEP,
+        },
+    ),
+    (
         "scoringHfrRejectAbove",
         PreferenceKind::Limit {
             max: MAX_HFR_REJECT_LIMIT,

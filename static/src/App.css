@@ -181,6 +181,17 @@
   --color-flat-group-3: rgb(125 205 150);
   --color-flat-group-4: rgb(205 140 230);
 
+  /* Night and hour marks in the gaps of the Images grid and the Sequence
+     strip: a line where a night or an hour begins, its label, and a faint
+     band behind every other night. */
+  --color-time-night-line: rgb(150 175 235 / 75%);
+  --color-time-night-label: rgb(200 212 245);
+  --color-time-night-label-bg: rgb(38 46 72);
+  --color-time-hour-line: rgb(255 255 255 / 16%);
+  --color-time-hour-label: var(--color-text-muted);
+  --color-time-hour-label-bg: var(--color-bg-tertiary);
+  --color-time-night-band: rgb(150 175 235 / 8%);
+
   /* Border Colors */
   --color-border-primary: #333;
   --color-border-secondary: #444;
@@ -5738,11 +5749,73 @@
 }
 
 .filter-images {
+  --card-gap: 1rem;
   display: grid;
-  gap: 1rem;
+  gap: var(--card-gap);
   padding: 1.5rem;
   transition: grid-template-columns 0.3s;
   align-items: start;
+}
+
+/* Night and hour marks between cards (TimeBreakMark). Everything sits in
+   the gaps or behind the cards, positioned absolutely or drawn as a shadow,
+   so no card moves for a mark. A line runs down the gap before the first
+   card of a night or an hour, its label sits in the gap above, and every
+   other night takes a faint band that fills the gaps around its cards, so
+   a night that wraps across rows still reads as one block. */
+.time-slot {
+  position: relative;
+}
+
+.time-slot.time-night-alt {
+  box-shadow: 0 0 0 calc(var(--card-gap) / 2) var(--color-time-night-band);
+}
+
+.time-slot[data-time-break]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--card-gap) / -2 - 1px);
+  width: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.time-slot[data-time-break='night']::before {
+  background: var(--color-time-night-line);
+}
+
+.time-slot[data-time-break='hour']::before {
+  left: calc(var(--card-gap) / -2 - 0.5px);
+  width: 1px;
+  background: var(--color-time-hour-line);
+}
+
+.time-break-label {
+  position: absolute;
+  z-index: 2;
+  bottom: 100%;
+  left: calc(var(--card-gap) / -2 - 1px);
+  margin-bottom: calc(var(--card-gap) / 2 - 0.4rem);
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  line-height: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.time-break-label[data-kind='night'] {
+  color: var(--color-time-night-label);
+  background: var(--color-time-night-label-bg);
+  font-weight: 600;
+}
+
+.time-break-label[data-kind='hour'] {
+  color: var(--color-time-hour-label);
+  background: var(--color-time-hour-label-bg);
 }
 
 /* Undo/Redo Toolbar */
@@ -6503,10 +6576,15 @@
 
 /* Time-ordered image gallery */
 .sequence-strip {
+  --card-gap: 0.5rem;
   display: grid;
-  gap: 0.5rem;
+  gap: var(--card-gap);
   padding: 0.75rem 1rem;
   align-items: flex-start;
+}
+
+.sequence-strip > .time-slot {
+  min-width: 0;
 }
 
 .sequence-image-card {

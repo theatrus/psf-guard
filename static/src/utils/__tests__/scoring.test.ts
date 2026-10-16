@@ -85,9 +85,11 @@ describe('scoring values', () => {
     expect(sameScoring(DEFAULTS, { ...DEFAULTS })).toBe(true);
     expect(sameScoring(DEFAULTS, { ...DEFAULTS, hfrRejectAbove: 3.5 })).toBe(false);
     expect(sameScoring(DEFAULTS, { ...DEFAULTS, temporal: 0 })).toBe(false);
+    expect(sameScoring(DEFAULTS, { ...DEFAULTS, hfrRise: 2 })).toBe(false);
+    expect(sameScoring(DEFAULTS, { ...DEFAULTS, starLoss: 0.5 })).toBe(false);
     expect(sameScoring({ ...DEFAULTS, hfrRejectAbove: null }, DEFAULTS)).toBe(true);
     expect(penaltyKeyOf({ ...DEFAULTS, satellite: 0.5, hfrRejectAbove: 4 }))
-      .toEqual([0.5, 1, 1, 4, null]);
+      .toEqual([0.5, 1, 1, 1, 1, 4, null]);
   });
 
   it('keeps the built-in values as they were', () => {
@@ -95,6 +97,8 @@ describe('scoring values', () => {
       satellite: 1,
       pointing: 1,
       temporal: 1,
+      hfrRise: 1,
+      starLoss: 1,
       hfrRejectAbove: null,
       starCountRejectBelow: null,
     });
@@ -107,6 +111,8 @@ describe('scoring defaults in the preferences document', () => {
       satellite: 0,
       pointing: 1.5,
       temporal: 1,
+      hfrRise: 2,
+      starLoss: 0.5,
       hfrRejectAbove: 2.55,
       starCountRejectBelow: null,
     };
@@ -115,6 +121,8 @@ describe('scoring defaults in the preferences document', () => {
       scoringPenaltySatellite: 0,
       scoringPenaltyPointing: 1.5,
       scoringPenaltyTemporal: 1,
+      scoringPenaltyHfrRise: 2,
+      scoringPenaltyStarLoss: 0.5,
       scoringHfrRejectAbove: 2.55,
       scoringStarCountRejectBelow: null,
     });
@@ -158,6 +166,8 @@ describe('a view\'s scoring in the link', () => {
       penaltySatellite: '0.5',
       penaltyPointing: '1',
       penaltyTemporal: '1',
+      penaltyHfrRise: '1',
+      penaltyStarLoss: '1',
       maxHfr: '3',
       minStars: '505',
     });
@@ -179,7 +189,8 @@ describe('a view\'s scoring in the link', () => {
 
   it('reads back what it writes', () => {
     const view: ScoringPreferences = {
-      satellite: 0, pointing: 1.2, temporal: 1, hfrRejectAbove: null, starCountRejectBelow: 40,
+      satellite: 0, pointing: 1.2, temporal: 1, hfrRise: 1.5, starLoss: 0, hfrRejectAbove: null,
+      starCountRejectBelow: 40,
     };
     const updates = scoringParamUpdates(view, defaults);
     const query = new URLSearchParams();

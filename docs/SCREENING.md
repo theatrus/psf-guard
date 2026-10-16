@@ -65,9 +65,13 @@ The signals feed two comparisons:
   stable by itself. It compares only frames with matching exposure, gain,
   offset, binning, readout, and sensor-region metadata.
 
-Both scores run from 0 to 1. They are relative ranks, not verdicts. Catalog
-star count, HFR, eccentricity, SNR, and background use a robust good reference
-with a no-penalty band for normal variation. When a fresh solve places a large
+Both scores run from 0 to 1, shown as 0 to 100 on the chips. They are
+relative ranks, not verdicts. Catalog star count, HFR, eccentricity, SNR, and
+background use a robust good reference with a no-penalty band for normal
+variation. Star count is measured against the sequence's 90th percentile and
+HFR against its 10th: at the calibrated penalty, a frame loses nothing within
+10% fewer stars or 5% more HFR, and that term reaches zero at 40% fewer stars
+or 30% more HFR. When a fresh solve places a large
 cataloged emission region in the field, raw background receives no score
 weight: lower can mean lost target signal, not a better frame. Matched-star
 transparency still detects that loss. Missing signals receive no weight.
@@ -159,7 +163,14 @@ scanned, and the values it wrote back are replaced.
 How hard event evidence hits the score is adjustable. The **Scoring**
 control in the Sequence view scales the score hit from satellite trails,
 pointing failures, and temporal anomalies between 0% (ignore that evidence),
-100% (the calibrated default), and 200% (double the hit). Setting the
+100% (the calibrated default), and 200% (double the hit).
+
+**HFR rise** and **Star loss** set, the same way, how hard a frame is marked
+down for an HFR above, or fewer stars than, the sequence's good frames. The
+scale divides both ends of the band above: at 200% a frame loses score from
+2.5% more HFR and reaches zero at 15%, at 50% the band doubles, and at 0%
+HFR or star count no longer separates frames. Unlike the Max HFR and Min
+stars limits below, these keep the score graded and relative to the night. Setting the
 satellite penalty to 0% turns satellite-trail checking off: trails neither
 lower the score nor drive reject recommendations, though a pixel-confirmed
 trail still shows as a warning — useful when trails are removed during
@@ -201,9 +212,9 @@ checks them too: a penalty from 0% to 200% in steps of 10%, a Max HFR above
 1,000,000. Either limit may be empty, which turns it off. A value outside
 them is refused and shown, never quietly changed.
 
-Once any value differs from your defaults, the address names all five:
-`penaltySatellite`, `penaltyPointing`, `penaltyTemporal` (1 is 100%),
-`maxHfr` and `minStars`, with `off` for a limit turned off. A link therefore
+Once any value differs from your defaults, the address names all of them:
+`penaltySatellite`, `penaltyPointing`, `penaltyTemporal`, `penaltyHfrRise`,
+`penaltyStarLoss` (1 is 100%), `maxHfr` and `minStars`, with `off` for a limit turned off. A link therefore
 scores the same for whoever opens it, whatever their defaults. A reload, the
 project's other targets, Images, the detail view and Stacks keep the view's
 scoring, so a frame scores the same everywhere in the project. Those views
@@ -220,8 +231,9 @@ loads.
 
 The zero-star cap does not scale: a frame measured to have no stars is
 ruined whatever the setting. API callers pass `penalty_satellite`,
-`penalty_pointing`, `penalty_temporal`, `hfr_reject_above`, or
-`star_count_reject_below` on the analysis endpoints.
+`penalty_pointing`, `penalty_temporal`, `penalty_hfr_rise`,
+`penalty_star_loss`, `hfr_reject_above`, or `star_count_reject_below` on the
+analysis endpoints.
 
 Capture sessions split at a Target Scheduler session change, a capture-profile
 change, or a 60-minute gap. Where a target and filter hold frames from two or
@@ -297,11 +309,25 @@ frames across two sessions. It reports profiles without enough matches instead
 of assigning them a perfect score. Stack previews use the same cross-session
 score when choosing a reference frame; profiles without enough matches keep
 their session score.
-Use the **Select** pill to pick frames by a rule: below the score cutoff,
-clouds or obstruction, off target, failed plate solve, recommended rejects,
-or poor calibration. Each choice shows how many frames it selects in the view
-on screen. A rule stays on, and the address keeps it as `selectRule` beside
-the `cutoff`: moving the cutoff, rescoring, or opening another session tab
+The **Cutoff** in the Sequence toolbar measures the **Score** (0 to 100, as
+the chips show it), **Stars** or **HFR**. The chart's bars, its dashed line,
+the slider and the marked cards follow the measure chosen. The Stars and HFR
+sliders run over the readings in the session on screen, and their cutoff
+starts where the score's own star or HFR term reaches zero at the calibrated
+penalty: 40% fewer stars than the session's 90th percentile, or an HFR 30%
+over its 10th. Fewer stars and a lower score fall below the cutoff; a larger
+HFR falls above it. The address keeps the measure as `cutoffBy` and each
+measure's cutoff on its own key, `cutoff` (the score as 0 to 1, as older
+links hold it), `starCutoff` and `hfrCutoff`, so switching back finds the
+cutoff where you left it.
+
+Use the **Select** pill to pick frames by a rule: past the cutoff, clouds or
+obstruction, off target, failed plate solve, recommended rejects, or poor
+calibration. The cutoff rule takes its name from the measure: **Below the
+cutoff**, **Fewer stars than the cutoff** or **HFR above the cutoff**. Each
+choice shows how many frames it selects in the view on screen. A rule stays
+on, and the address keeps it as `selectRule` beside the cutoff: moving the
+cutoff, changing its measure, rescoring, or opening another session tab
 selects again without choosing the rule a second time. Frames clicked by hand
 stay as you left them when the rule selects again. **×** beside the pill
 turns the rule off and keeps the frames; **Clear** empties the selection and
@@ -327,6 +353,19 @@ night's date. The boundary moves only when frames arrive in an hour the
 catalog had never captured in. That can move some frames to the neighbouring
 night, and a link naming only nights that no longer exist opens the default
 groups.
+
+### Night and hour marks
+
+Images and Sequence mark where the frames cross into another night or hour,
+so a long grid that wraps across many rows still shows the time passing. A
+line runs down the gap before the first frame of a night, with the night's
+date above it, and every other night takes a faint band behind its cards.
+Nights split where the catalog's nights split (see above), not at midnight.
+Thinner lines mark the hours, in the time the cards show: every hour while
+frames come every ten minutes or faster, every two or three hours for longer
+exposures, and none when even three hours would hold fewer than six frames.
+The marks sit in the gaps and behind the cards, so no card moves for them.
+Under a Date grouping each group is one night, so only the hours are marked.
 
 ### Order and new frames
 

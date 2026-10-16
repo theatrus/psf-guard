@@ -13,6 +13,8 @@ const NAMES = {
   satellite: 'Satellite trails (percent)',
   pointing: 'Pointing (percent)',
   temporal: 'Temporal anomalies (percent)',
+  hfrRise: 'HFR rise (percent)',
+  starLoss: 'Star loss (percent)',
   hfr: 'Max HFR (pixels)',
   stars: 'Min stars',
 };
@@ -52,6 +54,18 @@ describe('Settings › Review › Sequence scoring', () => {
     );
     expect(field(NAMES.hfr)).toHaveAccessibleDescription(/measured HFR.*Built in: off\.$/);
     expect(field(NAMES.stars)).not.toHaveAttribute('aria-label');
+  });
+
+  it('saves the HFR-rise and star-loss penalties', async () => {
+    const user = userEvent.setup();
+    render(<ScoringDefaultsSettings />);
+    expect(field(NAMES.hfrRise)).toHaveValue(100);
+    await user.clear(field(NAMES.hfrRise));
+    await user.type(field(NAMES.hfrRise), '150');
+    await user.clear(field(NAMES.starLoss));
+    await user.type(field(NAMES.starLoss), '0');
+    await user.click(save());
+    expect(scoringDefaults()).toEqual({ ...DEFAULTS, hfrRise: 1.5, starLoss: 0 });
   });
 
   it('saves what is edited, keeping focus on Save', async () => {

@@ -55,10 +55,10 @@ export function setScoringDefaults(next: ScoringPreferences): void {
 /** One snapshot per distinct set of values, so a caller can key effects
  *  and memos on it. */
 function useStableScoring(scoring: ScoringPreferences): ScoringPreferences {
-  const { satellite, pointing, temporal, hfrRejectAbove, starCountRejectBelow } = scoring;
+  const { satellite, pointing, temporal, hfrRise, starLoss, hfrRejectAbove, starCountRejectBelow } = scoring;
   return useMemo(
-    () => ({ satellite, pointing, temporal, hfrRejectAbove, starCountRejectBelow }),
-    [satellite, pointing, temporal, hfrRejectAbove, starCountRejectBelow],
+    () => ({ satellite, pointing, temporal, hfrRise, starLoss, hfrRejectAbove, starCountRejectBelow }),
+    [satellite, pointing, temporal, hfrRise, starLoss, hfrRejectAbove, starCountRejectBelow],
   );
 }
 
@@ -117,6 +117,8 @@ export function penaltyParamsOf(preferences: ScoringPreferences): PenaltyScalePa
   if (preferences.satellite !== 1) params.penalty_satellite = preferences.satellite;
   if (preferences.pointing !== 1) params.penalty_pointing = preferences.pointing;
   if (preferences.temporal !== 1) params.penalty_temporal = preferences.temporal;
+  if (preferences.hfrRise !== 1) params.penalty_hfr_rise = preferences.hfrRise;
+  if (preferences.starLoss !== 1) params.penalty_star_loss = preferences.starLoss;
   if (preferences.hfrRejectAbove != null) params.hfr_reject_above = preferences.hfrRejectAbove;
   if (preferences.starCountRejectBelow != null) {
     params.star_count_reject_below = preferences.starCountRejectBelow;

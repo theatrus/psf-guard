@@ -95,6 +95,8 @@ function stackScoringSettings(preferences: ScoringPreferences): StackScoringSett
     penalty_satellite: preferences.satellite,
     penalty_pointing: preferences.pointing,
     penalty_temporal: preferences.temporal,
+    penalty_hfr_rise: preferences.hfrRise,
+    penalty_star_loss: preferences.starLoss,
     hfr_reject_above: preferences.hfrRejectAbove,
     star_count_reject_below: preferences.starCountRejectBelow,
   };
@@ -107,6 +109,8 @@ function scoringPreferencesOf(settings: StackScoringSettings): ScoringPreference
     satellite: settings.penalty_satellite,
     pointing: settings.penalty_pointing,
     temporal: settings.penalty_temporal,
+    hfrRise: settings.penalty_hfr_rise ?? 1,
+    starLoss: settings.penalty_star_loss ?? 1,
     hfrRejectAbove: settings.hfr_reject_above,
     starCountRejectBelow: settings.star_count_reject_below,
   };

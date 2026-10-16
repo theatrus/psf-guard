@@ -37,6 +37,10 @@ describe('scoring request params', () => {
       penalty_satellite: 0,
       penalty_temporal: 1.5,
     });
+    expect(penaltyParamsOf({ ...DEFAULTS, hfrRise: 2, starLoss: 0 })).toEqual({
+      penalty_hfr_rise: 2,
+      penalty_star_loss: 0,
+    });
     expect(penaltyParamsOf({ ...DEFAULTS, hfrRejectAbove: 3.5, starCountRejectBelow: 50 })).toEqual({
       hfr_reject_above: 3.5,
       star_count_reject_below: 50,
@@ -164,7 +168,10 @@ describe('a view\'s scoring and its scope', () => {
     expect(keepScoringInScope(from, elsewhere).get('db')).toBe('main');
     const otherDb = new URLSearchParams(from);
     otherDb.set('db', 'second');
-    for (const name of ['penaltySatellite', 'penaltyPointing', 'penaltyTemporal', 'maxHfr', 'minStars']) {
+    for (const name of [
+      'penaltySatellite', 'penaltyPointing', 'penaltyTemporal', 'penaltyHfrRise', 'penaltyStarLoss',
+      'maxHfr', 'minStars',
+    ]) {
       expect(keepScoringInScope(from, otherDb).has(name)).toBe(false);
     }
   });

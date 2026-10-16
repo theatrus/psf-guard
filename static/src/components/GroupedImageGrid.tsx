@@ -59,6 +59,8 @@ import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calib
 import { useFlatGroupLights } from '../hooks/useFlatGroupLights';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import ScoringChangedNote from './ScoringChangedNote';
+import TimeBreakMark from './TimeBreakMark';
+import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
 
 interface GroupedImageGridProps {
@@ -317,10 +319,19 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // exactly as the detail view's next and previous walk them. Date groups
   // are observing nights, split where this catalog's nights split; they
   // wait for the boundary rather than open on UTC dates and move.
-  const { groupsIn, ready: groupsReady } = useGridGroups(dbId, filteredImages, groupingMode, mosaic);
+  const { groupsIn, nightBoundarySeconds, ready: groupsReady } = useGridGroups(dbId, filteredImages, groupingMode, mosaic);
   const isLoading = imagesLoading || !groupsReady;
   useStableScrollAnchor(containerRef, !isLoading);
   const imageGroups = useMemo(() => groupsIn(order), [groupsIn, order]);
+  // Where each group's frames cross into another night or hour, drawn in
+  // the gaps between cards.
+  const groupTimeMarks = useMemo(
+    () => new Map(imageGroups.map((group) => [
+      imageGroupKey(group),
+      timeMarks(group.images.map((image) => image.acquired_date), nightBoundarySeconds),
+    ])),
+    [imageGroups, nightBoundarySeconds],
+  );
 
   const visibleExpandedGroups = useMemo(
     () => resolveExpandedGroups(imageGroups, groupingMode, expandedGroups),
@@ -1168,19 +1179,23 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                       ['--card-height-estimate' as string]: `${thumbnailCardHeightEstimate(imageSize)}px`,
                     }}
                   >
-                    {group.images.map((image) => {
+                    {group.images.map((image, index) => {
                       const CardComponent = useLazyImages ? LazyImageCard : ImageCard;
+                      const marks = groupTimeMarks.get(groupKey) ?? null;
+                      const slot = timeSlotAttributes(marks, index);
                       return (
                         <div
                           key={image.id}
                           data-image-id={image.id}
                           data-scroll-anchor={`image:${image.id}`}
-                          className={`image-card-wrapper ${
+                          data-time-break={slot['data-time-break']}
+                          className={`image-card-wrapper ${slot.className} ${
                             selectedImages.has(image.id) ? 'multi-selected' : ''
                           } ${
                             image.id === activeImageId ? 'current-selection' : ''
                           }`}
                         >
+                          <TimeBreakMark marks={marks} index={index} />
                           <CardComponent
                             dbId={dbId!}
                             image={image}

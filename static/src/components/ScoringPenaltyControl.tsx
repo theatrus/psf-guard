@@ -20,7 +20,8 @@ const LIMIT_KEYS: LimitKey[] = ['hfrRejectAbove', 'starCountRejectBelow'];
 
 /**
  * The Sequence toolbar's Scoring control: how hard each kind of event
- * evidence hits the quality score, plus the absolute reject limits (HFR
+ * evidence, and an HFR rise or star loss against the sequence's good
+ * frames, hits the quality score, plus the absolute reject limits (HFR
  * ceiling, star-count floor).
  *
  * It starts from the person's defaults (Settings › Review). A change here
@@ -188,6 +189,14 @@ export default function ScoringPenaltyControl() {
         {slider(
           'temporal',
           'Score hit when a frame suddenly deviates from its neighbours.'
+        )}
+        {slider(
+          'hfrRise',
+          'How hard a frame is marked down for an HFR above the sequence\'s sharpest frames. At 100% the hit starts 5% over and reaches the full drop at 30% over; 200% halves both, 50% doubles them, 0% ignores HFR rises.'
+        )}
+        {slider(
+          'starLoss',
+          'How hard a frame is marked down for fewer stars than the sequence\'s best frames. At 100% the hit starts 10% under and reaches the full drop at 40% under; 200% halves both, 50% doubles them, 0% ignores star loss.'
         )}
         <span className="penalty-section">Reject limits</span>
         {limitInput(
