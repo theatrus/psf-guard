@@ -424,9 +424,13 @@ twice.
 
 Tick **Duplicates** among the Calibration page's filters
 (`calDupes=true` in the address) to list every exposure recorded more than
-once. The view checks the library when it opens and has no list yet, and
-**Check again** checks it afresh. Each group shows its files, which are
-missing, and which row a repair keeps. **Rig** and **Type** narrow the list, and the view offers no other
+once. The view keeps the last check's list and says when it was made
+("Checked 12 min ago"). When it opens with no list, or with one made before
+the calibration rows changed (a sync, an import, a repair from the command
+line), it checks again in the background, behind a person's work, while the
+old list stays in view. **Check again** checks at once. The check writes
+nothing, so a read-only account may run it. Each group shows its files,
+which are missing, and which row a repair keeps. **Rig** and **Type** narrow the list, and the view offers no other
 filters. A row whose file is gone only joins a twin that is on disk. A group
 whose copies are all on a disk that is not mounted is left alone. When only
 some of its copies are, a row on the unmounted disk reads as missing and
@@ -477,7 +481,10 @@ the new plan to Apply or close.
 A catalog is repaired by one process at a time. A repair holds a lock file
 beside the catalog (`<catalog>.psf-guard-repair.lock`), so a server and the
 command line cannot repair the same catalog at once. The second to start is
-refused and names the other. The file stays when the repair ends.
+refused: another repair of this catalog is running, from the command line
+or a server. The file stays when the repair ends. On a file system that
+cannot lock files, the repair goes ahead without the lock and logs a
+warning.
 
 From the command line, `psf-guard calibration repair-duplicates <db>
 --dry-run` prints the same plan without writing. Without `--dry-run` it
@@ -491,11 +498,14 @@ The API:
 
 - `GET /api/db/{db}/calibrations/duplicates` answers at once with the job's
   status. That holds `state` (`idle`, `running`, `done`, `stopped` or
-  `failed`), `action`, `stage`, `done` and `total`, and the run number. It
-  also holds the latest plan in `report`, with its `token`, the last applied
-  repair in `repaired`, and `changed` when a repair found the plan moved
-  on.
+  `failed`), `action`, `stage`, `done` and `total`, the run number, and
+  while it runs `priority` and `waiting_for`. It also holds the latest plan
+  in `report`, with its `token` and `checked_at`, `stale` when the
+  calibration rows have changed since, the last applied repair in
+  `repaired`, and `changed` when a repair found the plan moved on.
 - `POST …/duplicates/check` starts a check, or joins the one running.
+  `?automatic=true` runs it in the background; a person's check joining it
+  lifts it.
 - `POST …/duplicates/repair` with `{token}` starts a repair.
 - `POST …/duplicates/stop` stops the run.
 

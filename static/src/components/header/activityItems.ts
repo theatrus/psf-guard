@@ -302,16 +302,23 @@ function sitesItem(db: DatabaseActivity, sites: FrameSitesStatus): ActivityItem 
   };
 }
 
-/** A duplicate check or repair a person started on the Calibration page. */
+/** A duplicate check or repair on the Calibration page: a person's, or the
+ *  check the page starts on its own, which runs as background work and is
+ *  listed as waiting while it steps aside for a person's. */
 function duplicatesItem(db: DatabaseActivity, duplicates: CalibrationDuplicateStatus): ActivityItem {
   const search = new URLSearchParams({ db: db.dbId, calDupes: 'true' });
+  const background = duplicates.priority === 'background';
+  const waitingFor = duplicates.waiting_for ?? undefined;
   return {
     key: `duplicates:${db.dbId}`,
     kind: 'duplicates',
     title: duplicateJobTitle(duplicates),
     scope: db.dbName,
-    detail: duplicateJobLabel(duplicates),
-    status: 'running',
+    detail: waitingFor ? waitingDetail(waitingFor, duplicateJobLabel(duplicates)) : duplicateJobLabel(duplicates),
+    status: waitingFor ? 'waiting' : 'running',
+    waitingFor,
+    automatic: background,
+    background,
     percent: duplicateJobPercent(duplicates),
     stoppable: true,
     control: { kind: 'duplicates', dbId: db.dbId },

@@ -1935,9 +1935,11 @@ pub fn repair_lock_path(catalog: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Take `catalog`'s repair lock, without waiting. On a file system that
-/// cannot lock files the repair goes ahead unlocked, with a warning: a
-/// guard rail must not make the repair impossible.
+/// Take `catalog`'s repair lock, without waiting. Only another holder
+/// refuses the repair. A file system that cannot lock files (ENOLCK, or
+/// EOPNOTSUPP, which arrives uncategorised) lets it go ahead unlocked, with
+/// a warning: a guard rail must not make the repair impossible. A lock
+/// file that cannot be opened at all is an error.
 pub fn repair_lock(catalog: &Path) -> std::result::Result<RepairLock, RepairLockError> {
     let path = repair_lock_path(catalog);
     let file = std::fs::OpenOptions::new()
@@ -1949,16 +1951,13 @@ pub fn repair_lock(catalog: &Path) -> std::result::Result<RepairLock, RepairLock
     match file.try_lock() {
         Ok(()) => Ok(RepairLock { _file: Some(file) }),
         Err(std::fs::TryLockError::WouldBlock) => Err(RepairLockError::Busy),
-        Err(std::fs::TryLockError::Error(error))
-            if error.kind() == std::io::ErrorKind::Unsupported =>
-        {
+        Err(std::fs::TryLockError::Error(error)) => {
             tracing::warn!(
                 "{} cannot be locked ({error}); repairing without the lock",
                 path.display()
             );
             Ok(RepairLock { _file: None })
         }
-        Err(std::fs::TryLockError::Error(error)) => Err(RepairLockError::Failed(error)),
     }
 }
 

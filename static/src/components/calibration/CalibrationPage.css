@@ -629,7 +629,12 @@
 .calibration-duplicates-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
+}
+
+.calibration-checked-at {
+  font-size: 0.8rem;
 }
 
 /* A duplicate check or repair at work: what it does, how far, and Stop. */

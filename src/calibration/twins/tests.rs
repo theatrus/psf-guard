@@ -1066,3 +1066,135 @@ fn a_master_whose_row_went_or_moved_while_it_was_built_is_not_recorded() {
     record(&conn, &frames);
     assert!(master_uuids(&conn).is_empty());
 }
+
+// REVIEW #877: pins the record_master guard across two connections, as a
+// stack worker and a repair run on a file catalog: a build that read the
+// rows before Apply and records while Apply's transaction is open waits
+// for the commit, then sees its twin row gone and records nothing.
+#[test]
+fn review_877_a_master_recorded_during_apply_waits_and_is_left_out() {
+    use std::time::{Duration, Instant};
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("catalog.sqlite");
+    let mut conn = Connection::open(&catalog).unwrap();
+    let (_, uy) = two_twin_groups(&temp, &mut conn);
+    let report = duplicate_plan(&conn);
+    assert_eq!(report.groups.len(), 2);
+    // The build read Y's two rows before the repair began.
+    let frames = query_kind(&conn, CalibrationKind::Dark)
+        .unwrap()
+        .into_iter()
+        .filter(|frame| frame.frame_uuid == uy || frame.frame_uuid == "y-second")
+        .collect::<Vec<_>>();
+    assert_eq!(frames.len(), 2);
+
+    let (inside_tx, inside_rx) = std::sync::mpsc::channel::<()>();
+    let worker_catalog = catalog.clone();
+    let worker = std::thread::spawn(move || {
+        inside_rx.recv().unwrap();
+        let worker = Connection::open(&worker_catalog).unwrap();
+        worker.busy_timeout(Duration::from_secs(10)).unwrap();
+        record_master(
+            &worker,
+            CalibrationKind::Dark,
+            &frames,
+            "doubled-y",
+            Path::new("/masters/dark-doubled-y.fits"),
+            RecordedMaster {
+                exposure_seconds: Some(60.0),
+                statistics: serde_json::json!({}),
+            },
+            MasterInputs {
+                bias: None,
+                dark: None,
+                bias_dependency: None,
+                dark_dependency: None,
+            },
+        )
+        .unwrap();
+        Instant::now()
+    });
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let sent = std::cell::Cell::new(None::<Instant>);
+    super::apply_repair_with(
+        &mut conn,
+        &report,
+        &|done, _| {
+            if done == 1 {
+                // Inside Apply's transaction: let the build try to record.
+                inside_tx.send(()).unwrap();
+                sent.set(Some(Instant::now()));
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        },
+        &stop,
+    )
+    .unwrap();
+    let sent_at = sent.get();
+    let recorded_at = worker.join().unwrap();
+    assert!(
+        recorded_at.duration_since(sent_at.unwrap()) >= Duration::from_millis(250),
+        "the record waited for the repair to commit"
+    );
+    assert!(
+        master_uuids(&conn).is_empty(),
+        "a master averaging Y twice was recorded after the repair"
+    );
+}
+
+// REVIEW #877: a catalog in rollback-journal mode (the default) needs an
+// exclusive lock to COMMIT. When a reader outlasts the busy timeout the
+// COMMIT fails with SQLITE_BUSY and SQLite leaves the transaction open;
+// record_master returns the error without rolling back, so the stack
+// worker's connection keeps the write lock and every later record_master
+// on it writes into a transaction that is never committed.
+#[test]
+fn review_877_a_failed_commit_does_not_leave_record_master_inside_a_transaction() {
+    use std::time::Duration;
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("catalog.sqlite");
+    let (_, library) = two_copies(&temp);
+    let mut conn = Connection::open(&catalog).unwrap();
+    import_now(&mut conn, &[dark_at(&library, 1_000)]);
+    let frames = query_kind(&conn, CalibrationKind::Dark).unwrap();
+    drop(conn);
+
+    // A long reader holds a shared lock.
+    let reader = Connection::open(&catalog).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let _: i64 = reader
+        .query_row(
+            "SELECT COUNT(*) FROM psf_guard_calibration_frame",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let worker = Connection::open(&catalog).unwrap();
+    worker.busy_timeout(Duration::from_millis(50)).unwrap();
+    let result = record_master(
+        &worker,
+        CalibrationKind::Dark,
+        &frames,
+        "source-hash",
+        Path::new("/masters/dark.fits"),
+        RecordedMaster {
+            exposure_seconds: Some(60.0),
+            statistics: serde_json::json!({}),
+        },
+        MasterInputs {
+            bias: None,
+            dark: None,
+            bias_dependency: None,
+            dark_dependency: None,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "the COMMIT could not take the exclusive lock"
+    );
+    assert!(
+        worker.is_autocommit(),
+        "record_master left its own transaction open after a failed COMMIT"
+    );
+}

@@ -1963,11 +1963,12 @@ export const apiClient = {
   },
 
   /** Start a check for duplicates (or join the one running); poll the
-   *  status for its plan. */
-  checkCalibrationDuplicates: async (dbId: string): Promise<CalibrationDuplicateStatus> => {
+   *  status for its plan. `automatic` when the page starts it on its own:
+   *  it runs in the background and waits for a person's work. */
+  checkCalibrationDuplicates: async (dbId: string, automatic = false): Promise<CalibrationDuplicateStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<CalibrationDuplicateStatus>>(
-      dbPath(dbId, '/calibrations/duplicates/check')
+      dbPath(dbId, `/calibrations/duplicates/check${automatic ? '?automatic=true' : ''}`)
     );
     if (!data.data) throw new Error(data.error || 'Failed to check for calibration duplicates');
     return data.data;

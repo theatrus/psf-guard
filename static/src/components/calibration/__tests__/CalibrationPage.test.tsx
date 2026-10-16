@@ -560,11 +560,14 @@ describe('CalibrationPage', () => {
      * the next status read finishes unless `hold` keeps it going. `changed`
      * makes the first repair find the plan moved on.
      */
-    function serveDuplicates({ manage = true, changed = false }: { manage?: boolean; changed?: boolean } = {}) {
+    function serveDuplicates({ manage = true, changed = false, stale = false }: { manage?: boolean; changed?: boolean; stale?: boolean } = {}) {
       serve({ manage });
-      const seen = { checks: 0, repairs: [] as unknown[], stops: 0 };
+      const seen = { checks: 0, repairs: [] as unknown[], stops: 0, automatic: [] as boolean[] };
       const job = { hold: false };
-      let status: Record<string, unknown> = { ...IDLE };
+      // `stale`: the server kept a plan from before a sync changed the rows.
+      let status: Record<string, unknown> = stale
+        ? { ...IDLE, state: 'done', action: 'check', run: 1, report: report('t0'), checked_at: Date.now() / 1000 - 3600, stale: true }
+        : { ...IDLE };
       let finish: (() => void) | null = null;
       let applied = false;
       let plans = 0;
@@ -588,11 +591,12 @@ describe('CalibrationPage', () => {
           }
           return ok(status);
         }),
-        http.post('/api/db/demo/calibrations/duplicates/check', () => {
+        http.post('/api/db/demo/calibrations/duplicates/check', ({ request }) => {
           seen.checks += 1;
+          seen.automatic.push(new URL(request.url).searchParams.get('automatic') === 'true');
           if (status.state !== 'running') {
             begin('check', 'checking_files', 2140, () => {
-              status = { ...status, state: 'done', stage: null, done: 2140, report: plan(), checked_at: 1757600000 };
+              status = { ...status, state: 'done', stage: null, done: 2140, report: plan(), checked_at: Date.now() / 1000 - 120, stale: false };
             });
           }
           return HttpResponse.json({ success: true, data: status }, { status: 202 });
@@ -719,6 +723,45 @@ describe('CalibrationPage', () => {
       renderPage('/calibration?db=demo&calDupes=true');
       expect(await screen.findByText(/needs database management/, {}, POLL)).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Repair duplicates…' })).toBeNull();
+    });
+
+    it('checks in the background on arrival, and at once when asked', async () => {
+      const { seen } = serveDuplicates();
+      renderPage('/calibration?db=demo&calDupes=true');
+      const section = await screen.findByRole('region', { name: 'Duplicates' });
+      expect(await within(section).findByText('2 exposures recorded more than once', {}, POLL)).toBeInTheDocument();
+      expect(seen.automatic).toEqual([true]);
+      expect(within(section).getByText('Checked 2 min ago')).toBeInTheDocument();
+      fireEvent.click(within(section).getByRole('button', { name: 'Check again' }));
+      await waitFor(() => expect(seen.automatic).toEqual([true, false]));
+    });
+
+    it('keeps a plan the catalog has not moved on from, and checks again one it has', async () => {
+      const { seen } = serveDuplicates({ stale: true });
+      renderPage('/calibration?db=demo&calDupes=true');
+      const section = await screen.findByRole('region', { name: 'Duplicates' });
+      // The old plan shows while a background check makes the new one.
+      expect(await within(section).findByRole('listitem', { name: 'flat_0007.fits' })).toBeInTheDocument();
+      await waitFor(() => expect(seen.automatic).toEqual([true]));
+      expect(await within(section).findByText('Checked 2 min ago', {}, POLL)).toBeInTheDocument();
+      // The fresh plan is not stale: no further check.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(seen.checks).toBe(1);
+    });
+
+    // REVIEW #877: a read-only account without compute gets 403 from
+    // POST …/duplicates/check (auth.rs requires_write). Before the PR the
+    // GET computed the list, so such an account saw the duplicates.
+    it('does not leave a read-only viewer on "Checking the library…" forever', async () => {
+      serveDuplicates({ manage: false });
+      server.use(
+        http.post('/api/db/demo/calibrations/duplicates/check', () =>
+          HttpResponse.json({ success: false, data: null, error: 'This account has read-only access' }, { status: 403 })),
+      );
+      renderPage('/calibration?db=demo&calDupes=true');
+      const section = await screen.findByRole('region', { name: 'Duplicates' });
+      await waitFor(() => expect(within(section).getByRole('alert')).toBeInTheDocument(), POLL);
+      expect(within(section).queryByText('Checking the library…')).toBeNull();
     });
   });
 });

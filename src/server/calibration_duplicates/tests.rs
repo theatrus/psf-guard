@@ -66,11 +66,26 @@ impl Fixture {
     }
 
     async fn check(&self) -> DuplicateJobStatus {
-        let (code, Json(started)) = check_duplicates(State(Arc::clone(&self.state)), self.ctx())
-            .await
-            .unwrap();
+        self.check_as(false).await
+    }
+
+    /// A check the page starts on its own.
+    async fn check_as(&self, automatic: bool) -> DuplicateJobStatus {
+        let (code, Json(started)) = check_duplicates(
+            State(Arc::clone(&self.state)),
+            self.ctx(),
+            Query(CheckQuery { automatic }),
+        )
+        .await
+        .unwrap();
         assert_eq!(code, StatusCode::ACCEPTED);
         started.data.unwrap()
+    }
+
+    /// The status, as the page reads it.
+    async fn status(&self) -> DuplicateJobStatus {
+        let Json(now) = get_duplicates(self.ctx()).await;
+        now.data.unwrap()
     }
 
     async fn repair(&self, token: &str) -> Result<DuplicateJobStatus, AppError> {
@@ -327,4 +342,76 @@ fn plan_change_names_what_was_added_dropped_and_altered() {
     assert_eq!(change.dropped, ["c.fits"]);
     assert_eq!(change.altered, ["b.fits"]);
     assert_eq!((change.groups_before, change.groups_after), (3, 3));
+}
+
+#[tokio::test]
+async fn a_check_the_page_starts_runs_in_the_background_until_a_person_asks() {
+    let fixture = Fixture::new();
+    // A person's work is running: the background check waits for it.
+    let person = fixture.state.begin_named_interactive_job("a stack build");
+    let started = fixture.check_as(true).await;
+    assert_eq!(started.priority.as_deref(), Some("background"));
+    let began = Instant::now();
+    let waiting = loop {
+        let now = fixture.status().await;
+        if now.waiting_for.is_some() {
+            break now;
+        }
+        assert!(began.elapsed() < Duration::from_secs(10), "{now:?}");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert_eq!(waiting.state, "running");
+    assert_eq!(waiting.waiting_for.as_deref(), Some("a stack build"));
+    assert!(waiting.report.is_none());
+    // A person asking for a check joins it and lifts it.
+    assert_eq!(fixture.check().await.run, started.run);
+    let done = fixture.finished(started.run).await;
+    drop(person);
+    assert_eq!(done.state, "done", "{done:?}");
+    assert!(done.report.is_some());
+    assert!(done.waiting_for.is_none() && done.priority.is_none());
+
+    // With nobody's work running, a background check takes no guard and
+    // goes straight on.
+    let quiet = fixture.check_as(true).await;
+    let quiet = fixture.finished(quiet.run).await;
+    assert_eq!(quiet.state, "done");
+    assert!(!fixture.state.interactive_job_active());
+}
+
+#[tokio::test]
+async fn a_plan_goes_stale_when_the_catalog_rows_change() {
+    let fixture = Fixture::new();
+    let checked = fixture.check().await;
+    let done = fixture.finished(checked.run).await;
+    assert!(!done.stale);
+    assert!(!fixture.status().await.stale);
+
+    // Grading writes another table: the plan stays good.
+    Connection::open(fixture.path())
+        .unwrap()
+        .execute(
+            "INSERT INTO psf_guard_calibration_frame_quality (frame_uuid, grade, updated_at)
+             VALUES ('kept', 'good', 0)",
+            [],
+        )
+        .unwrap();
+    assert!(!fixture.status().await.stale);
+
+    // A sync, an import or a repair from the command line changes the rows.
+    Connection::open(fixture.path())
+        .unwrap()
+        .execute(
+            "INSERT INTO psf_guard_calibration_frame
+                (id, frame_uuid, rig_uuid, kind, source_path, source_fingerprint,
+                 captured_at, file_size, added_at, updated_at)
+             VALUES (3, 'synced', 'rig', 'dark', '/elsewhere/a.fits', 'f', 2000, 17, 0, 0)",
+            [],
+        )
+        .unwrap();
+    assert!(fixture.status().await.stale);
+    let again = fixture.check_as(true).await;
+    let again = fixture.finished(again.run).await;
+    assert!(!again.stale);
+    assert!(!fixture.status().await.stale);
 }

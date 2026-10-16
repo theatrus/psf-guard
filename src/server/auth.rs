@@ -900,9 +900,13 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
         return true;
     }
 
+    // A duplicate check reads rows and files and writes nothing. Its list
+    // was a GET any reader could load before it became a job, so a
+    // read-only account may run it too; the repair is an editor's.
     if path.ends_with("/images/generation-status")
         || path.ends_with("/stack-previews/calibration-masters/generation-status")
         || path.ends_with("/calibrations/generation-status")
+        || path.ends_with("/calibrations/duplicates/check")
     {
         return false;
     }
@@ -916,13 +920,10 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
     // but they do not change catalog grades, plans, files, or server config.
     // A page saying it shows a rig's flats lifts that rig's measuring for a
     // while, and may queue a check that writes flat measurements; it never
-    // changes the frames, grades or plans a catalog records. A duplicate
-    // check reads rows and files and writes nothing; the repair is an
-    // editor's.
+    // changes the frames, grades or plans a catalog records.
     !(path.ends_with("/astrometry")
         || path.ends_with("/satellites")
         || path.ends_with("/calibrations/flat-measure/watch")
-        || path.ends_with("/calibrations/duplicates/check")
         || path.contains("/stack-previews")
         || path == "/astrometry/catalogs/validate")
 }
@@ -1146,18 +1147,15 @@ mod tests {
                 true,
             ));
         }
-        // A duplicate check is a display calculation; the repair and Stop
-        // are an editor's.
-        assert!(!requires_write(
-            &Method::POST,
-            "/db/test/calibrations/duplicates/check",
-            true,
-        ));
-        assert!(requires_write(
-            &Method::POST,
-            "/db/test/calibrations/duplicates/check",
-            false,
-        ));
+        // Any reader may check for duplicates, as any reader could load
+        // the list; the repair and Stop are an editor's.
+        for can_compute in [true, false] {
+            assert!(!requires_write(
+                &Method::POST,
+                "/db/test/calibrations/duplicates/check",
+                can_compute,
+            ));
+        }
         for action in ["repair", "stop"] {
             assert!(requires_write(
                 &Method::POST,

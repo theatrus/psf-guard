@@ -7212,11 +7212,15 @@ fn record_master(
     let recorded =
         record_master_unless_changed(conn, kind, frames, source_hash, path, master, inputs);
     if own_transaction {
-        if recorded.is_ok() {
-            conn.execute_batch("COMMIT")?;
-        } else {
+        // A COMMIT that fails (SQLITE_BUSY while a reader outlasts the busy
+        // timeout, in rollback-journal mode) leaves the transaction open.
+        // Roll it back either way, or this connection keeps the write lock
+        // and every later write on it is lost with the transaction.
+        let committed = recorded.and_then(|()| Ok(conn.execute_batch("COMMIT")?));
+        if committed.is_err() && !conn.is_autocommit() {
             let _ = conn.execute_batch("ROLLBACK");
         }
+        return committed;
     }
     recorded
 }

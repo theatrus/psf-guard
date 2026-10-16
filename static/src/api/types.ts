@@ -3106,6 +3106,13 @@ export interface CalibrationDuplicateStatus {
    *  new plan. */
   changed: CalibrationPlanChange | null;
   error: string | null;
+  /** `interactive` for a run a person asked for, `background` for the
+   *  check a page starts on its own; while it runs. */
+  priority?: 'interactive' | 'background' | null;
+  /** What a person started that a background check waits for. */
+  waiting_for?: string | null;
+  /** The catalog's calibration rows changed since the plan was made. */
+  stale?: boolean;
 }
 
 /** Progress of the singleton per-DB import job (poll ~1s while running). */

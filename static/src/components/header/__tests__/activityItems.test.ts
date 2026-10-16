@@ -474,6 +474,18 @@ describe('duplicate checks and repairs in the job line', () => {
       ...db, duplicates: { ...idle, state: 'running', action: 'repair', stage: 'merging', done: 37, total: 203, run: 2 },
     }], []);
     expect(item).toMatchObject({ title: 'Repairing duplicates', detail: 'Merging 37 of 203' });
+    // The check a page starts on its own is background work, listed as
+    // waiting while it steps aside for a person's.
+    const [waiting] = activityItems([{
+      ...db, duplicates: {
+        ...idle, state: 'running', action: 'check', stage: 'checking_files', run: 3,
+        priority: 'background', waiting_for: 'a stack build',
+      },
+    }], []);
+    expect(waiting).toMatchObject({
+      status: 'waiting', waitingFor: 'a stack build', automatic: true, background: true,
+      detail: 'Waiting for a stack build · Checking files…',
+    });
     for (const state of ['idle', 'done', 'stopped', 'failed'] as const) {
       expect(activityItems([{ ...db, duplicates: { ...idle, state } }], [])).toEqual([]);
     }

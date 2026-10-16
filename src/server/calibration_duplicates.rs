@@ -2,20 +2,27 @@
 //! library records more than once, and merging them.
 //!
 //! Both are tracked jobs (see `docs/design/background-jobs.md`), one runner
-//! per catalog, at [`Priority::Interactive`]: a person starts each.
+//! per catalog. A check or repair a person asks for runs at
+//! [`Priority::Interactive`]; the check a page starts on its own when it
+//! opens on no plan, or a stale one, runs at [`Priority::Background`] and
+//! waits for a person's work, until a person asks for it.
 //!
 //! - **Check** (`POST …/duplicates/check`) reads the rows on its own
 //!   connection, then looks at the files of the rows that could be
-//!   duplicates on the interactive share's threads: "Checking files 812 of
-//!   2,140", then "Comparing copies". It leaves the plan, with its token, in
-//!   the status. Stop ends it at once.
+//!   duplicates on its share's threads: "Checking files 812 of 2,140", then
+//!   "Comparing copies". It leaves the plan, with its token and the
+//!   catalog's revision, in the status. Stop ends it at once. It writes
+//!   nothing, so a read-only account may run it.
 //! - **Repair** (`POST …/duplicates/repair {token}`) checks again, applies
 //!   only if the plan still has the previewed token, and merges in one
 //!   transaction: "Merging 37 of 203". Stop between exposures rolls the
 //!   whole repair back. When the plan has changed it applies nothing, and
 //!   says what changed beside the new plan. It holds the catalog's repair
 //!   lock, so the command line cannot repair the catalog meanwhile.
-//! - **Status** (`GET …/duplicates`) answers at once, from memory.
+//! - **Status** (`GET …/duplicates`) answers at once, from memory, and
+//!   says whether the plan is `stale`: whether the catalog's calibration
+//!   rows have changed since it was made (a sync, an import, a repair from
+//!   the command line), read from one aggregate query.
 //!
 //! Neither waits for the stack worker. A master a build records while a
 //! repair merges is guarded where it is recorded: one whose rows went or
@@ -24,7 +31,11 @@
 //! database's folders, as the browser reads them, and never moved or
 //! deleted.
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    Json,
+};
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -82,6 +93,17 @@ pub struct DuplicateJobStatus {
     /// changed. `report` is the new plan.
     pub changed: Option<PlanChange>,
     pub error: Option<String>,
+    /// `interactive` or `background`, while it runs.
+    pub priority: Option<String>,
+    /// What a person started that a background check waits for, while it
+    /// does.
+    pub waiting_for: Option<String>,
+    /// Whether the catalog's calibration rows changed since the plan was
+    /// made. Worked out by the status route.
+    pub stale: bool,
+    /// The catalog's revision when the plan was made.
+    #[serde(skip)]
+    revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -114,6 +136,9 @@ pub struct PlanChange {
 struct Job {
     status: RwLock<DuplicateJobStatus>,
     stop: AtomicBool,
+    /// Whether a person asked for the run: it runs at `Interactive`. A
+    /// background check a person joins turns interactive at its next step.
+    interactive: AtomicBool,
     /// Whether the catalog's one runner is at work.
     busy: Mutex<bool>,
     /// Holds a run at its next step until released or stopped, so a test
@@ -193,25 +218,63 @@ pub fn stop(path: &str) -> DuplicateJobStatus {
 
 #[derive(Debug, Clone)]
 enum Action {
-    Check,
-    Repair { token: String },
+    /// `automatic` when a page starts it on its own.
+    Check {
+        automatic: bool,
+    },
+    Repair {
+        token: String,
+    },
 }
 
 impl Action {
     fn name(&self) -> &'static str {
         match self {
-            Self::Check => "check",
+            Self::Check { .. } => "check",
             Self::Repair { .. } => "repair",
         }
     }
 
-    /// What the job line says the background work waits for.
-    fn waited_for(&self) -> &'static str {
-        match self {
-            Self::Check => "a duplicate check",
-            Self::Repair { .. } => "a duplicate repair",
-        }
+    fn automatic(&self) -> bool {
+        matches!(self, Self::Check { automatic: true })
     }
+}
+
+/// What the job line says background work waits for.
+fn waited_for(action: &str) -> String {
+    format!("a duplicate {action}")
+}
+
+/// A cheap stamp of the catalog's calibration rows: how many, the newest
+/// id and the newest change. A sync, an import, a forget, a merge or a
+/// repair from the command line moves it; grading and flat measuring,
+/// which write other tables, do not.
+fn catalog_revision(conn: &Connection) -> rusqlite::Result<String> {
+    if !calibration::schema_exists(conn) {
+        return Ok("none".into());
+    }
+    conn.query_row(
+        "SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(MAX(updated_at), 0)
+         FROM psf_guard_calibration_frame",
+        [],
+        |row| {
+            Ok(format!(
+                "{}:{}:{}",
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?
+            ))
+        },
+    )
+}
+
+fn open_read_only(path: &str) -> rusqlite::Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(conn)
 }
 
 /// Frees the runner if a run ends by a panic, or never starts. A run that
@@ -257,7 +320,12 @@ fn start(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if *busy {
             let running = job.status();
-            if matches!(action, Action::Check) && running.action.as_deref() == Some("check") {
+            if matches!(action, Action::Check { .. }) && running.action.as_deref() == Some("check")
+            {
+                // A person joining a background check lifts it.
+                if !action.automatic() {
+                    job.interactive.store(true, Ordering::SeqCst);
+                }
                 return Ok(running);
             }
             return Err(AppError::Conflict(format!(
@@ -265,21 +333,34 @@ fn start(
                 running.action.as_deref().unwrap_or("check")
             )));
         }
+        // Cleared under the runner's lock, so a Stop that comes as the run
+        // starts, which takes the same lock, is never lost.
+        job.stop.store(false, Ordering::SeqCst);
+        job.interactive.store(!action.automatic(), Ordering::SeqCst);
         *busy = true;
+        job.update(|status| {
+            status.run += 1;
+            status.state = "running".into();
+            status.action = Some(action.name().into());
+            status.stage = Some(STAGE_FILES.into());
+            status.done = 0;
+            status.total = 0;
+            status.started_at = Some(now());
+            status.finished_at = None;
+            status.changed = None;
+            status.error = None;
+            status.waiting_for = None;
+            status.priority = Some(
+                if action.automatic() {
+                    Priority::Background
+                } else {
+                    Priority::Interactive
+                }
+                .label()
+                .into(),
+            );
+        });
     }
-    job.stop.store(false, Ordering::SeqCst);
-    job.update(|status| {
-        status.run += 1;
-        status.state = "running".into();
-        status.action = Some(action.name().into());
-        status.stage = Some(STAGE_FILES.into());
-        status.done = 0;
-        status.total = 0;
-        status.started_at = Some(now());
-        status.finished_at = None;
-        status.changed = None;
-        status.error = None;
-    });
     let claim = RunnerClaim(Some(Arc::clone(&job)));
     let (state_for_run, ctx_for_run, job_for_run) =
         (Arc::clone(state), Arc::clone(ctx), Arc::clone(&job));
@@ -318,13 +399,14 @@ impl From<anyhow::Error> for Ended {
 
 fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &Job, action: &Action) {
     let began = std::time::Instant::now();
-    let ended = {
-        // A person started this: background work waits for it, and says
-        // so. Let go before the status says it is done.
-        let _person = state.begin_named_interactive_job(action.waited_for());
-        match action {
-            Action::Check => check(state, ctx, job),
-            Action::Repair { token } => repair(state, ctx, job, token),
+    // Let go of any guard before the status says the run is done.
+    let ended = match action {
+        Action::Check { .. } => check(state, ctx, job),
+        Action::Repair { token } => {
+            // A person started this: background work waits for it, and
+            // says so.
+            let _person = state.begin_named_interactive_job(waited_for("repair"));
+            repair(state, ctx, job, token)
         }
     };
     let elapsed = began.elapsed();
@@ -338,6 +420,8 @@ fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &Job, action: &Action)
     job.update(|status| {
         status.finished_at = Some(now());
         status.stage = None;
+        status.priority = None;
+        status.waiting_for = None;
         match &ended {
             Ok(()) => status.state = "done".into(),
             Err(Ended::Stopped) => status.state = "stopped".into(),
@@ -363,21 +447,61 @@ fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &Job, action: &Action)
     );
 }
 
+/// How often a background check looks again while a person's work runs.
+const WAIT_NAP: Duration = Duration::from_millis(250);
+
+/// A background check waits while a person's work runs, saying what for,
+/// until it may go on, a person asks for it (it turns interactive), Stop,
+/// or the server stops.
+fn wait_for_people(state: &AppState, job: &Job) -> Result<(), Ended> {
+    while let Some(name) = state.interactive_job_name() {
+        if job.interactive.load(Ordering::SeqCst) {
+            break;
+        }
+        if job.stop.load(Ordering::SeqCst) || state.shutdown.is_stopping() {
+            return Err(Ended::Stopped);
+        }
+        job.update(|status| {
+            if status.waiting_for.as_deref() != Some(name.as_str()) {
+                status.waiting_for = Some(name.clone());
+            }
+        });
+        std::thread::sleep(WAIT_NAP);
+    }
+    job.update(|status| status.waiting_for = None);
+    Ok(())
+}
+
 /// Plan from the catalog as it is now: the rows on a connection of the
-/// job's own, then the files on the interactive share's threads.
-fn plan(state: &AppState, ctx: &DatabaseContext, job: &Job) -> Result<DuplicateReport, Ended> {
-    let snapshot = {
-        let conn = Connection::open_with_flags(
-            &ctx.database_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        conn.busy_timeout(BUSY_TIMEOUT)?;
-        calibration::duplicate_snapshot(&conn)?
+/// job's own, then the files on the threads of its priority's share.
+/// Returns the plan and the catalog's revision it was made from.
+fn plan(
+    state: &AppState,
+    ctx: &DatabaseContext,
+    job: &Job,
+) -> Result<(DuplicateReport, String), Ended> {
+    if !job.interactive.load(Ordering::SeqCst) {
+        wait_for_people(state, job)?;
+    }
+    let priority = if job.interactive.load(Ordering::SeqCst) {
+        Priority::Interactive
+    } else {
+        Priority::Background
+    };
+    job.update(|status| status.priority = Some(priority.label().into()));
+    // A check a person asked for holds the guard, so background work steps
+    // aside for it. A repair holds its own as well.
+    let _person = (priority == Priority::Interactive)
+        .then(|| state.begin_named_interactive_job(waited_for("check")));
+    let (snapshot, revision) = {
+        let conn = open_read_only(&ctx.database_path)?;
+        let revision = catalog_revision(&conn)?;
+        (calibration::duplicate_snapshot(&conn)?, revision)
     };
     let roots = ReadableRoots::of(ctx);
     let files = FileAccess::resolving(move |path| roots.holds(path).then(|| path.to_path_buf()));
-    let budget = plan_workers(None, &state.worker_policy(), Priority::Interactive, None);
-    let lease = state.lease_workers(Priority::Interactive, budget.workers);
+    let budget = plan_workers(None, &state.worker_policy(), priority, None);
+    let lease = state.lease_workers(priority, budget.workers);
     let progress = |stage: CheckStage, done: usize, total: usize| {
         let stage = match stage {
             CheckStage::Files => STAGE_FILES,
@@ -390,16 +514,23 @@ fn plan(state: &AppState, ctx: &DatabaseContext, job: &Job) -> Result<DuplicateR
         progress: &progress,
         stop: &job.stop,
     };
-    calibration::plan_duplicate_repair_checked(&snapshot, &files, &checking)
-        .map_err(|_| Ended::Stopped)
+    let report = calibration::plan_duplicate_repair_checked(&snapshot, &files, &checking)
+        .map_err(|_| Ended::Stopped)?;
+    Ok((report, revision))
+}
+
+/// Keep `report` as the latest plan, made from `revision`.
+fn keep_plan(job: &Job, report: DuplicateReport, revision: String) {
+    job.update(|status| {
+        status.report = Some(report);
+        status.revision = Some(revision);
+        status.checked_at = Some(now());
+    });
 }
 
 fn check(state: &AppState, ctx: &DatabaseContext, job: &Job) -> Result<(), Ended> {
-    let report = plan(state, ctx, job)?;
-    job.update(|status| {
-        status.report = Some(report);
-        status.checked_at = Some(now());
-    });
+    let (report, revision) = plan(state, ctx, job)?;
+    keep_plan(job, report, revision);
     Ok(())
 }
 
@@ -419,14 +550,11 @@ fn repair(
         },
     )?;
     let previewed = job.status().report;
-    let report = plan(state, ctx, job)?;
+    let (report, revision) = plan(state, ctx, job)?;
     if report.token != token {
         let change = plan_change(previewed.as_ref(), &report);
-        job.update(|status| {
-            status.changed = Some(change);
-            status.report = Some(report);
-            status.checked_at = Some(now());
-        });
+        job.update(|status| status.changed = Some(change));
+        keep_plan(job, report, revision);
         return Ok(());
     }
     let mut conn = Connection::open_with_flags(
@@ -451,13 +579,10 @@ fn repair(
         Err(RepairError::Stale) => {
             // The rows changed between this run's check and its write:
             // check again, and say what changed.
-            let fresh = plan(state, ctx, job)?;
+            let (fresh, revision) = plan(state, ctx, job)?;
             let change = plan_change(Some(&report), &fresh);
-            job.update(|status| {
-                status.changed = Some(change);
-                status.report = Some(fresh);
-                status.checked_at = Some(now());
-            });
+            job.update(|status| status.changed = Some(change));
+            keep_plan(job, fresh, revision);
             return Ok(());
         }
         Err(RepairError::Failed(error)) => return Err(Ended::Failed(format!("{error:#}"))),
@@ -476,6 +601,7 @@ fn repair(
     let run = job.status().run;
     job.update(|status| {
         status.report = None;
+        status.revision = None;
         status.checked_at = None;
         status.repaired = Some(Repaired {
             run,
@@ -580,16 +706,45 @@ fn after_repair(state: &Arc<AppState>, ctx: &DatabaseContext, rigs: Vec<String>)
 /// GET /api/db/{db}/calibrations/duplicates — where the check or repair
 /// stands, with the latest plan. Never does the work itself.
 pub async fn get_duplicates(ctx: DbContext) -> Json<ApiResponse<DuplicateJobStatus>> {
-    Json(ApiResponse::success(status(&ctx.database_path)))
+    let mut status = status(&ctx.database_path);
+    // Whether the plan still describes the catalog: one aggregate query on
+    // a connection of its own, and none while a run is going.
+    if status.state != "running"
+        && let Some(made_from) = status.revision.clone()
+    {
+        let path = ctx.database_path.clone();
+        let now = tokio::task::spawn_blocking(move || {
+            open_read_only(&path).and_then(|conn| catalog_revision(&conn))
+        })
+        .await;
+        status.stale = matches!(now, Ok(Ok(now)) if now != made_from);
+    }
+    Json(ApiResponse::success(status))
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct CheckQuery {
+    /// A page started it on its own, because it had no plan or a stale
+    /// one: it runs at `Background`.
+    #[serde(default)]
+    pub automatic: bool,
 }
 
 /// POST /api/db/{db}/calibrations/duplicates/check — check the library
-/// for duplicates: `202` and the status, which the page polls.
+/// for duplicates: `202` and the status, which the page polls. It writes
+/// nothing, so any account that may read the catalog may run it.
 pub async fn check_duplicates(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
+    Query(query): Query<CheckQuery>,
 ) -> Result<(StatusCode, Json<ApiResponse<DuplicateJobStatus>>), AppError> {
-    let status = start(&state, &ctx.0, Action::Check)?;
+    let status = start(
+        &state,
+        &ctx.0,
+        Action::Check {
+            automatic: query.automatic,
+        },
+    )?;
     Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(status))))
 }
 

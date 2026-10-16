@@ -71,6 +71,16 @@ function changeLines(change: CalibrationPlanChange): string[] {
   return lines;
 }
 
+/** "just now", "12 min ago", "3 h ago", or the date. */
+function checkedAgo(at: number, now = Date.now() / 1000): string {
+  const minutes = Math.floor(Math.max(0, now - at) / 60);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return serverTime(at);
+}
+
 /** A check or repair at work: what it does, how far, and Stop. */
 function JobProgress({ status, onStop, stopping, canStop }: {
   status: CalibrationDuplicateStatus;
@@ -86,6 +96,7 @@ function JobProgress({ status, onStop, stopping, canStop }: {
         <span className="calibration-spinner" aria-hidden="true" />
         <span className="calibration-dup-progress-label">
           <strong>{duplicateJobTitle(status)}</strong> · {label}
+          {status.waiting_for && <span className="calibration-muted"> · waiting for {status.waiting_for}</span>}
         </span>
         {canStop && (
           <button type="button" className="tool-button" disabled={stopping} onClick={onStop}
@@ -129,8 +140,10 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
   const [repairRun, setRepairRun] = useState<number | null>(null);
   const store = (fresh: CalibrationDuplicateStatus) => queryClient.setQueryData(duplicatesKey(dbId), fresh);
 
+  // `true` for the check the view starts on its own, which runs in the
+  // background; a click runs one at once.
   const checking = useMutation({
-    mutationFn: () => apiClient.checkCalibrationDuplicates(dbId),
+    mutationFn: (automatic: boolean = false) => apiClient.checkCalibrationDuplicates(dbId, automatic),
     onSuccess: store,
   });
   const repairing = useMutation({
@@ -146,16 +159,18 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
     onSuccess: store,
   });
 
-  // With no plan known, and none on the way, the view checks on arrival,
-  // and again after a repair applied. A check that stopped or failed waits
-  // for a person to ask again.
+  // With no plan known, or one the catalog has moved on from (a sync, an
+  // import, a repair from the command line), the view checks on its own, in
+  // the background; so too after a repair applied. A check that stopped or
+  // failed, or that the server refused, waits for a person to ask again.
   const autoRun = useRef<number | null>(null);
   useEffect(() => {
-    if (!data || data.report || data.state === 'running' || checking.isPending) return;
+    if (!data || data.state === 'running' || checking.isPending) return;
+    if (data.report && !data.stale) return;
     if (data.action === 'check' && (data.state === 'stopped' || data.state === 'failed')) return;
     if (autoRun.current === data.run) return;
     autoRun.current = data.run;
-    checking.mutate();
+    checking.mutate(true);
   }, [data, checking]);
 
   // A repair that applied leaves the library changed everywhere.
@@ -177,7 +192,7 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
   );
   const total = report?.groups.length ?? 0;
   const startPreview = () => {
-    checking.mutate(undefined, {
+    checking.mutate(false, {
       onSuccess: (fresh) => setDialog({ phase: 'preview', run: fresh.run }),
     });
   };
@@ -191,6 +206,9 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
   const dialogRunning = !dialogStatus || dialogStatus.state === 'running';
   const checkStopped = data?.action === 'check' && !running && !report && (data.state === 'stopped' || data.state === 'failed');
   const startError = checking.error ?? repairing.error ?? stopping.error;
+  // The check could not start (the server refused it): say so, rather than
+  // "Checking the library…" for ever.
+  const checkRefused = !!checking.error && !running && !report;
 
   return (
     <section className="calibration-duplicates" aria-label="Duplicates">
@@ -202,14 +220,18 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
               : `${groups.length} of ${plural(total, 'exposure')} recorded more than once`}
           </p>
         )}
-        {!report && !checkStopped && !running && (
+        {!report && !checkStopped && !running && !checkRefused && (
           <p className="calibration-muted calibration-count">Checking the library…</p>
         )}
         {!running && report && (
           <span className="calibration-duplicates-actions">
+            {data?.checked_at != null && (
+              <span className="calibration-muted calibration-checked-at" title={serverTime(data.checked_at)}>
+                Checked {checkedAgo(data.checked_at)}
+              </span>
+            )}
             <button type="button" className="tool-button" disabled={checking.isPending}
-              title={data?.checked_at ? `Checked ${serverTime(data.checked_at)}` : undefined}
-              onClick={() => checking.mutate()}>
+              onClick={() => checking.mutate(false)}>
               Check again
             </button>
             {canRepair && total > 0 && (
@@ -235,13 +257,17 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
       {checkStopped && (
         <p className={data?.state === 'failed' ? 'calibration-error' : 'calibration-notice'} role={data?.state === 'failed' ? 'alert' : 'status'}>
           {data?.state === 'failed' ? `Could not check for duplicates: ${data.error ?? 'unknown error'}` : 'The check for duplicates was stopped.'}{' '}
-          <button type="button" className="link-button" disabled={checking.isPending} onClick={() => checking.mutate()}>
+          <button type="button" className="link-button" disabled={checking.isPending} onClick={() => checking.mutate(false)}>
             Check again
           </button>
         </p>
       )}
       {status.error && <p className="calibration-error">Could not check for duplicates: {status.error.message}</p>}
-      {startError && !dialog && <p className="calibration-error" role="alert">{startError.message}</p>}
+      {startError && !dialog && (
+        <p className="calibration-error" role="alert">
+          {checking.error ? `Could not check for duplicates: ${checking.error.message}` : startError.message}
+        </p>
+      )}
       {report && total === 0 && (
         <p className="calibration-empty">No exposure is recorded more than once.</p>
       )}

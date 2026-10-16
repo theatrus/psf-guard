@@ -58,7 +58,10 @@
   Stop. A stopped repair writes nothing. Apply no longer fails because a
   stack recorded a master or grading ran since the preview. When the
   duplicates themselves changed, it shows what changed and the new plan.
-  The command line and a server can no longer repair one catalog at once.
+  The list says when it was checked. It checks again in the background
+  when the calibration rows have changed since. Read-only accounts see it
+  too. The command line and a server can no longer repair one catalog at
+  once.
 - Collaboration imports preserve Starfront's physical-filter/data-band mapping
   and OSC camera and Bortle limits in reviewed plans. Reports carry the data
   bands explicitly, and work for bands disabled by the project stays held.
