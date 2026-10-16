@@ -1,10 +1,11 @@
 import type { CalibrationLightMark, ImageQualityResult } from '../api/types';
+import { cutoffMetricOf, type CutoffMetric } from './sequenceCutoff';
 
 /**
  * The Sequence view's selection rules. A rule chosen in the Select frames
  * field stays on, in the URL, and selects again whenever its answer
- * changes: the score cutoff moves, a scan rescores the frames, the
- * calibration marks arrive, or another session tab opens.
+ * changes: the cutoff moves or measures something else, a scan rescores
+ * the frames, the calibration marks arrive, or another session tab opens.
  */
 export type SelectionRuleId =
   | 'below-cutoff'
@@ -55,27 +56,24 @@ export const SELECTION_RULES: readonly SelectionRule[] = [
   },
 ];
 
-export const DEFAULT_SCORE_CUTOFF = 0.5;
-
 const POINTING_FLAGS = new Set(['off_target', 'pointing_jump', 'pointing_drift', 'rotation_skew']);
 
 export function parseSelectionRule(raw: string | null | undefined): SelectionRuleId | null {
   return SELECTION_RULES.find((rule) => rule.id === raw)?.id ?? null;
 }
 
-export function selectionRuleOf(id: SelectionRuleId): SelectionRule {
-  return SELECTION_RULES.find((rule) => rule.id === id)!;
-}
-
-/** The cutoff the URL holds, between 0 and 1; the default otherwise. */
-export function parseScoreCutoff(raw: string | null | undefined): number {
-  if (raw === null || raw === undefined || raw.trim() === '') return DEFAULT_SCORE_CUTOFF;
-  const value = Number(raw);
-  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : DEFAULT_SCORE_CUTOFF;
+/** A rule as the Select field names it. Below the cutoff takes its name
+ *  from what the cutoff measures. */
+export function selectionRuleOf(id: SelectionRuleId, metric: CutoffMetric = 'score'): SelectionRule {
+  const rule = SELECTION_RULES.find((candidate) => candidate.id === id)!;
+  if (id !== 'below-cutoff') return rule;
+  const info = cutoffMetricOf(metric);
+  return { ...rule, label: info.ruleLabel, description: info.ruleDescription };
 }
 
 interface RuleInputs {
-  cutoff: number;
+  /** The frames past the cutoff in the measure chosen (sequenceCutoff.ts). */
+  pastCutoff: ReadonlySet<number>;
   calibration: ReadonlyMap<number, CalibrationLightMark>;
   /** The project's calibration marks came before a change and wait for a
    *  pass. Fine to show; not to select from, since a reject follows. */
@@ -85,7 +83,7 @@ interface RuleInputs {
 function matches(rule: SelectionRuleId, image: ImageQualityResult, inputs: RuleInputs): boolean {
   switch (rule) {
     case 'below-cutoff':
-      return image.quality_score < inputs.cutoff;
+      return inputs.pastCutoff.has(image.image_id);
     case 'clouded':
       // A detector named the evidence; a low relative score alone must not
       // pass for a diagnosis.

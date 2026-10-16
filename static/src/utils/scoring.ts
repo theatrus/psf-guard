@@ -2,6 +2,10 @@
  * How hard each kind of event evidence hits the quality score, and the
  * absolute reject limits. Each penalty multiplies that evidence's built-in
  * hit: 0 ignores it, 1 keeps the calibrated behavior, 2 doubles it.
+ * HFR rise and star loss scale how hard an HFR above, or a star count
+ * below, the sequence's good frames marks a frame down: the server narrows
+ * the no-penalty band and the drop to zero by the same factor, so at 200%
+ * half the drop costs as much, and at 0 it costs nothing.
  *
  * The values here are pure; where a view gets them from is in
  * hooks/useScoringPreferences.ts.
@@ -10,6 +14,8 @@ export interface ScoringPreferences {
   satellite: number;
   pointing: number;
   temporal: number;
+  hfrRise: number;
+  starLoss: number;
   /** Absolute HFR ceiling: recommend rejecting frames whose measured HFR
    * exceeds this. `null` turns the check off. */
   hfrRejectAbove: number | null;
@@ -19,7 +25,7 @@ export interface ScoringPreferences {
 }
 
 export type ScoringField = keyof ScoringPreferences;
-export type PenaltyKey = 'satellite' | 'pointing' | 'temporal';
+export type PenaltyKey = 'satellite' | 'pointing' | 'temporal' | 'hfrRise' | 'starLoss';
 export type LimitKey = 'hfrRejectAbove' | 'starCountRejectBelow';
 
 /** The calibrated, built-in values. They never change: a person's own
@@ -28,6 +34,8 @@ export const SCORING_DEFAULTS: ScoringPreferences = Object.freeze({
   satellite: 1,
   pointing: 1,
   temporal: 1,
+  hfrRise: 1,
+  starLoss: 1,
   hfrRejectAbove: null,
   starCountRejectBelow: null,
 });
@@ -70,6 +78,14 @@ export const SCORING_RULES: Record<ScoringField, ScoringRule> = {
   },
   temporal: {
     label: 'Temporal anomalies', min: 0, max: MAX_SCORING_PENALTY, step: SCORING_PENALTY_STEP,
+    optional: false, percent: true, unit: 'percent', error: 'Enter 0 to 200%, in steps of 10.',
+  },
+  hfrRise: {
+    label: 'HFR rise', min: 0, max: MAX_SCORING_PENALTY, step: SCORING_PENALTY_STEP,
+    optional: false, percent: true, unit: 'percent', error: 'Enter 0 to 200%, in steps of 10.',
+  },
+  starLoss: {
+    label: 'Star loss', min: 0, max: MAX_SCORING_PENALTY, step: SCORING_PENALTY_STEP,
     optional: false, percent: true, unit: 'percent', error: 'Enter 0 to 200%, in steps of 10.',
   },
   hfrRejectAbove: {
@@ -148,6 +164,8 @@ export function penaltyKeyOf(preferences: ScoringPreferences): (number | null)[]
     preferences.satellite,
     preferences.pointing,
     preferences.temporal,
+    preferences.hfrRise,
+    preferences.starLoss,
     preferences.hfrRejectAbove,
     preferences.starCountRejectBelow,
   ];
@@ -197,6 +215,8 @@ export const SCORING_PREFERENCE_KEYS = {
   satellite: 'scoringPenaltySatellite',
   pointing: 'scoringPenaltyPointing',
   temporal: 'scoringPenaltyTemporal',
+  hfrRise: 'scoringPenaltyHfrRise',
+  starLoss: 'scoringPenaltyStarLoss',
   hfrRejectAbove: 'scoringHfrRejectAbove',
   starCountRejectBelow: 'scoringStarCountRejectBelow',
 } as const satisfies Record<ScoringField, string>;
@@ -205,6 +225,8 @@ export type ScoringPreferenceFields = {
   scoringPenaltySatellite: number;
   scoringPenaltyPointing: number;
   scoringPenaltyTemporal: number;
+  scoringPenaltyHfrRise: number;
+  scoringPenaltyStarLoss: number;
   scoringHfrRejectAbove: number | null;
   scoringStarCountRejectBelow: number | null;
 };
@@ -225,6 +247,8 @@ export function fieldsFromScoring(scoring: ScoringPreferences): ScoringPreferenc
     scoringPenaltySatellite: normalized.satellite,
     scoringPenaltyPointing: normalized.pointing,
     scoringPenaltyTemporal: normalized.temporal,
+    scoringPenaltyHfrRise: normalized.hfrRise,
+    scoringPenaltyStarLoss: normalized.starLoss,
     scoringHfrRejectAbove: normalized.hfrRejectAbove,
     scoringStarCountRejectBelow: normalized.starCountRejectBelow,
   };
@@ -243,7 +267,7 @@ export function storedScoringFields(stored: unknown): Record<string, unknown> {
 /*
  * The current view's own scoring, in the link. While the view scores as
  * the defaults do, the link names none of it, and whoever opens it scores
- * with their own defaults. Once any value differs, the link names all five,
+ * with their own defaults. Once any value differs, the link names them all,
  * so whoever opens it sees the same scores and reject recommendations.
  *
  * It belongs to the database and project it was set in: moving to another
@@ -254,6 +278,8 @@ export const SCORING_PARAMS = {
   satellite: 'penaltySatellite',
   pointing: 'penaltyPointing',
   temporal: 'penaltyTemporal',
+  hfrRise: 'penaltyHfrRise',
+  starLoss: 'penaltyStarLoss',
   hfrRejectAbove: 'maxHfr',
   starCountRejectBelow: 'minStars',
 } as const satisfies Record<ScoringField, string>;
@@ -267,15 +293,32 @@ function paramValue(key: ScoringField, text: string | null): number | null | und
   return scoringValue(key, Number(text));
 }
 
-/** The view's scoring: each value the link names, over the defaults. */
+/** Values added after links began naming every value: a link from before
+ *  them names the rest but not these. */
+const SCORING_ADDED_LATER: readonly ScoringField[] = ['hfrRise', 'starLoss'];
+
+/** The view's scoring: each value the link names, over the defaults. A
+ *  link that names any value but not one added since was made before it
+ *  existed, and scored with its built-in value; it takes that, not the
+ *  opener's default, so the link still scores as it did. */
 export function scoringFromParams(
   params: { get(name: string): string | null },
   defaults: ScoringPreferences,
 ): ScoringPreferences {
   const scoring = { ...defaults };
+  let namesAny = false;
   for (const key of SCORING_KEYS) {
     const value = paramValue(key, params.get(SCORING_PARAMS[key]));
-    if (value !== undefined) (scoring as Record<ScoringField, number | null>)[key] = value;
+    if (value === undefined) continue;
+    namesAny = true;
+    (scoring as Record<ScoringField, number | null>)[key] = value;
+  }
+  if (namesAny) {
+    for (const key of SCORING_ADDED_LATER) {
+      if (paramValue(key, params.get(SCORING_PARAMS[key])) === undefined) {
+        (scoring as Record<ScoringField, number | null>)[key] = SCORING_DEFAULTS[key];
+      }
+    }
   }
   return scoring;
 }

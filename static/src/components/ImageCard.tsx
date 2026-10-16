@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, type CSSProperties } from 'react';
 import { useInView } from 'react-intersection-observer';
 import type { CalibrationLightMark, Image, ImageCopy, ImageQualityResult } from '../api/types';
 
@@ -61,6 +61,17 @@ export interface ImageCardProps {
   /** Captured since the last visit from the Library (see isNewFrame): a
    *  small dot before the date. */
   isNew?: boolean;
+}
+
+/** The preview's shape: the frame's own, so a square or 4:3 sensor fills
+ *  its card as a 3:2 one does, held between a portrait 3:5 and a 5:2 strip
+ *  so an odd ROI cannot make a card absurd. Without a size, the 3:2 in
+ *  App.css. */
+function previewShape(image: Image): CSSProperties | undefined {
+  const size = image.frame_size;
+  if (!size || size.width <= 0 || size.height <= 0) return undefined;
+  const ratio = Math.min(2.5, Math.max(0.6, size.width / size.height));
+  return { aspectRatio: String(ratio) };
 }
 
 export default function ImageCard({
@@ -176,7 +187,7 @@ export default function ImageCard({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <div className="image-preview">
+      <div className="image-preview" style={previewShape(image)}>
         {shouldLoadPreview ? (
           <PreviewImage
             dbId={dbId}

@@ -58,7 +58,12 @@ const mockImages = normalFixture.data.sequences[0].images.map((img, i) => ({
   filter_name: 'L',
   grading_status: 0,
   reject_reason: null,
-  metadata: { FileName: `image_${img.image_id}.fits` },
+  // HFR 2.0 to 2.9 and stars 1000 down to 550, in card order.
+  metadata: {
+    FileName: `image_${img.image_id}.fits`,
+    HFR: Number((2 + i * 0.1).toFixed(2)),
+    DetectedStars: 1000 - i * 50,
+  },
   filesystem_path: `/images/image_${img.image_id}.fits`,
 }));
 
@@ -751,14 +756,12 @@ describe('SequenceView: interactions', () => {
       expect(screen.getByLabelText('Select frames')).toBeInTheDocument();
     });
 
-    // Default threshold is 0.50. With the normal fixture, images below 0.50 would be none.
-    // Instead, test with the default threshold -- just click the button and verify behavior.
-    // The default threshold of 0.50 won't select any normal fixture images (all are >= 0.70),
-    // so let's use fireEvent to set the threshold to 0.80.
+    // The default cutoff of 50 selects none of the fixture's frames (all
+    // score 70 or more), so move it to 80.
     const slider = screen.getByLabelText('Score cutoff');
     // fireEvent is more reliable for range inputs than userEvent
     const { fireEvent } = await import('@testing-library/react');
-    fireEvent.change(slider, { target: { value: '0.80' } });
+    fireEvent.change(slider, { target: { value: '80' } });
 
     await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
 
@@ -829,7 +832,7 @@ describe('SequenceView: interactions', () => {
     fireEvent.click(cards[0]);
     fireEvent.click(cards[8]);
 
-    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '0.80' } });
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '80' } });
     await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
     await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
 
@@ -966,7 +969,7 @@ describe('SequenceView: selection rules', () => {
     await cards();
 
     const cutoff = screen.getByLabelText('Score cutoff');
-    fireEvent.change(cutoff, { target: { value: '0.80' } });
+    fireEvent.change(cutoff, { target: { value: '80' } });
     expect(screen.getByRole('option', { name: 'Below the cutoff (4)' })).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
     await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
@@ -977,9 +980,9 @@ describe('SequenceView: selection rules', () => {
     expect(document.querySelector('.sequence-selection-bar')).toHaveTextContent('Rule: Below the cutoff');
 
     // No reselecting: the rule answers again for each cutoff.
-    fireEvent.change(cutoff, { target: { value: '0.75' } });
+    fireEvent.change(cutoff, { target: { value: '75' } });
     await waitFor(() => expect(screen.getByText('2 selected')).toBeInTheDocument());
-    fireEvent.change(cutoff, { target: { value: '0.85' } });
+    fireEvent.change(cutoff, { target: { value: '85' } });
     await waitFor(() => expect(screen.getByText('6 selected')).toBeInTheDocument());
     expect(params().get('selectRule')).toBe('below-cutoff');
   });
@@ -990,7 +993,7 @@ describe('SequenceView: selection rules', () => {
     renderWithLocation();
     const strip = await cards();
 
-    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '0.80' } });
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '80' } });
     await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
     await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
 
@@ -1000,7 +1003,7 @@ describe('SequenceView: selection rules', () => {
     await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
     expect(document.querySelector('.sequence-selection-bar')).toHaveTextContent('2 changed by hand');
 
-    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '0.85' } });
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '85' } });
     // The rule adds 0.83; 0.70 stays out and 0.82 stays in.
     await waitFor(() => expect(screen.getByText('5 selected')).toBeInTheDocument());
     expect(strip[0]).toHaveClass('selected');
@@ -1016,14 +1019,14 @@ describe('SequenceView: selection rules', () => {
     await cards();
 
     const cutoff = screen.getByLabelText('Score cutoff');
-    fireEvent.change(cutoff, { target: { value: '0.80' } });
+    fireEvent.change(cutoff, { target: { value: '80' } });
     await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
     await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: 'Stop rule' }));
     await waitFor(() => expect(params().get('selectRule')).toBeNull());
     expect(screen.getByLabelText('Select frames')).toHaveValue('');
-    fireEvent.change(cutoff, { target: { value: '0.90' } });
+    fireEvent.change(cutoff, { target: { value: '90' } });
     await waitFor(() => expect(params().get('cutoff')).toBe('0.90'));
     expect(screen.getByText('4 selected')).toBeInTheDocument();
 
@@ -1040,8 +1043,68 @@ describe('SequenceView: selection rules', () => {
     renderWithLocation('/sequence?db=test&project=1&target=1&cutoff=0.80&selectRule=below-cutoff');
     await cards();
     await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
-    expect(screen.getByLabelText('Score cutoff')).toHaveValue('0.8');
+    expect(screen.getByLabelText('Score cutoff')).toHaveValue('80');
     expect(screen.getByLabelText('Select frames')).toHaveValue('below-cutoff');
+  });
+
+  it('cuts by HFR over the readings on screen, and the rule follows', async () => {
+    setupDefaultHandlers();
+    const user = userEvent.setup();
+    const params = renderWithLocation();
+    await cards();
+
+    await user.selectOptions(screen.getByLabelText('Cutoff measure'), 'hfr');
+    await waitFor(() => expect(params().get('cutoffBy')).toBe('hfr'));
+    const slider = screen.getByLabelText('HFR cutoff');
+    expect(slider).toHaveAttribute('min', '2');
+    expect(slider).toHaveAttribute('max', '2.9');
+    // The default sits 30% over the sharp frames' 10th percentile, 2.09.
+    expect(slider).toHaveValue('2.72');
+    expect(document.querySelector('.sequence-timeline svg')).toHaveAttribute('data-metric', 'hfr');
+
+    fireEvent.change(slider, { target: { value: '2.65' } });
+    // Kept as a share of the sharp frames' 10th-percentile HFR, 2.09.
+    await waitFor(() => expect(params().get('hfrCutoff')).toBe('1.2679'));
+    expect(screen.getByRole('option', { name: 'HFR above the cutoff (3)' })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
+    await waitFor(() => expect(screen.getByText('3 selected')).toBeInTheDocument());
+    const strip = document.querySelectorAll('.sequence-image-card');
+    expect(strip[9]).toHaveClass('below-threshold');
+    expect(strip[0]).not.toHaveClass('below-threshold');
+
+    // Stars count fewer as worse; the rule selects again in the new measure.
+    await user.selectOptions(screen.getByLabelText('Cutoff measure'), 'stars');
+    fireEvent.change(screen.getByLabelText('Stars cutoff'), { target: { value: '720' } });
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+    expect(document.querySelector('.sequence-selection-bar')).toHaveTextContent('Rule: Fewer stars than the cutoff');
+
+    // Back to the score: its slider runs 0 to 100, and the others keep theirs.
+    await user.selectOptions(screen.getByLabelText('Cutoff measure'), 'score');
+    await waitFor(() => expect(params().get('cutoffBy')).toBeNull());
+    expect(screen.getByLabelText('Score cutoff')).toHaveAttribute('max', '100');
+    expect(params().get('hfrCutoff')).toBe('1.2679');
+    // 720 of the 90th-percentile 955 stars.
+    expect(params().get('starCutoff')).toBe('0.7539');
+  });
+
+  it('marks where the frames cross into another hour without moving a card', async () => {
+    setupDefaultHandlers();
+    server.use(http.get('/api/db/:dbId/images', () => HttpResponse.json({
+      success: true,
+      // Ten minutes apart over an hour and a half.
+      data: mockImages.map((image, i) => ({ ...image, acquired_date: 1705352400 + i * 600 })),
+      error: null,
+      status: 'ready',
+    })));
+    renderWithLocation();
+    await cards();
+    await waitFor(() => {
+      expect(document.querySelectorAll(".sequence-strip > .time-slot[data-time-break='hour']").length)
+        .toBeGreaterThan(0);
+    });
+    expect(document.querySelectorAll(".sequence-strip > .time-slot[data-time-break='night']")).toHaveLength(0);
+    expect(document.querySelectorAll('.sequence-strip > .time-slot')).toHaveLength(10);
+    expect(document.querySelector('.time-break-label')?.textContent).toMatch(/^\d\d:00$/);
   });
 
   it('keeps the clicks a reloaded URL carries', async () => {
@@ -1130,7 +1193,7 @@ describe('SequenceView: multi-session', () => {
 
     await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
     await user.click(screen.getByRole('button', { name: 'Review rejection' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent('Image 201 · score 0.42');
+    expect(screen.getByRole('dialog')).toHaveTextContent('Image 201 · score 42');
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
     const sessionTabs = screen.getAllByRole('button', { name: /L · .* \(5\)/ });

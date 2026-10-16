@@ -1217,6 +1217,8 @@ fn scoring_overrides(scoring: &StackScoringSettings) -> ScoringOverrideQuery {
         penalty_satellite: Some(scoring.penalty_satellite),
         penalty_pointing: Some(scoring.penalty_pointing),
         penalty_temporal: Some(scoring.penalty_temporal),
+        penalty_hfr_rise: Some(scoring.penalty_hfr_rise),
+        penalty_star_loss: Some(scoring.penalty_star_loss),
         hfr_reject_above: scoring.hfr_reject_above,
         star_count_reject_below: scoring.star_count_reject_below,
     }

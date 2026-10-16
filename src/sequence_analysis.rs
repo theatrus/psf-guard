@@ -1027,7 +1027,10 @@ enum ScoreScope {
 /// the hit. Separate from [`QualityWeights`], which balances the *measured
 /// metrics* inside the composite: these scale the score *caps and penalties*
 /// applied after it — a satellite trail, a pointing failure, a temporal
-/// anomaly. The zero-star cap is deliberately not scalable: a frame measured
+/// anomaly. `hfr_rise` and `star_loss` scale how hard a frame is marked down
+/// for an HFR above, or a star count below, the sequence's good frames:
+/// they narrow or widen the tolerance band around that reference rather
+/// than change the metric's weight. The zero-star cap is deliberately not scalable: a frame measured
 /// to have no stars is ruined whatever the operator's preferences.
 /// One `#[serde(default)]` at the struct level: missing fields come from
 /// the `Default` impl below, the single place the 1.0 calibration lives.
@@ -1040,6 +1043,11 @@ pub struct PenaltyScales {
     pub pointing: f64,
     /// The temporal-anomaly multiplicative penalty.
     pub temporal: f64,
+    /// HFR above the sequence's good frames (see [`HFR_TOLERANCE`]).
+    pub hfr_rise: f64,
+    /// Stars fewer than the sequence's good frames (see
+    /// [`STAR_COUNT_TOLERANCE`]).
+    pub star_loss: f64,
 }
 
 impl Default for PenaltyScales {
@@ -1048,6 +1056,8 @@ impl Default for PenaltyScales {
             satellite: 1.0,
             pointing: 1.0,
             temporal: 1.0,
+            hfr_rise: 1.0,
+            star_loss: 1.0,
         }
     }
 }
@@ -1060,6 +1070,8 @@ impl PenaltyScales {
             satellite: Self::sanitize(self.satellite),
             pointing: Self::sanitize(self.pointing),
             temporal: Self::sanitize(self.temporal),
+            hfr_rise: Self::sanitize(self.hfr_rise),
+            star_loss: Self::sanitize(self.star_loss),
         }
     }
 
@@ -1102,6 +1114,27 @@ impl PenaltyScales {
             return Self::blend(scale, score, score.min(cap));
         }
         score.min((cap * (2.0 - scale)).max(0.0))
+    }
+
+    /// Scale a relative metric's tolerance band: at 2 the penalty starts at
+    /// half the degradation and reaches zero at half, at 0.5 both double,
+    /// and at 0 the metric never marks a frame down. Dividing the band keeps
+    /// the score monotone in the degradation at every scale, and 1 leaves
+    /// the calibrated band exactly as it is.
+    fn scale_tolerance(
+        scale: f64,
+        tolerance: RelativeMetricTolerance,
+    ) -> Option<RelativeMetricTolerance> {
+        let scale = Self::sanitize(scale);
+        if scale == 1.0 {
+            return Some(tolerance);
+        }
+        (scale > 0.0).then(|| {
+            RelativeMetricTolerance::new(
+                tolerance.no_penalty_fraction / scale,
+                tolerance.zero_score_fraction / scale,
+            )
+        })
     }
 
     /// Scale a multiplicative penalty factor (`1 − hit`), where the factor
@@ -1814,14 +1847,24 @@ impl SequenceAnalyzer {
         // session jitter receives no penalty. The former percentile stretch
         // always forced the weakest frame toward zero even when every frame
         // was sound.
-        let norm_stars = score_relative_higher_better(
-            &images.iter().map(|i| i.star_count).collect::<Vec<_>>(),
+        // The operator's star-loss and HFR-rise scales narrow or widen
+        // those bands; at 0 every reading scores as good as the reference.
+        let star_counts = images.iter().map(|i| i.star_count).collect::<Vec<_>>();
+        let norm_stars = match PenaltyScales::scale_tolerance(
+            self.config.penalty_scales.star_loss,
             STAR_COUNT_TOLERANCE,
-        );
-        let norm_hfr = score_relative_lower_better(
-            &images.iter().map(|i| i.hfr).collect::<Vec<_>>(),
+        ) {
+            Some(tolerance) => score_relative_higher_better(&star_counts, tolerance),
+            None => score_unpenalized(&star_counts),
+        };
+        let hfrs = images.iter().map(|i| i.hfr).collect::<Vec<_>>();
+        let norm_hfr = match PenaltyScales::scale_tolerance(
+            self.config.penalty_scales.hfr_rise,
             HFR_TOLERANCE,
-        );
+        ) {
+            Some(tolerance) => score_relative_lower_better(&hfrs, tolerance),
+            None => score_unpenalized(&hfrs),
+        };
         let norm_ecc = score_relative_lower_better(
             &images.iter().map(|i| i.eccentricity).collect::<Vec<_>>(),
             ECCENTRICITY_TOLERANCE,
@@ -3836,6 +3879,12 @@ fn relative_metric_score(degradation: f64, tolerance: RelativeMetricTolerance) -
     (1.0 - (degradation - tolerance.no_penalty_fraction) / span).clamp(0.0, 1.0)
 }
 
+/// A metric whose penalty is turned off: every reading scores 1, and a
+/// frame without one stays without.
+fn score_unpenalized(values: &[Option<f64>]) -> Vec<Option<f64>> {
+    values.iter().map(|value| value.map(|_| 1.0)).collect()
+}
+
 fn score_relative_higher_better(
     values: &[Option<f64>],
     tolerance: RelativeMetricTolerance,
@@ -5070,6 +5119,91 @@ mod tests {
                 assert!(!result.flags.contains(&IssueCategory::NoStarsDetected));
             }
         }
+    }
+
+    #[test]
+    fn hfr_rise_and_star_loss_scales_set_how_hard_a_drop_scores() {
+        let mut images: Vec<_> = (0..8)
+            .map(|i| make_image(i, i as i64 * 300, 500.0, 2.5))
+            .collect();
+        // 16% over the reference HFR, and 30% fewer stars.
+        images[3].hfr = Some(2.9);
+        images[5].star_count = Some(350.0);
+        let analyze = |hfr_rise: f64, star_loss: f64| {
+            let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+                penalty_scales: PenaltyScales {
+                    hfr_rise,
+                    star_loss,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+            analyzer.analyze(&images, 1, "target", "L").remove(0)
+        };
+        let hfr_of = |sequence: &ScoredSequence, index: usize| {
+            sequence.images[index].normalized_metrics.hfr.unwrap()
+        };
+        let stars_of = |sequence: &ScoredSequence, index: usize| {
+            sequence.images[index]
+                .normalized_metrics
+                .star_count
+                .unwrap()
+        };
+
+        let calibrated = analyze(1.0, 1.0);
+        // The calibrated bands: HFR from 5% to 30% over, stars from 10% to
+        // 40% under.
+        assert!((hfr_of(&calibrated, 3) - (1.0 - 0.11 / 0.25)).abs() < 1e-9);
+        assert!((stars_of(&calibrated, 5) - (1.0 - 0.20 / 0.30)).abs() < 1e-9);
+
+        // Half as wide a band at 2: both drops are past the zero point.
+        let strict = analyze(2.0, 2.0);
+        assert_eq!(hfr_of(&strict, 3), 0.0);
+        assert_eq!(stars_of(&strict, 5), 0.0);
+        // Twice as wide at 0.5.
+        let lenient = analyze(0.5, 0.5);
+        assert!((hfr_of(&lenient, 3) - (1.0 - 0.06 / 0.50)).abs() < 1e-9);
+        assert!((stars_of(&lenient, 5) - (1.0 - 0.10 / 0.60)).abs() < 1e-9);
+        // Off: the drop costs nothing.
+        let off = analyze(0.0, 0.0);
+        assert_eq!(hfr_of(&off, 3), 1.0);
+        assert_eq!(stars_of(&off, 5), 1.0);
+
+        // The score follows the scale, and frames at the reference keep
+        // theirs whatever it is.
+        for index in [3, 5] {
+            let scores: Vec<f64> = [&off, &lenient, &calibrated, &strict]
+                .iter()
+                .map(|sequence| sequence.images[index].quality_score)
+                .collect();
+            assert!(
+                scores.windows(2).all(|pair| pair[0] >= pair[1]),
+                "frame {index} scores {scores:?} must fall as the scale rises"
+            );
+            assert!(scores[0] > scores[3], "frame {index} scores {scores:?}");
+        }
+        for sequence in [&off, &lenient, &calibrated, &strict] {
+            assert_eq!(hfr_of(sequence, 0), 1.0);
+            assert_eq!(stars_of(sequence, 0), 1.0);
+        }
+    }
+
+    #[test]
+    fn hfr_rise_and_star_loss_scales_are_clamped_like_the_others() {
+        let scales = PenaltyScales {
+            hfr_rise: f64::NAN,
+            star_loss: 7.0,
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(scales.hfr_rise, 1.0);
+        assert_eq!(scales.star_loss, 2.0);
+        let negative = PenaltyScales {
+            hfr_rise: -0.0,
+            ..Default::default()
+        }
+        .normalized();
+        assert_eq!(negative.hfr_rise.to_bits(), 0.0_f64.to_bits());
     }
 
     #[test]

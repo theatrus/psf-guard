@@ -101,6 +101,9 @@ export interface Image {
   filesystem_path: string | null;
   /** Calibrated and registered copies of this light (absent when none). */
   copies?: ImageCopy[];
+  /** The frame's size in pixels, read once per camera setup, to shape its
+   *  thumbnail. Absent until the server has read it. */
+  frame_size?: { width: number; height: number };
 }
 
 /** A calibrated or registered copy of a light that other software wrote. */
@@ -928,6 +931,9 @@ export interface StackScoringSettings {
   penalty_satellite: number;
   penalty_pointing: number;
   penalty_temporal: number;
+  /** Absent on an artifact recorded before these scales existed: 1. */
+  penalty_hfr_rise?: number;
+  penalty_star_loss?: number;
   hfr_reject_above: number | null;
   star_count_reject_below: number | null;
 }
@@ -3664,6 +3670,10 @@ export interface PenaltyScaleParams {
   penalty_satellite?: number;
   penalty_pointing?: number;
   penalty_temporal?: number;
+  /** How hard an HFR above, or a star count below, the sequence's good
+   *  frames marks a frame down: 0 not at all, 1 the calibrated band. */
+  penalty_hfr_rise?: number;
+  penalty_star_loss?: number;
   hfr_reject_above?: number;
   star_count_reject_below?: number;
 }

@@ -3,23 +3,26 @@ import type { CalibrationLightMark, ImageQualityResult } from '../../api/types';
 import {
   followRule,
   handChanges,
-  parseScoreCutoff,
   parseSelectionRule,
   ruleSelection,
+  selectionRuleOf,
 } from '../sequenceSelectionRules';
 
 const frame = (image_id: number, quality_score: number, extra: Partial<ImageQualityResult> = {}) =>
   ({ image_id, quality_score, ...extra }) as ImageQualityResult;
 
 describe('selection rules', () => {
-  it('reads only known rules and cutoffs between 0 and 1 from the URL', () => {
+  it('reads only known rules from the URL', () => {
     expect(parseSelectionRule('below-cutoff')).toBe('below-cutoff');
     expect(parseSelectionRule('threshold')).toBeNull();
     expect(parseSelectionRule(null)).toBeNull();
-    expect(parseScoreCutoff(null)).toBe(0.5);
-    expect(parseScoreCutoff('0.65')).toBe(0.65);
-    expect(parseScoreCutoff('3')).toBe(1);
-    expect(parseScoreCutoff('soon')).toBe(0.5);
+  });
+
+  it('names the cutoff rule after what the cutoff measures', () => {
+    expect(selectionRuleOf('below-cutoff').label).toBe('Below the cutoff');
+    expect(selectionRuleOf('below-cutoff', 'stars').label).toBe('Fewer stars than the cutoff');
+    expect(selectionRuleOf('below-cutoff', 'hfr').label).toBe('HFR above the cutoff');
+    expect(selectionRuleOf('clouded', 'hfr').label).toBe('Clouds or obstruction');
   });
 
   it('answers for the frames given', () => {
@@ -30,7 +33,7 @@ describe('selection rules', () => {
       frame(4, 0.3, { regrade_reason: 'Clouds' }),
     ];
     const calibration = new Map<number, CalibrationLightMark>([[3, { image_id: 3, level: 'poor', codes: [] }]]);
-    const inputs = { cutoff: 0.5, calibration };
+    const inputs = { pastCutoff: new Set([2, 4]), calibration };
     expect([...ruleSelection('below-cutoff', images, inputs)]).toEqual([2, 4]);
     expect([...ruleSelection('clouded', images, inputs)]).toEqual([2]);
     expect([...ruleSelection('off-target', images, inputs)]).toEqual([3]);

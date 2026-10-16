@@ -4,6 +4,25 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Images and Sequence mark where frames cross into another night or hour.
+  A line and the night's date sit in the gap before a night's first frame,
+  every other night takes a faint band, and thinner lines mark the hours
+  when frames are dense enough for them to help. Nights split where the
+  catalog's nights do, not at midnight, and no card moves for a mark.
+- Image cards in Images and Sequence take the shape of the frame, read
+  once per camera setup from one frame's header, so a square or 4:3
+  sensor fills its card as a 3:2 one does. They no longer leave empty
+  bands above and below a landscape frame at the smaller thumbnail
+  sizes, so more rows fit on screen, and Sequence lays its cards out with
+  the same spacing as Images.
+- Sequence's **Cutoff** can measure **Stars** or **HFR** as well as the
+  score. The chart, the slider and the cutoff rule follow the measure
+  chosen; the Stars and HFR sliders run over the readings in the session on
+  screen. The score cutoff now reads 0 to 100, as the chips do.
+- **Scoring** has two more penalties, **HFR rise** and **Star loss**, from 0%
+  to 200%, saved with your other scoring defaults. They set how hard a
+  frame is marked down for an HFR above, or fewer stars than, the night's
+  good frames, where Max HFR and Min stars only reject past a fixed line.
 - Flats are matched by what they measure, not only by the rotator angle
   they record. Angles whose flats measure alike are one **response
   family**, named in Calibration › Frames by its measured angle range

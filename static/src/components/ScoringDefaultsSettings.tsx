@@ -17,6 +17,8 @@ const HINTS: Record<ScoringField, string> = {
   satellite: 'The score hit for a pixel-confirmed trail. At 0% trails neither lower the score nor drive reject recommendations.',
   pointing: 'The score hit for off-target, pointing-jump and drift evidence, and the solve failures it corroborates.',
   temporal: 'The score hit when a frame suddenly departs from its neighbours.',
+  hfrRise: 'How hard an HFR above the sequence\'s sharpest frames marks a frame down. 200% makes half the rise cost as much; at 0% it costs nothing. Sudden jumps count under Temporal anomalies.',
+  starLoss: 'How hard fewer stars than the sequence\'s best frames marks a frame down. 200% makes half the loss cost as much; at 0% it costs nothing. Sudden drops count under Temporal anomalies.',
   hfrRejectAbove: 'Recommend rejecting a frame whose measured HFR is over this. Empty turns it off.',
   starCountRejectBelow: 'Recommend rejecting a frame with fewer detected stars than this. Empty turns it off.',
 };
@@ -26,10 +28,12 @@ const UNIT_MARKS: Partial<Record<ScoringField, string>> = {
   satellite: '%',
   pointing: '%',
   temporal: '%',
+  hfrRise: '%',
+  starLoss: '%',
   hfrRejectAbove: 'px',
 };
 
-const PENALTIES: ScoringField[] = ['satellite', 'pointing', 'temporal'];
+const PENALTIES: ScoringField[] = ['satellite', 'pointing', 'temporal', 'hfrRise', 'starLoss'];
 const LIMITS: ScoringField[] = ['hfrRejectAbove', 'starCountRejectBelow'];
 const FIELDS: ScoringField[] = [...PENALTIES, ...LIMITS];
 

@@ -89,6 +89,21 @@ describe('the Sequence toolbar\'s Scoring control', () => {
     expect(summary()).toHaveTextContent('Scoring (changed)');
   });
 
+  it('scales the HFR-rise and star-loss penalties like the others', () => {
+    renderControl();
+    const hfrRise = screen.getByLabelText('HFR rise', { exact: false }) as HTMLInputElement;
+    const starLoss = screen.getByLabelText('Star loss', { exact: false }) as HTMLInputElement;
+    expect(hfrRise).toHaveValue('1');
+    fireEvent.change(hfrRise, { target: { value: '2' } });
+    fireEvent.pointerUp(hfrRise);
+    expect(link().get('penaltyHfrRise')).toBe('2');
+    fireEvent.change(starLoss, { target: { value: '0' } });
+    fireEvent.pointerUp(starLoss);
+    expect(link().get('penaltyStarLoss')).toBe('0');
+    expect(control()).toHaveTextContent('200%');
+    expect(summary()).toHaveTextContent('Scoring (changed)');
+  });
+
   it('refuses a fractional Min stars or a Max HFR past its cap, rather than changing it', async () => {
     const user = userEvent.setup();
     renderControl();

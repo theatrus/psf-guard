@@ -494,6 +494,8 @@ pub struct StackScoringSettings {
     pub penalty_satellite: f64,
     pub penalty_pointing: f64,
     pub penalty_temporal: f64,
+    pub penalty_hfr_rise: f64,
+    pub penalty_star_loss: f64,
     pub hfr_reject_above: Option<f64>,
     pub star_count_reject_below: Option<f64>,
 }
@@ -505,6 +507,8 @@ impl Default for StackScoringSettings {
             penalty_satellite: config.penalty_scales.satellite,
             penalty_pointing: config.penalty_scales.pointing,
             penalty_temporal: config.penalty_scales.temporal,
+            penalty_hfr_rise: config.penalty_scales.hfr_rise,
+            penalty_star_loss: config.penalty_scales.star_loss,
             hfr_reject_above: config.hfr_reject_above,
             star_count_reject_below: config.star_count_reject_below,
         }
@@ -522,6 +526,8 @@ impl StackScoringSettings {
             penalty_satellite: config.penalty_scales.satellite,
             penalty_pointing: config.penalty_scales.pointing,
             penalty_temporal: config.penalty_scales.temporal,
+            penalty_hfr_rise: config.penalty_scales.hfr_rise,
+            penalty_star_loss: config.penalty_scales.star_loss,
             hfr_reject_above: config.hfr_reject_above,
             star_count_reject_below: config.star_count_reject_below,
         }
@@ -531,6 +537,8 @@ impl StackScoringSettings {
         config.penalty_scales.satellite = self.penalty_satellite;
         config.penalty_scales.pointing = self.penalty_pointing;
         config.penalty_scales.temporal = self.penalty_temporal;
+        config.penalty_scales.hfr_rise = self.penalty_hfr_rise;
+        config.penalty_scales.star_loss = self.penalty_star_loss;
         config.hfr_reject_above = self.hfr_reject_above;
         config.star_count_reject_below = self.star_count_reject_below;
     }
@@ -3045,6 +3053,14 @@ fn prepare_whole(
             if let Some(limit) = limit {
                 hasher.update(limit.to_le_bytes());
             }
+        }
+        // The HFR-rise and star-loss scales came later. They enter only
+        // when one is off its default, so an artifact built under another
+        // non-default policy before they existed keeps its id too.
+        if scoring.penalty_hfr_rise != 1.0 || scoring.penalty_star_loss != 1.0 {
+            hasher.update(b"relative-metric-scales");
+            hasher.update(scoring.penalty_hfr_rise.to_le_bytes());
+            hasher.update(scoring.penalty_star_loss.to_le_bytes());
         }
     }
     // The Seiza version above already changed every id when the method
@@ -6830,6 +6846,8 @@ mod tests {
             penalty_satellite: Some(3.0),
             penalty_pointing: Some(-0.0),
             penalty_temporal: Some(f64::NAN),
+            penalty_hfr_rise: Some(2.5),
+            penalty_star_loss: Some(0.4),
             hfr_reject_above: Some(0.0),
             star_count_reject_below: Some(35.0),
         };
@@ -6841,6 +6859,8 @@ mod tests {
                 penalty_satellite: 2.0,
                 penalty_pointing: 0.0,
                 penalty_temporal: 1.0,
+                penalty_hfr_rise: 2.0,
+                penalty_star_loss: 0.4,
                 hfr_reject_above: None,
                 star_count_reject_below: Some(35.0),
             }

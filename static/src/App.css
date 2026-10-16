@@ -181,6 +181,17 @@
   --color-flat-group-3: rgb(125 205 150);
   --color-flat-group-4: rgb(205 140 230);
 
+  /* Night and hour marks in the gaps of the Images grid and the Sequence
+     strip: a line where a night or an hour begins, its label, and a faint
+     band behind every other night. */
+  --color-time-night-line: rgb(150 175 235 / 75%);
+  --color-time-night-label: rgb(200 212 245);
+  --color-time-night-label-bg: rgb(38 46 72);
+  --color-time-hour-line: rgb(255 255 255 / 16%);
+  --color-time-hour-label: var(--color-text-muted);
+  --color-time-hour-label-bg: var(--color-bg-tertiary);
+  --color-time-night-band: rgb(150 175 235 / 8%);
+
   /* Border Colors */
   --color-border-primary: #333;
   --color-border-secondary: #444;
@@ -1205,8 +1216,10 @@
   align-items: center;
   justify-content: center;
   position: relative;
+  /* The frame's own shape, near enough: most astro sensors are 3:2. A
+     minimum height here once left bands above and below every landscape
+     frame on a card narrower than 300px. */
   aspect-ratio: 3/2;
-  min-height: 200px;
   border-radius: 4px;
   overflow: hidden;
 }
@@ -5738,11 +5751,81 @@
 }
 
 .filter-images {
+  /* Between columns, and between rows. A night or hour label sits in the
+     row gap, so that one stays tall enough to hold it. */
+  --card-gap: 1rem;
+  --card-row-gap: 1rem;
   display: grid;
-  gap: 1rem;
+  gap: var(--card-row-gap) var(--card-gap);
   padding: 1.5rem;
   transition: grid-template-columns 0.3s;
   align-items: start;
+}
+
+/* Night and hour marks between cards (TimeBreakMark). Everything is
+   positioned absolutely in the gaps or behind the card, so no card moves
+   for a mark. A line runs down the column gap before the first card of a
+   night or an hour, and its label sits inside the row gap above, clear of
+   the cards. Every other night takes a faint band that fills the gaps
+   around its cards, so a night that wraps across rows still reads as one
+   block; the card, later in the slot, paints over the band's middle. */
+.time-slot {
+  position: relative;
+}
+
+.time-night-band {
+  position: absolute;
+  inset: calc(var(--card-row-gap) / -2) calc(var(--card-gap) / -2);
+  background: var(--color-time-night-band);
+  pointer-events: none;
+}
+
+.time-slot[data-time-break]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--card-gap) / -2 - 1px);
+  width: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.time-slot[data-time-break='night']::before {
+  background: var(--color-time-night-line);
+}
+
+.time-slot[data-time-break='hour']::before {
+  left: calc(var(--card-gap) / -2 - 0.5px);
+  width: 1px;
+  background: var(--color-time-hour-line);
+}
+
+.time-break-label {
+  position: absolute;
+  z-index: 2;
+  bottom: 100%;
+  left: calc(var(--card-gap) / -2 - 1px);
+  /* Inside the row gap with 2px to spare above and below. */
+  margin-bottom: 2px;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  line-height: calc(var(--card-row-gap) - 4px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.time-break-label[data-kind='night'] {
+  color: var(--color-time-night-label);
+  background: var(--color-time-night-label-bg);
+  font-weight: 600;
+}
+
+.time-break-label[data-kind='hour'] {
+  color: var(--color-time-hour-label);
+  background: var(--color-time-hour-label-bg);
 }
 
 /* Undo/Redo Toolbar */
@@ -6502,15 +6585,21 @@
 }
 
 /* Time-ordered image gallery */
+/* The strip is a .filter-images grid too, and takes its gaps and padding:
+   Sequence and Images lay their cards out alike. */
 .sequence-strip {
-  display: grid;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
   align-items: flex-start;
+}
+
+.sequence-strip > .time-slot {
+  min-width: 0;
 }
 
 .sequence-image-card {
   min-width: 0;
+  /* Border included: at 100% plus its border the card ran 4px into the
+     column gap, over the night and hour line drawn there. */
+  box-sizing: border-box;
   width: 100%;
   content-visibility: auto;
   contain-intrinsic-size: auto 190px;
@@ -6534,10 +6623,6 @@
 
 .sequence-image-card.below-threshold:not(.selected) {
   border-color: var(--color-error);
-}
-
-.sequence-strip .image-preview {
-  min-height: 0;
 }
 
 .image-preview-deferred {

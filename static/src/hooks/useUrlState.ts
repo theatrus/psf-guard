@@ -10,11 +10,18 @@ import { type GroupingMode, DEFAULT_SINGLE_PROJECT_MODE, MULTI_PROJECT_MODES } f
 import { parseStatusFilter } from '../utils/statusFilter';
 import { listFilterOf } from '../utils/listFilter';
 import {
-  DEFAULT_SCORE_CUTOFF,
-  parseScoreCutoff,
   parseSelectionRule,
   type SelectionRuleId,
 } from '../utils/sequenceSelectionRules';
+import {
+  CUTOFF_METRIC_PARAM,
+  CUTOFF_PARAMS,
+  DEFAULT_CUTOFF_METRIC,
+  parseCutoff,
+  parseCutoffMetric,
+  serializeCutoff,
+  type CutoffMetric,
+} from '../utils/sequenceCutoff';
 import {
   DEFAULT_IMAGE_ORDER,
   IMAGE_ORDER_PARAM,
@@ -602,19 +609,28 @@ export function useGridState(view: ThumbnailView = 'grid') {
 }
 
 /**
- * The Sequence view's score cutoff (`cutoff`) and its selection rule
- * (`selectRule`), kept in the URL so a reload, a trip to Detail and back,
- * or a shared link opens with the same rule still selecting. The default
- * cutoff and no rule leave the URL clean.
+ * The Sequence view's cutoff and its selection rule (`selectRule`), kept in
+ * the URL so a reload, a trip to Detail and back, or a shared link opens
+ * with the same rule still selecting. `cutoffBy` names what the cutoff
+ * measures, and each measure keeps its own cutoff (see sequenceCutoff.ts).
+ * `cutoff` is what the URL holds, the score 0 to 100 or a Stars or HFR
+ * ratio, or null when it names none and the view's default applies. The
+ * score, a default cutoff and no rule leave the URL clean.
  */
 export function useSequenceSelectionRule() {
   const { getParam, updateParams } = useUrlParams();
-  const cutoff = parseScoreCutoff(getParam('cutoff'));
+  const metric = parseCutoffMetric(getParam(CUTOFF_METRIC_PARAM));
+  const cutoff = parseCutoff(metric, getParam(CUTOFF_PARAMS[metric]));
   const rule = parseSelectionRule(getParam('selectRule'));
 
-  const setCutoff = useCallback((value: number) => {
-    const rounded = Math.round(value * 100) / 100;
-    updateParams({ cutoff: rounded === DEFAULT_SCORE_CUTOFF ? null : rounded.toFixed(2) });
+  /** Keep a cutoff as `parseCutoff` reads it (see resolveCutoff and
+   *  storedCutoff), or null to take the default and leave the URL clean. */
+  const setCutoff = useCallback((stored: number | null) => {
+    updateParams({ [CUTOFF_PARAMS[metric]]: stored === null ? null : serializeCutoff(metric, stored) });
+  }, [metric, updateParams]);
+
+  const setMetric = useCallback((next: CutoffMetric) => {
+    updateParams({ [CUTOFF_METRIC_PARAM]: next === DEFAULT_CUTOFF_METRIC ? null : next });
   }, [updateParams]);
 
   /** Turn a rule on or off, and with `selection` set the selected images
@@ -626,7 +642,7 @@ export function useSequenceSelectionRule() {
     });
   }, [updateParams]);
 
-  return { cutoff, rule, setCutoff, setRule };
+  return { metric, cutoff, rule, setCutoff, setMetric, setRule };
 }
 
 /**

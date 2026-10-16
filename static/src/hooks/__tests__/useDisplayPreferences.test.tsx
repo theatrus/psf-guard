@@ -13,6 +13,8 @@ const BUILT_IN_SCORING = {
   scoringPenaltySatellite: 1,
   scoringPenaltyPointing: 1,
   scoringPenaltyTemporal: 1,
+  scoringPenaltyHfrRise: 1,
+  scoringPenaltyStarLoss: 1,
   scoringHfrRejectAbove: null,
   scoringStarCountRejectBelow: null,
 };

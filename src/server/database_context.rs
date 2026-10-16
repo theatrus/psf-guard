@@ -518,6 +518,9 @@ pub struct DatabaseContext {
     db_connection: Arc<Mutex<Connection>>,
     pub(crate) exposure_groups_cache:
         Arc<Mutex<crate::server::exposure_groups::ProjectExposureGroupsCache>>,
+    /// Frame sizes by camera setup, for the grid's thumbnails. A setup's
+    /// size does not change with the catalog, so a reopen keeps them.
+    pub(crate) frame_shapes: Arc<Mutex<crate::server::frame_shapes::FrameShapes>>,
     /// File identity of `database_path` as of the currently open connection.
     /// Compared on every `db()` to detect an external replace.
     db_fingerprint: Arc<Mutex<Option<DbFingerprint>>>,
@@ -948,6 +951,7 @@ impl DatabaseContext {
             calibration_root,
             db_connection: Arc::new(Mutex::new(conn)),
             exposure_groups_cache: Arc::new(Mutex::new(Default::default())),
+            frame_shapes: Arc::new(Mutex::new(Default::default())),
             db_fingerprint: Arc::new(Mutex::new(fingerprint)),
             reopen_lock: Arc::new(Mutex::new(())),
             organization_mutex: Arc::new(Mutex::new(())),
@@ -2170,6 +2174,7 @@ impl DatabaseContext {
             calibration_root: PathBuf::from("/tmp/psf-guard-test"),
             db_connection: Arc::new(Mutex::new(conn)),
             exposure_groups_cache: Arc::new(Mutex::new(Default::default())),
+            frame_shapes: Arc::new(Mutex::new(Default::default())),
             db_fingerprint: Arc::new(Mutex::new(None)),
             reopen_lock: Arc::new(Mutex::new(())),
             organization_mutex: Arc::new(Mutex::new(())),
@@ -2218,6 +2223,7 @@ impl Clone for DatabaseContext {
             calibration_root: self.calibration_root.clone(),
             db_connection: self.db_connection.clone(),
             exposure_groups_cache: self.exposure_groups_cache.clone(),
+            frame_shapes: self.frame_shapes.clone(),
             db_fingerprint: self.db_fingerprint.clone(),
             reopen_lock: self.reopen_lock.clone(),
             organization_mutex: self.organization_mutex.clone(),

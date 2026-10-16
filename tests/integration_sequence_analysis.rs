@@ -834,6 +834,46 @@ async fn test_analyze_sequence_custom_weights() {
     );
 }
 
+/// The HFR-rise and star-loss scales reach the score through the query:
+/// at 0 the softest frame and the one with fewest stars lose nothing for
+/// it, 200% cuts deeper than the default.
+#[tokio::test]
+async fn test_analyze_sequence_hfr_rise_and_star_loss_scales() {
+    async fn hfr_and_stars(query: &str) -> (f64, f64) {
+        let conn = Connection::open_in_memory().unwrap();
+        create_test_schema(&conn);
+        load_normal_sequence(&conn);
+        let app = create_test_app(conn);
+        let uri = format!("/api/db/test/analysis/sequence?target_id=1&filter_name=L{query}");
+        let (status, json) = get_json(app, &uri).await;
+        assert_eq!(status, StatusCode::OK);
+        let images = json["data"]["sequences"][0]["images"].as_array().unwrap();
+        let metric = |id: i64, name: &str| {
+            images.iter().find(|image| image["image_id"] == id).unwrap()["normalized_metrics"][name]
+                .as_f64()
+                .unwrap()
+        };
+        // Image 10 has the largest HFR (2.7), image 5 the fewest stars (300).
+        (metric(10, "hfr"), metric(5, "star_count"))
+    }
+
+    let (hfr_default, stars_default) = hfr_and_stars("").await;
+    let (hfr_off, stars_off) = hfr_and_stars("&penalty_hfr_rise=0&penalty_star_loss=0").await;
+    let (hfr_strict, stars_strict) = hfr_and_stars("&penalty_hfr_rise=2&penalty_star_loss=2").await;
+
+    assert_eq!(hfr_off, 1.0);
+    assert_eq!(stars_off, 1.0);
+    assert!(
+        hfr_default < 1.0,
+        "the 2.7 HFR frame must lose score by default"
+    );
+    assert!(
+        hfr_strict < hfr_default,
+        "200% must cut deeper: {hfr_strict} vs {hfr_default}"
+    );
+    assert!(stars_strict <= stars_default && stars_default <= stars_off);
+}
+
 /// Absolute reject limits: frames over the HFR ceiling or under the
 /// star-count floor get an [Auto] reject recommendation; without the
 /// params nothing is recommended.
