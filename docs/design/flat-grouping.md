@@ -33,16 +33,27 @@ work, PSF Guard judged both by the clock alone:
 
 The pixel measurements are Seiza's, `seiza_calibration::flat_response`
 (seiza #282): `metric` holds the response, the star mask, the comparison
-(`Q`, dust, broad, spots), the change map and applying it to a flat;
-`evidence` the light fit against a change; `choice` the light fit against
-several candidate responses. PSF Guard re-exports them as
-`flat_groups::measure::{metric, evidence, choice}` and keeps, in the same
-module, what it builds on the numbers with a pure API: `model` (response
-families, groups, change events, the angle term and placement), `lights`
-(angle epochs and which family a light takes) and `rows` (the data they
-share). A test fails if any of those names `crate::`, `rusqlite` or the
-file system. Only the background job (`job.rs`, `family_job.rs`) reads
-pixels.
+(`Q`, dust, broad, vignetting, spots), the change map and applying it to a
+flat; `evidence` the light fit against a change; `choice` the light fit
+against several candidate responses. Their dust is `seiza_calibration::dust`
+(seiza #289), the one definition the frames' Spots use too: compact and
+irregular dips, out-of-focus disks and donuts found by their rim, patches
+of overlapping ones, and border-anchored vignetting apart. PSF Guard
+re-exports them as `flat_groups::measure::{metric, evidence, choice}` and
+keeps, in the same module, what it builds on the numbers with a pure API:
+`model` (response families, groups, change events, the angle term and
+placement), `lights` (angle epochs and which family a light takes) and
+`rows` (the data they share). A test fails if any of those names
+`crate::`, `rusqlite` or the file system. Only the background job
+(`job.rs`, `family_job.rs`) reads pixels.
+
+A session's own dust is found on its kept response plane (`find_dust`), and
+the flats each shadow shows in by pairing it (`match_features`) with each
+flat's own features, as its grade stored them; no flat is read for it. It
+is kept beside the response plane as `{key}.dust-v{N}.json`, made again
+when the pedestal moves or once every flat of the session has its
+measurement. The rule for how many flats a shadow must show in lives in
+`job.rs` until Seiza offers it (`session_dust_from_lists`).
 
 ### 2.1 Responses
 
@@ -1007,18 +1018,25 @@ another target that shares a file name never takes another's choice
 
 ### Move to Seiza
 
-- **Done in seiza #282**: the session response, star mask, comparison
-  metrics, change map and its application, the light evidence, and the
-  light-against-responses choice are `seiza_calibration::flat_response`;
+- **Done in seiza #282 and #289**: the session response, star mask,
+  comparison metrics, change map and its application, the light evidence,
+  the light-against-responses choice, and the dust they count (#289) are
+  `seiza_calibration::flat_response` and `seiza_calibration::dust`;
   `MatchTolerances::light_rotation` lets the stacker's gate follow a
   measured angle. PSF Guard keeps the families, events, placement, the
   job, the store and the selection.
+- **Session dust from feature lists.** The rule for how many of a
+  session's flats a shadow must show in, applied to the flats' stored
+  features, is in `job.rs` for now; `dust::session_dust_from_lists` will
+  hold it beside `find_session_dust`'s.
 - **The stability check onto Seiza's measurement.** PSF Guard's
-  `flat_set_stability` reads each flat back against its master and, until
-  this change, counted bright departures too (`abs()`), which made tracked
-  sky flats look like dew. Seiza's `measure_flat` already finds dips only
-  (`FlatFeature` is "one compact dip"), so the check can be built on it
-  and leave PSF Guard.
+  `flat_set_stability` reads each flat back against its master and counts
+  dips only since its second generation. Moving it onto `measure_flat` and
+  `dust::match_features` was tried with seiza #289 and held back:
+  `measure_flat`'s 64-pixel background bins see a whole 64-pixel test frame
+  as one dip, so the small synthetic sets the master tests build cannot be
+  judged that way. It needs those tests on frames of a realistic size
+  first.
 - **Caller tolerances on light validation.** Done in seiza-stacking 0.34
   (seiza #270): a stack's gate and `validate_light_frame_with` replace the
   fixed `MatchTolerances::default()` (3 °C, 2°, 1 mm) that capped #839's

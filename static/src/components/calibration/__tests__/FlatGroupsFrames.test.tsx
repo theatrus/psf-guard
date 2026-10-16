@@ -301,7 +301,9 @@ describe('Flat groups in Frames', () => {
     fireEvent.load(within(viewer).getByTestId('flat-ratio-image'));
     const overlay = await within(viewer).findByTestId('flat-ratio-spots');
     expect(overlay).toHaveAttribute('viewBox', '0 0 6240 4160');
-    expect(overlay).toHaveAttribute('aria-hidden', 'true');
+    // Each mark can be tapped or focused for its numbers.
+    expect(overlay).toHaveAttribute('aria-label', '2 dust marks');
+    expect(within(overlay).getAllByRole('button')).toHaveLength(2);
     // What the circles mark is said in words too.
     const listed = within(viewer).getByRole('list', { name: 'Spots that changed' });
     expect(within(listed).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
@@ -321,6 +323,53 @@ describe('Flat groups in Frames', () => {
     await screen.findByRole('region', { name: 'Flat comparison' });
     fireEvent.click(compare);
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Flat comparison' })).toBeNull());
+  });
+
+  it('draws disks, donuts and vignetting that changed at their shape, by what happened, under Spots', async () => {
+    const changed = [
+      { kind: 'new' as const, darker: true, x: 3080, y: 2970, radius: 295, peak_pct: 0.33, shape: 'disk' as const,
+        bounds: [2785, 2675, 3375, 3265] as [number, number, number, number], within_tolerance: false },
+      { kind: 'moved' as const, darker: true, x: 520, y: 2060, radius: 120, peak_pct: 0.3, shape: 'donut' as const,
+        hole: 0.12, within_tolerance: true, offset_px: 18 },
+      { kind: 'gone' as const, darker: false, x: 3000, y: 1200, radius: 30, peak_pct: 0.4 },
+    ];
+    const vignetting = [{ edge: 'bottom_left' as const, darker: true, x: 170, y: 3940, area: 180000, depth_pct: 2.39 }];
+    const families = RIG.families.map((family) => ({
+      ...family,
+      splits: family.splits.map((split) => ({ ...split, spots: changed, vignetting })),
+    }));
+    serve({ available: true, rigs: [{ ...RIG, events: [], families }] });
+    renderPage('/calibration?db=demo&calKind=flat&calEarlier=r-0916&calLater=r-0920');
+    const viewer = await screen.findByRole('region', { name: 'Flat comparison' });
+    fireEvent.load(within(viewer).getByTestId('flat-ratio-image'));
+    const overlay = await within(viewer).findByTestId('flat-ratio-spots');
+    const marks = within(overlay).getAllByRole('button');
+    expect(marks.map((mark) => mark.getAttribute('data-shape')).sort()).toEqual(['compact', 'disk', 'donut', 'vignetting']);
+    // New, gone and moved each have their own look; a move within focus
+    // travel is drawn but not counted.
+    expect(marks.find((mark) => mark.getAttribute('data-shape') === 'disk')).toHaveClass('is-new');
+    expect(marks.find((mark) => mark.getAttribute('data-shape') === 'donut')).toHaveClass('is-tolerance');
+    expect(marks.find((mark) => mark.getAttribute('data-shape') === 'compact')).toHaveClass('is-gone');
+    const listed = within(viewer).getByRole('list', { name: 'Spots that changed' });
+    expect(within(listed).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
+      'New disk: darker by 0.33% near (3080, 2970)',
+      'Moved donut within focus travel: darker by 0.30% near (520, 2060)',
+      'Gone: brighter by 0.40% near (3000, 1200)',
+      'vignetting deeper 2.39% · bottom-left corner: the flats differ, not dust',
+    ]);
+
+    // Large dust is a toggle under Spots: off, only the compact spot stays.
+    const spotsGroup = within(viewer).getByRole('group', { name: 'Spots' });
+    const dust = within(spotsGroup).getByRole('button', { name: 'Large dust' });
+    expect(dust).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(dust);
+    await waitFor(() => expect(params().get('calDust')).toBe('0'));
+    await waitFor(() => expect(within(overlay).getAllByRole('button')).toHaveLength(1));
+    // Spots off hides the overlay, and with it the toggle under it.
+    fireEvent.click(within(spotsGroup).getByRole('button', { name: 'Spots' }));
+    await waitFor(() => expect(params().get('calRatioSpots')).toBe('0'));
+    expect(within(viewer).queryByTestId('flat-ratio-spots')).toBeNull();
+    expect(within(spotsGroup).queryByRole('button', { name: 'Large dust' })).toBeNull();
   });
 
   it('draws a picture still being made through the shared poll', async () => {

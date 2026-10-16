@@ -382,10 +382,119 @@
   pointer-events: none;
 }
 
-.calibration-spots rect {
+/* Spots, and nested under it the large dust it can also draw: one control,
+   its sub-option shown while Spots is on. */
+.calibration-spots-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.calibration-spots-toggle .calibration-subtoggle {
+  font-size: 0.78rem;
+}
+
+.calibration-spots-toggle .calibration-subtoggle::before {
+  content: '↳ ';
+  color: var(--color-text-muted);
+}
+
+.calibration-dust-pick {
+  margin: 0.3rem 0 0;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+/* Dust marks over a flat, at their shape. */
+.dust-overlay {
+  overflow: visible;
+  pointer-events: none;
+}
+
+.dust-mark {
+  pointer-events: visiblePainted;
+  cursor: pointer;
   fill: none;
-  stroke: #ffb020;
   stroke-width: 1.5;
+}
+
+.dust-mark > circle,
+.dust-mark > rect {
+  fill: transparent;
+}
+
+.dust-mark.is-spot {
+  stroke: var(--dust-spot);
+}
+
+.dust-mark.is-disk {
+  stroke: var(--dust-disk);
+  stroke-width: 2;
+}
+
+.dust-mark.is-donut {
+  stroke: var(--dust-donut);
+  stroke-width: 2;
+}
+
+.dust-mark .dust-hole {
+  stroke-dasharray: 4 3;
+}
+
+.dust-mark.is-transient {
+  stroke: var(--dust-transient);
+  stroke-dasharray: 3 3;
+}
+
+.dust-mark.is-new {
+  stroke: var(--dust-new);
+  stroke-width: 2;
+}
+
+.dust-mark.is-gone {
+  stroke: var(--dust-gone);
+  stroke-width: 2;
+}
+
+.dust-mark.is-moved {
+  stroke: var(--dust-moved);
+  stroke-width: 2;
+}
+
+.dust-mark.is-tolerance {
+  stroke: var(--dust-within-tolerance);
+  stroke-dasharray: 5 4;
+}
+
+.dust-mark.is-vignetting > path {
+  stroke: var(--vignetting);
+  stroke-dasharray: 6 4;
+  fill: var(--vignetting-fill);
+}
+
+.dust-mark[aria-pressed='true'] {
+  stroke-width: 3.5;
+}
+
+.dust-mark:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
+  stroke: var(--state-focus-border);
+  stroke-width: 3.5;
+}
+
+/* Session dust this flat does not show. */
+.dust-mark.is-unseen {
+  opacity: 0.45;
+}
+
+.dust-mark text {
+  fill: var(--dust-label-fg);
+  stroke: var(--dust-label-bg);
+  paint-order: stroke;
+  font-family: inherit;
+  stroke-dasharray: none;
 }
 
 .calibration-canvas-note {

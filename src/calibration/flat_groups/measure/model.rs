@@ -57,6 +57,10 @@ pub const IMAGING_GAP_SECONDS: i64 = 3 * 3600;
 pub const NOISY_DUST_SIGMAS: f64 = 2.0;
 /// Where nights split when the catalog says nothing: noon UTC.
 pub const DEFAULT_NIGHT_BOUNDARY: i64 = 12 * 3600;
+/// Two spots are one shadow only when the smaller's radius is at least this
+/// share of the larger's: one filter's donut measures a little larger or
+/// smaller than another's, never a dozen times.
+pub const SAME_SHADOW_SIZE: f32 = 0.5;
 
 /// The limits one rig's sessions are held to.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,7 +81,13 @@ impl Limits {
     /// How far two sessions are apart against these limits: alike at 1 or
     /// less.
     pub fn distance(&self, comparison: &ComparisonRow) -> f64 {
-        (comparison.dust / self.dust.max(1e-9)).max(comparison.broad / self.broad.max(1e-9))
+        // A change of vignetting is held to the light-pattern limit: a
+        // large, smooth shadow from the border, read at its deepest after
+        // heavy smoothing, as the broad change is read at its largest. Held
+        // to the dust limit instead, a corner that turns a little with the
+        // camera between two angles would part flats a light can share.
+        (comparison.dust / self.dust.max(1e-9))
+            .max(comparison.broad.max(comparison.vignetting) / self.broad.max(1e-9))
     }
 
     /// [`Self::distance`] for a pair of which one session combines fewer
@@ -86,7 +96,11 @@ impl Limits {
     /// deepest spot of a noisier ratio.
     pub fn noisy_distance(&self, comparison: &ComparisonRow) -> f64 {
         let dust = (comparison.dust - NOISY_DUST_SIGMAS * comparison.sigma).max(0.0);
-        (dust / self.dust.max(1e-9)).max(comparison.broad / self.broad.max(1e-9))
+        // Vignetting is read on a heavily smoothed residual: no spot height
+        // of a noisier ratio to allow for, and held to the light-pattern
+        // limit as in `distance`.
+        (dust / self.dust.max(1e-9))
+            .max(comparison.broad.max(comparison.vignetting) / self.broad.max(1e-9))
     }
 }
 
@@ -148,6 +162,10 @@ pub struct Boundary {
     /// when that pair was not compared.
     pub dust: Option<f64>,
     pub broad: Option<f64>,
+    /// The neighbouring pair's deepest change of vignetting, and the
+    /// changes.
+    pub vignetting: Option<f64>,
+    pub vignetting_changes: Vec<seiza_calibration::dust::VignettingChange>,
     /// When the neighbours themselves are alike but the groups are not: the
     /// worst pair across the boundary, by session index, and its distance.
     pub drift: Option<(usize, usize, f64)>,
@@ -189,6 +207,10 @@ pub struct Event {
     pub camera_side: bool,
     pub dust: f64,
     pub broad: f64,
+    /// The deepest change of vignetting among the members, and that
+    /// member's changes.
+    pub vignetting: f64,
+    pub vignetting_changes: Vec<seiza_calibration::dust::VignettingChange>,
     /// The spots of the member with the most dust.
     pub spots: Vec<Spot>,
     /// The window is shorter than one flat run ([`FLAT_RUN_SECONDS`]): the
@@ -1225,6 +1247,10 @@ impl Book {
             end: self.sessions[first].first,
             dust: neighbour.map(|c| c.dust),
             broad: neighbour.map(|c| c.broad),
+            vignetting: neighbour.map(|c| c.vignetting),
+            vignetting_changes: neighbour
+                .map(|c| c.vignetting_changes.clone())
+                .unwrap_or_default(),
             drift,
             spots: neighbour.map(|c| c.spots.clone()).unwrap_or_default(),
             opens: first,
@@ -1279,11 +1305,30 @@ impl Book {
         }
     }
 
+    /// Whether two boundaries show one shadow: a spot of each that meet,
+    /// or one change of vignetting at the same edge or corner. Dust that
+    /// moved only as far as focus travel explains is no change of either.
     fn shares_spot(a: &Boundary, b: &Boundary) -> bool {
-        Self::spots_meet(
-            &a.spots.iter().collect::<Vec<_>>(),
-            &b.spots.iter().collect::<Vec<_>>(),
-        )
+        Self::spots_meet(&Self::changes(a), &Self::changes(b)) || Self::shares_vignetting(a, b)
+    }
+
+    /// A boundary's spots that are changes: not moves within focus travel.
+    fn changes(boundary: &Boundary) -> Vec<&Spot> {
+        boundary
+            .spots
+            .iter()
+            .filter(|spot| !spot.within_tolerance)
+            .collect()
+    }
+
+    /// Whether two boundaries hold one change of vignetting: at the same
+    /// edge or corner, darker or lighter alike.
+    fn shares_vignetting(a: &Boundary, b: &Boundary) -> bool {
+        a.vignetting_changes.iter().any(|x| {
+            b.vignetting_changes
+                .iter()
+                .any(|y| x.darker == y.darker && x.vignetting.edge == y.vignetting.edge)
+        })
     }
 
     /// Whether `member` shows a shadow of `split`: one of the split's
@@ -1292,13 +1337,10 @@ impl Book {
     /// no shared shadow; a shallower shadow beside a deeper one is.
     fn shows_shadow(member: &Boundary, split: &Boundary) -> bool {
         Self::strong_spots(split).iter().any(|shadow| {
-            member.spots.iter().any(|spot| {
-                spot.darker == shadow.darker
-                    && spot.peak >= 0.5 * shadow.peak
-                    && ((spot.x - shadow.x).powi(2) + (spot.y - shadow.y).powi(2)).sqrt()
-                        <= spot.radius.max(shadow.radius)
-            })
-        })
+            Self::changes(member)
+                .iter()
+                .any(|spot| spot.peak >= 0.5 * shadow.peak && Self::one_shadow(spot, shadow))
+        }) || Self::shares_vignetting(member, split)
     }
 
     /// Groups with a split on either side, as `(split before, split
@@ -1370,27 +1412,27 @@ impl Book {
 
     /// A boundary's spots at least half as deep as its deepest.
     fn strong_spots(boundary: &Boundary) -> Vec<&Spot> {
-        let deepest = boundary
-            .spots
-            .iter()
-            .map(|spot| spot.peak)
-            .fold(0f32, f32::max);
-        boundary
-            .spots
-            .iter()
+        let changes = Self::changes(boundary);
+        let deepest = changes.iter().map(|spot| spot.peak).fold(0f32, f32::max);
+        changes
+            .into_iter()
             .filter(|spot| spot.peak >= 0.5 * deepest)
             .collect()
     }
 
     fn spots_meet(a: &[&Spot], b: &[&Spot]) -> bool {
-        a.iter().any(|sa| {
-            b.iter().any(|sb| {
-                sa.darker == sb.darker && {
-                    let distance = ((sa.x - sb.x).powi(2) + (sa.y - sb.y).powi(2)).sqrt();
-                    distance <= sa.radius.max(sb.radius)
-                }
-            })
-        })
+        a.iter()
+            .any(|sa| b.iter().any(|sb| Self::one_shadow(sa, sb)))
+    }
+
+    /// Whether two spots are one shadow: the same way, on one place, and of
+    /// a like size. A large out-of-focus donut covers hundreds of pixels; a
+    /// small dip that lies inside it is not that donut.
+    fn one_shadow(a: &Spot, b: &Spot) -> bool {
+        let (large, small) = (a.radius.max(b.radius), a.radius.min(b.radius));
+        a.darker == b.darker
+            && ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt() <= large
+            && small >= SAME_SHADOW_SIZE * large
     }
 
     fn find_outliers(&mut self) {
@@ -1461,6 +1503,12 @@ impl Book {
                 let (a, b) = (&self.boundaries[i], &self.boundaries[j]);
                 let (fa, fb) = (&self.families[a.family], &self.families[b.family]);
                 if fa.rig_uuid != fb.rig_uuid || a.family == b.family {
+                    continue;
+                }
+                // A split by hand is a change of its own: no shared spot or
+                // vignetting joins it to a change the flats measured.
+                let split_by_hand = |x: &Boundary| x.by_hand == Some(HandEdge::Split);
+                if split_by_hand(a) != split_by_hand(b) {
                     continue;
                 }
                 let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
@@ -1557,6 +1605,16 @@ impl Book {
                 .iter()
                 .filter_map(|b| self.boundaries[*b].broad)
                 .fold(0f64, f64::max);
+            let shaded = boundaries
+                .iter()
+                .copied()
+                .max_by(|a, b| {
+                    let v = |i: usize| self.boundaries[i].vignetting.unwrap_or(0.0);
+                    v(*a).total_cmp(&v(*b))
+                })
+                .unwrap_or(boundaries[0]);
+            let vignetting = self.boundaries[shaded].vignetting.unwrap_or(0.0);
+            let vignetting_changes = self.boundaries[shaded].vignetting_changes.clone();
             self.events.push(Event {
                 key: event_key(&rig, start, end),
                 rig_uuid: rig,
@@ -1568,6 +1626,8 @@ impl Book {
                 families,
                 dust,
                 broad,
+                vignetting,
+                vignetting_changes,
                 spots: self.boundaries[strongest].spots.clone(),
                 boundaries,
                 within_flat_run: !by_hand && end - start < FLAT_RUN_SECONDS,
@@ -1690,7 +1750,10 @@ impl Book {
     /// the same shadows at every angle, and leaves that dependence as it
     /// was. A broad change, a change seen in one filter alone (filter or
     /// telescope side), a split that makes no change, or a split made by
-    /// hand carries nothing.
+    /// hand carries nothing. Nor does a change of vignetting alone, with no
+    /// dust: a shadow from the border is the light path's, not dust on the
+    /// camera, though dust that arrived with one still carries. Dust that
+    /// moved no further than focus travel explains is no change of dust.
     pub fn carries_angle_term(&self, boundary: usize, limits: &Limits) -> bool {
         // A split or join by hand is the person's word, not a measured
         // change of dust: it carries no range, even where the
@@ -1704,7 +1767,7 @@ impl Book {
             && self.events.iter().any(|event| {
                 event.boundaries.contains(&boundary)
                     && event.camera_side
-                    && !event.spots.is_empty()
+                    && event.spots.iter().any(|spot| !spot.within_tolerance)
                     && event.broad <= limits.broad
             })
     }
@@ -2237,9 +2300,9 @@ impl Book {
     }
 
     /// The key an imaging session's evidence about a change is kept under:
-    /// the change, and for each filter of its rig the map's two sessions
-    /// and the reference flat the fit would use. A map or reference that
-    /// changes asks the lights again.
+    /// the change, the change-map algorithm, and for each filter of its rig
+    /// the map's two sessions and the reference flat the fit would use. A
+    /// map or reference that changes asks the lights again.
     pub fn evidence_key(&self, event: &Event, session: &ImagingSession) -> String {
         use sha2::Digest;
         let Some(index) = self.events.iter().position(|e| std::ptr::eq(e, event)) else {
@@ -2254,7 +2317,13 @@ impl Book {
         let response = |session: Option<usize>| {
             session.map_or("-", |i| self.sessions[i].row.response_key.as_str())
         };
-        let mut text = event.key.clone();
+        // The map the fit divides by is Seiza's change map: a new one asks
+        // the lights again.
+        let mut text = format!(
+            "{}\u{1f}map-v{}",
+            event.key,
+            super::metric::CHANGE_MAP_ALGORITHM_VERSION
+        );
         for filter in &filters {
             let member = self
                 .map_member(index, Some(filter))
@@ -2392,6 +2461,12 @@ mod tests {
             radius: 450.0,
             area: 600_000.0,
             peak: 0.016,
+            shape: seiza_calibration::dust::DustShape::Compact,
+            hole: None,
+            bounds: [0; 4],
+            within_tolerance: false,
+            offset: None,
+            distance_mm: None,
         }
     }
 
@@ -2405,6 +2480,8 @@ mod tests {
             spots,
             broad_x: 0.5,
             broad_y: 0.5,
+            vignetting: 0.0,
+            vignetting_changes: Vec::new(),
         }
     }
 
@@ -2588,11 +2665,28 @@ mod tests {
     /// dust between them seen by the OIII flats too, its pattern change
     /// `broad`: one pair on each side of the change.
     fn across_dust(broad: f64) -> Book {
+        across(broad, 0.02, 0.0, false)
+    }
+
+    /// [`across_dust`] with `dust` (none: no spots), a change of vignetting
+    /// with it, and its spots moved within focus travel or not.
+    fn across(broad: f64, dust: f64, vignetting: f64, within_tolerance: bool) -> Book {
         let at = |key: &str, filter: &str, rotation: f64, day: i64| ResponseRow {
             night: format!("2026-09-{:02}", day + 1),
             ..row(key, filter, filter, Some(rotation), day * DAY)
         };
-        let dust = |a: &str, b: &str| cmp(a, b, 0.02, broad, vec![new_dust(900.0)]);
+        let spots = if dust > 0.0 {
+            vec![Spot {
+                within_tolerance,
+                ..new_dust(900.0)
+            }]
+        } else {
+            Vec::new()
+        };
+        let dust = |a: &str, b: &str| ComparisonRow {
+            vignetting,
+            ..cmp(a, b, dust, broad, spots.clone())
+        };
         Book::build(
             vec![
                 at("a", "HA", 100.0, 0),
@@ -2642,6 +2736,29 @@ mod tests {
             .unwrap();
         assert_eq!(book.families[ha].carry_class, vec![0, 1]);
         assert!(book.families[ha].alike_ranges.is_empty());
+    }
+
+    #[test]
+    fn vignetting_alone_or_dust_within_focus_travel_carries_no_range() {
+        let ha = |book: &Book| {
+            book.families
+                .iter()
+                .position(|f| f.filter.as_deref() == Some("HA"))
+                .unwrap()
+        };
+        // A shadow from the border changed, and no dust: the light path's,
+        // not dust on the camera.
+        let book = across(0.002, 0.0, 0.03, false);
+        assert_eq!(book.families[ha(&book)].carry_class, vec![0, 1]);
+        assert!(book.families[ha(&book)].alike_ranges.is_empty());
+        // Dust that arrived with it still carries the range.
+        let book = across(0.002, 0.02, 0.03, false);
+        assert_eq!(book.families[ha(&book)].carry_class, vec![0, 0]);
+        assert_eq!(book.families[ha(&book)].alike_ranges.len(), 1);
+        // Shadows that only moved as far as focus travel are no change of
+        // dust to carry across.
+        let book = across(0.002, 0.02, 0.0, true);
+        assert!(book.families[ha(&book)].alike_ranges.is_empty());
     }
 
     /// Ha flats at `(key, angle, day)`, each on its own night.
@@ -2754,6 +2871,22 @@ mod tests {
             "{:?}",
             spans(&book)
         );
+    }
+
+    #[test]
+    fn a_change_of_vignetting_parts_sessions_past_the_light_pattern_limit() {
+        // C925 OIII 08-24 against 09-15: the guider's corner shadow deepened
+        // by 2.4%, no dust changed, and the smooth pattern stays in limits.
+        // The flats differ, so they are apart; the label says vignetting.
+        let mut row = cmp("aug24", "sep15", 0.0019, 0.004, Vec::new());
+        assert!(rules().distance(&row) < 1.0);
+        row.vignetting = 0.024;
+        assert!((rules().distance(&row) - 1.2).abs() < 1e-9);
+        // C925 Hα 09-16 at 104.3° against 09-22 at 100.1°: the corner turned
+        // a little with the camera, 1.1%, under the 2% light-pattern limit.
+        row.vignetting = 0.011;
+        assert!(rules().distance(&row) < 1.0);
+        assert!(rules().noisy_distance(&row) < 1.0);
     }
 
     #[test]

@@ -87,6 +87,22 @@
   shown as no longer applied. They travel with Merge catalogs and
   `sync pull`, and need database management to change.
 
+- Calibration › Frames finds the large, faint dust shadows a filter or
+  window casts, such as a RedCat61's 600-pixel disks under half a percent
+  deep, and an SCT's donuts, and no longer counts a flat's own noise as
+  spots. A flat's spots read as `15 spots · 3 large disks`. **Spots** draws
+  each at its shape — a disk's rim, a donut's ring and hole, a spot's box —
+  with **Large dust** nested under it for the disks, donuts and vignetting;
+  each large mark says its depth and, from the header's focal ratio, how far
+  in front of the sensor the dust sits. Against the session, the session's
+  dust found on the stack of its flats is drawn with the flats it shows in,
+  and what one flat alone holds as a transient. Flat groups count a disk
+  or donut that arrives, leaves or moves; dust that moves only as far as
+  focus travel explains, such as an SCT's donuts, is drawn but not counted;
+  and a guider's corner shadow that turns with the camera is named
+  vignetting, not new dust: held to the light-pattern limit, it parts the
+  groups only past it. After the upgrade every flat is graded once more,
+  and nothing else reads them again for their dust.
 - The header's background jobs keep automatic work in view while your own
   work runs. A database quality analysis, an automatic stack refresh, or a
   re-apply of processing that steps aside for a build, scan, or solve you

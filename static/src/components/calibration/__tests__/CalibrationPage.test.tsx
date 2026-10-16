@@ -461,6 +461,143 @@ describe('CalibrationPage', () => {
     expect(params().get('calView')).toBe('session');
   });
 
+  it('draws large dust at its shape, from a toggle nested under Spots, and keeps both in the URL', async () => {
+    serve();
+    const features = [
+      { x: 3080, y: 2970, left: 2785, top: 2675, right: 3375, bottom: 3265, pixels: 270000, depth: 0.0033,
+        shape: 'disk', radius: 295, distance_mm: 10.9 },
+      { x: 500, y: 2050, left: 380, top: 1930, right: 620, bottom: 2170, pixels: 45000, depth: 0.016,
+        shape: 'donut', radius: 120, hole: 0.12 },
+      { x: 100, y: 120, left: 90, top: 110, right: 110, bottom: 130, pixels: 300, depth: 0.12, shape: 'compact', radius: 10 },
+    ];
+    server.use(http.get('/api/db/demo/calibrations/frames/:uuid', ({ params }) => ok(detail(String(params.uuid), 's1', {
+      measurement: {
+        type: 'flat', width: 6248, height: 4176, feature_count: 3, features,
+        vignetting: [{ edge: 'bottom_left', x: 170, y: 3940, area: 180000, depth: 0.024 }],
+      },
+      metrics: [{ key: 'features', value: 1, session: 1 }, { key: 'large_dust', value: 2, session: 2 }],
+    }))));
+    renderPage('/calibration?db=demo&calSession=s1&calFrame=f1');
+    const panel = await screen.findByRole('complementary', { name: 'Frame' });
+    // Spots and large dust read as one row, the frame's and the session's.
+    expect(await within(panel).findByRole('row', { name: 'Spots 1 spot · 2 large disks 1 spot · 2 large disks' }))
+      .toBeInTheDocument();
+
+    const viewer = screen.getByRole('region', { name: 'Frame viewer' });
+    const spots = await within(viewer).findByRole('group', { name: 'Spots' });
+    const spotsButton = within(spots).getByRole('button', { name: 'Spots' });
+    expect(spotsButton).toHaveAttribute('aria-pressed', 'false');
+    // The large-dust toggle sits under Spots, offered only while Spots is on.
+    expect(within(spots).queryByRole('button', { name: 'Large dust' })).toBeNull();
+    fireEvent.click(spotsButton);
+    await waitFor(() => expect(params().get('calSpots')).toBe('1'));
+    const dustButton = await within(spots).findByRole('button', { name: 'Large dust' });
+    expect(dustButton).toHaveAttribute('aria-pressed', 'true');
+
+    // The picture loads at a size the overlay scales to.
+    const probe = viewer.querySelector('img.calibration-probe') as HTMLImageElement;
+    fireEvent.load(probe);
+    const shown = await within(viewer).findByTestId('calibration-frame-image');
+    Object.defineProperty(shown, 'naturalWidth', { value: 1562 });
+    Object.defineProperty(shown, 'naturalHeight', { value: 1044 });
+    fireEvent.load(shown);
+    const overlay = await within(viewer).findByTestId('calibration-dust-overlay');
+    expect(overlay).toHaveAttribute('viewBox', '0 0 6248 4176');
+    const marks = within(overlay).getAllByRole('button');
+    expect(marks.map((mark) => mark.getAttribute('data-shape')).sort()).toEqual(['compact', 'disk', 'donut', 'vignetting']);
+    // A disk is its rim; a donut its ring and its hole.
+    const disk = marks.find((mark) => mark.getAttribute('data-shape') === 'disk')!;
+    expect(disk.querySelector('circle')).toHaveAttribute('r', '295');
+    const donut = marks.find((mark) => mark.getAttribute('data-shape') === 'donut')!;
+    expect(donut.querySelectorAll('circle')).toHaveLength(2);
+    // Its label: in full on a wide picture, the depth alone on a small one.
+    expect(disk.querySelector('text')?.textContent).toMatch(/^(disk 0\.33% · ~11 mm, filter\/window|0\.33%)$/);
+    expect(disk).toHaveAttribute('aria-label', expect.stringContaining('disk 0.33% · ~11 mm, filter/window'));
+
+    // A tap says the numbers.
+    fireEvent.click(disk);
+    expect(await within(viewer).findByTestId('calibration-dust-pick'))
+      .toHaveTextContent('disk 0.33% · ~11 mm, filter/window · 590 px across · at (3080, 2970)');
+
+    // Large dust off: the compact spot stays.
+    fireEvent.click(dustButton);
+    await waitFor(() => expect(params().get('calDust')).toBe('0'));
+    await waitFor(() => expect(within(overlay).getAllByRole('button')).toHaveLength(1));
+    expect(within(spots).getByRole('button', { name: 'Large dust' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('restores spots and large dust from a shared link, and draws the session dust against the session', async () => {
+    serve();
+    server.use(http.get('/api/db/demo/calibrations/frames/:uuid', ({ params }) => ok(detail(String(params.uuid), 's1', {
+      session_dust: {
+        bin: 7, frames: 10,
+        features: [
+          { x: 3080, y: 2970, left: 2785, top: 2675, right: 3375, bottom: 3265, pixels: 270000, depth: 0.0033,
+            shape: 'disk', radius: 295, seen_in: { frames: 10, of: 10 } },
+          { x: 4040, y: 1900, left: 3745, top: 1605, right: 4335, bottom: 2195, pixels: 270000, depth: 0.0025,
+            shape: 'disk', radius: 295, seen_in: { frames: 9, of: 10 } },
+        ],
+        vignetting: [],
+        seen: [0],
+        transients: [{ x: 900, y: 800, left: 890, top: 790, right: 910, bottom: 810, pixels: 400, depth: 0.05, shape: 'compact', radius: 11 }],
+      },
+    }))));
+    renderPage('/calibration?db=demo&calSession=s1&calFrame=f1&calView=session&calSpots=1');
+    const viewer = screen.getByRole('region', { name: 'Frame viewer' });
+    const spots = await within(viewer).findByRole('group', { name: 'Spots' });
+    expect(within(spots).getByRole('button', { name: 'Spots' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await within(spots).findByRole('button', { name: 'Large dust' })).toHaveAttribute('aria-pressed', 'true');
+    const probe = viewer.querySelector('img.calibration-probe') as HTMLImageElement;
+    fireEvent.load(probe);
+    const shown = await within(viewer).findByTestId('calibration-frame-image');
+    Object.defineProperty(shown, 'naturalWidth', { value: 1562 });
+    Object.defineProperty(shown, 'naturalHeight', { value: 1044 });
+    fireEvent.load(shown);
+    const overlay = await within(viewer).findByTestId('calibration-dust-overlay');
+    const marks = within(overlay).getAllByRole('button');
+    expect(marks).toHaveLength(3);
+    // The session's disks, each with the flats it shows in; what this flat
+    // alone holds is a transient, not dust.
+    expect(marks.find((mark) => mark.getAttribute('aria-label')?.includes('in 9 of 10 flats'))?.getAttribute('aria-label'))
+      .toContain('not seen in this flat');
+    expect(marks.find((mark) => mark.getAttribute('data-shape') === 'compact')).toHaveClass('is-transient');
+  });
+
+  // A mark tapped on one frame must not describe another frame's mark
+  // after stepping with the arrow keys.
+  it('forgets the picked mark when the frame changes', async () => {
+    serve();
+    server.use(http.get('/api/db/demo/calibrations/frames/:uuid', ({ params }) => {
+      const uuid = String(params.uuid);
+      const x = uuid === 'f1' ? 100 : 4000;
+      return ok(detail(uuid, 's1', {
+        ...FRAMES.s1.find((entry) => entry.frame_uuid === uuid),
+        measurement: { type: 'flat', width: 6248, height: 4176, feature_count: 1,
+          features: [{ x, y: 120, left: x - 10, top: 110, right: x + 10, bottom: 130, pixels: 300, depth: 0.12, shape: 'compact', radius: 10 }] },
+      }));
+    }));
+    renderPage('/calibration?db=demo&calSession=s1&calFrame=f1&calSpots=1');
+    await screen.findByRole('heading', { name: 'f1.fits' });
+    const viewer = screen.getByRole('region', { name: 'Frame viewer' });
+    fireEvent.load(viewer.querySelector('img.calibration-probe') as HTMLImageElement);
+    const shown = await within(viewer).findByTestId('calibration-frame-image');
+    Object.defineProperty(shown, 'naturalWidth', { value: 1562 });
+    Object.defineProperty(shown, 'naturalHeight', { value: 1044 });
+    fireEvent.load(shown);
+    const overlay = await within(viewer).findByTestId('calibration-dust-overlay');
+    fireEvent.click(within(overlay).getAllByRole('button')[0]);
+    expect(await within(viewer).findByTestId('calibration-dust-pick')).toHaveTextContent('at (100, 120)');
+    fireEvent.keyDown(document, { key: 'ArrowRight', code: 'ArrowRight' });
+    await screen.findByRole('heading', { name: 'f2.fits' });
+    // The overlay waits for f2's own picture.
+    expect(within(viewer).queryByTestId('calibration-dust-overlay')).toBeNull();
+    fireEvent.load(viewer.querySelector('img.calibration-probe') as HTMLImageElement);
+    await waitFor(() => expect(within(viewer).getByTestId('calibration-dust-overlay')
+      .querySelector('[data-shape="compact"]')).toHaveAttribute('aria-label', expect.stringContaining('(4000, 120)')));
+    // Nothing was tapped on f2.
+    expect(within(viewer).queryByTestId('calibration-dust-pick')).toBeNull();
+  });
+
   it('keeps a frame out, marks its validity and forgets it', async () => {
     const seen = serve();
     vi.spyOn(window, 'confirm').mockReturnValue(true);

@@ -84,6 +84,12 @@ pub(crate) fn measure_as(conn: &Connection, dust: impl Fn(&ResponseRow, &Respons
                 radius: 40.0,
                 area: 5_000.0,
                 peak: value as f32,
+                shape: seiza_calibration::dust::DustShape::Compact,
+                hole: None,
+                bounds: [0; 4],
+                within_tolerance: false,
+                offset: None,
+                distance_mm: None,
             }]
         } else {
             Vec::new()
@@ -97,6 +103,8 @@ pub(crate) fn measure_as(conn: &Connection, dust: impl Fn(&ResponseRow, &Respons
             sigma: 0.0002,
             spots,
             star_fraction: 0.0,
+            vignetting: 0.0,
+            vignetting_changes: Vec::new(),
         };
         store::insert_comparison(
             conn,

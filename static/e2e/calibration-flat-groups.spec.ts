@@ -192,7 +192,8 @@ test('splits two nights of flats at new dust and compares them', async ({ page, 
     .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth), { timeout: 60_000 })
     .toBe(SIDE);
   await expect(viewer.getByTestId('flat-ratio-spots')).toBeVisible();
-  await expect(viewer.getByRole('list', { name: 'Spots that changed' })).toContainText('New: darker');
+  // The synthetic shadow is a filled disk, named by its shape.
+  await expect(viewer.getByRole('list', { name: 'Spots that changed' })).toContainText('New disk: darker');
   const stretch = viewer.getByRole('group', { name: 'Stretch' });
   await stretch.getByRole('button', { name: 'Tight' }).click();
   await expect(stretch.getByRole('button', { name: 'Tight' })).toHaveAttribute('aria-pressed', 'true');

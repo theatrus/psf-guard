@@ -260,8 +260,25 @@ own median. What all the flats share, dust and vignetting, divides out; what
 changes between them, such as drying dew, stays. The window is then ±10%,
 ±3% or ±1%. It needs three flats in the session. The session's median is
 worked out once, which reads every flat of the session, and kept for the
-other flats. **Spots** marks the deepest spots grading measured in the
-frame.
+other flats.
+
+**Spots** draws the dust grading measured in the frame, at its shape and
+size: a compact or irregular spot as its box, an out-of-focus **disk** as
+its rim, a **donut** (dust seen through a central obstruction, as in
+an SCT) as its ring and lit hole, and a **patch** of overlapping disks that
+would not separate as its box. Nested under Spots, **Large dust** turns
+the disks, donuts, patches and vignetting on and off; a **vignetting** shadow
+hanging from an edge or corner, such as an off-axis guider's prism, is
+drawn where it hangs, as a band along its edge or a quarter disc in its
+corner, dashed, and is never counted as dust. Each large mark
+carries its shape, depth and, when the frame's header gives the focal
+ratio and pixel size, how far in front of the sensor the dust sits and
+where that is: `disk 0.33% · ~11 mm, filter/window`. Hover or tap a mark
+for its numbers. Against the session, the overlay draws the session's
+own dust, found on the stack of its flats, with the number of flats each
+shows in; dust this flat does not show is marked so, and what this flat
+alone holds, such as a drop of dew drying, is drawn as a transient, not
+as dust. Spots and Large dust are kept in the address like the stretch.
 
 Pictures are drawn by the same queue as light previews: the page asks, the
 server answers that the picture is on its way, and one poll for the whole
@@ -277,7 +294,8 @@ strip's picture and the viewer's come from one read.
 The panel beside the viewer gives the frame's file, capture time and
 settings, its grade and main reason, and the numbers grading measured, each
 beside the median of the other measured frames of its session: for a flat
-its level, clipped share, noise and spots; for a bias or dark its level,
+its level, clipped share, noise and spots, read as `15 spots · 3 large
+disks`; for a bias or dark its level,
 spread, noise, row and column banding and hot pixels. Below them are the
 limits the frame crossed, each with its value and the limit.
 
@@ -590,9 +608,21 @@ level is taken out. Two numbers come from the ratio, each in percent of
 the sky background a light would be left with if it took the other night's
 flats:
 
-- **Dust**: the deepest shadow that appeared, left or moved. A spot counts
-  only where one of the two responses holds a dip; a bright leftover star
-  is not dust.
+- **Dust**: the deepest shadow that appeared, left or moved, by the same
+  definition the frames' Spots use: compact and irregular dips, and the
+  large, shallow disks and donuts of dust further up the train, found by
+  their sharp rim. A bright leftover star in a tracked sky flat is not
+  dust. Dust both nights hold that moved no further than focus travel
+  explains (25 pixels, or 15% of a disk's radius when that is more) is
+  drawn, marked within focus travel, and not counted; so is the crescent
+  it leaves on its rim. Window dust that arrives in front of a disk both
+  nights hold is new dust.
+- **Vignetting**: a shadow hanging from an edge or corner that deepened,
+  lightened or moved, such as an off-axis guider's prism turned with the
+  camera. It is held to the light-pattern limit, as a large, smooth change
+  is, and parts groups past it, since the flats really differ; it is named
+  as vignetting, never as new dust. A change of vignetting with no dust
+  carries no angle range across it.
 - **Light pattern**: the largest broad difference, such as a changed
   vignette, after a straight gradient is taken out. Background extraction
   removes a gradient from the stack.
@@ -1164,7 +1194,21 @@ can be a good flat.
 A spot is a small patch that passes less light than the response around
 it. Dust makes spots that sit in every flat of a session at the same depth;
 those are left alone. Dew or frost drying off the window makes spots that
-fade from one flat to the next; a flat holding many of those is poor.
+fade from one flat to the next; a flat holding many of those is poor. A
+spot of four pixels or fewer must clear a threshold raised for the number
+of pixels in the frame, so a 26-megapixel flat does not count its own
+noise. The large disks, donuts and patches are counted apart, as **large
+dust**: they belong to the light path, and the spot limits are not for
+them.
+
+The flat grouping pass also finds each session's dust on the stack of its
+flats, where noise is about three times lower for ten flats, and counts in
+how many of the session's flats each shadow shows. Dust holds still across
+flats shot a minute apart; noise does not. It reads no flat to do so: the
+stack is the session's kept response, and each flat's own shadows are the
+ones its grade measured. A session whose flats are not all graded yet shows
+its stack's dust alone until they are. A new bias or dark-flat level, or a
+new dust measure, finds the dust again without reading a flat.
 
 ### When frames are graded
 

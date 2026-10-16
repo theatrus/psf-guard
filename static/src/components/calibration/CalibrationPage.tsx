@@ -611,6 +611,10 @@ function CalibrationFrames({
       onView={state.setView}
       onStretch={state.setStretch}
       onFull={state.setFull}
+      showSpots={state.spots}
+      showDust={state.dust}
+      onShowSpots={state.setSpots}
+      onShowDust={state.setDust}
       canManage={canManage}
       actions={actions}
       keysEnabled={!state.master}
@@ -693,6 +697,11 @@ function CalibrationFrames({
               laterSession={flatIndex.response(ratio.later)}
               title={pair.event?.what ?? pair.split?.reason ?? 'Two flat sessions'}
               spots={pair.event?.spots ?? pair.split?.spots ?? []}
+              vignetting={pair.event?.vignetting ?? pair.split?.vignetting ?? []}
+              showSpots={state.ratioSpots}
+              showDust={state.dust}
+              onShowSpots={state.setRatioSpots}
+              onShowDust={state.setDust}
               stretch={state.stretch}
               onStretch={state.setStretch}
               onClose={closeRatio}

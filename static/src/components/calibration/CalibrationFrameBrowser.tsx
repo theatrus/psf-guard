@@ -36,6 +36,11 @@ interface CalibrationFrameBrowserProps {
   onView: (view: CalibrationFrameView) => void;
   onStretch: (stretch: CalibrationFrameStretch) => void;
   onFull: (full: boolean) => void;
+  /** Spots drawn over the frame, and nested under it, large dust. */
+  showSpots: boolean;
+  showDust: boolean;
+  onShowSpots: (show: boolean) => void;
+  onShowDust: (show: boolean) => void;
   canManage: boolean;
   actions: ReturnType<typeof useCalibrationActions>;
   /** ← → and C answer: off while a master is open. */
@@ -69,6 +74,10 @@ export default function CalibrationFrameBrowser({
   onView,
   onStretch,
   onFull,
+  showSpots,
+  showDust,
+  onShowSpots,
+  onShowDust,
   canManage,
   actions,
   keysEnabled,
@@ -148,7 +157,12 @@ export default function CalibrationFrameBrowser({
   if (known !== undefined && known !== held) setHeld(known);
   const compare = known ?? held;
   const spots = current?.measurement?.type === 'flat' && current.measurement.features
-    ? { width: current.measurement.width, height: current.measurement.height, features: current.measurement.features }
+    ? {
+        width: current.measurement.width,
+        height: current.measurement.height,
+        features: current.measurement.features,
+        vignetting: current.measurement.vignetting,
+      }
     : undefined;
 
   const hotkeys = { enabled: keysEnabled, preventDefault: true };
@@ -183,6 +197,11 @@ export default function CalibrationFrameBrowser({
             full={full}
             canCompare={compare}
             spots={spots}
+            sessionDust={current?.session_dust}
+            showSpots={showSpots}
+            showDust={showDust}
+            onShowSpots={onShowSpots}
+            onShowDust={onShowDust}
             onView={onView}
             onStretch={onStretch}
             onFull={onFull}
