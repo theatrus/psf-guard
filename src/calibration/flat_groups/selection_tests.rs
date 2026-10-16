@@ -611,7 +611,7 @@ fn a_flat_away_for_good_is_not_read_again_on_every_pass() {
     let row = super::store::load_responses(&conn).unwrap().remove(0);
     assert_eq!(row.frames, 3);
     assert_eq!(row.unread.len(), 1);
-    assert!(row.unread[0].missing, "{:?}", row.unread);
+    assert_eq!(row.unread[0].kind, super::store::UnreadKind::Missing);
     assert!(!row.unread[0].reason.is_empty());
 
     let (second, _) = pass_counting_yields(&conn, &dir);
@@ -633,25 +633,98 @@ fn a_flat_away_for_good_is_not_read_again_on_every_pass() {
     assert_eq!(fourth.frames_read, 0, "{fourth:?}");
 }
 
-/// A flat whose file is there but will not read is recorded with why, and
-/// is not read again on each pass; nor does it keep the rig retrying.
+/// A flat whose file is there but will not decode is recorded with why,
+/// and is not read again on each pass; nor does it keep the rig retrying.
+/// A good file put at the same path is read on the next pass, though the
+/// catalog's fingerprint for it is unchanged.
 #[test]
-fn a_flat_that_will_not_read_is_recorded_and_not_read_again() {
+fn a_flat_that_will_not_decode_is_read_again_only_once_its_file_is_replaced() {
     let temp = tempfile::tempdir().unwrap();
     let frames = four_flats(temp.path());
     let (conn, dir) = unmeasured_catalog(temp.path(), &frames);
-    std::fs::write(temp.path().join("four-more-0.fits"), b"not a FITS file").unwrap();
+    let path = temp.path().join("four-more-0.fits");
+    let good = std::fs::read(&path).unwrap();
+    std::fs::write(&path, b"not a FITS file").unwrap();
 
     let (first, _) = pass_counting_yields(&conn, &dir);
     assert_eq!((first.measured, first.unreadable), (1, 0), "{first:?}");
     assert!(first.retry.is_empty(), "a retry would not read it either");
     let row = super::store::load_responses(&conn).unwrap().remove(0);
     assert_eq!(row.frames, 3);
-    assert!(!row.unread[0].missing, "{:?}", row.unread);
+    assert_eq!(row.unread[0].kind, super::store::UnreadKind::Undecodable);
+    assert!(row.unread[0].stamp.is_some());
 
     let (second, _) = pass_counting_yields(&conn, &dir);
     assert_eq!(second.frames_read, 0, "{second:?}");
     assert!(second.retry.is_empty());
+
+    // The file is replaced where it lies.
+    std::fs::write(&path, good).unwrap();
+    let (third, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!((third.measured, third.frames_read), (1, 4), "{third:?}");
+    let row = super::store::load_responses(&conn).unwrap().remove(0);
+    assert_eq!((row.frames, row.unread.len()), (4, 0));
+    let (fourth, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(fourth.frames_read, 0, "{fourth:?}");
+}
+
+/// Review of #879: a flat the file system refuses (a permission, a share
+/// that dropped, an I/O error) is not final. Its rig stays on the retry
+/// ladder, a pass reads nothing while it is still refused, and the first
+/// pass after it opens again reads the session.
+#[cfg(unix)]
+#[test]
+fn a_flat_refused_for_a_while_is_read_again_once_it_opens() {
+    use std::os::unix::fs::PermissionsExt;
+    let temp = tempfile::tempdir().unwrap();
+    let frames = write_session(temp.path(), &BEFORE_HA_0, 1);
+    let (conn, dir) = unmeasured_catalog(temp.path(), &frames);
+    let files: Vec<PathBuf> = (0..3)
+        .map(|index| {
+            temp.path()
+                .join(format!("{}-{index}.fits", BEFORE_HA_0.name))
+        })
+        .collect();
+    let set_mode = |mode: u32| {
+        for file in &files {
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+    };
+    set_mode(0o000);
+    if std::fs::File::open(&files[0]).is_ok() {
+        // Run as root: permissions refuse nothing.
+        set_mode(0o644);
+        return;
+    }
+
+    let (first, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!((first.measured, first.unreadable), (0, 1), "{first:?}");
+    assert_eq!(first.retry.len(), 1, "the rig waits on the retry ladder");
+    let row = super::store::load_responses(&conn).unwrap().remove(0);
+    assert!(row.error.is_some());
+    assert!(
+        row.unread
+            .iter()
+            .all(|flat| flat.kind == super::store::UnreadKind::Transient),
+        "{:?}",
+        row.unread
+    );
+
+    let (second, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(second.frames_read, 0, "still refused; {second:?}");
+    assert_eq!(second.retry.len(), 1);
+
+    set_mode(0o644);
+    let (third, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(
+        (third.measured, third.unreadable, third.frames_read),
+        (1, 0, 3),
+        "{third:?}"
+    );
+    let row = super::store::load_responses(&conn).unwrap().remove(0);
+    assert_eq!((row.error, row.unread.len()), (None, 0));
+    let (fourth, _) = pass_counting_yields(&conn, &dir);
+    assert_eq!(fourth.frames_read, 0, "{fourth:?}");
 }
 
 /// A session none of whose flats can be read is kept as such, with why,

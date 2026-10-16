@@ -18,7 +18,9 @@
 use super::evidence::{self, EVIDENCE_ALGORITHM_VERSION};
 use super::metric::{self, Plane};
 use super::model::{canonical_filter, Book, Side};
-use super::store::{self, EvidenceFit, EvidenceRow, ResponseRow, UnreadFlat, Verdict};
+use super::store::{
+    self, EvidenceFit, EvidenceRow, FileStamp, ResponseRow, UnreadFlat, UnreadKind, Verdict,
+};
 use super::{family_job, family_store};
 use crate::calibration::{CalibrationFrame, CalibrationKind, LibrarySnapshot, Nights};
 use anyhow::{Context, Result};
@@ -608,15 +610,15 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
                 .collect();
             outcome.sessions += plans.len();
             // A session is done once its response is kept (see
-            // `response_is_current`). One left with flats away is read
-            // again when they are back, and keeps its rig on the retry
-            // ladder meanwhile; it is not read on every pass.
+            // `response_is_current`). One left with flats away or refused
+            // is read again once they may read, and keeps its rig on the
+            // retry ladder meanwhile; it is not read on every pass.
             let mut todo: Vec<(&SessionPlan, String)> = Vec::new();
             for plan in &plans {
                 let key = plan.response_key();
                 match known.get(&key) {
                     Some(row) if response_is_current(pass.dir, plan, row) => {
-                        if row.unread.iter().any(|flat| flat.missing) {
+                        if row.unread.iter().any(|flat| flat.kind.retries()) {
                             outcome.unreadable += 1;
                         }
                     }
@@ -852,17 +854,15 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
 /// Whether a session's kept response stands, so the pass reads nothing for
 /// it: its plane is on disk and it combines every flat it could read, or it
 /// could not be combined at all. The flats it could not read count as done
-/// until one that was away has its file back. A flat whose file is there
-/// but will not read is not tried again until the file's fingerprint, and
-/// so the key, changes. An older row that names no unread flats but
-/// combines fewer than its session holds is read once more to name them.
+/// until one may read now ([`may_read_now`]). An older row that names no
+/// unread flats but combines fewer than its session holds is read once more
+/// to name them.
 fn response_is_current(dir: &Path, plan: &SessionPlan, row: &ResponseRow) -> bool {
     let combined = plan.combined();
     let back = row.unread.iter().any(|flat| {
-        flat.missing
-            && combined
-                .iter()
-                .any(|frame| frame.frame_uuid == flat.frame_uuid && frame.source_path.is_file())
+        combined
+            .iter()
+            .any(|frame| frame.frame_uuid == flat.frame_uuid && may_read_now(flat, frame))
     });
     if back {
         return false;
@@ -870,6 +870,59 @@ fn response_is_current(dir: &Path, plan: &SessionPlan, row: &ResponseRow) -> boo
     row.error.is_some()
         || (super::response_path(dir, &row.response_key).is_file()
             && row.frames + row.unread.len() >= combined.len())
+}
+
+/// The size and modification time of the file at `path` now; none when no
+/// file is there.
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok().filter(|meta| meta.is_file())?;
+    let modified_ns = meta
+        .modified()
+        .ok()
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_nanos() as u64);
+    Some(FileStamp {
+        size: meta.len(),
+        modified_ns,
+    })
+}
+
+/// Whether a flat a session could not read is worth reading again: a
+/// missing file is there now, a refused one opens, or the file at its path
+/// is another than the one that failed (its size or time differ). Only
+/// stats and opens; reads no pixel.
+fn may_read_now(flat: &UnreadFlat, frame: &CalibrationFrame) -> bool {
+    let path = &frame.source_path;
+    let replaced = || file_stamp(path).is_some_and(|now| flat.stamp != Some(now));
+    match flat.kind {
+        UnreadKind::Missing => path.is_file(),
+        UnreadKind::Transient => replaced() || std::fs::File::open(path).is_ok(),
+        UnreadKind::Undecodable => replaced(),
+    }
+}
+
+/// Why a flat would not read, from the I/O error under it: no file, a file
+/// the file system would not give up, or one that is not a readable image
+/// (bad data, cut short).
+fn unread_kind(error: &anyhow::Error, path: &Path) -> UnreadKind {
+    use std::io::ErrorKind;
+    let io = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind)
+            // A FITS error keeps its I/O error without naming it a source.
+            .or_else(|| match cause.downcast_ref::<seiza_fits::FitsError>() {
+                Some(seiza_fits::FitsError::Io(error)) => Some(error.kind()),
+                _ => None,
+            })
+    });
+    match io {
+        Some(ErrorKind::NotFound) => UnreadKind::Missing,
+        Some(ErrorKind::InvalidData | ErrorKind::UnexpectedEof) => UnreadKind::Undecodable,
+        Some(_) => UnreadKind::Transient,
+        None if !path.is_file() => UnreadKind::Missing,
+        None => UnreadKind::Undecodable,
+    }
 }
 
 /// Read one flat session and keep its response, with the flats it could
@@ -901,14 +954,16 @@ fn measure_session(
             Ok(plane) => planes.push(plane),
             Err(error) => unread.push(UnreadFlat {
                 frame_uuid: frame.frame_uuid.clone(),
-                missing: !frame.source_path.is_file(),
+                kind: unread_kind(&error, &frame.source_path),
                 reason: format!("{error:#}"),
+                stamp: file_stamp(&frame.source_path),
             }),
         }
     }
-    // Files away, as on an unmounted share or a copy moved elsewhere: the
-    // caller tries again, and a pass reads the session once they are back.
-    if unread.iter().any(|flat| flat.missing) {
+    // Files away or refused, as on an unmounted share, a copy moved
+    // elsewhere or a permission: the caller tries again, and a pass reads
+    // the session once they may read.
+    if unread.iter().any(|flat| flat.kind.retries()) {
         outcome.unreadable += 1;
     }
     let bin = planes.first().map_or(1, |(_, bin)| *bin);

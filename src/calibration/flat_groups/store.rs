@@ -14,7 +14,8 @@
 
 use super::measure::metric::{Comparison, Spot};
 pub use super::measure::rows::{
-    ComparisonRow, EvidenceFit, EvidenceRow, ResponseRow, UnreadFlat, Verdict,
+    ComparisonRow, EvidenceFit, EvidenceRow, FileStamp, ResponseRow, UnreadFlat, UnreadKind,
+    Verdict,
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};

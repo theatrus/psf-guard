@@ -656,13 +656,16 @@ opens the rig's own value or the global one.
   (`store::forget_frames`); the next pass measures the session again from
   the rows the library holds.
 - **Partial reads**: a response records the flats it could not read
-  (`unread`), each with its reason and whether its file was missing. The
-  session is read again only when a missing file is back; until then its
-  rig stays on the retry ladder, and passes read none of its frames. A
-  flat whose file is there but will not read is tried again only when its
-  fingerprint changes the key. A session too few of whose flats read is
-  kept with that error and its unread flats, and is read again on the same
-  terms. A row from before `unread` that combines fewer flats than its
+  (`unread`), each with its reason, its file's size and time at the
+  failure, and a kind taken from the I/O error under it: `missing` (no
+  file), `transient` (any other I/O error, as a permission or a share that
+  dropped) or `undecodable` (bad data, cut short, not an image). The
+  session is read again once a flat may read: a missing file is there, a
+  transient one opens, or any file at its path has another size or time.
+  Until then passes read none of its frames, and a missing or transient
+  flat keeps its rig on the retry ladder. A session too few of whose
+  flats read is kept with that error and its unread flats, and is read
+  again on the same terms. A row from before `unread` that combines fewer flats than its
   session holds is read once more to record them. A session whose flats
   could not be combined at all stays recorded with its error until its
   frames or the algorithm change its key.
