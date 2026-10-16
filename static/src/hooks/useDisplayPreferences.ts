@@ -45,6 +45,15 @@ export type ProjectGrouping = (typeof SINGLE_PROJECT_MODES)[number];
 /** How Images groups every project's frames, under All projects. */
 export type AllProjectsGrouping = (typeof MULTI_PROJECT_MODES)[number];
 
+/** The night and hour marks between cards in Images and Sequence. */
+export type TimeMarksChoice = 'nights-hours' | 'nights' | 'off';
+export const TIME_MARKS_CHOICES: readonly TimeMarksChoice[] = ['nights-hours', 'nights', 'off'];
+export const TIME_MARKS_LABELS: Record<TimeMarksChoice, string> = {
+  'nights-hours': 'Nights and hours',
+  nights: 'Nights only',
+  off: 'Off',
+};
+
 export interface DisplayPreferences {
   /** Show the smaller "night <score>" chip — the per-session basis shown
    * when the main badge is the all-sessions score. */
@@ -71,6 +80,9 @@ export interface DisplayPreferences {
    */
   /** The order Images and Sequence show their frames in. */
   imageOrder?: ImageOrder;
+  /** Which marks Images and Sequence draw where frames cross into another
+   *  night or hour. */
+  timeMarks?: TimeMarksChoice;
   /** Images' grouping for one project. */
   imageGrouping?: ProjectGrouping;
   /** Images' grouping under All projects. */
@@ -109,6 +121,7 @@ const DEFAULTS: Required<DisplayPreferences> = {
   advanceOnGrade: true,
   projectPickerGrouping: 'activity',
   libraryDensity: 'compact',
+  timeMarks: 'nights-hours',
   detailSections: {},
   imageOrder: DEFAULT_IMAGE_ORDER,
   imageGrouping: DEFAULT_SINGLE_PROJECT_MODE as ProjectGrouping,
@@ -180,6 +193,7 @@ export function sanitizeDisplayPreferences(parsed: StoredPreferences): Required<
     advanceOnGrade: flag(parsed.advanceOnGrade, DEFAULTS.advanceOnGrade),
     projectPickerGrouping: oneOf(parsed.projectPickerGrouping, ['activity', 'database'], DEFAULTS.projectPickerGrouping),
     libraryDensity: oneOf(parsed.libraryDensity, ['compact', 'detailed'], DEFAULTS.libraryDensity),
+    timeMarks: oneOf(parsed.timeMarks, TIME_MARKS_CHOICES, DEFAULTS.timeMarks),
     detailSections: sanitizeSections(parsed.detailSections),
     imageOrder: parseImageOrder(typeof parsed.imageOrder === 'string' ? parsed.imageOrder : null) ?? DEFAULTS.imageOrder,
     imageGrouping: oneOf(parsed.imageGrouping, SINGLE_PROJECT_MODES as readonly ProjectGrouping[], DEFAULTS.imageGrouping),

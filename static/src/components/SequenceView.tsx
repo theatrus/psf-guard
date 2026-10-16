@@ -32,6 +32,9 @@ import { useProjectMosaic } from '../hooks/useProjectMosaic';
 import { useNightBoundary } from '../hooks/useNightBoundary';
 import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
 import TimeBreakMark from './TimeBreakMark';
+import TimeMarksChoice from './TimeMarksChoice';
+import NightSplitChoice from './NightSplitChoice';
+import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SequenceCutoffControl from './SequenceCutoffControl';
 import {
   cutoffMetricOf,
@@ -85,6 +88,7 @@ import {
   selectionRuleOf,
   type SelectionRuleId,
 } from '../utils/sequenceSelectionRules';
+import { keepAcrossNightSplit, nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
 
 interface SequenceChoice {
   key: string;
@@ -205,15 +209,21 @@ export default function SequenceView() {
   });
 
   // Fetch images for the target (for preview URLs)
+  // Nights as the view splits them, the server's setting or the link's.
+  const nightSplit = useNightSplit();
   const { data: images = [] } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.queryKey],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId || undefined,
         target_id: targetId || undefined,
         limit: 10000,
+        nights: nightSplit.override ?? undefined,
       }),
     enabled: !!dbId && projectId !== undefined,
+    // A new night split keeps the old frames on screen until its own
+    // arrive, so the grid neither empties nor loses its place.
+    placeholderData: keepAcrossNightSplit(['db', dbId, 'all-images', projectId, targetId]),
   });
 
   // Build image lookup map
@@ -987,7 +997,10 @@ export default function SequenceView() {
             )}
           </>
         )}
-        viewNote={order === 'newest' ? 'newest first' : undefined}
+        viewNote={[
+          order === 'newest' ? 'newest first' : undefined,
+          nightSplitNote(nightSplit.override, nightSplit.setting),
+        ].filter(Boolean).join(', ') || undefined}
         view={(
           <>
             <ImageOrderToggle
@@ -995,6 +1008,8 @@ export default function SequenceView() {
               onChange={chooseOrder}
               title="The frames and the session tabs by capture time. The score chart keeps time left to right."
             />
+            <TimeMarksChoice id="sequence-time-marks" />
+            <NightSplitChoice id="sequence-night-split" />
             <div className="toolbar-field">
               <span className="toolbar-caption">Chips</span>
               <SecondaryScoreToggle />
@@ -1528,9 +1543,14 @@ const SequenceStrip = memo(function SequenceStrip({
     });
   }, [currentImageId, imageSize, stripRef]);
 
+  const { timeMarks: marksChoice = 'nights-hours' } = useDisplayPreferences();
   const marks = useMemo(
-    () => timeMarks(images.map((quality) => imageMap.get(quality.image_id)?.acquired_date), nightBoundarySeconds),
-    [imageMap, images, nightBoundarySeconds],
+    () => marksChoice === 'off' ? null : timeMarks(
+      images.map((quality) => imageMap.get(quality.image_id) ?? { acquired_date: null }),
+      nightBoundarySeconds,
+      { hours: marksChoice === 'nights-hours' },
+    ),
+    [imageMap, images, marksChoice, nightBoundarySeconds],
   );
 
   return (

@@ -2807,6 +2807,21 @@ pub struct CalibrationReportQuery {
     /// Count rejected lights too; the report leaves them out by default.
     #[serde(default)]
     pub include_rejected: bool,
+    /// The view's night split, `rig` or `catalog`, over the `light_nights`
+    /// setting, so the report names the nights the view groups by.
+    #[serde(default)]
+    pub nights: Option<String>,
+}
+
+/// A view's night split from its link, over the `light_nights` setting.
+#[derive(Debug, Default, Deserialize)]
+pub struct NightsQuery {
+    #[serde(default)]
+    pub nights: Option<String>,
+}
+
+fn nights_view(raw: Option<&str>) -> Option<crate::calibration::LightNightSplit> {
+    raw.and_then(crate::calibration::LightNightSplit::parse)
 }
 
 /// `GET /api/db/{db_id}/projects/{project_id}/calibration-report` — how the
@@ -2832,6 +2847,7 @@ pub async fn get_project_calibration_report(
             project_id,
             &directory_tree,
             query.include_rejected,
+            nights_view(query.nights.as_deref()),
         )
     })
     .await
@@ -2845,6 +2861,7 @@ pub async fn get_project_calibration_report(
 async fn project_calibration_gaps(
     ctx: &DbContext,
     project_id: i32,
+    nights: Option<crate::calibration::LightNightSplit>,
 ) -> Result<crate::calibration::ProjectCalibrationGaps, AppError> {
     let directory_tree = ctx
         .get_directory_tree()
@@ -2856,7 +2873,7 @@ async fn project_calibration_gaps(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
         .map_err(|error| anyhow::anyhow!("opening {database_path}: {error}"))?;
-        crate::calibration::project_calibration_gaps(&conn, project_id, &directory_tree)
+        crate::calibration::project_calibration_gaps(&conn, project_id, &directory_tree, nights)
     })
     .await
     .map_err(|error| AppError::InternalError(format!("calibration check task: {error}")))?
@@ -2869,9 +2886,10 @@ async fn project_calibration_gaps(
 pub async fn get_project_calibration_gaps(
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
+    Query(query): Query<NightsQuery>,
 ) -> Result<Json<ApiResponse<crate::calibration::ProjectCalibrationGaps>>, AppError> {
     Ok(Json(ApiResponse::success(
-        project_calibration_gaps(&ctx, project_id).await?,
+        project_calibration_gaps(&ctx, project_id, nights_view(query.nights.as_deref())).await?,
     )))
 }
 
@@ -2890,7 +2908,8 @@ pub async fn reject_uncalibrated_lights(
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(request): Json<RejectUncalibratedRequest>,
 ) -> Result<Json<ApiResponse<BatchGradeResponse>>, AppError> {
-    let gaps = project_calibration_gaps(&ctx, project_id).await?;
+    // The digest is the same whichever split names the nights.
+    let gaps = project_calibration_gaps(&ctx, project_id, None).await?;
     if gaps.digest != request.digest {
         return Err(AppError::Conflict(
             "The lights that cannot be calibrated changed since the check; check again".into(),
@@ -2918,9 +2937,24 @@ pub async fn reject_uncalibrated_lights(
 pub async fn get_image_calibration(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
+    Query(query): Query<NightsQuery>,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationExplanation>>, AppError> {
     let (image, filename, target_name) = resolve_image_meta(&ctx, image_id)?;
     let path = find_fits_file(&ctx, &image, &target_name, &filename)?;
+    // The light's night as the grid names it, so the panel's same-night
+    // flats and nights apart count from the night the light was opened in.
+    let light_night = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        let nights = crate::server::sky_coverage::cached_light_nights(
+            &ctx,
+            &conn,
+            nights_view(query.nights.as_deref()),
+        )?;
+        image
+            .acquired_date
+            .map(|at| nights.night_of(image.profile_id.as_deref(), at))
+    };
     let database_path = ctx.database_path.clone();
     let explanation = tokio::task::spawn_blocking(move || {
         let conn = open_scheduler_connection_with_flags(
@@ -2934,6 +2968,10 @@ pub async fn get_image_calibration(
     .await
     .map_err(|error| AppError::InternalError(format!("calibration explanation task: {error}")))?
     .map_err(|error| AppError::InternalError(format!("explaining calibration: {error:#}")))?;
+    let mut explanation = explanation;
+    if light_night.is_some() {
+        explanation.light.night = light_night;
+    }
     Ok(Json(ApiResponse::success(explanation)))
 }
 
@@ -4561,6 +4599,13 @@ pub async fn get_images(
             .collect();
         let mut copies = crate::frame_derivatives::derivatives_for_lights(&conn, &guids)
             .map_err(|error| AppError::InternalError(format!("reading copies: {error:#}")))?;
+        // Each light's observing night, split at its rig's local noon, so every
+        // view groups and marks nights from this one answer.
+        let light_nights = crate::server::sky_coverage::cached_light_nights(
+            &ctx,
+            &conn,
+            nights_view(params.nights.as_deref()),
+        )?;
 
         // Each frame's camera setup, and a few frames of each to read the size
         // from. A delayed remote upload may still be arriving: not one of them.
@@ -4619,6 +4664,9 @@ pub async fn get_images(
                     project_display_name,
                     target_id: img.target_id,
                     target_name,
+                    night: img
+                        .acquired_date
+                        .map(|at| light_nights.night_of(img.profile_id.as_deref(), at)),
                     acquired_date: img.acquired_date,
                     filter_name: img.filter_name,
                     grading_status: img.grading_status,
@@ -4843,6 +4891,8 @@ pub async fn get_image(
         project_display_name,
         target_id: image.target_id,
         target_name,
+        // The grid's list carries the night; the detail walks its groups.
+        night: None,
         acquired_date: image.acquired_date,
         filter_name: image.filter_name,
         grading_status: image.grading_status,

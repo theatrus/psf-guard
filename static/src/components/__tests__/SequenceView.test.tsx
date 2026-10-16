@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import SequenceView from '../SequenceView';
+import { getDisplayPreferences, setDisplayPreferences } from '../../hooks/useDisplayPreferences';
 import normalFixture from '../../__fixtures__/sequence-analysis-normal.json';
 import cloudsFixture from '../../__fixtures__/sequence-analysis-clouds.json';
 import multiSessionFixture from '../../__fixtures__/sequence-analysis-multi-session.json';
@@ -1105,6 +1106,73 @@ describe('SequenceView: selection rules', () => {
     expect(document.querySelectorAll(".sequence-strip > .time-slot[data-time-break='night']")).toHaveLength(0);
     expect(document.querySelectorAll('.sequence-strip > .time-slot')).toHaveLength(10);
     expect(document.querySelector('.time-break-label')?.textContent).toMatch(/^\d\d:00$/);
+  });
+
+  it('draws nights, nights only, or no marks as the View panel chooses', async () => {
+    setupDefaultHandlers();
+    server.use(http.get('/api/db/:dbId/images', () => HttpResponse.json({
+      success: true,
+      // Ten minutes apart, crossing an hour; the server names two nights.
+      data: mockImages.map((image, i) => ({
+        ...image,
+        acquired_date: 1705352400 + i * 600,
+        night: i < 5 ? '2024-01-15' : '2024-01-16',
+      })),
+      error: null,
+      status: 'ready',
+    })));
+    const before = getDisplayPreferences();
+    try {
+      const user = userEvent.setup();
+      renderWithLocation();
+      await cards();
+      const marks = (kind: string) =>
+        document.querySelectorAll(`.sequence-strip > .time-slot[data-time-break='${kind}']`).length;
+      // The night the image list names, not the catalog's split.
+      await waitFor(() => expect(marks('night')).toBe(1));
+      expect(document.querySelectorAll('.sequence-strip > .time-slot')[5]).toHaveAttribute('data-time-break', 'night');
+      expect(marks('hour')).toBeGreaterThan(0);
+
+      await user.selectOptions(screen.getByLabelText('Marks'), 'nights');
+      expect(getDisplayPreferences().timeMarks).toBe('nights');
+      await waitFor(() => expect(marks('hour')).toBe(0));
+      expect(marks('night')).toBe(1);
+
+      await user.selectOptions(screen.getByLabelText('Marks'), 'off');
+      await waitFor(() => expect(marks('night')).toBe(0));
+      expect(document.querySelector('.time-break-label')).toBeNull();
+    } finally {
+      setDisplayPreferences(before);
+    }
+  });
+
+  it('splits nights at the catalog\'s quiet hours when the View panel asks, through its link', async () => {
+    setupDefaultHandlers();
+    const asked: (string | null)[] = [];
+    server.use(http.get('/api/db/:dbId/images', ({ request }) => {
+      asked.push(new URL(request.url).searchParams.get('nights'));
+      return HttpResponse.json({ success: true, data: mockImages, error: null, status: 'ready' });
+    }));
+    const user = userEvent.setup();
+    const params = renderWithLocation();
+    await cards();
+    const choice = screen.getByLabelText('Nights split at');
+    expect(choice).toHaveValue('rig');
+    expect([...choice.querySelectorAll('option')].map((option) => option.textContent))
+      .toEqual(["The rig's local noon (setting)", "The catalog's quiet hours"]);
+    expect(asked.every((value) => value === null)).toBe(true);
+
+    await user.selectOptions(choice, 'catalog');
+    // The frames stay on screen while the new nights load.
+    expect(document.querySelectorAll('.sequence-image-card')).toHaveLength(10);
+    await waitFor(() => expect(params().get('nights')).toBe('catalog'));
+    await waitFor(() => expect(asked).toContain('catalog'));
+    expect(choice).toHaveClass('is-set');
+    expect(screen.getByRole('button', { name: /View \(catalog nights\)/ })).toBeInTheDocument();
+
+    // The setting's own choice clears the link.
+    await user.selectOptions(choice, 'rig');
+    await waitFor(() => expect(params().get('nights')).toBeNull());
   });
 
   it('keeps the clicks a reloaded URL carries', async () => {

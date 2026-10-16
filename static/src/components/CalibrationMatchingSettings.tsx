@@ -13,6 +13,7 @@ import {
 } from '../utils/calibrationRules';
 import CalibrationRuleControl from './CalibrationRuleControl';
 import { invalidateCalibrationViews } from '../utils/calibrationQueries';
+import { invalidateNightSplitViews } from '../hooks/useNightSplit';
 
 /** What each group's settings change, said once above them. */
 const GROUP_NOTES: Record<CalibrationRuleField['group'], string> = {
@@ -88,6 +89,8 @@ export default function CalibrationMatchingSettings({ focusField = null }: { foc
     mutationFn: apiClient.updateCalibrationSettings,
     onSuccess: (updated) => {
       queryClient.setQueryData(['calibration-settings'], updated);
+      // Lights' nights may split elsewhere now.
+      invalidateNightSplitViews(queryClient);
       setDrafts({});
       setFlatStarMasking(null);
       setExcludeUncalibrated(null);

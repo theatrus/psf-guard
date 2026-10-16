@@ -30,12 +30,12 @@ pub use health::{
     ProjectHealth, ProjectLight, FLAT_CHECK_AGE_DAYS, HEALTH_ALGORITHM_VERSION,
 };
 pub use night::{
-    backfill_frame_sites, backfill_rig_sites, NightSource, Nights, RigNight, SiteBackfill,
-    SiteBackfillOutcome,
+    backfill_frame_sites, backfill_rig_sites, LightNights, NightSource, Nights, RigNight,
+    SiteBackfill, SiteBackfillOutcome,
 };
 pub use rules::{
-    rule_book, rules_for_light, rules_for_rig, Check, CheckMode, RuleBook, RuleNote, RuleSource,
-    RuleValues, Rules,
+    rule_book, rules_for_light, rules_for_rig, Check, CheckMode, LightNightSplit, RuleBook,
+    RuleNote, RuleSource, RuleValues, Rules,
 };
 use std::sync::Arc;
 pub use twins::{
@@ -3461,14 +3461,17 @@ pub fn project_calibration_gaps(
     conn: &Connection,
     project_id: i32,
     directory_tree: &crate::directory_tree::DirectoryTree,
+    nights_view: Option<LightNightSplit>,
 ) -> Result<ProjectCalibrationGaps> {
     let db = crate::db::Database::new(conn);
     let rows = db
         .query_images_scoped(None, Some(project_id), None, None, 0)
         .context("querying project lights")?;
     let nights = Nights::load(conn);
-    // Lights are named by the night Images groups them in.
-    let boundary = nights.catalog();
+    // Lights are named by the night Images groups them in: their profile's
+    // rig's local noon.
+    let light_nights = LightNights::from_nights(conn, &nights, nights_view);
+    let boundary = project_night_boundary(&rows, &light_nights);
     let mut lights = Vec::new();
     let (mut checked, mut missing_files) = (0usize, 0usize);
     for (image, _project, _target) in &rows {
@@ -3490,7 +3493,7 @@ pub fn project_calibration_gaps(
                 filter: image.filter_name.clone(),
                 night: image
                     .acquired_date
-                    .map(|at| night_of(at, boundary))
+                    .map(|at| light_nights.night_of(image.profile_id.as_deref(), at))
                     .unwrap_or_else(|| "unknown".into()),
                 reason,
             });
@@ -3503,8 +3506,12 @@ pub fn project_calibration_gaps(
             .then_with(|| left.filter.cmp(&right.filter))
             .then_with(|| left.image_id.cmp(&right.image_id))
     });
+    // In image order, not the night order shown: the digest names which
+    // lights would be rejected and why, whichever split names their nights.
+    let mut hashed: Vec<&_> = lights.iter().collect();
+    hashed.sort_by_key(|light| light.image_id);
     let mut hasher = Sha256::new();
-    for light in &lights {
+    for light in hashed {
         hasher.update(light.image_id.to_le_bytes());
         hasher.update(light.reason.as_bytes());
         hasher.update(b"\0");
@@ -4352,6 +4359,26 @@ pub(crate) fn night_of(timestamp: i64, boundary: i64) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
+/// Where a project's nights split, for the date links of its report: the
+/// split of the profile most of its lights were shot under. A project
+/// keeps one profile, so each light's own night (`LightNights::night_of`)
+/// and this agree; a project whose lights carry several still names each
+/// light's night by its own.
+fn project_night_boundary(
+    rows: &[(crate::models::AcquiredImage, String, String)],
+    light_nights: &LightNights,
+) -> i64 {
+    let mut counts: BTreeMap<Option<&str>, usize> = BTreeMap::new();
+    for (image, _, _) in rows {
+        *counts.entry(image.profile_id.as_deref()).or_default() += 1;
+    }
+    let profile = counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+        .and_then(|(profile, _)| profile);
+    light_nights.of_profile(profile).boundary_seconds
+}
+
 /// Where this catalog's lights' nights split, as Images groups them; noon
 /// UTC when its lights cannot be read. A rig's calibration frames split at
 /// its own local noon instead ([`Nights`]).
@@ -4371,6 +4398,7 @@ pub fn project_calibration_report(
     project_id: i32,
     directory_tree: &crate::directory_tree::DirectoryTree,
     include_rejected: bool,
+    nights_view: Option<LightNightSplit>,
 ) -> Result<ProjectCalibrationReport> {
     let db = crate::db::Database::new(conn);
     let rows = db
@@ -4379,9 +4407,11 @@ pub fn project_calibration_report(
 
     // Bucket lights by (night, filter) and pick the median exposure of each
     // bucket as its representative. Lights take the nights Images groups
-    // them by; calibration frames their own rig's.
+    // them by, their profile's rig's local noon (a project's lights share
+    // its profile); calibration frames their own rig's.
     let rig_nights = Nights::load(conn);
-    let boundary = rig_nights.catalog();
+    let light_nights = LightNights::from_nights(conn, &rig_nights, nights_view);
+    let boundary = project_night_boundary(&rows, &light_nights);
     let frame_night = |frame: &CalibrationFrame| {
         frame
             .captured_at
@@ -4403,7 +4433,10 @@ pub fn project_calibration_report(
             continue;
         };
         buckets
-            .entry((night_of(acquired, boundary), image.filter_name.clone()))
+            .entry((
+                light_nights.night_of(image.profile_id.as_deref(), acquired),
+                image.filter_name.clone(),
+            ))
             .or_default()
             .push((acquired, basename));
     }
@@ -13081,7 +13114,7 @@ pub(crate) mod tests {
             .query_row("SELECT id FROM project LIMIT 1", [], |row| row.get(0))
             .unwrap();
         let tree = crate::directory_tree::DirectoryTree::build_multiple(&[temp.path()]).unwrap();
-        let report = project_calibration_report(&conn, project_id, &tree, false).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, false, None).unwrap();
 
         assert_eq!(report.nights.len(), 2);
         // Newest night first; it has no same-night flats.
@@ -13122,7 +13155,7 @@ pub(crate) mod tests {
             [night_two],
         )
         .unwrap();
-        let report = project_calibration_report(&conn, project_id, &tree, false).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, false, None).unwrap();
         assert_eq!(report.nights.len(), 1);
         assert_eq!(report.nights[0].night, oldest.night);
         assert_eq!(report.rejected_lights, 1);
@@ -13131,7 +13164,7 @@ pub(crate) mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("same-night flats")));
-        let report = project_calibration_report(&conn, project_id, &tree, true).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, true, None).unwrap();
         assert_eq!(report.nights.len(), 2);
         assert_eq!(report.rejected_lights, 1);
         assert!(report.rejected_included);
@@ -13140,7 +13173,7 @@ pub(crate) mod tests {
         // reads as missing.
         conn.execute("UPDATE acquiredimage SET gradingStatus = 2", [])
             .unwrap();
-        let report = project_calibration_report(&conn, project_id, &tree, false).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, false, None).unwrap();
         assert!(report.nights.is_empty());
         assert_eq!(report.rejected_lights, 2);
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);

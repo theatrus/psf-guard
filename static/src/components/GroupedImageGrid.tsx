@@ -62,8 +62,11 @@ import FlatSideDialog from './FlatSideDialog';
 import { useFlatChoiceAccess } from './calibration/useFlatGroupChoices';
 import ScoringChangedNote from './ScoringChangedNote';
 import TimeBreakMark from './TimeBreakMark';
+import TimeMarksChoice from './TimeMarksChoice';
+import NightSplitChoice from './NightSplitChoice';
 import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
+import { keepAcrossNightSplit, nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -123,7 +126,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
 
   // Initialize grading system with undo/redo
   const grading = useGrading(dbId!);
-  const { advanceOnGrade, showCalibrationChip } = useDisplayPreferences();
+  const { advanceOnGrade, showCalibrationChip, timeMarks: marksChoice = 'nights-hours' } = useDisplayPreferences();
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
   // The selected lights whose flat side is being chosen.
@@ -148,15 +151,21 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   }, [latestParams, navigateNow]);
   
   // Fetch ALL images (no pagination for grouping) with periodic refresh
+  // Nights as the view splits them, the server's setting or the link's.
+  const nightSplit = useNightSplit();
   const { data: allImages = [], isLoading: imagesLoading } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.queryKey],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId || undefined, // null becomes undefined for API
         target_id: targetId || undefined,
         limit: 10000, // Get all images
+        nights: nightSplit.override ?? undefined,
       }),
     enabled: !!dbId && projectId !== undefined, // Need dbId and a project (or null=all-in-this-db)
+    // A new night split keeps the old frames on screen until its own
+    // arrive, so the grid neither empties nor loses its place.
+    placeholderData: keepAcrossNightSplit(['db', dbId, 'all-images', projectId, targetId]),
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: true,
   });
@@ -331,11 +340,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Where each group's frames cross into another night or hour, drawn in
   // the gaps between cards.
   const groupTimeMarks = useMemo(
-    () => new Map(imageGroups.map((group) => [
-      imageGroupKey(group),
-      timeMarks(group.images.map((image) => image.acquired_date), nightBoundarySeconds),
-    ])),
-    [imageGroups, nightBoundarySeconds],
+    () => marksChoice === 'off'
+      ? new Map<string, ReturnType<typeof timeMarks>>()
+      : new Map(imageGroups.map((group) => [
+        imageGroupKey(group),
+        timeMarks(group.images, nightBoundarySeconds, { hours: marksChoice === 'nights-hours' }),
+      ])),
+    [imageGroups, marksChoice, nightBoundarySeconds],
   );
 
   const visibleExpandedGroups = useMemo(
@@ -956,7 +967,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               icons
             />
           )}
-          viewNote={order === 'newest' ? 'newest first' : undefined}
+          viewNote={[
+          order === 'newest' ? 'newest first' : undefined,
+          nightSplitNote(nightSplit.override, nightSplit.setting),
+        ].filter(Boolean).join(', ') || undefined}
           view={(
             <>
               <div className="toolbar-field">
@@ -978,6 +992,8 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 onChange={chooseOrder}
                 title="The frames in each group by capture time. Date and Session groups always start with the newest night."
               />
+              <TimeMarksChoice id="grid-time-marks" />
+              <NightSplitChoice id="grid-night-split" />
               <div className="toolbar-field">
                 <span className="toolbar-caption">Chips</span>
                 <SecondaryScoreToggle />

@@ -1,7 +1,10 @@
 import { useAccess } from '../auth/access';
 import {
   setDisplayPreferences,
+  TIME_MARKS_CHOICES,
+  TIME_MARKS_LABELS,
   useDisplayPreferences,
+  type TimeMarksChoice as TimeMarksChoiceValue,
 } from '../hooks/useDisplayPreferences';
 import { CalibrationIcon, LayersIcon, MoonIcon } from './ScoreChipIcons';
 import ScoringDefaultsSettings from './ScoringDefaultsSettings';
@@ -77,6 +80,31 @@ export default function ReviewPreferences() {
       </label>
 
       <ScoringDefaultsSettings />
+
+      <h3>Images and Sequence</h3>
+      <label className="review-preference">
+        <span>
+          Night and hour marks
+          <small>
+            Lines between cards where frames cross into another night, split
+            at each rig's local noon, or another hour. The View panel in
+            Images and Sequence changes this too.
+          </small>
+        </span>
+        <select
+          value={preferences.timeMarks ?? 'nights-hours'}
+          aria-label="Night and hour marks"
+          onChange={(event) => set({
+            timeMarks: (TIME_MARKS_CHOICES as readonly string[]).includes(event.target.value)
+              ? event.target.value as TimeMarksChoiceValue
+              : 'nights-hours',
+          })}
+        >
+          {TIME_MARKS_CHOICES.map((choice) => (
+            <option key={choice} value={choice}>{TIME_MARKS_LABELS[choice]}</option>
+          ))}
+        </select>
+      </label>
 
       <h3>Top bar</h3>
       <label className="review-preference">

@@ -7,6 +7,7 @@ import { useAccess } from '../auth/access';
 import type { CalibrationExternalMaster, CalibrationHealthFinding, CalibrationHealthLevel, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
 import Dialog from './Dialog';
 import { calibrationGridHref, calibrationPageHref, nightDates, type NightDates } from './calibration/calibrationLinks';
+import { useNightSplit } from '../hooks/useNightSplit';
 import './CalibrationReportDialog.css';
 
 interface Props {
@@ -96,9 +97,11 @@ function UncalibratedLights({ dbId, projectId, onShow }: { dbId: string; project
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const [notice, setNotice] = useState('');
+  // Nights as the view splits them, so each night's link opens its lights.
+  const { override: nights } = useNightSplit();
   const check = useMutation({
     retry: false,
-    mutationFn: () => apiClient.getProjectCalibrationGaps(dbId, projectId),
+    mutationFn: () => apiClient.getProjectCalibrationGaps(dbId, projectId, nights),
     onSuccess: () => setNotice(''),
   });
   const reject = useMutation({
@@ -248,9 +251,11 @@ export default function CalibrationReportDialog({
   onClose,
 }: Props) {
   const [includeRejected, setIncludeRejected] = useState(false);
+  // Nights as the view splits them, so each night's link opens its lights.
+  const { override: nights, queryKey: split } = useNightSplit();
   const report = useQuery<ProjectCalibrationReport>({
-    queryKey: ['db', dbId, 'project', projectId, 'calibration-report', { includeRejected }],
-    queryFn: () => apiClient.getProjectCalibrationReport(dbId, projectId, includeRejected),
+    queryKey: ['db', dbId, 'project', projectId, 'calibration-report', { includeRejected, split }],
+    queryFn: () => apiClient.getProjectCalibrationReport(dbId, projectId, includeRejected, nights),
     enabled: open,
     staleTime: 60_000,
     placeholderData: keepPreviousData,

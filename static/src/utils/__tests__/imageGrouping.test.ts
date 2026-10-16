@@ -172,6 +172,24 @@ describe('grid groups in either order', () => {
     expect(ids(groupGridImages(frames, 'filter', 'newest'))).toEqual([[5, 3, 1], [4, 2]]);
   });
 
+  it('groups by the night the image list names, its rig\'s local noon', () => {
+    // A rig west of Greenwich: 01:00 UTC on the 2nd is still the evening
+    // of the 1st there, whatever the catalog's split says.
+    const named = [
+      { ...image(1, day('2026-10-01', 20)), night: '2026-10-01' },
+      { ...image(2, day('2026-10-02', 1)), night: '2026-10-01' },
+      { ...image(3, day('2026-10-02', 20)), night: '2026-10-02' },
+    ];
+    expect(names(groupGridImages(named, 'date', 'oldest', { nightBoundarySeconds: 0 })))
+      .toEqual(['2026-10-02', '2026-10-01']);
+    expect(ids(groupGridImages(named, 'date', 'oldest', { nightBoundarySeconds: 0 })))
+      .toEqual([[3], [1, 2]]);
+    // A list from a server that names no nights splits at the catalog's.
+    const unnamed = named.map((entry) => ({ ...entry, night: undefined }));
+    expect(ids(groupGridImages(unnamed, 'date', 'oldest', { nightBoundarySeconds: 0 })))
+      .toEqual([[2, 3], [1]]);
+  });
+
   it('keeps date groups newest night first in both orders', () => {
     expect(names(groupGridImages(frames, 'date'))).toEqual(['2026-10-02', '2026-10-01']);
     expect(ids(groupGridImages(frames, 'date'))).toEqual([[3, 4, 5], [1, 2]]);

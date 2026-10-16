@@ -6,7 +6,7 @@ import { hourStepFor, timeMarks } from '../timeBreaks';
 const BOUNDARY = 18 * 3600;
 const at = (iso: string) => Date.parse(iso) / 1000;
 const every = (startIso: string, minutes: number, count: number) =>
-  Array.from({ length: count }, (_, i) => at(startIso) + i * minutes * 60);
+  Array.from({ length: count }, (_, i) => ({ acquired_date: at(startIso) + i * minutes * 60 }));
 
 describe('time breaks', () => {
   beforeEach(() => {
@@ -22,7 +22,7 @@ describe('time breaks', () => {
     expect(hourStepFor(every('2026-10-14T20:00:00Z', 20, 30), BOUNDARY)).toBe(2);
     expect(hourStepFor(every('2026-10-14T20:00:00Z', 30, 20), BOUNDARY)).toBe(3);
     expect(hourStepFor(every('2026-10-14T20:00:00Z', 60, 10), BOUNDARY)).toBeNull();
-    expect(hourStepFor([at('2026-10-14T20:00:00Z')], BOUNDARY)).toBeNull();
+    expect(hourStepFor([{ acquired_date: at('2026-10-14T20:00:00Z') }], BOUNDARY)).toBeNull();
   });
 
   it('breaks at the night boundary, not at midnight, and at each hour', () => {
@@ -57,8 +57,31 @@ describe('time breaks', () => {
     ]);
   });
 
+  it('takes the night the image list names over the catalog split', () => {
+    // A rig west of Greenwich: its night began at 20:05 UTC local noon,
+    // so 19:30 UTC still belongs to the night before, though the catalog's
+    // 18:00 UTC split would put it in the next one.
+    const frames = [
+      { acquired_date: at('2026-08-19T18:30:00Z'), night: '2026-08-18' },
+      { acquired_date: at('2026-08-19T19:30:00Z'), night: '2026-08-18' },
+      { acquired_date: at('2026-08-19T20:30:00Z'), night: '2026-08-19' },
+    ];
+    const marks = timeMarks(frames, BOUNDARY);
+    expect([...marks.breaks.entries()].map(([index, mark]) => [index, mark.kind])).toEqual([[2, 'night']]);
+  });
+
+  it('marks nights alone when asked for no hours', () => {
+    const times = [
+      ...every('2026-10-14T22:30:00Z', 10, 19),
+      ...every('2026-10-15T20:00:00Z', 10, 7),
+    ];
+    const marks = timeMarks(times, BOUNDARY, { hours: false });
+    expect(marks.hourStep).toBeNull();
+    expect([...marks.breaks.values()].map((mark) => mark.kind)).toEqual(['night']);
+  });
+
   it('skips frames without a capture time', () => {
-    const marks = timeMarks([null, undefined], BOUNDARY);
+    const marks = timeMarks([{ acquired_date: null }, { acquired_date: undefined }], BOUNDARY);
     expect(marks.breaks.size).toBe(0);
     expect(marks.hourStep).toBeNull();
   });

@@ -42,6 +42,7 @@ describe('display preferences', () => {
       libraryDensity: 'compact',
       detailSections: {},
       imageOrder: 'oldest',
+      timeMarks: 'nights-hours',
       imageGrouping: 'filter',
       imageGroupingAllProjects: 'project',
       gridThumbnailSize: 300,
@@ -129,6 +130,7 @@ describe('display preferences', () => {
       libraryDensity: 'compact',
       detailSections: {},
       imageOrder: 'oldest',
+      timeMarks: 'nights-hours',
       imageGrouping: 'filter',
       imageGroupingAllProjects: 'project',
       gridThumbnailSize: 300,
@@ -302,6 +304,7 @@ describe('the Scoring control\'s earlier setting', () => {
       const fresh = await load();
       expect(fresh.getDisplayPreferences()).toMatchObject({
         imageOrder: 'oldest',
+      timeMarks: 'nights-hours',
         scoringPenaltySatellite: 0,
       });
       fresh.setPreferencesAccount('alice');

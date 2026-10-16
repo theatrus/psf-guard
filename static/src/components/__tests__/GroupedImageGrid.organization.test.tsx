@@ -63,7 +63,8 @@ vi.mock('../ImageCard', () => ({
 vi.mock('../StackPreviewPanel', () => ({ default: () => null }));
 
 const DB_ID = 'c925-review';
-const sourceKey = ['db', DB_ID, 'all-images', 1, 11];
+// The grid's key ends with the view's night split: none, the setting's.
+const sourceKey = ['db', DB_ID, 'all-images', 1, 11, 'setting'];
 const sourceRoute = `/grid?db=${DB_ID}&project=1&target=11&current=1&selected=1`;
 
 const firstImage: Image = {

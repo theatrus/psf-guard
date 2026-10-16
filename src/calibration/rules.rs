@@ -257,6 +257,28 @@ pub enum Group {
     Grades,
 }
 
+/// Where a rig's lights split into nights in Images, Sequence and the
+/// calibration reports: at its local noon, as its calibration frames do,
+/// or at the catalog's quiet hours, one split for every rig.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LightNightSplit {
+    #[default]
+    Rig,
+    Catalog,
+}
+
+impl LightNightSplit {
+    /// A view's override from the link: `rig` or `catalog`.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "rig" => Some(Self::Rig),
+            "catalog" => Some(Self::Catalog),
+            _ => None,
+        }
+    }
+}
+
 /// How a rig's flats of different nights may share a master.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FlatGrouping {
@@ -581,6 +603,33 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
                     .collect(),
             },
             default: json!("auto"),
+        },
+        FieldSpec {
+            key: "light_nights",
+            group: Group::Matching,
+            label: "Lights' nights split at",
+            help: "Where Images, Sequence and the calibration reports split a rig's lights \
+                   into nights. Its local noon follows the setting above, as its calibration \
+                   frames do; the catalog's quiet hours are one split for every rig, the \
+                   middle of the longest stretch of the day the catalog never captured in. \
+                   A view can show the other from its View panel.",
+            // It moves no calibration frame: only how lights are named and
+            // grouped by night. The light checks run again on their kept
+            // headers, which is all a report reads.
+            effect: Effect::Flags,
+            kind: FieldKind::Choice {
+                options: vec![
+                    ChoiceOption {
+                        value: "rig",
+                        label: "The rig's local noon",
+                    },
+                    ChoiceOption {
+                        value: "catalog",
+                        label: "The catalog's quiet hours",
+                    },
+                ],
+            },
+            default: json!("rig"),
         },
         // Dark masters.
         number(
@@ -1145,6 +1194,8 @@ pub struct Rules {
     /// offset from UTC in seconds, or `None` to follow its site
     /// ([`super::night`]).
     pub night_offset_seconds: Option<i64>,
+    /// The `light_nights` setting.
+    pub light_nights: LightNightSplit,
     checks: [CheckMode; Check::ALL.len()],
     pub bias: BiasScreening,
     pub dark: DarkScreening,
@@ -1252,6 +1303,10 @@ impl Rules {
             flat_split_dust_pct: number("flat_split_dust_pct"),
             flat_split_pattern_pct: number("flat_split_pattern_pct"),
             night_offset_seconds: night_offset_seconds(value("night_zone")),
+            light_nights: match value("light_nights").as_str() {
+                Some("catalog") => LightNightSplit::Catalog,
+                _ => LightNightSplit::Rig,
+            },
             checks,
             bias,
             dark,

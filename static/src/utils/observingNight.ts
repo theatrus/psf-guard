@@ -15,3 +15,16 @@ export function nightOf(capturedAt: number, boundarySeconds: number): string {
   const instant = new Date((capturedAt - boundarySeconds) * 1000);
   return Number.isNaN(instant.getTime()) ? 'Unknown Date' : instant.toISOString().slice(0, 10);
 }
+
+/**
+ * A light's night: the one the image list names, split at its rig's local
+ * noon (`LightNights` on the server), else the catalog's split at
+ * `boundarySeconds`, as a list from before the server named nights.
+ */
+export function lightNight(
+  light: { acquired_date: number | null | undefined; night?: string | null },
+  boundarySeconds: number,
+): string | null {
+  if (light.night) return light.night;
+  return light.acquired_date == null ? null : nightOf(light.acquired_date, boundarySeconds);
+}

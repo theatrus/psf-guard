@@ -171,6 +171,13 @@ export const handlers = [
     return HttpResponse.json(notFoundImageQuality, { status: 404 });
   }),
 
+  // The calibration settings: every value at its default, so lights' nights
+  // split at their rig's local noon (useNightSplit).
+  http.get('/api/settings/calibration', () => HttpResponse.json({ success: true, error: null, data: {
+    rotation_tolerance_deg: null, default_rotation_tolerance_deg: 5, external_masters: 'prefer',
+    flat_star_masking: false, rules: {},
+  } })),
+
   // Per-DB project / target / image listings
   // The catalog's stats, read by the grid and detail navigation for the
   // night boundary: an empty catalog, split at the server's fallback, noon.

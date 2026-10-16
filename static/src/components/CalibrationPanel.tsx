@@ -33,6 +33,7 @@ import {
   type CalibrationPart,
 } from '../utils/calibrationFocus';
 import './CalibrationPanel.css';
+import { useNightSplit } from '../hooks/useNightSplit';
 
 interface CalibrationPanelProps {
   dbId: string;
@@ -127,9 +128,11 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
   const purpose = focus ?? filters.calibration.join(',');
   const section = useCalibrationSection(!!mark, purpose);
 
+  // The light's night as the view names it (useNightSplit).
+  const nightSplit = useNightSplit();
   const query = useQuery({
-    queryKey: ['db', dbId, 'image-calibration', imageId],
-    queryFn: () => apiClient.getImageCalibration(dbId, imageId),
+    queryKey: ['db', dbId, 'image-calibration', imageId, nightSplit.queryKey],
+    queryFn: () => apiClient.getImageCalibration(dbId, imageId, nightSplit.override),
     staleTime: 60_000,
     retry: false,
     enabled: section.open,

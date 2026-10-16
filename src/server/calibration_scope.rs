@@ -270,8 +270,9 @@ fn work_out(
     }
     let conn = read_only(&ctx.database_path)?;
     let tree = ctx.get_directory_tree()?;
-    let boundary = crate::calibration::catalog_night_boundary(&conn);
-    let (lights, missing) = crate::calibration::project_lights(&conn, project, &tree, boundary)?;
+    // Lights' nights as Images names them, at the server's setting.
+    let nights = crate::calibration::LightNights::load(&conn, None);
+    let (lights, missing) = crate::calibration::project_lights(&conn, project, &tree, &nights)?;
     let headers = crate::server::calibration_health::kept_headers(&ctx.cache_dir_path, project);
     let read = READ
         .lock()

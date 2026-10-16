@@ -10,11 +10,20 @@
   counts it as OK, and the lights its masters serve lose the suspect
   frames Check. Its masters stay as they were. **Clear** brings the grade
   back, and a regrade keeps the choice.
+- Images, Sequence and the image detail split nights at each rig's local
+  noon, as calibration does, instead of one split for the whole catalog: a
+  light finds its rig through its Target Scheduler profile, so lights a
+  western rig shoots after midnight UTC stay on the night they began. The night and hour marks
+  can be set to nights and hours, nights only, or off, from **Marks** in
+  the View panel or Settings › Review. **Lights' nights split at** in
+  Settings › Calibration puts lights back on the catalog's quiet hours,
+  for every rig or one, and **Nights split at** in the View panel shows
+  the other split in one view, through its link.
 - Images and Sequence mark where frames cross into another night or hour.
   A line and the night's date sit in the gap before a night's first frame,
   every other night takes a faint band, and thinner lines mark the hours
-  when frames are dense enough for them to help. Nights split where the
-  catalog's nights do, not at midnight, and no card moves for a mark.
+  when frames are dense enough for them to help. Nights split at each
+  rig's local noon, not at midnight, and no card moves for a mark.
 - Image cards in Images and Sequence take the shape of the frame, read
   once per camera setup from one frame's header, so a square or 4:3
   sensor fills its card as a 3:2 one does. They no longer leave empty

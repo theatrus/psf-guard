@@ -1749,6 +1749,7 @@ ASI2600MM)`. An editor can open the rig's settings from there.
 | `use_darks` | Use darks | on | on, off | matching |
 | `external_masters` | Masters from other software | use whenever one matches | prefer, fallback, ignore | matching |
 | `night_zone` | Night starts at noon in: where a rig's nights split ([Nights](#nights)) | automatic | `auto`, or a UTC offset in hours from `-12` to `14` (`-9.5`, `5.75` and the other half and quarter hours zones keep) | frame grades and flat measuring |
+| `light_nights` | Lights' nights split at: where Images, Sequence and the calibration reports split a rig's lights ([Dates are nights](SCREENING.md#dates-are-nights)) | `rig` | `rig` (its local noon, as above) or `catalog` (the catalog's quiet hours); a view can show the other from its View panel | the light checks, on their kept headers |
 | `dark_reach_days` | Dark reach | 183 days | 1–3650 | matching |
 | `complete_dark_frames` | Complete night | 10 darks | 2–64 | matching |
 | `dark_choice` | Dark choice | complete set first | complete, nearest | matching |
