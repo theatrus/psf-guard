@@ -141,6 +141,17 @@ pub struct ImageArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExplainArgs {
+    /// Database id (slug) or name.
+    pub database: String,
+    /// The image id from `list_images`.
+    pub image_id: i32,
+    /// Only these kinds: `bias`, `dark`, `dark_flat`, `flat`. Omitted keeps
+    /// every kind.
+    pub kinds: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ProjectArgs {
     /// Database id (slug) or name.
     pub database: String,
@@ -585,10 +596,18 @@ macro_rules! attempt {
     };
 }
 
+mod backups;
+mod calibration;
+
 #[tool_router]
 impl PsfGuardMcp {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
+    }
+
+    /// Every tool: these, the calibration tools and the backup tools.
+    fn all_tools() -> rmcp::handler::server::router::tool::ToolRouter<Self> {
+        Self::tool_router() + Self::calibration_tools() + Self::backup_tools()
     }
 
     fn database(&self, name: &str) -> Result<DbContext, CallToolResult> {
@@ -634,6 +653,15 @@ impl PsfGuardMcp {
         path: &str,
     ) -> Result<Value, CallToolResult> {
         self.send(ctx, Method::GET, path, None).await
+    }
+
+    /// A part of a larger answer: its data, or `{"unavailable": why}` when
+    /// the caller may not read it, so the rest still answers.
+    async fn optional(&self, ctx: &RequestContext<RoleServer>, path: &str) -> Value {
+        match api::send(&self.state, &Caller::of(ctx), Method::GET, path, None).await {
+            Ok(reply) => api::data(reply).unwrap_or_else(|error| json!({ "unavailable": error })),
+            Err(error) => json!({ "unavailable": error }),
+        }
     }
 
     /// A request whose data is the tool's whole answer.
@@ -938,20 +966,41 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Why one light got the calibration masters it did: its header readings, then for bias, dark and flat every frame the library holds for its camera, grouped by night with each night's sensor temperatures: the frames a master would take, the ones that match but lose to another set, and the ones refused with the readings that disagree (rotation off, exposure, temperature, a validity mark, too far in time). `master` sums up what each master would be built from: frames, coldest and warmest reading, first and last night. Flats for other filters and frames from other cameras are only counted."
+        description = "Why one light got the calibration masters it did: its header readings, then for bias, dark and flat every frame the library holds for its camera, grouped by night with each night's sensor temperatures: the frames a master would take, the ones that match but lose to another set, and the ones refused with the readings that disagree (rotation off, exposure, temperature, a validity mark, too far in time), or taken though suspect. `master` sums up what each master would be built from: frames, coldest and warmest reading, first and last night. For flats with measured grouping: the family they come from and how it was chosen (at the light's angle, an alike range, or by its pixels), how they were chosen around a measured change (`basis`: own side, another angle, corrected), nights mixed as alike, a person's side or group choices in force or orphaned, and the changes and groups a side could be chosen from (`choice_options`). Flats for other filters and frames from other cameras are only counted. `kinds` keeps only some kinds, such as [\"flat\"]."
     )]
     async fn explain_calibration(
         &self,
-        Parameters(args): Parameters<ImageArgs>,
+        Parameters(args): Parameters<ExplainArgs>,
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
+        const KINDS: [&str; 4] = ["bias", "dark", "dark_flat", "flat"];
+        if let Some(unknown) = args.kinds.iter().flatten().find(|kind| {
+            !KINDS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(kind.trim()))
+        }) {
+            return Ok(failure(&format!(
+                "No calibration kind {unknown:?}; kinds are {}",
+                KINDS.join(", ")
+            )));
+        }
         let db = database!(self, &args.database);
         let path = format!(
             "/db/{}/images/{}/calibration",
             api::encode(&db.id),
             args.image_id
         );
-        self.answer(&ctx, Method::GET, &path, None).await
+        let mut account = attempt!(self.get(&ctx, &path).await);
+        if let Some(wanted) = args.kinds.filter(|kinds| !kinds.is_empty())
+            && let Some(kinds) = account.get_mut("kinds").and_then(Value::as_array_mut)
+        {
+            kinds.retain(|kind| {
+                kind["kind"]
+                    .as_str()
+                    .is_some_and(|kind| wanted.iter().any(|w| w.trim().eq_ignore_ascii_case(kind)))
+            });
+        }
+        Ok(text_result(&account))
     }
 
     // ---------- Stacks ----------
@@ -1118,7 +1167,7 @@ impl PsfGuardMcp {
     // ---------- Jobs ----------
 
     #[tool(
-        description = "Progress of the database's background jobs: import, quality scan, and WBPP run. Poll this after starting one."
+        description = "Progress of every background job of a database: import, quality backfill, quality scan, WBPP run, calibration grading, flat measuring (rig, stage, stopped rigs, retry), reading frame sites, and the calibration duplicate check or repair (its plan counted; get_calibration_duplicates lists it). A job's `waiting_for` names the person's work it steps aside for, as the job line shows it waiting. Poll this after starting one."
     )]
     async fn get_jobs(
         &self,
@@ -1133,20 +1182,34 @@ impl PsfGuardMcp {
                 .await
         );
         let wbpp = attempt!(self.get(&ctx, &format!("{base}/wbpp/runs/current")).await);
+        // The calibration jobs are read as the job line reads them; one
+        // the caller may not read says why rather than failing the rest.
+        let mut duplicates = self
+            .optional(&ctx, &format!("{base}/calibrations/duplicates"))
+            .await;
+        calibration::compact_duplicates(&mut duplicates, 0, 0);
         Ok(text_result(&json!({
             "import": import,
             "quality_backfill": quality,
+            "quality_scan": self.optional(&ctx, &format!("{base}/analysis/quality-scan")).await,
             "wbpp_run": wbpp,
+            "calibration_grading": self.optional(&ctx, &format!("{base}/calibrations/quality")).await,
+            "flat_measure": self.optional(&ctx, &format!("{base}/calibrations/flat-measure")).await,
+            "frame_sites": self.optional(&ctx, &format!("{base}/calibrations/frame-sites")).await,
+            "calibration_duplicates": duplicates,
         })))
     }
 
     #[tool(
-        description = "Stack builds and WBPP runs across every database: what runs now and what waits in the queue."
+        description = "Work across every database: stack builds running and queued, scheduled stack refreshes and re-applies waiting while a person's work runs, WBPP runs, and the backup under way with how the last one went (the backup needs write access and database management; without them it says so)."
     )]
     async fn get_activity(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
         let stacks = attempt!(self.get(&ctx, "/stack-activity").await);
         let wbpp = attempt!(self.get(&ctx, "/wbpp/activity").await);
-        Ok(text_result(&json!({ "stacks": stacks, "wbpp": wbpp })))
+        let backup = self.optional(&ctx, "/backups/status").await;
+        Ok(text_result(
+            &json!({ "stacks": stacks, "wbpp": wbpp, "backup": backup }),
+        ))
     }
 
     #[tool(
@@ -1910,7 +1973,7 @@ impl PsfGuardMcp {
     }
 }
 
-#[tool_handler]
+#[tool_handler(router = Self::all_tools())]
 impl ServerHandler for PsfGuardMcp {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
@@ -1920,11 +1983,20 @@ impl ServerHandler for PsfGuardMcp {
                  rigs shoot next. Start with list_databases; catalog tools take a database id \
                  from it. Grades are accepted, rejected or pending. analyze_sequence and \
                  get_image_quality report evidence and suggestions; nothing changes until \
-                 grade_images runs. Jobs (import, quality scan, WBPP) return at once; poll \
-                 get_jobs for progress. For a stack, list_stacks gives each channel's job; \
+                 grade_images runs. Jobs (import, quality scan, WBPP, flat measuring, duplicate \
+                 check, backup) return at once; poll get_jobs (one database) or get_activity \
+                 (stacks, WBPP and backups across databases). For a stack, list_stacks gives each channel's job; \
                  get_stack gives its frames and per-night drift, get_stack_calibration the \
                  masters it applied, and get_stack_image the picture (stretch `background` shows \
                  patterns). explain_calibration says why one light got, or missed, each master. \
+                 Flats: get_flat_groups shows each rig's flat families, groups, the changes \
+                 between them and the dust they show; get_flat_group_use what each group \
+                 feeds; get_calibration_frame one frame's dust. A person's choices \
+                 (set_calibration_frame_choice, set_flat_group_override, set_light_flat_choice) \
+                 change which flats lights take; read before you change. A duplicate repair \
+                 takes the token of a check: check_calibration_duplicates, then \
+                 get_calibration_duplicates, then repair_calibration_duplicates. Backups never \
+                 include secrets through MCP. \
                  Planning: list_plans and list_rigs give the ids get_plan, get_plan_progress, \
                  get_framing, get_activation and the rig tools take. To change a plan, read it, \
                  change the object and save it whole (save_plan, save_framing); activation is \

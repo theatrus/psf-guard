@@ -10,6 +10,18 @@
   backup schedule. The rig and site forms say **Unsaved changes** beside
   Save, folding a rig's setup or opening another site keeps its edits, and
   the browser asks before a reload drops them.
+- An agent connected over MCP can now work with flats and backups. It reads
+  each rig's flat groups, the changes between them and the dust they show,
+  what a group feeds, a calibration frame's dust, and a project's
+  calibration scope; it can split or join groups, put lights on a side of a
+  change, Use anyway a suspect frame, check and repair calibration
+  duplicates with the check's token, stop and resume flat measuring and
+  frame sites, and back up now (settings only, unless it asks for every
+  catalog). `get_jobs` lists every background job,
+  `explain_calibration` can keep only the flats, and each write needs the
+  same access and database management as in the app. Backups through MCP
+  never include secrets and never hand an archive out. See
+  [the MCP guide](../MCP.md).
 - A suspect calibration frame can be overruled. **Use anyway** in
   Calibration › Frames now appears on a suspect frame as well as a kept-out
   one. The frame then counts as OK: it shows **Used anyway**, its session
