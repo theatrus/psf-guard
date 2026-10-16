@@ -194,4 +194,34 @@ describe('the Images flat-group filter', () => {
     await waitFor(() => expect(screen.getByTestId('flat-group-filter-state'))
       .toHaveTextContent('the catalog could not be read'));
   });
+
+  // A regroup made group s-new; the server still holds the answer worked
+  // out before it, whose aliases lack s-new, while it works out the next.
+  it('says it is finding the lights, not that the group is gone, while refreshing', async () => {
+    server.use(
+      images(),
+      http.get('/api/db/:dbId/calibrations/flat-groups/use', () => ok({
+        computed: true,
+        groups: [{ key: 's-old', masters: [], lights: counts,
+          projects: [{ project_id: 1, name: 'Bubble', lights: counts }] }],
+        lights: 2, pending: 0, unread: 0, refreshing: true, group_found: false,
+      })),
+    );
+    render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1&flatGroup=c925:s-new') });
+    await waitFor(() => expect(screen.getByTestId('flat-group-filter-state')).toBeInTheDocument());
+    expect(screen.getByTestId('flat-group-filter-state')).not.toHaveTextContent('no longer exists');
+    expect(screen.getByTestId('flat-group-filter-state')).toHaveTextContent("Finding the group's lights");
+  });
+
+  it('says nothing of a key the server has not placed yet, and finds its lights', async () => {
+    server.use(
+      images(),
+      http.get('/api/db/:dbId/calibrations/flat-groups/use', () => ok({
+        computed: true, groups: [], lights: 2, pending: 0, unread: 0, refreshing: true,
+      })),
+    );
+    render(<GroupedImageGrid />, { wrapper: wrapper('/grid?db=c925&project=1&flatGroup=c925:s-new') });
+    await waitFor(() => expect(screen.getByTestId('flat-group-filter-state'))
+      .toHaveTextContent("Finding the group's lights"));
+  });
 });

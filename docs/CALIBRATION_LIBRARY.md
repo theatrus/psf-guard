@@ -634,9 +634,16 @@ every flat of the group's nights, oldest first, and marks where each
 night begins with its date and how many flats it holds, in the group's
 colour. ← and → step from flat to flat across the nights while ↑ and ↓
 keep moving between groups; the chosen flat lives in the address as
-`calFrame`, beside `calGroup`. The page's filters narrow the strip as
-they narrow a session's frames; a project scope does not, since a group
-is the same whoever uses it. Below the browser:
+`calFrame`, beside `calGroup`. Choosing another group starts at its
+first flat, and a group none of whose flats the filters keep shows no
+frame at all, so Keep out and Forget never reach the last group's.
+Switching between Sessions and Groups hands each list back the frame it
+last showed. In **Compare with session** the comparison and the zoom hold
+as the strip crosses into another night. The strip holds up to 5,000
+flats; a longer group says it shows only the first of them. The page's
+filters narrow the strip as they narrow a session's frames; a project
+scope does not, since a group is the same whoever uses it. Below the
+browser:
 
 - **Members**: its nights, oldest first, as cards. A card brings the
   strip to that night's first flat; **Open session** under it opens the
@@ -761,8 +768,13 @@ and angle a flat session's flats would take, measured or not. Each group in `fla
 many pairs; `pairs` holds each session against the next and the widest.
 `calibrations/sessions?locate=<session>` lists the page holding that
 session and says whether the filters keep it (`located`).
-`calibrations/frames?sessions=<a,b,…>` keeps only those sessions' frames,
-within a project scope when one is named: a flat group's flats.
+`calibrations/frames?group=<key>` lists a flat group's flats, the group
+found by its key or one of its sessions or response keys as the page finds
+it (none for a key no group answers to), within a project scope when one
+is named. They come session by session in night order (`sort=night`), a
+flat with no capture time with its session, in pages of up to 5,000. Each
+listed frame says whether it can be compared with its session
+(`compare`).
 
 `project=<id>` on `calibrations/sessions`, `calibrations/frames`,
 `calibrations/masters` and `calibrations/flat-groups` keeps what that

@@ -180,6 +180,20 @@ function serve(): Seen {
   return seen;
 }
 
+/** The sessions a frames request names: a group's, found as the server
+ *  finds it by its key or one of its sessions, or one session. */
+function sessionsOf(params: URLSearchParams): string[] {
+  const group = params.get('group');
+  if (!group) return [params.get('session') ?? ''];
+  for (const family of RIG.families) {
+    for (const entry of family.groups) {
+      const members = entry.sessions.flatMap((session) => session.sessions ?? []);
+      if (entry.key === group || members.includes(group)) return members;
+    }
+  }
+  return [];
+}
+
 function Location() {
   const location = useLocation();
   return <output aria-label="location">{location.search}</output>;
@@ -530,7 +544,7 @@ describe('the frames of a flat group', () => {
       http.get('/api/db/demo/calibrations/frames', ({ request }) => {
         const params = new URL(request.url).searchParams;
         asked.push(params);
-        const wanted = params.get('sessions')?.split(',') ?? [params.get('session') ?? ''];
+        const wanted = sessionsOf(params);
         const frames = FLATS.filter((entry) => wanted.includes(entry.session));
         return ok({ frames, total: frames.length, page: 0, per_page: 500 });
       }),
@@ -552,9 +566,11 @@ describe('the frames of a flat group', () => {
     renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907');
     const list = await strip();
     await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(4));
-    const request = asked.find((params) => params.get('sessions'));
-    expect(request?.get('sessions')).toBe('s-r0907,s-r0916');
-    expect(request?.get('sort')).toBe('oldest');
+    // The group is found on the server by its key, night by night.
+    const request = asked.find((params) => params.get('group'));
+    expect(request?.get('group')).toBe('s-r0907');
+    expect(request?.get('sort')).toBe('night');
+    expect(request?.get('sessions')).toBeNull();
     // The order in the strip: a night's mark, then its flats.
     expect([...list.children].map((item) =>
       item.getAttribute('data-run') ?? item.querySelector('[data-frame-uuid]')?.getAttribute('data-frame-uuid')))
@@ -593,5 +609,186 @@ describe('the frames of a flat group', () => {
     expect(params().get('calBrowse')).toBe('groups');
     await waitFor(() => expect(within(detail).getAllByTestId('flat-group-member')[1])
       .toHaveAttribute('aria-current', 'true'));
+  });
+});
+
+describe('the group browser as the group and its flats change', () => {
+  beforeAll(() => configure({ asyncUtilTimeout: 10_000 }));
+  afterAll(() => configure({ asyncUtilTimeout: 1_000 }));
+
+  const flat = (uuid: string, session: string, night: string, minute: number) => ({
+    frame_uuid: uuid, rig_uuid: 'rig', kind: 'flat', source_path: `/cal/${uuid}.fits`, source_exists: true,
+    captured_at: at(night.slice(5), minute), exposure_s: 2, camera_temp: -10, filter: 'R', grade: 'ok',
+    grade_code: null, grade_reason: null, quality_override: null, kept_out: null as string | null,
+    valid_direction: null, night, session,
+  });
+  type Flat = ReturnType<typeof flat>;
+  const twoNights = (): Flat[] => [
+    flat('a1', 's-r0907', '2026-09-07', 0), flat('a2', 's-r0907', '2026-09-07', 1),
+    flat('b1', 's-r0916', '2026-09-16', 0), flat('b2', 's-r0916', '2026-09-16', 1),
+  ];
+  let FLATS: Flat[] = twoNights();
+  interface Asked { frames: URLSearchParams[]; kept: unknown[]; forgot: string[] }
+  function serveFrames(slow?: string, flats: Flat[] = twoNights()): Asked {
+    FLATS = flats;
+    const asked: Asked = { frames: [], kept: [], forgot: [] };
+    serve();
+    server.use(
+      http.get('/api/db/demo/calibrations/frames', ({ request }) => {
+        const search = new URL(request.url).searchParams;
+        asked.frames.push(search);
+        const wanted = sessionsOf(search);
+        const all = FLATS.filter((entry) => wanted.includes(entry.session));
+        const most = Number(search.get('per_page') ?? 500);
+        return ok({ frames: all.slice(0, most), total: all.length, page: 0, per_page: most });
+      }),
+      http.get('/api/db/demo/calibrations/frames/:uuid', async ({ params: path }) => {
+        if (path.uuid === slow) await new Promise((resolve) => setTimeout(resolve, 400));
+        const own = FLATS.find((entry) => entry.frame_uuid === path.uuid);
+        if (!own) return HttpResponse.json({ success: false, error: 'Not found', data: null }, { status: 404 });
+        return ok({
+          ...own, measurement: null, measure_error: null, findings: [], metrics: [],
+          session_frames: 2, session_measured: 2, compare: true, masters: 0,
+        });
+      }),
+      http.put('/api/db/demo/calibrations/frames/quality', async ({ request }) => {
+        const body = await request.json() as { frame_uuids: string[]; choice: string };
+        asked.kept.push(body);
+        FLATS = FLATS.map((entry) => body.frame_uuids.includes(entry.frame_uuid)
+          ? { ...entry, kept_out: body.choice === 'exclude' ? 'by hand' : null } : entry);
+        return ok({ updated: body.frame_uuids.length });
+      }),
+      http.delete('/api/db/demo/calibrations/frames/:uuid', ({ params: path }) => {
+        asked.forgot.push(String(path.uuid));
+        FLATS = FLATS.filter((entry) => entry.frame_uuid !== path.uuid);
+        return ok({ forgotten: 1 });
+      }),
+    );
+    return asked;
+  }
+  const strip = () => screen.findByRole('list', { name: 'Frames' });
+  const thumbs = async () => within(await strip()).getAllByRole('button')
+    .map((button) => button.getAttribute('data-frame-uuid'));
+  const runs = async () => within(await strip()).getAllByTestId('calibration-strip-run')
+    .map((run) => run.textContent);
+
+  // Up to a group none of whose flats the strip lists (here 09-20; in use,
+  // any group a Grade filter leaves empty): no frame is shown, so Keep out
+  // and Forget reach none.
+  it("shows no frame, not the last group's, under a group with no listed flats", async () => {
+    serveFrames();
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907&calFrame=a2');
+    await strip();
+    fireEvent.keyDown(document, { key: 'ArrowUp', code: 'ArrowUp' });
+    await waitFor(() => expect(params().get('calGroup')).toBe('s-r0920'));
+    await screen.findByText('No flats of this group match the filters.');
+    expect(screen.queryByRole('region', { name: 'Frame viewer' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Forget' })).toBeNull();
+    expect(params().get('calFrame')).toBeNull();
+  });
+
+  it('starts another group chosen in the list at its first flat', async () => {
+    serveFrames();
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907&calFrame=b2');
+    await waitFor(async () => expect(within(await strip()).getByRole('button', { pressed: true }))
+      .toHaveAttribute('data-frame-uuid', 'b2'));
+    fireEvent.click(entries()[2]);
+    await waitFor(() => expect(params().get('calGroup')).toBe('s-g0913'));
+    expect(params().get('calFrame')).toBeNull();
+  });
+
+  // In Compare with session, stepping across a night keeps the
+  // comparison while the next night's detail loads, and the zoom with it.
+  it('stays in comparison, at the same zoom, while stepping across a night', async () => {
+    serveFrames('b1');
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907&calFrame=a2&calView=session');
+    const compare = await screen.findByRole('button', { name: 'Compare with session' });
+    await waitFor(() => expect(compare).toHaveAttribute('aria-pressed', 'true'));
+    const viewer = screen.getByRole('region', { name: 'Frame viewer' });
+    const zoom = within(viewer).getByRole('group', { name: 'Zoom' });
+    fireEvent.click(within(zoom).getByRole('button', { name: 'Zoom in' }));
+    fireEvent.click(within(zoom).getByRole('button', { name: 'Zoom in' }));
+    const zoomed = zoom.textContent;
+    fireEvent.keyDown(document, { key: 'ArrowRight', code: 'ArrowRight' });
+    await waitFor(() => expect(params().get('calFrame')).toBe('b1'));
+    expect(screen.getByRole('button', { name: 'Compare with session' })).toHaveAttribute('aria-pressed', 'true');
+    // The same viewer, not a new one, at the zoom it had.
+    expect(screen.getByRole('region', { name: 'Frame viewer' })).toBe(viewer);
+    expect(zoom.textContent).toBe(zoomed);
+    // And as shot, the same.
+    fireEvent.click(screen.getByRole('button', { name: 'Compare with session' }));
+    await waitFor(() => expect(params().get('calView')).toBeNull());
+    const asShot = zoom.textContent;
+    fireEvent.keyDown(document, { key: 'ArrowLeft', code: 'ArrowLeft' });
+    await waitFor(() => expect(params().get('calFrame')).toBe('a2'));
+    expect(screen.getByRole('region', { name: 'Frame viewer' })).toBe(viewer);
+    expect(zoom.textContent).toBe(asShot);
+  });
+
+  it('keeps a flat out and forgets one without leaving the group', async () => {
+    const asked = serveFrames();
+    const confirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907&calFrame=a2');
+      await waitFor(async () => expect(await thumbs()).toEqual(['a1', 'a2', 'b1', 'b2']));
+      fireEvent.click(await screen.findByRole('button', { name: 'Keep out' }));
+      await waitFor(() => expect(asked.kept).toHaveLength(1));
+      expect(asked.kept[0]).toMatchObject({ frame_uuids: ['a2'], choice: 'exclude' });
+      // The strip says so, and the flat stays chosen.
+      await waitFor(async () => expect(within(await strip()).getByRole('button', { pressed: true }))
+        .toHaveTextContent('Out'));
+      expect(params().get('calFrame')).toBe('a2');
+      expect(params().get('calGroup')).toBe('s-r0907');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Forget' }));
+      await waitFor(() => expect(asked.forgot).toEqual(['a2']));
+      // Gone from the strip and its night's count; the next flat is shown,
+      // still in the group.
+      await waitFor(async () => expect(await thumbs()).toEqual(['a1', 'b1', 'b2']));
+      expect(await runs()).toEqual(['2026-09-071 flat', '2026-09-162 flats']);
+      await waitFor(() => expect(params().get('calFrame')).toBe('b1'));
+      expect(params().get('calGroup')).toBe('s-r0907');
+      expect(params().get('calBrowse')).toBe('groups');
+    } finally {
+      window.confirm = confirm;
+    }
+  });
+
+  it('holds every flat of a group of more than 500 in the strip', async () => {
+    const many = Array.from({ length: 600 }, (_, index) => flat(
+      `f${index}`, index < 300 ? 's-r0907' : 's-r0916', index < 300 ? '2026-09-07' : '2026-09-16', index % 300,
+    ));
+    const asked = serveFrames(undefined, many);
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907');
+    await waitFor(async () => expect(await thumbs()).toHaveLength(600));
+    expect(await runs()).toEqual(['2026-09-07300 flats', '2026-09-16300 flats']);
+    expect(Number(asked.frames.find((search) => search.get('group'))?.get('per_page'))).toBeGreaterThanOrEqual(600);
+    expect(screen.queryByTestId('flat-group-strip-truncated')).toBeNull();
+  });
+
+  it('says a group past the bound shows only its first flats', async () => {
+    const many = Array.from({ length: 5_002 }, (_, index) => flat(
+      `f${index}`, 's-r0907', '2026-09-07', index % 600,
+    ));
+    serveFrames(undefined, many);
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907');
+    expect(await screen.findByTestId('flat-group-strip-truncated'))
+      .toHaveTextContent('Showing the first 5,000 of 5,002 flats.');
+  });
+
+  it('hands each list back its own frame on switching between Sessions and Groups', async () => {
+    serveFrames();
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907&calFrame=b2&calSessionFrame=x9');
+    const toggle = await screen.findByRole('group', { name: 'List' });
+    await waitFor(() => expect(params().get('calFrame')).toBe('b2'));
+    fireEvent.click(within(toggle).getByRole('button', { name: 'Sessions' }));
+    await waitFor(() => expect(params().get('calBrowse')).toBeNull());
+    // The group's frame waits for its return.
+    expect(params().get('calGroupFrame')).toBe('b2');
+    expect(params().get('calSessionFrame')).toBeNull();
+    fireEvent.click(within(toggle).getByRole('button', { name: 'Groups' }));
+    await waitFor(() => expect(params().get('calFrame')).toBe('b2'));
+    expect(params().get('calGroupFrame')).toBeNull();
   });
 });

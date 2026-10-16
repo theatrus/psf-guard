@@ -74,8 +74,11 @@ pub struct ListQuery {
     /// Sessions only: list the page holding this session instead of
     /// `page`, and say whether the filters keep it.
     pub locate: Option<String>,
-    /// Keep only these sessions, comma-separated: a flat group's nights.
-    pub sessions: Option<String>,
+    /// Frames only: keep a flat group's flats, the group named by its key
+    /// or one of its sessions, as the Calibration page names it. Unless
+    /// asked otherwise they come night by night, up to
+    /// [`MAX_GROUP_FRAMES`] a page.
+    pub group: Option<String>,
 }
 
 impl ListQuery {
@@ -109,22 +112,33 @@ impl ListQuery {
             let scope = crate::server::calibration_scope::scope_for(state, &ctx.0, project).await?;
             filter.within = Some(Arc::new(scope.sessions.clone()));
         }
-        narrow_to_sessions(&mut filter, self.sessions.as_deref());
+        if let Some(group) = self.group.clone().filter(|group| !group.is_empty()) {
+            let path = ctx.database_path.clone();
+            let sessions = tokio::task::spawn_blocking(move || {
+                let conn = crate::server::database_context::open_scheduler_connection_with_flags(
+                    &path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+                )?;
+                crate::server::flat_groups::group_sessions(&conn, &group)
+            })
+            .await
+            .map_err(joined)?
+            .map_err(AppError::db)?;
+            narrow_to_sessions(&mut filter, &sessions.unwrap_or_default());
+        }
         Ok(filter)
     }
 }
 
-/// Keep only the sessions `sessions` names, comma-separated, as a flat
-/// group's frames are listed, within whatever the filter keeps already.
-fn narrow_to_sessions(filter: &mut FrameFilter, sessions: Option<&str>) {
-    let Some(list) = sessions.filter(|list| !list.is_empty()) else {
-        return;
-    };
-    let wanted: std::collections::BTreeSet<String> = list
-        .split(',')
-        .filter(|id| !id.is_empty())
-        .map(str::to_owned)
-        .collect();
+/// The most frames a flat group's list holds in one page: every flat of
+/// even a long group, within reason.
+const MAX_GROUP_FRAMES: usize = 5_000;
+
+/// Keep only the sessions `wanted`, as a flat group's frames are listed,
+/// within whatever the filter keeps already.
+fn narrow_to_sessions(filter: &mut FrameFilter, wanted: &std::collections::BTreeSet<String>) {
+    let wanted = wanted.clone();
     let within = match filter.within.take() {
         Some(scope) => scope.intersection(&wanted).cloned().collect(),
         None => wanted,
@@ -194,16 +208,29 @@ pub async fn list_frames(
             .missing
             .unwrap_or(false)
             .then(|| missing_files(library.kept(&filter), &roots));
-        let mut page = library.frames_page(
+        let group = query
+            .group
+            .as_deref()
+            .is_some_and(|group| !group.is_empty());
+        let mut page = library.frames_page_up_to(
             &filter,
             |row| {
                 missing
                     .as_ref()
                     .is_none_or(|missing| missing.contains(&row.frame.frame_uuid))
             },
-            query.sort.unwrap_or_default(),
+            query.sort.unwrap_or(if group {
+                FrameSort::Night
+            } else {
+                FrameSort::default()
+            }),
             query.page.unwrap_or(0),
             query.per_page,
+            if group {
+                MAX_GROUP_FRAMES
+            } else {
+                browse::MAX_PAGE_SIZE
+            },
         );
         for row in &mut page.frames {
             row.frame.source_exists = roots.holds(std::path::Path::new(&row.frame.source_path));
@@ -935,18 +962,22 @@ mod tests {
 
     #[test]
     fn a_flat_groups_sessions_narrow_the_list_within_a_project_scope() {
+        let set = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect();
         let mut filter = FrameFilter::default();
-        narrow_to_sessions(&mut filter, None);
-        assert!(filter.within.is_none(), "nothing asked, nothing narrowed");
-        narrow_to_sessions(&mut filter, Some("s1,s2,"));
+        narrow_to_sessions(&mut filter, &set(&["s1", "s2"]));
         assert_eq!(within(&filter), vec!["s1", "s2"]);
 
         // Within a project's scope: only the sessions both keep.
         let mut scoped = FrameFilter {
-            within: Some(Arc::new(["s2".to_string(), "s3".to_string()].into())),
+            within: Some(Arc::new(set(&["s2", "s3"]))),
             ..FrameFilter::default()
         };
-        narrow_to_sessions(&mut scoped, Some("s1,s2"));
+        narrow_to_sessions(&mut scoped, &set(&["s1", "s2"]));
         assert_eq!(within(&scoped), vec!["s2"]);
+
+        // An unknown group: nothing at all.
+        let mut gone = FrameFilter::default();
+        narrow_to_sessions(&mut gone, &set(&[]));
+        assert!(within(&gone).is_empty() && gone.within.is_some());
     }
 }

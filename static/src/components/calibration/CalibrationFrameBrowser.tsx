@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../../api/client';
@@ -40,6 +40,8 @@ interface CalibrationFrameBrowserProps {
   upDown: string;
   /** Shown when the frames are in and there are none. */
   empty?: ReactNode;
+  /** Said above the strip, such as that it holds only the first frames. */
+  note?: ReactNode;
 }
 
 /**
@@ -67,6 +69,7 @@ export default function CalibrationFrameBrowser({
   keysEnabled,
   upDown,
   empty,
+  note,
 }: CalibrationFrameBrowserProps) {
   // The last frame's detail stays, faded, while the next one loads, so the
   // panel keeps its height.
@@ -78,13 +81,19 @@ export default function CalibrationFrameBrowser({
   });
 
   // The first frame is chosen until a person chooses; a frame the list
-  // drops gives way to the first one left.
+  // drops gives way to the first one left, and an empty list chooses none,
+  // so Keep out and Forget never reach a frame it does not show.
+  const listed = frames.some((frame) => frame.frame_uuid === frameUuid);
   useEffect(() => {
-    if (!ready || frames.length === 0) return;
-    if (!frameUuid || !frames.some((frame) => frame.frame_uuid === frameUuid)) {
-      onSelectFrame(frames[0].frame_uuid);
+    if (!ready) return;
+    if (frames.length === 0) {
+      if (frameUuid) onSelectFrame(null);
+      return;
     }
-  }, [frameUuid, frames, onSelectFrame, ready]);
+    if (!frameUuid || !listed) onSelectFrame(frames[0].frame_uuid);
+  }, [frameUuid, frames, listed, onSelectFrame, ready]);
+  // A frame the list does not hold is not drawn, once the list is in.
+  const shown = frameUuid && (listed || !ready) ? frameUuid : null;
 
   const frameIndex = frames.findIndex((frame) => frame.frame_uuid === frameUuid);
   const current = detail.data && detail.data.frame_uuid === frameUuid ? detail.data : undefined;
@@ -92,8 +101,15 @@ export default function CalibrationFrameBrowser({
   // Whether the frame can be set against its session. While the next
   // frame's detail loads, the last one of the same session answers, so
   // stepping through a session in compare mode stays in it.
+  // The list says whether a frame compares with its session, so stepping
+  // into another night in comparison stays in it while its detail loads.
+  // Without that word, the last one known holds until the detail is in.
   const ownSession = frames[frameIndex]?.session;
-  const compare = (current ?? (shownDetail?.session === ownSession ? shownDetail : undefined))?.compare ?? false;
+  const known = frames[frameIndex]?.compare
+    ?? (current ?? (shownDetail?.session === ownSession ? shownDetail : undefined))?.compare;
+  const [held, setHeld] = useState(false);
+  if (known !== undefined && known !== held) setHeld(known);
+  const compare = known ?? held;
   const spots = current?.measurement?.type === 'flat' && current.measurement.features
     ? { width: current.measurement.width, height: current.measurement.height, features: current.measurement.features }
     : undefined;
@@ -117,15 +133,16 @@ export default function CalibrationFrameBrowser({
   return (
     <>
       {ready && frames.length === 0 && empty}
+      {frames.length > 0 && note}
       {frames.length > 0 && (
         <CalibrationFrameStrip dbId={dbId} frames={frames} selected={frameUuid}
           stretch={stretch} onSelect={onSelectFrame} runOf={runOf} />
       )}
-      {frameUuid && (
+      {shown && (
         <div className="calibration-frame">
           <CalibrationFrameViewer
             dbId={dbId}
-            frameUuid={frameUuid}
+            frameUuid={shown}
             sessionId={zoomKey}
             kind={current?.kind ?? frames[frameIndex]?.kind ?? 'flat'}
             label={current ? fileName(current.source_path) : 'Calibration frame'}

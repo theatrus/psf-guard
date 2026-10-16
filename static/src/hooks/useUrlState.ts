@@ -231,6 +231,8 @@ export const CALIBRATION_PARAMS = [
   'calProject',
   'calBrowse',
   'calGroup',
+  'calSessionFrame',
+  'calGroupFrame',
 ] as const;
 
 /** The image detail's chosen calibration finding, or `all`. */
