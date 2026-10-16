@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { ChartColumn, Check, Columns2, FolderInput, Layers, RotateCcw, ScanSearch, X } from 'lucide-react';
 import { apiClient } from '../api/client';
@@ -9,7 +9,7 @@ import { GradingStatus } from '../api/types';
 import { useGrading } from '../hooks/useGrading';
 import { useSpatialScan } from '../hooks/useSpatialScan';
 import { useStableScrollAnchor } from '../hooks/useStableScrollAnchor';
-import { useDbProjectTarget, useGridState, useFilters, useImageOrder, useUrlParams } from '../hooks/useUrlState';
+import { useDbProjectTarget, useGridState, useFilters, useImageOrder, useLatestSearchParams, useUrlParams } from '../hooks/useUrlState';
 import { cardIsOnScreen, useReorderAnchor, viewIsAtRest } from '../hooks/useReorderAnchor';
 import type { ImageOrder } from '../utils/imageOrder';
 import { useNewFrameIds } from '../hooks/useNewFrames';
@@ -127,17 +127,18 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const selectionAnchorIdRef = useRef<number | null>(null);
   const selectionBaseIdsRef = useRef<Set<number>>(new Set());
 
-  // Navigation helpers
-  const [searchParams] = useSearchParams();
-  
+  // Navigation helpers. Each starts from the URL as it stands, so a
+  // selection or cursor written a moment before goes with it.
+  const latestParams = useLatestSearchParams();
+
   const navigateToDetail = useCallback((imageId: number, calibrationFocus?: string) => {
-    navigateNow(imageDetailPath(imageId, searchParams, 'grid', calibrationFocus));
-  }, [navigateNow, searchParams]);
-  
+    navigateNow(imageDetailPath(imageId, latestParams(), 'grid', calibrationFocus));
+  }, [latestParams, navigateNow]);
+
   const navigateToComparison = useCallback((leftId: number, rightId: number) => {
-    const params = searchParams.toString();
+    const params = latestParams().toString();
     navigateNow(`/compare/${leftId}/${rightId}?${params}`);
-  }, [navigateNow, searchParams]);
+  }, [latestParams, navigateNow]);
   
   // Fetch ALL images (no pagination for grouping) with periodic refresh
   const { data: allImages = [], isLoading: imagesLoading } = useQuery({
@@ -564,8 +565,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   }, [grading, navigateImages, advanceOnGrade]);
 
   const toggleGroup = useCallback((filterName: string) => {
-    setExpandedGroups(() => {
-      const next = new Set(visibleExpandedGroups);
+    // From the groups as the URL holds them now, so two toggles before a
+    // render both count.
+    setExpandedGroups((expanded) => {
+      const next = new Set(resolveExpandedGroups(imageGroups, groupingMode, expanded));
       if (next.has(filterName)) {
         next.delete(filterName);
       } else {
@@ -573,7 +576,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       }
       return next.size > 0 ? next : new Set([NO_EXPANDED_GROUPS]);
     });
-  }, [setExpandedGroups, visibleExpandedGroups]);
+  }, [groupingMode, imageGroups, setExpandedGroups]);
 
   // Handle image selection with shift+click support
   const handleImageSelection = useCallback((imageId: number, event: React.MouseEvent) => {
@@ -1109,7 +1112,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 disabled={projectId == null}
                 title="Stack the selected images"
                 onClick={() =>
-                  navigate(`/stacks?${searchParams.toString()}`, {
+                  navigate(`/stacks?${latestParams().toString()}`, {
                     state: { stackImageIds: [...selectedImages] },
                   })
                 }

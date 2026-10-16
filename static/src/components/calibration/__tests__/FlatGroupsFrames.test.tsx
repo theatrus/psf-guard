@@ -1,8 +1,7 @@
-import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { createMemoryRouter, RouterProvider, useLocation } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import type { CalibrationSession, FlatGroupsRig, FlatGroupsView, FlatSession } from '../../../api/types';
 import { server } from '../../../test/msw-server';
@@ -166,21 +165,21 @@ function Location() {
 
 function renderPage(entry: string, access?: Partial<AccessContextValue>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const wrapper = ({ children }: { children: ReactNode }) => (
+  // The app's kind of router: a data router.
+  const router = createMemoryRouter(
+    [{ path: '/calibration', element: <><CalibrationPage /><Location /></> }],
+    { initialEntries: [entry] },
+  );
+  return render(
     <QueryClientProvider client={client}>
       <AccessContext.Provider value={{
         status: { authentication_required: true, authenticated: true, role: 'read_write', can_compute: true },
         canWrite: true, canCompute: true, logout: async () => undefined, ...access,
       }}>
-        <MemoryRouter initialEntries={[entry]}>
-          <Routes>
-            <Route path="/calibration" element={<>{children}<Location /></>} />
-          </Routes>
-        </MemoryRouter>
+        <RouterProvider router={router} />
       </AccessContext.Provider>
-    </QueryClientProvider>
+    </QueryClientProvider>,
   );
-  return render(<CalibrationPage />, { wrapper });
 }
 
 const params = () => new URLSearchParams(screen.getByRole('status', { name: 'location' }).textContent ?? '');

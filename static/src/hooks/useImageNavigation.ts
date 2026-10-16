@@ -1,6 +1,6 @@
 import { useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { apiClient } from '../api/client';
 import {
   CALIBRATION_FOCUS_PARAM,
@@ -8,6 +8,7 @@ import {
   useFilters,
   useGridState,
   useImageOrder,
+  useLatestSearchParams,
 } from './useUrlState';
 import type { Image } from '../api/types';
 import { imageGroupKey, resolveExpandedGroups } from '../utils/imageGrouping';
@@ -33,7 +34,9 @@ export function useImageNavigation(currentImageId?: number) {
   const location = useLocation();
   // Each move hands the keyboard to the view it opens; see useNavigateNow.
   const navigate = useNavigateNow();
-  const [searchParams] = useSearchParams();
+  // Each move starts from the URL as it stands, so a write made in the
+  // same moment, such as a grade's or a selection's, goes with it.
+  const latestParams = useLatestSearchParams();
   const { dbId, projectId, targetId, mosaic: mosaicScope } = useDbProjectTarget();
   const { filters } = useFilters();
   const { groupingMode, expandedGroups } = useGridState();
@@ -172,8 +175,9 @@ export function useImageNavigation(currentImageId?: number) {
   const canGoNext = currentIndex >= 0 && currentIndex < flatImages.length - 1;
 
   const navigateToImageWithContext = useCallback((imageId: number, view: 'detail' | 'comparison' = 'detail') => {
+    const searchParams = latestParams();
     const params = searchParams.toString();
-    
+
     if (view === 'detail') {
       // A chosen calibration finding stays chosen from image to image.
       navigate(
@@ -191,7 +195,7 @@ export function useImageNavigation(currentImageId?: number) {
         (canGoNext ? flatImages[currentIndex + 1]?.id : imageId) : imageId;
       navigate(`/compare/${imageId}/${rightImageId}?${params}`, { replace: true });
     }
-  }, [navigate, searchParams, currentImageId, canGoNext, flatImages, currentIndex, location.state]);
+  }, [navigate, latestParams, currentImageId, canGoNext, flatImages, currentIndex, location.state]);
 
   const goToNext = useCallback(() => {
     if (canGoNext && currentIndex >= 0) {
@@ -208,17 +212,17 @@ export function useImageNavigation(currentImageId?: number) {
   }, [canGoPrevious, currentIndex, flatImages, navigateToImageWithContext]);
 
   const goToGrid = useCallback(() => {
-    const params = new URLSearchParams(searchParams);
+    const params = latestParams();
     params.delete(CALIBRATION_FOCUS_PARAM);
     navigate(`/grid?${params}`, { replace: true });
-  }, [navigate, searchParams]);
+  }, [latestParams, navigate]);
 
   const closeDetail = useCallback(() => {
-    navigate(imageDetailClosePath(searchParams), {
+    navigate(imageDetailClosePath(latestParams()), {
       replace: true,
       state: location.state,
     });
-  }, [location.state, navigate, searchParams]);
+  }, [latestParams, location.state, navigate]);
 
   return {
     canGoPrevious,

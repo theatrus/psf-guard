@@ -1,5 +1,5 @@
 import { useLocation, useParams, useSearchParams } from 'react-router-dom';
-import { useDbProjectTarget } from '../hooks/useUrlState';
+import { useDbProjectTarget, useLatestSearchParams } from '../hooks/useUrlState';
 import GroupedImageGrid from './GroupedImageGrid';
 import ImageDetailView from './ImageDetailView';
 import ImageComparisonView from './ImageComparisonView';
@@ -15,6 +15,8 @@ export default function MainView() {
   // Compare's arrows and swap keep the keyboard in Compare; see useNavigateNow.
   const navigate = useNavigateNow();
   const [searchParams] = useSearchParams();
+  // Compare's moves start from the URL as it stands; see useLatestSearchParams.
+  const latestParams = useLatestSearchParams();
   const { dbId, projectId, targetId } = useDbProjectTarget();
 
   // Determine current view mode from URL
@@ -85,7 +87,7 @@ export default function MainView() {
       for (let i = currentIndex + 1; i < navigation.allImages.length; i++) {
         const nextRightImage = navigation.allImages[i];
         if (leftImageId !== nextRightImage.id) {
-          const params = searchParams.toString();
+          const params = latestParams().toString();
           navigate(`/compare/${leftImageId}/${nextRightImage.id}?${params}`, { replace: true });
           return;
         }
@@ -103,7 +105,7 @@ export default function MainView() {
       for (let i = currentIndex - 1; i >= 0; i--) {
         const prevRightImage = navigation.allImages[i];
         if (leftImageId !== prevRightImage.id) {
-          const params = searchParams.toString();
+          const params = latestParams().toString();
           navigate(`/compare/${leftImageId}/${prevRightImage.id}?${params}`, { replace: true });
           return;
         }
@@ -115,7 +117,7 @@ export default function MainView() {
   const handleSwapImages = () => {
     // Prevent swapping if both sides have the same image
     if (leftImageId !== rightImageId) {
-      const params = searchParams.toString();
+      const params = latestParams().toString();
       navigate(`/compare/${rightImageId}/${leftImageId}?${params}`, { replace: true });
     }
   };

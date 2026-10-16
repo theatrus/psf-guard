@@ -20,7 +20,9 @@ import {
   useDbProjectTarget,
   useGridState,
   useImageOrder,
+  useLatestSearchParams,
   useSequenceSelectionRule,
+  useUrlParams,
 } from '../hooks/useUrlState';
 import { cardIsOnScreen, useReorderAnchor, viewIsAtRest } from '../hooks/useReorderAnchor';
 import { useNewFrameIds } from '../hooks/useNewFrames';
@@ -143,6 +145,10 @@ export default function SequenceView() {
   } = useGridState('sequence');
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  // Writes start from the URL as it stands, not as this render shows it:
+  // another write may have landed in the same moment.
+  const { updateParams } = useUrlParams();
+  const latestParams = useLatestSearchParams();
   const navigate = useNavigate();
   const navigateNow = useNavigateNow();
   const grading = useGrading(dbId!);
@@ -500,27 +506,26 @@ export default function SequenceView() {
     };
   }, [activeSequence, isAnalyzing, location.state]);
 
+  // Write the cursor this render settled on, unless the address has moved
+  // on since: a `current` written a moment ago, such as by an arrow key,
+  // that this render does not show yet is newer than what it worked out.
   useEffect(() => {
-    if (activeImageId !== null && activeImageId !== urlCurrentImageId) {
-      if (activeScoreScope === 'target_filter' && !requestedScoreScope) {
-        const params = new URLSearchParams(searchParams);
-        params.set('current', String(activeImageId));
-        params.set('scoreScope', `target-filter:${activeSequence?.filter_name ?? ''}`);
-        params.delete('groupIndex');
-        params.delete('imageIndex');
-        navigate(`/sequence?${params.toString()}`, { replace: true });
-      } else {
-        setCurrentImageId(activeImageId);
-      }
-    }
+    if (activeImageId === null || activeImageId === urlCurrentImageId) return;
+    const scoreScope = activeScoreScope === 'target_filter' && !requestedScoreScope
+      ? { scoreScope: `target-filter:${activeSequence?.filter_name ?? ''}` }
+      : {};
+    updateParams((latest) => {
+      const current = latest.get('current');
+      // Parsed as useGridState reads it, so an unreadable one still counts as the one shown.
+      if (!Object.is(current ? parseInt(current, 10) : null, urlCurrentImageId)) return null;
+      return { current: activeImageId, ...scoreScope, groupIndex: null, imageIndex: null };
+    });
   }, [
     activeImageId,
     activeScoreScope,
     activeSequence?.filter_name,
-    navigate,
     requestedScoreScope,
-    searchParams,
-    setCurrentImageId,
+    updateParams,
     urlCurrentImageId,
   ]);
 
@@ -759,10 +764,10 @@ export default function SequenceView() {
     const offsetTop = scroller && anchor
       ? anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
       : 0;
-    navigateNow(imageDetailPath(imageId, searchParams, 'sequence', calibrationFocus), {
+    navigateNow(imageDetailPath(imageId, latestParams(), 'sequence', calibrationFocus), {
       state: imageDetailNavigationState({ scrollTop, imageId, offsetTop }),
     });
-  }, [navigateNow, searchParams]);
+  }, [latestParams, navigateNow]);
 
   const selectSequence = useCallback((choice: SequenceChoice) => {
     const sequence = choice.sequence;
@@ -776,21 +781,17 @@ export default function SequenceView() {
       selectionBaseIdsRef.current = new Set(
         Array.from(selectedImages).filter(imageId => !sequenceImageIds.has(imageId)),
       );
-      const params = new URLSearchParams(searchParams);
-      params.set('current', String(firstImageId));
-      params.delete('groupIndex');
-      params.delete('imageIndex');
-      if (choice.scoreScope === 'target_filter') {
-        params.set('scoreScope', `target-filter:${sequence.filter_name}`);
-      } else {
-        params.delete('scoreScope');
-      }
-      navigate(`/sequence?${params.toString()}`, { replace: true });
+      updateParams({
+        current: firstImageId,
+        groupIndex: null,
+        imageIndex: null,
+        scoreScope: choice.scoreScope === 'target_filter' ? `target-filter:${sequence.filter_name}` : null,
+      });
     }
-  }, [navigate, order, searchParams, selectedImages]);
+  }, [order, selectedImages, updateParams]);
 
   const chooseFilter = useCallback((filter: string | undefined) => {
-    const params = new URLSearchParams(searchParams);
+    const params = latestParams();
     if (filter) {
       params.set('filterName', filter);
     } else {
@@ -798,7 +799,7 @@ export default function SequenceView() {
     }
     params.delete('scoreScope');
     navigate(`/sequence?${params.toString()}`);
-  }, [navigate, searchParams]);
+  }, [latestParams, navigate]);
 
   const ruleHandChanges = rulePicks ? handChanges(selectedImages, rulePicks) : 0;
 
@@ -835,7 +836,7 @@ export default function SequenceView() {
                     // Preserve the existing query context (notably ?db=) and
                     // just set the chosen target, instead of rebuilding the URL
                     // from scratch and dropping the db slug.
-                    const params = new URLSearchParams(searchParams);
+                    const params = latestParams();
                     params.set('project', String(projectId));
                     params.set('target', String(t.id));
                     navigate(`/sequence?${params.toString()}`);

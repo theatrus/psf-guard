@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useDirectorStatus } from '../../hooks/useDirectorStatus';
-import { withoutPlanningParams } from '../../hooks/useUrlState';
+import { useLatestUrl, withoutPlanningParams } from '../../hooks/useUrlState';
 import { usePlans } from '../header/useCurrentPlan';
 import './DirectorPage.css';
 import DirectorProjectContext from './DirectorProjectContext';
@@ -18,6 +18,8 @@ export default function PlanPage() {
   const [params] = useSearchParams();
   const { search } = useLocation();
   const navigate = useNavigate();
+  // The canonical address starts from the URL as it stands.
+  const latestUrl = useLatestUrl();
   const status = useDirectorStatus();
   const plans = usePlans();
   // The plan this page showed last: when a detach leaves two plans holding
@@ -34,8 +36,16 @@ export default function PlanPage() {
   // edits, notices and open dialog must survive that.
   const canonical = resolved.kind === 'plan' ? planKey(resolved.row, plans.rows) : null;
   useEffect(() => {
-    if (canonical && key !== canonical) navigate(planHref(canonical, params), { replace: true, state: samePageAs(search) });
-  }, [canonical, key, params, search, navigate]);
+    if (!canonical || key === canonical) return;
+    // One read of the address as it stands, for the new address and for
+    // the mark that keeps the unsaved-edits guard quiet: both must name
+    // the address being replaced. A plan chosen since this render is
+    // newer than the key it resolved, so it stays.
+    const latestSearch = latestUrl()?.search ?? search;
+    const latest = new URLSearchParams(latestSearch);
+    if (latest.get('plan') !== key) return;
+    navigate(planHref(canonical, latest), { replace: true, state: samePageAs(latestSearch) });
+  }, [canonical, key, latestUrl, search, navigate]);
   // A plan opens at its top, not at the scroll offset of the list it came
   // from; a new key for the plan already open keeps the place.
   const opened = resolved.kind === 'plan' ? resolved.row.project.id : key;

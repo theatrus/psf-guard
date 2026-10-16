@@ -1,8 +1,7 @@
-import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { createMemoryRouter, RouterProvider, useLocation } from 'react-router-dom';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CalibrationSession, FlatGroupsRig, FlatGroupUseView, FlatSession } from '../../../api/types';
 import { server } from '../../../test/msw-server';
@@ -201,17 +200,12 @@ function Location() {
 
 function renderPage(entry: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
-        <Routes>
-          <Route path="/calibration" element={<>{children}<Location /></>} />
-          <Route path="/grid" element={<Location />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>
-  );
-  return render(<CalibrationPage />, { wrapper });
+  // The app's kind of router: a data router.
+  const router = createMemoryRouter([
+    { path: '/calibration', element: <><CalibrationPage /><Location /></> },
+    { path: '/grid', element: <Location /> },
+  ], { initialEntries: [entry] });
+  return render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
 }
 
 const params = () => new URLSearchParams(screen.getByRole('status', { name: 'location' }).textContent ?? '');

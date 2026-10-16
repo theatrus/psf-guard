@@ -872,7 +872,7 @@ test('Grid starts target quality analysis and keeps progress in the global heade
   // The header keeps the job to a small chip; hovering it opens the queue.
   const activity = page.getByRole('button', { name: /Background jobs/ });
   const queue = page.getByRole('region', { name: 'Background jobs' });
-  await expect(activity).toContainText('1 job');
+  await expect(activity).toContainText('1 running');
   await activity.hover();
   await expect(queue).toContainText('Analyzing quality');
   await expect(queue).toContainText('Solving 1/3 frames');
