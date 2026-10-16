@@ -43,7 +43,7 @@
   shows one rig's flats, that rig is measured first, without holding up a
   stack, a preview or anything else you start. Work it could not finish,
   such as flats on a share that is away, is tried again later, and Stop
-  pauses measuring until the next change, **Resume now**, or a restart.
+  pauses measuring until those flats change, **Resume now**, or a restart.
 
 - Images' **Date** groups are observing nights, split where the catalog's
   nights split, as calibration and the AstroBin export do: a night west of

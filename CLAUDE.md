@@ -172,9 +172,9 @@ Current behavior: [satellites](docs/SATELLITES.md) and
 - Write generated artifacts to a temporary file and rename them atomically.
 - Preview requests return `202` while queued work runs. Keep generation out of
   the HTTP request path.
-- Run long or heavy work as a tracked job with a row in the job line. No ad
-  hoc threads, and no such work in a request handler. See
-  [background jobs](docs/design/background-jobs.md).
+- Run long or heavy work as a tracked job with a row in the job line: one
+  runner thread per job, no other threads, and no such work in a request
+  handler. See [background jobs](docs/design/background-jobs.md).
 - Give each job a `concurrency::Priority`: `Interactive` when a person
   started it, `Viewed` for automatic work a page shows, `Background` for the
   rest. Only `Interactive` holds the guard, from

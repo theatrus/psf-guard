@@ -463,9 +463,10 @@ fn an_unreadable_session_is_queued_again() {
     cancel(&path);
 }
 
-/// Stop pauses what runs and what waits; a later change resumes it.
+/// Stop pauses what runs and what waits; a change to a rig's flats resumes
+/// that rig, a start every rig.
 #[test]
-fn a_stopped_pass_resumes_with_the_next_change() {
+fn a_stopped_pass_resumes_when_its_flats_change() {
     let _settings = settings_lock();
     let library = library();
     let state = test_state();
@@ -485,13 +486,30 @@ fn a_stopped_pass_resumes_with_the_next_change() {
         assert_eq!(queue.stopped, Scope::everything(), "paused, not forgotten");
         assert_eq!(queue.take_ready(Instant::now()), Ready::Idle);
     }
-    // A page's look does not resume it; a change does.
+    // A page's look does not resume it; new lights do not either.
     let now = Instant::now();
     job.queue()
         .add(Scope::flats(Rigs::of(["x"])), now, Trigger::Look);
+    job.queue()
+        .add(Scope::lights(Rigs::All), now, Trigger::Change);
     assert_eq!(job.queue().stopped, Scope::everything());
+    // A change to one rig's flats takes that rig up, and the rest stays
+    // stopped.
+    job.queue().pending = Scope::default();
     job.queue()
         .add(Scope::flats(Rigs::of(["x"])), now, Trigger::Change);
+    assert_eq!(
+        job.queue().pending,
+        Scope {
+            flats: Rigs::of(["x"]),
+            lights: Rigs::of(["x"]),
+        }
+    );
+    assert_eq!(job.queue().stopped, Scope::everything());
+    // A start takes up every rig.
+    job.queue().pending = Scope::default();
+    job.queue().add(Scope::everything(), now, Trigger::Change);
+    assert!(job.queue().stopped.is_empty());
     let resumed = match job.queue().take_ready(now + FLAT_MEASURE_SETTLE) {
         Ready::Run(scope) => scope,
         other => panic!("{other:?}"),
@@ -565,16 +583,16 @@ async fn forgetting_through_the_route_queues_its_rig() {
 // ---------------------------------------------------------------------------
 // Tiers: a page lifts a rig's pass without holding up the person.
 
-/// Review of #870: a pass a page lifts leases a share of its own, step by
-/// step, and holds no interactive guard, so a stack the person starts
-/// meanwhile plans with its whole share and nothing waits for the pass.
+/// Review of #870: a pass a page lifts borrows from the background share,
+/// step by step, and holds no interactive guard, so a stack the person
+/// starts meanwhile plans with its whole share and nothing waits for the
+/// pass.
 #[test]
 fn a_viewed_pass_leaves_a_persons_stack_its_share() {
     let state = test_state();
     let job = Job::default();
     let path = "/viewed/catalog.sqlite";
-    let state_arc = Arc::new(test_state());
-    watch(&state_arc, path, "rig-a");
+    watch_at(path, "rig-a", Instant::now());
     assert!(watched(path, "rig-a"));
     assert!(
         !watched(path, "rig-b"),
@@ -627,7 +645,7 @@ fn a_pass_waits_for_the_persons_work_at_either_tier() {
             "/waits/background.sqlite"
         };
         if watch_it {
-            watch(&state, path, "rig");
+            watch_at(path, "rig", Instant::now());
         }
         let preview = state.begin_named_interactive_job("a preview");
         let waiter = {
@@ -653,23 +671,36 @@ fn a_pass_waits_for_the_persons_work_at_either_tier() {
 }
 
 /// A page's look queues a check of its rig at most every
-/// [`WATCH_RECHECK`], and never one Stop paused.
+/// [`WATCH_RECHECK`], never one Stop paused, and none for a rig the catalog
+/// does not record.
 #[test]
 fn a_page_looking_at_a_rig_asks_for_a_check_now_and_then() {
+    let library = library();
     let state = Arc::new(test_state());
-    let path = "/looks/catalog.sqlite";
-    // The rig is paused: a look queues nothing.
-    job(path).queue().stopped = Scope::flats(Rigs::of(["paused"]));
-    watch(&state, path, "paused");
+    let path = library.path.as_str();
+    // Rig B is paused: a look queues nothing, though it lifts the rig.
+    job(path).queue().stopped = Scope::flats(Rigs::of([library.b.clone()]));
+    watch(&state, path, &library.b);
     assert!(job(path).queue().pending.is_empty());
-    assert!(watched(path, "paused"), "though it still lifts the rig");
-    // An idle rig: one check, then none until WATCH_RECHECK.
-    watch(&state, path, "rig");
+    assert!(watched(path, &library.b));
+    // Rig A is idle: one check, then none until WATCH_RECHECK.
+    watch(&state, path, &library.a);
     let first = job(path).queue().pending.clone();
-    assert_eq!(first, Scope::flats(Rigs::of(["rig"])));
+    assert_eq!(first, Scope::flats(Rigs::of([library.a.clone()])));
     job(path).queue().pending = Scope::default();
-    watch(&state, path, "rig");
+    watch(&state, path, &library.a);
     assert!(job(path).queue().pending.is_empty(), "rate-limited");
+    // A rig the catalog does not record: nothing at all.
+    watch(&state, path, "no-such-rig");
+    assert!(job(path).queue().pending.is_empty());
+    assert!(!watched(path, "no-such-rig"));
+    let looks = LOOKS.lock().unwrap();
+    assert!(looks.contains_key(&(path.to_string(), library.a.clone())));
+    assert!(
+        !looks.contains_key(&(path.to_string(), library.b.clone())),
+        "a look that queued nothing is not counted"
+    );
+    drop(looks);
     cancel(path);
 }
 
@@ -701,4 +732,209 @@ fn stop_pauses_waiting_work_and_resume_takes_it_up() {
     assert!(resumed.stopped.is_empty());
     assert_eq!(resumed.rigs, ["a"]);
     cancel(path);
+}
+
+// ---------------------------------------------------------------------------
+// Second review of #870.
+
+/// Excluding every flat of a rig (the use/exclude choice) leaves it no
+/// plan; its responses still go, as the old catalog-wide retain dropped
+/// them.
+#[test]
+fn excluding_every_flat_of_a_rig_drops_its_responses() {
+    let _settings = settings_lock();
+    let library = library();
+    let state = test_state();
+    let job = Job::default();
+    library.pass(&state, &job, Scope::everything());
+    let uuids: Vec<String> = {
+        let mut statement = library
+            .conn
+            .prepare("SELECT frame_uuid FROM psf_guard_calibration_frame WHERE rig_uuid = ?1")
+            .unwrap();
+        statement
+            .query_map([&library.b], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    };
+    let touched = rigs_of_frames(&library.conn, &uuids);
+    crate::calibration::set_overrides(
+        &library.conn,
+        &uuids,
+        Some(crate::calibration::QualityOverride::Exclude),
+    )
+    .unwrap();
+    library.pass(&state, &job, Scope::flats(touched));
+    assert_eq!(
+        library.measured_rigs(),
+        std::slice::from_ref(&library.a),
+        "rig B's flats are all kept out, yet its responses stay"
+    );
+}
+
+/// Stop during a pass, then a change before the pass notices: the change
+/// takes the work back into line, and the pass ending does not file it as
+/// stopped again.
+#[test]
+fn a_change_after_stop_leaves_nothing_stopped() {
+    let job = Job::default();
+    let scope = Scope::flats(Rigs::of(["a"]));
+    job.queue().running = Some(scope.clone());
+    job.queue().stop();
+    job.cancelled.store(true, Ordering::SeqCst);
+    job.queue()
+        .add(scope.clone(), Instant::now(), Trigger::Change);
+    let result = Ok(PassOutcome {
+        stopped: true,
+        ..Default::default()
+    });
+    settle_outcome(&job, &scope, &result, Instant::now());
+    let queue = job.queue();
+    assert!(!queue.pending.is_empty(), "the change queued it");
+    assert!(
+        queue.stopped.is_empty(),
+        "stopped as well: {:?}",
+        queue.stopped
+    );
+}
+
+/// A light arriving (a remote upload, every few minutes on an imaging night)
+/// does not resume flat measuring the person stopped.
+#[test]
+fn a_new_light_does_not_resume_stopped_flats() {
+    let mut queue = Queue {
+        stopped: Scope::flats(Rigs::of(["a"])),
+        ..Default::default()
+    };
+    queue.add(Scope::lights(Rigs::All), Instant::now(), Trigger::Change);
+    assert_eq!(
+        queue.stopped,
+        Scope::flats(Rigs::of(["a"])),
+        "Stop lasted one upload"
+    );
+}
+
+/// Rig ids a page posts that the catalog does not record leave no trace,
+/// and old looks are pruned.
+#[test]
+fn looks_are_pruned() {
+    let state = Arc::new(test_state());
+    let path = "/review2/looks.sqlite";
+    for index in 0..500 {
+        watch(&state, path, &format!("rig-{index}"));
+    }
+    cancel(path);
+    let kept = LOOKS
+        .lock()
+        .unwrap()
+        .keys()
+        .filter(|(catalog, _)| catalog == path)
+        .count();
+    assert!(kept < 500, "{kept} looks kept");
+}
+
+/// A pass that ends in an error (as a busy catalog) tries its rigs again;
+/// one Stop ended files them as stopped instead.
+#[test]
+fn a_pass_that_fails_is_tried_again() {
+    let now = Instant::now();
+    let job = Job::default();
+    let scope = Scope::flats(Rigs::of(["a", "b"]));
+    job.queue().running = Some(scope.clone());
+    settle_outcome(
+        &job,
+        &scope,
+        &Err(anyhow::anyhow!("database is locked")),
+        now,
+    );
+    {
+        let queue = job.queue();
+        assert!(queue.running.is_none());
+        assert_eq!(queue.due["a"], now + RETRY_FIRST);
+        assert_eq!(queue.due["b"], now + RETRY_FIRST);
+    }
+    // Every rig's pass failing tries every rig again.
+    let job = Job::default();
+    settle_outcome(
+        &job,
+        &Scope::everything(),
+        &Err(anyhow::anyhow!("busy")),
+        now,
+    );
+    assert!(job.queue().due.contains_key(EVERY_RIG));
+    // Stopped by Stop: paused, not retried.
+    let job = Job::default();
+    job.cancelled.store(true, Ordering::SeqCst);
+    settle_outcome(&job, &scope, &Err(anyhow::anyhow!("busy")), now);
+    assert!(job.queue().due.is_empty());
+    assert_eq!(job.queue().stopped, scope);
+}
+
+/// The rig a page shows is measured first.
+#[test]
+fn the_rig_a_page_shows_goes_first() {
+    let _settings = settings_lock();
+    let library = library();
+    // The rig that would come last in order.
+    let last = library.a.clone().max(library.b.clone());
+    let mut order: Vec<String> = Vec::new();
+    flat_groups::job::run(flat_groups::job::Pass {
+        conn: &library.conn,
+        dir: &library.dir,
+        scope: Scope::everything(),
+        keep_going: &|| true,
+        yield_now: &|| {},
+        progress: &mut |at| {
+            if order.last().map(String::as_str) != Some(at.rig) {
+                order.push(at.rig.to_string());
+            }
+        },
+        goes_first: &|rig| rig == last,
+        find_light: &|_| None,
+        pool: None,
+    })
+    .unwrap();
+    assert_eq!(order.first(), Some(&last), "{order:?}");
+    assert_eq!(order.len(), 2);
+}
+
+/// A use/exclude choice through its route queues the frames' rig alone.
+#[tokio::test]
+async fn a_keep_out_choice_through_the_route_queues_its_rig() {
+    let library = library();
+    let state = Arc::new(
+        AppState::new(
+            library.path.clone(),
+            vec![library.root.to_string_lossy().into_owned()],
+            library.root.join("cache").to_string_lossy().into_owned(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    let ctx = state.all_databases()[0].clone();
+    let path = ctx.database_path.clone();
+    let uuid: String = library
+        .conn
+        .query_row(
+            "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE source_path LIKE '%a1-0.fits'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let _ = crate::server::handlers::set_calibration_quality_override(
+        State(Arc::clone(&state)),
+        DbContext(ctx),
+        Json(
+            crate::server::handlers::SetCalibrationQualityOverrideRequest {
+                frame_uuids: vec![uuid],
+                choice: "exclude".into(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
+    let queued = status(&path);
+    assert_eq!(queued.rigs, std::slice::from_ref(&library.a), "{queued:?}");
+    cancel(&path);
 }

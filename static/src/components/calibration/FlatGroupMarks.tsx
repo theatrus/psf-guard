@@ -54,8 +54,8 @@ function StoppedNote({ dbId }: { dbId: string }) {
   });
   return (
     <p className="calibration-muted flat-measure-stopped" data-testid="flat-measure-stopped">
-      Flat measuring is stopped. It resumes with the next import or change to these flats, or when
-      the server starts again.
+      Flat measuring is stopped. It resumes when these flats change, or when the server starts
+      again.
       {access.canWrite && (
         <>
           {' '}

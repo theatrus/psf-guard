@@ -474,9 +474,10 @@ sessions`, then the pairs it compares, then the lights it reads.
   folders do not show yet, or a catalog busy with another writer leave the
   rig to be tried again: after a minute, then less often, up to every half
   hour.
-- **Stop** pauses measuring. Frames says so, and it resumes with the next
-  import or change to the flats, with **Resume now**, or when the server
-  starts again.
+- **Stop** pauses measuring. Frames says so, and it resumes when those
+  flats change (an import, sync, forget or keep-out choice), with **Resume
+  now**, or when the server starts again. New lights alone do not resume
+  it.
 - **Settings.** A changed dust or light-pattern limit regroups from the
   stored numbers at once, without grading again. A rig switched from **By
   time only** to **By measurement** is measured then, and only that rig.
@@ -484,7 +485,8 @@ sessions`, then the pairs it compares, then the lights it reads.
 - **Priority.** It uses the background share of the CPU, waits while a
   preview, a stack or other work you started runs, and keeps each result as
   it goes. While **Calibration › Frames** shows one rig's flats, that rig is
-  measured first, on a small share of its own; nothing else waits for it.
+  measured first, with workers from the background share; nothing else
+  waits for it.
 
 A read-only catalog, or one from an older build, has no place for the
 numbers and groups flats by time, as before.

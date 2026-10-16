@@ -97,16 +97,16 @@ pub(crate) fn add_tables(conn: &Connection) -> Result<bool> {
 /// the maps and reference it was fitted with): a column added after the
 /// table, NULL on older rows until a pass names them.
 fn add_change_key(conn: &Connection) -> Result<()> {
-    let has = conn
-        .prepare("SELECT change_key FROM psf_guard_flat_light_evidence LIMIT 0")
-        .is_ok();
-    if !has {
-        conn.execute(
-            "ALTER TABLE psf_guard_flat_light_evidence ADD COLUMN change_key TEXT",
-            [],
-        )
-        .context("adding change_key to the light evidence table")?;
-    }
+    // The library's own upgrade step: it tells a busy catalog from a
+    // missing column, and takes the column another opener just added as
+    // added.
+    crate::calibration::add_column_if_missing(
+        conn,
+        "psf_guard_flat_light_evidence",
+        "change_key",
+        "TEXT",
+    )
+    .context("adding change_key to the light evidence table")?;
     Ok(())
 }
 

@@ -16,7 +16,7 @@ moment is a **job**. A job:
 
 What a job must not do:
 
-- start threads of its own beyond its one runner, or loop in
+- start threads beyond its one runner thread, or loop in
   `tokio::task::spawn_blocking`;
 - do the work inside an HTTP handler. A handler queues the job and returns;
   a preview answers `202` while its work is queued;
@@ -29,18 +29,22 @@ What a job must not do:
 | Tier | Who | Workers | Guard | Waits for |
 |---|---|---|---|---|
 | `Interactive` | A person started it: a stack, a preview, a scan they asked for | The interactive share | Holds `AppState::begin_named_interactive_job(name)` | Nothing |
-| `Viewed` | Automatic work a page shows now, as flat measuring for the rig Calibration › Frames is open on | A modest share of its own (the background share's size), not split with background jobs | None | Interactive work |
+| `Viewed` | Automatic work a page shows now, as flat measuring for the rig Calibration › Frames is open on | Borrowed from the background share, so the cores in use stay at the interactive and background shares | None | Interactive work |
 | `Background` | Automatic work nobody is looking at: pre-generation, quality backfill, grading, flat measuring after an import | The background share, split between background jobs | None | Interactive work |
 
 Only a person's work holds the guard, so nothing a page merely shows can
 hold up a stack, a preview, autoimport, grading, backfill or an automatic
 stack. A `Viewed` job leases again for each step and gives the workers back
-between steps, so a stack started meanwhile plans with its whole share.
+between steps, so a stack started meanwhile plans with its whole share. It
+does not wait out `RESUME_QUIET` after a person's work, as automatic stack
+refreshes do: a page is showing what it measures.
 
 A page lifts a job with a hint, not by polling harder: Frames sends `POST
 …/calibrations/flat-measure/watch {rig}` every 20 s while one rig is chosen.
-For 45 s after each, that rig goes first and runs `Viewed`. The hint
-changes no catalog and takes the gate of the other display calculations.
+For 45 s after each, that rig goes first and runs `Viewed`. The hint takes
+the gate of the other display calculations: it may queue a check, which
+writes measurements, but never changes what the catalog records of frames
+or grades. A rig the catalog does not record is ignored.
 
 ## The parts
 

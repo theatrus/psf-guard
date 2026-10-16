@@ -915,7 +915,8 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
     // These POSTs calculate derived display data. They may populate caches,
     // but they do not change catalog grades, plans, files, or server config.
     // A page saying it shows a rig's flats lifts that rig's measuring for a
-    // while; it changes no catalog.
+    // while, and may queue a check that writes flat measurements; it never
+    // changes the frames, grades or plans a catalog records.
     !(path.ends_with("/astrometry")
         || path.ends_with("/satellites")
         || path.ends_with("/calibrations/flat-measure/watch")

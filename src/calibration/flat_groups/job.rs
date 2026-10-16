@@ -108,6 +108,28 @@ impl Rigs {
             }
         };
     }
+
+    /// Those of these rigs that `others` names too.
+    pub fn within(&self, others: &Rigs) -> Rigs {
+        match (self, others) {
+            (Rigs::None, _) | (_, Rigs::None) => Rigs::None,
+            (Rigs::All, others) => others.clone(),
+            (mine, Rigs::All) => mine.clone(),
+            (Rigs::Some(mine), Rigs::Some(theirs)) => Rigs::of(mine.intersection(theirs).cloned()),
+        }
+    }
+
+    /// These rigs less those `others` names. Every rig less some stays every
+    /// rig: the set cannot say which are left, and a pass over a rig with
+    /// nothing to do reads nothing.
+    pub fn without(&self, others: &Rigs) -> Rigs {
+        match (self, others) {
+            (_, Rigs::All) | (Rigs::None, _) => Rigs::None,
+            (Rigs::All, _) => Rigs::All,
+            (mine, Rigs::None) => mine.clone(),
+            (Rigs::Some(mine), Rigs::Some(theirs)) => Rigs::of(mine.difference(theirs).cloned()),
+        }
+    }
 }
 
 /// Which work a pass does, and for which rigs. A rig's flats are measured,
@@ -150,6 +172,14 @@ impl Scope {
     pub fn merge(&mut self, other: Scope) {
         self.flats.merge(other.flats);
         self.lights.merge(other.lights);
+    }
+
+    /// This scope less what `other` already covers.
+    pub fn without(&self, other: &Scope) -> Scope {
+        Scope {
+            flats: self.flats.without(&other.flats),
+            lights: self.lights.without(&other.lights),
+        }
     }
 
     /// Whether this rig's flat sessions are measured and compared.
@@ -713,6 +743,17 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
     }
     outcome.frames_read = frames_read.load(Ordering::Relaxed);
 
+    // A rig in scope with measured rows but no flats in use any more (every
+    // one kept out by the use/exclude choice, or forgotten) has no plan, so
+    // the loop never named it: its rows all go. A rig grouped by time keeps
+    // them for when it is measured again.
+    let planned: BTreeSet<&str> = plans.iter().map(|plan| plan.rig_uuid.as_str()).collect();
+    for row in known.values() {
+        let rig = row.rig_uuid.as_str();
+        if !planned.contains(rig) && pass.scope.measures(rig) && rig_is_measured(rig) {
+            measured_rigs.insert(rig.to_string());
+        }
+    }
     // Rows of the rigs measured that no current session has go, with their
     // planes; other rigs' rows wait for their own pass.
     store::retain_responses(conn, &measured_rigs, &current)?;

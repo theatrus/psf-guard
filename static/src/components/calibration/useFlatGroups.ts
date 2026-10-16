@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
+import { useAccess } from '../../auth/access';
 import { FLAT_WATCH_MS, flatMeasureKey, flatMeasurePollMs, measuringRig } from './flatMeasureLabel';
 
 /** How often the job's progress is asked for while a pass runs, and while it
@@ -26,6 +27,7 @@ export function useFlatGroups(
   rig?: string,
 ) {
   const queryClient = useQueryClient();
+  const access = useAccess();
   // Read once, and again only when a pass changed them: not on the app's
   // usual timer, since the server reads every light to answer.
   const groups = useQuery({
@@ -43,11 +45,12 @@ export function useFlatGroups(
     refetchIntervalInBackground: false,
     retry: false,
   });
-  // A hint while one rig's flats are in view; nothing when every rig is.
+  // A hint while one rig's flats are in view; nothing when every rig is,
+  // or for a viewer the server keeps from display calculations.
   useQuery({
     queryKey: [...flatMeasureKey(dbId), 'watch', rig ?? null],
     queryFn: () => apiClient.watchFlatMeasure(dbId, rig!),
-    enabled: enabled && !!rig,
+    enabled: enabled && !!rig && access.canCompute,
     refetchInterval: FLAT_WATCH_MS,
     refetchIntervalInBackground: false,
     retry: false,

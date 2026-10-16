@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { CalibrationSession, FlatGroupsRig, FlatGroupsView, FlatSession } from '../../../api/types';
 import { server } from '../../../test/msw-server';
 import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from '../../../utils/settingsIntent';
+import { AccessContext, type AccessContextValue } from '../../../auth/access';
 import CalibrationPage from '../CalibrationPage';
 import { FLAT_POLL_MS } from '../useFlatGroups';
 
@@ -163,15 +164,20 @@ function Location() {
   return <output aria-label="location">{location.search}</output>;
 }
 
-function renderPage(entry: string) {
+function renderPage(entry: string, access?: Partial<AccessContextValue>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
-        <Routes>
-          <Route path="/calibration" element={<>{children}<Location /></>} />
-        </Routes>
-      </MemoryRouter>
+      <AccessContext.Provider value={{
+        status: { authentication_required: true, authenticated: true, role: 'read_write', can_compute: true },
+        canWrite: true, canCompute: true, logout: async () => undefined, ...access,
+      }}>
+        <MemoryRouter initialEntries={[entry]}>
+          <Routes>
+            <Route path="/calibration" element={<>{children}<Location /></>} />
+          </Routes>
+        </MemoryRouter>
+      </AccessContext.Provider>
     </QueryClientProvider>
   );
   return render(<CalibrationPage />, { wrapper });
@@ -530,6 +536,14 @@ describe('Flat groups in Frames', () => {
     expect(screen.queryByTestId('flat-groups-measuring')).toBeNull();
   });
 
+  it('sends no hint for a viewer the server keeps from display calculations', async () => {
+    const seen = serve(VIEW, { state: 'running', active: true, rig_uuid: 'rig', stage: 'measuring flat sessions', done: 1, total: 4 });
+    renderPage('/calibration?db=demo&calKind=flat&calRig=rig', { canCompute: false, canWrite: false });
+    expect(await screen.findByTestId('flat-groups-measuring')).toHaveTextContent('Measuring flats · 1 of 4 sessions');
+    await waitFor(() => expect(seen.quality).toBeGreaterThan(0));
+    expect(seen.watch).toEqual([]);
+  });
+
   it('lifts no rig when every rig is in view, and still shows the pass', async () => {
     const seen = serve(VIEW, {
       state: 'running', active: true, rig_uuid: 'rig', rig_name: 'UltraCat · ASI6200',
@@ -545,7 +559,7 @@ describe('Flat groups in Frames', () => {
     const seen = serve(VIEW, { state: 'stopped', stopped: ['rig'] });
     renderPage('/calibration?db=demo&calKind=flat&calRig=rig');
     const note = await screen.findByTestId('flat-measure-stopped');
-    expect(note).toHaveTextContent('Flat measuring is stopped. It resumes with the next import or change to these flats');
+    expect(note).toHaveTextContent('Flat measuring is stopped. It resumes when these flats change, or when the server starts again.');
     fireEvent.click(screen.getByTestId('flat-measure-resume'));
     await waitFor(() => expect(seen.resumed).toBe(1));
     await waitFor(() => expect(screen.queryByTestId('flat-measure-stopped')).toBeNull());

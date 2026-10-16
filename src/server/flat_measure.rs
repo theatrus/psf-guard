@@ -16,15 +16,17 @@
 //!   again after [`RETRY_FIRST`], doubling up to [`RETRY_MAX`], at most
 //!   [`RETRY_LIMIT`] times; a new change to the rig starts again.
 //! - **Stop** pauses: what was waiting or running is kept as stopped until
-//!   the next change the server is told of in this catalog, Resume, or the
-//!   next start.
+//!   those rigs' flats change, Resume, or the next start. New lights alone
+//!   resume nothing.
 //! - **Prioritised.** A pass runs at [`Priority::Background`]. While a page
 //!   shows a rig's flats ([`watch`]) that rig goes first and runs at
-//!   [`Priority::Viewed`]: a modest share of its own, leased again for each
-//!   step, and no interactive guard. Either way it waits for interactive
-//!   work a person started before each step
+//!   [`Priority::Viewed`]: workers borrowed from the background share,
+//!   leased again for each step, and no interactive guard. Either way it
+//!   waits for interactive work a person started before each step
 //!   ([`AppState::wait_for_interactive_work`]), and says what it waits for.
-//!   No flat path holds the interactive guard: nobody starts a pass.
+//!   No flat path holds the interactive guard: nobody starts a pass. It
+//!   does not wait for `RESUME_QUIET` after a person's work, as automatic
+//!   stack refreshes do: a page is showing what it measures.
 //! - **Time mode.** A rig whose flats group by time is never measured.
 //! - **Tracked.** [`status`] feeds the header's job line and the page.
 
@@ -151,8 +153,8 @@ enum Ready {
 /// Where a trigger comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Trigger {
-    /// A change to the catalog, a start or Resume: tries start again, and
-    /// stopped work resumes.
+    /// A change to the catalog, a start or Resume: the tries of the rigs
+    /// whose flats it names start again, and their stopped work resumes.
     Change,
     /// A page showing a rig asks for a check: it respects Stop and the
     /// retry wait.
@@ -176,25 +178,32 @@ fn backoff(attempt: u32) -> Duration {
 impl Queue {
     fn add(&mut self, scope: Scope, now: Instant, trigger: Trigger) {
         if trigger == Trigger::Change {
-            // A change starts the tries again and resumes what Stop paused.
-            match (&scope.flats, &scope.lights) {
-                (Rigs::All, _) | (_, Rigs::All) => {
+            // A change to rigs' flats starts their tries again and resumes
+            // what Stop paused for them. New lights alone do neither: one
+            // remote upload must not undo a person's Stop.
+            match &scope.flats {
+                Rigs::All => {
                     self.attempts.clear();
                     self.due.clear();
                 }
-                _ => {
-                    for rigs in [&scope.flats, &scope.lights] {
-                        if let Rigs::Some(rigs) = rigs {
-                            for rig in rigs {
-                                self.attempts.remove(rig);
-                                self.due.remove(rig);
-                            }
-                        }
+                Rigs::Some(rigs) => {
+                    for rig in rigs {
+                        self.attempts.remove(rig);
+                        self.due.remove(rig);
                     }
                 }
+                Rigs::None => {}
             }
-            let stopped = std::mem::take(&mut self.stopped);
-            self.pending.merge(stopped);
+            let named = &scope.flats;
+            let resumed = Scope {
+                flats: self.stopped.flats.within(named),
+                lights: self.stopped.lights.within(named),
+            };
+            self.stopped = self.stopped.without(&Scope {
+                flats: named.clone(),
+                lights: named.clone(),
+            });
+            self.pending.merge(resumed);
         }
         self.pending.merge(scope);
         self.last = Some(now);
@@ -353,8 +362,9 @@ pub fn running(path: &str) -> bool {
 
 /// Queue flat measuring for the catalog at `path`: `scope` names the rigs
 /// whose flats or lights changed. Requests merge; the pass starts once they
-/// pause for [`FLAT_MEASURE_SETTLE`] and grading is done. A change also
-/// resumes what Stop paused.
+/// pause for [`FLAT_MEASURE_SETTLE`] and grading is done. A change to rigs'
+/// flats also resumes what Stop paused for them; every rig's (a start) all
+/// of it.
 pub fn queue(state: &Arc<AppState>, path: &str, scope: Scope) {
     enqueue(state, path, scope, Trigger::Change);
 }
@@ -394,8 +404,8 @@ pub fn queue_all(state: &Arc<AppState>, scope: Scope) {
 }
 
 /// Stop: the running pass ends at its next step, and what it and the
-/// waiting requests had left is paused until the next change to the
-/// catalog, [`resume`], or the next start.
+/// waiting requests had left is paused until those flats change,
+/// [`resume`], or the next start.
 pub fn cancel(path: &str) -> FlatMeasureStatus {
     let job = job(path);
     {
@@ -574,7 +584,9 @@ fn settle_outcome(
     };
     match result {
         Ok(outcome) if outcome.stopped && cancelled => {
-            queue.stopped.merge(scope.clone());
+            // A change since Stop may have put some of it back in line.
+            let rest = scope.without(&queue.pending);
+            queue.stopped.merge(rest);
             outcome.measured + outcome.compared + outcome.evidence > 0
         }
         Ok(outcome) => {
@@ -592,7 +604,8 @@ fn settle_outcome(
             outcome.measured + outcome.compared + outcome.evidence > 0
         }
         Err(_) if cancelled => {
-            queue.stopped.merge(scope.clone());
+            let rest = scope.without(&queue.pending);
+            queue.stopped.merge(rest);
             true
         }
         Err(_) => {
@@ -719,23 +732,60 @@ static WATCHES: LazyLock<Mutex<HashMap<(String, String), Instant>>> =
 /// When a page's look last queued a check of a rig.
 static LOOKS: LazyLock<Mutex<HashMap<(String, String), Instant>>> = LazyLock::new(Default::default);
 
+/// How long a catalog's list of rigs is trusted before it is read again.
+const RIG_LIST_TTL: Duration = Duration::from_secs(60);
+
+/// Each catalog's rigs, and when they were read: a page may only name
+/// those.
+static KNOWN_RIGS: LazyLock<Mutex<HashMap<String, RigList>>> = LazyLock::new(Default::default);
+
+/// A catalog's rigs, and when they were read.
+type RigList = (Instant, BTreeSet<String>);
+
+/// Whether the catalog at `path` records this rig. Read on a connection of
+/// its own, at most every [`RIG_LIST_TTL`].
+fn catalog_has_rig(path: &str, rig: &str) -> bool {
+    let now = Instant::now();
+    let mut known = KNOWN_RIGS.lock().unwrap_or_else(|p| p.into_inner());
+    known.retain(|_, (read, _)| now.saturating_duration_since(*read) < RIG_LIST_TTL);
+    let (_, rigs) = known.entry(path.to_string()).or_insert_with(|| {
+        let rigs = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .and_then(|conn| {
+            conn.busy_timeout(BUSY_TIMEOUT)?;
+            let mut statement = conn.prepare("SELECT rig_uuid FROM psf_guard_rig")?;
+            let rigs: BTreeSet<String> = statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            Ok(rigs)
+        })
+        .unwrap_or_default();
+        (now, rigs)
+    });
+    rigs.contains(rig)
+}
+
 /// A page shows the flats of `rig` in the catalog at `path`. For
 /// [`WATCH_TTL`] that rig goes first and runs in the viewed tier; and, at
 /// most every [`WATCH_RECHECK`], a check of it is queued, unless Stop
-/// paused it or a retry waits.
+/// paused it, a retry waits or a pass runs. A rig the catalog does not
+/// record is ignored. Reads the catalog's rigs: call it off the request
+/// path.
 pub fn watch(state: &Arc<AppState>, path: &str, rig: &str) {
+    if !catalog_has_rig(path, rig) {
+        return;
+    }
     let now = Instant::now();
     watch_at(path, rig, now);
     let key = (path.to_string(), rig.to_string());
     {
         let mut looks = LOOKS.lock().unwrap_or_else(|p| p.into_inner());
-        if looks
-            .get(&key)
-            .is_some_and(|at| now.saturating_duration_since(*at) < WATCH_RECHECK)
-        {
+        looks.retain(|_, at| now.saturating_duration_since(*at) < WATCH_RECHECK);
+        if looks.contains_key(&key) {
             return;
         }
-        looks.insert(key, now);
     }
     let job = job(path);
     {
@@ -747,6 +797,11 @@ pub fn watch(state: &Arc<AppState>, path: &str, rig: &str) {
         }
     }
     enqueue(state, path, Scope::flats(Rigs::of([rig])), Trigger::Look);
+    // Only a check queued counts against the next.
+    LOOKS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(key, now);
 }
 
 fn watch_at(path: &str, rig: &str, at: Instant) {
@@ -1028,12 +1083,19 @@ pub async fn post_watch(
     if rig.is_empty() || rig.len() > 64 {
         return Err(AppError::BadRequest("name one rig".into()));
     }
-    watch(&state, &ctx.database_path, rig);
-    Ok(Json(ApiResponse::success(status(&ctx.database_path))))
+    let (path, rig) = (ctx.database_path.clone(), rig.to_string());
+    // It may read the catalog's rigs: off the request path.
+    let path = tokio::task::spawn_blocking(move || {
+        watch(&state, &path, &rig);
+        path
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("noting the rig in view: {error}")))?;
+    Ok(Json(ApiResponse::success(status(&path))))
 }
 
 /// `POST /api/db/{db}/calibrations/flat-measure/cancel` — Stop: what runs
-/// and waits is paused until the next change, Resume, or the next start.
+/// and waits is paused until those flats change, Resume, or the next start.
 pub async fn post_cancel(ctx: DbContext) -> Json<ApiResponse<FlatMeasureStatus>> {
     Json(ApiResponse::success(cancel(&ctx.database_path)))
 }

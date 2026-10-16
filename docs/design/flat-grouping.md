@@ -483,7 +483,9 @@ opens the rig's own value or the global one.
     sessions with a new evidence key.
   - **Retains** are per rig: a pass drops the stale response rows of the
     rigs it measured, never another rig's, then every comparison whose
-    sessions are not both kept, then planes with no row.
+    sessions are not both kept, then planes with no row. A rig in scope
+    whose flats are all kept out (or gone) has no plan; its rows go too,
+    unless it groups by time.
   - **Debounce**: requests merge, and a pass starts
     `FLAT_MEASURE_SETTLE` (5 s) after the last one, and only once the
     catalog's grading is not running or waiting for uploads to settle
@@ -493,10 +495,13 @@ opens the rig's own value or the global one.
     again after `RETRY_FIRST` (1 min), doubling to `RETRY_MAX` (30 min), at
     most `RETRY_LIMIT` (6) times; a new change to the rig starts again.
   - **Stop** (`POST …/flat-measure/cancel`) ends the pass at its next step
-    and pauses what ran and waited. It resumes with the next change the
-    server is told of in that catalog, with **Resume now** on the Frames
-    page (`POST …/flat-measure/resume`), or at the next start. A page's
-    look never resumes it.
+    and pauses what ran and waited. A rig's stopped work resumes when that
+    rig's flats change (an import, sync, forget, override or repair that
+    names it), with **Resume now** on the Frames page (`POST
+    …/flat-measure/resume`), or at the next start. New lights alone, as a
+    remote upload, resume nothing, and neither does a page's look. A
+    change that arrives after Stop but before the pass notices keeps its
+    work in line rather than stopped.
   - **Start** and adding a database queue every rig: only unfinished or
     stale work is done, and a catalog that is up to date reads no pixel.
   - **Settings**: a change to `flat_grouping`, `flat_split_dust_pct`,
@@ -513,12 +518,16 @@ opens the rig's own value or the global one.
   - **Tiers**: a pass runs `Background` and waits for a person's
     interactive work before each step. While Frames shows one rig, the page
     sends `POST …/flat-measure/watch {rig}` every 20 s; for `WATCH_TTL`
-    (45 s) after each, that rig goes first and runs `Viewed`: a modest
-    share of its own, leased again for each step, and no interactive guard,
-    so autoimport, grading, backfill and automatic stacks carry on and a
-    stack the person starts plans with its whole share. At most every
-    `WATCH_RECHECK` (5 min) a look also queues a check of the rig, which
-    reads nothing when nothing is stale.
+    (45 s) after each, that rig goes first and runs `Viewed`: workers
+    borrowed from the background share (the cores in use stay at the
+    interactive and background shares), leased again for each step, and no
+    interactive guard, so autoimport, grading, backfill and automatic stacks
+    carry on and a stack the person starts plans with its whole share. A
+    viewed pass does not wait out `RESUME_QUIET` after a person's work, as
+    automatic stack refreshes do: a page is showing what it measures. At
+    most every `WATCH_RECHECK` (5 min) a look also queues a check of the
+    rig, which reads nothing when nothing is stale; a rig the catalog does
+    not record is ignored.
 - **Grouping by time** is the previous behaviour throughout: selection,
   the mixed-flats Check and its wording, export sessions (no per-flat-set
   sessions), and the light's account, which says nothing of measurements.
