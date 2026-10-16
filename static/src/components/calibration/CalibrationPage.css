@@ -110,6 +110,33 @@
   font-size: 0.8rem;
 }
 
+/* The sidebar sticks to the top of the page's scroll area at no more than
+   its height (the page measures it): its list takes what the toggle, count
+   and pager leave and scrolls on its own. */
+.calibration-sessions-column {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: var(--calibration-sidebar-height, calc(100dvh - 5rem));
+  min-height: 0;
+}
+
+.calibration-sessions-column > * {
+  flex: none;
+}
+
+.calibration-sessions-column > .calibration-sessions {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.calibration-sessions-column > .calibration-sessions > * {
+  flex: none;
+}
+
 .calibration-sessions ul {
   position: relative;
   display: grid;
@@ -119,6 +146,13 @@
   padding: 0 0.2rem 0 0;
   overflow-y: auto;
   list-style: none;
+}
+
+.calibration-sessions-column > .calibration-sessions > ul {
+  flex: 1 1 auto;
+  align-content: start;
+  min-height: 0;
+  max-height: none;
 }
 
 .calibration-sessions li button {
@@ -936,7 +970,13 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .calibration-sessions ul {
+  .calibration-sessions-column {
+    position: static;
+    max-height: none;
+  }
+
+  .calibration-sessions ul,
+  .calibration-sessions-column > .calibration-sessions > ul {
     max-height: 15rem;
   }
 

@@ -567,6 +567,35 @@ function CalibrationFrames({
   useHotkeys('up', () => moveGroup('prev'), groupHotkeys, [moveGroup]);
   useHotkeys('down', () => moveGroup('next'), groupHotkeys, [moveGroup]);
 
+  // The sidebar sticks to the top of the page's scroll area at no more than
+  // its height, so its list scrolls on its own and its foot (a pager, the
+  // last group) stays in reach however long the frame's side runs.
+  useEffect(() => {
+    const column = listRef.current;
+    const area = column?.closest<HTMLElement>('.app-main');
+    if (!column || !area) return;
+    const fit = () => {
+      // A sticky box stops at its container's end, so the padding below it,
+      // the page's and the scroll area's, comes off its height too.
+      let below = 0;
+      for (let element = column.parentElement; element; element = element.parentElement) {
+        const style = getComputedStyle(element);
+        below += (parseFloat(style.paddingBottom) || 0) + (parseFloat(style.borderBottomWidth) || 0);
+        if (element === area) break;
+        below += parseFloat(style.marginBottom) || 0;
+      }
+      column.style.setProperty('--calibration-sidebar-height', `${area.clientHeight - below}px`);
+    };
+    fit();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', fit);
+      return () => window.removeEventListener('resize', fit);
+    }
+    const observer = new ResizeObserver(fit);
+    observer.observe(area);
+    return () => observer.disconnect();
+  }, []);
+
   // Keep the chosen session or group in sight in its list as the keys move it.
   const shownKey = browse === 'groups' ? groupEntry?.key : sessionId;
   useEffect(() => {

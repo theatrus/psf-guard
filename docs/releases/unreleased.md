@@ -4,6 +4,9 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Calibration › Frames keeps its sidebar in view: the session or group
+  list stays beside the frame as the page scrolls, fits the window, and
+  scrolls on its own, so its last groups and its pager stay in reach.
 - A project's state pill in the Library asks before it changes the
   state in Target Scheduler, and its caret now sits inside the pill.
 - Settings looks the same on every tab. Each panel sits in a card of
