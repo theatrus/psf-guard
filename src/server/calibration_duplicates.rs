@@ -78,6 +78,16 @@ pub async fn repair_duplicates(
         RepairError::Failed(error) => AppError::db(error),
     })?;
     if outcome.rows_removed > 0 {
+        // The sessions a merged row was measured in are measured again
+        // from the rows kept: the rigs the plan named.
+        let rigs = crate::calibration::flat_groups::job::Rigs::of(
+            report.groups.iter().map(|group| group.rig_uuid.clone()),
+        );
+        crate::server::flat_measure::queue(
+            &state,
+            &ctx.database_path,
+            crate::calibration::flat_groups::job::Scope::flats(rigs),
+        );
         // The merged rows were peers the others were judged by, and what
         // each project's lights get may have changed.
         crate::server::calibration_quality::request(&state, &ctx.database_path);
@@ -113,6 +123,8 @@ mod tests {
         let state = Arc::new(AppState::new_for_test(conn));
         let mut context = (*state.all_databases().remove(0)).clone();
         context.image_dir_paths = vec![images.path().to_path_buf()];
+        // A path of its own, for the flat measuring job's queue.
+        context.database_path = "/duplicates-repair/catalog.sqlite".into();
         let context = Arc::new(context);
         let ctx = || DbContext(Arc::clone(&context));
 
@@ -140,6 +152,10 @@ mod tests {
         ));
         let Json(applied) = repair(&report.token).await.unwrap();
         assert_eq!(applied.data.unwrap().rows_removed, 1);
+        // The merged rows' rig, named by the plan, is queued for flats.
+        let path = &context.database_path;
+        assert_eq!(crate::server::flat_measure::status(path).rigs, ["rig"]);
+        crate::server::flat_measure::cancel(path);
         // The plan is spent: the library now plans to nothing.
         assert!(matches!(
             repair(&report.token).await,

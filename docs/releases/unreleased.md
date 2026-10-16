@@ -31,6 +31,19 @@
   queues new exposures and changed source revisions. Retrying an exception checks
   the current remote owner's receipts, and automation settings wait for their
   saved policy before allowing edits.
+- Flat measuring is a job of its own in the header's job line, **Measuring
+  flats**, with the rig, `12 of 40 sessions` and a Stop, and Calibration ›
+  Frames shows the same line while it measures a rig in view. It measures
+  only the rigs and sessions an import, sync, upload, forget or duplicate
+  repair touched, once a burst of them pauses, and at start picks up only
+  unfinished work, so an up-to-date catalog reads no pixel. Changing the
+  dust or light-pattern limit regroups at once without grading the library
+  again; switching a rig from grouping by time to by measurement measures
+  that rig alone, and a rig grouped by time is never measured. While Frames
+  shows one rig's flats, that rig is measured first, without holding up a
+  stack, a preview or anything else you start. Work it could not finish,
+  such as flats on a share that is away, is tried again later, and Stop
+  pauses measuring until those flats change, **Resume now**, or a restart.
 
 - Images' **Date** groups are observing nights, split where the catalog's
   nights split, as calibration and the AstroBin export do: a night west of

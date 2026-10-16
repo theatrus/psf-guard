@@ -249,6 +249,17 @@ pub async fn sync_with_peer(
     } else {
         Some(state.sync_apply_lock.lock().await)
     };
+    // The calibration frames before a pull, so flat measuring is asked only
+    // for the rigs it touched.
+    let flats_before = if !request.dry_run && direction == RemoteDirection::Pull {
+        let path = context.database_path.clone();
+        tokio::task::spawn_blocking(move || crate::server::flat_measure::rig_state_at(&path))
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     let outcome = sync_remote(RemoteSyncOptions {
         direction,
         local_path: std::path::PathBuf::from(&context.database_path),
@@ -283,6 +294,16 @@ pub async fn sync_with_peer(
         );
         crate::server::quality_arrival::note_arrival(&context.id);
         crate::server::calibration_quality::request(&state, &context.database_path);
+        let (flat_state, path) = (Arc::clone(&state), context.database_path.clone());
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::server::flat_measure::queue_change(
+                &flat_state,
+                &path,
+                flats_before.as_ref(),
+                true,
+            )
+        })
+        .await;
     }
     Ok(Json(ApiResponse::success(RemoteSyncResult {
         applied: outcome.applied,

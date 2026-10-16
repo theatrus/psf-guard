@@ -4264,16 +4264,49 @@ export interface CalibrationQualityProgress {
   workers: number;
   started_at: number | null;
   finished_at: number | null;
-  stage_done?: number;
-  stage_total?: number;
-  last_flat_groups?: {
+  last_error?: string | null;
+}
+
+/** The flat measuring job of one catalog: responses, comparisons and light
+ *  evidence, one rig at a time. */
+export interface FlatMeasureStatus {
+  /** `queued` while requests settle, grading runs or a retry waits;
+   *  `stopped` when Stop paused work. */
+  state: 'idle' | 'queued' | 'running' | 'stopped';
+  /** A pass found work and is doing it: what the job line shows. */
+  active: boolean;
+  rig_uuid: string | null;
+  rig_name: string | null;
+  /** `measuring flat sessions`, `comparing flat sessions`, or `reading
+   *  lights shot during a change`. */
+  stage: string | null;
+  done: number;
+  total: number;
+  /** Rigs whose work waits or runs; `*` for every rig. */
+  rigs: string[];
+  /** Rigs Stop paused; `*` for every rig. */
+  stopped: string[];
+  /** When the next retry of unfinished work is due, Unix seconds. */
+  retry_at: number | null;
+  /** `viewed` while a page shows the rig. */
+  priority: 'background' | 'viewed' | null;
+  /** What a person started that the pass waits for, while it does. */
+  waiting_for: string | null;
+  workers: number;
+  started_at: number | null;
+  finished_at: number | null;
+  last: {
     sessions: number;
     measured: number;
     unreadable: number;
     compared: number;
     evidence: number;
+    frames_read: number;
+    lights_missing: number;
+    retry: string[];
+    stopped: boolean;
   } | null;
-  last_error?: string | null;
+  last_error: string | null;
 }
 
 export interface CalibrationQualityStatus {

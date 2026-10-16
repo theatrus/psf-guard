@@ -65,6 +65,7 @@ function runAction(action: ActivityAction): Promise<unknown> {
     return Promise.resolve();
   }
   if (control.kind === 'stack') return apiClient.cancelStackJob(control.jobId);
+  if (control.kind === 'flats') return apiClient.cancelFlatMeasure(control.dbId);
   if (control.kind === 'wbpp-running') return apiClient.cancelWbppRun(control.dbId);
   return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
 }

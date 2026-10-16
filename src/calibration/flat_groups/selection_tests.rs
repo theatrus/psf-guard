@@ -90,9 +90,11 @@ fn measured_frames(dir: &Path, frames: &[FrameMeta]) -> (Connection, PathBuf) {
     let outcome = super::job::run(super::job::Pass {
         conn: &conn,
         dir: &responses,
+        scope: super::job::Scope::everything(),
         keep_going: &|| true,
         yield_now: &|| {},
-        progress: &mut |_, _, _| {},
+        progress: &mut |_| {},
+        goes_first: &|_| false,
         find_light: &|_| None,
         pool: None,
     })
@@ -472,11 +474,13 @@ fn pass_counting_yields(conn: &Connection, dir: &Path) -> (super::job::PassOutco
     let outcome = super::job::run(super::job::Pass {
         conn,
         dir,
+        scope: super::job::Scope::everything(),
         keep_going: &|| true,
         yield_now: &|| {
             yields.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         },
-        progress: &mut |_, _, _| {},
+        progress: &mut |_| {},
+        goes_first: &|_| false,
         find_light: &|_| None,
         pool: None,
     })

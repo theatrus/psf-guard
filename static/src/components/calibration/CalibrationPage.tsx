@@ -335,10 +335,11 @@ function CalibrationFrames({
   const revision = filters.project !== undefined ? scopeRevision ?? null : null;
   // Flat groups ride along wherever the list can hold flats.
   const flatsListed = filters.kind === undefined || filters.kind === 'flat';
-  const flat = useFlatGroups(dbId, flatsListed, filters.project, revision);
+  const chosenRig = filters.rig && filters.rig !== ALL_RIGS ? filters.rig : undefined;
+  // The page shows this rig's flats: its pass runs at interactive priority.
+  const flat = useFlatGroups(dbId, flatsListed, filters.project, revision, chosenRig);
   const flatRigs = useMemo(() => flat.groups.data?.rigs ?? [], [flat.groups.data]);
   const flatIndex = useMemo(() => indexFlatGroups(flatRigs), [flatRigs]);
-  const chosenRig = filters.rig && filters.rig !== ALL_RIGS ? filters.rig : undefined;
   const rigsInView = useMemo(
     () => (chosenRig ? flatRigs.filter((rig) => rig.rig_uuid === chosenRig) : flatRigs),
     [chosenRig, flatRigs],
@@ -629,7 +630,7 @@ function CalibrationFrames({
       <CalibrationFilters filters={filters} facets={sessions.data?.facets} rigs={rigs}
         scope={scopeChip} onChange={state.setFilters} onClear={state.clearFilters} />
       {flatsListed && (
-        <FlatGroupsSummary view={flat.groups.data} error={flat.groups.error} rigs={rigsInView}
+        <FlatGroupsSummary dbId={dbId} view={flat.groups.data} error={flat.groups.error} rigs={rigsInView}
           progress={flat.progress} measuring={flat.measuring} canManage={canManage} />
       )}
       {sessions.error && browse === 'sessions' && (

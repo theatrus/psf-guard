@@ -20,6 +20,9 @@
 //!    waits can report what it waits for: `AppState::wait_for_interactive_work`
 //!    blocks a background thread and tells the job's status, which the
 //!    header's job list then shows as waiting rather than running.
+//!    [`Priority::Viewed`] sits between: automatic work a page shows, which
+//!    draws on the background share (the cores used stay where they were),
+//!    yields to interactive work and holds nobody up.
 //! 2. **Core budget** — a fraction of the logical cores per priority. The CLI
 //!    uses all cores for its foreground scan; the server leaves headroom to
 //!    keep serving the UI (`interactive_ratio`, default 0.5) and throttles
@@ -77,11 +80,26 @@ pub const DEFAULT_MEMORY_BUDGET_FRACTION: f64 = 0.5;
 /// Fallback core count when the platform can't report parallelism.
 const FALLBACK_CORES: usize = 4;
 
-/// How much of the machine a piece of work is entitled to.
+/// How much of the machine a piece of work is entitled to. Three tiers, from
+/// the top:
+///
+/// 1. [`Priority::Interactive`]: a person started it (a stack, a preview, a
+///    scan they asked for). It holds an interactive job guard, and every
+///    tier below waits for it.
+/// 2. [`Priority::Viewed`]: automatic work on what a page shows now, such as
+///    flat measuring for the rig Calibration › Frames is open on. It borrows
+///    from the background share rather than adding to the cores in use,
+///    goes first in its own job, takes no interactive guard, so nothing
+///    waits for it, and still waits for interactive work before each step.
+/// 3. [`Priority::Background`]: automatic work nobody is looking at. It
+///    splits the background share and waits for interactive work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Priority {
     /// User asked for it and is waiting — use the interactive core budget.
     Interactive,
+    /// Automatic work a page shows now: drawn from the background share,
+    /// and no interactive guard.
+    Viewed,
     /// Opportunistic cache pre-warming — use the smaller background budget and
     /// stay out of interactive work's way.
     Background,
@@ -91,19 +109,22 @@ impl Priority {
     fn index(self) -> usize {
         match self {
             Priority::Interactive => 0,
-            Priority::Background => 1,
+            // Borrowed from the background share: interactive and background
+            // together stay at the cores they always had.
+            Priority::Viewed | Priority::Background => 1,
         }
     }
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Priority::Interactive => "interactive",
+            Priority::Viewed => "viewed",
             Priority::Background => "background",
         }
     }
 }
 
-/// The server's two shared worker budgets, one per [`Priority`]. Each holds
+/// The server's shared worker budgets, one per [`Priority`]. Each holds
 /// as many workers as its share of the cores allows. A job leases the workers
 /// it planned from the budget for its priority and gives them back when the
 /// lease drops, so jobs running at once split that share instead of each
@@ -248,7 +269,7 @@ impl WorkerPolicy {
     pub fn ratio_for(&self, priority: Priority) -> f64 {
         match priority {
             Priority::Interactive => self.interactive_ratio,
-            Priority::Background => self.background_ratio,
+            Priority::Viewed | Priority::Background => self.background_ratio,
         }
     }
 }
@@ -672,6 +693,30 @@ mod tests {
         drop((scan, pregeneration, next, preview));
         assert_eq!(budgets.in_use(Priority::Background), 0);
         assert_eq!(budgets.in_use(Priority::Interactive), 0);
+    }
+
+    /// Work a page shows borrows from the background share: a stack a
+    /// person starts meanwhile gets its whole share, and the cores in use
+    /// stay at the interactive and background shares, as before.
+    #[test]
+    fn viewed_work_borrows_from_the_background_share() {
+        let budgets = std::sync::Arc::new(WorkerBudgets::default());
+        let policy = WorkerPolicy::default();
+        assert_eq!(
+            priority_budget(&policy, Priority::Viewed),
+            priority_budget(&policy, Priority::Background),
+        );
+        let viewed = budgets.lease_from(2, Priority::Viewed, 2);
+        let stack = budgets.lease_from(8, Priority::Interactive, 8);
+        assert_eq!((viewed.workers, stack.workers), (2, 8));
+        // The background share is spent: a background job runs on one.
+        let backfill = budgets.lease_from(2, Priority::Background, 2);
+        assert_eq!(backfill.workers, 1);
+        assert_eq!(budgets.in_use(Priority::Background), 3);
+        assert_eq!(budgets.in_use(Priority::Viewed), 3, "one share");
+        drop(viewed);
+        assert_eq!(budgets.in_use(Priority::Background), 1);
+        assert_eq!(Priority::Viewed.label(), "viewed");
     }
 
     #[test]

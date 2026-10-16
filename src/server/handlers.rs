@@ -138,9 +138,18 @@ pub async fn forget_calibration_frame(
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationMutationOutcome>>, AppError> {
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
+    // Its rig, read before the row goes: its flat session is measured
+    // again, from the flats left.
+    let rigs =
+        crate::server::flat_measure::rigs_of_frames(&conn, std::slice::from_ref(&frame_uuid));
     let outcome = crate::calibration::forget_frame(&mut conn, &frame_uuid).map_err(AppError::db)?;
     // A forgotten frame may have been a peer the others were judged by.
     crate::server::calibration_quality::request(&state, &ctx.database_path);
+    crate::server::flat_measure::queue(
+        &state,
+        &ctx.database_path,
+        crate::calibration::flat_groups::job::Scope::flats(rigs),
+    );
     if outcome.frames_removed == 0 {
         return Err(AppError::NotFound);
     }
@@ -164,10 +173,18 @@ pub async fn forget_calibration_frames(
     }
     let conn = ctx.db();
     let mut conn = conn.lock().map_err(AppError::db)?;
+    // Their rigs, read before the rows go: their flat sessions are
+    // measured again, from the flats left.
+    let rigs = crate::server::flat_measure::rigs_of_frames(&conn, &request.frame_uuids);
     let outcome =
         crate::calibration::forget_frames(&mut conn, &request.frame_uuids).map_err(AppError::db)?;
     // A forgotten frame may have been a peer the others were judged by.
     crate::server::calibration_quality::request(&state, &ctx.database_path);
+    crate::server::flat_measure::queue(
+        &state,
+        &ctx.database_path,
+        crate::calibration::flat_groups::job::Scope::flats(rigs),
+    );
     if outcome.frames_removed == 0 {
         return Err(AppError::NotFound);
     }
@@ -257,6 +274,14 @@ pub async fn set_calibration_quality_override(
     }
     // What each project's lights get has changed.
     crate::server::calibration_health::request(&state, &ctx.database_path);
+    // A flat kept out or let back in changes its session's response.
+    crate::server::flat_measure::queue(
+        &state,
+        &ctx.database_path,
+        crate::calibration::flat_groups::job::Scope::flats(
+            crate::server::flat_measure::rigs_of_frames(&conn, &request.frame_uuids),
+        ),
+    );
     Ok(Json(ApiResponse::success(SetCalibrationValidityResponse {
         updated,
     })))
@@ -966,6 +991,17 @@ pub(crate) async fn execute_scheduler_sync_paths(
     let destination_id_for_cache = destination_id.clone();
     let source_path_for_error = source_path.display().to_string();
     let destination_path_for_error = destination_path.display().to_string();
+    // The calibration frames before a pull, so flat measuring is asked only
+    // for the rigs it touched.
+    let flats_before = if !dry_run && matches!(kind, SchedulerSyncKind::Pull) {
+        let path = destination_path.display().to_string();
+        tokio::task::spawn_blocking(move || crate::server::flat_measure::rig_state_at(&path))
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
 
     let response = tokio::task::spawn_blocking(
         move || -> anyhow::Result<(
@@ -1190,6 +1226,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
     })?;
 
     let (response, fingerprint, changed_images) = response;
+    let new_lights = !changed_images.is_empty();
     if !dry_run
         && let Some(destination_ctx) = state.get_database(&destination_id_for_cache)
         && let Err(error) = tokio::task::spawn_blocking(move || {
@@ -1217,6 +1254,18 @@ pub(crate) async fn execute_scheduler_sync_paths(
         // calibration health is judged again.
         if let Some(destination) = state.get_database(&destination_id_for_cache) {
             crate::server::calibration_quality::request(state, &destination.database_path);
+            if matches!(kind, SchedulerSyncKind::Pull) {
+                let (state, path) = (Arc::clone(state), destination.database_path.clone());
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::server::flat_measure::queue_change(
+                        &state,
+                        &path,
+                        flats_before.as_ref(),
+                        new_lights,
+                    )
+                })
+                .await;
+            }
         }
     }
     Ok((response, fingerprint))
@@ -1496,8 +1545,14 @@ pub async fn add_database_route(
     // Kick a background refresh for the newly-registered DB so file/dir caches
     // populate without the user having to refresh manually.
     let _ = ctx.ensure_cache_available();
-    // Grade its calibration frames and judge its projects, as at start.
+    // Grade its calibration frames and judge its projects, as at start, and
+    // measure the flats it has not measured.
     crate::server::calibration_quality::request(&state, &ctx.database_path);
+    crate::server::flat_measure::queue(
+        &state,
+        &ctx.database_path,
+        crate::calibration::flat_groups::job::Scope::everything(),
+    );
 
     Ok(Json(ApiResponse::success(summary_of(&ctx))))
 }
@@ -3434,13 +3489,18 @@ pub(crate) fn spawn_import_job_with_trigger(
             dirs.iter().map(std::path::PathBuf::from).collect();
         let shutdown = Arc::clone(&state.shutdown);
         let import_result = tokio::task::spawn_blocking(move || {
+            // The calibration frames before, so flat measuring is asked only
+            // for the rigs this import touched.
+            let flats_before =
+                crate::server::flat_measure::rig_state_at(&blocking_ctx.database_path);
             run_import_blocking(&blocking_ctx, &dir_paths, &blocking_options, &|| {
                 shutdown.is_stopping()
             })
+            .map(|outcome| (outcome, flats_before))
         })
         .await;
 
-        let outcome = match import_result {
+        let (outcome, flats_before) = match import_result {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(e)) => {
                 tracing::warn!("📥 Import for db={} failed: {:#}", ctx.id, e);
@@ -3489,6 +3549,19 @@ pub(crate) fn spawn_import_job_with_trigger(
         // relies on them; with none to measure this regrades the library.
         if !dry_run {
             crate::server::calibration_quality::request(&state, &ctx.database_path);
+            // The flat sessions it touched are measured once grading is done,
+            // and new lights shot during a change are asked which side they
+            // are on.
+            let (flat_state, path) = (Arc::clone(&state), ctx.database_path.clone());
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::server::flat_measure::queue_change(
+                    &flat_state,
+                    &path,
+                    flats_before.as_ref(),
+                    imported_any,
+                )
+            })
+            .await;
         }
 
         // Quality analysis is a general database maintenance job, not an

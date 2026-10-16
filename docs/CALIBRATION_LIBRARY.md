@@ -456,10 +456,37 @@ flats:
 
 Sessions that could share a master, and each session and the next, are
 compared. The numbers are kept in the catalog without limits applied, so a
-changed limit regroups at once and reads no pixel. The stage waits while
-interactive work runs, uses the background share of the CPU, and keeps each
-result as it goes. The quality progress reports `measuring flat sessions`,
-`comparing flat sessions` and `reading lights shot during a change`.
+changed limit regroups at once and reads no pixel.
+
+Measuring is a job of its own, **Measuring flats** in the header's job
+line, with the rig and how far it is: `Measuring flats · 12 of 40
+sessions`, then the pairs it compares, then the lights it reads.
+
+- **When it runs.** After an import, a sync, an upload, a forget, a
+  use/exclude choice or a duplicate repair, for the rigs whose calibration
+  frames changed, and only for their sessions that have no current
+  measurement. New lights alone ask only whether lights shot during a
+  change sit before or after it. A burst of imports or uploads shares one
+  pass: it starts 5 seconds after the last, once grading of the new frames
+  is done. At start the server picks up only unfinished or stale work, so a
+  catalog that is up to date reads no pixel.
+- **Unfinished work.** Flats on a share that is away, lights the image
+  folders do not show yet, or a catalog busy with another writer leave the
+  rig to be tried again: after a minute, then less often, up to every half
+  hour.
+- **Stop** pauses measuring. Frames says so, and it resumes when those
+  flats change (an import, sync, forget or keep-out choice), with **Resume
+  now**, or when the server starts again. New lights alone do not resume
+  it.
+- **Settings.** A changed dust or light-pattern limit regroups from the
+  stored numbers at once, without grading again. A rig switched from **By
+  time only** to **By measurement** is measured then, and only that rig.
+  A rig that groups by time is never measured.
+- **Priority.** It uses the background share of the CPU, waits while a
+  preview, a stack or other work you started runs, and keeps each result as
+  it goes. While **Calibration › Frames** shows one rig's flats, that rig is
+  measured first, with workers from the background share; nothing else
+  waits for it.
 
 A read-only catalog, or one from an older build, has no place for the
 numbers and groups flats by time, as before.
@@ -587,7 +614,8 @@ Flat):
   neutral grey. **Compare** again, or **Close**, closes it.
 - Above the list, a line for each rig in view gives its limits and how
   much its flats depend on the rotator angle, counts the sessions not
-  measured, shows the background pass while it measures, and ends in
+  measured, shows `Measuring flats · 12 of 40 sessions` while the job
+  measures a rig in view, and ends in
   **Edit limits**. That opens **Settings › Calibration** on the dust
   limit, or on **Group flats** while the rig groups by time: the rig's
   own value when it sets one, else the global one.

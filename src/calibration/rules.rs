@@ -1327,6 +1327,14 @@ impl RuleBook {
         &self.global
     }
 
+    /// The rigs with settings of their own.
+    pub fn rig_uuids(&self) -> impl Iterator<Item = &str> {
+        self.rigs
+            .iter()
+            .filter(|(_, layer)| !layer.values.is_empty())
+            .map(|(uuid, _)| uuid.as_str())
+    }
+
     /// Whether a rig sets `key` for itself rather than inheriting it.
     pub fn rig_sets(&self, rig_uuid: &str, key: &str) -> bool {
         self.rigs

@@ -22,7 +22,8 @@
   color: var(--color-text-primary);
 }
 
-.flat-rig-summary .link-button {
+.flat-rig-summary .link-button,
+.flat-measure-stopped .link-button {
   padding: 0;
   border: 0;
   background: none;
@@ -32,9 +33,15 @@
   cursor: pointer;
 }
 
-.flat-rig-summary .link-button:focus-visible {
+.flat-rig-summary .link-button:focus-visible,
+.flat-measure-stopped .link-button:focus-visible {
   outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
+}
+
+.flat-measure-stopped .link-button:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .flat-groups-measuring {

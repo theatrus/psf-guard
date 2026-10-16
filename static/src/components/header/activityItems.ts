@@ -1,5 +1,6 @@
 import type {
   CacheRefreshProgress,
+  FlatMeasureStatus,
   QualityBackfillStatus,
   ScheduledRefresh,
   SpatialScanStatus,
@@ -8,10 +9,12 @@ import type {
   WbppActivity,
 } from '../../api/types';
 import type { TransferJob } from '../../api/transferTypes';
+import { flatMeasureLabel } from '../calibration/flatMeasureLabel';
 
 /** What a row can do: stop its job, and move it in its line. */
 export type ActivityControl =
   | { kind: 'stack'; jobId: string }
+  | { kind: 'flats'; dbId: string }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string };
 
@@ -28,7 +31,7 @@ export type ActivityStatus = 'running' | 'queued' | 'waiting';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'stack' | 'processing' | 'wbpp' | 'transfer';
+  kind: 'refresh' | 'quality' | 'flats' | 'stack' | 'processing' | 'wbpp' | 'transfer';
   transfer?: TransferJob;
   stateLabel?: string;
   /** What is happening: "Stacking", "Analyzing quality". */
@@ -96,6 +99,7 @@ export interface DatabaseActivity {
   refresh?: CacheRefreshProgress;
   scan?: SpatialScanStatus;
   backfill?: QualityBackfillStatus;
+  flats?: FlatMeasureStatus;
 }
 
 /** Automatic stack work out of the line, waiting for the worker. */
@@ -233,6 +237,32 @@ function qualityItems(db: DatabaseActivity, projectOf: ProjectOf): ActivityItem[
     status: scanWaitsFor ? 'waiting' : 'running',
     waitingFor: scanWaitsFor,
   }];
+}
+
+/** Flat measuring, once a pass has found work. Always automatic: a page that
+ *  shows the rig puts it first, but no person started it. */
+function flatsItem(db: DatabaseActivity, flats: FlatMeasureStatus): ActivityItem {
+  const search = new URLSearchParams({ db: db.dbId, calKind: 'flat' });
+  if (flats.rig_uuid) search.set('calRig', flats.rig_uuid);
+  return {
+    key: `flats:${db.dbId}`,
+    kind: 'flats',
+    title: 'Measuring flats',
+    scope: [db.dbName, flats.rig_name].filter(Boolean).join(' · '),
+    // While it steps aside for a person's work it is listed as waiting,
+    // as the other automatic jobs are, keeping how far it had got.
+    detail: flats.waiting_for
+      ? waitingDetail(flats.waiting_for, flatMeasureLabel(flats))
+      : flatMeasureLabel(flats),
+    status: flats.waiting_for ? 'waiting' : 'running',
+    waitingFor: flats.waiting_for ?? undefined,
+    percent: fraction(flats.done, flats.total),
+    automatic: true,
+    background: true,
+    stoppable: true,
+    control: { kind: 'flats', dbId: db.dbId },
+    href: `/calibration?${search.toString()}`,
+  };
 }
 
 /** A stretch, deconvolution or RC-Astro run on a finished stack. It waits in
@@ -434,6 +464,7 @@ export function activityItems(
   for (const db of databases) {
     if (db.refresh?.is_refreshing) items.push(refreshItem(db, db.refresh));
     items.push(...qualityItems(db, projectOf));
+    if (db.flats?.active) items.push(flatsItem(db, db.flats));
   }
   // The server lists builds running first, then the line in order.
   const ordered = [...stacks].sort(

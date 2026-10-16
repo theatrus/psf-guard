@@ -1184,13 +1184,14 @@ pub(crate) mod tests {
             [],
         )
         .unwrap();
-        let keep: Vec<String> = store::load_responses(&conn)
-            .unwrap()
+        let rows = store::load_responses(&conn).unwrap();
+        let rigs = rows.iter().map(|row| row.rig_uuid.clone()).collect();
+        let keep: Vec<String> = rows
             .into_iter()
             .filter(|row| row.night != "2026-09-10")
             .map(|row| row.response_key)
             .collect();
-        store::retain_responses(&conn, &keep).unwrap();
+        store::retain_responses(&conn, &rigs, &keep).unwrap();
         flat_groups::testing::measure_as(&conn, |_, _| 0.002);
         let view = build_view(&conn).unwrap();
         let family = &view.rigs[0].families[0];
