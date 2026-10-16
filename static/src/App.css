@@ -1216,8 +1216,10 @@
   align-items: center;
   justify-content: center;
   position: relative;
+  /* The frame's own shape, near enough: most astro sensors are 3:2. A
+     minimum height here once left bands above and below every landscape
+     frame on a card narrower than 300px. */
   aspect-ratio: 3/2;
-  min-height: 200px;
   border-radius: 4px;
   overflow: hidden;
 }
@@ -6598,6 +6600,9 @@
 
 .sequence-image-card {
   min-width: 0;
+  /* Border included: at 100% plus its border the card ran 4px into the
+     column gap, over the night and hour line drawn there. */
+  box-sizing: border-box;
   width: 100%;
   content-visibility: auto;
   contain-intrinsic-size: auto 190px;
@@ -6621,10 +6626,6 @@
 
 .sequence-image-card.below-threshold:not(.selected) {
   border-color: var(--color-error);
-}
-
-.sequence-strip .image-preview {
-  min-height: 0;
 }
 
 .image-preview-deferred {

@@ -6,8 +6,9 @@ export function thumbnailGridColumns(size: number): string {
   return `repeat(auto-fill, minmax(min(${size}px, 100%), 1fr))`;
 }
 
-/** About how tall a grid card stands at this thumbnail size. An off-screen
+/** About how tall a grid card stands at this thumbnail size: a 3:2
+ *  preview at least `size` wide, and the lines under it. An off-screen
  *  card holds this much room until it first renders. */
 export function thumbnailCardHeightEstimate(size: number): number {
-  return Math.max(256, Math.round(size * 0.75 + 75));
+  return Math.round(size / 1.5 + 80);
 }

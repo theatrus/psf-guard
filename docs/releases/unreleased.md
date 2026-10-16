@@ -9,6 +9,9 @@
   every other night takes a faint band, and thinner lines mark the hours
   when frames are dense enough for them to help. Nights split where the
   catalog's nights do, not at midnight, and no card moves for a mark.
+- Image cards in Images no longer leave empty bands above and below a
+  landscape frame at the smaller thumbnail sizes, so more rows fit on
+  screen. Sequence cards no longer run into the gap beside them.
 - Sequence's **Cutoff** can measure **Stars** or **HFR** as well as the
   score. The chart, the slider and the cutoff rule follow the measure
   chosen; the Stars and HFR sliders run over the readings in the session on
