@@ -301,6 +301,16 @@ impl Nights {
     /// keeps it (`sky_coverage::cached_night_boundary`) has it, so the
     /// load does not read every light's time again.
     pub fn load_with_catalog(conn: &Connection, catalog: i64) -> Self {
+        Self {
+            frames: Arc::new(read_frame_sites(conn)),
+            ..Self::load_rigs(conn, catalog)
+        }
+    }
+
+    /// Each rig's split without the frames' own sites, which only
+    /// calibration frames have: what lights need ([`LightNights`]), at the
+    /// cost of the rig and site tables alone, not a scan of every frame.
+    pub fn load_rigs(conn: &Connection, catalog: i64) -> Self {
         let dominant = read_dominant(conn);
         let mut rigs = HashMap::new();
         for rig in rig_uuids(conn) {
@@ -315,7 +325,7 @@ impl Nights {
             catalog,
             rigs: Arc::new(rigs),
             dominant: Arc::new(dominant),
-            frames: Arc::new(read_frame_sites(conn)),
+            frames: Arc::new(HashMap::new()),
         }
     }
 
@@ -476,13 +486,14 @@ impl LightNights {
         Self::from_nights(conn, &Nights::load(conn), view)
     }
 
-    /// [`LightNights::load`] with the catalog's split given.
+    /// [`LightNights::load`] with the catalog's split given, reading the
+    /// rig tables alone ([`Nights::load_rigs`]).
     pub fn load_with_catalog(
         conn: &Connection,
         catalog: i64,
         view: Option<LightNightSplit>,
     ) -> Self {
-        Self::from_nights(conn, &Nights::load_with_catalog(conn, catalog), view)
+        Self::from_nights(conn, &Nights::load_rigs(conn, catalog), view)
     }
 
     /// Each profile's split from `nights`. `view` overrides the
@@ -534,10 +545,19 @@ impl LightNights {
             .collect();
 
         let global = nights.rig("");
-        let placed: BTreeSet<i64> = nights
+        // Rigs placed by a setting, a site or a clock, whose own lights
+        // split at their noon: a rig set to the catalog split lends its
+        // noon to no other light.
+        let placed_rigs: Vec<RigNight> = nights
             .rigs
-            .values()
-            .filter(|night| night.source != NightSource::Catalog)
+            .iter()
+            .filter(|(rig, night)| {
+                night.source != NightSource::Catalog && split_of(rig) == LightNightSplit::Rig
+            })
+            .map(|(_, night)| *night)
+            .collect();
+        let placed: BTreeSet<i64> = placed_rigs
+            .iter()
             .map(|night| night.boundary_seconds)
             .collect();
         let unbound = if split_of("") == LightNightSplit::Catalog {
@@ -545,10 +565,8 @@ impl LightNights {
         } else if global.source == NightSource::Setting {
             global
         } else if placed.len() == 1 {
-            nights
-                .rigs
-                .values()
-                .filter(|night| night.source != NightSource::Catalog)
+            placed_rigs
+                .iter()
                 .copied()
                 .min_by_key(|night| source_rank(night.source))
                 .unwrap_or(global)
@@ -1965,6 +1983,14 @@ mod tests {
         assert_eq!(
             split(Some(LightNightSplit::Rig)).boundary_seconds,
             solar_noon(C925_LONGITUDE)
+        );
+        // A rig set to the catalog split lends its noon to no light that no
+        // rig is bound to, though it is the catalog's only placed rig.
+        assert_eq!(
+            LightNights::load(&conn, None)
+                .of_profile(Some("other"))
+                .source,
+            NightSource::Catalog
         );
 
         // The global setting: every light, bound or not.

@@ -137,6 +137,17 @@ pub(crate) struct ProjectExposureGroupsCache {
     /// Where the catalog's nights split
     /// ([`super::sky_coverage::cached_night_boundary`]), as of a revision.
     pub(crate) night_boundary: Option<(CatalogRevision, i64)>,
+    /// Where each profile's lights split, by a view's override, as of a
+    /// revision and the settings' digest
+    /// ([`super::sky_coverage::cached_light_nights`]).
+    pub(crate) light_nights: HashMap<
+        Option<crate::calibration::LightNightSplit>,
+        (
+            CatalogRevision,
+            Option<String>,
+            Arc<crate::calibration::LightNights>,
+        ),
+    >,
 }
 
 impl ProjectExposureGroupsCache {
@@ -145,6 +156,7 @@ impl ProjectExposureGroupsCache {
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.night_boundary = None;
+        self.light_nights.clear();
     }
 }
 

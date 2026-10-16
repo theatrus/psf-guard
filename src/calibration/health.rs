@@ -26,9 +26,9 @@
 
 use super::quality::{self, StoredMeasurement};
 use super::{
-    calibration_gaps, coherent_master_subset, flat_session_at, night_of, rule_book,
-    CalibrationFrame, CalibrationKind, Check, CheckMode, ExternalMasterPolicy, LibrarySnapshot,
-    Rules, MIN_MASTER_FRAMES, THIN_MASTER_FRAMES,
+    calibration_gaps, coherent_master_subset, flat_session_at, rule_book, CalibrationFrame,
+    CalibrationKind, Check, CheckMode, ExternalMasterPolicy, LibrarySnapshot, Rules,
+    MIN_MASTER_FRAMES, THIN_MASTER_FRAMES,
 };
 use crate::commands::import::headers::FrameMeta;
 use anyhow::{Context, Result};
@@ -404,10 +404,10 @@ impl HealthLibrary {
         })
     }
 
-    /// Where this catalog's lights' nights split, in seconds after 00:00
-    /// UTC, as Images groups them.
-    pub fn night_boundary(&self) -> i64 {
-        self.nights.catalog()
+    /// Where this catalog's lights' nights split, by profile, as Images
+    /// groups them at the server's `light_nights` setting.
+    pub fn light_nights(&self, conn: &Connection) -> super::LightNights {
+        super::LightNights::from_nights(conn, &self.nights, None)
     }
 
     /// Whether the library holds no frame at all. Then there is nothing to
@@ -799,7 +799,7 @@ pub fn project_lights(
     conn: &Connection,
     project_id: i32,
     directory_tree: &crate::directory_tree::DirectoryTree,
-    boundary: i64,
+    nights: &super::LightNights,
 ) -> Result<(Vec<ProjectLight>, usize)> {
     let rows = crate::db::Database::new(conn)
         .query_images_scoped(None, Some(project_id), None, None, 0)
@@ -821,7 +821,7 @@ pub fn project_lights(
             path,
             night: image
                 .acquired_date
-                .map(|at| night_of(at, boundary))
+                .map(|at| nights.night_of(image.profile_id.as_deref(), at))
                 .unwrap_or_else(|| "unknown".into()),
             filter: image.filter_name.clone(),
         });
@@ -917,8 +917,12 @@ pub fn project_health(
     directory_tree: &crate::directory_tree::DirectoryTree,
 ) -> Result<ProjectHealth> {
     let library = HealthLibrary::load(conn)?;
-    let (lights, missing) =
-        project_lights(conn, project_id, directory_tree, library.night_boundary())?;
+    let (lights, missing) = project_lights(
+        conn,
+        project_id,
+        directory_tree,
+        &library.light_nights(conn),
+    )?;
     let results = lights
         .iter()
         .map(|light| library.judge_light(light))

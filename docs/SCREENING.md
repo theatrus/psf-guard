@@ -359,8 +359,11 @@ of the longest stretch of the day in which it never captured, which
 `/stats/overall` reports as `night_boundary_seconds`.
 
 The image list names each light's night as `night`, so Images, Sequence's
-marks and the image detail's next and previous all walk the same nights,
-and a calibration report's nights link to the same lights. The AstroBin
+marks and the image detail's next and previous all walk the same nights.
+The calibration reports, the calibration health behind the chips and the
+image detail's calibration account name a light's night the same way, so
+a report's night links to the same lights and a same-night flat is the
+one Images would show beside it. The AstroBin
 export and the sky coverage still split at the catalog's split.
 
 **Lights' nights split at** in Settings › Calibration chooses between the

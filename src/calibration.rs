@@ -3469,13 +3469,9 @@ pub fn project_calibration_gaps(
         .context("querying project lights")?;
     let nights = Nights::load(conn);
     // Lights are named by the night Images groups them in: their profile's
-    // rig's local noon. A project's lights share its profile.
-    let profile = rows
-        .iter()
-        .find_map(|(image, _, _)| image.profile_id.as_deref());
-    let boundary = LightNights::from_nights(conn, &nights, nights_view)
-        .of_profile(profile)
-        .boundary_seconds;
+    // rig's local noon.
+    let light_nights = LightNights::from_nights(conn, &nights, nights_view);
+    let boundary = project_night_boundary(&rows, &light_nights);
     let mut lights = Vec::new();
     let (mut checked, mut missing_files) = (0usize, 0usize);
     for (image, _project, _target) in &rows {
@@ -3497,7 +3493,7 @@ pub fn project_calibration_gaps(
                 filter: image.filter_name.clone(),
                 night: image
                     .acquired_date
-                    .map(|at| night_of(at, boundary))
+                    .map(|at| light_nights.night_of(image.profile_id.as_deref(), at))
                     .unwrap_or_else(|| "unknown".into()),
                 reason,
             });
@@ -4363,6 +4359,26 @@ pub(crate) fn night_of(timestamp: i64, boundary: i64) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
+/// Where a project's nights split, for the date links of its report: the
+/// split of the profile most of its lights were shot under. A project
+/// keeps one profile, so each light's own night (`LightNights::night_of`)
+/// and this agree; a project whose lights carry several still names each
+/// light's night by its own.
+fn project_night_boundary(
+    rows: &[(crate::models::AcquiredImage, String, String)],
+    light_nights: &LightNights,
+) -> i64 {
+    let mut counts: BTreeMap<Option<&str>, usize> = BTreeMap::new();
+    for (image, _, _) in rows {
+        *counts.entry(image.profile_id.as_deref()).or_default() += 1;
+    }
+    let profile = counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+        .and_then(|(profile, _)| profile);
+    light_nights.of_profile(profile).boundary_seconds
+}
+
 /// Where this catalog's lights' nights split, as Images groups them; noon
 /// UTC when its lights cannot be read. A rig's calibration frames split at
 /// its own local noon instead ([`Nights`]).
@@ -4394,12 +4410,8 @@ pub fn project_calibration_report(
     // them by, their profile's rig's local noon (a project's lights share
     // its profile); calibration frames their own rig's.
     let rig_nights = Nights::load(conn);
-    let profile = rows
-        .iter()
-        .find_map(|(image, _, _)| image.profile_id.as_deref());
-    let boundary = LightNights::from_nights(conn, &rig_nights, nights_view)
-        .of_profile(profile)
-        .boundary_seconds;
+    let light_nights = LightNights::from_nights(conn, &rig_nights, nights_view);
+    let boundary = project_night_boundary(&rows, &light_nights);
     let frame_night = |frame: &CalibrationFrame| {
         frame
             .captured_at
@@ -4421,7 +4433,10 @@ pub fn project_calibration_report(
             continue;
         };
         buckets
-            .entry((night_of(acquired, boundary), image.filter_name.clone()))
+            .entry((
+                light_nights.night_of(image.profile_id.as_deref(), acquired),
+                image.filter_name.clone(),
+            ))
             .or_default()
             .push((acquired, basename));
     }

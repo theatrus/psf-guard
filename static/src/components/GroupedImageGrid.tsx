@@ -66,7 +66,7 @@ import TimeMarksChoice from './TimeMarksChoice';
 import NightSplitChoice from './NightSplitChoice';
 import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
-import { nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
+import { keepAcrossNightSplit, nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -154,7 +154,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   // Nights as the view splits them, the server's setting or the link's.
   const nightSplit = useNightSplit();
   const { data: allImages = [], isLoading: imagesLoading } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.split],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.queryKey],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId || undefined, // null becomes undefined for API
@@ -163,6 +163,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         nights: nightSplit.override ?? undefined,
       }),
     enabled: !!dbId && projectId !== undefined, // Need dbId and a project (or null=all-in-this-db)
+    // A new night split keeps the old frames on screen until its own
+    // arrive, so the grid neither empties nor loses its place.
+    placeholderData: keepAcrossNightSplit(['db', dbId, 'all-images', projectId, targetId]),
     refetchInterval: 30000, // Refresh every 30 seconds
     refetchIntervalInBackground: true,
   });

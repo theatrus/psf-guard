@@ -309,13 +309,13 @@ fn work_out(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<FlatGroup
     let masters = browse::recorded_masters(&conn)?;
     let names = crate::server::calibration_browser::project_names(&conn);
     let tree = ctx.get_directory_tree()?;
-    let boundary = crate::calibration::catalog_night_boundary(&conn);
+    // Lights' nights as Images names them, at the server's setting.
+    let nights = crate::calibration::LightNights::load(&conn, None);
     let mut pending = 0;
     let mut unread = 0;
     let mut kept: Vec<(i32, i32, FrameMeta)> = Vec::new();
     for project in project_ids(&conn) {
-        let (lights, missing) =
-            crate::calibration::project_lights(&conn, project, &tree, boundary)?;
+        let (lights, missing) = crate::calibration::project_lights(&conn, project, &tree, &nights)?;
         unread += missing;
         let headers = crate::server::calibration_health::kept_headers(&ctx.cache_dir_path, project);
         for light in lights {

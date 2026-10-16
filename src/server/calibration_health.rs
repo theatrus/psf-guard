@@ -418,8 +418,12 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
         if state.shutdown.is_stopping() {
             break;
         }
-        let (lights, missing) =
-            crate::calibration::project_lights(&conn, project, &tree, library.night_boundary())?;
+        let (lights, missing) = crate::calibration::project_lights(
+            &conn,
+            project,
+            &tree,
+            &library.light_nights(&conn),
+        )?;
         let judged = judge_project(
             &pool,
             &library,

@@ -88,7 +88,7 @@ import {
   selectionRuleOf,
   type SelectionRuleId,
 } from '../utils/sequenceSelectionRules';
-import { nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
+import { keepAcrossNightSplit, nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
 
 interface SequenceChoice {
   key: string;
@@ -212,7 +212,7 @@ export default function SequenceView() {
   // Nights as the view splits them, the server's setting or the link's.
   const nightSplit = useNightSplit();
   const { data: images = [] } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.split],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.queryKey],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId || undefined,
@@ -221,6 +221,9 @@ export default function SequenceView() {
         nights: nightSplit.override ?? undefined,
       }),
     enabled: !!dbId && projectId !== undefined,
+    // A new night split keeps the old frames on screen until its own
+    // arrive, so the grid neither empties nor loses its place.
+    placeholderData: keepAcrossNightSplit(['db', dbId, 'all-images', projectId, targetId]),
   });
 
   // Build image lookup map

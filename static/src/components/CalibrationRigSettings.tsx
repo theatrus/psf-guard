@@ -21,6 +21,7 @@ import {
 } from '../utils/calibrationRules';
 import { invalidateCalibrationViews } from '../utils/calibrationQueries';
 import CalibrationRuleControl from './CalibrationRuleControl';
+import { invalidateNightSplitViews } from '../hooks/useNightSplit';
 
 /** A rig to open on arrival, as a light's Calibration panel names it. */
 export interface CalibrationRigFocus {
@@ -166,6 +167,8 @@ function RigEditor({ rig, fields, globalRules }: RigEditorProps) {
 
   const settled = (updated: CalibrationSettings) => {
     queryClient.setQueryData(['calibration-settings'], updated);
+    // A rig's lights' nights may split elsewhere now.
+    invalidateNightSplitViews(queryClient);
     invalidateCalibrationViews(queryClient);
     setPreset(null);
   };

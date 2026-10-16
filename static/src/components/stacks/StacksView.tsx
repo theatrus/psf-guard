@@ -14,7 +14,7 @@ import { DEFAULT_WBPP_OPTIONS } from '../../api/types';
 import WbppStacks from './WbppStacks';
 import MosaicStacks from './MosaicStacks';
 import { useProjectMosaic } from '../../hooks/useProjectMosaic';
-import { useNightSplit } from '../../hooks/useNightSplit';
+import { keepAcrossNightSplit, useNightSplit } from '../../hooks/useNightSplit';
 import './stacks.css';
 
 /** What Images hands over when a person stacks a selection. */
@@ -96,7 +96,7 @@ export default function StacksView() {
   // Nights as the view splits them, the server's setting or the link's.
   const nightSplit = useNightSplit();
   const { data: images = [], isLoading } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.split],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.queryKey],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId || undefined,
@@ -105,6 +105,9 @@ export default function StacksView() {
         nights: nightSplit.override ?? undefined,
       }),
     enabled: !!dbId && projectId != null,
+    // A new night split keeps the old frames on screen until its own
+    // arrive, so the grid neither empties nor loses its place.
+    placeholderData: keepAcrossNightSplit(['db', dbId, 'all-images', projectId, targetId]),
     refetchInterval: 30000,
   });
   const selection = useMemo(() => {

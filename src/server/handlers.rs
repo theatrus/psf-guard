@@ -2937,9 +2937,24 @@ pub async fn reject_uncalibrated_lights(
 pub async fn get_image_calibration(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,
+    Query(query): Query<NightsQuery>,
 ) -> Result<Json<ApiResponse<crate::calibration::CalibrationExplanation>>, AppError> {
     let (image, filename, target_name) = resolve_image_meta(&ctx, image_id)?;
     let path = find_fits_file(&ctx, &image, &target_name, &filename)?;
+    // The light's night as the grid names it, so the panel's same-night
+    // flats and nights apart count from the night the light was opened in.
+    let light_night = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        let nights = crate::server::sky_coverage::cached_light_nights(
+            &ctx,
+            &conn,
+            nights_view(query.nights.as_deref()),
+        )?;
+        image
+            .acquired_date
+            .map(|at| nights.night_of(image.profile_id.as_deref(), at))
+    };
     let database_path = ctx.database_path.clone();
     let explanation = tokio::task::spawn_blocking(move || {
         let conn = open_scheduler_connection_with_flags(
@@ -2953,6 +2968,10 @@ pub async fn get_image_calibration(
     .await
     .map_err(|error| AppError::InternalError(format!("calibration explanation task: {error}")))?
     .map_err(|error| AppError::InternalError(format!("explaining calibration: {error:#}")))?;
+    let mut explanation = explanation;
+    if light_night.is_some() {
+        explanation.light.night = light_night;
+    }
     Ok(Json(ApiResponse::success(explanation)))
 }
 
@@ -4582,11 +4601,11 @@ pub async fn get_images(
             .map_err(|error| AppError::InternalError(format!("reading copies: {error:#}")))?;
         // Each light's observing night, split at its rig's local noon, so every
         // view groups and marks nights from this one answer.
-        let light_nights = crate::calibration::LightNights::load_with_catalog(
+        let light_nights = crate::server::sky_coverage::cached_light_nights(
+            &ctx,
             &conn,
-            crate::server::sky_coverage::cached_night_boundary(&ctx, &conn)?,
             nights_view(params.nights.as_deref()),
-        );
+        )?;
 
         // Each frame's camera setup, and a few frames of each to read the size
         // from. A delayed remote upload may still be arriving: not one of them.

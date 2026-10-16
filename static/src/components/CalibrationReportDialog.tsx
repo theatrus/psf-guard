@@ -252,7 +252,7 @@ export default function CalibrationReportDialog({
 }: Props) {
   const [includeRejected, setIncludeRejected] = useState(false);
   // Nights as the view splits them, so each night's link opens its lights.
-  const { split, override: nights } = useNightSplit();
+  const { override: nights, queryKey: split } = useNightSplit();
   const report = useQuery<ProjectCalibrationReport>({
     queryKey: ['db', dbId, 'project', projectId, 'calibration-report', { includeRejected, split }],
     queryFn: () => apiClient.getProjectCalibrationReport(dbId, projectId, includeRejected, nights),

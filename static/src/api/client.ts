@@ -1618,12 +1618,14 @@ export const apiClient = {
   /** Which frames calibrate one light, and what the health check finds. */
   getImageCalibration: async (
     dbId: string,
-    imageId: number
+    imageId: number,
+    /** The view's night split over the server's setting (useNightSplit). */
+    nights?: 'rig' | 'catalog' | null,
   ): Promise<import('./types').ImageCalibrationExplanation> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<
       ApiResponse<import('./types').ImageCalibrationExplanation>
-    >(dbPath(dbId, `/images/${imageId}/calibration`));
+    >(dbPath(dbId, `/images/${imageId}/calibration`), { params: nights ? { nights } : undefined });
     if (!data.data) throw new Error(data.error || 'Failed to read the light\'s calibration');
     return data.data;
   },

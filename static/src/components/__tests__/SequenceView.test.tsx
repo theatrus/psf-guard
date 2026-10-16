@@ -1163,6 +1163,8 @@ describe('SequenceView: selection rules', () => {
     expect(asked.every((value) => value === null)).toBe(true);
 
     await user.selectOptions(choice, 'catalog');
+    // The frames stay on screen while the new nights load.
+    expect(document.querySelectorAll('.sequence-image-card')).toHaveLength(10);
     await waitFor(() => expect(params().get('nights')).toBe('catalog'));
     await waitFor(() => expect(asked).toContain('catalog'));
     expect(choice).toHaveClass('is-set');

@@ -738,18 +738,7 @@ async fn the_image_list_names_each_lights_night_at_its_rigs_local_noon() {
     let (status, json) =
         get_json(app, "/api/db/test/images?project_id=1&target_id=1&limit=10").await;
     assert_eq!(status, StatusCode::OK, "body: {json}");
-    let mut nights: Vec<(i64, String)> = json["data"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|image| {
-            (
-                image["id"].as_i64().unwrap(),
-                image["night"].as_str().unwrap_or_default().to_string(),
-            )
-        })
-        .collect();
-    nights.sort();
+    let nights = nights_of(&json);
     // 2024-01-15 21:00 UTC is that evening; 2024-01-16 19:00 UTC, before
     // the site's 20:05 UTC noon, still belongs to it. The catalog's quiet
     // hours would have put the second in the night of the 16th.

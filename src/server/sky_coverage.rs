@@ -324,6 +324,45 @@ pub fn cached_night_boundary(
     Ok(boundary)
 }
 
+/// Where each profile's lights split ([`crate::calibration::LightNights`])
+/// for a view's override, kept until the catalog or the settings change,
+/// so the image list does not read the rig tables on every request. The
+/// caller holds this context's connection mutex, as for
+/// [`cached_night_boundary`].
+pub fn cached_light_nights(
+    ctx: &super::database_context::DatabaseContext,
+    conn: &rusqlite::Connection,
+    view: Option<crate::calibration::LightNightSplit>,
+) -> Result<std::sync::Arc<crate::calibration::LightNights>, super::handlers::AppError> {
+    use super::exposure_groups::CatalogRevision;
+    let revision = CatalogRevision::read(conn)?;
+    let rules = crate::calibration::rule_book().digest();
+    {
+        let cache = ctx
+            .exposure_groups_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some((cached, cached_rules, nights)) = cache.light_nights.get(&view)
+            && *cached == revision
+            && *cached_rules == rules
+        {
+            return Ok(std::sync::Arc::clone(nights));
+        }
+    }
+    let catalog = cached_night_boundary(ctx, conn)?;
+    let nights = std::sync::Arc::new(crate::calibration::LightNights::load_with_catalog(
+        conn, catalog, view,
+    ));
+    if CatalogRevision::read(conn)? == revision {
+        ctx.exposure_groups_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .light_nights
+            .insert(view, (revision, rules, std::sync::Arc::clone(&nights)));
+    }
+    Ok(nights)
+}
+
 /// The civil date a capture's night began on, for a catalog whose nights
 /// split `boundary` seconds after 00:00 UTC: a local evening and the small
 /// hours that follow it share one key.
@@ -956,6 +995,71 @@ fn preview_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The image list's lights' nights are kept until the catalog or the
+    /// settings change, and a view's override is kept apart.
+    #[test]
+    fn light_nights_are_kept_until_the_catalog_or_the_settings_change() {
+        use crate::calibration::rules::{set_test_rule_book, RuleBook};
+        use crate::calibration::{LightNightSplit, NightSource};
+        use std::sync::Arc;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::calibration::ensure_schema(&conn).unwrap();
+        let light = crate::commands::import::headers::FrameMeta {
+            camera: Some("ASI2600MM".into()),
+            telescope: Some("C925".into()),
+            width: Some(6248),
+            height: Some(4176),
+            timestamp: Some(1_705_352_400),
+            site_longitude: Some(-121.163),
+            site_latitude: Some(38.66),
+            ..Default::default()
+        };
+        crate::calibration::note_light_rig(&conn, Some("home"), &light).unwrap();
+        let ctx = super::super::database_context::DatabaseContext::new_for_test(conn);
+        let shared = ctx.db();
+        let conn = shared.lock().unwrap();
+
+        let first = cached_light_nights(&ctx, &conn, None).unwrap();
+        assert_eq!(first.of_profile(Some("home")).source, NightSource::Site);
+        assert!(Arc::ptr_eq(
+            &first,
+            &cached_light_nights(&ctx, &conn, None).unwrap()
+        ));
+        let by_catalog = cached_light_nights(&ctx, &conn, Some(LightNightSplit::Catalog)).unwrap();
+        assert_eq!(
+            by_catalog.of_profile(Some("home")).source,
+            NightSource::Catalog
+        );
+
+        // A setting saved: the next list reads it.
+        set_test_rule_book(Some(RuleBook::new(
+            std::collections::BTreeMap::from([(
+                "light_nights".to_string(),
+                serde_json::json!("catalog"),
+            )]),
+            std::collections::BTreeMap::new(),
+        )));
+        let changed = cached_light_nights(&ctx, &conn, None).unwrap();
+        set_test_rule_book(None);
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert_eq!(
+            changed.of_profile(Some("home")).source,
+            NightSource::Catalog
+        );
+
+        // A write to the catalog, such as a rig bound to another profile.
+        let before = cached_light_nights(&ctx, &conn, None).unwrap();
+        conn.execute(
+            "INSERT INTO psf_guard_rig_binding (binding_uuid, rig_uuid, profile_id, created_at)
+             SELECT 'b2', rig_uuid, 'away', 0 FROM psf_guard_rig_binding LIMIT 1",
+            [],
+        )
+        .unwrap();
+        let after = cached_light_nights(&ctx, &conn, None).unwrap();
+        assert!(!Arc::ptr_eq(&before, &after));
+        assert_eq!(after.of_profile(Some("away")).source, NightSource::Site);
+    }
 
     #[test]
     fn a_half_turned_stack_carries_its_solution_through_the_turn() {

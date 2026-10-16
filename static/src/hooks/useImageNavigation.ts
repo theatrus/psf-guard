@@ -26,7 +26,7 @@ import { useScopedQuality } from './useSequenceAnalysis';
 import { useCalibrationMarks } from './useCalibrationMarks';
 import { useFlatGroupLights } from './useFlatGroupLights';
 import { useNavigateNow } from './useNavigateNow';
-import { useNightSplit } from './useNightSplit';
+import { keepAcrossNightSplit, useNightSplit } from './useNightSplit';
 
 /**
  * Hook for navigating between images in the current context
@@ -66,7 +66,7 @@ export function useImageNavigation(currentImageId?: number) {
   // Nights as the view splits them, the server's setting or the link's.
   const nightSplit = useNightSplit();
   const { data: allImages = [] } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.split],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.queryKey],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId!,
@@ -75,6 +75,9 @@ export function useImageNavigation(currentImageId?: number) {
         nights: nightSplit.override ?? undefined,
       }),
     enabled: !!dbId && !!projectId,
+    // A new night split keeps the old frames on screen until its own
+    // arrive, so the grid neither empties nor loses its place.
+    placeholderData: keepAcrossNightSplit(['db', dbId, 'all-images', projectId, targetId]),
   });
 
   // Apply the same filtering logic as GroupedImageGrid
