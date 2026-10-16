@@ -119,9 +119,11 @@ Then:
 
 - Flat measuring (`flat_measure.rs`) follows all of it.
 - Reading frame sites (`frame_sites.rs`) follows it for one catalog-wide
-  scope: queued at start and after imports, retried while the server runs
-  when the volume is away or a pass fails, Stop and Resume, a row in the
-  job line, and a wait for interactive work before each chunk.
+  scope: queued at start, after imports and hourly when frames marked away
+  come due, retried while the server runs when the volume is away or a pass
+  fails, Stop and Resume (a note on Calibration while stopped), a row in
+  the job line, a wait for interactive work before each chunk, and what it
+  placed handed on at most every 45 s.
 - Calibration grading (`calibration_quality.rs`) is a Background runner per
   catalog with a status route, but it has no row in the job line yet.
 - Calibration health (`calibration_health.rs`), quality backfill and scans

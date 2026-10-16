@@ -10,10 +10,13 @@
 //!   (no file it tried could be read, as with an unmounted NAS) or ended on
 //!   an error is tried again after [`RETRY_FIRST`], doubling up to
 //!   [`RETRY_MAX`], at most [`RETRY_LIMIT`] times. A frame whose file alone
-//!   is away is marked and read again a week later, or on import.
-//! - **Reported as it goes.** Each committed chunk's rigs are graded again
-//!   and their flat measuring queued ([`super::flat_measure::sites_found`]),
-//!   so a pass that ends early has handed on what it placed.
+//!   is away is marked and read again a week later ([`spawn_away_watch`]
+//!   queues the pass), or on import.
+//! - **Handed on as it goes.** The rigs it placed are graded again and
+//!   their flat measuring queued ([`super::flat_measure::sites_found`]) at
+//!   most every [`crate::calibration::night::SITE_FLUSH_EVERY`] and once
+//!   when the pass ends, so flat measuring does not wait for the whole pass
+//!   and one that ends early has handed on what it placed.
 //! - **Stop** pauses until the next change, Resume, or the next start.
 //! - **Background.** Before each chunk it waits for interactive work a
 //!   person started, and says what it waits for.
@@ -337,8 +340,10 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job) {
     {
         let mut queue = job.queue();
         queue.running = false;
-        if cancelled {
+        if cancelled && !queue.pending {
             queue.stopped = true;
+        } else if cancelled {
+            // A change came after Stop: it runs.
         } else if unfinished {
             queue.retry(Instant::now());
         } else {
@@ -431,6 +436,43 @@ fn run_on(
             placed: &mut placed,
         },
     )
+}
+
+/// How often the server looks for frames marked away that are due to be
+/// read again.
+pub const AWAY_WATCH: Duration = Duration::from_secs(60 * 60);
+
+/// Every [`AWAY_WATCH`], queue a pass for each catalog with frames marked
+/// away a week or more ago, so they are read again without waiting for an
+/// import or a restart.
+pub fn spawn_away_watch(state: &Arc<AppState>) {
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        while state.shutdown.sleep(AWAY_WATCH).await {
+            let paths: Vec<String> = state
+                .all_databases()
+                .into_iter()
+                .map(|ctx| ctx.database_path.clone())
+                .collect();
+            let due: Vec<String> = tokio::task::spawn_blocking(move || {
+                paths
+                    .into_iter()
+                    .filter(|path| {
+                        Connection::open_with_flags(
+                            path,
+                            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                        )
+                        .is_ok_and(|conn| crate::calibration::night::away_frames_due(&conn))
+                    })
+                    .collect()
+            })
+            .await
+            .unwrap_or_default();
+            for path in due {
+                queue(&state, &path);
+            }
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

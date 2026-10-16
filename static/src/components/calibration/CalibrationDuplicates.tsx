@@ -7,7 +7,8 @@ import type {
   CalibrationTwinGroup,
 } from '../../api/types';
 import Dialog from '../Dialog';
-import { KIND_LABELS, formatTime, plural } from './calibrationLabels';
+import { KIND_LABELS, formatTime, plural, serverTime } from './calibrationLabels';
+import { useRigClocks } from './useRigClocks';
 import { ALL_RIGS, type CalibrationFilterState } from './useCalibrationUrlState';
 
 interface CalibrationDuplicatesProps {
@@ -51,6 +52,7 @@ function planLines(report: CalibrationDuplicateReport): string[] {
  */
 export default function CalibrationDuplicates({ dbId, canRepair, repairNote, filters }: CalibrationDuplicatesProps) {
   const queryClient = useQueryClient();
+  const clockOf = useRigClocks(dbId);
   const report = useQuery({
     queryKey: ['db', dbId, 'calibrations', 'duplicates'],
     queryFn: () => apiClient.getCalibrationDuplicates(dbId),
@@ -135,7 +137,7 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, fil
                 <strong>{group.file_name}</strong>
               </div>
               <p className="calibration-muted">
-                {[formatTime(group.captured_at), group.rig_name, groupNote(group)].filter(Boolean).join(' · ')}
+                {[formatTime(group.captured_at, clockOf(group.rig_uuid)), group.rig_name, groupNote(group)].filter(Boolean).join(' · ')}
               </p>
               <ul className="calibration-twin-members">
                 {group.members.map((member) => (
@@ -201,7 +203,7 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, fil
                       {preview.masters.map((master) => (
                         <li key={master.master_uuid}>
                           {KIND_LABELS[master.kind] ?? master.kind} {shortUuid(master.master_uuid)} · {plural(master.source_count, 'frame')}
-                          {' · built '}{formatTime(master.created_at)}
+                          {' · built '}{serverTime(master.created_at)}
                           {master.doubled ? ' · averaged an exposure twice' : master.direct ? '' : ' · built on one of these'}
                         </li>
                       ))}

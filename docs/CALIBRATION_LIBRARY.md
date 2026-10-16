@@ -64,23 +64,23 @@ Where a frame's noon falls, first found wins:
    reads the same.
 3. The frame's computer clock (`DATE-LOC` less `DATE-OBS`): noon on that
    clock.
-4. The longitude its rig recorded nearest in time: from its other frames,
-   and from every site an import saw the rig at, with the span of captures
-   it was there.
-5. The clock its rig recorded nearest in time.
-6. Its rig's newest site, for a frame with no capture time.
-7. The hours in which the catalog's lights are never captured, as Images
+4. Its rig's usual place: the longitude its frames and lights recorded on
+   the most nights, or, for a profile with no site set, the clock they
+   recorded on the most nights. Each night counts once; a tie goes to the
+   most recent.
+5. The hours in which the catalog's lights are never captured, as Images
    splits nights ([Sky coverage](SKY_COVERAGE.md)). A catalog with no
    lights splits at noon UTC.
 
-A frame's own site comes first and its rig's nearest in time next, so a rig
-taken to a star party splits those nights where it was and keeps its home
-nights, even for home frames whose file is away or whose header names only
-a clock; a trip does not move them, nor stick after it. The server's own
-time zone never counts; it often runs on UTC or somewhere else. Daylight
-saving moves civil noon by an hour, which leaves the split in the middle of
-the day; a clock is the one the frame, or its nearest neighbour, was shot
-by. A site of 0°, 0° (an unset profile) counts as none. Set a rig's offset
+A rig is taken to live somewhere: an observatory, or a home its trips come
+back to. A frame shot on a trip records its own site and splits where it
+was. One that records none, because its file is away or its header comes
+from other software, splits where its rig usually is, so a trip neither
+moves the home nights nor sticks after it. The server's own time zone never
+counts; it often runs on UTC or somewhere else. Daylight saving moves civil
+noon by an hour, which leaves the split in the middle of the day; a frame's
+own clock is the one it was shot by. A site of 0°, 0° (an unset profile)
+counts as none. Set a rig's offset
 when its frames record no site and its computer's clock is wrong too, as on
 a remote rig kept on UTC. A site past UTC+12 (New Zealand in summer, Tonga)
 or close to 180° W still names its nights by their local evening.
@@ -93,15 +93,21 @@ frames imported before, the server's **Reading frame sites** job reads
 their headers: a row in the job line (`Reading frame sites · 812 of 1,867
 frames`) with Stop, started when the server starts and after an import, a
 hundred headers between commits, stepping aside while your own work runs
-and saying what it waits for. A frame whose file is away while others are
-read is tried again a week later, or when an import brings it. When no file
-it tries can be read, as when the NAS is not mounted, it marks nothing and
-tries again while the server runs, after a minute, then two, up to half an
-hour. The CLI's `flat-groups` reads the sites on its copy. Until a frame's
-site is read it splits by its rig's nearest site, or as the catalog's lights
-do. As each hundred commits, the rigs whose frames found a site are graded
-again and queued for flat measuring, which waits for grading and plans their
-sessions again; a pass that ends early has handed on what it read.
+and saying what it waits for. Stop pauses it until frames are imported or
+the server starts again; while it is stopped, Calibration says so and offers
+**Resume now**. A frame whose file is away while others are read is marked
+and tried again a week later (the server looks hourly for frames that are
+due), or when an import brings it. Files that cannot be read before any
+other file of the pass is are held back unmarked, and marked once one is
+read; when no file of the pass can be read, as when the NAS is not mounted,
+nothing is marked and the pass is tried again while the server runs, after
+a minute, then two, up to half an hour. The CLI's `flat-groups` reads the
+sites on its copy. Until a frame's site is read it splits where its rig
+usually is, or as the catalog's lights do. The rigs whose frames found a
+site are graded again and queued for flat measuring, which waits for
+grading and plans their sessions again: at most every 45 seconds while the
+pass reads, so grading does not run once a hundred frames, and once more
+when it ends, early or not.
 Changing **Night starts at noon in** grades again and queues its rigs too.
 It picks no frames itself, so it re-keys no master or stack. After an upgrade:
 
@@ -121,13 +127,15 @@ lights split at noon UTC: three dawn flat runs were cut in two (OIII at
 104.2° from 04:58 to 05:00 PDT on 2026-08-19 among them) and eight dark
 runs crossed noon. Split at the site's noon, none are.
 
-Times on the Calibration page read on the rig's clock, as its frames
-record it, with its offset: flat groups' change windows and master build
-times, frames' times in the strip and the frame panel, and masters' build
-times, `2026-08-11 06:23 – 2026-08-12 06:06 UTC−7`, and `UTC−8` once the
-clocks went back. A rig with a **Night starts at noon in** setting reads on
-that offset. A rig whose frames record no clock reads on the viewer's clock,
-with its zone (`PDT`). Night dates are the rig's local dates either way.
+On the Calibration page, when something was shot reads on its rig's
+clock, as its frames record it, with its offset: frames in the strip, the
+frame panel and the duplicates list, and flat groups' change windows, such
+as `2026-08-11 06:23 – 2026-08-12 06:06 UTC−7`, and `UTC−8` once the clocks
+went back. A rig with a **Night starts at noon in** setting reads on that
+offset; one whose frames record no clock reads on the viewer's clock, with
+its zone (`PDT`). When the server built a master is no rig's time: it reads
+on the viewer's clock with its zone, in Masters, flat groups and the
+duplicates repair alike. Night dates are the rig's local dates either way.
 
 ## Browse the library
 

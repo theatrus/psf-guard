@@ -8,6 +8,7 @@ import { apiClient } from '../../../api/client';
 import { AccessContext, useAccess } from '../../../auth/access';
 import { server } from '../../../test/msw-server';
 import CalibrationPage from '../CalibrationPage';
+import { serverTime } from '../calibrationLabels';
 
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 
@@ -517,8 +518,8 @@ describe('CalibrationPage', () => {
     expect(within(masters).getByText('Thin')).toBeInTheDocument();
     expect(within(masters).getByText('Poor · spots')).toBeInTheDocument();
     expect(within(masters).getByText('31 changing, 25 carried, 4 steady spots')).toBeInTheDocument();
-    // Built at 14:13 UTC: on the rig's clock, as flat groups read it.
-    expect(await within(masters).findByText('Askar · ASI2600 · built 2025-09-11 07:13 UTC−7')).toBeInTheDocument();
+    // Built by the server: on the viewer's clock, with its zone.
+    expect(await within(masters).findByText(`Askar · ASI2600 · built ${serverTime(1757600000)}`)).toBeInTheDocument();
     fireEvent.click(within(masters).getByRole('button', { name: /View Flat master/ }));
     await waitFor(() => expect(params().get('calMaster')).toBe('m1'));
     const inspector = await screen.findByRole('dialog');
@@ -583,6 +584,8 @@ describe('CalibrationPage', () => {
       expect(within(flat).getByText('Keep')).toBeInTheDocument();
       expect(within(flat).getByText('Missing')).toBeInTheDocument();
       expect(within(flat).getByText('/data/_Incoming/flat_0007.fits')).toBeInTheDocument();
+      // When it was shot, on its rig's clock, as the frame strip reads it.
+      expect(await within(flat).findByText(/^2025-09-10 21:00 UTC−7 · Askar · ASI2600/)).toBeInTheDocument();
       expect(screen.getByRole('checkbox', { name: 'Duplicates' })).toBeChecked();
       // Only the filters this view reads are offered.
       expect(screen.queryByLabelText('Grade')).toBeNull();

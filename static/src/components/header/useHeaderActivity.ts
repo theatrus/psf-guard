@@ -14,6 +14,7 @@ import { useStackActivity } from '../../hooks/useStackActivity';
 import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
 import { flatMeasureKey, flatMeasurePollMs } from '../calibration/flatMeasureLabel';
 import { activityItems, summarize, type DatabaseActivity, type ProjectOf } from './activityItems';
+import { frameSitesKey } from '../calibration/frameSitesKey';
 
 export const WBPP_ACTIVITY_QUERY_KEY = ['wbpp-activity'] as const;
 
@@ -128,7 +129,7 @@ export function useHeaderActivity() {
   // so a quiet server keeps a slow look, as for flat measuring.
   const sites = useQueries({
     queries: databases.map((db) => ({
-      queryKey: ['db', db.id, 'calibrations', 'frame-sites'] as const,
+      queryKey: frameSitesKey(db.id),
       queryFn: () => apiClient.getFrameSitesStatus(db.id),
       refetchInterval: (query: { state: { data?: FrameSitesStatus } }) =>
         query.state.data?.state === 'running' ? 2_000 : query.state.data?.state === 'queued' ? 5_000 : 30_000,

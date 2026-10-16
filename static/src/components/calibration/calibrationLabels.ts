@@ -62,13 +62,22 @@ export function fileName(path: string): string {
 }
 
 /**
- * A frame's or master's time with its zone, on its rig's clock when its
- * frames record one (`2026-08-19 04:58 UTC−7`), else on the viewer's
- * (`2026-08-19 04:58 PDT`): the clock flat groups read on too.
+ * When a frame was shot, with its zone: on its rig's clock when its frames
+ * record one (`2026-08-19 04:58 UTC−7`), as its flats were shot by, else on
+ * the viewer's (`2026-08-19 04:58 PDT`). Flat groups' change windows read
+ * the same way.
  */
 export function formatTime(timestamp?: number | null, clock?: readonly FlatClockRun[]): string {
   if (timestamp === undefined || timestamp === null) return 'Time unknown';
   return timeLabel(timestamp, clock);
+}
+
+/**
+ * When the server did something, such as build a master, on the viewer's
+ * clock with its zone (`2026-10-14 09:55 PDT`): no rig's clock was involved.
+ */
+export function serverTime(timestamp: number): string {
+  return timeLabel(timestamp);
 }
 
 const seconds = (value: number) => `${Number(value.toFixed(2))}s`;

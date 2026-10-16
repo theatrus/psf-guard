@@ -1137,6 +1137,7 @@ async fn run_server_internal(
     tokio::spawn(stack_preview::run_janitor(Arc::clone(&state)));
     // Scan newly arrived frames where a database asks for it.
     tokio::spawn(quality_arrival::run(Arc::clone(&state)));
+    frame_sites::spawn_away_watch(&state);
 
     // Start background image pre-generation if enabled
     if config.pregeneration_config.is_enabled() {

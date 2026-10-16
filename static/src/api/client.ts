@@ -1830,6 +1830,15 @@ export const apiClient = {
     return data.data;
   },
 
+  resumeFrameSites: async (dbId: string): Promise<FrameSitesStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<FrameSitesStatus>>(
+      dbPath(dbId, '/calibrations/frame-sites/resume')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to resume reading frame sites');
+    return data.data;
+  },
+
   cancelFrameSites: async (dbId: string): Promise<FrameSitesStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<FrameSitesStatus>>(

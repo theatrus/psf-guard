@@ -14,9 +14,9 @@ import {
   nightRange,
   percent,
   plural,
-  timeLabel,
   windowLabel,
 } from './flatGroupLabels';
+import { serverTime } from './calibrationLabels';
 
 /** Masters listed before Show all: the newest, since a library rebuilds
  *  a group's master as its settings change. */
@@ -326,7 +326,7 @@ export default function FlatGroupDetail({
                 {(allMasters ? fed.masters : fed.masters.slice(0, MASTERS_SHOWN)).map((master) => (
                   <li key={master.id}>
                     <Link to={calibrationMasterHref(search, dbId, master.id)} title={master.label}>
-                      Master built {timeLabel(master.created_at, rig.clock)}
+                      Master built {serverTime(master.created_at)}
                     </Link>
                     <span className="calibration-muted">
                       {' · '}{plural(master.sources, 'flat')}
