@@ -914,8 +914,11 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
 
     // These POSTs calculate derived display data. They may populate caches,
     // but they do not change catalog grades, plans, files, or server config.
+    // A page saying it shows a rig's flats lifts that rig's measuring for a
+    // while; it changes no catalog.
     !(path.ends_with("/astrometry")
         || path.ends_with("/satellites")
+        || path.ends_with("/calibrations/flat-measure/watch")
         || path.contains("/stack-previews")
         || path == "/astrometry/catalogs/validate")
 }
@@ -1115,6 +1118,25 @@ mod tests {
             "/db/test/calibrations/frames/quality",
             false,
         ));
+        // Saying a page shows a rig is a display hint; stopping or resuming
+        // the job is an editor's.
+        assert!(!requires_write(
+            &Method::POST,
+            "/db/test/calibrations/flat-measure/watch",
+            true,
+        ));
+        assert!(requires_write(
+            &Method::POST,
+            "/db/test/calibrations/flat-measure/watch",
+            false,
+        ));
+        for action in ["cancel", "resume"] {
+            assert!(requires_write(
+                &Method::POST,
+                &format!("/db/test/calibrations/flat-measure/{action}"),
+                true,
+            ));
+        }
         assert!(requires_write(
             &Method::POST,
             "/db/test/images/12/astrometry",

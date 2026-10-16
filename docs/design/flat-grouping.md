@@ -228,8 +228,14 @@ unchanged.
    stored as undecided, so it is not read on every pass. Its key
    (`Book::evidence_key`) names the change and, per filter of the rig,
    the map's two sessions and the reference flat, so a borrowed map or a
-   reference that changes asks the lights again; rows of older keys and
-   fit versions are dropped at the end of the pass.
+   reference that changes asks the lights again. Each row also records
+   the change it answers for (`change_key`). At the end of a pass a row
+   goes only when it is of an older fit, when its imaging session is gone,
+   or when the pass asks for the same session and change under another
+   key. A row whose change a limit removed stays, even while its session
+   sits in another change's window: on C925, raising the dust limit to 3%
+   removed every change, and putting it back to 1% read all 46 sessions'
+   lights again until this rule.
 4. **Undetermined** otherwise.
 
 Pixel evidence is evidence about the lights; a comparison between flats is
@@ -408,9 +414,12 @@ opens the rig's own value or the global one.
 - A **camera-side change** draws once, above the newest listed flat of
   the rig shot before its window; its member splits do not draw again.
   A filter-side change is a split.
-- The page polls the quality job's progress once, through
-  `useFlatGroups`, and reads the view again when a pass that worked on
-  flats ends.
+- The page polls the flat measuring job's status once, through
+  `useFlatGroups` (`GET …/calibrations/flat-measure`, the header's poll of
+  the same catalog), shows
+  its progress while it measures a rig in view, and reads the view again
+  when a pass ends. With one rig chosen it also sends `POST
+  …/flat-measure/watch` (§6).
 - `calRotation` is a Frames filter (`rotation` on the session and frame
   routes, flats within `ROTATION_CLUSTER_DEG`); the facets list the
   flats' angles. An old `calTab=groups` link becomes `calKind=flat` and
@@ -454,10 +463,62 @@ opens the rig's own value or the global one.
 - **Pictures**: the ratio picture goes through the preview queue
   (`GenKind::FlatRatio`), keyed by both responses, the stretch and the
   render version, and reports through the shared generation-status poll.
-- **Job**: a stage of the calibration quality job after grading, on the
-  background worker share sized by the library's largest flat
-  (`plan_workers` with its samples), yielding to interactive work before
-  each read, comparison and evidence session, committing as it goes.
+- **Job**: `src/server/flat_measure.rs`, a tracked job of its own per
+  catalog (see [background jobs](background-jobs.md)), no longer a stage of
+  the calibration quality pass. One `job::run` plans the catalog once, then
+  takes each rig in turn through responses, comparisons and evidence,
+  committing as it goes. It reports `FlatMeasureStatus` (rig, stage, done
+  of total) to the header's job line and the Frames page, and turns
+  `active`, and shows, only once a stage finds work.
+  - **Scope** (`job::Scope`): rigs whose flats changed get responses,
+    comparisons and evidence; rigs whose lights changed get evidence only.
+    Forget, a use/exclude override and duplicate repair name their rigs
+    (the frames' `rig_uuid`, the repair plan's groups). Import, sync pull
+    and peer pull diff each rig's raw calibration frames
+    (`flat_measure::rig_state`: uuid, file fingerprint, kind, time, stray
+    light, grade) before and after, on a connection of their own, never the
+    request connection; import adds lights when it imported any. An upload
+    names its frame's rig, or lights. Within a rig the pass reads only
+    sessions without a current response, missing pairs and imaging
+    sessions with a new evidence key.
+  - **Retains** are per rig: a pass drops the stale response rows of the
+    rigs it measured, never another rig's, then every comparison whose
+    sessions are not both kept, then planes with no row.
+  - **Debounce**: requests merge, and a pass starts
+    `FLAT_MEASURE_SETTLE` (5 s) after the last one, and only once the
+    catalog's grading is not running or waiting for uploads to settle
+    (`calibration_quality::busy`), since grades decide the flats in use.
+  - **Retries**: a rig left with flats away, lights the folders do not show
+    yet, or a pass that ended in an error (as a busy catalog), is tried
+    again after `RETRY_FIRST` (1 min), doubling to `RETRY_MAX` (30 min), at
+    most `RETRY_LIMIT` (6) times; a new change to the rig starts again.
+  - **Stop** (`POST …/flat-measure/cancel`) ends the pass at its next step
+    and pauses what ran and waited. It resumes with the next change the
+    server is told of in that catalog, with **Resume now** on the Frames
+    page (`POST …/flat-measure/resume`), or at the next start. A page's
+    look never resumes it.
+  - **Start** and adding a database queue every rig: only unfinished or
+    stale work is done, and a catalog that is up to date reads no pixel.
+  - **Settings**: a change to `flat_grouping`, `flat_split_dust_pct`,
+    `flat_split_pattern_pct` (or the window or rotation tolerance the
+    limits carry) regroups on the next read, since the book's digest holds
+    the rules; health is judged again, nothing is graded again. The rigs
+    whose own limits changed and that group by measurement now are queued,
+    or every rig when the server-wide limits changed; the pass reads only
+    what the new grouping lacks, as for a rig switched from time. The rule
+    books alone say which rigs: nothing is read on the request. A change
+    grading reads queues every rig after the regrade, as before.
+  - **Time mode**: a rig with `flat_grouping = time` is skipped at every
+    stage; its rows stay for when it is switched back.
+  - **Tiers**: a pass runs `Background` and waits for a person's
+    interactive work before each step. While Frames shows one rig, the page
+    sends `POST …/flat-measure/watch {rig}` every 20 s; for `WATCH_TTL`
+    (45 s) after each, that rig goes first and runs `Viewed`: a modest
+    share of its own, leased again for each step, and no interactive guard,
+    so autoimport, grading, backfill and automatic stacks carry on and a
+    stack the person starts plans with its whole share. At most every
+    `WATCH_RECHECK` (5 min) a look also queues a check of the rig, which
+    reads nothing when nothing is stale.
 - **Grouping by time** is the previous behaviour throughout: selection,
   the mixed-flats Check and its wording, export sessions (no per-flat-set
   sessions), and the light's account, which says nothing of measurements.

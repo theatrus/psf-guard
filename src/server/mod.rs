@@ -21,6 +21,7 @@ pub mod extract;
 pub mod flat_group_use;
 pub mod flat_groups;
 pub mod flat_history;
+pub mod flat_measure;
 pub mod handlers;
 pub mod import_job;
 pub mod master_cleanup;
@@ -258,6 +259,19 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/calibrations/flat-groups",
             get(flat_groups::get_flat_groups),
+        )
+        .route("/calibrations/flat-measure", get(flat_measure::get_status))
+        .route(
+            "/calibrations/flat-measure/watch",
+            post(flat_measure::post_watch),
+        )
+        .route(
+            "/calibrations/flat-measure/resume",
+            post(flat_measure::post_resume),
+        )
+        .route(
+            "/calibrations/flat-measure/cancel",
+            post(flat_measure::post_cancel),
         )
         .route(
             "/calibrations/flat-groups/ratio",
@@ -1068,6 +1082,13 @@ async fn run_server_internal(
                 &state.shutdown,
             );
             crate::server::calibration_quality::request(&state, &path);
+            // Only what is unfinished or stale: a catalog that is up to date
+            // reads no pixels.
+            crate::server::flat_measure::queue(
+                &state,
+                &path,
+                crate::calibration::flat_groups::job::Scope::everything(),
+            );
         }
     }
 

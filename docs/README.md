@@ -24,6 +24,7 @@ Use this index for detailed behavior and engineering records.
 These files explain contracts that span several modules or still have planned
 work. Historical checklists record delivery; they do not track current work.
 
+- [Background jobs and priority](design/background-jobs.md)
 - [Data transfer and remote sync](design/data-transfer.md)
 - [Multi-database architecture](design/multi-database.md)
 - [Director: goal-driven acquisition and phased plan](design/director.md)

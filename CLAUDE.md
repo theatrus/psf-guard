@@ -172,7 +172,16 @@ Current behavior: [satellites](docs/SATELLITES.md) and
 - Write generated artifacts to a temporary file and rename them atomically.
 - Preview requests return `202` while queued work runs. Keep generation out of
   the HTTP request path.
-- Size CPU pools through `src/concurrency.rs`; do not add fixed worker counts.
+- Run long or heavy work as a tracked job with a row in the job line. No ad
+  hoc threads, and no such work in a request handler. See
+  [background jobs](docs/design/background-jobs.md).
+- Give each job a `concurrency::Priority`: `Interactive` when a person
+  started it, `Viewed` for automatic work a page shows, `Background` for the
+  rest. Only `Interactive` holds the guard, from
+  `AppState::begin_named_interactive_job`. The others yield through
+  `AppState::wait_for_interactive_work`, which reports what they wait for.
+- Lease workers with `plan_workers` and `AppState::lease_workers`, and run
+  Seiza in a `ComputePool`. No fixed worker counts.
 - Interactive work wins over background pre-generation and quality backfill.
 - Keep the shared request database connection free of slow refresh work.
 - A stale directory tree may be served while one background refresh runs. Do

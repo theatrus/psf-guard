@@ -9,7 +9,8 @@
 //!    lights which side they are on ([`super::evidence`]).
 //!
 //! Each step commits as it goes, so a stop loses little. The caller runs
-//! this inside a pool sized from the background budget.
+//! this on workers from the background budget, and says which rigs it
+//! works on ([`Scope`]); a rig grouped by time is never measured.
 
 use super::evidence::{self, EVIDENCE_ALGORITHM_VERSION};
 use super::metric::{self, Plane};
@@ -23,8 +24,9 @@ use rayon::prelude::*;
 use rusqlite::Connection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Rounds of comparisons one pass makes at most: the pairs the stored
 /// comparisons ask for, then those the families they formed ask for.
@@ -38,6 +40,139 @@ pub struct PassOutcome {
     pub unreadable: usize,
     pub compared: usize,
     pub evidence: usize,
+    /// Frames read from disk, flats and lights: none when the catalog's
+    /// measurements are current.
+    pub frames_read: usize,
+    /// Imaging sessions in a change's window whose lights the image folders
+    /// do not hold yet, as before a refresh has seen them.
+    pub lights_missing: usize,
+    /// Rigs left with work this pass could not do (flats away, lights not
+    /// found): the caller tries them again later.
+    pub retry: BTreeSet<String>,
+    /// Whether the pass stopped before its end (`keep_going` said so).
+    pub stopped: bool,
+}
+
+/// Where a pass stands, as it reports it.
+#[derive(Debug, Clone, Copy)]
+pub struct Progress<'a> {
+    /// The rig being worked on.
+    pub rig: &'a str,
+    /// [`STAGE_MEASURING`], [`STAGE_COMPARING`] or [`STAGE_EVIDENCE`].
+    pub stage: &'a str,
+    pub done: usize,
+    pub total: usize,
+}
+
+/// Some rigs of a catalog, or all of them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Rigs {
+    #[default]
+    None,
+    Some(BTreeSet<String>),
+    All,
+}
+
+impl Rigs {
+    /// These rigs; none when the list is empty.
+    pub fn of<S: Into<String>>(rigs: impl IntoIterator<Item = S>) -> Self {
+        let rigs: BTreeSet<String> = rigs.into_iter().map(Into::into).collect();
+        if rigs.is_empty() {
+            Rigs::None
+        } else {
+            Rigs::Some(rigs)
+        }
+    }
+
+    pub fn contains(&self, rig: &str) -> bool {
+        match self {
+            Rigs::None => false,
+            Rigs::Some(rigs) => rigs.contains(rig),
+            Rigs::All => true,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Rigs::None)
+    }
+
+    /// These and those.
+    pub fn merge(&mut self, other: Rigs) {
+        *self = match (std::mem::take(self), other) {
+            (Rigs::All, _) | (_, Rigs::All) => Rigs::All,
+            (Rigs::None, other) | (other, Rigs::None) => other,
+            (Rigs::Some(mut mine), Rigs::Some(theirs)) => {
+                mine.extend(theirs);
+                Rigs::Some(mine)
+            }
+        };
+    }
+}
+
+/// Which work a pass does, and for which rigs. A rig's flats are measured,
+/// compared and then its lights asked; a rig's lights alone are only asked.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Scope {
+    /// Rigs whose flats changed: responses, comparisons, then evidence.
+    pub flats: Rigs,
+    /// Rigs whose lights changed: light evidence only.
+    pub lights: Rigs,
+}
+
+impl Scope {
+    /// Every rig's flats and lights: what is unfinished or stale anywhere.
+    pub fn everything() -> Self {
+        Self {
+            flats: Rigs::All,
+            lights: Rigs::All,
+        }
+    }
+
+    pub fn flats(rigs: Rigs) -> Self {
+        Self {
+            flats: rigs,
+            lights: Rigs::None,
+        }
+    }
+
+    pub fn lights(rigs: Rigs) -> Self {
+        Self {
+            flats: Rigs::None,
+            lights: rigs,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.flats.is_empty() && self.lights.is_empty()
+    }
+
+    pub fn merge(&mut self, other: Scope) {
+        self.flats.merge(other.flats);
+        self.lights.merge(other.lights);
+    }
+
+    /// Whether this rig's flat sessions are measured and compared.
+    pub fn measures(&self, rig: &str) -> bool {
+        self.flats.contains(rig)
+    }
+
+    /// Whether this rig's lights are asked which side of a change they lie.
+    pub fn reads_lights(&self, rig: &str) -> bool {
+        self.flats.contains(rig) || self.lights.contains(rig)
+    }
+}
+
+/// Where a pass's reads and measurements run.
+pub trait Workers: Sync {
+    /// Run `work` on these workers and wait for it.
+    fn run(&self, work: &mut (dyn FnMut() + Send));
+}
+
+impl Workers for rayon::ThreadPool {
+    fn run(&self, work: &mut (dyn FnMut() + Send)) {
+        self.install(work)
+    }
 }
 
 /// What the pass needs from its caller.
@@ -45,26 +180,46 @@ pub struct Pass<'a> {
     pub conn: &'a Connection,
     /// Where response planes are kept.
     pub dir: &'a Path,
+    /// The rigs and work this pass does. A rig grouped by time is left
+    /// out whatever the scope says.
+    pub scope: Scope,
     /// Asked before each piece of work; false ends the pass.
     pub keep_going: &'a (dyn Fn() -> bool + Sync),
     /// Called before each read: waits while interactive work runs.
     pub yield_now: &'a (dyn Fn() + Sync),
-    /// `(stage, done, total)`.
-    pub progress: &'a mut dyn FnMut(&str, usize, usize),
+    /// Where the pass stands, before each step and at each stage's end.
+    pub progress: &'a mut dyn FnMut(&Progress<'_>),
+    /// Rigs worked on first, as one a page shows.
+    pub goes_first: &'a dyn Fn(&str) -> bool,
     /// A light's file from its name, when the image folders hold it.
     pub find_light: &'a dyn Fn(&str) -> Option<PathBuf>,
-    /// The pool reads and measurements run on; the calling thread's when
+    /// The workers reads and measurements run on; the calling thread when
     /// absent.
-    pub pool: Option<&'a rayon::ThreadPool>,
+    pub pool: Option<&'a dyn Workers>,
 }
 
 impl Pass<'_> {
     fn in_pool<R: Send>(&self, work: impl FnOnce() -> R + Send) -> R {
         match self.pool {
-            Some(pool) => pool.install(work),
+            Some(pool) => {
+                let mut work = Some(work);
+                let mut out = None;
+                pool.run(&mut || out = work.take().map(|work| work()));
+                out.expect("the workers ran the work")
+            }
             None => work(),
         }
     }
+}
+
+/// The stages a pass reports, in order.
+pub const STAGE_MEASURING: &str = "measuring flat sessions";
+pub const STAGE_COMPARING: &str = "comparing flat sessions";
+pub const STAGE_EVIDENCE: &str = "reading lights shot during a change";
+
+/// Whether flats of this rig are grouped by measurement, so measured.
+pub fn rig_is_measured(rig: &str) -> bool {
+    super::rig_limits(rig).measured
 }
 
 /// One flat session about to be measured.
@@ -354,7 +509,9 @@ fn write_plane(dir: &Path, key: &str, plane: &Plane) -> Result<()> {
     Ok(())
 }
 
-/// Run one pass.
+/// Run one pass: the catalog is planned once, then each rig in the scope
+/// goes through its stages in turn (responses, comparisons, light
+/// evidence), the rigs `goes_first` names first.
 pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
     let conn = pass.conn;
     let mut outcome = PassOutcome::default();
@@ -370,197 +527,290 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         .iter()
         .filter(|plan| plan.frames.len() >= metric::MIN_FRAMES)
         .collect();
-    outcome.sessions = measurable.len();
-    let mut current: Vec<String> = Vec::new();
-    // A session is done when its response is on disk from every flat it
-    // combines, or could not be combined at all. One built while some
-    // files were away is read again until they are back.
-    let todo: Vec<(&SessionPlan, String)> = measurable
+    // Rigs with flats, those the caller puts first ahead of the rest. A rig
+    // grouped by time is left out: its selection must not lean on
+    // measurements.
+    let mut rigs: Vec<&str> = plans
         .iter()
-        .map(|plan| (*plan, plan.response_key()))
-        .filter(|(plan, key)| {
-            !known.get(key).is_some_and(|row| {
-                row.error.is_some()
-                    || (super::response_path(pass.dir, key).is_file()
-                        && row.frames >= plan.combined().len())
-            })
-        })
+        .map(|plan| plan.rig_uuid.as_str())
+        .collect::<BTreeSet<&str>>()
+        .into_iter()
+        .filter(|rig| pass.scope.reads_lights(rig) && rig_is_measured(rig))
         .collect();
-    for plan in &measurable {
-        let key = plan.response_key();
-        // A dark-flat or bias that arrived since: the pedestal comes off
-        // anew, and the comparisons made without it are made again.
-        if let Some(row) = known.get(&key) {
-            let first = &plan.frames[0];
-            let pedestal = pedestal_for(
-                &pedestal_table,
-                &plan.rig_uuid,
-                first.gain,
-                first.offset,
-                first.exposure_s,
-            );
-            let moved = match (row.pedestal_adu, pedestal) {
-                (Some(a), Some(b)) => (a - b).abs() > 0.5,
-                (a, b) => a.is_some() != b.is_some(),
-            };
-            if moved {
-                store::set_pedestal(conn, &key, pedestal)?;
-            }
-            // Measured when the family key named less, as before it took
-            // the focal length: the plane stands, the family is renamed.
-            if row.family_key != plan.family_key || row.session_key != plan.session_key {
-                store::set_family(conn, &key, &plan.family_key, &plan.session_key)?;
-            }
-        }
-        current.push(key);
-    }
-    let total = todo.len();
-    for (done, (plan, key)) in todo.iter().enumerate() {
-        if !(pass.keep_going)() {
-            return Ok(outcome);
-        }
-        (pass.progress)("measuring flat sessions", done, total);
-        let combined = plan.combined();
-        let yield_now = pass.yield_now;
-        let read: Vec<Result<(Plane, usize)>> = pass.in_pool(|| {
-            combined
-                .par_iter()
-                .map(|frame| {
-                    yield_now();
-                    read_binned(&frame.source_path)
-                })
-                .collect()
-        });
-        let (planes, failures): (Vec<_>, Vec<_>) = read.into_iter().partition(|r| r.is_ok());
-        let planes: Vec<(Plane, usize)> = planes.into_iter().map(|r| r.expect("ok")).collect();
-        if !failures.is_empty() && planes.len() < metric::MIN_FRAMES {
-            // Files away, as on an unmounted share: try again next pass.
-            outcome.unreadable += 1;
-            continue;
-        }
-        let bin = planes.first().map_or(1, |(_, bin)| *bin);
-        let first = &plan.frames[0];
-        let pedestal = pedestal_for(
-            &pedestal_table,
-            &plan.rig_uuid,
-            first.gain,
-            first.offset,
-            first.exposure_s,
-        );
-        let binned: Vec<Plane> = planes.into_iter().map(|(plane, _)| plane).collect();
-        let response = pass.in_pool(|| metric::build_response(&binned, bin));
-        let mut row = ResponseRow {
-            response_key: key.clone(),
-            session_key: plan.session_key.clone(),
-            rig_uuid: plan.rig_uuid.clone(),
-            family_key: plan.family_key.clone(),
-            night: plan.night.clone(),
-            filter: plan.filter.clone(),
-            rotation: plan.rotation,
-            frame_uuids: plan.frames.iter().map(|f| f.frame_uuid.clone()).collect(),
-            frames: binned.len(),
-            captured_first: plan.frames.first().and_then(|f| f.captured_at),
-            captured_last: plan.frames.last().and_then(|f| f.captured_at),
-            level_adu: None,
-            pedestal_adu: pedestal,
-            noise: None,
-            width: None,
-            height: None,
-            bin: Some(bin),
-            algorithm_version: metric::RESPONSE_ALGORITHM_VERSION,
-            error: None,
-        };
-        match response {
-            Some(response) => {
-                write_plane(pass.dir, key, &response.plane)?;
-                row.level_adu = Some(f64::from(response.level));
-                row.noise = Some(f64::from(response.noise));
-                row.width = Some(response.plane.width);
-                row.height = Some(response.plane.height);
-                outcome.measured += 1;
-            }
-            None => row.error = Some("the flats could not be combined".into()),
-        }
-        store::upsert_response(conn, &row)?;
-    }
-    (pass.progress)("measuring flat sessions", total, total);
-    store::retain_responses(conn, &current)?;
-    remove_stale_planes(pass.dir, &current);
-
-    // Comparisons. A session whose flats record no angle joins a rotation
-    // cluster only once compared with it, and then has that family's pairs
-    // to make: a second round makes them.
+    rigs.sort_by_key(|rig| !(pass.goes_first)(rig));
+    let frames_read = AtomicUsize::new(0);
+    let mut measured_rigs: BTreeSet<String> = BTreeSet::new();
+    let mut current: Vec<String> = Vec::new();
     let mut tried: std::collections::HashSet<(String, String)> = Default::default();
-    for _round in 0..COMPARE_ROUNDS {
-        let book = Book::build(
-            store::load_responses(conn)?,
-            store::load_comparisons(conn)?,
-            Vec::new(),
-            Vec::new(),
-            super::rig_limits,
-        );
-        let pairs: Vec<(usize, usize)> = book
-            .pairs_to_compare()
-            .into_iter()
-            .filter(|(a, b)| book.comparison(*a, *b).is_none())
-            .filter(|(a, b)| {
-                tried.insert((
-                    book.sessions[*a].row.response_key.clone(),
-                    book.sessions[*b].row.response_key.clone(),
-                ))
-            })
-            .collect();
-        if pairs.is_empty() {
-            break;
-        }
-        let total = pairs.len();
-        for (done, (a, b)) in pairs.iter().enumerate() {
-            if !(pass.keep_going)() {
-                return Ok(outcome);
+    'rigs: for rig in rigs {
+        let report = |stage: &'static str, done: usize, total: usize| Progress {
+            rig,
+            stage,
+            done,
+            total,
+        };
+        let left_before = (outcome.unreadable, outcome.lights_missing);
+        if pass.scope.measures(rig) {
+            measured_rigs.insert(rig.to_string());
+            let plans: Vec<&SessionPlan> = measurable
+                .iter()
+                .filter(|plan| plan.rig_uuid == rig)
+                .copied()
+                .collect();
+            outcome.sessions += plans.len();
+            // A session is done when its response is on disk from every
+            // flat it combines, or could not be combined at all. One built
+            // while some files were away is read again until they are back.
+            let todo: Vec<(&SessionPlan, String)> = plans
+                .iter()
+                .map(|plan| (*plan, plan.response_key()))
+                .filter(|(plan, key)| {
+                    !known.get(key).is_some_and(|row| {
+                        row.error.is_some()
+                            || (super::response_path(pass.dir, key).is_file()
+                                && row.frames >= plan.combined().len())
+                    })
+                })
+                .collect();
+            for plan in &plans {
+                let key = plan.response_key();
+                // A dark-flat or bias that arrived since: the pedestal comes
+                // off anew, and the comparisons made without it are made
+                // again.
+                if let Some(row) = known.get(&key) {
+                    let first = &plan.frames[0];
+                    let pedestal = pedestal_for(
+                        &pedestal_table,
+                        &plan.rig_uuid,
+                        first.gain,
+                        first.offset,
+                        first.exposure_s,
+                    );
+                    let moved = match (row.pedestal_adu, pedestal) {
+                        (Some(a), Some(b)) => (a - b).abs() > 0.5,
+                        (a, b) => a.is_some() != b.is_some(),
+                    };
+                    if moved {
+                        store::set_pedestal(conn, &key, pedestal)?;
+                    }
+                    // Measured when the family key named less, as before it
+                    // took the focal length: the plane stands, the family is
+                    // renamed.
+                    if row.family_key != plan.family_key || row.session_key != plan.session_key {
+                        store::set_family(conn, &key, &plan.family_key, &plan.session_key)?;
+                    }
+                }
+                current.push(key);
             }
-            (pass.progress)("comparing flat sessions", done, total);
-            (pass.yield_now)();
-            let (sa, sb) = (&book.sessions[*a].row, &book.sessions[*b].row);
-            let (Some(pa), Some(pb)) = (session_plane(pass.dir, sa), session_plane(pass.dir, sb))
-            else {
-                continue;
-            };
-            let bin = sa.bin.unwrap_or(1);
-            if let Some(comparison) = pass.in_pool(|| metric::compare(&pa, &pb, bin)) {
-                store::insert_comparison(conn, &sa.response_key, &sb.response_key, &comparison)?;
-                outcome.compared += 1;
+            let total = todo.len();
+            for (done, (plan, key)) in todo.iter().enumerate() {
+                if !(pass.keep_going)() {
+                    outcome.stopped = true;
+                    break 'rigs;
+                }
+                (pass.progress)(&report(STAGE_MEASURING, done, total));
+                measure_session(
+                    &pass,
+                    plan,
+                    key,
+                    &pedestal_table,
+                    &frames_read,
+                    &mut outcome,
+                )?;
             }
-        }
-        (pass.progress)("comparing flat sessions", total, total);
-    }
+            (pass.progress)(&report(STAGE_MEASURING, total, total));
 
-    // Light evidence.
-    let book = super::load_book(conn)?;
-    let needed = book.sessions_needing_evidence();
-    let total = needed.len();
-    for (done, (event_index, session_index)) in needed.iter().enumerate() {
-        if !(pass.keep_going)() {
-            return Ok(outcome);
+            // Comparisons. A session whose flats record no angle joins a
+            // rotation cluster only once compared with it, and then has that
+            // family's pairs to make: a second round makes them.
+            for _round in 0..COMPARE_ROUNDS {
+                let book = Book::build(
+                    store::load_responses(conn)?,
+                    store::load_comparisons(conn)?,
+                    Vec::new(),
+                    Vec::new(),
+                    super::rig_limits,
+                );
+                let pairs: Vec<(usize, usize)> = book
+                    .pairs_to_compare()
+                    .into_iter()
+                    .filter(|(a, b)| book.comparison(*a, *b).is_none())
+                    .filter(|(a, _)| book.sessions[*a].row.rig_uuid == rig)
+                    .filter(|(a, b)| {
+                        tried.insert((
+                            book.sessions[*a].row.response_key.clone(),
+                            book.sessions[*b].row.response_key.clone(),
+                        ))
+                    })
+                    .collect();
+                if pairs.is_empty() {
+                    break;
+                }
+                let total = pairs.len();
+                for (done, (a, b)) in pairs.iter().enumerate() {
+                    if !(pass.keep_going)() {
+                        outcome.stopped = true;
+                        break 'rigs;
+                    }
+                    (pass.progress)(&report(STAGE_COMPARING, done, total));
+                    (pass.yield_now)();
+                    let (sa, sb) = (&book.sessions[*a].row, &book.sessions[*b].row);
+                    let (Some(pa), Some(pb)) =
+                        (session_plane(pass.dir, sa), session_plane(pass.dir, sb))
+                    else {
+                        continue;
+                    };
+                    let bin = sa.bin.unwrap_or(1);
+                    if let Some(comparison) = pass.in_pool(|| metric::compare(&pa, &pb, bin)) {
+                        store::insert_comparison(
+                            conn,
+                            &sa.response_key,
+                            &sb.response_key,
+                            &comparison,
+                        )?;
+                        outcome.compared += 1;
+                    }
+                }
+                (pass.progress)(&report(STAGE_COMPARING, total, total));
+            }
         }
-        (pass.progress)("reading lights shot during a change", done, total);
-        (pass.yield_now)();
-        if let Some(row) =
-            session_evidence(&pass, &book, *event_index, *session_index, &pedestal_table)?
-        {
-            store::upsert_evidence(conn, &row, EVIDENCE_ALGORITHM_VERSION)?;
-            outcome.evidence += 1;
+
+        // Light evidence for this rig's changes.
+        let book = super::load_book(conn)?;
+        let needed: Vec<(usize, usize)> = book
+            .sessions_needing_evidence()
+            .into_iter()
+            .filter(|(event, _)| book.events[*event].rig_uuid == rig)
+            .collect();
+        let total = needed.len();
+        for (done, (event_index, session_index)) in needed.iter().enumerate() {
+            if !(pass.keep_going)() {
+                outcome.stopped = true;
+                break 'rigs;
+            }
+            (pass.progress)(&report(STAGE_EVIDENCE, done, total));
+            (pass.yield_now)();
+            match session_evidence(
+                &pass,
+                &book,
+                *event_index,
+                *session_index,
+                &pedestal_table,
+                &frames_read,
+            )? {
+                Some(row) => {
+                    let change = &book.events[*event_index].key;
+                    store::upsert_evidence(conn, &row, change, EVIDENCE_ALGORITHM_VERSION)?;
+                    outcome.evidence += 1;
+                }
+                None => outcome.lights_missing += 1,
+            }
+        }
+        (pass.progress)(&report(STAGE_EVIDENCE, total, total));
+        if (outcome.unreadable, outcome.lights_missing) != left_before {
+            outcome.retry.insert(rig.to_string());
         }
     }
-    (pass.progress)("reading lights shot during a change", total, total);
-    // Evidence no session in a window asks for any more, or kept by an
-    // older fit, goes.
-    let keep: Vec<(String, String)> = book
+    outcome.frames_read = frames_read.load(Ordering::Relaxed);
+
+    // Rows of the rigs measured that no current session has go, with their
+    // planes; other rigs' rows wait for their own pass.
+    store::retain_responses(conn, &measured_rigs, &current)?;
+    remove_stale_planes(pass.dir, &store::response_keys(conn)?);
+    // Evidence a newer key replaced, of an older fit, or of a session the
+    // catalog lost goes; see `store::retain_evidence` for what stays.
+    let book = super::load_book(conn)?;
+    let wanted: Vec<store::EvidenceWanted> = book
         .sessions_in_windows()
         .into_iter()
-        .map(|(_, session, key)| (book.imaging[session].key.clone(), key))
+        .map(|(event, session, key)| store::EvidenceWanted {
+            session: book.imaging[session].key.clone(),
+            change: book.events[event].key.clone(),
+            key,
+        })
         .collect();
-    store::retain_evidence(conn, &keep, EVIDENCE_ALGORITHM_VERSION)?;
+    let sessions: Vec<String> = book
+        .imaging
+        .iter()
+        .map(|session| session.key.clone())
+        .collect();
+    store::retain_evidence(conn, &wanted, &sessions, EVIDENCE_ALGORITHM_VERSION)?;
     Ok(outcome)
+}
+
+/// Read one flat session and keep its response.
+fn measure_session(
+    pass: &Pass<'_>,
+    plan: &SessionPlan,
+    key: &str,
+    pedestal_table: &PedestalTable,
+    frames_read: &AtomicUsize,
+    outcome: &mut PassOutcome,
+) -> Result<()> {
+    let combined = plan.combined();
+    let yield_now = pass.yield_now;
+    let read: Vec<Result<(Plane, usize)>> = pass.in_pool(|| {
+        combined
+            .par_iter()
+            .map(|frame| {
+                yield_now();
+                frames_read.fetch_add(1, Ordering::Relaxed);
+                read_binned(&frame.source_path)
+            })
+            .collect()
+    });
+    let (planes, failures): (Vec<_>, Vec<_>) = read.into_iter().partition(|r| r.is_ok());
+    let planes: Vec<(Plane, usize)> = planes.into_iter().map(|r| r.expect("ok")).collect();
+    if !failures.is_empty() && planes.len() < metric::MIN_FRAMES {
+        // Files away, as on an unmounted share: the caller tries again.
+        outcome.unreadable += 1;
+        return Ok(());
+    }
+    let bin = planes.first().map_or(1, |(_, bin)| *bin);
+    let first = &plan.frames[0];
+    let pedestal = pedestal_for(
+        pedestal_table,
+        &plan.rig_uuid,
+        first.gain,
+        first.offset,
+        first.exposure_s,
+    );
+    let binned: Vec<Plane> = planes.into_iter().map(|(plane, _)| plane).collect();
+    let response = pass.in_pool(|| metric::build_response(&binned, bin));
+    let mut row = ResponseRow {
+        response_key: key.to_string(),
+        session_key: plan.session_key.clone(),
+        rig_uuid: plan.rig_uuid.clone(),
+        family_key: plan.family_key.clone(),
+        night: plan.night.clone(),
+        filter: plan.filter.clone(),
+        rotation: plan.rotation,
+        frame_uuids: plan.frames.iter().map(|f| f.frame_uuid.clone()).collect(),
+        frames: binned.len(),
+        captured_first: plan.frames.first().and_then(|f| f.captured_at),
+        captured_last: plan.frames.last().and_then(|f| f.captured_at),
+        level_adu: None,
+        pedestal_adu: pedestal,
+        noise: None,
+        width: None,
+        height: None,
+        bin: Some(bin),
+        algorithm_version: metric::RESPONSE_ALGORITHM_VERSION,
+        error: None,
+    };
+    match response {
+        Some(response) => {
+            write_plane(pass.dir, key, &response.plane)?;
+            row.level_adu = Some(f64::from(response.level));
+            row.noise = Some(f64::from(response.noise));
+            row.width = Some(response.plane.width);
+            row.height = Some(response.plane.height);
+            outcome.measured += 1;
+        }
+        None => row.error = Some("the flats could not be combined".into()),
+    }
+    store::upsert_response(pass.conn, &row)?;
+    Ok(())
 }
 
 /// A session's response plane with its pedestal taken out.
@@ -576,6 +826,7 @@ pub fn session_plane(dir: &Path, row: &ResponseRow) -> Option<Plane> {
     Some(response.without_pedestal(row.pedestal_adu.unwrap_or(0.0) as f32))
 }
 
+/// Remove the planes of responses the catalog no longer holds.
 fn remove_stale_planes(dir: &Path, current: &[String]) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -613,6 +864,7 @@ fn session_evidence(
     event_index: usize,
     session_index: usize,
     pedestals: &PedestalTable,
+    frames_read: &AtomicUsize,
 ) -> Result<Option<EvidenceRow>> {
     let event = &book.events[event_index];
     let session = &book.imaging[session_index];
@@ -702,6 +954,7 @@ fn session_evidence(
                 .par_iter()
                 .map(|(path, _)| {
                     yield_now();
+                    frames_read.fetch_add(1, Ordering::Relaxed);
                     read_binned(path)
                 })
                 .collect()

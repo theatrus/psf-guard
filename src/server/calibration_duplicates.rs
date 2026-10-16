@@ -78,6 +78,16 @@ pub async fn repair_duplicates(
         RepairError::Failed(error) => AppError::db(error),
     })?;
     if outcome.rows_removed > 0 {
+        // The sessions a merged row was measured in are measured again
+        // from the rows kept: the rigs the plan named.
+        let rigs = crate::calibration::flat_groups::job::Rigs::of(
+            report.groups.iter().map(|group| group.rig_uuid.clone()),
+        );
+        crate::server::flat_measure::queue(
+            &state,
+            &ctx.database_path,
+            crate::calibration::flat_groups::job::Scope::flats(rigs),
+        );
         // The merged rows were peers the others were judged by, and what
         // each project's lights get may have changed.
         crate::server::calibration_quality::request(&state, &ctx.database_path);

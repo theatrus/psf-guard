@@ -102,6 +102,7 @@ import type { GuidFillReport, GuidReport,
   FlatGroupsView,
   FlatGroupUseView,
   FlatSessionPlace,
+  FlatMeasureStatus,
   FlatRatioPreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
@@ -1778,6 +1779,46 @@ export const apiClient = {
   },
 
   /** The calibration quality job's progress. */
+  /** Where flat measuring stands. The header and the page share this poll. */
+  getFlatMeasureStatus: async (dbId: string): Promise<FlatMeasureStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<FlatMeasureStatus>>(
+      dbPath(dbId, '/calibrations/flat-measure')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read flat measuring progress');
+    return data.data;
+  },
+
+  /** Say a page shows this rig's flats: its pass goes first, in the viewed
+   *  tier, for a while after each call. */
+  watchFlatMeasure: async (dbId: string, rig: string): Promise<FlatMeasureStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<FlatMeasureStatus>>(
+      dbPath(dbId, '/calibrations/flat-measure/watch'),
+      { rig }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to note the rig in view');
+    return data.data;
+  },
+
+  resumeFlatMeasure: async (dbId: string): Promise<FlatMeasureStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<FlatMeasureStatus>>(
+      dbPath(dbId, '/calibrations/flat-measure/resume')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to resume flat measuring');
+    return data.data;
+  },
+
+  cancelFlatMeasure: async (dbId: string): Promise<FlatMeasureStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<FlatMeasureStatus>>(
+      dbPath(dbId, '/calibrations/flat-measure/cancel')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to stop flat measuring');
+    return data.data;
+  },
+
   getCalibrationQuality: async (dbId: string): Promise<CalibrationQualityStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<CalibrationQualityStatus>>(

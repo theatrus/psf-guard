@@ -1,0 +1,1051 @@
+//! The flat measuring job: flat responses, comparisons and light evidence
+//! (see [`crate::calibration::flat_groups::job`]) as a tracked background
+//! job of its own, one per catalog.
+//!
+//! - **Scoped.** Each trigger queues only what it touched: the rigs whose
+//!   calibration frames an import, sync, upload, forget, merge or override
+//!   changed ([`Scope::flats`]), or, for new lights alone, light evidence
+//!   ([`Scope::lights`]). Within a rig the pass reads only sessions without
+//!   a current response, pairs not yet compared and imaging sessions whose
+//!   evidence key is new, so a catalog that is up to date reads no pixels.
+//! - **Debounced.** Requests merge, and the pass starts once they pause for
+//!   [`FLAT_MEASURE_SETTLE`], and once the catalog's grading is done (its
+//!   grades decide which flats are in use).
+//! - **Retried.** A rig a pass could not finish (flats away, lights the
+//!   folders do not show yet, an error such as a busy catalog) is tried
+//!   again after [`RETRY_FIRST`], doubling up to [`RETRY_MAX`], at most
+//!   [`RETRY_LIMIT`] times; a new change to the rig starts again.
+//! - **Stop** pauses: what was waiting or running is kept as stopped until
+//!   the next change the server is told of in this catalog, Resume, or the
+//!   next start.
+//! - **Prioritised.** A pass runs at [`Priority::Background`]. While a page
+//!   shows a rig's flats ([`watch`]) that rig goes first and runs at
+//!   [`Priority::Viewed`]: a modest share of its own, leased again for each
+//!   step, and no interactive guard. Either way it waits for interactive
+//!   work a person started before each step
+//!   ([`AppState::wait_for_interactive_work`]), and says what it waits for.
+//!   No flat path holds the interactive guard: nobody starts a pass.
+//! - **Time mode.** A rig whose flats group by time is never measured.
+//! - **Tracked.** [`status`] feeds the header's job line and the page.
+
+use crate::calibration::flat_groups::{
+    self,
+    job::{PassOutcome, Progress, Rigs, Scope, Workers},
+};
+use crate::calibration::rules::RuleBook;
+use crate::concurrency::{ComputePool, Priority};
+use crate::server::api::ApiResponse;
+use crate::server::extract::DbContext;
+use crate::server::handlers::AppError;
+use crate::server::state::AppState;
+use axum::extract::State;
+use axum::Json;
+use rusqlite::{Connection, OpenFlags};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant};
+
+/// How long requests must pause before a pass starts, so a burst of
+/// imports or uploads shares one pass.
+pub const FLAT_MEASURE_SETTLE: Duration = Duration::from_secs(5);
+
+/// How long a page's interest in a rig lasts after it last said so. The
+/// page says so more often than this while it shows the rig.
+pub const WATCH_TTL: Duration = Duration::from_secs(45);
+
+/// How often a page showing a rig asks for a check of it while the job
+/// rests: a pass that finds nothing stale reads nothing.
+pub const WATCH_RECHECK: Duration = Duration::from_secs(5 * 60);
+
+/// The wait before a rig a pass could not finish is tried again; it
+/// doubles with each try, up to [`RETRY_MAX`].
+pub const RETRY_FIRST: Duration = Duration::from_secs(60);
+
+/// The longest wait between tries.
+pub const RETRY_MAX: Duration = Duration::from_secs(30 * 60);
+
+/// Tries before a rig waits for the next change to it, or the next start.
+pub const RETRY_LIMIT: u32 = 6;
+
+/// How often a waiting pass looks again.
+const POLL: Duration = Duration::from_millis(250);
+
+/// The longest nap of the runner while it waits for a retry.
+const NAP_MAX: Duration = Duration::from_secs(1);
+
+/// How long a pass waits for the catalog's write lock.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The retry key for work on every rig.
+const EVERY_RIG: &str = "*";
+
+/// Where a catalog's flat measuring stands, for the job line and the page.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct FlatMeasureStatus {
+    /// `idle`; `queued` while requests settle, grading runs or a retry
+    /// waits; `running`; or `stopped` when Stop left work paused.
+    pub state: String,
+    /// Whether a pass found work and is doing it: what the job line shows.
+    /// A pass with nothing to read never turns active.
+    pub active: bool,
+    /// The rig being measured.
+    pub rig_uuid: Option<String>,
+    pub rig_name: Option<String>,
+    /// [`flat_groups::job::STAGE_MEASURING`] and the stages after it.
+    pub stage: Option<String>,
+    pub done: usize,
+    pub total: usize,
+    /// Rigs whose work waits or runs; `*` for every rig.
+    pub rigs: Vec<String>,
+    /// Rigs Stop paused.
+    pub stopped: Vec<String>,
+    /// When the next retry is due, Unix seconds.
+    pub retry_at: Option<i64>,
+    /// `background` or `viewed`, while running.
+    pub priority: Option<String>,
+    /// What a person started that the pass waits for, while it does: the
+    /// job line lists it as waiting.
+    pub waiting_for: Option<String>,
+    pub workers: usize,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    /// What the last finished pass did.
+    pub last: Option<PassOutcome>,
+    pub last_error: Option<String>,
+}
+
+/// Requests waiting for a pass.
+#[derive(Debug, Default)]
+struct Queue {
+    pending: Scope,
+    /// When the last request came.
+    last: Option<Instant>,
+    /// The scope of the pass running now.
+    running: Option<Scope>,
+    /// Rigs ([`EVERY_RIG`] for all) to try again, and when.
+    due: BTreeMap<String, Instant>,
+    /// Tries so far, per rig.
+    attempts: BTreeMap<String, u32>,
+    /// What Stop paused.
+    stopped: Scope,
+    /// Whether a thread serves this catalog.
+    worker: bool,
+}
+
+/// What the waiting requests allow now.
+#[derive(Debug, PartialEq)]
+enum Ready {
+    /// Nothing waits.
+    Idle,
+    /// Requests are still arriving, or a retry is not due: look again
+    /// after this.
+    Settle(Duration),
+    /// Run this.
+    Run(Scope),
+}
+
+/// Where a trigger comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Trigger {
+    /// A change to the catalog, a start or Resume: tries start again, and
+    /// stopped work resumes.
+    Change,
+    /// A page showing a rig asks for a check: it respects Stop and the
+    /// retry wait.
+    Look,
+}
+
+fn scope_of(key: &str) -> Scope {
+    if key == EVERY_RIG {
+        Scope::everything()
+    } else {
+        Scope::flats(Rigs::of([key]))
+    }
+}
+
+/// The wait before try `attempt` (1 for the first retry).
+fn backoff(attempt: u32) -> Duration {
+    let doubled = RETRY_FIRST.saturating_mul(1 << attempt.saturating_sub(1).min(16));
+    doubled.min(RETRY_MAX)
+}
+
+impl Queue {
+    fn add(&mut self, scope: Scope, now: Instant, trigger: Trigger) {
+        if trigger == Trigger::Change {
+            // A change starts the tries again and resumes what Stop paused.
+            match (&scope.flats, &scope.lights) {
+                (Rigs::All, _) | (_, Rigs::All) => {
+                    self.attempts.clear();
+                    self.due.clear();
+                }
+                _ => {
+                    for rigs in [&scope.flats, &scope.lights] {
+                        if let Rigs::Some(rigs) = rigs {
+                            for rig in rigs {
+                                self.attempts.remove(rig);
+                                self.due.remove(rig);
+                            }
+                        }
+                    }
+                }
+            }
+            let stopped = std::mem::take(&mut self.stopped);
+            self.pending.merge(stopped);
+        }
+        self.pending.merge(scope);
+        self.last = Some(now);
+    }
+
+    /// Try `key` (a rig, or [`EVERY_RIG`]) again later. False once it has
+    /// had its [`RETRY_LIMIT`] tries.
+    fn retry(&mut self, key: &str, now: Instant) -> bool {
+        let attempt = self.attempts.get(key).copied().unwrap_or(0) + 1;
+        self.attempts.insert(key.to_string(), attempt);
+        if attempt > RETRY_LIMIT {
+            self.due.remove(key);
+            return false;
+        }
+        self.due.insert(key.to_string(), now + backoff(attempt));
+        true
+    }
+
+    /// A pass finished `key` (a rig, or every rig): its tries are over.
+    fn finished(&mut self, key: &str) {
+        if key == EVERY_RIG {
+            self.attempts.clear();
+        } else {
+            self.attempts.remove(key);
+        }
+    }
+
+    /// The merged requests once they have paused for
+    /// [`FLAT_MEASURE_SETTLE`], with every retry that is due.
+    fn take_ready(&mut self, now: Instant) -> Ready {
+        let due: Vec<String> = self
+            .due
+            .iter()
+            .filter(|(_, at)| **at <= now)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in due {
+            self.due.remove(&key);
+            self.pending.merge(scope_of(&key));
+        }
+        if self.pending.is_empty() {
+            return match self.due.values().min() {
+                Some(next) => Ready::Settle(next.saturating_duration_since(now)),
+                None => Ready::Idle,
+            };
+        }
+        let quiet = self.last.map_or(FLAT_MEASURE_SETTLE, |last| {
+            now.saturating_duration_since(last)
+        });
+        if quiet < FLAT_MEASURE_SETTLE {
+            return Ready::Settle(FLAT_MEASURE_SETTLE - quiet);
+        }
+        self.last = None;
+        Ready::Run(std::mem::take(&mut self.pending))
+    }
+
+    /// Stop: what waits, what runs and what would be tried again is paused.
+    fn stop(&mut self) {
+        let mut stopped = std::mem::take(&mut self.pending);
+        if let Some(running) = &self.running {
+            stopped.merge(running.clone());
+        }
+        for key in std::mem::take(&mut self.due).into_keys() {
+            stopped.merge(scope_of(&key));
+        }
+        self.attempts.clear();
+        self.last = None;
+        self.stopped.merge(stopped);
+    }
+}
+
+#[derive(Default)]
+struct Job {
+    queue: Mutex<Queue>,
+    status: RwLock<FlatMeasureStatus>,
+    /// Set by [`cancel`]: the running pass stops at its next step.
+    cancelled: AtomicBool,
+}
+
+impl Job {
+    fn update(&self, edit: impl FnOnce(&mut FlatMeasureStatus)) {
+        edit(&mut self.status.write().unwrap_or_else(|p| p.into_inner()));
+    }
+
+    fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {
+        self.queue.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+/// One job per catalog file.
+static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
+
+fn job(path: &str) -> Arc<Job> {
+    Arc::clone(
+        JOBS.lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(path.to_string())
+            .or_default(),
+    )
+}
+
+fn rig_list(scope: &Scope) -> Vec<String> {
+    let mut rigs: Vec<String> = Vec::new();
+    for set in [&scope.flats, &scope.lights] {
+        match set {
+            Rigs::None => {}
+            Rigs::All => return vec![EVERY_RIG.into()],
+            Rigs::Some(some) => rigs.extend(some.iter().cloned()),
+        }
+    }
+    rigs.sort();
+    rigs.dedup();
+    rigs
+}
+
+fn unix_at(at: Instant) -> i64 {
+    let ahead = at.saturating_duration_since(Instant::now());
+    chrono::Utc::now().timestamp() + ahead.as_secs() as i64
+}
+
+/// Where flat measuring stands for the catalog at `path`.
+pub fn status(path: &str) -> FlatMeasureStatus {
+    let job = job(path);
+    let queue = job.queue();
+    let mut status = job.status.read().unwrap_or_else(|p| p.into_inner()).clone();
+    let mut waiting = queue.pending.clone();
+    for key in queue.due.keys() {
+        waiting.merge(scope_of(key));
+    }
+    if let Some(running) = &queue.running {
+        waiting.merge(running.clone());
+    }
+    status.rigs = rig_list(&waiting);
+    status.stopped = rig_list(&queue.stopped);
+    status.retry_at = queue.due.values().min().map(|at| unix_at(*at));
+    status.state = if queue.running.is_some() {
+        "running"
+    } else if !status.rigs.is_empty() {
+        "queued"
+    } else if !status.stopped.is_empty() {
+        "stopped"
+    } else {
+        "idle"
+    }
+    .into();
+    if queue.running.is_none() {
+        status.active = false;
+    }
+    status
+}
+
+/// Whether a pass runs over the catalog at `path`.
+pub fn running(path: &str) -> bool {
+    job(path).queue().running.is_some()
+}
+
+/// Queue flat measuring for the catalog at `path`: `scope` names the rigs
+/// whose flats or lights changed. Requests merge; the pass starts once they
+/// pause for [`FLAT_MEASURE_SETTLE`] and grading is done. A change also
+/// resumes what Stop paused.
+pub fn queue(state: &Arc<AppState>, path: &str, scope: Scope) {
+    enqueue(state, path, scope, Trigger::Change);
+}
+
+fn enqueue(state: &Arc<AppState>, path: &str, scope: Scope, trigger: Trigger) {
+    if scope.is_empty() || state.shutdown.is_stopping() {
+        return;
+    }
+    let job = job(path);
+    let spawn = {
+        let mut queue = job.queue();
+        queue.add(scope, Instant::now(), trigger);
+        !std::mem::replace(&mut queue.worker, true)
+    };
+    if !spawn {
+        return;
+    }
+    let state_for_runner = Arc::clone(state);
+    let path_for_runner = path.to_string();
+    let runner_job = Arc::clone(&job);
+    // The job's one runner per catalog: it naps while requests settle and
+    // holds the server's stop only while a pass writes.
+    let started = std::thread::Builder::new()
+        .name("flat-measure".into())
+        .spawn(move || serve(&state_for_runner, &path_for_runner, &runner_job));
+    if let Err(error) = started {
+        tracing::warn!("Could not start flat measuring: {error}");
+        job.queue().worker = false;
+    }
+}
+
+/// [`queue`] for every catalog the server holds.
+pub fn queue_all(state: &Arc<AppState>, scope: Scope) {
+    for ctx in state.all_databases() {
+        queue(state, &ctx.database_path, scope.clone());
+    }
+}
+
+/// Stop: the running pass ends at its next step, and what it and the
+/// waiting requests had left is paused until the next change to the
+/// catalog, [`resume`], or the next start.
+pub fn cancel(path: &str) -> FlatMeasureStatus {
+    let job = job(path);
+    {
+        let mut queue = job.queue();
+        queue.stop();
+        job.cancelled.store(true, Ordering::SeqCst);
+    }
+    status(path)
+}
+
+/// Take up what Stop paused.
+pub fn resume(state: &Arc<AppState>, path: &str) -> FlatMeasureStatus {
+    let stopped = std::mem::take(&mut job(path).queue().stopped);
+    queue(state, path, stopped);
+    status(path)
+}
+
+/// Resets the runner's claim if it ends without letting go, as on a panic,
+/// so the next request starts another.
+struct RunnerClaim<'a> {
+    job: &'a Job,
+    released: bool,
+}
+
+impl Drop for RunnerClaim<'_> {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let mut queue = self.job.queue();
+        queue.worker = false;
+        queue.running = None;
+        drop(queue);
+        self.job.update(|status| {
+            status.active = false;
+            status.stage = None;
+            status.priority = None;
+            status.waiting_for = None;
+            status.last_error = Some("flat measuring stopped unexpectedly".into());
+        });
+    }
+}
+
+fn serve(state: &Arc<AppState>, path: &str, job: &Job) {
+    let mut claim = RunnerClaim {
+        job,
+        released: false,
+    };
+    loop {
+        if state.shutdown.is_stopping() {
+            job.queue().worker = false;
+            claim.released = true;
+            return;
+        }
+        // Grading first: it decides which flats are in use.
+        let grading = crate::server::calibration_quality::busy(path);
+        let scope = {
+            let mut queue = job.queue();
+            match next_step(&mut queue, Instant::now(), grading) {
+                Step::Exit => {
+                    queue.worker = false;
+                    claim.released = true;
+                    return;
+                }
+                Step::Nap(wait) => {
+                    drop(queue);
+                    std::thread::sleep(wait);
+                    continue;
+                }
+                Step::Run(scope) => {
+                    queue.running = Some(scope.clone());
+                    job.cancelled.store(false, Ordering::SeqCst);
+                    scope
+                }
+            }
+        };
+        let _work = state.shutdown.hold(format!("flat measuring ({path})"));
+        run_logged(state, path, job, scope);
+    }
+}
+
+/// What the runner does next.
+#[derive(Debug, PartialEq)]
+enum Step {
+    /// Nothing waits: let go of the catalog.
+    Exit,
+    /// Look again after this.
+    Nap(Duration),
+    /// Run a pass over this.
+    Run(Scope),
+}
+
+/// The runner's choice, given the queue and whether grading is busy: a pass
+/// waits for grading, which decides the flats in use, without pushing back
+/// its settle.
+fn next_step(queue: &mut Queue, now: Instant, grading: bool) -> Step {
+    match queue.take_ready(now) {
+        Ready::Idle => Step::Exit,
+        Ready::Settle(wait) => Step::Nap(wait.clamp(POLL, NAP_MAX)),
+        Ready::Run(scope) if grading => {
+            queue.pending.merge(scope);
+            Step::Nap(POLL)
+        }
+        Ready::Run(scope) => Step::Run(scope),
+    }
+}
+
+fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope) {
+    job.update(|status| {
+        *status = FlatMeasureStatus {
+            started_at: Some(chrono::Utc::now().timestamp()),
+            last: status.last.take(),
+            ..Default::default()
+        };
+    });
+    let result = run(state, path, job, &scope);
+    let changed = settle_outcome(job, &scope, &result, Instant::now());
+    match &result {
+        Ok(outcome) => {
+            if outcome.frames_read > 0 || outcome.compared > 0 {
+                tracing::info!(
+                    "Measured flats in {path}: {} session(s), {} comparison(s), {} light \
+                     session(s), {} frame(s) read",
+                    outcome.measured,
+                    outcome.compared,
+                    outcome.evidence,
+                    outcome.frames_read
+                );
+            }
+        }
+        Err(error) => tracing::info!(
+            "Paused measuring flats in {path}: {error:#}. It is tried again shortly."
+        ),
+    }
+    job.update(|status| {
+        status.active = false;
+        status.rig_uuid = None;
+        status.rig_name = None;
+        status.stage = None;
+        status.priority = None;
+        status.waiting_for = None;
+        status.finished_at = Some(chrono::Utc::now().timestamp());
+        match result {
+            Ok(outcome) => {
+                status.last = Some(outcome);
+                status.last_error = None;
+            }
+            Err(error) => status.last_error = Some(format!("{error:#}")),
+        }
+    });
+    if changed {
+        // What each project's lights take may have changed.
+        crate::server::calibration_health::request(state, path);
+    }
+}
+
+/// Put what a pass left behind back in line: Stop's share as stopped, rigs
+/// it could not finish (or, on an error, its whole scope) as retries.
+/// Returns whether the pass changed anything health reads.
+fn settle_outcome(
+    job: &Job,
+    scope: &Scope,
+    result: &anyhow::Result<PassOutcome>,
+    now: Instant,
+) -> bool {
+    let mut queue = job.queue();
+    queue.running = None;
+    let cancelled = job.cancelled.load(Ordering::SeqCst);
+    let keys = || -> Vec<String> {
+        let rigs = rig_list(scope);
+        if rigs.is_empty() {
+            vec![EVERY_RIG.into()]
+        } else {
+            rigs
+        }
+    };
+    match result {
+        Ok(outcome) if outcome.stopped && cancelled => {
+            queue.stopped.merge(scope.clone());
+            outcome.measured + outcome.compared + outcome.evidence > 0
+        }
+        Ok(outcome) => {
+            for key in keys() {
+                if key != EVERY_RIG && !outcome.retry.contains(&key) {
+                    queue.finished(&key);
+                }
+            }
+            if rig_list(scope) == [EVERY_RIG] && outcome.retry.is_empty() {
+                queue.finished(EVERY_RIG);
+            }
+            for rig in &outcome.retry {
+                queue.retry(rig, now);
+            }
+            outcome.measured + outcome.compared + outcome.evidence > 0
+        }
+        Err(_) if cancelled => {
+            queue.stopped.merge(scope.clone());
+            true
+        }
+        Err(_) => {
+            for key in keys() {
+                queue.retry(&key, now);
+            }
+            true
+        }
+    }
+}
+
+/// One pass over the rigs `scope` names, on the server's catalog context.
+fn run(state: &AppState, path: &str, job: &Job, scope: &Scope) -> anyhow::Result<PassOutcome> {
+    let Some(ctx) = state
+        .all_databases()
+        .into_iter()
+        .find(|ctx| ctx.database_path == path)
+    else {
+        return Ok(Default::default());
+    };
+    let dir = ctx
+        .cache()
+        .ensure_category_dir(flat_groups::CACHE_CATEGORY)?;
+    flat_groups::register_response_dir(Path::new(path), dir.clone());
+    // The image folders are walked only when a light is looked for.
+    let tree = OnceLock::new();
+    let find_light = |name: &str| {
+        tree.get_or_init(|| ctx.get_directory_tree().ok())
+            .as_ref()
+            .and_then(|tree| tree.find_file_first(name).cloned())
+    };
+    run_with(state, path, job, scope, &dir, &find_light)
+}
+
+/// [`run`] with the response folder and the light lookup given: the
+/// catalog is planned once, and the rigs are measured in turn, those a
+/// page shows first.
+fn run_with(
+    state: &AppState,
+    path: &str,
+    job: &Job,
+    scope: &Scope,
+    dir: &Path,
+    find_light: &dyn Fn(&str) -> Option<PathBuf>,
+) -> anyhow::Result<PassOutcome> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    if conn.is_readonly(rusqlite::MAIN_DB)? || !flat_groups::store::tables_exist(&conn) {
+        return Ok(Default::default());
+    }
+    let names: HashMap<String, String> = flat_rigs(&conn)?.into_iter().collect();
+    let workers = PriorityWorkers::new(state, path, "", largest_flat_pixels(&conn), job);
+    let keep_going = || !state.shutdown.is_stopping() && !job.cancelled.load(Ordering::SeqCst);
+    let yield_now = || workers.yield_now();
+    let goes_first = |rig: &str| watched(path, rig);
+    let mut progress = |at: &Progress<'_>| {
+        workers.set_rig(at.rig);
+        job.update(|status| {
+            if status.rig_uuid.as_deref() != Some(at.rig) {
+                status.rig_uuid = Some(at.rig.to_string());
+                status.rig_name = names.get(at.rig).cloned();
+            }
+            status.stage = Some(at.stage.to_string());
+            status.done = at.done;
+            status.total = at.total;
+            // Work found: the job line shows it from here on.
+            status.active |= at.total > 0 && at.done < at.total;
+        });
+    };
+    flat_groups::job::run(flat_groups::job::Pass {
+        conn: &conn,
+        dir,
+        scope: scope.clone(),
+        keep_going: &keep_going,
+        yield_now: &yield_now,
+        progress: &mut progress,
+        goes_first: &goes_first,
+        find_light,
+        pool: Some(&workers),
+    })
+}
+
+/// Rigs with raw flats, and their names.
+fn flat_rigs(conn: &Connection) -> anyhow::Result<Vec<(String, String)>> {
+    let mut statement = conn.prepare(
+        "SELECT DISTINCT f.rig_uuid, COALESCE(r.name, f.rig_uuid)
+         FROM psf_guard_calibration_frame f
+         LEFT JOIN psf_guard_rig r ON r.rig_uuid = f.rig_uuid
+         WHERE f.kind = 'flat' AND f.is_master = 0
+         ORDER BY f.rig_uuid",
+    )?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// The samples in the library's largest raw flat, every channel counted:
+/// what one worker holds at once, a flat or a light of the same sensor.
+fn largest_flat_pixels(conn: &Connection) -> Option<usize> {
+    conn.query_row(
+        "SELECT MAX(width * height * COALESCE(channels, 1)) FROM psf_guard_calibration_frame
+         WHERE kind = 'flat' AND is_master = 0",
+        [],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+    .and_then(|pixels| usize::try_from(pixels).ok())
+    .filter(|pixels| *pixels > 0)
+}
+
+// ---------------------------------------------------------------------------
+// Interest: a page showing a rig lifts its pass to the viewed tier.
+
+/// Pages showing a catalog's rigs, `(catalog, rig)`, and when they last
+/// said so.
+static WATCHES: LazyLock<Mutex<HashMap<(String, String), Instant>>> =
+    LazyLock::new(Default::default);
+
+/// When a page's look last queued a check of a rig.
+static LOOKS: LazyLock<Mutex<HashMap<(String, String), Instant>>> = LazyLock::new(Default::default);
+
+/// A page shows the flats of `rig` in the catalog at `path`. For
+/// [`WATCH_TTL`] that rig goes first and runs in the viewed tier; and, at
+/// most every [`WATCH_RECHECK`], a check of it is queued, unless Stop
+/// paused it or a retry waits.
+pub fn watch(state: &Arc<AppState>, path: &str, rig: &str) {
+    let now = Instant::now();
+    watch_at(path, rig, now);
+    let key = (path.to_string(), rig.to_string());
+    {
+        let mut looks = LOOKS.lock().unwrap_or_else(|p| p.into_inner());
+        if looks
+            .get(&key)
+            .is_some_and(|at| now.saturating_duration_since(*at) < WATCH_RECHECK)
+        {
+            return;
+        }
+        looks.insert(key, now);
+    }
+    let job = job(path);
+    {
+        let queue = job.queue();
+        let paused = queue.stopped.reads_lights(rig);
+        let waiting = queue.due.contains_key(rig) || queue.due.contains_key(EVERY_RIG);
+        if paused || waiting || queue.running.is_some() {
+            return;
+        }
+    }
+    enqueue(state, path, Scope::flats(Rigs::of([rig])), Trigger::Look);
+}
+
+fn watch_at(path: &str, rig: &str, at: Instant) {
+    let mut watches = WATCHES.lock().unwrap_or_else(|p| p.into_inner());
+    watches.retain(|_, seen| at.saturating_duration_since(*seen) < WATCH_TTL);
+    watches.insert((path.to_string(), rig.to_string()), at);
+}
+
+/// Whether a page shows this rig's flats now.
+pub fn watched(path: &str, rig: &str) -> bool {
+    let now = Instant::now();
+    WATCHES
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(&(path.to_string(), rig.to_string()))
+        .is_some_and(|seen| now.saturating_duration_since(*seen) < WATCH_TTL)
+}
+
+/// The workers a pass runs on. Each step leases them again at the tier the
+/// rig's watchers ask for (viewed while a page shows it, background
+/// otherwise) and gives them back when it ends, so a person's work started
+/// meanwhile plans with its whole share; and each read first waits for
+/// interactive work a person started.
+struct PriorityWorkers<'a> {
+    state: &'a AppState,
+    path: &'a str,
+    rig: Mutex<String>,
+    frame_pixels: Option<usize>,
+    job: &'a Job,
+}
+
+impl<'a> PriorityWorkers<'a> {
+    fn new(
+        state: &'a AppState,
+        path: &'a str,
+        rig: &str,
+        frame_pixels: Option<usize>,
+        job: &'a Job,
+    ) -> Self {
+        Self {
+            state,
+            path,
+            rig: Mutex::new(rig.to_string()),
+            frame_pixels,
+            job,
+        }
+    }
+
+    fn set_rig(&self, rig: &str) {
+        let mut current = self.rig.lock().unwrap_or_else(|p| p.into_inner());
+        if *current != rig {
+            *current = rig.to_string();
+        }
+    }
+
+    /// The tier the rig's watchers ask for now.
+    fn priority(&self) -> Priority {
+        let rig = self.rig.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if watched(self.path, &rig) {
+            Priority::Viewed
+        } else {
+            Priority::Background
+        }
+    }
+
+    /// Before each read: wait for interactive work a person started,
+    /// through the shared helper, which names what the pass waits for once
+    /// the wait outlasts a passing preview. Both tiers do; neither holds
+    /// anyone else up.
+    fn yield_now(&self) {
+        self.state.wait_for_interactive_work(POLL, |waiting_for| {
+            self.job
+                .update(|status| status.waiting_for = waiting_for.map(str::to_string));
+        });
+    }
+}
+
+impl Workers for PriorityWorkers<'_> {
+    fn run(&self, work: &mut (dyn FnMut() + Send)) {
+        let priority = self.priority();
+        let budget = crate::concurrency::plan_workers(
+            None,
+            &self.state.worker_policy(),
+            priority,
+            self.frame_pixels,
+        );
+        // Leased for this step alone.
+        let lease = self.state.lease_workers(priority, budget.workers);
+        self.job.update(|status| {
+            status.priority = Some(priority.label().into());
+            status.workers = lease.workers;
+        });
+        match ComputePool::take("calibration-flat-groups", lease.workers) {
+            Ok(pool) => pool.install(work),
+            // No pool to be had: the calling thread does it.
+            Err(_) => work(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Triggers: which rigs a change touched.
+
+/// The rigs of these calibration frames, looked up by their uuids: what a
+/// forget, an override or a merge names. Read before the frames go.
+pub fn rigs_of_frames(conn: &Connection, frame_uuids: &[String]) -> Rigs {
+    if frame_uuids.is_empty() {
+        return Rigs::None;
+    }
+    let Ok(mut statement) =
+        conn.prepare("SELECT rig_uuid FROM psf_guard_calibration_frame WHERE frame_uuid = ?1")
+    else {
+        return Rigs::None;
+    };
+    let mut rigs = BTreeSet::new();
+    for uuid in frame_uuids {
+        if let Ok(rig) = statement.query_row([uuid], |row| row.get::<_, String>(0)) {
+            rigs.insert(rig);
+        }
+    }
+    Rigs::of(rigs)
+}
+
+/// Per rig, a digest of its raw calibration frames as flat measuring sees
+/// them: which frames, their files, kinds, times, and what keeps them out.
+/// Read on a connection of its own ([`rig_state_at`]), never the request
+/// connection: it scans the whole library.
+pub type RigState = BTreeMap<String, String>;
+
+/// The catalog's [`RigState`], or `None` when it cannot be read.
+pub fn rig_state(conn: &Connection) -> Option<RigState> {
+    if !crate::calibration::schema_exists(conn) {
+        return Some(RigState::new());
+    }
+    let sql = |grade: &str, join: &str| {
+        format!(
+            "SELECT f.rig_uuid, f.frame_uuid, f.source_fingerprint, f.kind, f.captured_at,
+                    f.stray_light, {grade}
+             FROM psf_guard_calibration_frame f {join}
+             WHERE f.is_master = 0
+             ORDER BY f.rig_uuid, f.frame_uuid"
+        )
+    };
+    // Without the grade table, a catalog that has not been graded yet.
+    let mut statement = conn
+        .prepare(&sql(
+            "q.grade, q.override_choice",
+            "LEFT JOIN psf_guard_calibration_frame_quality q ON q.frame_uuid = f.frame_uuid",
+        ))
+        .or_else(|_| conn.prepare(&sql("NULL, NULL", "")))
+        .ok()?;
+    let mut hashers: BTreeMap<String, Sha256> = BTreeMap::new();
+    let rows = statement
+        .query_map([], |row| {
+            let rig: String = row.get(0)?;
+            let mut text = String::new();
+            for index in 1..8 {
+                let value: rusqlite::types::Value = row.get(index)?;
+                text.push_str(&format!("{value:?}\u{1f}"));
+            }
+            Ok((rig, text))
+        })
+        .ok()?;
+    for row in rows {
+        let (rig, text) = row.ok()?;
+        hashers.entry(rig).or_default().update(text.as_bytes());
+    }
+    Some(
+        hashers
+            .into_iter()
+            .map(|(rig, hasher)| {
+                let digest: String = hasher
+                    .finalize()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                (rig, digest)
+            })
+            .collect(),
+    )
+}
+
+/// The [`RigState`] of the catalog at `path`, read on its own connection.
+pub fn rig_state_at(path: &str) -> Option<RigState> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    conn.busy_timeout(BUSY_TIMEOUT).ok()?;
+    rig_state(&conn)
+}
+
+/// The rigs whose frames differ between two states: added, gone or
+/// changed. Every rig when either could not be read.
+pub fn changed_rigs(before: Option<&RigState>, after: Option<&RigState>) -> Rigs {
+    let (Some(before), Some(after)) = (before, after) else {
+        return Rigs::All;
+    };
+    Rigs::of(
+        before
+            .keys()
+            .chain(after.keys())
+            .filter(|rig| before.get(*rig) != after.get(*rig))
+            .cloned(),
+    )
+}
+
+/// Queue the flats of the rigs a change to the catalog at `path` touched,
+/// from its state before the change (read with [`rig_state_at`]), and its
+/// lights when `lights` say new ones came. Call it off the request path.
+pub fn queue_change(state: &Arc<AppState>, path: &str, before: Option<&RigState>, lights: bool) {
+    let mut scope = Scope::flats(changed_rigs(before, rig_state_at(path).as_ref()));
+    if lights {
+        scope.merge(Scope::lights(Rigs::All));
+    }
+    queue(state, path, scope);
+}
+
+// ---------------------------------------------------------------------------
+// Settings.
+
+/// What a change of settings asks of flat measuring: the rigs whose
+/// grouping limits changed and whose flats are grouped by measurement now,
+/// or every rig when the server-wide limits changed. Their book regroups
+/// from the stored measurements on its own; a pass only reads what the new
+/// grouping lacks, as the sessions of a rig switched from time to measured,
+/// and finds nothing to read for a rig that already had it.
+pub fn rigs_to_measure_after(before: &RuleBook, after: &RuleBook) -> Rigs {
+    let global = |book: &RuleBook| flat_groups::limits_of(&book.global());
+    if global(after).measured && global(before) != global(after) {
+        return Rigs::All;
+    }
+    let rigs: BTreeSet<&str> = before.rig_uuids().chain(after.rig_uuids()).collect();
+    Rigs::of(rigs.into_iter().filter(|rig| {
+        let was = flat_groups::limits_of(&before.for_rig(rig));
+        let now = flat_groups::limits_of(&after.for_rig(rig));
+        now.measured && was != now
+    }))
+}
+
+/// Settings changed: queue measuring, in every catalog, for the rigs whose
+/// grouping changed. When grades changed too, every rig: the grading pass
+/// that follows may change which flats are in use. Reads nothing here.
+pub fn settings_changed(state: &Arc<AppState>, before: &RuleBook, after: &RuleBook) {
+    let rigs = if before.grades_differ(after) {
+        Rigs::All
+    } else {
+        rigs_to_measure_after(before, after)
+    };
+    queue_all(state, Scope::flats(rigs));
+}
+
+// ---------------------------------------------------------------------------
+// Routes.
+
+/// `GET /api/db/{db}/calibrations/flat-measure` — where flat measuring
+/// stands. The header and the page share this one poll.
+pub async fn get_status(ctx: DbContext) -> Json<ApiResponse<FlatMeasureStatus>> {
+    Json(ApiResponse::success(status(&ctx.database_path)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WatchRequest {
+    pub rig: String,
+}
+
+/// `POST /api/db/{db}/calibrations/flat-measure/watch` — a page shows this
+/// rig's flats. A hint, not a change: it lifts the rig's pass to the viewed
+/// tier for [`WATCH_TTL`] and, rate-limited, queues a check that reads
+/// nothing when nothing is stale. It takes the gate of the other display
+/// calculations (`requires_write`), so a viewer who may compute may send it.
+pub async fn post_watch(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<WatchRequest>,
+) -> Result<Json<ApiResponse<FlatMeasureStatus>>, AppError> {
+    let rig = request.rig.trim();
+    if rig.is_empty() || rig.len() > 64 {
+        return Err(AppError::BadRequest("name one rig".into()));
+    }
+    watch(&state, &ctx.database_path, rig);
+    Ok(Json(ApiResponse::success(status(&ctx.database_path))))
+}
+
+/// `POST /api/db/{db}/calibrations/flat-measure/cancel` — Stop: what runs
+/// and waits is paused until the next change, Resume, or the next start.
+pub async fn post_cancel(ctx: DbContext) -> Json<ApiResponse<FlatMeasureStatus>> {
+    Json(ApiResponse::success(cancel(&ctx.database_path)))
+}
+
+/// `POST /api/db/{db}/calibrations/flat-measure/resume` — take up what Stop
+/// paused.
+pub async fn post_resume(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<FlatMeasureStatus>> {
+    Json(ApiResponse::success(resume(&state, &ctx.database_path)))
+}
+
+#[cfg(test)]
+mod tests;

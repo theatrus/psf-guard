@@ -61,6 +61,7 @@ pub(crate) const TABLES_SQL: &str = r#"
         verdict            TEXT NOT NULL,
         detail_json        TEXT NOT NULL,
         measured_at        INTEGER NOT NULL,
+        change_key         TEXT,
         PRIMARY KEY (session_key, event_key, algorithm_version)
     );
 "#;
@@ -80,12 +81,42 @@ pub(crate) fn tables_exist(conn: &Connection) -> bool {
 /// Create the tables in a writable catalog that holds a calibration
 /// library. Safe to run twice; adds only.
 pub(crate) fn add_tables(conn: &Connection) -> Result<bool> {
-    if tables_exist(conn) || conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true) {
+    if conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true) {
+        return Ok(false);
+    }
+    if tables_exist(conn) {
+        add_change_key(conn)?;
         return Ok(false);
     }
     conn.execute_batch(TABLES_SQL)
         .context("creating the flat grouping tables")?;
     Ok(true)
+}
+
+/// The change an evidence row answers for, beside its key (which also names
+/// the maps and reference it was fitted with): a column added after the
+/// table, NULL on older rows until a pass names them.
+fn add_change_key(conn: &Connection) -> Result<()> {
+    let has = conn
+        .prepare("SELECT change_key FROM psf_guard_flat_light_evidence LIMIT 0")
+        .is_ok();
+    if !has {
+        conn.execute(
+            "ALTER TABLE psf_guard_flat_light_evidence ADD COLUMN change_key TEXT",
+            [],
+        )
+        .context("adding change_key to the light evidence table")?;
+    }
+    Ok(())
+}
+
+/// One evidence row a pass asks for now: the imaging session, the change
+/// and the key it is fitted under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EvidenceWanted {
+    pub session: String,
+    pub change: String,
+    pub key: String,
 }
 
 pub(crate) fn upsert_response(conn: &Connection, row: &ResponseRow) -> Result<()> {
@@ -171,65 +202,124 @@ pub(crate) fn load_responses(conn: &Connection) -> Result<Vec<ResponseRow>> {
     Ok(rows)
 }
 
-/// Drop evidence rows of an older fit, and those no imaging session in a
-/// change's window asks for under its current key.
+/// Keep light evidence while it may be asked for again, and no longer:
+///
+/// - a row of an older fit goes;
+/// - a row of an imaging session the catalog no longer has (`sessions`, every
+///   current one) goes, which bounds the table;
+/// - a row for a session and change the pass asks for under another key (a
+///   new map or reference) goes, since that key replaces it.
+///
+/// A row whose change is gone stays: a limit loosened and then restored, or
+/// a rig grouped by time and then by measurement again, finds it as it was
+/// and reads no light, even while the session sits in another change's
+/// window. Rows from before the change was recorded are named on the way.
 pub(crate) fn retain_evidence(
     conn: &Connection,
-    keep: &[(String, String)],
+    wanted: &[EvidenceWanted],
+    sessions: &[String],
     version: u32,
 ) -> Result<usize> {
+    add_change_key(conn)?;
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS evidence_keep (session_key TEXT, event_key TEXT,
-         PRIMARY KEY (session_key, event_key))",
+        "CREATE TEMP TABLE IF NOT EXISTS evidence_wanted (session_key TEXT, change_key TEXT,
+             event_key TEXT, PRIMARY KEY (session_key, change_key));
+         CREATE TEMP TABLE IF NOT EXISTS evidence_sessions (session_key TEXT PRIMARY KEY);
+         DELETE FROM evidence_wanted;
+         DELETE FROM evidence_sessions;",
     )?;
-    tx.execute("DELETE FROM evidence_keep", [])?;
     {
         let mut insert = tx.prepare(
-            "INSERT OR IGNORE INTO evidence_keep (session_key, event_key) VALUES (?1, ?2)",
+            "INSERT OR IGNORE INTO evidence_wanted (session_key, change_key, event_key)
+             VALUES (?1, ?2, ?3)",
         )?;
-        for (session, event) in keep {
-            insert.execute([session, event])?;
+        for row in wanted {
+            insert.execute([&row.session, &row.change, &row.key])?;
+        }
+        let mut insert =
+            tx.prepare("INSERT OR IGNORE INTO evidence_sessions (session_key) VALUES (?1)")?;
+        for session in sessions {
+            insert.execute([session])?;
         }
     }
+    // Older rows learn the change they answer for.
+    tx.execute(
+        "UPDATE psf_guard_flat_light_evidence
+         SET change_key = (SELECT w.change_key FROM evidence_wanted w
+                           WHERE w.session_key = psf_guard_flat_light_evidence.session_key
+                             AND w.event_key = psf_guard_flat_light_evidence.event_key)
+         WHERE change_key IS NULL
+           AND EXISTS (SELECT 1 FROM evidence_wanted w
+                       WHERE w.session_key = psf_guard_flat_light_evidence.session_key
+                         AND w.event_key = psf_guard_flat_light_evidence.event_key)",
+        [],
+    )?;
     let removed = tx.execute(
         "DELETE FROM psf_guard_flat_light_evidence
          WHERE algorithm_version != ?1
-            OR NOT EXISTS (SELECT 1 FROM evidence_keep k
-                           WHERE k.session_key = psf_guard_flat_light_evidence.session_key
-                             AND k.event_key = psf_guard_flat_light_evidence.event_key)",
+            OR session_key NOT IN (SELECT session_key FROM evidence_sessions)
+            OR EXISTS (SELECT 1 FROM evidence_wanted w
+                       WHERE w.session_key = psf_guard_flat_light_evidence.session_key
+                         AND w.change_key = psf_guard_flat_light_evidence.change_key
+                         AND w.event_key != psf_guard_flat_light_evidence.event_key)",
         [version],
     )?;
-    tx.execute("DELETE FROM evidence_keep", [])?;
+    tx.execute_batch("DELETE FROM evidence_wanted; DELETE FROM evidence_sessions;")?;
     tx.commit()?;
     Ok(removed)
 }
 
-/// Drop response rows no current session has, with their comparisons.
-pub(crate) fn retain_responses(conn: &Connection, keep: &[String]) -> Result<usize> {
+/// Drop the response rows of `rigs` that no current session has, then every
+/// comparison whose sessions are not both kept. Other rigs' rows stand: a
+/// pass over one rig leaves another rig's stale rows for that rig's own
+/// pass, which measures them again rather than finding them gone.
+pub(crate) fn retain_responses(
+    conn: &Connection,
+    rigs: &std::collections::BTreeSet<String>,
+    keep: &[String],
+) -> Result<usize> {
     let tx = conn.unchecked_transaction()?;
-    tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS flat_keep (key TEXT PRIMARY KEY)")?;
-    tx.execute("DELETE FROM flat_keep", [])?;
+    tx.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS flat_keep (key TEXT PRIMARY KEY);
+         CREATE TEMP TABLE IF NOT EXISTS flat_rigs (rig TEXT PRIMARY KEY);
+         DELETE FROM flat_keep;
+         DELETE FROM flat_rigs;",
+    )?;
     {
         let mut insert = tx.prepare("INSERT OR IGNORE INTO flat_keep (key) VALUES (?1)")?;
         for key in keep {
             insert.execute([key])?;
         }
+        let mut insert = tx.prepare("INSERT OR IGNORE INTO flat_rigs (rig) VALUES (?1)")?;
+        for rig in rigs {
+            insert.execute([rig])?;
+        }
     }
     let removed = tx.execute(
         "DELETE FROM psf_guard_flat_response
-         WHERE response_key NOT IN (SELECT key FROM flat_keep)",
+         WHERE rig_uuid IN (SELECT rig FROM flat_rigs)
+           AND response_key NOT IN (SELECT key FROM flat_keep)",
         [],
     )?;
     tx.execute(
         "DELETE FROM psf_guard_flat_comparison
-         WHERE earlier_key NOT IN (SELECT key FROM flat_keep)
-            OR later_key NOT IN (SELECT key FROM flat_keep)",
+         WHERE earlier_key NOT IN (SELECT response_key FROM psf_guard_flat_response)
+            OR later_key NOT IN (SELECT response_key FROM psf_guard_flat_response)",
         [],
     )?;
-    tx.execute("DELETE FROM flat_keep", [])?;
+    tx.execute_batch("DELETE FROM flat_keep; DELETE FROM flat_rigs;")?;
     tx.commit()?;
     Ok(removed)
+}
+
+/// Every response key the catalog holds: the planes to keep on disk.
+pub(crate) fn response_keys(conn: &Connection) -> Result<Vec<String>> {
+    let mut statement = conn.prepare("SELECT response_key FROM psf_guard_flat_response")?;
+    let keys = statement
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(keys)
 }
 
 /// Rename a measured session's family and session keys. Its plane and its
@@ -365,11 +455,20 @@ pub(crate) fn load_comparisons(conn: &Connection) -> Result<Vec<ComparisonRow>> 
     Ok(rows)
 }
 
-pub(crate) fn upsert_evidence(conn: &Connection, row: &EvidenceRow, version: u32) -> Result<()> {
+/// Keep what an imaging session's lights say about the change `change`
+/// (the event's key), under the evidence key in `row`.
+pub(crate) fn upsert_evidence(
+    conn: &Connection,
+    row: &EvidenceRow,
+    change: &str,
+    version: u32,
+) -> Result<()> {
+    add_change_key(conn)?;
     conn.execute(
         "INSERT OR REPLACE INTO psf_guard_flat_light_evidence
-            (session_key, event_key, algorithm_version, verdict, detail_json, measured_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (session_key, event_key, algorithm_version, verdict, detail_json, measured_at,
+             change_key)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             row.session_key,
             row.event_key,
@@ -377,6 +476,7 @@ pub(crate) fn upsert_evidence(conn: &Connection, row: &EvidenceRow, version: u32
             row.verdict.as_str(),
             serde_json::to_string(&row.fits)?,
             chrono::Utc::now().timestamp(),
+            change,
         ],
     )?;
     Ok(())
@@ -474,7 +574,143 @@ mod tests {
                 fit("L", None, Verdict::Undecided),
             ],
         };
-        upsert_evidence(&conn, &row, 1).unwrap();
+        upsert_evidence(&conn, &row, "change", 1).unwrap();
         assert_eq!(load_evidence(&conn, 1).unwrap(), vec![row]);
+    }
+
+    fn evidence_row(session: &str, key: &str) -> EvidenceRow {
+        EvidenceRow {
+            session_key: session.into(),
+            event_key: key.into(),
+            verdict: Verdict::Undecided,
+            fits: Vec::new(),
+        }
+    }
+
+    fn wanted(session: &str, change: &str, key: &str) -> EvidenceWanted {
+        EvidenceWanted {
+            session: session.into(),
+            change: change.into(),
+            key: key.into(),
+        }
+    }
+
+    fn evidence_keys(conn: &Connection) -> Vec<(String, String)> {
+        let mut statement = conn
+            .prepare(
+                "SELECT session_key, event_key FROM psf_guard_flat_light_evidence ORDER BY 1, 2",
+            )
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    /// A limit loosened until a change is gone leaves its rows waiting for
+    /// the limit to come back; a new key for the same change replaces the
+    /// old one; a session the catalog lost takes its rows with it.
+    #[test]
+    fn evidence_stays_until_replaced_or_its_session_goes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(TABLES_SQL).unwrap();
+        upsert_evidence(&conn, &evidence_row("a", "a-old"), "dust", 2).unwrap();
+        upsert_evidence(&conn, &evidence_row("a", "a-now"), "dust", 2).unwrap();
+        upsert_evidence(&conn, &evidence_row("b", "b-gone"), "corner", 2).unwrap();
+        upsert_evidence(&conn, &evidence_row("gone", "g"), "dust", 2).unwrap();
+        upsert_evidence(&conn, &evidence_row("c", "older-fit"), "dust", 1).unwrap();
+        let sessions: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        let removed =
+            retain_evidence(&conn, &[wanted("a", "dust", "a-now")], &sessions, 2).unwrap();
+        assert_eq!(removed, 3, "a's old key, the lost session, the older fit");
+        assert_eq!(
+            evidence_keys(&conn),
+            [("a".into(), "a-now".into()), ("b".into(), "b-gone".into())]
+        );
+        // Nothing in any window: nothing more goes.
+        assert_eq!(retain_evidence(&conn, &[], &sessions, 2).unwrap(), 0);
+    }
+
+    /// Review of #870: a session in the windows of two changes keeps its row
+    /// for the change a looser limit removed while the other stays, so
+    /// restoring the limit reads no light.
+    #[test]
+    fn evidence_of_a_session_still_in_another_window_stays() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(TABLES_SQL).unwrap();
+        for change in ["ha-change", "oiii-change"] {
+            upsert_evidence(&conn, &evidence_row("s", change), change, 2).unwrap();
+        }
+        // The looser limit removes the Ha change; the OIII one stays.
+        let removed = retain_evidence(
+            &conn,
+            &[wanted("s", "oiii-change", "oiii-change")],
+            &["s".to_string()],
+            2,
+        )
+        .unwrap();
+        assert_eq!(removed, 0, "the Ha row is needed when the limit comes back");
+    }
+
+    /// Rows from before the change was recorded learn it from the key a
+    /// pass asks for, and are then replaced like any other.
+    #[test]
+    fn older_evidence_rows_learn_their_change() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&TABLES_SQL.replace("        change_key         TEXT,\n", ""))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO psf_guard_flat_light_evidence
+                 (session_key, event_key, algorithm_version, verdict, detail_json, measured_at)
+             VALUES ('s', 'k1', 2, 'undecided', '[]', 0), ('s', 'old', 2, 'undecided', '[]', 0)",
+            [],
+        )
+        .unwrap();
+        let sessions = ["s".to_string()];
+        retain_evidence(&conn, &[wanted("s", "dust", "k1")], &sessions, 2).unwrap();
+        // `old` names no change it can be matched to: it stays.
+        assert_eq!(evidence_keys(&conn).len(), 2);
+        retain_evidence(&conn, &[wanted("s", "dust", "k2")], &sessions, 2).unwrap();
+        assert_eq!(
+            evidence_keys(&conn),
+            [("s".into(), "old".into())],
+            "k1 answered for dust, and k2 replaces it"
+        );
+    }
+
+    /// A pass over one rig leaves another rig's rows, stale or not, to that
+    /// rig's own pass.
+    #[test]
+    fn retaining_responses_touches_only_the_rigs_measured() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(TABLES_SQL).unwrap();
+        for (key, rig) in [("a1", "a"), ("a-stale", "a"), ("b-stale", "b")] {
+            conn.execute(
+                "INSERT INTO psf_guard_flat_response (response_key, session_key, rig_uuid,
+                     family_key, night, frame_uuids, frames, algorithm_version, measured_at)
+                 VALUES (?1, ?1, ?2, 'f', 'n', '[]', 3, 1, 0)",
+                [key, rig],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO psf_guard_flat_comparison VALUES ('a1', 'a-stale', 1, 0, 0, 0, '{}', 0)",
+            [],
+        )
+        .unwrap();
+        let rigs = std::collections::BTreeSet::from(["a".to_string()]);
+        assert_eq!(retain_responses(&conn, &rigs, &["a1".into()]).unwrap(), 1);
+        let mut keys = response_keys(&conn).unwrap();
+        keys.sort();
+        assert_eq!(keys, ["a1", "b-stale"]);
+        let pairs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM psf_guard_flat_comparison",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pairs, 0, "its pair went");
     }
 }

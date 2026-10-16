@@ -1450,9 +1450,11 @@ mod tests {
             crate::calibration::flat_groups::job::run(crate::calibration::flat_groups::job::Pass {
                 conn: &fixture.conn,
                 dir: &responses,
+                scope: crate::calibration::flat_groups::job::Scope::everything(),
                 keep_going: &|| true,
                 yield_now: &|| {},
-                progress: &mut |_, _, _| {},
+                progress: &mut |_| {},
+                goes_first: &|_| false,
                 find_light: &|_| None,
                 pool: None,
             })

@@ -3,6 +3,7 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type {
   CacheRefreshProgress,
+  FlatMeasureStatus,
   QualityBackfillStatus,
   SpatialScanStatus,
   WbppActivity,
@@ -10,6 +11,7 @@ import type {
 import { useAllDatabases, useMergedTargets } from '../../hooks/useDatabases';
 import { useStackActivity } from '../../hooks/useStackActivity';
 import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
+import { flatMeasureKey, flatMeasurePollMs } from '../calibration/flatMeasureLabel';
 import { activityItems, summarize, type DatabaseActivity, type ProjectOf } from './activityItems';
 
 export const WBPP_ACTIVITY_QUERY_KEY = ['wbpp-activity'] as const;
@@ -34,7 +36,12 @@ export interface ScanErrorNote {
 }
 
 function busy(db: DatabaseActivity): boolean {
-  return !!(db.refresh?.is_refreshing || db.scan?.progress.running || db.backfill?.progress.running);
+  return !!(
+    db.refresh?.is_refreshing
+    || db.scan?.progress.running
+    || db.backfill?.progress.running
+    || db.flats?.active
+  );
 }
 
 /**
@@ -101,12 +108,27 @@ export function useHeaderActivity() {
     })),
   });
 
+  // Flat measuring starts on its own after an import, a sync or an upload,
+  // so a quiet server keeps a slow look, as for refreshes. The Calibration
+  // page reads the same query, so one request serves both.
+  const flats = useQueries({
+    queries: databases.map((db) => ({
+      queryKey: flatMeasureKey(db.id),
+      queryFn: () => apiClient.getFlatMeasureStatus(db.id),
+      refetchInterval: (query: { state: { data?: FlatMeasureStatus } }) =>
+        flatMeasurePollMs(query.state.data),
+      refetchIntervalInBackground: false,
+      retry: false,
+    })),
+  });
+
   const perDb: DatabaseActivity[] = databases.map((db, index) => ({
     dbId: db.id,
     dbName: db.name,
     refresh: refreshes[index]?.data,
     scan: scans[index]?.data,
     backfill: backfills[index]?.data,
+    flats: flats[index]?.data,
   }));
   const items = activityItems(perDb, stacks, wbpp.data, projectOf, {
     scheduled,

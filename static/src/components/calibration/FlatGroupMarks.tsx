@@ -1,12 +1,16 @@
 import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiClient } from '../../api/client';
+import { useAccess } from '../../auth/access';
 import type {
-  CalibrationQualityProgress,
+  FlatMeasureStatus,
   FlatGroupsRig,
   FlatGroupsView,
   FlatUnmeasuredSession,
 } from '../../api/types';
 import type { FlatMark, FlatSessionPlace } from './flatGroupIndex';
 import { editFlatLimits } from './flatLimitsLink';
+import { FLAT_STAGES, flatMeasureKey, flatMeasureLabel, stoppedRig } from './flatMeasureLabel';
 import {
   eventSeenIn,
   eventSideLabel,
@@ -20,28 +24,60 @@ import {
 } from './flatGroupLabels';
 import './FlatGroups.css';
 
-export function MeasuringNote({ progress }: { progress: CalibrationQualityProgress }) {
-  const total = progress.stage_total ?? 0;
-  const counts = total > 0 ? ` ${progress.stage_done ?? 0}/${total}` : '';
+/** "Measuring flats · 12 of 40 sessions", with the rig when the page shows
+ *  several, and a word while the pass waits for a person's work. */
+export function MeasuringNote({ progress, showRig }: { progress: FlatMeasureStatus; showRig: boolean }) {
+  const extra = [
+    showRig && progress.rig_name ? progress.rig_name : null,
+    progress.waiting_for ? `waiting for ${progress.waiting_for}` : null,
+  ].filter(Boolean);
   // The counts tick every poll; the live region beside it says only when
   // the stage changes.
   return (
-    <span className="flat-groups-measuring" aria-hidden="true" data-testid="flat-groups-measuring">
+    <span className="flat-groups-measuring" aria-hidden="true" data-testid="flat-groups-measuring"
+      data-priority={progress.priority ?? undefined}>
       <span className="calibration-spinner" aria-hidden="true" />
-      Measuring flats…{counts}
-      {progress.stage && progress.stage !== 'measuring flat sessions' && (
-        <span className="calibration-muted"> · {progress.stage}</span>
-      )}
+      {flatMeasureLabel(progress)}
+      {extra.length > 0 && <span className="calibration-muted"> · {extra.join(' · ')}</span>}
     </span>
   );
 }
 
+/** Stop in the job line paused measuring: say how it comes back, and offer
+ *  to take it up now. */
+function StoppedNote({ dbId }: { dbId: string }) {
+  const access = useAccess();
+  const queryClient = useQueryClient();
+  const resume = useMutation({
+    mutationFn: () => apiClient.resumeFlatMeasure(dbId),
+    onSuccess: (status) => queryClient.setQueryData(flatMeasureKey(dbId), status),
+  });
+  return (
+    <p className="calibration-muted flat-measure-stopped" data-testid="flat-measure-stopped">
+      Flat measuring is stopped. It resumes with the next import or change to these flats, or when
+      the server starts again.
+      {access.canWrite && (
+        <>
+          {' '}
+          <button type="button" className="link-button" data-testid="flat-measure-resume"
+            disabled={resume.isPending} onClick={() => resume.mutate()}>
+            Resume now
+          </button>
+        </>
+      )}
+    </p>
+  );
+}
+
 interface FlatGroupsSummaryProps {
+  dbId: string;
   view: FlatGroupsView | undefined;
   error: Error | null;
   /** The rigs in view: the one the Rig filter chose, or every one. */
   rigs: FlatGroupsRig[];
-  progress: CalibrationQualityProgress | undefined;
+  /** The flat measuring job. */
+  progress: FlatMeasureStatus | undefined;
+  /** Whether it measures a rig in view now. */
   measuring: boolean;
   canManage: boolean;
 }
@@ -63,11 +99,11 @@ function useMeasuringAnnouncement(measuring: boolean, stage: string | null | und
     setWas(measuring);
     setFinished(was && !measuring);
   }
-  if (measuring) return `Measuring flats: ${stage ?? 'measuring flat sessions'}`;
+  if (measuring) return `Measuring flats: ${stage ?? FLAT_STAGES.measuring}`;
   return finished ? 'Flats measured; the groups are up to date.' : '';
 }
 
-export function FlatGroupsSummary({ view, error, rigs, progress, measuring, canManage }: FlatGroupsSummaryProps) {
+export function FlatGroupsSummary({ dbId, view, error, rigs, progress, measuring, canManage }: FlatGroupsSummaryProps) {
   const announcement = useMeasuringAnnouncement(measuring, progress?.stage);
   const live = (
     <span className="visually-hidden" role="status" data-testid="flat-groups-status">{announcement}</span>
@@ -82,10 +118,12 @@ export function FlatGroupsSummary({ view, error, rigs, progress, measuring, canM
   }
   if (!view) return live;
   const showName = rigs.length > 1;
+  const stopped = !measuring && stoppedRig(progress, rigs.length === 1 ? rigs[0].rig_uuid : undefined);
   return (
     <section className="flat-groups-summary" aria-label="Flat groups" data-testid="flat-groups-summary">
       {live}
-      {measuring && progress && <MeasuringNote progress={progress} />}
+      {measuring && progress && <MeasuringNote progress={progress} showRig={showName} />}
+      {stopped && <StoppedNote dbId={dbId} />}
       {!view.available && (
         <p className="calibration-muted">This catalog cannot be written, so flats are grouped by time.</p>
       )}

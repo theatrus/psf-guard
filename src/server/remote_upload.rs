@@ -264,6 +264,18 @@ pub async fn upload_image(
     // before a stack or an export relies on it, and every project's
     // calibration health is judged again, as after an import.
     crate::server::calibration_quality::note_upload(&state, &ctx.database_path);
+    // Its rig's flats once uploads pause and grading is done, or, for a
+    // light, the lights shot during a change.
+    {
+        use crate::calibration::flat_groups::job::{Rigs, Scope};
+        let response = &published.response;
+        let scope = match &response.calibration {
+            Some(calibration) => Scope::flats(Rigs::of([calibration.rig_uuid.clone()])),
+            None if response.resolution.is_some() => Scope::lights(Rigs::All),
+            None => Scope::default(),
+        };
+        crate::server::flat_measure::queue(&state, &ctx.database_path, scope);
+    }
     tracing::info!(
         "Remote image received for db={}: {} ({} bytes, sha256={})",
         ctx.id,

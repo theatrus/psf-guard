@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
   CacheRefreshProgress,
+  FlatMeasureStatus,
   QualityBackfillStatus,
   SpatialScanStatus,
   StackActivityEntry,
@@ -347,5 +348,59 @@ describe('header activity items', () => {
         detail: 'Waiting for a quality scan · 2/8 targets',
       },
     ]);
+  });
+});
+
+describe('flat measuring in the job line', () => {
+  const idle: FlatMeasureStatus = {
+    state: 'idle', active: false, rig_uuid: null, rig_name: null, stage: null, done: 0, total: 0, rigs: [],
+    stopped: [], retry_at: null, priority: null, waiting_for: null, workers: 0, started_at: null, finished_at: null,
+    last: null, last_error: null,
+  };
+  const measuring: FlatMeasureStatus = {
+    ...idle, state: 'running', active: true, rig_uuid: 'c925', rig_name: 'C925 · ASI2600', priority: 'background',
+    stage: 'measuring flat sessions', done: 12, total: 40, workers: 2,
+  };
+  const db = { dbId: 'astro', dbName: 'Observatory' };
+
+  it('shows a pass with work as an automatic job, with its rig, progress, a stop and a link', () => {
+    const [item] = activityItems([{ ...db, flats: measuring }], []);
+    expect(item).toMatchObject({
+      key: 'flats:astro',
+      kind: 'flats',
+      title: 'Measuring flats',
+      scope: 'Observatory · C925 · ASI2600',
+      detail: 'Measuring flats · 12 of 40 sessions',
+      status: 'running',
+      percent: 30,
+      automatic: true,
+      background: true,
+      stoppable: true,
+      control: { kind: 'flats', dbId: 'astro' },
+      href: '/calibration?db=astro&calKind=flat&calRig=c925',
+    });
+    expect(summarize([item])).toEqual({ count: 1, running: 1, waiting: 0, queued: 0, percent: 30 });
+  });
+
+  it('leaves out a pass that is settling, waiting for grading or has nothing to read', () => {
+    expect(activityItems([{ ...db, flats: idle }], [])).toEqual([]);
+    expect(activityItems([{ ...db, flats: { ...idle, state: 'queued', rigs: ['c925'] } }], [])).toEqual([]);
+    expect(activityItems([{ ...db, flats: { ...idle, state: 'stopped', stopped: ['c925'] } }], [])).toEqual([]);
+    expect(activityItems([{ ...db, flats: { ...measuring, active: false } }], [])).toEqual([]);
+  });
+
+  it('stays automatic when a page puts it first, and is listed as waiting while it steps aside', () => {
+    const [viewed] = activityItems([{ ...db, flats: { ...measuring, priority: 'viewed' } }], []);
+    expect(viewed.automatic).toBe(true);
+    const [waiting] = activityItems([{
+      ...db, flats: { ...measuring, stage: 'comparing flat sessions', done: 1, total: 4, waiting_for: 'a stack build' },
+    }], []);
+    expect(waiting).toMatchObject({
+      status: 'waiting',
+      waitingFor: 'a stack build',
+      detail: 'Waiting for a stack build · Comparing flats · 1 of 4 pairs',
+      percent: 25,
+    });
+    expect(summarize([waiting])).toMatchObject({ running: 0, waiting: 1 });
   });
 });

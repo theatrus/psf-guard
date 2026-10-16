@@ -98,12 +98,23 @@ const SESSIONS = [
 
 interface Seen {
   groups: number;
+  /** Polls of the flat measuring job. */
   quality: number;
+  /** The rig each poll said the page shows. */
+  watch: (string | null)[];
+  /** Resume requests. */
+  resumed: number;
   sessions: URLSearchParams[];
 }
 
+const IDLE_JOB = {
+  state: 'idle', active: false, rig_uuid: null, rig_name: null, stage: null, done: 0, total: 0, rigs: [],
+  stopped: [], retry_at: null, priority: null, waiting_for: null, workers: 0, started_at: null, finished_at: null,
+  last: null, last_error: null,
+};
+
 function serve(view: FlatGroupsView = VIEW, progress: Record<string, unknown> = {}): Seen {
-  const seen: Seen = { groups: 0, quality: 0, sessions: [] };
+  const seen: Seen = { groups: 0, quality: 0, watch: [], resumed: 0, sessions: [] };
   server.use(
     http.get('/api/info', () => ok({ version: 'test', cache_directory: '/cache', allow_database_management: true })),
     http.get('/api/databases', () => ok([
@@ -130,15 +141,17 @@ function serve(view: FlatGroupsView = VIEW, progress: Record<string, unknown> = 
       seen.groups += 1;
       return ok(view);
     }),
-    http.get('/api/db/demo/calibrations/quality', () => {
+    http.get('/api/db/demo/calibrations/flat-measure', () => {
       seen.quality += 1;
-      return ok({
-        progress: {
-          running: false, stage: null, to_measure: 0, done: 0, workers: 0, started_at: null, finished_at: null,
-          stage_done: 0, stage_total: 0, last_flat_groups: null, ...progress,
-        },
-        counts: {},
-      });
+      return ok({ ...IDLE_JOB, ...progress });
+    }),
+    http.post('/api/db/demo/calibrations/flat-measure/watch', async ({ request }) => {
+      seen.watch.push(((await request.json()) as { rig: string }).rig);
+      return ok({ ...IDLE_JOB, ...progress });
+    }),
+    http.post('/api/db/demo/calibrations/flat-measure/resume', () => {
+      seen.resumed += 1;
+      return ok({ ...IDLE_JOB });
     }),
     http.post('/api/db/demo/calibrations/generation-status', () => ok({ statuses: [] })),
   );
@@ -473,28 +486,30 @@ describe('Flat groups in Frames', () => {
     const poll = { ...FLAT_POLL_MS };
     FLAT_POLL_MS.running = 50;
     try {
-      let progress: Record<string, unknown> = { running: true, stage: 'measuring flat sessions', stage_done: 3, stage_total: 12 };
-      server.use(http.get('/api/db/demo/calibrations/quality', () => {
+      const running = { state: 'running', active: true, rig_uuid: 'rig', rig_name: 'UltraCat · ASI6200', priority: 'background' };
+      let progress: Record<string, unknown> = { ...running, stage: 'measuring flat sessions', done: 12, total: 40 };
+      server.use(http.get('/api/db/demo/calibrations/flat-measure', () => {
         seen.quality += 1;
-        return ok({ progress: { to_measure: 0, done: 0, workers: 1, started_at: null, finished_at: null, ...progress }, counts: {} });
+        return ok({ ...IDLE_JOB, ...progress });
       }));
       renderPage('/calibration?db=demo&calKind=flat&calSession=s-r0916');
-      expect(await screen.findByTestId('flat-groups-measuring')).toHaveTextContent('Measuring flats… 3/12');
+      expect(await screen.findByTestId('flat-groups-measuring')).toHaveTextContent('Measuring flats · 12 of 40 sessions');
       expect(screen.getByTestId('flat-groups-status')).toHaveAttribute('role', 'status');
       expect(screen.getByTestId('flat-groups-status')).toHaveTextContent('Measuring flats: measuring flat sessions');
       await waitFor(() => expect(seen.groups).toBe(1));
 
       // Later stages name themselves; the live region changes with the
       // stage, not with each count.
-      progress = { running: true, stage: 'comparing flat sessions', stage_done: 4, stage_total: 9 };
-      await waitFor(() => expect(screen.getByTestId('flat-groups-measuring')).toHaveTextContent('Measuring flats… 4/9 · comparing flat sessions'));
+      progress = { ...running, stage: 'comparing flat sessions', done: 4, total: 9 };
+      await waitFor(() => expect(screen.getByTestId('flat-groups-measuring')).toHaveTextContent('Comparing flats · 4 of 9 pairs'));
       expect(screen.getByTestId('flat-groups-status')).toHaveTextContent('Measuring flats: comparing flat sessions');
-      progress = { running: true, stage: 'reading lights shot during a change', stage_done: 1, stage_total: 2 };
-      await waitFor(() => expect(screen.getByTestId('flat-groups-measuring')).toHaveTextContent('· reading lights shot during a change'));
+      progress = { ...running, stage: 'reading lights shot during a change', done: 1, total: 2, waiting_for: 'a stack build' };
+      await waitFor(() => expect(screen.getByTestId('flat-groups-measuring')).toHaveTextContent(
+        'Reading lights shot during a change · 1 of 2 sessions · waiting for a stack build'));
 
       // The pass ends; the next poll finds it done and the groups are read again.
       const polls = seen.quality;
-      progress = { running: false, stage: null, finished_at: 1760000000 };
+      progress = { state: 'idle', active: false, finished_at: 1760000000 };
       await waitFor(() => expect(screen.queryByTestId('flat-groups-measuring')).toBeNull());
       expect(screen.getByTestId('flat-groups-status')).toHaveTextContent('Flats measured; the groups are up to date.');
       await waitFor(() => expect(seen.groups).toBe(2));
@@ -504,5 +519,35 @@ describe('Flat groups in Frames', () => {
     } finally {
       Object.assign(FLAT_POLL_MS, poll);
     }
+  });
+
+  it('tells the server which rig the page shows, and leaves out another rig\'s pass', async () => {
+    const other = { state: 'running', active: true, rig_uuid: 'redcat', rig_name: 'RedCat', stage: 'measuring flat sessions', done: 2, total: 5 };
+    const seen = serve(VIEW, other);
+    renderPage('/calibration?db=demo&calKind=flat&calRig=rig');
+    await waitFor(() => expect(seen.groups).toBe(1));
+    await waitFor(() => expect(seen.watch).toContain('rig'));
+    expect(screen.queryByTestId('flat-groups-measuring')).toBeNull();
+  });
+
+  it('lifts no rig when every rig is in view, and still shows the pass', async () => {
+    const seen = serve(VIEW, {
+      state: 'running', active: true, rig_uuid: 'rig', rig_name: 'UltraCat · ASI6200',
+      stage: 'measuring flat sessions', done: 12, total: 40, priority: 'background',
+    });
+    renderPage('/calibration?db=demo&calKind=flat');
+    expect(await screen.findByTestId('flat-groups-measuring')).toHaveTextContent('Measuring flats · 12 of 40 sessions');
+    expect(screen.getByTestId('flat-groups-measuring')).toHaveAttribute('data-priority', 'background');
+    expect(seen.watch).toEqual([]);
+  });
+
+  it('says Stop paused measuring, how it comes back, and resumes it on request', async () => {
+    const seen = serve(VIEW, { state: 'stopped', stopped: ['rig'] });
+    renderPage('/calibration?db=demo&calKind=flat&calRig=rig');
+    const note = await screen.findByTestId('flat-measure-stopped');
+    expect(note).toHaveTextContent('Flat measuring is stopped. It resumes with the next import or change to these flats');
+    fireEvent.click(screen.getByTestId('flat-measure-resume'));
+    await waitFor(() => expect(seen.resumed).toBe(1));
+    await waitFor(() => expect(screen.queryByTestId('flat-measure-stopped')).toBeNull());
   });
 });

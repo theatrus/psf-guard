@@ -1,0 +1,704 @@
+use super::*;
+use crate::calibration::flat_groups::job::{Rigs, Scope};
+use crate::calibration::flat_groups::{metric, store};
+use crate::calibration::import_calibration_frames;
+use crate::calibration::test_frames::write_frame_with;
+use crate::commands::import::headers::{read_frame_meta, FrameMeta};
+use crate::server::extract::DbContext;
+use axum::extract::State;
+use axum::Json;
+use serde_json::json;
+
+const SIZE: (usize, usize) = (240, 160);
+/// A shadow some mornings carry.
+const DUST: (f32, f32, f32, f32) = (120.0, 70.0, 16.0, 0.03);
+
+/// One morning's three flats on a camera, dusty or not.
+fn session(
+    dir: &Path,
+    name: &str,
+    camera: &str,
+    captured: &str,
+    dusty: bool,
+    seed: u64,
+) -> Vec<FrameMeta> {
+    let dust: &[(f32, f32, f32, f32)] = if dusty { &[DUST] } else { &[] };
+    (0..3)
+        .map(|index| {
+            let path = dir.join(format!("{name}-{index}.fits"));
+            let plane = metric::tests::synthetic(
+                SIZE.0,
+                SIZE.1,
+                dust,
+                0.0,
+                &[],
+                0.0005,
+                seed * 10 + index as u64,
+            );
+            let at = format!("{captured}:0{index}");
+            write_frame_with(&path, "FLAT", SIZE, &at, &["ROTATANG= 0.0"], |x, y| {
+                30_000.0 * f64::from(plane.data[y * SIZE.0 + x])
+            });
+            let mut meta = read_frame_meta(&path);
+            meta.filter = Some("Ha".into());
+            meta.rotator_position = Some(0.0);
+            meta.camera = Some(camera.into());
+            meta
+        })
+        .collect()
+}
+
+fn import(conn: &mut Connection, frames: &[FrameMeta]) {
+    let tx = conn.transaction().unwrap();
+    import_calibration_frames(&tx, frames, Some("profile")).unwrap();
+    tx.commit().unwrap();
+}
+
+fn rig_of(conn: &Connection, camera: &str) -> String {
+    conn.query_row(
+        "SELECT rig_uuid FROM psf_guard_rig WHERE camera = ?1",
+        [camera],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+fn test_state() -> AppState {
+    AppState::new_for_test(Connection::open_in_memory().unwrap())
+}
+
+/// Settings are per thread in tests; the lock keeps them from other tests
+/// that change the process's.
+fn settings_lock() -> std::sync::MutexGuard<'static, ()> {
+    crate::calibration::tests::POLICY_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A catalog with two rigs, two mornings each: new dust on rig A's second.
+struct Library {
+    _temp: tempfile::TempDir,
+    root: PathBuf,
+    path: String,
+    dir: PathBuf,
+    conn: Connection,
+    a: String,
+    b: String,
+}
+
+fn library() -> Library {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_path_buf();
+    let path = root.join("catalog.sqlite");
+    let mut conn = Connection::open(&path).unwrap();
+    let mut frames = session(&root, "a1", "CamA", "2026-09-10T14:00", false, 1);
+    frames.extend(session(&root, "a2", "CamA", "2026-09-14T14:00", true, 2));
+    frames.extend(session(&root, "b1", "CamB", "2026-09-10T14:30", false, 3));
+    frames.extend(session(&root, "b2", "CamB", "2026-09-14T14:30", false, 4));
+    import(&mut conn, &frames);
+    store::add_tables(&conn).unwrap();
+    let (a, b) = (rig_of(&conn, "CamA"), rig_of(&conn, "CamB"));
+    assert_ne!(a, b);
+    Library {
+        dir: root.join("responses"),
+        path: path.to_string_lossy().into_owned(),
+        _temp: temp,
+        root,
+        conn,
+        a,
+        b,
+    }
+}
+
+impl Library {
+    fn pass(&self, state: &AppState, job: &Job, scope: Scope) -> PassOutcome {
+        run_with(state, &self.path, job, &scope, &self.dir, &|_| None).unwrap()
+    }
+
+    fn measured_rigs(&self) -> Vec<String> {
+        let mut rigs: Vec<String> = store::load_responses(&self.conn)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.rig_uuid)
+            .collect();
+        rigs.sort();
+        rigs.dedup();
+        rigs
+    }
+}
+
+#[test]
+fn requests_settle_into_one_pass() {
+    let start = Instant::now();
+    let mut queue = Queue::default();
+    assert_eq!(queue.take_ready(start), Ready::Idle);
+    // A burst of three imports, a second apart, each touching its rig.
+    for (second, rig) in [(0, "a"), (1, "b"), (2, "a")] {
+        queue.add(
+            Scope::flats(Rigs::of([rig])),
+            start + Duration::from_secs(second),
+            Trigger::Change,
+        );
+    }
+    queue.add(
+        Scope::lights(Rigs::All),
+        start + Duration::from_secs(2),
+        Trigger::Change,
+    );
+    let last = start + Duration::from_secs(2);
+    assert_eq!(
+        queue.take_ready(last + Duration::from_secs(1)),
+        Ready::Settle(FLAT_MEASURE_SETTLE - Duration::from_secs(1)),
+        "still settling after the last request"
+    );
+    assert_eq!(
+        queue.take_ready(last + FLAT_MEASURE_SETTLE),
+        Ready::Run(Scope {
+            flats: Rigs::of(["a", "b"]),
+            lights: Rigs::All,
+        }),
+        "one pass for the burst"
+    );
+    assert_eq!(
+        queue.take_ready(last + FLAT_MEASURE_SETTLE * 2),
+        Ready::Idle
+    );
+}
+
+#[test]
+fn a_trigger_touches_only_its_rig_and_sessions() {
+    let _settings = settings_lock();
+    let mut library = library();
+    let state = test_state();
+    let job = Job::default();
+    let first = library.pass(&state, &job, Scope::everything());
+    assert_eq!((first.measured, first.compared), (4, 2));
+
+    // New flats arrive for both rigs, but the import touched rig A only:
+    // rig B's arrived behind the catalog's back, as from N.I.N.A.
+    let before = rig_state(&library.conn);
+    let root = library.root.clone();
+    import(
+        &mut library.conn,
+        &session(&root, "a3", "CamA", "2026-09-18T14:00", true, 5),
+    );
+    let after = rig_state(&library.conn);
+    let touched = changed_rigs(before.as_ref(), after.as_ref());
+    assert_eq!(touched, Rigs::of([library.a.clone()]));
+    import(
+        &mut library.conn,
+        &session(&root, "b3", "CamB", "2026-09-18T14:30", false, 6),
+    );
+
+    let outcome = library.pass(&state, &job, Scope::flats(touched));
+    assert_eq!(outcome.measured, 1, "rig A's new morning alone");
+    assert_eq!(outcome.frames_read, 3, "its three flats, nothing else");
+    assert!(outcome.compared >= 1);
+    let sessions_of = |rig: &str| {
+        store::load_responses(&library.conn)
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.rig_uuid == rig)
+            .count()
+    };
+    assert_eq!(sessions_of(&library.a), 3);
+    assert_eq!(
+        sessions_of(&library.b),
+        2,
+        "rig B waits for its own trigger"
+    );
+
+    // New lights alone ask only for evidence: no flat is read.
+    let lights = library.pass(&state, &job, Scope::lights(Rigs::All));
+    assert_eq!(
+        (lights.measured, lights.compared, lights.frames_read),
+        (0, 0, 0)
+    );
+    assert_eq!(sessions_of(&library.b), 2);
+}
+
+#[test]
+fn forgetting_a_flat_measures_only_its_session_again() {
+    let _settings = settings_lock();
+    let mut library = library();
+    let state = test_state();
+    let job = Job::default();
+    library.pass(&state, &job, Scope::everything());
+    // A fourth flat on rig A's first morning, then forgotten again: the
+    // session keeps three.
+    let uuid: String = library
+        .conn
+        .query_row(
+            "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE source_path LIKE '%a2-0.fits'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    // As the route does: the frame's rig, read before it goes.
+    let touched = rigs_of_frames(&library.conn, std::slice::from_ref(&uuid));
+    crate::calibration::forget_frame(&mut library.conn, &uuid).unwrap();
+    assert_eq!(touched, Rigs::of([library.a.clone()]));
+    let outcome = library.pass(&state, &job, Scope::flats(touched));
+    // Two flats are too few: the session waits, and nothing else is read.
+    assert_eq!((outcome.measured, outcome.frames_read), (0, 0));
+    assert_eq!(library.measured_rigs().len(), 2);
+}
+
+#[test]
+fn a_catalog_up_to_date_reads_no_pixels() {
+    let _settings = settings_lock();
+    let library = library();
+    let state = test_state();
+    let job = Job::default();
+    let first = library.pass(&state, &job, Scope::everything());
+    assert_eq!(first.frames_read, 12);
+    // A restart asks for everything unfinished or stale: there is none.
+    let job = Job::default();
+    let start = library.pass(&state, &job, Scope::everything());
+    assert_eq!(
+        (
+            start.measured,
+            start.compared,
+            start.evidence,
+            start.frames_read
+        ),
+        (0, 0, 0, 0)
+    );
+    assert!(!job.status.read().unwrap().active, "never shown as work");
+}
+
+#[test]
+fn a_rig_grouped_by_time_is_not_measured_until_it_is_switched() {
+    let _settings = settings_lock();
+    let library = library();
+    let state = test_state();
+    let job = Job::default();
+    let before = crate::calibration::rule_book();
+    {
+        let _time = crate::calibration::tests::RulesInForce::with(
+            &[],
+            &[(library.a.as_str(), "A", &[("flat_grouping", json!("time"))])],
+        );
+        let time = crate::calibration::rule_book();
+        // Switching to time asks nothing of the job.
+        assert_eq!(rigs_to_measure_after(&before, &time), Rigs::None);
+        let outcome = library.pass(&state, &job, Scope::everything());
+        assert_eq!(
+            (outcome.measured, outcome.frames_read),
+            (2, 6),
+            "rig B only"
+        );
+        assert_eq!(library.measured_rigs(), std::slice::from_ref(&library.b));
+
+        // Back to measured: rig A alone is queued, and measured.
+        let _measured = crate::calibration::tests::RulesInForce::global(&[]);
+        let measured = crate::calibration::rule_book();
+        let rigs_now = rigs_to_measure_after(&time, &measured);
+        assert_eq!(rigs_now, Rigs::of([library.a.clone()]));
+        let outcome = library.pass(&state, &job, Scope::flats(rigs_now));
+        assert_eq!((outcome.measured, outcome.frames_read), (2, 6));
+    }
+}
+
+#[test]
+fn a_grouping_limit_regroups_without_grading_or_reading() {
+    let _settings = settings_lock();
+    let library = library();
+    let state = test_state();
+    let job = Job::default();
+    library.pass(&state, &job, Scope::everything());
+    let book = flat_groups::load_book(&library.conn).unwrap();
+    assert_eq!(book.events.len(), 1, "rig A's new dust splits its mornings");
+
+    let before = crate::calibration::rule_book();
+    let _loose =
+        crate::calibration::tests::RulesInForce::global(&[("flat_split_dust_pct", json!(10.0))]);
+    let after = crate::calibration::rule_book();
+    assert!(!before.grades_differ(&after), "no regrade");
+    // Regrouped from the stored rows, on read.
+    let book = flat_groups::load_book(&library.conn).unwrap();
+    assert!(book.events.is_empty(), "the same mornings, one group now");
+    // A server-wide limit asks for every rig; the pass finds nothing to read.
+    let rigs = rigs_to_measure_after(&before, &after);
+    assert_eq!(rigs, Rigs::All);
+    let outcome = library.pass(&state, &job, Scope::flats(rigs));
+    assert_eq!(
+        (outcome.measured, outcome.compared, outcome.frames_read),
+        (0, 0, 0)
+    );
+}
+
+/// A pass over rig A leaves rig B's stale rows for B's own pass, which
+/// measures them again rather than finding them gone.
+#[test]
+fn a_pass_over_one_rig_leaves_another_rigs_rows() {
+    let _settings = settings_lock();
+    let library = library();
+    let state = test_state();
+    let job = Job::default();
+    library.pass(&state, &job, Scope::everything());
+    // One of rig B's files changed under the catalog: its session's key is
+    // new, and its old row stale.
+    library
+        .conn
+        .execute(
+            "UPDATE psf_guard_calibration_frame SET source_fingerprint = 'changed'
+             WHERE source_path LIKE '%b1-0.fits'",
+            [],
+        )
+        .unwrap();
+    let rows_of = |rig: &str| {
+        store::load_responses(&library.conn)
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.rig_uuid == rig)
+            .count()
+    };
+    let a = library.pass(&state, &job, Scope::flats(Rigs::of([library.a.clone()])));
+    assert_eq!(a.frames_read, 0);
+    assert_eq!(rows_of(&library.b), 2, "B's stale row waits for B's pass");
+    let b = library.pass(&state, &job, Scope::flats(Rigs::of([library.b.clone()])));
+    assert_eq!((b.measured, b.frames_read), (1, 3));
+    assert_eq!(rows_of(&library.b), 2, "the stale row replaced");
+}
+
+// ---------------------------------------------------------------------------
+// The runner: retries, Stop, grading, triggers.
+
+#[test]
+fn a_rig_left_unfinished_is_tried_again_later_and_less_often() {
+    let start = Instant::now();
+    let mut queue = Queue::default();
+    assert!(queue.retry("a", start));
+    assert_eq!(queue.take_ready(start), Ready::Settle(RETRY_FIRST));
+    assert_eq!(
+        queue.take_ready(start + RETRY_FIRST),
+        Ready::Run(Scope::flats(Rigs::of(["a"]))),
+        "due: it runs without waiting for a settle"
+    );
+    // Each try waits twice as long, up to the most.
+    let mut waits = Vec::new();
+    for attempt in 2..=RETRY_LIMIT {
+        assert!(queue.retry("a", start));
+        waits.push(queue.due["a"] - start);
+        assert_eq!(backoff(attempt), waits[waits.len() - 1]);
+    }
+    assert_eq!(waits[0], RETRY_FIRST * 2);
+    assert!(waits.windows(2).all(|pair| pair[1] >= pair[0]));
+    assert!(waits.iter().all(|wait| *wait <= RETRY_MAX));
+    assert_eq!(backoff(20), RETRY_MAX);
+    // Then it waits for a change.
+    assert!(!queue.retry("a", start), "past the limit");
+    assert!(!queue.due.contains_key("a"));
+    queue.add(Scope::flats(Rigs::of(["a"])), start, Trigger::Change);
+    assert!(!queue.attempts.contains_key("a"), "a change starts again");
+    assert!(queue.retry("a", start));
+    assert_eq!(queue.due["a"] - start, RETRY_FIRST);
+    // A pass that finishes it ends its tries.
+    queue.finished("a");
+    assert!(!queue.attempts.contains_key("a"));
+}
+
+#[test]
+fn a_pass_waits_for_grading_without_pushing_its_settle_back() {
+    let start = Instant::now();
+    let mut queue = Queue::default();
+    queue.add(Scope::flats(Rigs::of(["a"])), start, Trigger::Change);
+    let ready = start + FLAT_MEASURE_SETTLE;
+    assert_eq!(next_step(&mut queue, ready, true), Step::Nap(POLL));
+    assert!(!queue.pending.is_empty(), "back in line");
+    // Grading done: it runs at once.
+    assert_eq!(
+        next_step(&mut queue, ready + POLL, false),
+        Step::Run(Scope::flats(Rigs::of(["a"])))
+    );
+    assert_eq!(next_step(&mut queue, ready + POLL, false), Step::Exit);
+    // A retry not yet due naps, at most a second at a time.
+    queue.retry("a", ready);
+    assert_eq!(next_step(&mut queue, ready, false), Step::Nap(NAP_MAX));
+}
+
+/// Review of #870: flats that are away (an unmounted share) leave their
+/// rig queued for another try, not dropped until a restart.
+#[test]
+fn an_unreadable_session_is_queued_again() {
+    let _settings = settings_lock();
+    let library = library();
+    let away: Vec<(PathBuf, PathBuf)> = (0..3)
+        .map(|i| {
+            let file = library.root.join(format!("a2-{i}.fits"));
+            (file.clone(), file.with_extension("away"))
+        })
+        .collect();
+    for (file, moved) in &away {
+        std::fs::rename(file, moved).unwrap();
+    }
+    let state = Arc::new(
+        AppState::new(
+            library.path.clone(),
+            vec![library.root.to_string_lossy().into_owned()],
+            library.root.join("cache").to_string_lossy().into_owned(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    let path = state.all_databases()[0].database_path.clone();
+    queue(&state, &path, Scope::flats(Rigs::of([library.a.clone()])));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while status(&path).finished_at.is_none() {
+        assert!(Instant::now() < deadline, "the pass never ran");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let after = status(&path);
+    assert_eq!(after.last.as_ref().unwrap().unreadable, 1, "{after:?}");
+    assert!(after.last.as_ref().unwrap().retry.contains(&library.a));
+    // The share comes back; the rig waits for its next try.
+    for (file, moved) in &away {
+        std::fs::rename(moved, file).unwrap();
+    }
+    let now = status(&path);
+    assert_eq!(now.state, "queued", "{now:?}");
+    assert_eq!(now.rigs, std::slice::from_ref(&library.a));
+    assert!(now.retry_at.is_some());
+    cancel(&path);
+}
+
+/// Stop pauses what runs and what waits; a later change resumes it.
+#[test]
+fn a_stopped_pass_resumes_with_the_next_change() {
+    let _settings = settings_lock();
+    let library = library();
+    let state = test_state();
+    let job = Job::default();
+    let scope = Scope::everything();
+    // Stop arrives as the pass starts.
+    job.queue().running = Some(scope.clone());
+    job.queue().stop();
+    job.cancelled.store(true, Ordering::SeqCst);
+    let result = Ok(library.pass(&state, &job, scope.clone()));
+    let outcome = result.as_ref().unwrap();
+    assert!(outcome.stopped);
+    assert_eq!(outcome.frames_read, 0, "nothing read after Stop");
+    settle_outcome(&job, &scope, &result, Instant::now());
+    {
+        let mut queue = job.queue();
+        assert_eq!(queue.stopped, Scope::everything(), "paused, not forgotten");
+        assert_eq!(queue.take_ready(Instant::now()), Ready::Idle);
+    }
+    // A page's look does not resume it; a change does.
+    let now = Instant::now();
+    job.queue()
+        .add(Scope::flats(Rigs::of(["x"])), now, Trigger::Look);
+    assert_eq!(job.queue().stopped, Scope::everything());
+    job.queue()
+        .add(Scope::flats(Rigs::of(["x"])), now, Trigger::Change);
+    let resumed = match job.queue().take_ready(now + FLAT_MEASURE_SETTLE) {
+        Ready::Run(scope) => scope,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(resumed, Scope::everything());
+    job.cancelled.store(false, Ordering::SeqCst);
+    let outcome = library.pass(&state, &job, resumed);
+    assert_eq!((outcome.measured, outcome.stopped), (4, false));
+}
+
+#[test]
+fn a_runner_that_panics_lets_go_of_the_catalog() {
+    let job = Job::default();
+    {
+        let mut queue = job.queue();
+        queue.worker = true;
+        queue.running = Some(Scope::everything());
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _claim = RunnerClaim {
+            job: &job,
+            released: false,
+        };
+        panic!("a pass blew up");
+    }));
+    assert!(result.is_err());
+    let queue = job.queue();
+    assert!(!queue.worker, "the next request starts a runner");
+    assert!(queue.running.is_none());
+    drop(queue);
+    assert!(job.status.read().unwrap().last_error.is_some());
+}
+
+/// A forget through its route queues the forgotten frame's rig alone.
+#[tokio::test]
+async fn forgetting_through_the_route_queues_its_rig() {
+    let library = library();
+    let state = Arc::new(
+        AppState::new(
+            library.path.clone(),
+            vec![library.root.to_string_lossy().into_owned()],
+            library.root.join("cache").to_string_lossy().into_owned(),
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    let ctx = state.all_databases()[0].clone();
+    let path = ctx.database_path.clone();
+    let uuid: String = library
+        .conn
+        .query_row(
+            "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE source_path LIKE '%b2-0.fits'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let _ = crate::server::handlers::forget_calibration_frames(
+        State(Arc::clone(&state)),
+        DbContext(ctx),
+        Json(crate::server::handlers::ForgetCalibrationFramesRequest {
+            frame_uuids: vec![uuid],
+        }),
+    )
+    .await
+    .unwrap();
+    let queued = status(&path);
+    assert_eq!(queued.rigs, std::slice::from_ref(&library.b), "{queued:?}");
+    cancel(&path);
+}
+
+// ---------------------------------------------------------------------------
+// Tiers: a page lifts a rig's pass without holding up the person.
+
+/// Review of #870: a pass a page lifts leases a share of its own, step by
+/// step, and holds no interactive guard, so a stack the person starts
+/// meanwhile plans with its whole share and nothing waits for the pass.
+#[test]
+fn a_viewed_pass_leaves_a_persons_stack_its_share() {
+    let state = test_state();
+    let job = Job::default();
+    let path = "/viewed/catalog.sqlite";
+    let state_arc = Arc::new(test_state());
+    watch(&state_arc, path, "rig-a");
+    assert!(watched(path, "rig-a"));
+    assert!(
+        !watched(path, "rig-b"),
+        "another rig stays in the background"
+    );
+    let workers = PriorityWorkers::new(&state, path, "rig-a", None, &job);
+    let stack_share =
+        crate::concurrency::plan_workers(None, &state.worker_policy(), Priority::Interactive, None)
+            .workers;
+    let mut seen = None;
+    workers.run(&mut || {
+        let stack = state.lease_workers(Priority::Interactive, stack_share);
+        seen = Some((stack.workers, state.interactive_job_active()));
+    });
+    assert_eq!(
+        seen,
+        Some((stack_share, false)),
+        "the stack's whole share, and no guard"
+    );
+    assert_eq!(
+        job.status.read().unwrap().priority.as_deref(),
+        Some("viewed")
+    );
+    // Between steps the pass holds nothing.
+    assert_eq!(state.leased_workers(Priority::Viewed), 0);
+
+    // The page goes: the next step is background again.
+    watch_at(
+        path,
+        "rig-a",
+        Instant::now() - WATCH_TTL - Duration::from_secs(1),
+    );
+    assert!(!watched(path, "rig-a"));
+    workers.run(&mut || {});
+    assert_eq!(
+        job.status.read().unwrap().priority.as_deref(),
+        Some("background")
+    );
+}
+
+/// Both tiers wait for interactive work a person started.
+#[test]
+fn a_pass_waits_for_the_persons_work_at_either_tier() {
+    for watch_it in [false, true] {
+        let state = Arc::new(test_state());
+        let job = Arc::new(Job::default());
+        let path = if watch_it {
+            "/waits/viewed.sqlite"
+        } else {
+            "/waits/background.sqlite"
+        };
+        if watch_it {
+            watch(&state, path, "rig");
+        }
+        let preview = state.begin_named_interactive_job("a preview");
+        let waiter = {
+            let (state, job) = (Arc::clone(&state), Arc::clone(&job));
+            std::thread::spawn(move || {
+                PriorityWorkers::new(&state, path, "rig", None, &job).yield_now();
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while job.status.read().unwrap().waiting_for.is_none() {
+            assert!(Instant::now() < deadline, "the pass never waited");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!waiter.is_finished(), "the person's work comes first");
+        assert_eq!(
+            job.status.read().unwrap().waiting_for.as_deref(),
+            Some("a preview")
+        );
+        drop(preview);
+        waiter.join().unwrap();
+        assert_eq!(job.status.read().unwrap().waiting_for, None);
+    }
+}
+
+/// A page's look queues a check of its rig at most every
+/// [`WATCH_RECHECK`], and never one Stop paused.
+#[test]
+fn a_page_looking_at_a_rig_asks_for_a_check_now_and_then() {
+    let state = Arc::new(test_state());
+    let path = "/looks/catalog.sqlite";
+    // The rig is paused: a look queues nothing.
+    job(path).queue().stopped = Scope::flats(Rigs::of(["paused"]));
+    watch(&state, path, "paused");
+    assert!(job(path).queue().pending.is_empty());
+    assert!(watched(path, "paused"), "though it still lifts the rig");
+    // An idle rig: one check, then none until WATCH_RECHECK.
+    watch(&state, path, "rig");
+    let first = job(path).queue().pending.clone();
+    assert_eq!(first, Scope::flats(Rigs::of(["rig"])));
+    job(path).queue().pending = Scope::default();
+    watch(&state, path, "rig");
+    assert!(job(path).queue().pending.is_empty(), "rate-limited");
+    cancel(path);
+}
+
+#[test]
+fn every_rig_counts_as_changed_when_a_state_cannot_be_read() {
+    let state = RigState::from([("a".to_string(), "1".to_string())]);
+    assert_eq!(changed_rigs(None, Some(&state)), Rigs::All);
+    assert_eq!(changed_rigs(Some(&state), Some(&state)), Rigs::None);
+    let gone = RigState::new();
+    assert_eq!(changed_rigs(Some(&state), Some(&gone)), Rigs::of(["a"]));
+}
+
+#[test]
+fn stop_pauses_waiting_work_and_resume_takes_it_up() {
+    let state = Arc::new(test_state());
+    let path = "/stopped/catalog.sqlite";
+    let job = job(path);
+    job.queue().add(
+        Scope::flats(Rigs::of(["a"])),
+        Instant::now(),
+        Trigger::Change,
+    );
+    let stopped = cancel(path);
+    assert_eq!(stopped.state, "stopped");
+    assert_eq!(stopped.stopped, ["a"]);
+    assert!(stopped.rigs.is_empty());
+    assert!(job.cancelled.load(Ordering::SeqCst));
+    let resumed = resume(&state, path);
+    assert!(resumed.stopped.is_empty());
+    assert_eq!(resumed.rigs, ["a"]);
+    cancel(path);
+}

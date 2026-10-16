@@ -431,6 +431,10 @@ fn apply(state: &Arc<AppState>, settings: Option<&CalibrationSettings>) {
     } else {
         crate::server::calibration_health::request_all(state);
     }
+    // Grouping regroups from the stored measurements as soon as it is read;
+    // only a rig whose new grouping asks for something not measured yet
+    // (switched from time to measured) has pixels read, by the flat job.
+    crate::server::flat_measure::settings_changed(state, &before, &after);
 }
 
 /// GET /api/settings/calibration

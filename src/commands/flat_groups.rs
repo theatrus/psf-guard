@@ -145,18 +145,20 @@ pub fn run(
     let keep_going = || true;
     let yield_now = || {};
     let mut last_stage = String::new();
-    let mut progress = |stage: &str, done: usize, total: usize| {
-        if stage != last_stage || done == total {
-            println!("{stage}: {done}/{total}");
-            last_stage = stage.to_string();
+    let mut progress = |at: &flat_groups::job::Progress<'_>| {
+        if at.stage != last_stage || at.done == at.total {
+            println!("{}: {}/{}", at.stage, at.done, at.total);
+            last_stage = at.stage.to_string();
         }
     };
     let outcome = flat_groups::job::run(flat_groups::job::Pass {
         conn: &conn,
         dir: &dir,
+        scope: flat_groups::job::Scope::everything(),
         keep_going: &keep_going,
         yield_now: &yield_now,
         progress: &mut progress,
+        goes_first: &|_| false,
         find_light: &find_light,
         pool: None,
     })?;

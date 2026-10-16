@@ -650,6 +650,11 @@ impl AppState {
             .lease(&self.worker_policy(), priority, wanted)
     }
 
+    /// Workers leased at `priority` now.
+    pub fn leased_workers(&self, priority: crate::concurrency::Priority) -> usize {
+        self.worker_budgets.in_use(priority)
+    }
+
     pub fn begin_interactive_job(&self) -> InteractiveJobGuard {
         self.begin_named_interactive_job(INTERACTIVE_WORK)
     }
