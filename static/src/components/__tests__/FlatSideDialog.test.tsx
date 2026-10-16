@@ -17,7 +17,7 @@ describe('the Images bulk action for flat sides', () => {
         return ok({
           changes: [{
             key: 'c-1', rig_uuid: 'rig', start: 1_789_200_000, end: 1_789_800_000, what: 'new dust: 1 shadow near (1423, 3545)',
-            camera_side: true, filters: ['HA', 'OIII'], lights: 3, chosen_before: 0, chosen_after: 3,
+            camera_side: true, filters: ['HA', 'OIII'], lights: 2, chosen_before: 0, chosen_after: 2, image_ids: [3, 1],
           }],
           with_choices: 3,
           without_guid: 0,
@@ -36,10 +36,11 @@ describe('the Images bulk action for flat sides', () => {
     );
     const change = await screen.findByTestId('flat-side-change');
     expect(asked).toEqual({ image_ids: [3, 1, 2] });
-    expect(change).toHaveTextContent('3 selected lights shot during it · all put after');
+    expect(change).toHaveTextContent('2 selected lights shot during it, so a side sets 2 of the 3 · all put after');
     expect(within(change).getByRole('button', { name: 'After' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(within(change).getByRole('button', { name: 'Before' }));
-    await waitFor(() => expect(sent).toEqual([{ image_ids: [3, 1, 2], choice: 'before', change_key: 'c-1' }]));
+    // Only the lights shot during it.
+    await waitFor(() => expect(sent).toEqual([{ image_ids: [3, 1], choice: 'before', change_key: 'c-1' }]));
     fireEvent.click(screen.getByTestId('flat-side-reset-all'));
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(sent[1]).toEqual({ image_ids: [3, 1, 2], choice: 'reset' });

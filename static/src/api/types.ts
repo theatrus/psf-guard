@@ -4499,6 +4499,8 @@ export interface FlatLightChoiceOptions {
     lights: number;
     chosen_before: number;
     chosen_after: number;
+    /** Those lights, by id: what a side for the change is sent for. */
+    image_ids: number[];
   }[];
   /** Lights with any choice in force. */
   with_choices: number;

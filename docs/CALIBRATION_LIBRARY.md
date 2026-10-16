@@ -833,8 +833,10 @@ better, your choice wins, and it shows as yours:
   angle through an alike range from that side. A group you choose gives
   its flats at whatever angle they lie, and a stack reads the light at
   theirs. In Images, **Flat side…** on a selection lists the changes the
-  selected lights were shot during, with Before, After and Reset for each;
-  it offers no group, since a selection can span filters.
+  selected lights were shot during, with Before, After and Reset for each,
+  and says how many of the selection each one sets: a side goes only to
+  the lights shot during that change, of its rig and filter. It offers no
+  group, since a selection can span filters.
 
 Edges you split or joined are drawn apart from measured ones, *Split by
 you* or *Joined by you*, with the measured numbers beside them and
@@ -847,7 +849,8 @@ choose otherwise. A split you made that overlaps a camera-side change is
 shown the same way.
 
 A choice is kept by the flats and lights it names, not by row numbers, so
-it survives a regroup. When its flats or its change are gone, or no
+it survives a regroup, a duplicate repair that merges its flat into a twin,
+and keeping out a session's first flat. When its flats or its change are gone, or no
 longer one family, it is kept and shown as **no longer applied**, with
 why, and does nothing until you reset it. Grouping by time keeps choices
 and applies none.

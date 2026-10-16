@@ -1902,7 +1902,7 @@ pub fn sync_library(
     let (quality, mut choices) = quality::sync_quality(source, destination, &merged)?;
     // A person's splits, joins and choices for lights, by their flats and
     // lights, the newer winning.
-    let flat_choices = flat_groups::override_store::sync(source, destination)?;
+    let flat_choices = flat_groups::override_store::sync(source, destination, &merged)?;
     choices.flat_groups = flat_choices.groups;
     choices.flat_lights = flat_choices.lights;
     Ok(CalibrationSyncOutcome {

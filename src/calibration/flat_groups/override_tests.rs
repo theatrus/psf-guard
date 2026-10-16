@@ -156,6 +156,7 @@ fn group_choice(
     at: i64,
 ) {
     let (anchor_frame, session_key) = session(conn, filter, after);
+    let before_night = before;
     let before = before.map(|night| session(conn, filter, night));
     let (family_key, rig_uuid) = family_of(conn, filter);
     override_store::set_group_override(
@@ -170,6 +171,8 @@ fn group_choice(
             before_session_key: before.map(|b| b.1),
             label: format!("{filter} {after}"),
             chosen_at: at,
+            night: Some(after.to_string()),
+            before_night: before_night.map(str::to_string),
         },
     )
     .unwrap();
@@ -486,6 +489,8 @@ fn a_choice_whose_change_or_flats_are_gone_is_kept_and_shown_not_applied() {
             before_session_key: None,
             label: "Ha, 2026-08-01".into(),
             chosen_at: 300,
+            night: Some("2026-08-01".into()),
+            before_night: None,
         },
     )
     .unwrap();
@@ -627,6 +632,7 @@ fn a_split_by_hand_places_lights_by_time_at_the_start_of_its_later_night() {
     let book = super::load_book(&conn).unwrap();
     let event = &book.events[0];
     assert!(event.by_hand);
+    assert!(!event.within_flat_run, "a moment, not a narrow window");
     // No window: the split falls where the night of its later flats begins,
     // at the rig's own night boundary.
     assert_eq!(event.start, event.end);
@@ -675,4 +681,249 @@ fn a_split_by_hand_never_carries_an_alike_range() {
         OverrideStatus::Applied { agrees: true }
     );
     assert!(!book.carries_angle_term(ha_edge(&book), &limits(&book)));
+}
+
+// Lights that share a file name, flats a repair merged, and bulk sides.
+
+/// A Ha light written as `dir/name`, catalogued with `id` and `guid`.
+fn light_named(
+    dir: &Path,
+    conn: &Connection,
+    id: i64,
+    name: &str,
+    captured: &str,
+    guid: &str,
+) -> FrameMeta {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(name);
+    write_frame_with(
+        &path,
+        "LIGHT",
+        SIZE,
+        captured,
+        &["ROTATANG= 0.0"],
+        |_, _| 1_000.0,
+    );
+    let mut meta = read_frame_meta(&path);
+    meta.filter = Some("Ha".into());
+    meta.rotator_position = Some(0.0);
+    conn.execute(
+        "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+             gradingStatus, metadata, profileId, guid)
+         VALUES (?1, 1, 1, ?2, 'Ha', 0, ?3, 'profile', ?4)",
+        rusqlite::params![
+            id,
+            meta.timestamp.unwrap(),
+            format!(r#"{{"FileName": "C:\\Lights\\{id}\\{name}"}}"#),
+            guid
+        ],
+    )
+    .unwrap();
+    meta
+}
+
+/// A light's choice is found by file name and filter, then the nearest
+/// time among lights that HAVE choices. A light with no choice that shares
+/// its file name (two targets both writing `Ha_0001.fits`) takes the other
+/// light's side, though it was shot on another night.
+#[test]
+fn a_light_without_a_choice_does_not_take_another_lights_choice_by_file_name() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = catalog(temp.path(), false, &["Ha"]);
+    let a = temp.path().join("a");
+    let b = temp.path().join("b");
+    let chosen = light_named(&a, &conn, 1, "Ha_0001.fits", "2026-09-16T04:00:00", "g-1");
+    // Shot well before the change, with no choice of its own.
+    let other = light_named(&b, &conn, 2, "Ha_0001.fits", "2026-09-11T04:00:00", "g-2");
+    let event = super::load_book(&conn).unwrap().events[0].clone();
+    override_store::set_light_choices(
+        &conn,
+        &[side_choice("g-1", &event, Some(LightChoice::After), 100)],
+    )
+    .unwrap();
+    assert!(matches!(
+        select_for_light(&conn, &chosen).unwrap().flat_basis,
+        FlatBasis::SameSide {
+            placement: Placement::Person { .. },
+            ..
+        }
+    ));
+    let selected = select_for_light(&conn, &other).unwrap();
+    assert!(
+        selected.flat_choices.is_empty(),
+        "light 2 took light 1's choice: {:?}",
+        selected.flat_choices
+    );
+    assert!(!nights(&selected.flat[..1]).contains(&NIGHTS[2].to_string()));
+}
+
+/// A split anchored on a flat the destination's duplicate repair merged
+/// into its twin (#877) never comes across: the sync looks the anchor up
+/// in `psf_guard_calibration_frame` without the merge map that the frame
+/// and quality syncs translate through.
+#[test]
+fn a_split_on_a_merged_flat_still_syncs_to_its_keeper() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let source = catalog(temp.path(), false, &[]);
+    group_choice(
+        &source,
+        "Ha",
+        Some(GroupChoice::Split),
+        NIGHTS[2],
+        None,
+        100,
+    );
+    let (anchor, _) = session(&source, "Ha", NIGHTS[2]);
+    let book = super::load_book(&source).unwrap();
+    let session = book.session_of_frame(&anchor).unwrap();
+    let keeper = book.sessions[session].row.frame_uuids[1].clone();
+
+    let copy = temp.path().join("copy.sqlite");
+    std::fs::copy(source.path().unwrap(), &copy).unwrap();
+    let mut destination = Connection::open(&copy).unwrap();
+    destination
+        .execute_batch("DELETE FROM psf_guard_flat_group_override;")
+        .unwrap();
+    // The destination's repair merged the anchor into its twin.
+    destination
+        .execute(
+            "DELETE FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+            [&anchor],
+        )
+        .unwrap();
+    destination
+        .execute(
+            "INSERT INTO psf_guard_calibration_merged (merged_uuid, keep_uuid, merged_at)
+             VALUES (?1, ?2, 1)",
+            [&anchor, &keeper],
+        )
+        .unwrap();
+    let tx = destination.transaction().unwrap();
+    let outcome = crate::calibration::sync_library(&source, &tx).unwrap();
+    tx.commit().unwrap();
+    assert_eq!(outcome.choices.flat_groups, 1, "the split was dropped");
+}
+
+/// Images' bulk "Flat side…" sends every selected light with the change's
+/// key, and the route writes a side for each, so a light shot days before
+/// the change is put after it, over its own time.
+#[test]
+fn the_bulk_side_moves_only_lights_shot_during_the_change() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = catalog(temp.path(), false, &["Ha"]);
+    light(temp.path(), &conn, 1, "2026-09-16T04:00:00", "g-1");
+    let before = light(temp.path(), &conn, 2, "2026-09-11T04:00:00", "g-2");
+    let event = super::load_book(&conn).unwrap().events[0].clone();
+    let options = crate::server::flat_choices::light_choice_options(&conn, &[1, 2]).unwrap();
+    assert_eq!(options.changes.len(), 1);
+    assert_eq!(options.changes[0].lights, 1, "one light shot during it");
+    // What FlatSideDialog sends on "After".
+    crate::server::flat_choices::apply_light_choices(
+        &conn,
+        &crate::server::flat_choices::LightChoiceRequest {
+            image_ids: vec![1, 2],
+            whole_session: false,
+            choice: "after".into(),
+            change_key: Some(event.key.clone()),
+            group_response: None,
+        },
+    )
+    .unwrap();
+    let selected = select_for_light(&conn, &before).unwrap();
+    assert!(
+        !nights(&selected.flat[..1]).contains(&NIGHTS[2].to_string()),
+        "a light shot before the change now takes the flats after it: {:?}",
+        selected.flat_basis
+    );
+}
+
+/// A duplicate repair here that folds a split's anchor flat into its twin
+/// moves the split to the kept flat, so it is still found.
+#[test]
+fn a_repair_moves_a_split_to_the_flat_it_kept() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = catalog(temp.path(), false, &[]);
+    group_choice(&conn, "Ha", Some(GroupChoice::Split), NIGHTS[2], None, 100);
+    let (anchor, _) = session(&conn, "Ha", NIGHTS[2]);
+    override_store::repoint_frames(&conn, std::slice::from_ref(&anchor), "kept-twin").unwrap();
+    let rows = override_store::load_group_overrides(&conn).unwrap();
+    assert_eq!(rows[0].anchor_frame, "kept-twin");
+}
+
+/// Keeping out the first flat of a split's session renames the session
+/// (its key hashes its first flat in use): the split is found again by its
+/// rig, family and night, not orphaned.
+#[test]
+fn keeping_out_a_splits_first_flat_does_not_orphan_it() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = catalog(temp.path(), false, &[]);
+    group_choice(&conn, "Ha", Some(GroupChoice::Split), NIGHTS[2], None, 100);
+    let (anchor, old_key) = session(&conn, "Ha", NIGHTS[2]);
+    crate::calibration::set_overrides(
+        &conn,
+        std::slice::from_ref(&anchor),
+        Some(crate::calibration::QualityOverride::Exclude),
+    )
+    .unwrap();
+    // The pass measures the session again, without that flat.
+    conn.execute_batch(
+        "DELETE FROM psf_guard_flat_response; DELETE FROM psf_guard_flat_comparison;",
+    )
+    .unwrap();
+    super::testing::measure_as(&conn, |_, _| 0.0);
+    let (_, new_key) = session(&conn, "Ha", NIGHTS[2]);
+    assert_ne!(new_key, old_key, "the session is named anew");
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(
+        book.overrides[0].status,
+        OverrideStatus::Applied { agrees: false },
+        "{:?}",
+        book.overrides[0].status
+    );
+    assert_eq!(
+        ha_groups(&conn),
+        [vec![NIGHTS[0], NIGHTS[1]], vec![NIGHTS[2]]]
+    );
+}
+
+/// A side for one light alone needs a change of its rig and filter; a light
+/// of another filter is refused, and nothing is written.
+#[test]
+fn a_side_for_a_light_the_change_does_not_reach_is_refused() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = catalog(temp.path(), false, &["Ha"]);
+    conn.execute(
+        "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+             gradingStatus, metadata, profileId, guid)
+         VALUES (5, 1, 1, ?1, 'OIII', 0, '{\"FileName\": \"oiii.fits\"}', 'profile', 'g-5')",
+        [CHANGE_AT],
+    )
+    .unwrap();
+    let event = super::load_book(&conn).unwrap().events[0].clone();
+    let refused = crate::server::flat_choices::apply_light_choices(
+        &conn,
+        &crate::server::flat_choices::LightChoiceRequest {
+            image_ids: vec![5],
+            whole_session: false,
+            choice: "before".into(),
+            change_key: Some(event.key.clone()),
+            group_response: None,
+        },
+    );
+    assert!(
+        matches!(
+            refused,
+            Err(crate::server::handlers::AppError::BadRequest(_))
+        ),
+        "{refused:?}"
+    );
+    assert!(override_store::light_choices_of(&conn, &["g-5".into()])
+        .unwrap()
+        .is_empty());
 }

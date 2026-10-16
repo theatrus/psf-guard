@@ -1006,7 +1006,12 @@ impl Book {
         });
         for row in rows {
             let Some(choice) = row.choice else { continue };
-            let after = self.session_named(Some(&row.anchor_frame), Some(&row.session_key));
+            let after = self.override_session(
+                &row,
+                Some(&row.anchor_frame),
+                Some(&row.session_key),
+                row.night.as_deref(),
+            );
             let family = after
                 .and_then(|session| self.family_of.get(session).copied())
                 .filter(|family| *family != usize::MAX);
@@ -1027,9 +1032,11 @@ impl Book {
                         }
                     }
                     GroupChoice::Join => {
-                        before = self.session_named(
+                        before = self.override_session(
+                            &row,
                             row.before_frame.as_deref(),
                             row.before_session_key.as_deref(),
+                            row.before_night.as_deref(),
                         );
                         match before {
                             None => orphaned(
@@ -1507,8 +1514,13 @@ impl Book {
             // the start of the night of the first flats after it, and a
             // light is placed by its time alone, never by its pixels.
             let (start, end) = if by_hand {
-                let night = self.night_start(self.boundaries[boundaries[0]].opens);
-                (night, night)
+                let edge = &self.boundaries[boundaries[0]];
+                let night = self.night_start(edge.opens);
+                // Two sessions of one night: the night starts before the
+                // earlier one, so the split falls at the later one's first
+                // flat instead.
+                let at = if night <= edge.start { edge.end } else { night };
+                (at, at)
             } else {
                 windows[root]
             };
@@ -1556,7 +1568,7 @@ impl Book {
                 broad,
                 spots: self.boundaries[strongest].spots.clone(),
                 boundaries,
-                within_flat_run: end - start < FLAT_RUN_SECONDS,
+                within_flat_run: !by_hand && end - start < FLAT_RUN_SECONDS,
                 by_hand,
             });
         }

@@ -60,6 +60,11 @@ pub struct GroupOverrideRow {
     /// The edge in words when it was made: "R at 104.0°, 2026-08-11 | 2026-08-12".
     pub label: String,
     pub chosen_at: i64,
+    /// The nights of the session the edge comes before, and of a join's
+    /// earlier session: they find the session again when its first flat is
+    /// kept out or forgotten, which renames it.
+    pub night: Option<String>,
+    pub before_night: Option<String>,
 }
 
 /// Which side of a change, or which group, a person put a light on.
@@ -97,6 +102,10 @@ impl LightChoice {
         }
     }
 }
+
+/// How far a light's header time may lie from its catalog row's and still
+/// be that light: both record the exposure's start, to the second.
+pub const LIGHT_TIME_TOLERANCE_SECONDS: i64 = 2;
 
 /// The key a light's group choice is kept under, beside its side choices.
 pub const GROUP_CHOICE_KEY: &str = "group";
@@ -210,6 +219,35 @@ impl Book {
             })
     }
 
+    /// A group override's session: by its flat or session key, else the
+    /// one session of its rig and family settings on `night` (a session
+    /// whose first flat was kept out is named anew, its night stays).
+    pub fn override_session(
+        &self,
+        row: &GroupOverrideRow,
+        frame: Option<&str>,
+        session_key: Option<&str>,
+        night: Option<&str>,
+    ) -> Option<usize> {
+        self.session_named(frame, session_key).or_else(|| {
+            let night = night?;
+            // The family's key is its settings and its first flat.
+            let settings = row
+                .family_key
+                .rsplit_once(':')
+                .map_or(row.family_key.as_str(), |(settings, _)| settings);
+            let mut found = self.sessions.iter().enumerate().filter(|(_, session)| {
+                session.row.rig_uuid == row.rig_uuid
+                    && session.row.family_key == settings
+                    && session.row.night == night
+            });
+            match (found.next(), found.next()) {
+                (Some((index, _)), None) => Some(index),
+                _ => None,
+            }
+        })
+    }
+
     /// The group of `family` that holds `session`, by index.
     pub fn group_of(&self, family: usize, session: usize) -> Option<usize> {
         self.families
@@ -232,20 +270,40 @@ impl Book {
         let Some(entries) = self.light_choices.get(file_name) else {
             return out;
         };
+        // A light read from its file carries no catalog id, and two targets
+        // can write one file name. The light a choice was made for is the
+        // one of that name, filter and rig whose capture time is its own:
+        // the catalog's time is the exposure's start, as its header's is.
+        // A light that records no time matches none.
+        let Some(at) = at else { return out };
         let canonical = filter.map(super::model::canonical_filter);
-        // Two lights of one file name: the one of the light's filter, then
-        // the one nearest its time.
         let same_filter = |entry: &&LightChoiceEntry| match (&canonical, &entry.filter) {
             (Some(light), Some(row)) => *light == super::model::canonical_filter(row),
             _ => true,
         };
-        let candidates: Vec<&LightChoiceEntry> = entries.iter().filter(same_filter).collect();
+        let same_rig = |entry: &&LightChoiceEntry| {
+            let rigs: Vec<&String> = self
+                .imaging
+                .iter()
+                .filter(|session| session.lights.contains(&entry.light_id))
+                .flat_map(|session| &session.rigs)
+                .collect();
+            // A profile bound to no rig says nothing either way.
+            rigs.is_empty() || rigs.iter().any(|r| r.as_str() == rig)
+        };
+        let candidates: Vec<&LightChoiceEntry> = entries
+            .iter()
+            .filter(same_filter)
+            .filter(|entry| {
+                entry
+                    .at
+                    .is_some_and(|when| (when - at).abs() <= LIGHT_TIME_TOLERANCE_SECONDS)
+            })
+            .filter(same_rig)
+            .collect();
         let Some(light_id) = candidates
             .iter()
-            .min_by_key(|entry| match (at, entry.at) {
-                (Some(a), Some(b)) => (a - b).abs(),
-                _ => i64::MAX,
-            })
+            .min_by_key(|entry| entry.at.map_or(i64::MAX, |when| (when - at).abs()))
             .map(|entry| entry.light_id)
         else {
             return out;

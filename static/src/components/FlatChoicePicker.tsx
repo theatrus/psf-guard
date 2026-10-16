@@ -36,7 +36,13 @@ interface FlatChoicePickerProps {
  * or a group to take. Choosing waits for the database-management gate;
  * everyone sees the choices.
  */
-export default function FlatChoicePicker({ dbId, imageId, kind, rig }: FlatChoicePickerProps) {
+export default function FlatChoicePicker(props: FlatChoicePickerProps) {
+  // Detail moves to the next light without remounting the panel: what was
+  // ticked or picked for one light never carries to the next.
+  return <LightFlatChoices key={props.imageId} {...props} />;
+}
+
+function LightFlatChoices({ dbId, imageId, kind, rig }: FlatChoicePickerProps) {
   const clock = useRigClocks(dbId)(rig);
   const canChange = useFlatChoiceAccess();
   const choose = useFlatLightChoice(dbId);

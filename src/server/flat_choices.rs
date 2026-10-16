@@ -141,7 +141,7 @@ pub(crate) fn group_override_row(
         .ok_or(AppError::NotFound)?;
     let row = &book.sessions[after].row;
     let anchor_frame = row.frame_uuids.first().cloned().ok_or(AppError::NotFound)?;
-    let (before_frame, before_session_key, label) = match choice {
+    let (before_frame, before_session_key, before_night, label) = match choice {
         Some(overrides::GroupChoice::Join) => {
             let before = session_of(&request.before_response).ok_or_else(|| {
                 AppError::BadRequest("a join names the session before it: before_response".into())
@@ -155,6 +155,7 @@ pub(crate) fn group_override_row(
             (
                 before_row.frame_uuids.first().cloned(),
                 Some(before_row.session_key.clone()),
+                Some(before_row.night.clone()),
                 format!(
                     "{} joined with {}",
                     session_label(&book, after),
@@ -163,6 +164,7 @@ pub(crate) fn group_override_row(
             )
         }
         _ => (
+            None,
             None,
             None,
             format!("{} starts a group", session_label(&book, after)),
@@ -179,6 +181,8 @@ pub(crate) fn group_override_row(
             before_session_key,
             label,
             chosen_at: now(),
+            night: Some(row.night.clone()),
+            before_night,
         },
         row.rig_uuid.clone(),
     ))
@@ -236,15 +240,34 @@ pub struct LightChoiceResponse {
     pub lights: usize,
     /// Lights named that have no GUID to keep a choice under.
     pub without_guid: usize,
+    /// Lights named that the choice does not reach: not shot during the
+    /// change, or of another rig or filter.
+    pub skipped: usize,
 }
 
-/// The lights the request names, as `(id, guid)`: the named ones, or every
-/// light of their imaging sessions.
+/// One light a request names, as the catalog keeps it.
+#[derive(Debug, Clone)]
+struct NamedLight {
+    guid: Option<String>,
+    filter: Option<String>,
+    at: Option<i64>,
+    /// The rigs its profile shot with; empty when none is bound.
+    rigs: Vec<String>,
+}
+
+impl NamedLight {
+    fn of_rig(&self, rig: &str) -> bool {
+        self.rigs.is_empty() || self.rigs.iter().any(|r| r == rig)
+    }
+}
+
+/// The lights the request names: the named ones, or every light of their
+/// imaging sessions.
 fn named_lights(
     conn: &Connection,
     book: &model::Book,
     request: &LightChoiceRequest,
-) -> Result<Vec<(i64, Option<String>)>, AppError> {
+) -> Result<Vec<NamedLight>, AppError> {
     let mut ids: BTreeSet<i64> = request.image_ids.iter().copied().collect();
     if request.whole_session {
         for session in &book.imaging {
@@ -257,20 +280,77 @@ fn named_lights(
             }
         }
     }
+    let rigs_of: HashMap<i64, &Vec<String>> = book
+        .imaging
+        .iter()
+        .flat_map(|session| session.lights.iter().map(move |id| (*id, &session.rigs)))
+        .collect();
     let mut statement = conn
-        .prepare("SELECT guid FROM acquiredimage WHERE Id = ?1")
+        .prepare("SELECT guid, filtername, acquireddate FROM acquiredimage WHERE Id = ?1")
         .map_err(|_| AppError::BadRequest("this catalog's lights keep no GUID".into()))?;
     let mut out = Vec::new();
     for id in ids {
-        let guid: Option<Option<String>> = statement
-            .query_row([id], |row| row.get(0))
+        let row = statement
+            .query_row([id], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            })
             .optional()
             .map_err(AppError::db)?;
-        if let Some(guid) = guid {
-            out.push((id, guid.filter(|guid| !guid.trim().is_empty())));
+        if let Some((guid, filter, at)) = row {
+            out.push(NamedLight {
+                guid: guid.filter(|guid| !guid.trim().is_empty()),
+                filter,
+                at,
+                rigs: rigs_of
+                    .get(&id)
+                    .map(|rigs| (*rigs).clone())
+                    .unwrap_or_default(),
+            });
         }
     }
     Ok(out)
+}
+
+/// Whether a person may put `light` on a side of `event`: the change is of
+/// its rig and reaches its filter, and the light was shot inside its
+/// window, or the request names this one light alone (its Calibration
+/// panel offers the changes its flats were chosen around too). A side for
+/// any other light would move it against its own time.
+fn side_reaches(event: &model::Event, light: &NamedLight, alone: bool) -> bool {
+    light.of_rig(&event.rig_uuid)
+        && event.applies_to(light.filter.as_deref())
+        && (alone || light.at.is_some_and(|at| event.side_of(at).is_none()))
+}
+
+/// When a change began, on its rig's clock: "2026-08-11 06:23 UTC−7".
+fn on_rig_clock(conn: &Connection, rig: &str, at: i64) -> String {
+    let offset = crate::calibration::Nights::load(conn)
+        .clock_offset(rig)
+        .unwrap_or(0);
+    let when = chrono::DateTime::from_timestamp(at + offset, 0)
+        .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_default();
+    let zone = if offset == 0 {
+        "UTC".to_string()
+    } else {
+        let minutes = offset.abs() / 60;
+        let rest = minutes % 60;
+        format!(
+            "UTC{}{}{}",
+            if offset < 0 { '−' } else { '+' },
+            minutes / 60,
+            if rest > 0 {
+                format!(":{rest:02}")
+            } else {
+                String::new()
+            }
+        )
+    };
+    format!("{when} {zone}")
 }
 
 /// Work out and record the rows a light choice request makes.
@@ -282,14 +362,66 @@ pub(crate) fn apply_light_choices(
         return Err(AppError::BadRequest("no lights named".into()));
     }
     let book = flat_groups::load_book(conn).map_err(AppError::db)?;
-    let lights = named_lights(conn, &book, request)?;
-    if lights.is_empty() {
+    let named = named_lights(conn, &book, request)?;
+    if named.is_empty() {
         return Err(AppError::NotFound);
     }
-    let guids: Vec<String> = lights.iter().filter_map(|(_, guid)| guid.clone()).collect();
+    let alone = named.len() == 1 && request.image_ids.len() == 1;
+    // The lights the choice can apply to; the rest are skipped.
+    let lights: Vec<&NamedLight> = match request.choice.as_str() {
+        "before" | "after" => {
+            let key = request.change_key.as_deref().ok_or_else(|| {
+                AppError::BadRequest("a side is chosen for a change: change_key".into())
+            })?;
+            let event = book
+                .events
+                .iter()
+                .find(|event| event.key == key)
+                .ok_or(AppError::NotFound)?;
+            named
+                .iter()
+                .filter(|light| side_reaches(event, light, alone))
+                .collect()
+        }
+        "group" => {
+            let session = request
+                .group_response
+                .as_deref()
+                .and_then(|key| book.session_by_response(key))
+                .ok_or_else(|| {
+                    AppError::BadRequest("group_response names no measured flat session".into())
+                })?;
+            let row = &book.sessions[session].row;
+            named
+                .iter()
+                .filter(|light| {
+                    light.of_rig(&row.rig_uuid)
+                        && match (&light.filter, &row.filter) {
+                            (Some(light), Some(flats)) => {
+                                model::canonical_filter(light) == model::canonical_filter(flats)
+                            }
+                            _ => true,
+                        }
+                })
+                .collect()
+        }
+        _ => named.iter().collect(),
+    };
+    if lights.is_empty() {
+        return Err(AppError::BadRequest(
+            "the choice reaches none of these lights: none of them was shot during that change \
+             on its rig and filter, or of the group's rig and filter"
+                .into(),
+        ));
+    }
+    let guids: Vec<String> = lights
+        .iter()
+        .filter_map(|light| light.guid.clone())
+        .collect();
     let response = LightChoiceResponse {
         lights: guids.len(),
         without_guid: lights.len() - guids.len(),
+        skipped: named.len() - lights.len(),
     };
     let at = now();
     let recorded = override_store::light_choices_of(conn, &guids).map_err(AppError::db)?;
@@ -314,9 +446,7 @@ pub(crate) fn apply_light_choices(
         },
         "before" | "after" => {
             let side = overrides::LightChoice::parse(&request.choice).expect("a side");
-            let key = request.change_key.as_deref().ok_or_else(|| {
-                AppError::BadRequest("a side is chosen for a change: change_key".into())
-            })?;
+            let key = request.change_key.as_deref().unwrap_or_default();
             let event = book
                 .events
                 .iter()
@@ -326,9 +456,7 @@ pub(crate) fn apply_light_choices(
             let label = format!(
                 "{} the change of {} ({})",
                 side.as_str(),
-                chrono::DateTime::from_timestamp(event.start, 0)
-                    .map(|t| t.format("%Y-%m-%d").to_string())
-                    .unwrap_or_default(),
+                on_rig_clock(conn, &event.rig_uuid, event.start),
                 note.what
             );
             // A side replaces a group the person chose before.
@@ -438,6 +566,8 @@ pub struct BulkChangeOption {
     /// Of those, the ones a person put before it, and after it.
     pub chosen_before: usize,
     pub chosen_after: usize,
+    /// Those lights, by id: what a side for the change is sent for.
+    pub image_ids: Vec<i64>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -505,7 +635,7 @@ pub(crate) fn light_choice_options(
             continue;
         };
         for (index, event) in book.events.iter().enumerate() {
-            if !rigs.contains(&event.rig_uuid)
+            if !(rigs.is_empty() || rigs.contains(&event.rig_uuid))
                 || !event.applies_to(filter.as_deref())
                 || event.side_of(at).is_some()
             {
@@ -524,9 +654,11 @@ pub(crate) fn light_choice_options(
                     lights: 0,
                     chosen_before: 0,
                     chosen_after: 0,
+                    image_ids: Vec::new(),
                 }
             });
             entry.lights += 1;
+            entry.image_ids.push(*id);
             let side = chosen
                 .iter()
                 .find(|row| row.change_key == event.key)

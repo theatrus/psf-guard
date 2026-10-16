@@ -857,12 +857,19 @@ read and write them.
 `psf_guard_flat_group_override`, one row per edge, keyed by the first flat
 (`anchor_frame`) of the session the edge comes before, with that session's
 key, the family's key and rig at the time, and for a join the session on
-the earlier side (`before_frame`, `before_session_key`). No row id, family
-index or response key is kept: those change with a regroup or a new
-measuring algorithm. A session is found again by its flat, else its
-session key (`Book::session_named`); the family is the one that session is
-in now, so a family that a later change to family formation splits or
-renames takes its edges with it.
+the earlier side (`before_frame`, `before_session_key`), and both sessions'
+nights (`night`, `before_night`). No row id, family index or response key
+is kept: those change with a regroup or a new measuring algorithm. A
+session is found again by its flat, else its session key, else as the one
+session of the row's rig and family settings on its night
+(`Book::override_session`): keeping out a session's first flat renames it,
+since its key hashes its first flat in use, and the night still finds it.
+The family is the one that session is in now, so a family that a later
+change to family formation splits or renames takes its edges with it.
+A duplicate repair that folds a row's flat into its twin moves the
+choice's `anchor_frame`, `before_frame` and a light's `group_frame` to the
+kept flat (`override_store::repoint_frames`), and a sync maps them through
+the destination's merge map, as frame grades are.
 
 `Book::build_with_overrides` applies them after the measured grouping, in
 `build_groups`, oldest first: joins, then splits, so a split always cuts.
@@ -875,7 +882,10 @@ renames takes its edges with it.
   (`Event::by_hand` when every member is one), so a light takes its side
   of it. Such an event has no window: it falls at the start of the night
   of its later flats: the rig's local noon before their first flat, as
-  `Nights::frame` splits that flat's night (`Book::night_start`). Every
+  `Nights::frame` splits that flat's night (`Book::night_start`). When
+  both sessions lie on one night (two angles of a family), the night
+  starts before the earlier one, so the split falls at the later
+  session's first flat instead. It is never `within_flat_run`. Every
   light is placed by its time alone, the view shows the moment on the
   rig's clock ("at 2026-09-28 13:00 UTC−7"), and the measuring job reads
   no light for it (`sessions_in_windows` skips it). The person dated the
@@ -913,8 +923,12 @@ key `group` and names a flat and session key of the group. Setting a side
 resets the light's group choice, and a group resets its sides.
 
 `LibrarySnapshot::select_with` finds a light's rows by the file name it is
-read from (as the image routes find its file from `FileName`), its filter
-and, between two of one name, its time (`Book::light_choices`):
+read from (as the image routes find its file from `FileName`), its filter,
+its rig (by its profile's bindings) and its capture time, which must lie
+within 2 s of the catalog's (`LIGHT_TIME_TOLERANCE_SECONDS`: both record
+the exposure's start). A light with no time matches none, so a light of
+another target that shares a file name never takes another's choice
+(`Book::light_choices`):
 
 - **Before or after**: the change is found by its key, else as the one
   change of the rig whose window overlaps the window recorded (new flats
@@ -952,11 +966,20 @@ and, between two of one name, its time (`Book::light_choices`):
   job (`Scope::lights`): no flat is measured again, and only imaging
   sessions whose change key moved are read; a split by hand asks none. Health is judged again;
   nothing is regraded. A light choice judges health again only.
+- A side is written only for lights the change reaches: of its rig, a
+  filter it applies to, and shot inside its window; or one light alone,
+  named by its Calibration panel, which also offers the changes its flats
+  were chosen around. The rest are skipped and counted (`skipped`); none
+  reached is a 400. Images' bulk action sends each change only the lights
+  the options found shot during it (`image_ids`), and a whole imaging
+  session takes only its lights inside the window. A group is written only
+  for lights of its rig and filter.
 - Every write sits behind the database-management gate
   (`require_database_management_allowed`); the view and a light's account
   show the choices to everyone.
 - `sync_library` copies both tables (`override_store::sync`): a row comes
-  across when the destination holds its flat or light, and the newer
+  across when the destination holds its flat (or the flat a repair kept
+  in its place) or light, and the newer
   `chosen_at` wins, a reset included, as keep-out choices do. Exports and
   WBPP place lights through `select_for_light`, as stacks do.
 - The MCP server reads the view (`/db/{db}/calibrations/flat-groups` in

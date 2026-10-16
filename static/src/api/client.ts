@@ -1832,9 +1832,11 @@ export const apiClient = {
       change_key?: string;
       group_response?: string;
     }
-  ): Promise<{ lights: number; without_guid: number }> => {
+  ): Promise<{ lights: number; without_guid: number; skipped: number }> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.put<ApiResponse<{ lights: number; without_guid: number }>>(
+    const { data } = await apiInstance.put<
+      ApiResponse<{ lights: number; without_guid: number; skipped: number }>
+    >(
       dbPath(dbId, '/calibrations/flat-choices'),
       request
     );

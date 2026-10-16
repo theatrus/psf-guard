@@ -34,7 +34,9 @@ pub(crate) const TABLES_SQL: &str = r#"
         before_frame        TEXT,
         before_session_key  TEXT,
         label               TEXT NOT NULL DEFAULT '',
-        chosen_at           INTEGER NOT NULL
+        chosen_at           INTEGER NOT NULL,
+        night               TEXT,
+        before_night        TEXT
     );
     CREATE TABLE IF NOT EXISTS psf_guard_flat_light_choice (
         light_guid          TEXT NOT NULL,
@@ -54,7 +56,7 @@ pub(crate) const TABLES_SQL: &str = r#"
 const GROUP_TABLE: &str = "psf_guard_flat_group_override";
 const LIGHT_TABLE: &str = "psf_guard_flat_light_choice";
 
-const GROUP_COLUMNS: [&str; 9] = [
+const GROUP_COLUMNS: [&str; 11] = [
     "anchor_frame",
     "session_key",
     "family_key",
@@ -64,6 +66,8 @@ const GROUP_COLUMNS: [&str; 9] = [
     "before_session_key",
     "label",
     "chosen_at",
+    "night",
+    "before_night",
 ];
 
 const LIGHT_COLUMNS: [&str; 10] = [
@@ -97,12 +101,26 @@ pub fn tables_exist(conn: &Connection) -> bool {
 
 /// Create the tables in a writable catalog. Safe to run twice.
 pub fn add_tables(conn: &Connection) -> Result<bool> {
-    if tables_exist(conn) || conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true) {
+    if conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true) {
+        return Ok(false);
+    }
+    if tables_exist(conn) {
+        add_night_columns(conn)?;
         return Ok(false);
     }
     conn.execute_batch(TABLES_SQL)
         .context("creating the flat group choice tables")?;
     Ok(true)
+}
+
+/// The nights a split or join was made at: columns added after the table,
+/// NULL on older rows.
+fn add_night_columns(conn: &Connection) -> Result<()> {
+    for column in ["night", "before_night"] {
+        crate::calibration::add_column_if_missing(conn, GROUP_TABLE, column, "TEXT")
+            .context("adding the night to the flat group choice table")?;
+    }
+    Ok(())
 }
 
 fn require_tables(conn: &Connection) -> Result<()> {
@@ -130,6 +148,8 @@ fn group_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GroupOverrideRow> {
         before_session_key: row.get(6)?,
         label: row.get(7)?,
         chosen_at: row.get(8)?,
+        night: row.get(9)?,
+        before_night: row.get(10)?,
     })
 }
 
@@ -230,13 +250,14 @@ pub fn set_group_override(conn: &Connection, row: &GroupOverrideRow) -> Result<(
     require_tables(conn)?;
     conn.execute(
         &format!(
-            "INSERT INTO {GROUP_TABLE} ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "INSERT INTO {GROUP_TABLE} ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(anchor_frame) DO UPDATE SET
                 session_key = excluded.session_key, family_key = excluded.family_key,
                 rig_uuid = excluded.rig_uuid, choice = excluded.choice,
                 before_frame = excluded.before_frame,
                 before_session_key = excluded.before_session_key,
-                label = excluded.label, chosen_at = excluded.chosen_at",
+                label = excluded.label, chosen_at = excluded.chosen_at,
+                night = excluded.night, before_night = excluded.before_night",
             GROUP_COLUMNS.join(", ")
         ),
         params![
@@ -249,8 +270,37 @@ pub fn set_group_override(conn: &Connection, row: &GroupOverrideRow) -> Result<(
             row.before_session_key,
             row.label,
             row.chosen_at,
+            row.night,
+            row.before_night,
         ],
     )?;
+    Ok(())
+}
+
+/// After a duplicate repair folded `removed` into `keep`: a split, join or
+/// group choice that named a removed row's flat names the kept row's. An
+/// edge the kept flat already anchors keeps its own row; the other stays,
+/// found again by its session or night.
+pub fn repoint_frames(conn: &Connection, removed: &[String], keep: &str) -> Result<()> {
+    if !tables_exist(conn) {
+        return Ok(());
+    }
+    for gone in removed {
+        conn.execute(
+            &format!(
+                "UPDATE OR IGNORE {GROUP_TABLE} SET anchor_frame = ?1 WHERE anchor_frame = ?2"
+            ),
+            params![keep, gone],
+        )?;
+        conn.execute(
+            &format!("UPDATE {GROUP_TABLE} SET before_frame = ?1 WHERE before_frame = ?2"),
+            params![keep, gone],
+        )?;
+        conn.execute(
+            &format!("UPDATE {LIGHT_TABLE} SET group_frame = ?1 WHERE group_frame = ?2"),
+            params![keep, gone],
+        )?;
+    }
     Ok(())
 }
 
@@ -329,7 +379,11 @@ pub struct ChoiceSync {
 /// comes across only when the destination holds its flat, a light choice
 /// only when it holds the light: a choice about nothing there would only
 /// show as orphaned.
-pub fn sync(source: &Connection, destination: &rusqlite::Transaction<'_>) -> Result<ChoiceSync> {
+pub fn sync(
+    source: &Connection,
+    destination: &rusqlite::Transaction<'_>,
+    merged: &HashMap<String, String>,
+) -> Result<ChoiceSync> {
     let mut counts = ChoiceSync::default();
     if !table_exists(source, GROUP_TABLE) && !table_exists(source, LIGHT_TABLE) {
         return Ok(counts);
@@ -337,6 +391,7 @@ pub fn sync(source: &Connection, destination: &rusqlite::Transaction<'_>) -> Res
     destination
         .execute_batch(TABLES_SQL)
         .context("creating the flat group choice tables")?;
+    add_night_columns(destination)?;
     if table_exists(source, GROUP_TABLE) {
         counts.groups = sync_table(
             source,
@@ -345,6 +400,7 @@ pub fn sync(source: &Connection, destination: &rusqlite::Transaction<'_>) -> Res
             &GROUP_COLUMNS,
             &["anchor_frame"],
             "SELECT 1 FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+            (&["anchor_frame", "before_frame"], merged),
         )?;
     }
     if table_exists(source, LIGHT_TABLE) && light_guids_exist(destination) {
@@ -355,6 +411,7 @@ pub fn sync(source: &Connection, destination: &rusqlite::Transaction<'_>) -> Res
             &LIGHT_COLUMNS,
             &["light_guid", "change_key"],
             "SELECT 1 FROM acquiredimage WHERE guid = ?1",
+            (&["group_frame"], merged),
         )?;
     }
     Ok(counts)
@@ -369,6 +426,7 @@ fn sync_table(
     columns: &[&str],
     keys: &[&str],
     known: &str,
+    (frame_columns, merged): (&[&str], &HashMap<String, String>),
 ) -> Result<usize> {
     let select = format!("SELECT {} FROM {table}", columns.join(", "));
     let at = columns
@@ -398,9 +456,18 @@ fn sync_table(
     let mut rows = statement.query([])?;
     let mut changed = 0;
     while let Some(row) = rows.next()? {
-        let values = (0..columns.len())
+        let mut values = (0..columns.len())
             .map(|index| row.get::<_, Value>(index))
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        // A flat a repair here merged away is its kept row's flat now.
+        for column in frame_columns {
+            let index = columns.iter().position(|c| c == column).expect("column");
+            if let Value::Text(uuid) = &values[index]
+                && let Some(keep) = merged.get(uuid)
+            {
+                values[index] = Value::Text(keep.clone());
+            }
+        }
         let key_values: Vec<&Value> = key_positions.iter().map(|p| &values[*p]).collect();
         let held = destination
             .query_row(known, [key_values[0]], |_| Ok(()))

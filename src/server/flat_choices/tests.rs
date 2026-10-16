@@ -30,6 +30,8 @@ fn fixture(dir: &std::path::Path) -> (Arc<AppState>, Arc<DatabaseContext>) {
             before_session_key: None,
             label: "Ha, 2026-09-12".into(),
             chosen_at: 10,
+            night: Some("2026-09-12".into()),
+            before_night: None,
         },
     )
     .unwrap();

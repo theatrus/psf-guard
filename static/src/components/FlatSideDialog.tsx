@@ -30,9 +30,11 @@ export default function FlatSideDialog({ dbId, imageIds, onClose }: FlatSideDial
   const choose = useFlatLightChoice(dbId);
   const clockOf = useRigClocks(dbId);
   const busy = choose.isPending;
-  const send = (choice: 'before' | 'after' | 'reset', changeKey?: string) =>
+  // A side, or its reset, goes only to the lights shot during that change;
+  // resetting every choice goes to the whole selection.
+  const send = (choice: 'before' | 'after' | 'reset', change?: { key: string; image_ids: number[] }) =>
     choose.mutate(
-      { image_ids: imageIds, choice, change_key: changeKey },
+      { image_ids: change ? change.image_ids : imageIds, choice, change_key: change?.key },
       { onSuccess: () => void options.refetch() },
     );
   const data = options.data;
@@ -54,8 +56,8 @@ export default function FlatSideDialog({ dbId, imageIds, onClose }: FlatSideDial
       }
     >
       <p className="flat-side-note">
-        {plural(imageIds.length, 'light')} selected. A side you choose wins over its time, its imaging
-        session and its pixels, and only these lights change.
+        {plural(imageIds.length, 'light')} selected. A side goes only to the selected lights shot
+        during that change, and wins over their time, imaging session and pixels.
       </p>
       {options.isPending && <p className="flat-side-note" role="status">Finding the changes they were shot during…</p>}
       {options.error instanceof Error && (
@@ -76,23 +78,24 @@ export default function FlatSideDialog({ dbId, imageIds, onClose }: FlatSideDial
                   <span className="flat-side-note">
                     {windowLabel(change.start, change.end, clockOf(change.rig_uuid))} · {change.camera_side ? `camera side, seen in ${change.filters.join(', ')}` : change.filters.join(', ')}
                   </span>
-                  <span className="flat-side-note">
+                  <span className="flat-side-note" data-testid="flat-side-reach">
                     {plural(all, 'selected light')} shot during it
+                    {all < imageIds.length ? `, so a side sets ${all} of the ${imageIds.length}` : ''}
                     {chosen(change.chosen_before) ? ` · ${chosen(change.chosen_before)} put before` : ''}
                     {chosen(change.chosen_after) ? ` · ${chosen(change.chosen_after)} put after` : ''}
                   </span>
                 </div>
                 <span className="flat-side-buttons" role="group" aria-label="Their side of the change">
                   <button type="button" className="header-button" disabled={busy}
-                    aria-pressed={change.chosen_before === all} onClick={() => send('before', change.key)}>
+                    aria-pressed={change.chosen_before === all} onClick={() => send('before', change)}>
                     Before
                   </button>
                   <button type="button" className="header-button" disabled={busy}
-                    aria-pressed={change.chosen_after === all} onClick={() => send('after', change.key)}>
+                    aria-pressed={change.chosen_after === all} onClick={() => send('after', change)}>
                     After
                   </button>
                   <button type="button" className="header-button" disabled={busy || change.chosen_before + change.chosen_after === 0}
-                    onClick={() => send('reset', change.key)}>
+                    onClick={() => send('reset', change)}>
                     Reset
                   </button>
                 </span>
