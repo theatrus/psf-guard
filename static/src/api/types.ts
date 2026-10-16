@@ -2485,6 +2485,8 @@ export interface CalibrationRigSummary {
   flat: number;
   oldest_at?: number | null;
   newest_at?: number | null;
+  /** The rig's clock over time: its frames' and masters' times read on it. */
+  clock?: FlatClockRun[];
 }
 
 export interface CalibrationLibrarySummary {
@@ -2843,6 +2845,58 @@ export interface CalibrationKindExplanation {
   basis?: FlatBasis;
   /** Flats only: the master mixes nights measured alike. Fractions, not percent. */
   alike?: { nights: number; dust: number; broad: number };
+  /** Flats only: the response family they come from, when measured grouping
+   *  chose one at another angle than the light's, or by its own pixels. */
+  family?: FlatFamilyNote;
+}
+
+/** The response family a light's flats come from, and how it was chosen. */
+export interface FlatFamilyNote {
+  key: string;
+  /** Filter, as the flats name it, and measured angle range: "OIII at
+   *  72.6° & 82.2°". */
+  label: string;
+  /** `angle`: the only family near it, at its recorded angle; `pixels`:
+   *  its own lights follow these flats; `nearest`: the family at its
+   *  recorded angle, its lights not read or unable to tell; `disputed`:
+   *  its lights pointed to another family and nothing confirmed it. */
+  by: 'angle' | 'pixels' | 'nearest' | 'disputed';
+  /** `pixels` and `disputed`: how many lights, of which targets, said so. */
+  lights?: number;
+  targets?: string[];
+  /** `pixels`: whether they moved it off its recorded angle, and what
+   *  confirmed the move ("its OIII lights", "the rotator's epochs"). */
+  moved?: boolean;
+  corroborated?: string | null;
+  /** `nearest`: its lights were read and could not tell. */
+  undecided?: boolean;
+  /** `disputed`: the family its lights pointed to. */
+  pointed?: string;
+  /** Whether the family has flats at the light's recorded angle. */
+  at_recorded: boolean;
+  light_angle: number;
+  /** How far the rotator's epochs turn the light's angle into the flats'. */
+  shift: number;
+  /** The families within the angle prior, nearest first. */
+  candidates: string[];
+  /** When its master's flats lie at another angle inside a span the
+   *  family's flats measure alike across: the span and its evidence. */
+  alike_range?: FlatAlikeRangeNote;
+}
+
+/** A span of angles a flat family's own flats measure alike across. */
+export interface FlatAlikeRangeNote {
+  /** The angle of the flats the light's master is built from. */
+  flats_angle: number;
+  low: number;
+  high: number;
+  /** The angles at its two ends: "101.5–102.2° and 104.2–104.4°". */
+  label: string;
+  pairs: number;
+  nights: number;
+  /** Its pairs were all measured in other groups of the family, across
+   *  camera-side dust changes only. */
+  carried: boolean;
 }
 
 /** A measured change near a light, as its account names it. Fractions. */
@@ -3016,6 +3070,55 @@ export interface CalibrationRepairOutcome {
   rows_removed: number;
   repointed: number;
   masters_removed: number;
+}
+
+/** How the plan a repair found differs from the plan previewed. */
+export interface CalibrationPlanChange {
+  groups_before: number;
+  groups_after: number;
+  rows_before: number;
+  rows_after: number;
+  /** Exposures the new plan repairs that the preview did not, by file name
+   *  (the first 20); the count says how many in all. */
+  added: string[];
+  added_count: number;
+  /** Exposures the preview repaired that the new plan leaves. */
+  dropped: string[];
+  dropped_count: number;
+  /** Exposures in both whose rows or files differ. */
+  altered: string[];
+  altered_count: number;
+}
+
+/** The catalog's duplicate check or repair: a job, polled while it runs. */
+export interface CalibrationDuplicateStatus {
+  /** `idle` before the first run. */
+  state: 'idle' | 'running' | 'done' | 'stopped' | 'failed';
+  action: 'check' | 'repair' | null;
+  /** `checking_files`, `comparing_copies` or `merging`, while it runs. */
+  stage: string | null;
+  done: number;
+  total: number;
+  /** Counts up with each run, so a page knows which result is its own. */
+  run: number;
+  started_at: number | null;
+  finished_at: number | null;
+  /** The latest plan. None after a repair applied, until the next check. */
+  report: CalibrationDuplicateReport | null;
+  checked_at: number | null;
+  /** The last repair that applied, and its run. */
+  repaired: { run: number; finished_at: number; outcome: CalibrationRepairOutcome } | null;
+  /** A repair that found the plan changed: what changed; `report` is the
+   *  new plan. */
+  changed: CalibrationPlanChange | null;
+  error: string | null;
+  /** `interactive` for a run a person asked for, `background` for the
+   *  check a page starts on its own; while it runs. */
+  priority?: 'interactive' | 'background' | null;
+  /** What a person started that a background check waits for. */
+  waiting_for?: string | null;
+  /** The catalog's calibration rows changed since the plan was made. */
+  stale?: boolean;
 }
 
 /** Progress of the singleton per-DB import job (poll ~1s while running). */
@@ -4088,10 +4191,22 @@ export interface FlatGroupsRig {
   own_limits?: string[];
   angle_term: FlatPairDifference | null;
   angle_pairs: number;
+  /**
+   * The rig's clock over time, oldest first, one run per change: its
+   * `night_zone` setting, else what its frames' clocks record. Its times
+   * read on it; empty, on the viewer's clock.
+   */
+  clock?: FlatClockRun[];
   /** Newest first. */
   events: FlatChangeEvent[];
   families: FlatFamily[];
   unmeasured: FlatUnmeasuredSession[];
+}
+
+export interface FlatClockRun {
+  /** Unix seconds of the first frame on this offset. */
+  from: number;
+  offset_seconds: number;
 }
 
 export interface FlatPairDifference {
@@ -4139,11 +4254,17 @@ export interface FlatSpot {
   peak_pct: number;
 }
 
-/** One filter at one angle on one rig. */
+/** One filter's response family on one rig: the angles whose flats
+ *  measure alike. */
 export interface FlatFamily {
   key: string;
   filter: string | null;
+  /** The middle angle of its largest rotation cluster. */
   rotation: number | null;
+  /** Its measured angle range, one span per rotation cluster that joined. */
+  angles?: { low: number; high: number }[];
+  /** That range in words: "100.1–104.4°", "72.6° & 82.2°", "no angle". */
+  angle_label?: string;
   /** Newest first. */
   groups: FlatGroup[];
   /** `splits[i]` lies between `groups[i + 1]` (older) and `groups[i]` (newer). */
@@ -4275,6 +4396,36 @@ export interface CalibrationQualityProgress {
   started_at: number | null;
   finished_at: number | null;
   last_error?: string | null;
+}
+
+/** What one pass of the frame-sites job did. */
+export interface FrameSitesOutcome {
+  pending: number;
+  done: number;
+  located: number;
+  clocked: number;
+  unplaced: number;
+  unreadable: number;
+  /** No file could be read, as when the volume is not mounted. */
+  volume_away: boolean;
+  error: string | null;
+  placed: string[];
+}
+
+/** The frame-sites job of one catalog: reads the site of each calibration
+ *  frame imported before the catalog kept one. */
+export interface FrameSitesStatus {
+  state: 'idle' | 'queued' | 'running' | 'stopped';
+  /** A pass is reading frames: what the job line shows. */
+  active: boolean;
+  done: number;
+  total: number;
+  waiting_for: string | null;
+  retry_at: number | null;
+  started_at: number | null;
+  finished_at: number | null;
+  last: FrameSitesOutcome | null;
+  last_error: string | null;
 }
 
 /** The flat measuring job of one catalog: responses, comparisons and light

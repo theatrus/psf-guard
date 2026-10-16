@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type {
   CacheRefreshProgress,
+  CalibrationDuplicateStatus,
   FlatMeasureStatus,
+  FrameSitesStatus,
   QualityBackfillStatus,
   SpatialScanStatus,
   StackActivityEntry,
 } from '../../../api/types';
-import { activityItems, lineLengths, summarize } from '../activityItems';
+import { activityItems, frameSitesLabel, lineLengths, summarize } from '../activityItems';
 
 function scan(processed: number, total: number, stage = 'astrometry'): SpatialScanStatus {
   return {
@@ -402,5 +404,90 @@ describe('flat measuring in the job line', () => {
       percent: 25,
     });
     expect(summarize([waiting])).toMatchObject({ running: 0, waiting: 1 });
+  });
+});
+
+describe('reading frame sites in the job line', () => {
+  const db = { dbId: 'astro', dbName: 'Observatory' };
+  const reading: FrameSitesStatus = {
+    state: 'running', active: true, done: 812, total: 1867, waiting_for: null, retry_at: null,
+    started_at: 1, finished_at: null, last: null, last_error: null,
+  };
+
+  it('shows a pass with frames to read as an automatic job, with its progress and a stop', () => {
+    const [item] = activityItems([{ ...db, sites: reading }], []);
+    expect(item).toMatchObject({
+      key: 'sites:astro',
+      kind: 'sites',
+      title: 'Reading frame sites',
+      scope: 'Observatory',
+      detail: 'Reading frame sites · 812 of 1,867 frames',
+      status: 'running',
+      automatic: true,
+      background: true,
+      stoppable: true,
+      control: { kind: 'sites', dbId: 'astro' },
+    });
+    expect(item.percent).toBeCloseTo(43.49, 1);
+  });
+
+  it('is listed as waiting while it steps aside, and left out at rest or retrying', () => {
+    const [waiting] = activityItems([{ ...db, sites: { ...reading, waiting_for: 'a stack build' } }], []);
+    expect(waiting).toMatchObject({
+      status: 'waiting',
+      detail: 'Waiting for a stack build · Reading frame sites · 812 of 1,867 frames',
+    });
+    expect(activityItems([{ ...db, sites: { ...reading, state: 'queued', active: false, retry_at: 99 } }], []))
+      .toEqual([]);
+    expect(frameSitesLabel({ done: 0, total: 1 })).toBe('Reading frame sites · 0 of 1 frame');
+  });
+});
+
+describe('duplicate checks and repairs in the job line', () => {
+  const idle: CalibrationDuplicateStatus = {
+    state: 'idle', action: null, stage: null, done: 0, total: 0, run: 0, started_at: null, finished_at: null,
+    report: null, checked_at: null, repaired: null, changed: null, error: null,
+  };
+  const db = { dbId: 'ultracat', dbName: 'Ultracat' };
+
+  it("shows a person's check with its files, a stop and a link to the duplicates", () => {
+    const [item] = activityItems([{
+      ...db, duplicates: { ...idle, state: 'running', action: 'check', stage: 'checking_files', done: 812, total: 2140, run: 1 },
+    }], []);
+    expect(item).toMatchObject({
+      key: 'duplicates:ultracat',
+      kind: 'duplicates',
+      title: 'Checking for duplicates',
+      scope: 'Ultracat',
+      detail: 'Checking files 812 of 2,140',
+      status: 'running',
+      stoppable: true,
+      control: { kind: 'duplicates', dbId: 'ultracat' },
+      href: '/calibration?db=ultracat&calDupes=true',
+    });
+    expect(item.automatic).toBeFalsy();
+    expect(item.percent).toBeCloseTo(37.94, 1);
+  });
+
+  it('says a repair merges, and leaves out a run that has ended', () => {
+    const [item] = activityItems([{
+      ...db, duplicates: { ...idle, state: 'running', action: 'repair', stage: 'merging', done: 37, total: 203, run: 2 },
+    }], []);
+    expect(item).toMatchObject({ title: 'Repairing duplicates', detail: 'Merging 37 of 203' });
+    // The check a page starts on its own is background work, listed as
+    // waiting while it steps aside for a person's.
+    const [waiting] = activityItems([{
+      ...db, duplicates: {
+        ...idle, state: 'running', action: 'check', stage: 'checking_files', run: 3,
+        priority: 'background', waiting_for: 'a stack build',
+      },
+    }], []);
+    expect(waiting).toMatchObject({
+      status: 'waiting', waitingFor: 'a stack build', automatic: true, background: true,
+      detail: 'Waiting for a stack build · Checking files…',
+    });
+    for (const state of ['idle', 'done', 'stopped', 'failed'] as const) {
+      expect(activityItems([{ ...db, duplicates: { ...idle, state } }], [])).toEqual([]);
+    }
   });
 });

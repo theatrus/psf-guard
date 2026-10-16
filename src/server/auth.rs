@@ -900,9 +900,13 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
         return true;
     }
 
+    // A duplicate check reads rows and files and writes nothing. Its list
+    // was a GET any reader could load before it became a job, so a
+    // read-only account may run it too; the repair is an editor's.
     if path.ends_with("/images/generation-status")
         || path.ends_with("/stack-previews/calibration-masters/generation-status")
         || path.ends_with("/calibrations/generation-status")
+        || path.ends_with("/calibrations/duplicates/check")
     {
         return false;
     }
@@ -1135,6 +1139,27 @@ mod tests {
             assert!(requires_write(
                 &Method::POST,
                 &format!("/db/test/calibrations/flat-measure/{action}"),
+                true,
+            ));
+            assert!(requires_write(
+                &Method::POST,
+                &format!("/db/test/calibrations/frame-sites/{action}"),
+                true,
+            ));
+        }
+        // Any reader may check for duplicates, as any reader could load
+        // the list; the repair and Stop are an editor's.
+        for can_compute in [true, false] {
+            assert!(!requires_write(
+                &Method::POST,
+                "/db/test/calibrations/duplicates/check",
+                can_compute,
+            ));
+        }
+        for action in ["repair", "stop"] {
+            assert!(requires_write(
+                &Method::POST,
+                &format!("/db/test/calibrations/duplicates/{action}"),
                 true,
             ));
         }

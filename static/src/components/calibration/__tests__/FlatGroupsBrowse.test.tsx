@@ -8,6 +8,7 @@ import { server } from '../../../test/msw-server';
 import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from '../../../utils/settingsIntent';
 import CalibrationPage from '../CalibrationPage';
 import { browseGroups, groupName } from '../flatGroupBrowse';
+import { timeLabel } from '../flatGroupLabels';
 
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 
@@ -340,7 +341,7 @@ describe('browsing flat groups', () => {
 
     // What it feeds: its master, and the lights by project, linking to Images.
     const feeds = within(detail).getByTestId('flat-group-feeds');
-    expect(await within(feeds).findByRole('link', { name: 'Master built 1970-01-01 00:00 UTC' })).toHaveAttribute(
+    expect(await within(feeds).findByRole('link', { name: `Master built ${timeLabel(0)}` })).toHaveAttribute(
       'href', expect.stringContaining('calMaster=m1'));
     expect(within(feeds).getByTestId('flat-group-lights')).toHaveTextContent(
       '14 lights take its flats: 10 on their own side, 3 undetermined, 1 from another angle.');

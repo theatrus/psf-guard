@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { CalibrationKind, LibraryCalibrationMaster } from '../../api/types';
 import { CalibrationMasterInspector } from '../CalibrationMasterInspector';
-import { KIND_LABELS, formatTime, plural } from './calibrationLabels';
+import { KIND_LABELS, plural, serverTime } from './calibrationLabels';
 import PillSelect from '../toolbar/PillSelect';
 import ViewToolbar from '../toolbar/ViewToolbar';
 import type { useCalibrationActions } from './useCalibrationActions';
@@ -142,7 +142,7 @@ export default function CalibrationMasterList({
                 </div>
                 <p className="calibration-muted">{sourcesText(master)}</p>
                 <p className="calibration-muted">
-                  {[master.rig_name, `built ${formatTime(master.created_at)}`].filter(Boolean).join(' · ')}
+                  {[master.rig_name, `built ${serverTime(master.created_at)}`].filter(Boolean).join(' · ')}
                 </p>
                 <div className="calibration-badges">
                   {master.thin && <span className="calibration-badge calibration-badge-poor" title="Fewer frames than a master needs; its noise goes into every light">Thin</span>}

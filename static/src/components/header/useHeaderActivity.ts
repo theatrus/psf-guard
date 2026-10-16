@@ -3,7 +3,9 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type {
   CacheRefreshProgress,
+  CalibrationDuplicateStatus,
   FlatMeasureStatus,
+  FrameSitesStatus,
   QualityBackfillStatus,
   SpatialScanStatus,
   WbppActivity,
@@ -12,7 +14,9 @@ import { useAllDatabases, useMergedTargets } from '../../hooks/useDatabases';
 import { useStackActivity } from '../../hooks/useStackActivity';
 import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
 import { flatMeasureKey, flatMeasurePollMs } from '../calibration/flatMeasureLabel';
+import { duplicatesKey, duplicatesPollMs } from '../calibration/duplicateJob';
 import { activityItems, summarize, type DatabaseActivity, type ProjectOf } from './activityItems';
+import { frameSitesKey } from '../calibration/frameSitesKey';
 
 export const WBPP_ACTIVITY_QUERY_KEY = ['wbpp-activity'] as const;
 
@@ -41,6 +45,9 @@ function busy(db: DatabaseActivity): boolean {
     || db.scan?.progress.running
     || db.backfill?.progress.running
     || db.flats?.active
+    || db.sites?.active
+    // A repair changes frames, masters and grades; a check changes nothing.
+    || (db.duplicates?.state === 'running' && db.duplicates.action === 'repair')
   );
 }
 
@@ -122,6 +129,33 @@ export function useHeaderActivity() {
     })),
   });
 
+  // Reading frame sites starts at the server's start and after imports,
+  // so a quiet server keeps a slow look, as for flat measuring.
+  const sites = useQueries({
+    queries: databases.map((db) => ({
+      queryKey: frameSitesKey(db.id),
+      queryFn: () => apiClient.getFrameSitesStatus(db.id),
+      refetchInterval: (query: { state: { data?: FrameSitesStatus } }) =>
+        query.state.data?.state === 'running' ? 2_000 : query.state.data?.state === 'queued' ? 5_000 : 30_000,
+      refetchIntervalInBackground: false,
+      retry: false,
+    })),
+  });
+
+  // A duplicate check or repair runs only when a person starts one, and
+  // starting it puts its status in this shared query, so it is read once
+  // and then polled only while it runs.
+  const duplicates = useQueries({
+    queries: databases.map((db) => ({
+      queryKey: duplicatesKey(db.id),
+      queryFn: () => apiClient.getCalibrationDuplicates(db.id),
+      refetchInterval: (query: { state: { data?: CalibrationDuplicateStatus } }) =>
+        duplicatesPollMs(query.state.data),
+      refetchIntervalInBackground: false,
+      retry: false,
+    })),
+  });
+
   const perDb: DatabaseActivity[] = databases.map((db, index) => ({
     dbId: db.id,
     dbName: db.name,
@@ -129,6 +163,8 @@ export function useHeaderActivity() {
     scan: scans[index]?.data,
     backfill: backfills[index]?.data,
     flats: flats[index]?.data,
+    sites: sites[index]?.data,
+    duplicates: duplicates[index]?.data,
   }));
   const items = activityItems(perDb, stacks, wbpp.data, projectOf, {
     scheduled,

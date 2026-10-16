@@ -156,7 +156,7 @@ pub(super) fn manifest(
     let tree = catalog
         .get_directory_tree()
         .map_err(|_| held("Image folders are unavailable"))?;
-    let boundary = calibration::catalog_night_boundary(&conn);
+    let nights = calibration::Nights::load(&conn);
     let mut associations = Vec::new();
     let mut calibration_sets = BTreeMap::new();
     let mut files = BTreeMap::new();
@@ -202,7 +202,7 @@ pub(super) fn manifest(
             ));
         }
         let selected = library.select(&light);
-        let gap = calibration::calibration_gap(&conn, &light, &selected, boundary)
+        let gap = calibration::calibration_gap(&conn, &light, &selected, &nights)
             .map_err(|_| invalid())?;
         if request.output.is_none() && gap.is_some() && calibration::exclude_uncalibrated_enabled()
         {
@@ -592,7 +592,7 @@ mod tests {
             "Target",
             None,
             crate::commands::export::ExportLayout::Standard,
-            calibration::catalog_night_boundary(&conn),
+            &calibration::Nights::load(&conn),
             false,
         )
         .unwrap();

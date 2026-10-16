@@ -7,6 +7,9 @@
 //!    from the cached planes.
 //! 3. Every imaging session shot inside a change's window asks its own
 //!    lights which side they are on ([`super::evidence`]).
+//! 4. Every imaging session whose lights' angle points at two or more
+//!    response families asks its own lights which one they follow
+//!    ([`super::family_job`]).
 //!
 //! Each step commits as it goes, so a stop loses little. The caller runs
 //! this on workers from the background budget, and says which rigs it
@@ -15,10 +18,11 @@
 use super::evidence::{self, EVIDENCE_ALGORITHM_VERSION};
 use super::metric::{self, Plane};
 use super::model::{canonical_filter, Book, Side};
-use super::store::{self, EvidenceFit, EvidenceRow, ResponseRow, Verdict};
-use crate::calibration::{
-    catalog_night_boundary, night_of, CalibrationFrame, CalibrationKind, LibrarySnapshot,
+use super::store::{
+    self, EvidenceFit, EvidenceRow, FileStamp, ResponseRow, UnreadFlat, UnreadKind, Verdict,
 };
+use super::{family_job, family_store};
+use crate::calibration::{CalibrationFrame, CalibrationKind, LibrarySnapshot, Nights};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rusqlite::Connection;
@@ -37,6 +41,8 @@ const COMPARE_ROUNDS: usize = 3;
 pub struct PassOutcome {
     pub sessions: usize,
     pub measured: usize,
+    /// Sessions left with flats whose files are away: the caller tries
+    /// them again later, and a pass reads them once the files are back.
     pub unreadable: usize,
     pub compared: usize,
     pub evidence: usize,
@@ -51,6 +57,8 @@ pub struct PassOutcome {
     pub retry: BTreeSet<String>,
     /// Whether the pass stopped before its end (`keep_going` said so).
     pub stopped: bool,
+    /// Imaging sessions and filters whose lights chose their family.
+    pub families: usize,
 }
 
 /// Where a pass stands, as it reports it.
@@ -58,7 +66,8 @@ pub struct PassOutcome {
 pub struct Progress<'a> {
     /// The rig being worked on.
     pub rig: &'a str,
-    /// [`STAGE_MEASURING`], [`STAGE_COMPARING`] or [`STAGE_EVIDENCE`].
+    /// [`STAGE_MEASURING`], [`STAGE_COMPARING`], [`STAGE_EVIDENCE`] or
+    /// [`STAGE_FAMILIES`].
     pub stage: &'a str,
     pub done: usize,
     pub total: usize,
@@ -229,7 +238,7 @@ pub struct Pass<'a> {
 }
 
 impl Pass<'_> {
-    fn in_pool<R: Send>(&self, work: impl FnOnce() -> R + Send) -> R {
+    pub(crate) fn in_pool<R: Send>(&self, work: impl FnOnce() -> R + Send) -> R {
         match self.pool {
             Some(pool) => {
                 let mut work = Some(work);
@@ -246,6 +255,7 @@ impl Pass<'_> {
 pub const STAGE_MEASURING: &str = "measuring flat sessions";
 pub const STAGE_COMPARING: &str = "comparing flat sessions";
 pub const STAGE_EVIDENCE: &str = "reading lights shot during a change";
+pub const STAGE_FAMILIES: &str = "reading lights to choose their flats";
 
 /// Whether flats of this rig are grouped by measurement, so measured.
 pub fn rig_is_measured(rig: &str) -> bool {
@@ -377,8 +387,8 @@ pub fn focal_classes<'a>(
 /// Flat sessions in use: one night of one family, frames whose rotator
 /// angle lies within [`super::model::ROTATION_CLUSTER_DEG`] of the
 /// session's first.
-pub fn plan_sessions(frames: &[CalibrationFrame], boundary: i64) -> Vec<SessionPlan> {
-    plan_sessions_with(frames, boundary, |rig| {
+pub fn plan_sessions(frames: &[CalibrationFrame], nights: &Nights) -> Vec<SessionPlan> {
+    plan_sessions_with(frames, nights, |rig| {
         crate::calibration::rules::rules_for_rig(rig)
             .coherence_tolerances()
             .focal_length_mm
@@ -388,7 +398,7 @@ pub fn plan_sessions(frames: &[CalibrationFrame], boundary: i64) -> Vec<SessionP
 /// [`plan_sessions`], with each rig's focal length tolerance given.
 pub fn plan_sessions_with(
     frames: &[CalibrationFrame],
-    boundary: i64,
+    nights: &Nights,
     focal_tolerance: impl Fn(&str) -> f64,
 ) -> Vec<SessionPlan> {
     let mut flats: Vec<&CalibrationFrame> = frames
@@ -404,7 +414,11 @@ pub fn plan_sessions_with(
     let focal = focal_classes(flats.iter().copied(), focal_tolerance);
     let mut sessions: Vec<SessionPlan> = Vec::new();
     for frame in flats {
-        let night = night_of(frame.captured_at.unwrap_or_default(), boundary);
+        let night = nights.night_of_frame(
+            &frame.rig_uuid,
+            &frame.frame_uuid,
+            frame.captured_at.unwrap_or_default(),
+        );
         let family = family_key(frame, focal.get(&frame.frame_uuid).copied().flatten());
         let joins = |session: &SessionPlan| {
             session.family_key == family
@@ -545,9 +559,8 @@ fn write_plane(dir: &Path, key: &str, plane: &Plane) -> Result<()> {
 pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
     let conn = pass.conn;
     let mut outcome = PassOutcome::default();
-    let boundary = catalog_night_boundary(conn);
     let library = LibrarySnapshot::load(conn)?;
-    let plans = plan_sessions(library.frames(), boundary);
+    let plans = plan_sessions(library.frames(), &Nights::load(conn));
     let pedestal_table = pedestals(conn)?;
     let known: HashMap<String, ResponseRow> = store::load_responses(conn)?
         .into_iter()
@@ -568,10 +581,18 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         .filter(|rig| pass.scope.reads_lights(rig) && rig_is_measured(rig))
         .collect();
     rigs.sort_by_key(|rig| !(pass.goes_first)(rig));
+    // The lights' rotator offsets, which the family stage's candidates are
+    // turned by: from the lights' metadata and the solves in the catalog's
+    // cache folder that changed since the last pass.
+    if !rigs.is_empty() && (pass.keep_going)() {
+        super::gather_angles(conn, pass.dir.parent())?;
+    }
     let frames_read = AtomicUsize::new(0);
     let mut measured_rigs: BTreeSet<String> = BTreeSet::new();
     let mut current: Vec<String> = Vec::new();
     let mut tried: std::collections::HashSet<(String, String)> = Default::default();
+    let mut family_keep: Vec<family_store::Kept> = Vec::new();
+    let mut family_rigs: BTreeSet<String> = BTreeSet::new();
     'rigs: for rig in rigs {
         let report = |stage: &'static str, done: usize, total: usize| Progress {
             rig,
@@ -588,20 +609,22 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
                 .copied()
                 .collect();
             outcome.sessions += plans.len();
-            // A session is done when its response is on disk from every
-            // flat it combines, or could not be combined at all. One built
-            // while some files were away is read again until they are back.
-            let todo: Vec<(&SessionPlan, String)> = plans
-                .iter()
-                .map(|plan| (*plan, plan.response_key()))
-                .filter(|(plan, key)| {
-                    !known.get(key).is_some_and(|row| {
-                        row.error.is_some()
-                            || (super::response_path(pass.dir, key).is_file()
-                                && row.frames >= plan.combined().len())
-                    })
-                })
-                .collect();
+            // A session is done once its response is kept (see
+            // `response_is_current`). One left with flats away or refused
+            // is read again once they may read, and keeps its rig on the
+            // retry ladder meanwhile; it is not read on every pass.
+            let mut todo: Vec<(&SessionPlan, String)> = Vec::new();
+            for plan in &plans {
+                let key = plan.response_key();
+                match known.get(&key) {
+                    Some(row) if response_is_current(pass.dir, plan, row) => {
+                        if row.unread.iter().any(|flat| flat.kind.retries()) {
+                            outcome.unreadable += 1;
+                        }
+                    }
+                    _ => todo.push((*plan, key)),
+                }
+            }
             for plan in &plans {
                 let key = plan.response_key();
                 // A dark-flat or bias that arrived since: the pedestal comes
@@ -628,6 +651,11 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
                     // renamed.
                     if row.family_key != plan.family_key || row.session_key != plan.session_key {
                         store::set_family(conn, &key, &plan.family_key, &plan.session_key)?;
+                    }
+                    // Measured before the rig's nights split at its own
+                    // noon: the same flats under another night's name.
+                    if row.night != plan.night {
+                        store::set_night(conn, &key, &plan.night)?;
                     }
                 }
                 current.push(key);
@@ -737,6 +765,40 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
             }
         }
         (pass.progress)(&report(STAGE_EVIDENCE, total, total));
+
+        // Which response family this rig's lights follow, where their angle
+        // points at two or more ([`super::family_job`]).
+        family_store::add_table(conn)?;
+        let library = LibrarySnapshot::load(conn)?;
+        let book = std::sync::Arc::clone(library.flat_book());
+        let questions = family_job::questions(&pass, &library, &book, rig)?;
+        let todo: Vec<&family_job::Question> = questions
+            .iter()
+            .filter(|question| !family_job::answered(question))
+            .collect();
+        let total = todo.len();
+        for (done, question) in todo.iter().enumerate() {
+            if !(pass.keep_going)() {
+                outcome.stopped = true;
+                break 'rigs;
+            }
+            (pass.progress)(&report(STAGE_FAMILIES, done, total));
+            (pass.yield_now)();
+            match family_job::answer(&pass, &book, question, &pedestal_table, &frames_read) {
+                Some(row) => {
+                    family_store::upsert(conn, &row)?;
+                    outcome.families += 1;
+                }
+                None => outcome.lights_missing += 1,
+            }
+        }
+        (pass.progress)(&report(STAGE_FAMILIES, total, total));
+        family_keep.extend(
+            questions
+                .iter()
+                .map(|question| family_job::kept(&book, question)),
+        );
+        family_rigs.insert(rig.to_string());
         if (outcome.unreadable, outcome.lights_missing) != left_before {
             outcome.retry.insert(rig.to_string());
         }
@@ -776,10 +838,95 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         .map(|session| session.key.clone())
         .collect();
     store::retain_evidence(conn, &wanted, &sessions, EVIDENCE_ALGORITHM_VERSION)?;
+    // Family evidence of the rigs whose lights were asked: rows no
+    // question asks for go, and rows of sessions the catalog lost.
+    let judged: std::collections::HashSet<String> = book
+        .imaging
+        .iter()
+        .filter(|session| session.rigs.iter().any(|rig| family_rigs.contains(rig)))
+        .map(|session| session.key.clone())
+        .collect();
+    let all: std::collections::HashSet<String> = sessions.into_iter().collect();
+    family_store::retain(conn, &family_keep, &judged, &all)?;
     Ok(outcome)
 }
 
-/// Read one flat session and keep its response.
+/// Whether a session's kept response stands, so the pass reads nothing for
+/// it: its plane is on disk and it combines every flat it could read, or it
+/// could not be combined at all. The flats it could not read count as done
+/// until one may read now ([`may_read_now`]). An older row that names no
+/// unread flats but combines fewer than its session holds is read once more
+/// to name them.
+fn response_is_current(dir: &Path, plan: &SessionPlan, row: &ResponseRow) -> bool {
+    let combined = plan.combined();
+    let back = row.unread.iter().any(|flat| {
+        combined
+            .iter()
+            .any(|frame| frame.frame_uuid == flat.frame_uuid && may_read_now(flat, frame))
+    });
+    if back {
+        return false;
+    }
+    row.error.is_some()
+        || (super::response_path(dir, &row.response_key).is_file()
+            && row.frames + row.unread.len() >= combined.len())
+}
+
+/// The size and modification time of the file at `path` now; none when no
+/// file is there.
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok().filter(|meta| meta.is_file())?;
+    let modified_ns = meta
+        .modified()
+        .ok()
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_nanos() as u64);
+    Some(FileStamp {
+        size: meta.len(),
+        modified_ns,
+    })
+}
+
+/// Whether a flat a session could not read is worth reading again: a
+/// missing file is there now, a refused one opens, or the file at its path
+/// is another than the one that failed (its size or time differ). Only
+/// stats and opens; reads no pixel.
+fn may_read_now(flat: &UnreadFlat, frame: &CalibrationFrame) -> bool {
+    let path = &frame.source_path;
+    let replaced = || file_stamp(path).is_some_and(|now| flat.stamp != Some(now));
+    match flat.kind {
+        UnreadKind::Missing => path.is_file(),
+        UnreadKind::Transient => replaced() || std::fs::File::open(path).is_ok(),
+        UnreadKind::Undecodable => replaced(),
+    }
+}
+
+/// Why a flat would not read, from the I/O error under it: no file, a file
+/// the file system would not give up, or one that is not a readable image
+/// (bad data, cut short).
+fn unread_kind(error: &anyhow::Error, path: &Path) -> UnreadKind {
+    use std::io::ErrorKind;
+    let io = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .map(std::io::Error::kind)
+            // A FITS error keeps its I/O error without naming it a source.
+            .or_else(|| match cause.downcast_ref::<seiza_fits::FitsError>() {
+                Some(seiza_fits::FitsError::Io(error)) => Some(error.kind()),
+                _ => None,
+            })
+    });
+    match io {
+        Some(ErrorKind::NotFound) => UnreadKind::Missing,
+        Some(ErrorKind::InvalidData | ErrorKind::UnexpectedEof) => UnreadKind::Undecodable,
+        Some(_) => UnreadKind::Transient,
+        None if !path.is_file() => UnreadKind::Missing,
+        None => UnreadKind::Undecodable,
+    }
+}
+
+/// Read one flat session and keep its response, with the flats it could
+/// not read and why.
 fn measure_session(
     pass: &Pass<'_>,
     plan: &SessionPlan,
@@ -800,12 +947,24 @@ fn measure_session(
             })
             .collect()
     });
-    let (planes, failures): (Vec<_>, Vec<_>) = read.into_iter().partition(|r| r.is_ok());
-    let planes: Vec<(Plane, usize)> = planes.into_iter().map(|r| r.expect("ok")).collect();
-    if !failures.is_empty() && planes.len() < metric::MIN_FRAMES {
-        // Files away, as on an unmounted share: the caller tries again.
+    let mut planes: Vec<(Plane, usize)> = Vec::new();
+    let mut unread: Vec<UnreadFlat> = Vec::new();
+    for (frame, result) in combined.iter().zip(read) {
+        match result {
+            Ok(plane) => planes.push(plane),
+            Err(error) => unread.push(UnreadFlat {
+                frame_uuid: frame.frame_uuid.clone(),
+                kind: unread_kind(&error, &frame.source_path),
+                reason: format!("{error:#}"),
+                stamp: file_stamp(&frame.source_path),
+            }),
+        }
+    }
+    // Files away or refused, as on an unmounted share, a copy moved
+    // elsewhere or a permission: the caller tries again, and a pass reads
+    // the session once they may read.
+    if unread.iter().any(|flat| flat.kind.retries()) {
         outcome.unreadable += 1;
-        return Ok(());
     }
     let bin = planes.first().map_or(1, |(_, bin)| *bin);
     let first = &plan.frames[0];
@@ -838,6 +997,7 @@ fn measure_session(
         bin: Some(bin),
         algorithm_version: metric::RESPONSE_ALGORITHM_VERSION,
         error: None,
+        unread,
     };
     match response {
         Some(response) => {
@@ -847,6 +1007,14 @@ fn measure_session(
             row.width = Some(response.plane.width);
             row.height = Some(response.plane.height);
             outcome.measured += 1;
+        }
+        None if binned.len() < metric::MIN_FRAMES && !row.unread.is_empty() => {
+            row.error = Some(format!(
+                "{} of {} flats could not be read: {}",
+                row.unread.len(),
+                combined.len(),
+                row.unread[0].reason
+            ));
         }
         None => row.error = Some("the flats could not be combined".into()),
     }

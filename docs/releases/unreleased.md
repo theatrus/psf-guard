@@ -23,6 +23,40 @@
   to 200%, saved with your other scoring defaults. They set how hard a
   frame is marked down for an HFR above, or fewer stars than, the night's
   good frames, where Max HFR and Min stars only reject past a fixed line.
+- Flats are matched by what they measure, not only by the rotator angle
+  they record. Angles whose flats measure alike are one **response
+  family**, named in Calibration › Frames by its measured angle range
+  (`72.6° & 82.2°`). A light takes its family's flats at its own angle
+  first, and another angle's only where they measured alike with its own
+  angle's, the family's flats at the two angles measure alike on several
+  sessions and nights (from the light's side of every change), or its own
+  pixels chose the family; a stack then reads it at its flats' angle instead of
+  refusing them, and the panel says which span and how many pairs. Where two families lie within
+  10° of a light's angle, as after a rotator re-homed, the light's own
+  pixels choose between them. They move a light off its recorded angle
+  only when its rotator's epochs or another filter's lights agree;
+  otherwise it keeps its recorded angle's flats and gets a Check. The
+  Calibration panel names the **Flat family** and how it was chosen.
+  Nights of only two flats are measured and grouped too.
+
+- Calibration splits frames into nights at local noon where each was shot,
+  taken from the site longitude in its header (the N.I.N.A. profile's site),
+  else its computer's clock, so a dawn flat run that crosses noon UTC stays
+  one session and is graded as one. Before, every rig split where the
+  catalog's lights were quiet, and a catalog without lights split at noon
+  UTC, cutting dawn runs west of Greenwich in two. A rig taken to a star
+  party keeps its home nights; a frame with no site of its own splits where
+  its rig usually is. A rig with no site in its frames can take a
+  UTC offset under **Night starts at noon in** in its calibration settings.
+  After the upgrade a **Reading frame sites** row in the job line reads
+  each frame's site in the background, with Stop, and tries again while
+  the server runs if the NAS is not mounted; the rigs it places are graded
+  again and their flat groups planned again: sessions whose date moved are
+  renamed without measuring them again, and only runs that were split are
+  measured once more. When a frame was shot, from flat-group change windows
+  to the strip, the frame panel and the duplicates list, reads on the rig's
+  clock with its offset, such as UTC−7; when a master was built reads on
+  your clock with its zone.
 - The header's background jobs keep automatic work in view while your own
   work runs. A database quality analysis, an automatic stack refresh, or a
   re-apply of processing that steps aside for a build, scan, or solve you
@@ -35,6 +69,18 @@
   frame or grade changed meanwhile, and its row turns into the running
   build without appearing twice. One you stopped yourself stays stopped.
 
+- **Repair duplicates** on the Calibration page works on large libraries
+  behind a reverse proxy. Before, Apply waited for any stack build in
+  progress and could end in a gateway timeout with nothing repaired. The
+  check and the repair now run as jobs, on the page and in the header's job
+  line: "Checking files 812 of 2,140", then "Merging 37 of 203", with
+  Stop. A stopped repair writes nothing. Apply no longer fails because a
+  stack recorded a master or grading ran since the preview. When the
+  duplicates themselves changed, it shows what changed and the new plan.
+  The list says when it was checked. It checks again in the background
+  when the calibration rows have changed since. Read-only accounts see it
+  too. The command line and a server can no longer repair one catalog at
+  once.
 - Collaboration imports preserve Starfront's physical-filter/data-band mapping
   and OSC camera and Bortle limits in reviewed plans. Reports carry the data
   bands explicitly, and work for bands disabled by the project stays held.
@@ -63,6 +109,15 @@
   stack, a preview or anything else you start. Work it could not finish,
   such as flats on a share that is away, is tried again later, and Stop
   pauses measuring until those flats change, **Resume now**, or a restart.
+- A flat session some of whose files are gone, as flats catalogued both
+  where an upload left them and where they were moved, is measured once
+  from the flats that read and then left alone, instead of being read again
+  on every measuring pass. It is read again when a missing file comes back,
+  a file the share or its permissions refused opens again, or a file that
+  would not decode is replaced. A session none of whose flats read is no
+  longer tried on every pass either; the catalog's flat measurements
+  (`psf_guard_flat_response.unread`) keep which flats failed and why. The
+  app does not show these yet.
 
 - Images' **Date** groups are observing nights, split where the catalog's
   nights split, as calibration and the AstroBin export do: a night west of

@@ -44,8 +44,9 @@ use std::time::UNIX_EPOCH;
 /// Bump when the rules or what a result keeps change, so every kept result
 /// is computed again. 2: each finding keeps its lights' ids. 3: measured
 /// flat groups: mixed nights only when unmeasured, flats across a change.
-/// 4: grouping by time checks mixed nights as version 2 did.
-pub const HEALTH_ALGORITHM_VERSION: u32 = 4;
+/// 4: grouping by time checks mixed nights as version 2 did. 5: flats by
+/// measured response family.
+pub const HEALTH_ALGORITHM_VERSION: u32 = 5;
 
 /// Flats further than this from a light are worth a look, though they are
 /// within the age limit that makes a light one that cannot be calibrated,
@@ -202,7 +203,8 @@ pub struct JudgedLight {
 pub struct HealthLibrary {
     snapshot: LibrarySnapshot,
     flats: Vec<CalibrationFrame>,
-    boundary: i64,
+    /// Where each rig's calibration nights split, and the catalog's lights'.
+    nights: super::Nights,
     has_frames: bool,
     suspect: HashSet<String>,
     by_hand: HashSet<String>,
@@ -388,7 +390,7 @@ impl HealthLibrary {
         Ok(Self {
             snapshot,
             flats,
-            boundary: super::catalog_night_boundary(conn),
+            nights: super::Nights::load(conn),
             has_frames,
             suspect,
             by_hand,
@@ -398,9 +400,10 @@ impl HealthLibrary {
         })
     }
 
-    /// Where this catalog's nights split, in seconds after 00:00 UTC.
+    /// Where this catalog's lights' nights split, in seconds after 00:00
+    /// UTC, as Images groups them.
     pub fn night_boundary(&self) -> i64 {
-        self.boundary
+        self.nights.catalog()
     }
 
     /// Whether the library holds no frame at all. Then there is nothing to
@@ -500,9 +503,7 @@ impl HealthLibrary {
             );
             return Ok(found.judgement);
         }
-        let gaps = calibration_gaps(light, &selected, self.boundary, || {
-            Ok(self.flats.as_slice())
-        })?;
+        let gaps = calibration_gaps(light, &selected, &self.nights, || Ok(self.flats.as_slice()))?;
         // One gap speaks for the light, in the gap rule's order (no flat,
         // then no bias or dark, then flats past the age limit): the first
         // flagged, else the first advisory. A gap whose check is off is
@@ -612,7 +613,15 @@ impl HealthLibrary {
         if let Some(finding) = self.mixed_flats(flat.raw(), rules) {
             found.push(Check::MixedFlats, finding);
         }
-        if let Some(reason) = super::flat_groups::describe_flag(&selected.flat_basis, rules) {
+        // A change it cannot be placed against, or a family its own lights
+        // point away from that nothing confirms.
+        let flag = super::flat_groups::describe_flag(&selected.flat_basis, rules).or_else(|| {
+            selected
+                .flat_family
+                .as_ref()
+                .and_then(super::flat_groups::describe_family_flag)
+        });
+        if let Some(reason) = flag {
             found.push(
                 Check::FlatsDiffer,
                 check(HealthCode::FlatsDiffer, reason).about([CalibrationKind::Flat]),
@@ -686,8 +695,13 @@ impl HealthLibrary {
     fn mixed_flats(&self, flats: &[CalibrationFrame], rules: &Rules) -> Option<LightFinding> {
         let nights: BTreeSet<String> = flats
             .iter()
-            .filter_map(|frame| frame.captured_at)
-            .map(|at| night_of(at, self.boundary))
+            .filter_map(|frame| {
+                Some(self.nights.night_of_frame(
+                    &frame.rig_uuid,
+                    &frame.frame_uuid,
+                    frame.captured_at?,
+                ))
+            })
             .collect();
         if nights.len() <= 1 {
             return None;
@@ -967,11 +981,14 @@ pub fn library_digest(conn: &Connection) -> Result<String> {
     hasher.update(b"\x1d");
     // What flat grouping measured decides which flats a light takes.
     super::flat_groups::store::digest_rows(conn, &mut hasher)?;
+    // So does which family the lights' own pixels chose.
+    super::flat_groups::family_store::digest(conn, &mut hasher)?;
     Ok(hex(hasher))
 }
 
-/// The settings that change what matches a light, with the night boundary.
-pub fn settings_digest(boundary: i64) -> String {
+/// The settings that change what matches a light, with where nights split.
+pub fn settings_digest(nights: &super::Nights) -> String {
+    let boundary = nights.digest();
     let book = rule_book();
     let global = book.global();
     let mut digest = format!(
@@ -1084,7 +1101,7 @@ pub fn project_key(library: &str, settings: &str, lights: &str) -> String {
 /// The current key of every project in the catalog.
 pub fn current_keys(conn: &Connection) -> Result<BTreeMap<i32, String>> {
     let library = library_digest(conn)?;
-    let settings = settings_digest(super::catalog_night_boundary(conn));
+    let settings = settings_digest(&super::Nights::load(conn));
     Ok(project_light_digests(conn)?
         .into_iter()
         .map(|(project, lights)| (project, project_key(&library, &settings, &lights)))
@@ -1862,7 +1879,13 @@ mod tests {
         let light = read_frame_meta(&fixture.path("light-1.fits"));
         let gap = || {
             let selected = super::super::select_for_light(&fixture.conn, &light).unwrap();
-            super::super::calibration_gap(&fixture.conn, &light, &selected, 0).unwrap()
+            super::super::calibration_gap(
+                &fixture.conn,
+                &light,
+                &selected,
+                &super::super::Nights::fixed(0),
+            )
+            .unwrap()
         };
         assert_eq!(
             gap().as_deref(),

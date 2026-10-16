@@ -43,6 +43,100 @@ with that rig. Target Scheduler row IDs are not used as calibration identity.
 Settings shows each rig and its bias, dark, dark-flat, and flat coverage. A
 database copy carries this catalog with its projects and grades.
 
+### Nights
+
+Calibration groups a rig's frames by night: an evening's darks, the flats
+shot at dusk and those shot at the following dawn. A frame's night runs
+from local noon where it was shot to the next local noon, as N.I.N.A.'s
+`DATEMINUS12` folders date it, and takes the local date its evening began.
+A dusk or dawn flat run never straddles the split, so it stays one session.
+Sessions, flat groups, flat grading, the coverage report, masters' source
+nights and export folders all use these nights.
+
+Where a frame's noon falls, first found wins:
+
+1. Its rig's **Night starts at noon in** setting, then the global one: a
+   UTC offset (`night_zone`, below). Automatic by default.
+2. The site longitude the frame records (`SITELONG`, the N.I.N.A. profile's
+   site): mean solar noon there, 12:00 UTC plus four minutes for each
+   degree west. The C925 at 121.16° W splits at 20:05 UTC, 13:05 PDT or
+   12:05 PST. A longitude written as 0–360° east, 238.84° for 121.16° W,
+   reads the same.
+3. The frame's computer clock (`DATE-LOC` less `DATE-OBS`): noon on that
+   clock.
+4. Its rig's usual place: the longitude its frames and lights recorded on
+   the most nights, or, for a profile with no site set, the clock they
+   recorded on the most nights. Each night counts once; a tie goes to the
+   most recent.
+5. The hours in which the catalog's lights are never captured, as Images
+   splits nights ([Sky coverage](SKY_COVERAGE.md)). A catalog with no
+   lights splits at noon UTC.
+
+A rig is taken to live somewhere: an observatory, or a home its trips come
+back to. A frame shot on a trip records its own site and splits where it
+was. One that records none, because its file is away or its header comes
+from other software, splits where its rig usually is, so a trip neither
+moves the home nights nor sticks after it. The server's own time zone never
+counts; it often runs on UTC or somewhere else. Daylight saving moves civil
+noon by an hour, which leaves the split in the middle of the day; a frame's
+own clock is the one it was shot by. A site of 0°, 0° (an unset profile)
+counts as none. Set a rig's offset
+when its frames record no site and its computer's clock is wrong too, as on
+a remote rig kept on UTC. A site past UTC+12 (New Zealand in summer, Tonga)
+or close to 180° W still names its nights by their local evening.
+
+Lights keep the nights Images groups them by, so a link from a calibration
+report opens the lights Images shows under that date.
+
+An import records each frame's site from its header, and its rig's. For
+frames imported before, the server's **Reading frame sites** job reads
+their headers: a row in the job line (`Reading frame sites · 812 of 1,867
+frames`) with Stop, started when the server starts and after an import, a
+hundred headers between commits, stepping aside while your own work runs
+and saying what it waits for. Stop pauses it until frames are imported or
+the server starts again; while it is stopped, Calibration says so and offers
+**Resume now**. A frame whose file is away while others are read is marked
+and tried again a week later (the server looks hourly for frames that are
+due), or when an import brings it. Files that cannot be read before any
+other file of the pass is are held back unmarked, and marked once one is
+read; when no file of the pass can be read, as when the NAS is not mounted,
+nothing is marked and the pass is tried again while the server runs, after
+a minute, then two, up to half an hour. The CLI's `flat-groups` reads the
+sites on its copy. Until a frame's site is read it splits where its rig
+usually is, or as the catalog's lights do. The rigs whose frames found a
+site are graded again and queued for flat measuring, which waits for
+grading and plans their sessions again: at most every 45 seconds while the
+pass reads, so grading does not run once a hundred frames, and once more
+when it ends, early or not.
+Changing **Night starts at noon in** grades again and queues its rigs too.
+It picks no frames itself, so it re-keys no master or stack. After an upgrade:
+
+- A session whose frames stay together keeps its id when its date does
+  not change. Where only the date changes, flat groups rename the measured
+  session in place: its measurement and comparisons stand and nothing is
+  read again.
+- A run that was split in two becomes one session, graded as one. Flat
+  groups measure it once, drop the two halves and compare it again, and
+  masters and stacks that took those flats build again. Masters are keyed
+  by their frames, so nothing else rebuilds.
+- A link to a session whose id changed opens the first page of its list.
+
+On the C925, PSF Guard's catalog copy already split at 20:00 UTC, its
+lights' quiet hours, so nothing moved. A copy of that catalog without its
+lights split at noon UTC: three dawn flat runs were cut in two (OIII at
+104.2° from 04:58 to 05:00 PDT on 2026-08-19 among them) and eight dark
+runs crossed noon. Split at the site's noon, none are.
+
+On the Calibration page, when something was shot reads on its rig's
+clock, as its frames record it, with its offset: frames in the strip, the
+frame panel and the duplicates list, and flat groups' change windows, such
+as `2026-08-11 06:23 – 2026-08-12 06:06 UTC−7`, and `UTC−8` once the clocks
+went back. A rig with a **Night starts at noon in** setting reads on that
+offset; one whose frames record no clock reads on the viewer's clock, with
+its zone (`PDT`). When the server built a master is no rig's time: it reads
+on the viewer's clock with its zone, in Masters, flat groups and the
+duplicates repair alike. Night dates are the rig's local dates either way.
+
 ## Browse the library
 
 The **Calibration** page shows one database's library: its sessions, the
@@ -125,8 +219,8 @@ filter and rotator angle, for darks and dark-flats the exposure and sensor
 temperature, and for bias the exposure. A temperature or an angle drifts
 while a set is shot, so a frame joins a session while it sits within 1.5 °C
 (darks) or 1° (flats) of the next; bias is not split by temperature, since
-a bias set is often shot while the sensor cools. Nights split as in
-[Validity boundaries](#validity-boundaries). A session's address carries
+a bias set is often shot while the sensor cools. Nights split at the rig's
+local noon ([Nights](#nights)). A session's address carries
 its middle temperature or angle rounded to a whole degree, so a link to it
 keeps working when a colder or warmer frame joins it, unless that frame moves
 the middle across a half degree.
@@ -330,8 +424,13 @@ twice.
 
 Tick **Duplicates** among the Calibration page's filters
 (`calDupes=true` in the address) to list every exposure recorded more than
-once. Each group shows its files, which are missing, and which row a repair
-keeps. **Rig** and **Type** narrow the list, and the view offers no other
+once. The view keeps the last check's list and says when it was made
+("Checked 12 min ago"). When it opens with no list, or with one made before
+the calibration rows changed (a sync, an import, a repair from the command
+line), it checks again in the background, behind a person's work, while the
+old list stays in view. **Check again** checks at once. The check writes
+nothing, so a read-only account may run it. Each group shows its files,
+which are missing, and which row a repair keeps. **Rig** and **Type** narrow the list, and the view offers no other
 filters. A row whose file is gone only joins a twin that is on disk. A group
 whose copies are all on a disk that is not mounted is left alone. When only
 some of its copies are, a row on the unmounted disk reads as missing and
@@ -354,23 +453,64 @@ library, whatever the filters show. **Apply** then, for each exposure:
   moves, and every master built on one of those, so stacks build them again.
   Stacks key on the frames they use, so their previews rebuild too.
 
-A master that was being built while the repair ran is not recorded if a row
-it used has gone; the next stack builds it again.
+A repair does not wait for a stack build. A master a build records while
+the repair runs is not recorded if a row it used has gone or moved to
+another file, and one recorded before the repair is removed with the
+others; the next stack builds it again.
 
-No file is moved or deleted. Apply is refused when the library, or which
-files are on disk, has changed since the preview; preview again. A second
-repair finds nothing to do. Repair needs database management: the desktop
-app, or a server started with `--allow-database-management`.
+No file is moved or deleted. A second repair finds nothing to do. Repair
+needs database management: the desktop app, or a server started with
+`--allow-database-management`.
+
+The check and the repair run as jobs, not inside the page's request. Each
+shows what it does and how far it has got, on the page and in the header's
+job line: "Checking files 812 of 2,140", "Comparing copies", then for a
+repair "Merging 37 of 203". **Stop** ends a check at once. It ends a repair
+between exposures and rolls it back whole, so nothing is written. Closing
+the dialog leaves the job running. When it is done, the page reports what
+the repair did.
+
+Apply checks the files again, then applies only if the plan is still the
+one previewed. The plan depends on the rows that could be duplicates, on
+which of their files are on disk, and on the copies' contents. Grading,
+flat measuring, a stack recording a master, or new frames of other
+exposures do not change it. When the plan has changed, Apply writes
+nothing. It says which exposures were added, dropped or changed, and shows
+the new plan to Apply or close.
+
+A catalog is repaired by one process at a time. A repair holds a lock file
+beside the catalog (`<catalog>.psf-guard-repair.lock`), so a server and the
+command line cannot repair the same catalog at once. The second to start is
+refused: another repair of this catalog is running, from the command line
+or a server. The file stays when the repair ends. On a file system that
+cannot lock files, the repair goes ahead without the lock and logs a
+warning.
 
 From the command line, `psf-guard calibration repair-duplicates <db>
---dry-run` prints the same plan without writing, and without `--dry-run`
-applies it. A server open on the same catalog sees the change at its next
-scan, regrade or restart. For a dry run against a catalog copied from another machine,
-`--map-prefix /mnt/share=/Volumes/share` reads the recorded paths through
-this machine's mount. The API is `GET /api/db/{db}/calibrations/duplicates`,
-which returns the groups, the plan and a `token`, and
-`POST /api/db/{db}/calibrations/duplicates/repair` with that `token`, which
-answers `409` when the plan has changed.
+--dry-run` prints the same plan without writing. Without `--dry-run` it
+applies the plan, holding the lock. Both print their progress and timings
+on standard error. A server open on the same catalog sees the change at its
+next scan, regrade or restart. For a dry run against a catalog copied from
+another machine, `--map-prefix /mnt/share=/Volumes/share` reads the
+recorded paths through this machine's mount.
+
+The API:
+
+- `GET /api/db/{db}/calibrations/duplicates` answers at once with the job's
+  status. That holds `state` (`idle`, `running`, `done`, `stopped` or
+  `failed`), `action`, `stage`, `done` and `total`, the run number, and
+  while it runs `priority` and `waiting_for`. It also holds the latest plan
+  in `report`, with its `token` and `checked_at`, `stale` when the
+  calibration rows have changed since, the last applied repair in
+  `repaired`, and `changed` when a repair found the plan moved on.
+- `POST …/duplicates/check` starts a check, or joins the one running.
+  `?automatic=true` runs it in the background; a person's check joining it
+  lifts it.
+- `POST …/duplicates/repair` with `{token}` starts a repair.
+- `POST …/duplicates/stop` stops the run.
+
+The start routes answer `202` with the status. Starting a run while the
+other kind runs answers `409`.
 
 #### Repairs and sync
 
@@ -432,13 +572,16 @@ own side of each change.
 
 After each grading pass, a background stage reads every flat session once
 more: one night of one rig, filter, focal length, sensor mode and rotator
-angle, with at least three flats in use. Focal lengths within the rig's
+angle, with at least two flats in use. Two flats make a response as two
+make a master; their combination is a mean, noisier than a median of
+three or more, and the comparison allows for that. Focal lengths within the rig's
 tolerance (1 mm by default) count as one; flats shot through a reducer
 are never compared with flats shot without it, and flats that record no
 focal length join the rig's only one, or keep to themselves when it has
 several. It takes at most 16 flats of a session, bins each to at most
 1,024 px on the long side, divides each by its median and keeps the
-sigma-clipped median of them: the session's **response**. Stars that move
+sigma-clipped median of them: the session's **response**. The measuring
+itself is Seiza's (`seiza_calibration::flat_response`). Stars that move
 between frames drop out. Stars that sit still, as in tracked sky flats,
 are masked when two responses are compared.
 
@@ -491,31 +634,50 @@ sessions`, then the pairs it compares, then the lights it reads.
 A read-only catalog, or one from an older build, has no place for the
 numbers and groups flats by time, as before.
 
+### Response families
+
+The rotator angle a flat records is a good guide but not proof of its
+light path. A rotator re-homed or a camera re-seated reads the same angle
+for another position, and on some optics flats tens of degrees apart
+measure alike. So flats are grouped by what they measure, with the angle
+as a starting point:
+
+1. Within one rig, filter, focal length and sensor mode, the recorded
+   angles first form **angle clusters**: angles join while the gaps between
+   them are no wider than the rig's rotation tolerance, at most 2°. Flats
+   at 101.3°, 102.2° and 104.0° are one cluster; flats at 82° and 104° are
+   two. A wider match tolerance lets a light reach further for flats; it
+   does not make two angles one.
+2. Each session is compared with its neighbours in time in every other
+   cluster of its filter, as well as within its own.
+3. Two clusters join into one **response family** when some pair of their
+   sessions shot within one flat session window, or neighbours in time,
+   measure alike, and no pair shot within one window measures apart.
+   Clusters never measured alike stay apart.
+4. Flats that record no angle join the family one of whose neighbours in
+   time they measure alike with, when exactly one does and every other
+   was measured and is unlike. Alike with none, or with several, they keep
+   to themselves at no angle.
+
+A family's **measured angle range** is the recorded angles of its
+clusters: `100.1–104.4°`, or `72.6° & 82.2°` for two angles whose flats
+measure alike. Frames names each family by it.
+
 ### Groups and changes
 
-Within one rig, filter, sensor mode and rotator angle, sessions join into
-**groups** in time order. Two sessions are alike when their dust and light
+Within one response family, sessions join into **groups** in time
+order. Two sessions are alike when their dust and light
 pattern are both within the limits: 1% dust and 2% light pattern by
 default. Each group holds only sessions measured alike with every other
 session it was compared with, so a slow drift cannot chain nights that
 differ into one master.
 
-Angles count as one while the rig's flats step between them in gaps no
-wider than its rotation tolerance, at most 2°: flats at 101.3°, 102.2° and
-104.0° are one angle; flats at 82° and 104° are two. A wider match
-tolerance lets a light reach further for flats; it does not make two
-angles one. Flats that record no angle, on a rig whose other flats do,
-are compared with that filter's flats either side of them in time at
-every angle. When they measure alike with one angle and unlike every
-other, they take the angle of the flats they matched. Alike with none, or
-with several, they keep to themselves at no angle.
-
 Between two groups lies a **split**, a window from the last flat before it
 to the first flat after it. Splits of one rig whose windows overlap and
 whose shadows sit at the same sensor position are one **change**. Dust on
 the camera side turns with the camera, so the same shadow shows in every
-filter and at every angle: a change seen in two filters or at two angles
-applies to every light of the rig. A change seen in one filter, as filter
+filter and every light path: a change seen in two filters, or in two
+response families of one filter, applies to every light of the rig. A change seen in one filter, as filter
 dust, applies to that filter only. One night unlike the nights either side
 of it, which measure alike, as after a hazy dawn, keeps to a group of its
 own but is no change: no light is flagged or kept from flats for it.
@@ -551,14 +713,66 @@ A light stands before or after a change:
    only when the change's map or the flat it divides by changes.
 4. Otherwise it is **undetermined**.
 
+### Which family a light takes
+
+First, the response family. The candidates are the families of the
+light's filter and sensor mode whose measured angle range lies within 10°
+of the light's angle:
+
+- **Its angle** as it recorded it, and as the rotator's **epochs** turn it.
+  N.I.N.A. records each light's sky angle, synced from its own plate
+  solves, beside the mechanical angle; where PSF Guard has solved the
+  light's pixels, that solve gives the sky angle instead. Sky − mechanical
+  is constant until the rotator is re-homed or the camera re-seated, so
+  each run of lights with one offset is an epoch, and a light compared
+  with flats of another epoch is turned by the difference.
+- **One candidate**: its flats, when it has flats at the light's recorded
+  angle. A header or an epoch alone never hands a light flats at another
+  angle.
+- **Two or more**: the light's own pixels choose. The measuring job takes
+  the sky background of up to eight lights of each imaging session,
+  filter, target and angle, and fits it against what tells each pair of
+  candidates apart, weighed against the same fit where nothing differs
+  (Seiza's `flat_response::choice`). The family the lights follow wins
+  when it stands clear of every other. The answer is kept, so choosing
+  flats reads no pixel.
+  - Pixels that pick the family at the light's recorded angle confirm it.
+  - Pixels that pick a family at another angle move the light only when
+    something else agrees: the rotator's epochs put the light at that
+    family's angle, or the session's lights of another filter, at the
+    same angles, moved the same way. Otherwise the light keeps the family
+    at its recorded angle and gets a Check.
+  - Over a nebula the lights usually cannot tell, and the light keeps the
+    family at its recorded angle; the panel says so.
+- **None** within 10°, or none at its recorded angle that its pixels
+  confirm: flats are matched by angle as before.
+
+Within its family a light takes the flats at its own angle first, then
+those within 10° of it, then the rest; the family's far angles serve
+where nothing nearer lies on its side of a change. A flat at another
+angle serves only when the light's own pixels chose the family, when
+its session measured alike with the family's flats at the light's
+angle, or when the family's own flats at the two angles measure alike.
+That needs pairs compared directly, with two sessions on two nights at
+each angle, and no change between the two flats of a pair; a pair
+measured apart that it would serve rules it out. It reaches across a
+change only when that change is dust on the camera side, which leaves
+how flats depend on the angle as it was. A flat served this way must
+come from the light's side of every change, and the panel names the
+angles and their pairs. A light whose flats sit at another angle than it recorded is read
+at its flats' angle when a stack judges it against its masters, so the
+stacker does not refuse the master its family chose.
+
 ### Which flats a light takes
 
-A light no change touches takes the nearest flats, as before. Otherwise,
-in this order:
+A light no change touches takes the nearest flats of its family, as
+before. Otherwise, in this order:
 
-1. Its own angle's flats from its own side of every change.
+1. Its family's flats from its own side of every change.
 2. When it has none, its own side's flats at the nearest other angle, if
-   this rig's flats measure alike across angles. Flats of one filter shot
+   this rig's flats measure alike across angles. Angles that measure alike
+   are usually one family already; this serves a family never measured
+   against the others. Flats of one filter shot
    at two angles within one flat session show how much the angle matters;
    that difference must be within the split limits.
 3. Otherwise, when the change is on the camera side, its own angle's flats
@@ -580,7 +794,13 @@ change this way takes a new master: its stack's key changes.
 
 An undetermined light keeps the nearest flats and is flagged. The light's
 Calibration panel says which of these chose its flats, under **Chosen
-by**, with the change and how the light was placed. When its flat master
+by**, with the change and how the light was placed. When its family was
+not simply the one at its recorded angle, **Flat family** names it with
+its measured angle range and how it was chosen: *chosen by its own
+pixels*, *moved by its own pixels* with what confirmed it, *its angles
+measure alike*, or *at its recorded angle*, with whether its lights
+could not tell or have not been read yet. A move nothing confirmed reads
+*check: its lights point to …*. When its flat master
 mixes nights, the panel says how alike they measured.
 
 An export, and a WBPP run, place the same flats a stack takes. WBPP
@@ -606,7 +826,8 @@ Flat):
 - A **change** on the camera side reaches every filter and angle of the
   rig, so it shows once, as one row above the newest flat shot before it:
   what it is, its depth, the filters and angles it was seen in, and its
-  window, with a note when the window is narrower than one flat run. Its
+  window on the rig's clock ([Nights](#nights)), with a note when the window is narrower
+  than one flat run. Its
   splits do not repeat in each filter.
 - **Compare**, on a split or a change, opens the ratio of the two
   sessions above the session view: later ÷ earlier, at ±3%, ±1% or
@@ -1032,11 +1253,10 @@ cleaning, a re-spaced imaging train, or any other change that makes older
 calibration wrong for newer lights. When nights lack their own frames, mark
 the boundary yourself on the [Calibration page](#browse-the-library): a
 session's header marks every frame of the session, and the frame panel one
-frame. A night splits where the catalog's lights are never captured, as in
-[Sky coverage](SKY_COVERAGE.md), so dusk and dawn flats share the date of
-the night between them, as N.I.N.A.'s `DATEMINUS12` folders do. The coverage
-report and export folders use the same nights. A catalog with no lights
-splits at noon UTC. The session header can also **Forget session**,
+frame. A rig's nights split at its local noon ([Nights](#nights)), so dusk
+and dawn flats share the date of the night between them, as N.I.N.A.'s
+`DATEMINUS12` folders do. The coverage report and export folders use the
+same nights. The session header can also **Forget session**,
 removing its records (and dependent masters) in one step without touching
 the FITS files. Mark frames usable **After only** (a set shot right after
 the change) or **Before only** (the final set shot before it). Marked frames
@@ -1406,6 +1626,7 @@ ASI2600MM)`. An editor can open the rig's settings from there.
 | `flat_session_hours` | Flat session: how far apart one master's flats may be | 24 h | 1–720 | matching |
 | `use_darks` | Use darks | on | on, off | matching |
 | `external_masters` | Masters from other software | use whenever one matches | prefer, fallback, ignore | matching |
+| `night_zone` | Night starts at noon in: where a rig's nights split ([Nights](#nights)) | automatic | `auto`, or a UTC offset in hours from `-12` to `14` (`-9.5`, `5.75` and the other half and quarter hours zones keep) | frame grades and flat measuring |
 | `dark_reach_days` | Dark reach | 183 days | 1–3650 | matching |
 | `complete_dark_frames` | Complete night | 10 darks | 2–64 | matching |
 | `dark_choice` | Dark choice | complete set first | complete, nearest | matching |

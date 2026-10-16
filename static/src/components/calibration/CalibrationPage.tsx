@@ -31,6 +31,7 @@ import { ALL_RIGS, listFilters, useCalibrationUrlState } from './useCalibrationU
 import type { CalibrationFilterState, CalibrationTab } from './useCalibrationUrlState';
 import { findGridNavigationIndex } from '../../utils/gridNavigation';
 import './CalibrationPage.css';
+import FrameSitesNote from './FrameSitesNote';
 
 const SESSIONS_PER_PAGE = 50;
 /** Frames of one session shown in the strip, at most. */
@@ -270,12 +271,13 @@ function CalibrationLibrary({
       {!canManage && (
         <p className="calibration-notice">Your account can view frames, not change them.</p>
       )}
+      <FrameSitesNote dbId={dbId} />
       {state.filters.duplicates ? (
         <>
           <CalibrationFilters filters={state.filters} facets={undefined} rigs={summary.data?.rigs ?? []}
             onChange={state.setFilters} onClear={state.clearFilters} />
           <CalibrationDuplicates dbId={dbId} filters={state.filters}
-            canRepair={canManage && managementAllowed}
+            canRepair={canManage && managementAllowed} canStop={canManage}
             repairNote={!canManage ? null
               : 'Repairing duplicates needs database management: the desktop app, or a server started with --allow-database-management.'} />
         </>

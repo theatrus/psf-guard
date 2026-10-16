@@ -8,6 +8,7 @@ import type {
   CalibrationKind,
   CalibrationKindExplanation,
   CalibrationNightFrames,
+  FlatFamilyNote,
   ImageCalibrationExplanation,
   LightCalibrationFinding,
 } from '../api/types';
@@ -40,6 +41,24 @@ interface CalibrationPanelProps {
 
 /** Bases that leave a light's flats from across a change: worth a check. */
 const UNSETTLED_BASES = new Set(['no_same_side', 'undetermined']);
+
+/** How a light's flat family was chosen, in a few words. */
+function familyBasisLabel(family: FlatFamilyNote): string {
+  switch (family.by) {
+    case 'pixels':
+      return family.moved
+        ? `moved by its own pixels, confirmed by ${family.corroborated ?? 'other evidence'}`
+        : 'chosen by its own pixels';
+    case 'nearest':
+      return family.undecided
+        ? 'at its recorded angle: its lights could not tell'
+        : 'at its recorded angle: its lights not read yet';
+    case 'disputed':
+      return `check: its lights point to ${family.pointed ?? 'another family'}, unconfirmed`;
+    default:
+      return 'its angles measure alike';
+  }
+}
 
 /** A fraction as a percent with one decimal: `0.2%`. */
 /** A fraction in percent: two decimals below 1%, and `<0.01%` below that. */
@@ -426,10 +445,31 @@ function KindAccount({ kind, parts, folded, level, lightNight, hrefFor }: KindAc
               <ul>{kind.matching_unused.map((night) => nightRow(night, 'unused'))}</ul>
             </div>
           )}
+          {kind.family && (
+            <p className="light-calibration-part" data-testid="calibration-flat-family">
+              <span className="light-calibration-part-label">Flat family</span>
+              <span>
+                {kind.family.label}
+                {' · '}
+                <span className="light-calibration-muted">{familyBasisLabel(kind.family)}</span>
+                {kind.family.alike_range && (
+                  <>
+                    {' · '}
+                    <span className="light-calibration-muted" data-testid="calibration-flat-alike-range">
+                      flats at {kind.family.alike_range.flats_angle.toFixed(1)}°, measured alike at{' '}
+                      {kind.family.alike_range.label} ({plural(kind.family.alike_range.pairs, 'pair')})
+                    </span>
+                  </>
+                )}
+              </span>
+            </p>
+          )}
           {kind.chosen_by && (
             <p
               className={`light-calibration-part light-calibration-chosen-by${
-                kind.basis && UNSETTLED_BASES.has(kind.basis.basis) ? ' is-check' : ''
+                (kind.basis && UNSETTLED_BASES.has(kind.basis.basis)) || kind.family?.by === 'disputed'
+                  ? ' is-check'
+                  : ''
               }`}
               data-testid="calibration-flat-chosen-by"
             >

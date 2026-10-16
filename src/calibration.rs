@@ -18,6 +18,7 @@ use std::time::UNIX_EPOCH;
 pub mod browse;
 pub mod flat_groups;
 mod health;
+pub mod night;
 pub mod project_scope;
 mod quality;
 pub mod rules;
@@ -28,15 +29,21 @@ pub use health::{
     HealthLibrary, JudgedLight, KeptHeader, LightFinding, LightResult, NightFilterLights,
     ProjectHealth, ProjectLight, FLAT_CHECK_AGE_DAYS, HEALTH_ALGORITHM_VERSION,
 };
+pub use night::{
+    backfill_frame_sites, backfill_rig_sites, NightSource, Nights, RigNight, SiteBackfill,
+    SiteBackfillOutcome,
+};
 pub use rules::{
     rule_book, rules_for_light, rules_for_rig, Check, CheckMode, RuleBook, RuleNote, RuleSource,
     RuleValues, Rules,
 };
 use std::sync::Arc;
 pub use twins::{
-    apply_repair as apply_duplicate_repair, duplicate_snapshot,
-    plan_repair as plan_duplicate_repair, DuplicateReport, DuplicateSnapshot, FileAccess,
-    InvalidatedMaster, RepairError, RepairOutcome, TwinGroup, TwinMember,
+    apply_repair as apply_duplicate_repair, apply_repair_with as apply_duplicate_repair_with,
+    duplicate_snapshot, plan_repair as plan_duplicate_repair,
+    plan_repair_checked as plan_duplicate_repair_checked, repair_lock, repair_lock_path,
+    CheckStage, Checking, DuplicateReport, DuplicateSnapshot, FileAccess, InvalidatedMaster,
+    RepairError, RepairLock, RepairLockError, RepairOutcome, Stopped, TwinGroup, TwinMember,
 };
 /// Synthetic frames for tests elsewhere in the crate.
 #[cfg(test)]
@@ -247,6 +254,9 @@ pub struct CalibrationSelection {
     /// for its own master, and refused by every fallback (the next set when
     /// one is unstable, an external master).
     pub flat_held_back: Vec<String>,
+    /// The response family the flats come from, when measured grouping
+    /// chose one (see [`flat_groups::lights`]).
+    pub flat_family: Option<flat_groups::FlatFamily>,
 }
 
 /// Which kinds of usable frame the library holds for one light's sensor,
@@ -307,6 +317,9 @@ impl CalibrationSelection {
         if let Some(widened) = self.flat_basis.rotation_tolerance() {
             tolerances.rotation_deg = tolerances.rotation_deg.max(widened);
         }
+        if let Some(family) = &self.flat_family {
+            tolerances.light_rotation = family.light_rotation;
+        }
         tolerances
     }
 
@@ -349,6 +362,9 @@ pub struct CalibrationRigSummary {
     pub flat: usize,
     pub oldest_at: Option<i64>,
     pub newest_at: Option<i64>,
+    /// The rig's clock over time ([`night::clock_runs`]): the clock its
+    /// frames' and masters' times read on.
+    pub clock: Vec<night::ClockRun>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -681,8 +697,10 @@ const READABLE_FRAME_COLUMNS: &[&str] = &[
 fn add_dark_level_columns_and_grades(conn: &Connection) -> Result<bool> {
     let columns = add_dark_level_columns(conn)?;
     let grades = quality::add_quality_table(conn)?;
-    // Flat grouping's tables came later still, the same way.
-    Ok(flat_groups::store::add_tables(conn)? | grades | columns)
+    // Flat grouping's tables came later still, the same way, and each
+    // rig's site after them.
+    let flat_groups = flat_groups::store::add_tables(conn)?;
+    Ok(night::add_site_table(conn)? | flat_groups | grades | columns)
 }
 
 fn add_dark_level_columns(conn: &Connection) -> Result<bool> {
@@ -1295,6 +1313,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         .context("creating PSF Guard calibration tables")?;
     conn.execute_batch(flat_groups::store::TABLES_SQL)
         .context("creating PSF Guard calibration tables")?;
+    conn.execute_batch(night::SITE_TABLE_SQL)
+        .context("creating PSF Guard calibration tables")?;
     // A catalog that has just had its tables created is already at the
     // current version; one that had them from an older build is stamped with
     // whatever it was, and the ladder below carries it up.
@@ -1353,6 +1373,10 @@ pub fn import_calibration_frames(
             .as_ref()
             .is_some_and(|(_, previous)| previous == &fingerprint)
         {
+            // Unchanged, but read before the catalog kept each frame's site.
+            if frame_site_unread(tx, &source_path) {
+                night::record_frame_site(tx, &source_path, frame)?;
+            }
             outcome.skipped_existing += 1;
             count_kind(&mut outcome, kind);
             continue;
@@ -1480,6 +1504,7 @@ pub fn import_calibration_frames(
                 frame.processed,
             ],
         )?;
+        night::record_frame_site(tx, &source_path, frame)?;
         if existing.is_some() || moved {
             outcome.updated += 1;
         } else {
@@ -1488,6 +1513,18 @@ pub fn import_calibration_frames(
         count_kind(&mut outcome, kind);
     }
     Ok(outcome)
+}
+
+/// Whether a frame's own site has yet to be read, or was read while its
+/// file was away.
+fn frame_site_unread(conn: &Connection, source_path: &str) -> bool {
+    conn.query_row(
+        "SELECT site_read_at IS NULL OR site_read_at < 0
+         FROM psf_guard_calibration_frame WHERE source_path = ?1",
+        [source_path],
+        |row| row.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
 }
 
 pub fn library_summary(conn: &Connection) -> Result<CalibrationLibrarySummary> {
@@ -1560,9 +1597,14 @@ pub fn library_summary(conn: &Connection) -> Result<CalibrationLibrarySummary> {
                 flat: row.get::<_, i64>(9)? as usize,
                 oldest_at: row.get(10)?,
                 newest_at: row.get(11)?,
+                clock: Vec::new(),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut rigs = rigs;
+    for rig in &mut rigs {
+        rig.clock = night::clock_runs(conn, &rig.rig_uuid);
+    }
     Ok(CalibrationLibrarySummary {
         schema_version,
         frame_count: rigs.iter().map(|rig| rig.frame_count).sum(),
@@ -2099,6 +2141,18 @@ impl LibrarySnapshot {
             ..Default::default()
         };
         let policy = rules.external_masters;
+        let family = self.flat_family(light, &rules);
+        // The family serves the light's flats when it has flats at the
+        // angle the light recorded, or its own pixels chose it. A family
+        // its lights only pointed to is a Check, not flats.
+        let serving = family
+            .as_ref()
+            .filter(|choice| choice.at_recorded || choice.by_pixels());
+        // Flats of the serving family at another angle than the light's,
+        // admitted by measurement: they stay candidates only where nothing
+        // at the light's own angle can serve it (below), so a light that
+        // never needs them keeps the candidates, and the stack key, it had.
+        let mut off_angle: HashSet<String> = HashSet::new();
         for candidate in &self.frames {
             if candidate.is_master && policy == ExternalMasterPolicy::Ignore {
                 continue;
@@ -2132,16 +2186,32 @@ impl LibrarySnapshot {
                         && dark_within_reach(candidate, light.timestamp, &rules)
                 }
                 CalibrationKind::DarkFlat => false,
-                CalibrationKind::Flat => match self.measured_angle(candidate, &rules) {
-                    // Flats that record no angle, measured alike with a
-                    // rotation cluster: matched at its angle.
-                    Some(angle) if candidate.rotation.is_none() => {
-                        let mut at_angle = candidate.clone();
-                        at_angle.rotation = Some(angle);
-                        flat_matches(light, &at_angle, &rules)
+                CalibrationKind::Flat => {
+                    match self.family_admits(serving, light, candidate, &rules) {
+                        Some(admitted) => {
+                            if admitted && !self.at_lights_angle(light, candidate, &rules) {
+                                off_angle.insert(candidate.frame_uuid.clone());
+                            }
+                            admitted && {
+                                // Its family was chosen for the light: matched at
+                                // the light's angle, every other gate as always.
+                                let mut at_angle = candidate.clone();
+                                at_angle.rotation = light.rotator_position;
+                                flat_matches(light, &at_angle, &rules)
+                            }
+                        }
+                        None => match self.measured_angle(candidate, &rules) {
+                            // Flats that record no angle, measured alike with a
+                            // rotation cluster: matched at its angle.
+                            Some(angle) if candidate.rotation.is_none() => {
+                                let mut at_angle = candidate.clone();
+                                at_angle.rotation = Some(angle);
+                                flat_matches(light, &at_angle, &rules)
+                            }
+                            _ => flat_matches(light, candidate, &rules),
+                        },
                     }
-                    _ => flat_matches(light, candidate, &rules),
-                },
+                }
             };
             if matches && candidate.kept_out.is_some() {
                 selected.kept_out.push(candidate.clone());
@@ -2157,11 +2227,76 @@ impl LibrarySnapshot {
             }
         }
 
+        if !off_angle.is_empty() {
+            // One at the light's own angle that can reach it leaves them
+            // nothing to do; one across a known change from the light
+            // could serve it only as its own angle's flats would, carried
+            // or flagged, which they are not.
+            let own_angle_serves = selected.flat.iter().any(|frame| {
+                !off_angle.contains(&frame.frame_uuid)
+                    && self.at_lights_angle(light, frame, &rules)
+                    && self.not_across_a_known_change(light, frame)
+            });
+            let keep = |frame: &CalibrationFrame| {
+                !off_angle.contains(&frame.frame_uuid)
+                    || (!own_angle_serves && self.not_across_a_known_change(light, frame))
+            };
+            selected.flat.retain(|frame| keep(frame));
+            selected.kept_out.retain(|frame| keep(frame));
+        }
         sort_candidates(&mut selected.bias, light.timestamp);
         sort_candidates(&mut selected.dark, light.timestamp);
         sort_candidates(&mut selected.flat, light.timestamp);
+        if let Some(family) = serving {
+            // Within its family, the flats at the angle the light recorded
+            // first, as before families: measured alike is not identical.
+            // Then those within the angle prior, then the rest, each in
+            // time order: the family's far angles serve where nothing
+            // nearer lies on the light's side of a change. The epochs widen
+            // which families are candidates; they do not reorder a
+            // family's flats, since a sync's degree or two would.
+            let tier = |frame: &CalibrationFrame| match self.measured_angle(frame, &rules) {
+                Some(flat) if rotation_gap(family.light_angle, flat) <= rules.rotation_deg => 0,
+                Some(flat)
+                    if rotation_gap(family.light_angle, flat)
+                        <= flat_groups::lights::ANGLE_PRIOR_DEG =>
+                {
+                    1
+                }
+                _ => 2,
+            };
+            selected.flat.sort_by_key(tier);
+        }
         self.keep_unknown_angles_last(light, &rules, &mut selected.flat);
         self.choose_flats_around_changes(light, &rules, &mut selected);
+        selected.flat_family = family.map(|choice| {
+            let mut family = flat_groups::FlatFamily::of(&self.flat_book, &choice);
+            family.light_rotation = family_light_rotation(light, &selected.flat, &rules);
+            // Its flats lie at another angle that the family measures
+            // alike with the light's: say over which span, and on what.
+            if let flat_groups::LightRotation::Measured { degrees } = family.light_rotation {
+                let book = &self.flat_book;
+                family.alike_range = selected
+                    .flat
+                    .iter()
+                    .filter(|frame| frame.rotation.is_some_and(|r| (r - degrees).abs() < 1e-6))
+                    .find_map(|frame| book.session_of_frame(&frame.frame_uuid))
+                    .and_then(|session| {
+                        let range = book.alike_range_for(
+                            choice.family,
+                            session,
+                            choice.light_angle,
+                            rules.rotation_deg,
+                        )?;
+                        let group = book.families[choice.family]
+                            .groups
+                            .iter()
+                            .position(|group| group.contains(&session));
+                        Some(flat_groups::AlikeRangeNote::of(range, degrees, group))
+                    });
+            }
+            family
+        });
         if let Some(flat) = selected.flat.first() {
             for candidate in self.of_kind(CalibrationKind::DarkFlat) {
                 // Dark-flats pair with the flat, but the boundary is judged
@@ -2185,7 +2320,210 @@ impl LibrarySnapshot {
     }
 }
 
+/// How the stacker's gate reads a light whose flats came from its measured
+/// response family: as recorded when the flats its master is built from lie
+/// at its angle, else at their angle, which the family measured to be the
+/// light's own light path. Every light of one master shares it.
+fn family_light_rotation(
+    light: &FrameMeta,
+    flats: &[CalibrationFrame],
+    rules: &Rules,
+) -> flat_groups::LightRotation {
+    use flat_groups::LightRotation;
+    let subset = coherent_master_subset(CalibrationKind::Flat, flats, rules);
+    let Some(angle) = subset
+        .iter()
+        .find_map(|frame| frame.rotation.filter(|a| a.is_finite()))
+    else {
+        return LightRotation::Recorded;
+    };
+    match light.rotator_position.filter(|a| a.is_finite()) {
+        Some(recorded)
+            if subset.iter().all(|frame| {
+                frame
+                    .rotation
+                    .is_none_or(|flat| rotation_gap(recorded, flat) <= rules.rotation_deg)
+            }) =>
+        {
+            LightRotation::Recorded
+        }
+        Some(_) => LightRotation::Measured { degrees: angle },
+        None => LightRotation::Recorded,
+    }
+}
+
 impl LibrarySnapshot {
+    /// The response family a light's flats come from, with measured
+    /// grouping and a light that records its angle: among the families
+    /// whose flats pass every gate but the angle, the one its angle, its
+    /// rotator's epochs and its own pixels point to (see
+    /// [`flat_groups::lights`]). `None` matches flats by angle as before.
+    fn flat_family(
+        &self,
+        light: &FrameMeta,
+        rules: &Rules,
+    ) -> Option<flat_groups::lights::FamilyChoice> {
+        if rules.flat_grouping != rules::FlatGrouping::Measured
+            || self.flat_book.families.is_empty()
+        {
+            return None;
+        }
+        let angle = light.rotator_position.filter(|a| a.is_finite())?;
+        let compatible = self.flat_family_compatible(light, rules);
+        self.flat_book.choose_family(
+            &rules::light_rig_uuid(light),
+            light.filter.as_deref(),
+            light.timestamp,
+            Some(angle),
+            &compatible,
+            rules.rotation_deg,
+        )
+    }
+
+    /// The response families whose flats pass every gate for `light` but
+    /// the angle.
+    pub(crate) fn flat_family_compatible(&self, light: &FrameMeta, rules: &Rules) -> Vec<usize> {
+        let book = &self.flat_book;
+        let light_signature = light_signature(light);
+        let mut tolerances = rules.tolerances();
+        tolerances.rotation_deg = seiza_calibration::MatchTolerances::MAX_ROTATION_DEG;
+        let mut compatible: Vec<usize> = self
+            .of_kind(CalibrationKind::Flat)
+            .filter(|frame| {
+                !frame.is_master
+                    && frame.kept_out.is_none()
+                    && validity_admits(frame, light.timestamp)
+                    && sensor_matches(light, frame)
+                    && seiza_calibration::optics_match(
+                        &light_signature.seiza,
+                        &frame_signature(frame).seiza,
+                        &tolerances,
+                    )
+            })
+            .filter_map(|frame| book.family_of_frame(&frame.frame_uuid))
+            .collect();
+        compatible.sort_unstable();
+        compatible.dedup();
+        compatible
+    }
+
+    /// Whether a flat may serve a light whose response family serves it:
+    /// `None` to match it by angle as before (no family serves, a flat whose
+    /// family records no angle, or one not measured while the family is at
+    /// the light's recorded angle); `Some(false)` for a flat of another
+    /// family with an angle, or one not measured when its own pixels moved
+    /// the light to another angle; `Some(true)` for a flat of its family
+    /// that its evidence reaches. A flat of its family at the light's
+    /// recorded angle always is. One at another angle is only when the
+    /// light's own pixels chose the family, its session measured alike
+    /// with a session of the family at the light's recorded angle, or the
+    /// family's flats measure alike across a span holding both angles
+    /// ([`flat_groups::model::AlikeRange`]) and the flat lies on the
+    /// light's side of every change: a header or an epoch alone never
+    /// hands a light flats at another angle.
+    fn family_admits(
+        &self,
+        family: Option<&flat_groups::lights::FamilyChoice>,
+        light: &FrameMeta,
+        candidate: &CalibrationFrame,
+        rules: &Rules,
+    ) -> Option<bool> {
+        let family = family?;
+        let book = &self.flat_book;
+        match book.family_of_frame(&candidate.frame_uuid) {
+            Some(of) if of == family.family => {
+                let angle = self.measured_angle(candidate, rules);
+                let at_angle = angle.is_some_and(|flat| {
+                    rotation_gap(family.light_angle, flat) <= rules.rotation_deg
+                });
+                let in_range = || {
+                    book.session_of_frame(&candidate.frame_uuid)
+                        .and_then(|session| {
+                            book.alike_range_for(
+                                of,
+                                session,
+                                family.light_angle,
+                                rules.rotation_deg,
+                            )
+                        })
+                        .is_some()
+                        && self.on_lights_side_of_changes(light, candidate)
+                };
+                Some(
+                    at_angle
+                        || family.by_pixels()
+                        || in_range()
+                        || book
+                            .session_of_frame(&candidate.frame_uuid)
+                            .is_some_and(|session| {
+                                book.alike_with_angle(
+                                    of,
+                                    session,
+                                    family.light_angle,
+                                    rules.rotation_deg,
+                                )
+                            }),
+                )
+            }
+            Some(of) if book.families[of].angles.is_empty() => None,
+            Some(_) => Some(false),
+            None if family.moved() => Some(false),
+            None => None,
+        }
+    }
+
+    /// Whether a flat lies at the light's recorded angle, within the rig's
+    /// tolerance.
+    fn at_lights_angle(&self, light: &FrameMeta, frame: &CalibrationFrame, rules: &Rules) -> bool {
+        match (light.rotator_position, self.measured_angle(frame, rules)) {
+            (Some(light), Some(flat)) => rotation_gap(light, flat) <= rules.rotation_deg,
+            _ => false,
+        }
+    }
+
+    /// Whether a flat lies on no known other side of a measured change from
+    /// the light: on its side of every change whose side for the light is
+    /// known.
+    fn not_across_a_known_change(&self, light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
+        let book = &self.flat_book;
+        let rig = rules::light_rig_uuid(light);
+        let Some(at) = light.timestamp else {
+            return true;
+        };
+        book.events
+            .iter()
+            .filter(|event| event.rig_uuid == rig && event.applies_to(light.filter.as_deref()))
+            .all(
+                |event| match flat_groups::place_light(book, event, at).side() {
+                    Some(side) => candidate
+                        .captured_at
+                        .is_none_or(|captured| event.side_of(captured) == Some(side)),
+                    None => true,
+                },
+            )
+    }
+
+    /// Whether a flat lies on the light's side of every measured change of
+    /// the light's rig that reaches its filter, the light's side known for
+    /// each: a light shot while a change happened takes no flats through
+    /// an alike range.
+    fn on_lights_side_of_changes(&self, light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
+        let book = &self.flat_book;
+        let rig = rules::light_rig_uuid(light);
+        let (Some(at), Some(captured)) = (light.timestamp, candidate.captured_at) else {
+            return false;
+        };
+        book.events
+            .iter()
+            .filter(|event| event.rig_uuid == rig && event.applies_to(light.filter.as_deref()))
+            .all(
+                |event| match flat_groups::place_light(book, event, at).side() {
+                    Some(side) => event.side_of(captured) == Some(side),
+                    None => false,
+                },
+            )
+    }
+
     /// A flat's rotator angle: the one it records, or, with measured
     /// grouping, the angle of the rotation cluster its session measured
     /// alike with.
@@ -2285,7 +2623,7 @@ impl LibrarySnapshot {
         }
         let placements: Vec<(usize, flat_groups::model::Placement)> = events
             .iter()
-            .map(|(index, event)| (*index, book.place(event, at)))
+            .map(|(index, event)| (*index, flat_groups::place_light(&book, event, at)))
             .collect();
         let side_of = |frame: &CalibrationFrame, event: &flat_groups::model::Event| {
             frame
@@ -2572,19 +2910,19 @@ pub(crate) fn selection_fingerprint_with_masking(
 
 /// A light's selection fingerprint, and why it cannot be calibrated
 /// properly when it cannot (see [`calibration_gap`]), from one header read.
-/// Without a night boundary the gap is not looked for: calibration is off,
-/// or stacks keep such lights.
+/// Without the catalog's [`Nights`] the gap is not looked for: calibration
+/// is off, or stacks keep such lights.
 pub(crate) fn light_calibration(
     conn: &Connection,
     light_path: &Path,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     flat_star_masking: bool,
-    night_boundary: Option<i64>,
+    nights: Option<&Nights>,
 ) -> Result<(String, Option<String>)> {
     let light = crate::commands::import::headers::read_frame_meta(light_path);
     let mut selected = select_for_light(conn, &light)?;
-    let gap = match night_boundary {
-        Some(boundary) => calibration_gap(conn, &light, &selected, boundary)?,
+    let gap = match nights {
+        Some(nights) => calibration_gap(conn, &light, &selected, nights)?,
         None => None,
     };
     remap_missing_sources(&mut selected, directory_tree);
@@ -2604,9 +2942,9 @@ pub fn calibration_gap(
     conn: &Connection,
     light: &FrameMeta,
     selected: &CalibrationSelection,
-    night_boundary: i64,
+    nights: &Nights,
 ) -> Result<Option<String>> {
-    Ok(calibration_gaps(light, selected, night_boundary, || {
+    Ok(calibration_gaps(light, selected, nights, || {
         query_kind(conn, CalibrationKind::Flat)
     })?
     .into_iter()
@@ -2619,29 +2957,29 @@ pub fn calibration_gap(
 pub(crate) struct GapJudge {
     snapshot: LibrarySnapshot,
     flats: Vec<CalibrationFrame>,
-    night_boundary: i64,
+    nights: Nights,
 }
 
 impl GapJudge {
-    pub(crate) fn load(conn: &Connection, night_boundary: i64) -> Result<Self> {
+    pub(crate) fn load(conn: &Connection) -> Result<Self> {
         let snapshot = LibrarySnapshot::load(conn)?;
         let flats = snapshot.of_kind(CalibrationKind::Flat).cloned().collect();
         Ok(Self {
             snapshot,
             flats,
-            night_boundary,
+            nights: Nights::load(conn),
         })
     }
 
     /// Why `light` cannot be calibrated properly, as a stack would judge it.
     pub(crate) fn gap(&self, light: &FrameMeta) -> Result<Option<String>> {
         let selected = self.snapshot.select(light);
-        Ok(calibration_gaps(light, &selected, self.night_boundary, || {
-            Ok(self.flats.as_slice())
-        })?
-        .into_iter()
-        .find(|gap| gap.mode == CheckMode::Flag)
-        .map(|gap| gap.reason))
+        Ok(
+            calibration_gaps(light, &selected, &self.nights, || Ok(self.flats.as_slice()))?
+                .into_iter()
+                .find(|gap| gap.mode == CheckMode::Flag)
+                .map(|gap| gap.reason),
+        )
     }
 }
 
@@ -2663,13 +3001,13 @@ pub(crate) struct CalibrationGap {
 pub(crate) fn calibration_gaps<Flats: AsRef<[CalibrationFrame]>>(
     light: &FrameMeta,
     selected: &CalibrationSelection,
-    night_boundary: i64,
+    nights: &Nights,
     flats: impl FnOnce() -> Result<Flats>,
 ) -> Result<Vec<CalibrationGap>> {
     let rules = &selected.rules;
     let mut gaps = Vec::new();
     if selected.flat.is_empty() && selected.library.flat {
-        let reason = match flat_near_miss_in(flats()?.as_ref(), light, night_boundary, rules) {
+        let reason = match flat_near_miss_in(flats()?.as_ref(), light, nights, rules) {
             Some(miss) => format!(
                 "No matching flat: the nearest {}flats are {:.0}° off its rotation{}",
                 miss.filter
@@ -2859,7 +3197,9 @@ pub fn project_calibration_gaps(
     let rows = db
         .query_images_scoped(None, Some(project_id), None, None, 0)
         .context("querying project lights")?;
-    let boundary = catalog_night_boundary(conn);
+    let nights = Nights::load(conn);
+    // Lights are named by the night Images groups them in.
+    let boundary = nights.catalog();
     let mut lights = Vec::new();
     let (mut checked, mut missing_files) = (0usize, 0usize);
     for (image, _project, _target) in &rows {
@@ -2875,7 +3215,7 @@ pub fn project_calibration_gaps(
         checked += 1;
         let meta = crate::commands::import::headers::read_frame_meta(&path);
         let selected = select_for_light(conn, &meta)?;
-        if let Some(reason) = calibration_gap(conn, &meta, &selected, boundary)? {
+        if let Some(reason) = calibration_gap(conn, &meta, &selected, &nights)? {
             lights.push(UncalibratedLight {
                 image_id: image.id,
                 filter: image.filter_name.clone(),
@@ -3264,6 +3604,11 @@ pub struct KindExplanation {
     /// Flats only: the choice itself, for the panel to mark.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basis: Option<flat_groups::FlatBasis>,
+    /// Flats only: the response family they come from, when measured
+    /// grouping chose one at another angle than the light's or by its own
+    /// pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<flat_groups::FlatFamily>,
     /// Flats only: when the master mixes nights measured alike, the largest
     /// difference between them, fractions of the background.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3349,9 +3694,13 @@ pub struct RefusedFrames {
 }
 
 pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<CalibrationExplanation> {
-    let boundary = catalog_night_boundary(conn);
-    let night =
-        |at: Option<i64>| at.map_or_else(|| "unknown".to_string(), |at| night_of(at, boundary));
+    let nights = Nights::load(conn);
+    let night = |frame: &CalibrationFrame| {
+        frame.captured_at.map_or_else(
+            || "unknown".to_string(),
+            |at| nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at),
+        )
+    };
     let selected = select_for_light(conn, light)?;
     let light_signature = light_signature(light);
     let suspect_reasons = quality::suspect_reasons(conn)?;
@@ -3366,7 +3715,7 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
         let mut nights: BTreeMap<String, Vec<Option<f64>>> = BTreeMap::new();
         for frame in frames {
             nights
-                .entry(night(frame.captured_at))
+                .entry(night(frame))
                 .or_default()
                 .push(frame.camera_temp);
         }
@@ -3421,9 +3770,7 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
                 continue;
             }
             let reason = refusal(light, &light_signature, &candidate, &selected.rules);
-            *refused
-                .entry((night(candidate.captured_at), reason))
-                .or_default() += 1;
+            *refused.entry((night(&candidate), reason)).or_default() += 1;
         }
         let mut refused: Vec<RefusedFrames> = refused
             .into_iter()
@@ -3445,7 +3792,7 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
             .filter(|frame| frame.kind == kind)
             .map(|frame| KeptOutFrame {
                 file: file_of(frame),
-                night: night(frame.captured_at),
+                night: night(frame),
                 reason: frame.kept_out.clone().unwrap_or_default(),
             })
             .collect();
@@ -3455,7 +3802,7 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
                 let reason = suspect_reasons.get(&frame.frame_uuid)?;
                 Some(SuspectFrame {
                     file: file_of(frame),
-                    night: night(frame.captured_at),
+                    night: night(frame),
                     reason: if reason.is_empty() {
                         "Graded suspect".to_string()
                     } else {
@@ -3467,8 +3814,20 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
         let (chosen_by, basis, alike) = if kind == CalibrationKind::Flat {
             let basis = (selected.flat_basis != flat_groups::FlatBasis::Nearest)
                 .then(|| selected.flat_basis.clone());
-            (
+            // The family first: which light path, then which side of a
+            // change.
+            let chosen_by = [
+                selected
+                    .flat_family
+                    .as_ref()
+                    .and_then(flat_groups::describe_family),
                 flat_groups::describe_basis(&selected.flat_basis, &selected.rules),
+            ]
+            .into_iter()
+            .flatten()
+            .reduce(|family, basis| format!("{family}. {basis}"));
+            (
+                chosen_by,
                 basis,
                 // Grouping by time says nothing of measurements.
                 (selected.rules.flat_grouping == rules::FlatGrouping::Measured)
@@ -3482,13 +3841,20 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
             chosen_by,
             basis,
             alike,
+            family: (kind == CalibrationKind::Flat)
+                .then(|| {
+                    selected
+                        .flat_family
+                        .clone()
+                        .filter(|family| flat_groups::describe_family(family).is_some())
+                })
+                .flatten(),
             kind: kind.as_str().to_string(),
-            master: FrameSpan::of(master.iter().map(|frame| {
-                (
-                    frame.camera_temp,
-                    frame.captured_at.map(|at| night(Some(at))),
-                )
-            })),
+            master: FrameSpan::of(
+                master
+                    .iter()
+                    .map(|frame| (frame.camera_temp, frame.captured_at.map(|_| night(frame)))),
+            ),
             used: by_night(&master),
             matching_unused: by_night(&unused),
             refused,
@@ -3519,7 +3885,7 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            night: light.timestamp.map(|at| night_of(at, boundary)),
+            night: light.timestamp.map(|at| night_of(at, nights.catalog())),
             filter: light.filter.clone(),
             exposure_s: light.exposure_s,
             gain: light.gain,
@@ -3581,13 +3947,13 @@ fn rotation_gap(left: f64, right: f64) -> f64 {
 fn flat_near_miss(
     conn: &Connection,
     light: &FrameMeta,
-    boundary: i64,
+    nights: &Nights,
     rules: &Rules,
 ) -> Result<Option<FlatNearMiss>> {
     Ok(flat_near_miss_in(
         &query_kind(conn, CalibrationKind::Flat)?,
         light,
-        boundary,
+        nights,
         rules,
     ))
 }
@@ -3596,7 +3962,7 @@ fn flat_near_miss(
 fn flat_near_miss_in(
     flats: &[CalibrationFrame],
     light: &FrameMeta,
-    boundary: i64,
+    nights: &Nights,
     rules: &Rules,
 ) -> Option<FlatNearMiss> {
     let light_rotation = light.rotator_position.filter(|angle| angle.is_finite())?;
@@ -3640,11 +4006,16 @@ fn flat_near_miss_in(
     });
     let (off, best) = near.first()?;
     let best_rotation = best.rotation.unwrap_or(light_rotation);
-    let session = best.captured_at.map(|at| night_of(at, boundary));
+    let night = |frame: &CalibrationFrame| {
+        frame
+            .captured_at
+            .map(|at| nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at))
+    };
+    let session = night(best);
     let frames = near
         .iter()
         .filter(|(_, frame)| {
-            frame.captured_at.map(|at| night_of(at, boundary)) == session
+            night(frame) == session
                 && frame.rotation.is_some_and(|angle| {
                     rotation_gap(angle, best_rotation) <= tolerance.rotation_deg
                 })
@@ -3661,9 +4032,10 @@ fn flat_near_miss_in(
     })
 }
 
-/// The imaging night a timestamp belongs to, for a catalog whose nights split
-/// `boundary` seconds after 00:00 UTC (see
-/// [`crate::server::sky_coverage::night_boundary`]). An evening and the small
+/// The imaging night a timestamp belongs to, for nights that split
+/// `boundary` seconds after 00:00 UTC: a rig's local noon for its
+/// calibration frames ([`Nights`]), the catalog's quiet hours for lights
+/// ([`crate::server::sky_coverage::night_boundary`]). An evening and the small
 /// hours after it share a date, and so do the flats shot at either end, the
 /// way N.I.N.A.'s local `DATEMINUS12` folders group them. Twelve hours off
 /// UTC would not: a site west of Greenwich would see its dawn flats a day
@@ -3674,7 +4046,9 @@ pub(crate) fn night_of(timestamp: i64, boundary: i64) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-/// Where this catalog's nights split; noon UTC when its lights cannot be read.
+/// Where this catalog's lights' nights split, as Images groups them; noon
+/// UTC when its lights cannot be read. A rig's calibration frames split at
+/// its own local noon instead ([`Nights`]).
 pub(crate) fn catalog_night_boundary(conn: &Connection) -> i64 {
     crate::server::sky_coverage::catalog_night_boundary(conn).unwrap_or(12 * 3600)
 }
@@ -3698,8 +4072,15 @@ pub fn project_calibration_report(
         .context("querying project lights")?;
 
     // Bucket lights by (night, filter) and pick the median exposure of each
-    // bucket as its representative.
-    let boundary = catalog_night_boundary(conn);
+    // bucket as its representative. Lights take the nights Images groups
+    // them by; calibration frames their own rig's.
+    let rig_nights = Nights::load(conn);
+    let boundary = rig_nights.catalog();
+    let frame_night = |frame: &CalibrationFrame| {
+        frame
+            .captured_at
+            .map(|at| rig_nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at))
+    };
     let mut buckets: HashMap<(String, String), Vec<(i64, String)>> = HashMap::new();
     let mut rejected_lights = 0usize;
     for (image, _project, _target) in &rows {
@@ -3724,7 +4105,12 @@ pub fn project_calibration_report(
     let mut lights_missing_files = 0usize;
     let mut nights: HashMap<String, CalibrationNightReport> = HashMap::new();
     // Distinct matching frames per kind, across every representative.
-    let mut kind_frames: HashMap<CalibrationKind, HashMap<String, Option<i64>>> = HashMap::new();
+    // Each matching frame's capture time and night.
+    #[allow(clippy::type_complexity)]
+    let mut kind_frames: HashMap<
+        CalibrationKind,
+        HashMap<String, (Option<i64>, Option<String>)>,
+    > = HashMap::new();
     let mut nights_without_nightly_flats: Vec<String> = Vec::new();
     let mut worst_flat_age: Option<(String, String, f64)> = None;
 
@@ -3774,7 +4160,10 @@ pub fn project_calibration_report(
         ] {
             let entry = kind_frames.entry(kind).or_default();
             for frame in frames {
-                entry.insert(frame.frame_uuid.clone(), frame.captured_at);
+                entry.insert(
+                    frame.frame_uuid.clone(),
+                    (frame.captured_at, frame_night(frame)),
+                );
             }
         }
 
@@ -3804,16 +4193,16 @@ pub fn project_calibration_report(
             coherent_master_subset(CalibrationKind::Dark, &selected.dark, &selected.rules);
         let dark_master_nights = dark_master
             .iter()
-            .filter_map(|frame| frame.captured_at.map(|at| night_of(at, boundary)))
+            .filter_map(frame_night)
             .collect::<std::collections::HashSet<_>>()
             .len();
         let external_masters = external_master_notes(conn, &meta, &selected)?;
         let flat_near_miss = if selected.flat.is_empty() {
-            flat_near_miss(conn, &meta, boundary, &selected.rules)?
+            flat_near_miss(conn, &meta, &rig_nights, &selected.rules)?
         } else {
             None
         };
-        let cannot_calibrate = calibration_gap(conn, &meta, &selected, boundary)?;
+        let cannot_calibrate = calibration_gap(conn, &meta, &selected, &rig_nights)?;
 
         let mut missing = Vec::new();
         if selected.bias.is_empty() {
@@ -3836,7 +4225,14 @@ pub fn project_calibration_report(
             dark_master_nights,
             dark_flat_frames: selected.dark_flat.len(),
             flat_frames: selected.flat.len(),
-            flat_session: flat_session_at.map(|at| night_of(at, boundary)),
+            flat_session: flat_session_at.and_then(|at| {
+                let frame = selected
+                    .flat
+                    .iter()
+                    .find(|frame| frame.captured_at == Some(at))
+                    .or(selected.flat.first())?;
+                Some(rig_nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at))
+            }),
             flat_age_days: age_days(flat_session_at),
             nightly_flats,
             missing,
@@ -3868,7 +4264,7 @@ pub fn project_calibration_report(
         let frames = kind_frames.remove(&kind).unwrap_or_default();
         let mut sessions: Vec<String> = frames
             .values()
-            .filter_map(|at| at.map(|at| night_of(at, boundary)))
+            .filter_map(|(_, night)| night.clone())
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect();
@@ -3876,8 +4272,8 @@ pub fn project_calibration_report(
         kinds.push(CalibrationKindSummary {
             kind: kind.as_str().to_string(),
             matching_frames: frames.len(),
-            newest_at: frames.values().filter_map(|at| *at).max(),
-            oldest_at: frames.values().filter_map(|at| *at).min(),
+            newest_at: frames.values().filter_map(|(at, _)| *at).max(),
+            oldest_at: frames.values().filter_map(|(at, _)| *at).min(),
             sessions,
         });
     }
@@ -4822,6 +5218,12 @@ fn session_key(selected: &CalibrationSelection) -> String {
     // one session shares the session's gate.
     if let Some(tolerance) = selected.flat_basis.rotation_tolerance() {
         parts.push(format!("flat-rotation-tolerance={tolerance:.3}"));
+    }
+    // So does a gate that reads the light at its flats' measured angle.
+    if let Some(family) = &selected.flat_family
+        && !family.light_rotation.is_recorded()
+    {
+        parts.push(format!("flat-light-rotation={:?}", family.light_rotation));
     }
     hex_digest(&parts.join("\u{1e}"))
 }
@@ -6799,25 +7201,58 @@ fn record_master(
     master: RecordedMaster,
     inputs: MasterInputs<'_>,
 ) -> Result<()> {
-    // A repair or a forget may have removed a source row, or a master this
-    // one is built on, while it was being built — from another process, the
-    // command line, too. A record citing a row that is gone would never be
-    // found again, and would keep the rows' masters from being rebuilt
-    // whole, so the master is left unrecorded and is built afresh.
+    // The check below and the write are one transaction, so a duplicate
+    // repair, which holds the write lock while it merges, either finishes
+    // before the check sees its rows or starts after the master is
+    // recorded and removes it with the others.
+    let own_transaction = conn.is_autocommit();
+    if own_transaction {
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+    }
+    let recorded =
+        record_master_unless_changed(conn, kind, frames, source_hash, path, master, inputs);
+    if own_transaction {
+        // A COMMIT that fails (SQLITE_BUSY while a reader outlasts the busy
+        // timeout, in rollback-journal mode) leaves the transaction open.
+        // Roll it back either way, or this connection keeps the write lock
+        // and every later write on it is lost with the transaction.
+        let committed = recorded.and_then(|()| Ok(conn.execute_batch("COMMIT")?));
+        if committed.is_err() && !conn.is_autocommit() {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+        return committed;
+    }
+    recorded
+}
+
+fn record_master_unless_changed(
+    conn: &Connection,
+    kind: CalibrationKind,
+    frames: &[CalibrationFrame],
+    source_hash: &str,
+    path: &Path,
+    master: RecordedMaster,
+    inputs: MasterInputs<'_>,
+) -> Result<()> {
+    // A repair or a forget may have removed a source row, moved a kept row
+    // to a twin's file, or removed a master this one is built on, while it
+    // was being built — from another process, the command line, too. A
+    // record citing a row that is gone, or that now names another file,
+    // would never be found again, and would keep the rows' masters from
+    // being rebuilt whole, so the master is left unrecorded and is built
+    // afresh.
     let gone = frames
         .iter()
-        .map(|frame| frame.frame_uuid.as_str())
-        .filter(|uuid| {
-            !conn
-                .query_row(
-                    "SELECT 1 FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
-                    [uuid],
-                    |_| Ok(()),
-                )
-                .optional()
-                .ok()
-                .flatten()
-                .is_some()
+        .filter(|frame| {
+            conn.query_row(
+                "SELECT source_fingerprint FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+                [&frame.frame_uuid],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .is_none_or(|fingerprint| fingerprint != frame.source_fingerprint)
         })
         .collect::<Vec<_>>();
     let dependency_gone = [inputs.bias_dependency, inputs.dark_dependency]
@@ -6837,7 +7272,7 @@ fn record_master(
         });
     if !gone.is_empty() || dependency_gone {
         tracing::warn!(
-            "not recording the {} master at {}: its inputs changed while it was built ({} frame row(s) gone{})",
+            "not recording the {} master at {}: its inputs changed while it was built ({} frame row(s) gone or moved{})",
             kind.as_str(),
             path.display(),
             gone.len(),
@@ -7045,6 +7480,7 @@ fn ensure_rig(
             params![uuid, now, profile_id],
         )?;
         ensure_rig_binding(conn, &uuid, profile_id, now)?;
+        night::record_site(conn, &uuid, frame)?;
         return Ok(uuid);
     }
     let rig_uuid = stable_uuid(signature);
@@ -7074,6 +7510,7 @@ fn ensure_rig(
         ],
     )?;
     ensure_rig_binding(conn, &rig_uuid, profile_id, now)?;
+    night::record_site(conn, &rig_uuid, frame)?;
     Ok(rig_uuid)
 }
 
@@ -8247,8 +8684,8 @@ pub struct DarkSet {
     pub frame_uuids: Vec<String>,
 }
 
-/// Lights are matched one at a time, so the caller reads `night_boundary` once
-/// for the catalog ([`crate::server::sky_coverage::catalog_night_boundary`]).
+/// Lights are matched one at a time, so the caller reads the catalog's
+/// [`Nights`] once.
 /// `judge_gap` asks for [`ExportCalibration::gap`], which may read the flat
 /// library again; an export that keeps such lights passes `false`.
 pub fn export_destinations(
@@ -8257,14 +8694,14 @@ pub fn export_destinations(
     target_name: &str,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     layout: crate::commands::export::ExportLayout,
-    night_boundary: i64,
+    nights: &Nights,
     judge_gap: bool,
 ) -> Result<ExportCalibration> {
     use crate::commands::export::{session_component, ExportLayout};
     let mut selected = select_for_light(conn, light)?;
     // Judged as a stack judges it, before missing files are followed.
     let gap = if judge_gap {
-        calibration_gap(conn, light, &selected, night_boundary)?
+        calibration_gap(conn, light, &selected, nights)?
     } else {
         None
     };
@@ -8280,7 +8717,7 @@ pub fn export_destinations(
         .map(|frame| frame.source_path.clone())
         .collect();
     let selected = delivery_selection(selected);
-    let flat_session = flat_session_label(&selected.flat, night_boundary);
+    let flat_session = flat_session_label(&selected.flat, nights);
     let flat_set = flat_session.clone().map(|night| {
         let mut frame_uuids: Vec<String> = selected
             .flat
@@ -8316,7 +8753,7 @@ pub fn export_destinations(
             group: dark_group(nearest),
             night: nearest
                 .captured_at
-                .map(|at| night_of(at, night_boundary))
+                .map(|at| nights.night_of_frame(&nearest.rig_uuid, &nearest.frame_uuid, at))
                 .unwrap_or_else(|| "undated".into()),
             frame_uuids,
         }
@@ -8439,16 +8876,16 @@ fn dark_group(frame: &CalibrationFrame) -> String {
 /// The night a flat set was shot, as one path component: the observing
 /// night of its earliest frame, or "undated" for frames without a capture
 /// time. `None` when there are no flats.
-pub fn flat_session_label(flats: &[CalibrationFrame], night_boundary: i64) -> Option<String> {
+pub fn flat_session_label(flats: &[CalibrationFrame], nights: &Nights) -> Option<String> {
     if flats.is_empty() {
         return None;
     }
     Some(
         flats
             .iter()
-            .filter_map(|frame| frame.captured_at)
-            .min()
-            .map(|at| night_of(at, night_boundary))
+            .filter_map(|frame| Some((frame.captured_at?, frame)))
+            .min_by_key(|(at, _)| *at)
+            .map(|(at, frame)| nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at))
             .unwrap_or_else(|| "undated".into()),
     )
 }
@@ -9920,7 +10357,7 @@ pub(crate) mod tests {
             "NGC 6543",
             None,
             crate::commands::export::ExportLayout::Wbpp,
-            0,
+            &Nights::fixed(0),
             false,
         )
         .unwrap();
@@ -10058,7 +10495,7 @@ pub(crate) mod tests {
         let conn = gap_library(&temp, light_at - 2 * day, false);
         let gap = |light: &FrameMeta| {
             let selected = select_for_light(&conn, light).unwrap();
-            calibration_gap(&conn, light, &selected, 12 * 3600).unwrap()
+            calibration_gap(&conn, light, &selected, &Nights::fixed(12 * 3600)).unwrap()
         };
 
         // The flats' angle, two days on: calibrated. The library holds no
@@ -10098,7 +10535,7 @@ pub(crate) mod tests {
         let selected = select_for_light(&conn, &light).unwrap();
         assert_eq!(selected.library, LibraryKinds::default());
         assert_eq!(
-            calibration_gap(&conn, &light, &selected, 12 * 3600).unwrap(),
+            calibration_gap(&conn, &light, &selected, &Nights::fixed(12 * 3600)).unwrap(),
             None
         );
     }
@@ -10115,7 +10552,7 @@ pub(crate) mod tests {
         let selected = select_for_light(&conn, &light).unwrap();
         assert!(!selected.bias.is_empty());
         assert_eq!(
-            calibration_gap(&conn, &light, &selected, 12 * 3600).unwrap(),
+            calibration_gap(&conn, &light, &selected, &Nights::fixed(12 * 3600)).unwrap(),
             None
         );
 
@@ -10131,7 +10568,7 @@ pub(crate) mod tests {
         let selected = select_for_light(&conn, &light).unwrap();
         assert!(selected.bias.is_empty() && selected.library.bias);
         assert_eq!(
-            calibration_gap(&conn, &light, &selected, 12 * 3600)
+            calibration_gap(&conn, &light, &selected, &Nights::fixed(12 * 3600))
                 .unwrap()
                 .as_deref(),
             Some("No matching bias or dark")
@@ -10269,7 +10706,7 @@ pub(crate) mod tests {
         light.rotator_position = Some(92.6);
         let selected = select_for_light(&conn, &light).unwrap();
         assert!(selected.flat.is_empty());
-        let miss = flat_near_miss(&conn, &light, 12 * 3600, &global_rules())
+        let miss = flat_near_miss(&conn, &light, &Nights::fixed(12 * 3600), &global_rules())
             .unwrap()
             .unwrap();
         assert_eq!(miss.flat_rotation_deg, 94.7);
@@ -11374,7 +11811,7 @@ pub(crate) mod tests {
             "Target",
             None,
             crate::commands::export::ExportLayout::Wbpp,
-            12 * 3600,
+            &Nights::fixed(12 * 3600),
             false,
         )
         .unwrap();
@@ -14115,7 +14552,10 @@ pub(crate) mod tests {
         assert!(selected.dark.is_empty());
         assert!(!selected.library.dark, "lacking a dark is not a gap");
         assert!(selected.library.unused_dark, "but the library has some");
-        assert_eq!(calibration_gap(&conn, &light, &selected, 0).unwrap(), None);
+        assert_eq!(
+            calibration_gap(&conn, &light, &selected, &Nights::fixed(0)).unwrap(),
+            None
+        );
         assert_ne!(selection_hash(&selected, false), default_hash);
         let explained = explain_calibration(&conn, &light).unwrap();
         let dark = explained

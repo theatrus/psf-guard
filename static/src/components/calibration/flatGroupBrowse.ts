@@ -99,6 +99,22 @@ function angleGap(a: number, b: number): number {
 const sameFilter = (a: string | null, b: string | null) =>
   (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
 
+/** How far an angle lies from a family: from the nearest of its measured
+ *  spans (0 inside one), else from its angle. A family that records no
+ *  angle is at no distance from no angle, and infinitely far otherwise. */
+export function familyAngleGap(family: FlatFamily, angle: number | null): number {
+  if (family.rotation === null || angle === null) {
+    return family.rotation === angle ? 0 : Number.POSITIVE_INFINITY;
+  }
+  const spans = family.angles ?? [];
+  if (spans.length === 0) return angleGap(family.rotation, angle);
+  return Math.min(...spans.map((span) => {
+    const width = ((span.high - span.low) % 360 + 360) % 360;
+    const into = ((angle - span.low) % 360 + 360) % 360;
+    return into <= width ? 0 : Math.min(angleGap(angle, span.low), angleGap(angle, span.high));
+  }));
+}
+
 /** The family an unmeasured session would join: the same filter at the
  *  nearest angle within tolerance. Families are read from the data, so a
  *  family whose angle drifts or that holds a hint of one still matches. */
@@ -107,9 +123,7 @@ function familyOf(rig: FlatGroupsRig, session: FlatUnmeasuredSession): FlatFamil
   let bestGap = Number.POSITIVE_INFINITY;
   for (const family of rig.families) {
     if (!sameFilter(family.filter, session.filter)) continue;
-    const gap = family.rotation === null || session.rotation === null
-      ? (family.rotation === session.rotation ? 0 : Number.POSITIVE_INFINITY)
-      : angleGap(family.rotation, session.rotation);
+    const gap = familyAngleGap(family, session.rotation);
     if (gap <= ANGLE_TOLERANCE && gap < bestGap) {
       best = family;
       bestGap = gap;
@@ -122,7 +136,11 @@ function familyOf(rig: FlatGroupsRig, session: FlatUnmeasuredSession): FlatFamil
  *  the same name (another frame size, gain or readout, or one angle the
  *  measurements split) are told apart by the night each begins. */
 function familyLabels(rig: FlatGroupsRig): Map<FlatFamily, string> {
-  const base = (family: FlatFamily) => `${family.filter ?? 'No filter'} · ${angleLabel(family.rotation)}`;
+  // Its measured angle range when it has one; a family with no angle is
+  // named as the rest of the page names it.
+  const base = (family: FlatFamily) => `${family.filter ?? 'No filter'} · ${
+    family.angles?.length && family.angle_label ? family.angle_label : angleLabel(family.rotation)
+  }`;
   const counts = new Map<string, number>();
   for (const family of rig.families) counts.set(base(family), (counts.get(base(family)) ?? 0) + 1);
   const labels = new Map<FlatFamily, string>();
@@ -170,7 +188,7 @@ export function browseGroups(rigs: FlatGroupsRig[], options: GroupBrowseOptions 
     for (const family of rig.families) {
       if (options.filter && !sameFilter(family.filter, options.filter)) continue;
       if (options.rotation !== undefined
-        && (family.rotation === null || angleGap(family.rotation, options.rotation) > ANGLE_TOLERANCE)) continue;
+        && familyAngleGap(family, options.rotation) > ANGLE_TOLERANCE) continue;
       const label = labels.get(family) ?? '';
       const entries = family.groups.map((group, position): GroupEntry => {
         const number = family.groups.length - position;
@@ -236,9 +254,8 @@ export function browseGroups(rigs: FlatGroupsRig[], options: GroupBrowseOptions 
     const days = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
     // Its family: the same rig and settings (filter, gain, binning, frame
     // size, focal class) by the family key, at the nearest angle.
-    const angleOf = (family: FlatFamily) => (family.rotation === null || place.rotation === null
-      ? (family.rotation === place.rotation ? 0 : ANGLE_TOLERANCE)
-      : angleGap(family.rotation, place.rotation));
+    const angleOf = (family: FlatFamily) =>
+      Math.min(familyAngleGap(family, place.rotation), ANGLE_TOLERANCE);
     const candidates = all.filter((entry) =>
       entry.rig.rig_uuid === place.rig_uuid && entry.family.key.startsWith(`${place.family_key}:`));
     const nearest = Math.min(...candidates.map((entry) => angleOf(entry.family)));

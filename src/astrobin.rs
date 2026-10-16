@@ -607,7 +607,7 @@ pub fn export(
     if request.exclude_uncalibrated {
         match directory_tree {
             Some(tree) => {
-                let judge = crate::calibration::GapJudge::load(conn, boundary)
+                let judge = crate::calibration::GapJudge::load(conn)
                     .context("reading the calibration library")?;
                 let mut kept = Vec::with_capacity(basenames.len());
                 let mut example = None;

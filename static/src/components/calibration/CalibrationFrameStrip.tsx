@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useRef } from 'react';
 import { apiClient } from '../../api/client';
-import type { BrowsedCalibrationFrame, CalibrationFrameStretch } from '../../api/types';
+import type { BrowsedCalibrationFrame, CalibrationFrameStretch, FlatClockRun } from '../../api/types';
 import { useAsyncImage } from '../../hooks/useAsyncImage';
 import { fileName, formatTime, gradeLabel } from './calibrationLabels';
+import { useRigClocks } from './useRigClocks';
 
 interface ThumbProps {
   dbId: string;
@@ -11,9 +12,10 @@ interface ThumbProps {
   stretch: CalibrationFrameStretch;
   selected: boolean;
   onSelect: (uuid: string) => void;
+  clock?: FlatClockRun[];
 }
 
-function Thumb({ dbId, frame, index, stretch, selected, onSelect }: ThumbProps) {
+function Thumb({ dbId, frame, index, stretch, selected, onSelect, clock }: ThumbProps) {
   const options = { view: 'frame', size: 'thumb', stretch } as const;
   const image = useAsyncImage(
     dbId,
@@ -29,7 +31,7 @@ function Thumb({ dbId, frame, index, stretch, selected, onSelect }: ThumbProps) 
         className={`calibration-thumb calibration-thumb-${state}`}
         aria-pressed={selected}
         aria-label={`Frame ${index + 1}: ${fileName(frame.source_path)}`}
-        title={`${fileName(frame.source_path)}\n${formatTime(frame.captured_at)}${grade ? `\n${grade}` : ''}${frame.kept_out ? `\nKept out: ${frame.kept_out}` : ''}`}
+        title={`${fileName(frame.source_path)}\n${formatTime(frame.captured_at, clock)}${grade ? `\n${grade}` : ''}${frame.kept_out ? `\nKept out: ${frame.kept_out}` : ''}`}
         data-frame-uuid={frame.frame_uuid}
         onClick={() => onSelect(frame.frame_uuid)}
       >
@@ -89,6 +91,7 @@ interface CalibrationFrameStripProps {
 /** Frames in order as small pictures: one session's, or a flat group's
  *  night by night, each night marked where it begins. */
 export default function CalibrationFrameStrip({ dbId, frames, selected, stretch, onSelect, runOf }: CalibrationFrameStripProps) {
+  const clockOf = useRigClocks(dbId);
   const listRef = useRef<HTMLOListElement>(null);
   // Keep the chosen frame in sight as the arrow keys move through the
   // strip. Only the strip scrolls; the page stays where the reader left it.
@@ -119,6 +122,7 @@ export default function CalibrationFrameStrip({ dbId, frames, selected, stretch,
             )}
             <Thumb
               dbId={dbId}
+              clock={clockOf(frame.rig_uuid)}
               frame={frame}
               index={index}
               stretch={stretch}

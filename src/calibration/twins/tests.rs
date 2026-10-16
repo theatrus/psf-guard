@@ -818,3 +818,383 @@ fn a_remembered_copy_whose_file_is_gone_is_forgotten() {
     import_now(&mut conn, &[dark_at(&other, 2_000)]);
     assert!(twin_paths(&conn).is_empty());
 }
+
+/// Two exposures recorded twice each: X's drop copy is gone, Y has two
+/// copies on disk. Returns the uuids of X's and Y's oldest rows.
+fn two_twin_groups(temp: &tempfile::TempDir, conn: &mut Connection) -> (String, String) {
+    let library = temp.path().join("library");
+    let other = temp.path().join("other");
+    std::fs::create_dir_all(&library).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let x = library.join("x.fits");
+    let y = library.join("y.fits");
+    std::fs::write(&x, b"exposure x").unwrap();
+    std::fs::write(&y, b"exposure y").unwrap();
+    std::fs::copy(&y, other.join("y.fits")).unwrap();
+    import_now(conn, &[dark_at(&x, 1_000), dark_at(&y, 2_000)]);
+    let (ux, uy) = (uuid_at(conn, &x), uuid_at(conn, &y));
+    record_twin_row(
+        conn,
+        &ux,
+        "x-dropped",
+        &temp.path().join("drop").join("x.fits"),
+    );
+    record_twin_row(conn, &uy, "y-second", &other.join("y.fits"));
+    (ux, uy)
+}
+
+#[test]
+fn a_preview_stays_good_while_background_work_writes_elsewhere() {
+    // Grading, flat measuring, a stack building masters and an import of
+    // other frames all write to the catalog between a preview and Apply.
+    // None of them touches the rows that are duplicates, so Apply goes on.
+    let temp = tempfile::tempdir().unwrap();
+    let (drop, library) = two_copies(&temp);
+    let mut conn = Connection::open_in_memory().unwrap();
+    import_now(&mut conn, &[dark_at(&library, 1_000)]);
+    let oldest = uuid_at(&conn, &library);
+    record_twin_row(&conn, &oldest, "second-copy", &drop);
+    let lone_path = temp.path().join("library").join("lone.fits");
+    std::fs::write(&lone_path, b"a dark of its own").unwrap();
+    import_now(&mut conn, &[dark_at(&lone_path, 2_000)]);
+    let lone = uuid_at(&conn, &lone_path);
+    let report = duplicate_plan(&conn);
+    assert_eq!(report.groups.len(), 1);
+
+    // A master built from another exposure, and one built since the
+    // preview from both copies of the twin.
+    insert_master(&conn, "m-other", &[&lone], None);
+    insert_master(&conn, "m-doubled-since", &[&oldest, "second-copy"], None);
+    // A grade, and a person's mark on another frame.
+    conn.execute(
+        "INSERT INTO psf_guard_calibration_frame_quality (frame_uuid, grade, updated_at)
+         VALUES (?1, 'good', 0)",
+        [&oldest],
+    )
+    .unwrap();
+    set_frames_validity(
+        &conn,
+        std::slice::from_ref(&lone),
+        Some(ValidDirection::Backward),
+    )
+    .unwrap();
+    // A new frame of another exposure.
+    let late = temp.path().join("library").join("late.fits");
+    std::fs::write(&late, b"a later dark").unwrap();
+    import_now(&mut conn, &[dark_at(&late, 3_000)]);
+
+    assert_eq!(
+        duplicate_plan(&conn).token,
+        report.token,
+        "the plan is the same"
+    );
+    let outcome = super::apply_repair(&mut conn, &report).unwrap();
+    assert_eq!(outcome.rows_removed, 1);
+    assert_eq!(
+        outcome.masters_removed, 1,
+        "the master built since from the twins goes too"
+    );
+    assert_eq!(master_uuids(&conn), vec!["m-other"]);
+}
+
+#[test]
+fn a_change_to_a_duplicate_row_changes_the_token() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut conn = Connection::open_in_memory().unwrap();
+    two_twin_groups(&temp, &mut conn);
+    let report = duplicate_plan(&conn);
+    conn.execute(
+        "UPDATE psf_guard_calibration_frame SET gain = 200 WHERE frame_uuid = 'x-dropped'",
+        [],
+    )
+    .unwrap();
+    let changed = duplicate_plan(&conn);
+    assert_ne!(changed.token, report.token);
+    assert_eq!(changed.groups.len(), 1, "X's rows no longer agree");
+    assert!(matches!(
+        super::apply_repair(&mut conn, &report),
+        Err(RepairError::Stale)
+    ));
+    assert_eq!(recorded_rows(&conn).len(), 4, "nothing applied");
+}
+
+#[test]
+fn the_checked_plan_is_the_plain_plan_and_counts_its_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut conn = Connection::open_in_memory().unwrap();
+    two_twin_groups(&temp, &mut conn);
+    let lone_path = temp.path().join("library").join("lone.fits");
+    std::fs::write(&lone_path, b"a dark of its own").unwrap();
+    import_now(&mut conn, &[dark_at(&lone_path, 3_000)]);
+    let snapshot = duplicate_snapshot(&conn).unwrap();
+    let plain = plan_repair(&snapshot, &FileAccess::disk());
+
+    let seen = std::sync::Mutex::new(Vec::new());
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let progress = |stage: super::CheckStage, done: usize, total: usize| {
+        seen.lock().unwrap().push((stage, done, total));
+    };
+    let checking = super::Checking {
+        workers: 3,
+        progress: &progress,
+        stop: &stop,
+    };
+    let checked = super::plan_repair_checked(&snapshot, &FileAccess::disk(), &checking).unwrap();
+    assert_eq!(checked.token, plain.token);
+    assert_eq!(checked.groups.len(), 2);
+    let last = |stage| {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|(seen, _, _)| *seen == stage)
+            .map(|(_, done, total)| (*done, *total))
+            .max()
+            .unwrap()
+    };
+    // Four rows could be duplicates; the lone frame is never looked at.
+    assert_eq!(last(super::CheckStage::Files), (4, 4));
+    // Only Y's two copies on disk share a size, so only they are read.
+    assert_eq!(last(super::CheckStage::Copies), (2, 2));
+
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(super::plan_repair_checked(&snapshot, &FileAccess::disk(), &checking).is_err());
+}
+
+#[test]
+fn a_repair_stopped_between_exposures_changes_nothing() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut conn = Connection::open_in_memory().unwrap();
+    let (ux, uy) = two_twin_groups(&temp, &mut conn);
+    insert_master(&conn, "m-doubled", &[&ux, "x-dropped"], None);
+    let report = duplicate_plan(&conn);
+    assert_eq!(report.groups.len(), 2);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let merged = std::sync::Mutex::new(Vec::new());
+    let stopped = super::apply_repair_with(
+        &mut conn,
+        &report,
+        &|done, total| {
+            merged.lock().unwrap().push((done, total));
+            if done == 1 {
+                stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        },
+        &stop,
+    )
+    .unwrap_err();
+    assert!(matches!(stopped, RepairError::Stopped), "{stopped}");
+    assert_eq!(*merged.lock().unwrap(), vec![(0, 2), (1, 2)]);
+    assert_eq!(recorded_rows(&conn).len(), 4, "rolled back whole");
+    assert_eq!(master_uuids(&conn), vec!["m-doubled"]);
+
+    // Asked again, it goes through.
+    stop.store(false, std::sync::atomic::Ordering::SeqCst);
+    let outcome = super::apply_repair_with(&mut conn, &report, &|_, _| {}, &stop).unwrap();
+    assert_eq!((outcome.groups, outcome.rows_removed), (2, 2));
+    let kept = recorded_rows(&conn)
+        .into_iter()
+        .map(|(uuid, _)| uuid)
+        .collect::<Vec<_>>();
+    assert_eq!(kept, vec![ux, uy]);
+}
+
+#[test]
+fn one_repair_at_a_time_per_catalog() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("schedulerdb.sqlite");
+    let first = super::repair_lock(&catalog).unwrap();
+    assert!(matches!(
+        super::repair_lock(&catalog),
+        Err(super::RepairLockError::Busy)
+    ));
+    // Another catalog's repair is its own.
+    let _other = super::repair_lock(&temp.path().join("other.sqlite")).unwrap();
+    drop(first);
+    let _again = super::repair_lock(&catalog).unwrap();
+    assert!(
+        super::repair_lock_path(&catalog).is_file(),
+        "the lock file stays"
+    );
+}
+
+#[test]
+fn a_master_whose_row_went_or_moved_while_it_was_built_is_not_recorded() {
+    let temp = tempfile::tempdir().unwrap();
+    let (_, library) = two_copies(&temp);
+    let mut conn = Connection::open_in_memory().unwrap();
+    import_now(&mut conn, &[dark_at(&library, 1_000)]);
+    let frames = query_kind(&conn, CalibrationKind::Dark).unwrap();
+    assert_eq!(frames.len(), 1);
+    let record = |conn: &Connection, frames: &[CalibrationFrame]| {
+        record_master(
+            conn,
+            CalibrationKind::Dark,
+            frames,
+            "source-hash",
+            Path::new("/masters/dark.fits"),
+            RecordedMaster {
+                exposure_seconds: Some(60.0),
+                statistics: serde_json::json!({}),
+            },
+            MasterInputs {
+                bias: None,
+                dark: None,
+                bias_dependency: None,
+                dark_dependency: None,
+            },
+        )
+        .unwrap();
+    };
+    // A repair moved the row to a twin's file while the master was built.
+    conn.execute(
+        "UPDATE psf_guard_calibration_frame SET source_fingerprint = 'a twin file'",
+        [],
+    )
+    .unwrap();
+    record(&conn, &frames);
+    assert!(master_uuids(&conn).is_empty(), "built from the old file");
+    // Read again, as the next build reads it, the master is recorded.
+    let frames = query_kind(&conn, CalibrationKind::Dark).unwrap();
+    record(&conn, &frames);
+    assert_eq!(master_uuids(&conn).len(), 1);
+    assert!(conn.is_autocommit(), "its transaction is closed");
+    // A row that is gone keeps its master out too.
+    conn.execute("DELETE FROM psf_guard_calibration_master", [])
+        .unwrap();
+    conn.execute("DELETE FROM psf_guard_calibration_frame", [])
+        .unwrap();
+    record(&conn, &frames);
+    assert!(master_uuids(&conn).is_empty());
+}
+
+// REVIEW #877: pins the record_master guard across two connections, as a
+// stack worker and a repair run on a file catalog: a build that read the
+// rows before Apply and records while Apply's transaction is open waits
+// for the commit, then sees its twin row gone and records nothing.
+#[test]
+fn review_877_a_master_recorded_during_apply_waits_and_is_left_out() {
+    use std::time::{Duration, Instant};
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("catalog.sqlite");
+    let mut conn = Connection::open(&catalog).unwrap();
+    let (_, uy) = two_twin_groups(&temp, &mut conn);
+    let report = duplicate_plan(&conn);
+    assert_eq!(report.groups.len(), 2);
+    // The build read Y's two rows before the repair began.
+    let frames = query_kind(&conn, CalibrationKind::Dark)
+        .unwrap()
+        .into_iter()
+        .filter(|frame| frame.frame_uuid == uy || frame.frame_uuid == "y-second")
+        .collect::<Vec<_>>();
+    assert_eq!(frames.len(), 2);
+
+    let (inside_tx, inside_rx) = std::sync::mpsc::channel::<()>();
+    let worker_catalog = catalog.clone();
+    let worker = std::thread::spawn(move || {
+        inside_rx.recv().unwrap();
+        let worker = Connection::open(&worker_catalog).unwrap();
+        worker.busy_timeout(Duration::from_secs(10)).unwrap();
+        record_master(
+            &worker,
+            CalibrationKind::Dark,
+            &frames,
+            "doubled-y",
+            Path::new("/masters/dark-doubled-y.fits"),
+            RecordedMaster {
+                exposure_seconds: Some(60.0),
+                statistics: serde_json::json!({}),
+            },
+            MasterInputs {
+                bias: None,
+                dark: None,
+                bias_dependency: None,
+                dark_dependency: None,
+            },
+        )
+        .unwrap();
+        Instant::now()
+    });
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let sent = std::cell::Cell::new(None::<Instant>);
+    super::apply_repair_with(
+        &mut conn,
+        &report,
+        &|done, _| {
+            if done == 1 {
+                // Inside Apply's transaction: let the build try to record.
+                inside_tx.send(()).unwrap();
+                sent.set(Some(Instant::now()));
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        },
+        &stop,
+    )
+    .unwrap();
+    let sent_at = sent.get();
+    let recorded_at = worker.join().unwrap();
+    assert!(
+        recorded_at.duration_since(sent_at.unwrap()) >= Duration::from_millis(250),
+        "the record waited for the repair to commit"
+    );
+    assert!(
+        master_uuids(&conn).is_empty(),
+        "a master averaging Y twice was recorded after the repair"
+    );
+}
+
+// REVIEW #877: a catalog in rollback-journal mode (the default) needs an
+// exclusive lock to COMMIT. When a reader outlasts the busy timeout the
+// COMMIT fails with SQLITE_BUSY and SQLite leaves the transaction open;
+// record_master returns the error without rolling back, so the stack
+// worker's connection keeps the write lock and every later record_master
+// on it writes into a transaction that is never committed.
+#[test]
+fn review_877_a_failed_commit_does_not_leave_record_master_inside_a_transaction() {
+    use std::time::Duration;
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("catalog.sqlite");
+    let (_, library) = two_copies(&temp);
+    let mut conn = Connection::open(&catalog).unwrap();
+    import_now(&mut conn, &[dark_at(&library, 1_000)]);
+    let frames = query_kind(&conn, CalibrationKind::Dark).unwrap();
+    drop(conn);
+
+    // A long reader holds a shared lock.
+    let reader = Connection::open(&catalog).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let _: i64 = reader
+        .query_row(
+            "SELECT COUNT(*) FROM psf_guard_calibration_frame",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let worker = Connection::open(&catalog).unwrap();
+    worker.busy_timeout(Duration::from_millis(50)).unwrap();
+    let result = record_master(
+        &worker,
+        CalibrationKind::Dark,
+        &frames,
+        "source-hash",
+        Path::new("/masters/dark.fits"),
+        RecordedMaster {
+            exposure_seconds: Some(60.0),
+            statistics: serde_json::json!({}),
+        },
+        MasterInputs {
+            bias: None,
+            dark: None,
+            bias_dependency: None,
+            dark_dependency: None,
+        },
+    );
+    assert!(
+        result.is_err(),
+        "the COMMIT could not take the exclusive lock"
+    );
+    assert!(
+        worker.is_autocommit(),
+        "record_master left its own transaction open after a failed COMMIT"
+    );
+}

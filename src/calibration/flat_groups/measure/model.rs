@@ -1,12 +1,16 @@
 //! Flat groups, change events and where each light stands, worked out from
 //! what the catalog keeps. Nothing here reads pixels.
 //!
-//! - A **family** is the measured sessions of one rig, filter, sensor mode
-//!   and rotation cluster: the sessions that could ever share a master. A
-//!   rotation cluster is single-linkage: angles split only where a gap
-//!   between them is wider than the rig's rotation tolerance. A session
-//!   whose flats record no angle, on a rig whose other flats do, joins the
-//!   cluster it measures alike with, else stays on its own.
+//! - A **family** is a **response family**: the measured sessions of one
+//!   rig, filter, focal class and sensor mode that describe one light path.
+//!   The recorded rotator angle is a prior, not an identity. Angles first
+//!   form rotation clusters by single linkage: they split only where a gap
+//!   between them is wider than the rig's rotation tolerance. Clusters
+//!   whose sessions measure alike then join: two sessions shot within one
+//!   flat window, or neighbours in time, alike within the limits, with no
+//!   pair shot within one window apart. Clusters never measured alike stay
+//!   apart. A session whose flats record no angle joins the family it
+//!   measures alike with, else stays on its own.
 //! - Within a family, sessions merge into **groups** in time order: the
 //!   neighbouring pair with the smallest linkage first, while it stays
 //!   within the limits. Linkage is the largest difference between any two
@@ -16,14 +20,16 @@
 //!   before it to the first after, with the spots that changed.
 //! - Boundaries of one rig whose windows overlap and whose spots coincide
 //!   merge into one **change event**. Dust on the camera side turns with the
-//!   camera, so the same shadow shows in every filter and at every angle;
-//!   an event seen in two filters or at two angles applies to every light
-//!   of the rig, one seen in a single filter only to that filter.
+//!   camera, so the same shadow shows in every filter and in every response
+//!   family; an event seen in two filters, or in two response families of
+//!   one filter, applies to every light of the rig, one seen in a single
+//!   family only to that filter.
 //! - A light stands **before** or **after** an event by its time, by the
 //!   continuous imaging session it belongs to, or by its own pixels (see
 //!   [`super::evidence`]); otherwise it is undetermined.
 
-use super::metric::Spot;
+use super::lights::{AngleEpochs, FamilyEvidence};
+use super::metric::{Spot, MEDIAN_FRAMES};
 use super::rows::{ComparisonRow, EvidenceRow, ResponseRow, Verdict};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
@@ -40,6 +46,12 @@ pub const FLAT_RUN_SECONDS: i64 = 3600;
 /// Lights of one profile closer than this in time are one continuous
 /// imaging session. A night's pauses are shorter; a day is longer.
 pub const IMAGING_GAP_SECONDS: i64 = 3 * 3600;
+/// A comparison that takes a session of fewer than
+/// [`MEDIAN_FRAMES`] flats sets this many of its own spreads against its
+/// dust before the limit: two flats combine by a mean, not a median, and
+/// the deepest spot of a noisier ratio stands that much higher for noise
+/// alone.
+pub const NOISY_DUST_SIGMAS: f64 = 2.0;
 
 /// The limits one rig's sessions are held to.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -61,6 +73,45 @@ impl Limits {
     /// less.
     pub fn distance(&self, comparison: &ComparisonRow) -> f64 {
         (comparison.dust / self.dust.max(1e-9)).max(comparison.broad / self.broad.max(1e-9))
+    }
+
+    /// [`Self::distance`] for a pair of which one session combines fewer
+    /// than [`MEDIAN_FRAMES`] flats: its dust less [`NOISY_DUST_SIGMAS`] of
+    /// the comparison's own spread, the height noise alone gives the
+    /// deepest spot of a noisier ratio.
+    pub fn noisy_distance(&self, comparison: &ComparisonRow) -> f64 {
+        let dust = (comparison.dust - NOISY_DUST_SIGMAS * comparison.sigma).max(0.0);
+        (dust / self.dust.max(1e-9)).max(comparison.broad / self.broad.max(1e-9))
+    }
+}
+
+/// The recorded angles of one rotation cluster of a family, lowest to
+/// highest going round the circle from `low`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct AngleSpan {
+    pub low: f64,
+    pub high: f64,
+}
+
+impl AngleSpan {
+    /// "100.1–104.4°", or "82.2°" for one angle.
+    pub fn label(&self) -> String {
+        if (self.high - self.low).abs() < 0.05 {
+            format!("{:.1}°", self.low)
+        } else {
+            format!("{:.1}–{:.1}°", self.low, self.high)
+        }
+    }
+
+    /// How far `angle` lies outside the span, around the circle: 0 inside.
+    pub fn gap_to(&self, angle: f64) -> f64 {
+        let width = (self.high - self.low).rem_euclid(360.0);
+        let into = (angle - self.low).rem_euclid(360.0);
+        if into <= width {
+            0.0
+        } else {
+            rotation_gap(angle, self.low).min(rotation_gap(angle, self.high))
+        }
     }
 }
 
@@ -110,9 +161,12 @@ pub struct Event {
     /// Indices into the book's boundaries.
     pub boundaries: Vec<usize>,
     pub filters: BTreeSet<String>,
+    /// The angle of each response family it was seen in.
     pub rotations: Vec<Option<f64>>,
-    /// Seen in two filters or at two angles: on the camera side, so it
-    /// applies to every filter of the rig.
+    /// The response families it was seen in, by index.
+    pub families: BTreeSet<usize>,
+    /// Seen in two filters, or in two response families of one filter: on
+    /// the camera side, so it applies to every filter of the rig.
     pub camera_side: bool,
     pub dust: f64,
     pub broad: f64,
@@ -151,6 +205,75 @@ pub struct AngleTerm {
     pub broad: f64,
 }
 
+/// An angle difference folded into (−180°, 180°].
+fn wrap_degrees(difference: f64) -> f64 {
+    let folded = difference.rem_euclid(360.0);
+    if folded > 180.0 {
+        folded - 360.0
+    } else {
+        folded
+    }
+}
+
+/// How many distinct flat sessions each end of an alike range needs: two.
+/// One session at an end can make a range alone: a gradient of its
+/// twilight, or a header that changed while the rotator did not, would
+/// pass for an angle that does not matter. A second session at that end
+/// repeats the measurement.
+pub const ALIKE_RANGE_MIN_SESSIONS: usize = 2;
+
+/// How many flat nights each end's sessions must reach: two. Two sessions
+/// of one night share its sky, its dust and its temperature.
+pub const ALIKE_RANGE_MIN_NIGHTS: usize = 2;
+
+/// Two angles a family's flats measure alike at: the family's own angle
+/// term, from pairs of its sessions compared directly. A flat at one end
+/// serves the family's lights at the other (see [`AlikeRange::serves`]),
+/// from the light's side of every change.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AlikeRange {
+    /// The recorded angles of the sessions at each end, the short way
+    /// round from the first to the second.
+    pub ends: [AngleSpan; 2],
+    /// The arc each alike pair it rests on spans, going round from `low`
+    /// to `high`, never more than a half turn.
+    pub arcs: Vec<AngleSpan>,
+    /// The span from the first end to the second.
+    pub span: AngleSpan,
+    pub pairs: usize,
+    /// Distinct sessions and flat nights at each end.
+    pub sessions: [usize; 2],
+    pub ends_nights: [usize; 2],
+    /// Flat nights the pairs reach, both ends together.
+    pub nights: usize,
+    /// The family's groups its pairs come from, and the carrying class
+    /// they share ([`Family::carry_class`]): it serves flats of the groups
+    /// of that class only.
+    pub groups: Vec<usize>,
+    pub class: usize,
+}
+
+impl AlikeRange {
+    /// Whether a light at `light` may take flats at `flat` through it: the
+    /// arc of one pair it rests on holds both, within `tolerance` at
+    /// either end, and they lie no further apart than that arc plus the
+    /// tolerance, so the tolerance counts once. A chain of pairs never
+    /// bridges angles no pair compared.
+    pub fn serves(&self, light: f64, flat: f64, tolerance: f64) -> bool {
+        self.arcs.iter().any(|arc| {
+            let width = (arc.high - arc.low).rem_euclid(360.0);
+            arc.gap_to(light) <= tolerance
+                && arc.gap_to(flat) <= tolerance
+                && rotation_gap(light, flat) <= width + tolerance
+        })
+    }
+
+    /// "101.9–102.2° and 104.2–104.4°".
+    pub fn label(&self) -> String {
+        format!("{} and {}", self.ends[0].label(), self.ends[1].label())
+    }
+}
+
 /// A family of sessions: one rig, filter, sensor mode and rotation cluster.
 #[derive(Debug, Clone, Serialize)]
 pub struct Family {
@@ -160,14 +283,25 @@ pub struct Family {
     /// rotation aside.
     pub family_key: String,
     pub filter: Option<String>,
-    /// The cluster's middle angle; absent for flats that record none.
+    /// The middle angle of its largest rotation cluster; absent for flats
+    /// that record none.
     pub rotation: Option<f64>,
+    /// The recorded angles of each rotation cluster it joins, in angle
+    /// order: its measured angle range. Empty for flats that record none.
+    pub angles: Vec<AngleSpan>,
     /// Session indices in time order.
     pub sessions: Vec<usize>,
     /// Session indices per group, in time order.
     pub groups: Vec<Vec<usize>>,
     /// Indices into the book's boundaries, between consecutive groups.
     pub boundaries: Vec<usize>,
+    /// The angles its flats measure alike at ([`AlikeRange`]), by their
+    /// first end. Empty unless enough pairs measured alike.
+    pub alike_ranges: Vec<AlikeRange>,
+    /// Per group, the class of groups an alike range carries across: the
+    /// next group shares its class only when the change between them is
+    /// camera-side dust ([`Book::carries_angle_term`]).
+    pub carry_class: Vec<usize>,
 }
 
 /// A continuous run of lights of one profile.
@@ -183,12 +317,8 @@ pub struct ImagingSession {
     pub lights: Vec<i64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Side {
-    Before,
-    After,
-}
+/// Which side of a change something stands on.
+pub use super::evidence::Side;
 
 /// How a light was put on one side of an event.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -231,6 +361,12 @@ pub struct Book {
     pub families: Vec<Family>,
     pub boundaries: Vec<Boundary>,
     pub events: Vec<Event>,
+    /// Light angle epochs: each rig's sky − mechanical rotator offset over
+    /// time, from the lights' own solves (see [`super::lights`]).
+    pub epochs: AngleEpochs,
+    /// What imaging sessions' own lights said about which family their
+    /// flats come from, by session key and filter.
+    pub family_evidence: FamilyEvidence,
     /// Boundaries on either side of one night unlike the nights around it,
     /// which measure alike with each other: a hazy dawn, not a change.
     /// They split groups but make no event, so no light is flagged for them.
@@ -241,7 +377,12 @@ pub struct Book {
     pub angle_terms: HashMap<String, AngleTerm>,
     pub imaging: Vec<ImagingSession>,
     /// Each session's family, by index.
-    family_of: Vec<usize>,
+    pub(super) family_of: Vec<usize>,
+    /// Each session's rotation cluster, by index; `usize::MAX` for one that
+    /// records no angle.
+    cluster_of: Vec<usize>,
+    /// Each rotation cluster's sessions, with its rig and family key.
+    clusters: Vec<(String, String, Vec<usize>)>,
     by_response: HashMap<String, usize>,
     by_frame: HashMap<String, usize>,
     comparisons: HashMap<(usize, usize), ComparisonRow>,
@@ -293,6 +434,15 @@ fn rotation_clusters(mut angled: Vec<(usize, f64)>, tolerance: f64) -> Vec<Vec<(
         }
     }
     clusters
+}
+
+/// A family while clusters join.
+struct FamilyDraft {
+    /// The middle angle of its largest cluster.
+    middle: Option<f64>,
+    anchor_size: usize,
+    angles: Vec<AngleSpan>,
+    sessions: Vec<usize>,
 }
 
 impl Book {
@@ -353,6 +503,7 @@ impl Book {
         book.find_spanning();
         book.build_events();
         book.build_angle_terms();
+        book.build_alike_ranges();
         book
     }
 
@@ -387,67 +538,213 @@ impl Book {
         let mut keys: Vec<_> = by_key.keys().cloned().collect();
         keys.sort();
         self.family_of = vec![usize::MAX; self.sessions.len()];
+        self.cluster_of = vec![usize::MAX; self.sessions.len()];
         for key in keys {
             let members = by_key.remove(&key).unwrap_or_default();
+            let limits = self.limits(&key.0);
             // The rig's tolerance, capped at the coherence tolerance one
             // master's flats are held to: a wide match setting lets lights
             // reach further for flats, it does not make two angles one.
-            let tolerance = self.limits(&key.0).map_or(ROTATION_CLUSTER_DEG, |limits| {
+            let tolerance = limits.map_or(ROTATION_CLUSTER_DEG, |limits| {
                 limits.rotation.min(ROTATION_CLUSTER_DEG)
             });
             let (angled, unknown): (Vec<usize>, Vec<usize>) = members
                 .into_iter()
                 .partition(|index| self.angle(*index).is_some());
-            let mut clusters: Vec<(Option<f64>, Vec<usize>)> = rotation_clusters(
+            let clusters = rotation_clusters(
                 angled
                     .into_iter()
                     .filter_map(|index| Some((index, self.angle(index)?)))
                     .collect(),
                 tolerance,
-            )
-            .into_iter()
-            .map(|cluster| {
-                let middle = cluster[cluster.len() / 2].1;
-                (Some(middle), cluster.into_iter().map(|(i, _)| i).collect())
-            })
-            .collect();
-            // Flats that record no angle join the cluster they measure
+            );
+            // Every rotation cluster starts as a family of its own.
+            let mut families: Vec<FamilyDraft> = Vec::new();
+            for cluster in clusters {
+                let id = self.clusters.len();
+                let sessions: Vec<usize> = cluster.iter().map(|(i, _)| *i).collect();
+                for index in &sessions {
+                    self.cluster_of[*index] = id;
+                }
+                self.clusters
+                    .push((key.0.clone(), key.1.clone(), sessions.clone()));
+                families.push(FamilyDraft {
+                    middle: Some(cluster[cluster.len() / 2].1),
+                    anchor_size: cluster.len(),
+                    angles: vec![AngleSpan {
+                        low: cluster[0].1.rem_euclid(360.0),
+                        high: cluster[cluster.len() - 1].1.rem_euclid(360.0),
+                    }],
+                    sessions,
+                });
+            }
+            // Clusters whose sessions measure alike are one light path.
+            if let Some(limits) = limits {
+                self.join_alike_clusters(&mut families, &limits);
+            }
+            // Flats that record no angle join the family they measure
             // alike with; the rest stay together on their own.
             let mut alone = Vec::new();
+            let members: Vec<Vec<usize>> = families.iter().map(|f| f.sessions.clone()).collect();
             for index in unknown {
-                match self.measured_cluster(index, &clusters) {
-                    Some((cluster, angle)) => {
+                match self.measured_cluster(index, &members) {
+                    Some((family, angle)) => {
                         self.sessions[index].inferred_rotation = Some(angle);
-                        clusters[cluster].1.push(index);
+                        families[family].sessions.push(index);
                     }
                     None => alone.push(index),
                 }
             }
             if !alone.is_empty() {
-                clusters.push((None, alone));
+                families.push(FamilyDraft {
+                    middle: None,
+                    anchor_size: 0,
+                    angles: Vec::new(),
+                    sessions: alone,
+                });
             }
-            for (rotation, mut sessions) in clusters {
-                sessions.sort_by_key(|index| (self.sessions[*index].first, *index));
-                let filter = self.sessions[sessions[0]].row.filter.clone();
-                for index in &sessions {
+            for mut draft in families {
+                draft
+                    .sessions
+                    .sort_by_key(|index| (self.sessions[*index].first, *index));
+                draft
+                    .angles
+                    .sort_by(|a, b| a.low.total_cmp(&b.low).then(a.high.total_cmp(&b.high)));
+                let filter = self.sessions[draft.sessions[0]].row.filter.clone();
+                for index in &draft.sessions {
                     self.family_of[*index] = self.families.len();
                 }
+                // Named by its earliest session's first flat: a session
+                // that arrives later never renames it, nor does a new night
+                // boundary, so a choice made about the family by hand can
+                // find it again.
+                let anchor = self.sessions[draft.sessions[0]]
+                    .row
+                    .frame_uuids
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| self.sessions[draft.sessions[0]].row.response_key.clone());
                 self.families.push(Family {
-                    key: format!(
-                        "{}:{}",
-                        key.1,
-                        rotation.map_or_else(|| "none".to_string(), |r| format!("{r:.1}"))
-                    ),
+                    key: format!("{}:{anchor}", key.1),
                     rig_uuid: key.0.clone(),
                     family_key: key.1.clone(),
                     filter,
-                    rotation,
-                    sessions,
+                    rotation: draft.middle,
+                    angles: draft.angles,
+                    sessions: draft.sessions,
                     groups: Vec::new(),
                     boundaries: Vec::new(),
+                    alike_ranges: Vec::new(),
+                    carry_class: Vec::new(),
                 });
             }
         }
+    }
+
+    /// Join rotation clusters of one family key whose sessions measure
+    /// alike, closest first. Two clusters join when some pair of their
+    /// sessions, shot within one flat window or neighbours in time, is
+    /// alike within the limits, and no such pair is apart: complete linkage
+    /// over the pairs that speak to the angle. A pair apart keeps the
+    /// clusters apart, so a light is never handed flats that measured apart
+    /// from its own angle's, unless a change of dust explains it: a third
+    /// session, beside one of the pair at its angle, measured alike with
+    /// the other and apart from its own neighbour. Clusters never measured
+    /// alike stay apart.
+    fn join_alike_clusters(&self, families: &mut Vec<FamilyDraft>, limits: &Limits) {
+        loop {
+            let mut best: Option<(usize, usize, f64)> = None;
+            for x in 0..families.len() {
+                for y in x + 1..families.len() {
+                    if let Some(distance) =
+                        self.family_link(&families[x].sessions, &families[y].sessions, limits)
+                        && best.is_none_or(|(_, _, b)| distance < b)
+                    {
+                        best = Some((x, y, distance));
+                    }
+                }
+            }
+            let Some((x, y, _)) = best else { break };
+            let joined = families.remove(y);
+            let into = &mut families[x];
+            if joined.anchor_size > into.anchor_size {
+                into.middle = joined.middle;
+                into.anchor_size = joined.anchor_size;
+            }
+            into.angles.extend(joined.angles);
+            into.sessions.extend(joined.sessions);
+        }
+    }
+
+    /// The closest likeness between two sets of sessions, when they may
+    /// join: see [`Self::join_alike_clusters`].
+    fn family_link(&self, left: &[usize], right: &[usize], limits: &Limits) -> Option<f64> {
+        let mut alike: Option<f64> = None;
+        for a in left {
+            let right_neighbours = self.neighbours_in(*a, right);
+            for b in right {
+                let Some(distance) = self.pair_distance(*a, *b, limits) else {
+                    continue;
+                };
+                let within =
+                    (self.sessions[*a].first - self.sessions[*b].first).abs() <= limits.window;
+                let neighbours =
+                    right_neighbours.contains(b) || self.neighbours_in(*b, left).contains(a);
+                if (within || neighbours)
+                    && distance > 1.0
+                    && !self.apart_by_a_change(*a, *b, left, right, limits)
+                {
+                    return None;
+                }
+                if (within || neighbours) && distance <= 1.0 {
+                    alike = Some(alike.map_or(distance, |d: f64| d.min(distance)));
+                }
+            }
+        }
+        alike
+    }
+
+    /// Whether sessions `a` (of `left`) and `b` (of `right`), measured
+    /// apart, differ by a change of dust rather than by their angles: a
+    /// session at one's angle measured alike with the other, and apart
+    /// from the one beside it. A morning's two angles alike, and the same
+    /// angle apart from an earlier morning, is new dust, not the angle.
+    fn apart_by_a_change(
+        &self,
+        a: usize,
+        b: usize,
+        left: &[usize],
+        right: &[usize],
+        limits: &Limits,
+    ) -> bool {
+        let alike = |x: usize, y: usize| self.pair_distance(x, y, limits).is_some_and(|d| d <= 1.0);
+        let apart = |x: usize, y: usize| self.pair_distance(x, y, limits).is_some_and(|d| d > 1.0);
+        left.iter().any(|c| *c != a && alike(*c, b) && apart(a, *c))
+            || right
+                .iter()
+                .any(|c| *c != b && alike(a, *c) && apart(*c, b))
+    }
+
+    /// How far two sessions measured apart against `limits`, with the noise
+    /// of a session of fewer than [`MEDIAN_FRAMES`] flats allowed for;
+    /// `None` when they were not compared.
+    pub fn pair_distance(&self, a: usize, b: usize, limits: &Limits) -> Option<f64> {
+        let comparison = self.comparison(a, b)?;
+        let few = |i: usize| self.sessions[i].row.frames < MEDIAN_FRAMES;
+        Some(if few(a) || few(b) {
+            limits.noisy_distance(comparison)
+        } else {
+            limits.distance(comparison)
+        })
+    }
+
+    /// Whether two sessions both record angles, in different rotation
+    /// clusters: a pair at two angles. A session whose flats record no
+    /// angle sits at the angle it measured alike with, never at another.
+    pub fn at_two_angles(&self, a: usize, b: usize) -> bool {
+        self.angle(a).is_some()
+            && self.angle(b).is_some()
+            && self.cluster_of[a] != self.cluster_of[b]
     }
 
     /// A session's recorded rotator angle, when it has a usable one.
@@ -469,30 +766,23 @@ impl Book {
         before.into_iter().chain(after).collect()
     }
 
-    /// For a session whose flats record no angle: the rotation cluster one
-    /// of whose neighbours in time it measures alike with, and that
-    /// neighbour's angle. Only when the measurements single the cluster
-    /// out: every other cluster measured, and unlike. On a rig whose angles
-    /// barely matter a night alike with several clusters says nothing of
-    /// its angle, and stays unknown.
-    fn measured_cluster(
-        &self,
-        session: usize,
-        clusters: &[(Option<f64>, Vec<usize>)],
-    ) -> Option<(usize, f64)> {
+    /// For a session whose flats record no angle: the family one of whose
+    /// neighbours in time it measures alike with, and that neighbour's
+    /// angle. Only when the measurements single the family out: every
+    /// other family measured, and unlike. On a rig whose angles barely
+    /// matter a night alike with several families says nothing of its
+    /// angle, and stays unknown.
+    fn measured_cluster(&self, session: usize, families: &[Vec<usize>]) -> Option<(usize, f64)> {
         let limits = self.limits(&self.sessions[session].row.rig_uuid)?;
         let mut alike = None;
-        for (c, (_, members)) in clusters.iter().enumerate() {
+        for (c, members) in families.iter().enumerate() {
             let closest = self
                 .neighbours_in(session, members)
                 .into_iter()
-                .filter_map(|n| {
-                    let comparison = self.comparison(session, n)?;
-                    Some((limits.distance(comparison), self.angle(n)?))
-                })
+                .filter_map(|n| Some((self.pair_distance(session, n, &limits)?, self.angle(n)?)))
                 .min_by(|a, b| a.0.total_cmp(&b.0));
             match closest {
-                // Never compared: nothing rules this cluster out.
+                // Never compared: nothing rules this family out.
                 None => return None,
                 Some((distance, angle)) if distance <= 1.0 => {
                     if alike.is_some() {
@@ -527,8 +817,7 @@ impl Book {
                 if !self.compared_pair(*a, *b, neighbours, limits) {
                     continue;
                 }
-                if let Some(comparison) = self.comparison(*a, *b) {
-                    let distance = limits.distance(comparison);
+                if let Some(distance) = self.pair_distance(*a, *b, limits) {
                     worst = Some(worst.map_or(distance, |w: f64| w.max(distance)));
                 }
             }
@@ -563,21 +852,29 @@ impl Book {
             }
             let mut boundaries = Vec::new();
             for pair in groups.windows(2) {
-                let before = *pair[0].last().expect("groups are not empty");
-                let after = pair[1][0];
+                let last = *pair[0].last().expect("groups are not empty");
+                let first = pair[1][0];
+                // The change is told by the nearest pair across it at one
+                // angle: a family's two angles differ by their light path
+                // too, so a pair at two angles says nothing of the change.
+                let (before, after) = pair[0]
+                    .iter()
+                    .flat_map(|a| pair[1].iter().map(move |b| (*a, *b)))
+                    .filter(|(a, b)| !self.at_two_angles(*a, *b))
+                    .min_by_key(|(a, b)| (self.sessions[*b].first - self.sessions[*a].last, *a, *b))
+                    .unwrap_or((last, first));
                 let neighbour = self.comparison(before, after);
-                let distance = neighbour.map(|c| limits.distance(c));
+                let distance = self.pair_distance(before, after, &limits);
                 let drift = if distance.is_none_or(|d| d <= 1.0) {
                     // The neighbours agree: say which pair across the
                     // boundary did not.
                     let mut worst: Option<(usize, usize, f64)> = None;
                     for a in &pair[0] {
                         for b in &pair[1] {
-                            if let Some(c) = self.comparison(*a, *b) {
-                                let d = limits.distance(c);
-                                if worst.is_none_or(|(_, _, w)| d > w) {
-                                    worst = Some((*a, *b, d));
-                                }
+                            if let Some(d) = self.pair_distance(*a, *b, &limits)
+                                && worst.is_none_or(|(_, _, w)| d > w)
+                            {
+                                worst = Some((*a, *b, d));
                             }
                         }
                     }
@@ -590,8 +887,8 @@ impl Book {
                     family: family_index,
                     before,
                     after,
-                    start: self.sessions[before].last,
-                    end: self.sessions[after].first,
+                    start: self.sessions[last].last,
+                    end: self.sessions[first].first,
                     dust: neighbour.map(|c| c.dust),
                     broad: neighbour.map(|c| c.broad),
                     drift,
@@ -633,7 +930,13 @@ impl Book {
         for family in &self.families {
             for g in 1..family.groups.len().saturating_sub(1) {
                 let (left, right) = (family.boundaries[g - 1], family.boundaries[g]);
-                if !self.outliers.contains(&left) && !self.outliers.contains(&right) {
+                let change = |b: usize| {
+                    !self.outliers.contains(&b) && {
+                        let boundary = &self.boundaries[b];
+                        !self.at_two_angles(boundary.before, boundary.after)
+                    }
+                };
+                if change(left) && change(right) {
                     bounded.push((left, right));
                 }
             }
@@ -727,8 +1030,8 @@ impl Book {
                     continue;
                 };
                 if self
-                    .comparison(*before, *after)
-                    .is_some_and(|c| limits.distance(c) <= 1.0)
+                    .pair_distance(*before, *after, &limits)
+                    .is_some_and(|d| d <= 1.0)
                 {
                     outliers.insert(family.boundaries[g - 1]);
                     outliers.insert(family.boundaries[g]);
@@ -757,7 +1060,15 @@ impl Book {
         // Each merge's members, by its root.
         let mut merged: Vec<Vec<usize>> = (0..self.boundaries.len()).map(|i| vec![i]).collect();
         let bounded = self.bounded_groups();
-        let apart = |i: usize| self.outliers.contains(&i) || self.spanning.contains(&i);
+        // A boundary between two angles of one family is a split of the
+        // family, never a change: the two angles may differ by the angle
+        // alone.
+        let across_angles = |i: usize| {
+            let boundary = &self.boundaries[i];
+            self.at_two_angles(boundary.before, boundary.after)
+        };
+        let apart =
+            |i: usize| self.outliers.contains(&i) || self.spanning.contains(&i) || across_angles(i);
         for i in 0..self.boundaries.len() {
             for j in (i + 1)..self.boundaries.len() {
                 if apart(i) || apart(j) {
@@ -815,15 +1126,11 @@ impl Book {
                 .map(|f| canonical_filter(&f))
                 .collect();
             let mut rotations: Vec<Option<f64>> = Vec::new();
+            let mut families: BTreeSet<usize> = BTreeSet::new();
             for b in &boundaries {
-                let rotation = self.families[self.boundaries[*b].family].rotation;
-                let known = rotations.iter().any(|r| match (r, rotation) {
-                    (None, None) => true,
-                    (Some(x), Some(y)) => rotation_gap(*x, y) <= ROTATION_CLUSTER_DEG,
-                    _ => false,
-                });
-                if !known {
-                    rotations.push(rotation);
+                let family = self.boundaries[*b].family;
+                if families.insert(family) {
+                    rotations.push(self.families[family].rotation);
                 }
             }
             let strongest = boundaries
@@ -847,9 +1154,10 @@ impl Book {
                 rig_uuid: rig,
                 start,
                 end,
-                camera_side: filters.len() >= 2 || rotations.len() >= 2,
+                camera_side: filters.len() >= 2 || self.two_families_of_one_key(&families),
                 filters,
                 rotations,
+                families,
                 dust,
                 broad,
                 spots: self.boundaries[strongest].spots.clone(),
@@ -878,17 +1186,26 @@ impl Book {
                 if let Some(filter) = &family.filter {
                     event.filters.insert(canonical_filter(filter));
                 }
-                let known = event.rotations.iter().any(|r| match (r, family.rotation) {
-                    (None, None) => true,
-                    (Some(x), Some(y)) => rotation_gap(*x, y) <= ROTATION_CLUSTER_DEG,
-                    _ => false,
-                });
-                if !known {
+                if event.families.insert(split.family) {
                     event.rotations.push(family.rotation);
                 }
-                event.camera_side = event.filters.len() >= 2 || event.rotations.len() >= 2;
             }
         }
+        for index in 0..self.events.len() {
+            let two = self.two_families_of_one_key(&self.events[index].families);
+            let event = &mut self.events[index];
+            event.camera_side = event.filters.len() >= 2 || two;
+        }
+    }
+
+    /// Whether two of `families` are of one family key (one filter, optics
+    /// and sensor mode) and so differ by their light path alone: a change
+    /// seen in both turned with the camera.
+    fn two_families_of_one_key(&self, families: &BTreeSet<usize>) -> bool {
+        let mut keys = BTreeSet::new();
+        families
+            .iter()
+            .any(|family| !keys.insert(self.families[*family].family_key.as_str()))
     }
 
     fn build_angle_terms(&mut self) {
@@ -917,14 +1234,266 @@ impl Book {
         }
     }
 
+    /// Each family's [`AlikeRange`]s, from pairs of its sessions at two
+    /// angles further apart than the rig's tolerance, compared directly,
+    /// in one group, with no change of the rig that reaches the filter
+    /// between them. A range gathers the alike pairs whose ends lie within
+    /// the tolerance of one pair's ends, from groups of one carrying class
+    /// ([`Self::carries_angle_term`]). It needs
+    /// [`ALIKE_RANGE_MIN_SESSIONS`] distinct sessions on
+    /// [`ALIKE_RANGE_MIN_NIGHTS`] nights at each end, and no pair of the
+    /// family measured apart that it would serve. Only measured pairs
+    /// count: a header's angle never makes or widens one.
+    fn build_alike_ranges(&mut self) {
+        for family_index in 0..self.families.len() {
+            let classes = self.carry_classes(family_index);
+            self.families[family_index].carry_class = classes;
+            let ranges = self.alike_ranges_of(family_index);
+            self.families[family_index].alike_ranges = ranges;
+        }
+    }
+
+    /// Per group of a family, its carrying class: consecutive groups share
+    /// one when the change between them carries an angle term.
+    fn carry_classes(&self, family_index: usize) -> Vec<usize> {
+        let family = &self.families[family_index];
+        let limits = self.limits(&family.rig_uuid);
+        let mut classes = Vec::with_capacity(family.groups.len());
+        for g in 0..family.groups.len() {
+            let class = match (g, limits) {
+                (0, _) => 0,
+                (_, Some(limits)) if self.carries_angle_term(family.boundaries[g - 1], &limits) => {
+                    classes[g - 1]
+                }
+                _ => classes[g - 1] + 1,
+            };
+            classes.push(class);
+        }
+        classes
+    }
+
+    /// Whether an angle term measured on one side of a boundary holds on
+    /// the other: only when the boundary is part of a camera-side change of
+    /// dust, with spots and no broad change over the limit. How flats
+    /// depend on the angle comes from the telescope side (vignetting,
+    /// reflections, the light path through a rotating camera's optics);
+    /// dust on the camera's window or filter moves with the camera, adds
+    /// the same shadows at every angle, and leaves that dependence as it
+    /// was. A broad change, a change seen in one filter alone (filter or
+    /// telescope side), a split that makes no change, or a split made by
+    /// hand carries nothing.
+    // TODO(#878): a boundary a person split or joined by hand carries
+    // nothing; check the choices here once they reach the book.
+    pub fn carries_angle_term(&self, boundary: usize, limits: &Limits) -> bool {
+        self.events.iter().any(|event| {
+            event.boundaries.contains(&boundary)
+                && event.camera_side
+                && !event.spots.is_empty()
+                && event.broad <= limits.broad
+        })
+    }
+
+    fn alike_ranges_of(&self, family_index: usize) -> Vec<AlikeRange> {
+        struct Pair<'a> {
+            ends: [(usize, f64); 2],
+            arc: AngleSpan,
+            alike: bool,
+            group: usize,
+            class: usize,
+            nights: [&'a str; 2],
+        }
+        let family = &self.families[family_index];
+        let Some(limits) = self.limits(&family.rig_uuid) else {
+            return Vec::new();
+        };
+        let tolerance = limits.rotation;
+        let mut pairs: Vec<Pair> = Vec::new();
+        for (g, group) in family.groups.iter().enumerate() {
+            for (i, a) in group.iter().enumerate() {
+                for b in &group[i + 1..] {
+                    let (Some(x), Some(y)) = (self.angle(*a), self.angle(*b)) else {
+                        continue;
+                    };
+                    if rotation_gap(x, y) <= tolerance || self.change_between(family, *a, *b) {
+                        continue;
+                    }
+                    let Some(distance) = self.pair_distance(*a, *b, &limits) else {
+                        continue;
+                    };
+                    // The short way round, from the first end.
+                    let (from, to) = if (y - x).rem_euclid(360.0) <= 180.0 {
+                        ((*a, x), (*b, y))
+                    } else {
+                        ((*b, y), (*a, x))
+                    };
+                    pairs.push(Pair {
+                        ends: [from, to],
+                        arc: AngleSpan {
+                            low: from.1,
+                            high: to.1,
+                        },
+                        alike: distance <= 1.0,
+                        group: g,
+                        class: family.carry_class.get(g).copied().unwrap_or(g),
+                        nights: [
+                            self.sessions[from.0].row.night.as_str(),
+                            self.sessions[to.0].row.night.as_str(),
+                        ],
+                    });
+                }
+            }
+        }
+        // Which end of `q` lies at each end of `p`, if both do.
+        let lined_up = |p: &Pair, q: &Pair| -> Option<[usize; 2]> {
+            let near = |a: f64, b: f64| rotation_gap(a, b) <= tolerance;
+            if near(p.ends[0].1, q.ends[0].1) && near(p.ends[1].1, q.ends[1].1) {
+                Some([0, 1])
+            } else if near(p.ends[0].1, q.ends[1].1) && near(p.ends[1].1, q.ends[0].1) {
+                Some([1, 0])
+            } else {
+                None
+            }
+        };
+        let mut seen: BTreeSet<Vec<usize>> = BTreeSet::new();
+        let mut found: Vec<AlikeRange> = Vec::new();
+        for seed in pairs.iter().filter(|pair| pair.alike) {
+            let members: Vec<(usize, [usize; 2])> = pairs
+                .iter()
+                .enumerate()
+                .filter(|(_, q)| q.alike && q.class == seed.class)
+                .filter_map(|(index, q)| lined_up(seed, q).map(|order| (index, order)))
+                .collect();
+            if !seen.insert(members.iter().map(|(index, _)| *index).collect()) {
+                continue;
+            }
+            let mut sessions: [BTreeSet<usize>; 2] = Default::default();
+            let mut nights: [BTreeSet<&str>; 2] = Default::default();
+            let mut angles: [Vec<f64>; 2] = Default::default();
+            let mut groups = BTreeSet::new();
+            for (index, order) in &members {
+                let q = &pairs[*index];
+                groups.insert(q.group);
+                for side in 0..2 {
+                    let end = order[side];
+                    sessions[side].insert(q.ends[end].0);
+                    nights[side].insert(q.nights[end]);
+                    angles[side].push(q.ends[end].1);
+                }
+            }
+            if sessions
+                .iter()
+                .any(|set| set.len() < ALIKE_RANGE_MIN_SESSIONS)
+                || nights.iter().any(|set| set.len() < ALIKE_RANGE_MIN_NIGHTS)
+            {
+                continue;
+            }
+            let span_of = |angles: &[f64], around: f64| {
+                let offsets = angles.iter().map(|a| wrap_degrees(a - around));
+                let low = offsets.clone().fold(f64::INFINITY, f64::min);
+                let high = offsets.fold(f64::NEG_INFINITY, f64::max);
+                AngleSpan {
+                    low: (around + low).rem_euclid(360.0),
+                    high: (around + high).rem_euclid(360.0),
+                }
+            };
+            let ends = [
+                span_of(&angles[0], seed.ends[0].1),
+                span_of(&angles[1], seed.ends[1].1),
+            ];
+            let all_nights: BTreeSet<&str> = nights[0].union(&nights[1]).copied().collect();
+            let range = AlikeRange {
+                ends,
+                arcs: members.iter().map(|(index, _)| pairs[*index].arc).collect(),
+                span: AngleSpan {
+                    low: ends[0].low,
+                    high: ends[1].high,
+                },
+                pairs: members.len(),
+                sessions: [sessions[0].len(), sessions[1].len()],
+                ends_nights: [nights[0].len(), nights[1].len()],
+                nights: all_nights.len(),
+                groups: groups.into_iter().collect(),
+                class: seed.class,
+            };
+            // A pair of the family measured apart that it would serve rules
+            // it out.
+            if pairs
+                .iter()
+                .any(|pair| !pair.alike && range.serves(pair.ends[0].1, pair.ends[1].1, tolerance))
+            {
+                continue;
+            }
+            found.push(range);
+        }
+        found.sort_by(|a, b| {
+            a.ends[0]
+                .low
+                .total_cmp(&b.ends[0].low)
+                .then(a.ends[1].low.total_cmp(&b.ends[1].low))
+        });
+        found
+    }
+
+    /// Whether a change of the rig that reaches the family's filter falls
+    /// between two of its sessions.
+    fn change_between(&self, family: &Family, a: usize, b: usize) -> bool {
+        let (a, b) = (&self.sessions[a], &self.sessions[b]);
+        let (earlier, later) = if a.first <= b.first { (a, b) } else { (b, a) };
+        self.events.iter().any(|event| {
+            event.rig_uuid == family.rig_uuid
+                && event.applies_to(family.filter.as_deref())
+                && event.start < later.first
+                && event.end > earlier.last
+        })
+    }
+
+    /// A range of `family` that serves a light at `light` with flats at
+    /// `flat`, within the rig's `tolerance`, whichever group it was
+    /// measured in.
+    pub fn alike_range(
+        &self,
+        family: usize,
+        light: f64,
+        flat: f64,
+        tolerance: f64,
+    ) -> Option<&AlikeRange> {
+        self.families[family]
+            .alike_ranges
+            .iter()
+            .find(|range| range.serves(light, flat, tolerance))
+    }
+
+    /// A range of `family` that serves a light at `light` with the flats
+    /// of `session`: one measured in the session's carrying class.
+    pub fn alike_range_for(
+        &self,
+        family: usize,
+        session: usize,
+        light: f64,
+        tolerance: f64,
+    ) -> Option<&AlikeRange> {
+        let family_ref = &self.families[family];
+        let flat = self.angle(session)?;
+        let group = family_ref
+            .groups
+            .iter()
+            .position(|group| group.contains(&session))?;
+        let class = family_ref.carry_class.get(group).copied()?;
+        family_ref
+            .alike_ranges
+            .iter()
+            .filter(|range| range.class == class)
+            .find(|range| range.serves(light, flat, tolerance))
+    }
+
     /// Whether two sessions are of one rig and family key but different
     /// rotation clusters, each with its angle recorded: a pair at two
-    /// angles.
+    /// angles, whether or not they measured alike.
     fn across_clusters(&self, a: usize, b: usize) -> bool {
         let (sa, sb) = (&self.sessions[a].row, &self.sessions[b].row);
         sa.rig_uuid == sb.rig_uuid
             && sa.family_key == sb.family_key
-            && self.family_of[a] != self.family_of[b]
+            && self.cluster_of[a] != self.cluster_of[b]
             && self.angle(a).is_some()
             && self.angle(b).is_some()
     }
@@ -932,9 +1501,11 @@ impl Book {
     /// Pairs the measurement pass should compare: within each family, every
     /// pair within twice the window and every pair of neighbours; across
     /// rotation clusters of one filter, pairs shot within one window, which
-    /// give the rig's angle term; and a session whose flats record no angle
-    /// against its neighbours in time in every cluster of its filter, which
-    /// tell its angle. Earlier first.
+    /// give the rig's angle term and join clusters that measure alike; and
+    /// every session against its neighbours in time in every other rotation
+    /// cluster of its family key, so each has a measured neighbourhood
+    /// whatever its header says, and one whose flats record no angle can be
+    /// placed. Earlier first.
     pub fn pairs_to_compare(&self) -> Vec<(usize, usize)> {
         let mut pairs = BTreeSet::new();
         for family in &self.families {
@@ -976,16 +1547,16 @@ impl Book {
                 (b, a)
             }
         };
-        for session in (0..self.sessions.len()).filter(|i| self.angle(*i).is_none()) {
+        for session in 0..self.sessions.len() {
             let row = &self.sessions[session].row;
-            for family in &self.families {
-                if family.rotation.is_none()
-                    || family.rig_uuid != row.rig_uuid
-                    || family.family_key != row.family_key
+            for (id, (rig, family_key, members)) in self.clusters.iter().enumerate() {
+                if *rig != row.rig_uuid
+                    || *family_key != row.family_key
+                    || self.cluster_of[session] == id
                 {
                     continue;
                 }
-                for neighbour in self.neighbours_in(session, &family.sessions) {
+                for neighbour in self.neighbours_in(session, members) {
                     pairs.insert(earlier_first(session, neighbour));
                 }
             }
@@ -1005,10 +1576,9 @@ impl Book {
         sessions.iter().enumerate().all(|(i, a)| {
             sessions.iter().skip(i + 1).all(|b| {
                 let rig = &self.sessions[*a].row.rig_uuid;
-                match (self.comparison(*a, *b), self.limits(rig)) {
-                    (Some(c), Some(limits)) => limits.distance(c) <= 1.0,
-                    _ => false,
-                }
+                self.limits(rig)
+                    .and_then(|limits| self.pair_distance(*a, *b, &limits))
+                    .is_some_and(|d| d <= 1.0)
             })
         })
     }
@@ -1358,6 +1928,7 @@ mod tests {
             bin: Some(10),
             algorithm_version: 1,
             error: None,
+            unread: Vec::new(),
         }
     }
 
@@ -1405,6 +1976,337 @@ mod tests {
 
     fn new_dust(x: f32) -> Spot {
         Spot { x, ..spot(x, true) }
+    }
+
+    fn alike(a: &str, b: &str) -> ComparisonRow {
+        cmp(a, b, 0.002, 0.002, vec![])
+    }
+
+    fn spans(book: &Book) -> Vec<(String, usize, usize)> {
+        book.families
+            .iter()
+            .flat_map(|family| family.alike_ranges.iter())
+            .map(|range| (range.label(), range.pairs, range.nights))
+            .collect()
+    }
+
+    /// 100° and 103.6°, two sessions at each end on four nights.
+    fn two_by_two(more: Vec<ComparisonRow>) -> Book {
+        let mut comparisons = vec![alike("a", "b"), alike("c", "d")];
+        comparisons.extend(more);
+        nights_book(
+            &[
+                ("a", 100.0, 0),
+                ("b", 103.6, 1),
+                ("c", 100.0, 2),
+                ("d", 103.6, 3),
+            ],
+            comparisons,
+        )
+    }
+
+    #[test]
+    fn a_familys_alike_pairs_grant_the_angles_they_compare() {
+        let book = two_by_two(vec![]);
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert_eq!(spans(&book), vec![("100.0° and 103.6°".to_string(), 2, 4)]);
+        let range = &book.families[0].alike_ranges[0];
+        assert_eq!((range.sessions, range.ends_nights), ([2, 2], [2, 2]));
+        // A light at 100° takes 103.6° flats, and the tolerance counts once:
+        // 1.5° outside an end is fine, but not 5.6° + more apart.
+        assert!(book.alike_range(0, 100.0, 103.6, 2.0).is_some());
+        assert!(book.alike_range(0, 98.5, 103.6, 2.0).is_some());
+        assert!(book.alike_range(0, 97.5, 103.6, 2.0).is_none());
+        assert!(book.alike_range(0, 99.0, 105.0, 2.0).is_none());
+    }
+
+    #[test]
+    fn a_pair_apart_that_a_range_would_serve_rules_it_out() {
+        // A (100°) and D (103.6°) measured apart, three days apart and not
+        // neighbours: the range would hand a light at 100° the 103.6° flats.
+        let book = two_by_two(vec![cmp("a", "d", 0.03, 0.002, vec![])]);
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert!(spans(&book).is_empty(), "{:?}", spans(&book));
+    }
+
+    #[test]
+    fn overlapping_ranges_stand_side_by_side_and_never_bridge() {
+        // 100°↔103.6° and 103.6°↔107.2°, each two by two; 100° and 107.2°
+        // measured apart. Both ranges stand, sharing an end; neither hands
+        // a light at 100° the 107.2° flats.
+        let book = nights_book(
+            &[
+                ("a", 100.0, 0),
+                ("b", 103.6, 1),
+                ("c", 100.0, 2),
+                ("d", 103.6, 3),
+                ("e", 107.2, 4),
+                ("f", 107.2, 5),
+            ],
+            vec![
+                alike("a", "b"),
+                alike("c", "d"),
+                alike("b", "e"),
+                alike("d", "f"),
+                cmp("a", "f", 0.03, 0.002, vec![]),
+            ],
+        );
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert_eq!(
+            spans(&book),
+            vec![
+                ("100.0° and 103.6°".to_string(), 2, 4),
+                ("103.6° and 107.2°".to_string(), 2, 4)
+            ]
+        );
+        assert!(book.alike_range(0, 100.0, 107.2, 2.0).is_none());
+        assert!(book.alike_range(0, 107.2, 103.6, 2.0).is_some());
+    }
+
+    #[test]
+    fn too_few_sessions_or_nights_at_an_end_grant_nothing() {
+        // One pair.
+        let book = nights_book(&[("a", 100.0, 0), ("b", 103.6, 1)], vec![alike("a", "b")]);
+        assert!(spans(&book).is_empty());
+        // Two pairs sharing the 103.6° session.
+        let book = nights_book(
+            &[("a", 100.0, 0), ("b", 103.6, 1), ("c", 100.0, 2)],
+            vec![alike("a", "b"), alike("b", "c")],
+        );
+        assert!(spans(&book).is_empty(), "{:?}", spans(&book));
+        // Two sessions at each end, but each end's on one night.
+        let rows = [
+            ("a", 100.0, 0),
+            ("b", 103.6, 0),
+            ("c", 100.0, 0),
+            ("d", 103.6, 0),
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, (key, rotation, _))| ResponseRow {
+            night: "2026-09-01".into(),
+            ..row(key, "HA", "Ha", Some(*rotation), i as i64 * 3_600)
+        })
+        .collect();
+        let book = Book::build(
+            rows,
+            vec![alike("a", "b"), alike("c", "d")],
+            vec![],
+            vec![],
+            |_| rules(),
+        );
+        assert!(spans(&book).is_empty(), "{:?}", spans(&book));
+        // Two sessions on two nights at each end.
+        assert_eq!(spans(&two_by_two(vec![])).len(), 1);
+    }
+
+    #[test]
+    fn a_wide_range_serves_only_along_its_own_arc() {
+        // 100° and 160° alike, two by two: the arc between them, but never
+        // the other way round, and never further than the arc.
+        let book = nights_book(
+            &[
+                ("a", 100.0, 0),
+                ("b", 160.0, 1),
+                ("c", 100.0, 2),
+                ("d", 160.0, 3),
+            ],
+            vec![alike("a", "b"), alike("c", "d")],
+        );
+        assert_eq!(spans(&book), vec![("100.0° and 160.0°".to_string(), 2, 4)]);
+        assert!(book.alike_range(0, 130.0, 160.0, 2.0).is_some());
+        assert!(book.alike_range(0, 40.0, 100.0, 2.0).is_none());
+        assert!(book.alike_range(0, 100.0, 220.0, 2.0).is_none());
+    }
+
+    #[test]
+    fn a_range_wraps_round_zero() {
+        let book = nights_book(
+            &[
+                ("a", 358.5, 0),
+                ("b", 2.0, 1),
+                ("c", 358.5, 2),
+                ("d", 2.0, 3),
+            ],
+            vec![alike("a", "b"), alike("c", "d")],
+        );
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert_eq!(spans(&book), vec![("358.5° and 2.0°".to_string(), 2, 4)]);
+        assert!(book.alike_range(0, 357.5, 2.0, 2.0).is_some());
+        assert!(book.alike_range(0, 2.0, 358.5, 2.0).is_some());
+        assert!(book.alike_range(0, 180.0, 2.0, 2.0).is_none());
+    }
+
+    /// Hα at 100° and 103.6° on days 0–1 and again on days 10–11, with new
+    /// dust between them seen by the OIII flats too, its pattern change
+    /// `broad`: one pair on each side of the change.
+    fn across_dust(broad: f64) -> Book {
+        let at = |key: &str, filter: &str, rotation: f64, day: i64| ResponseRow {
+            night: format!("2026-09-{:02}", day + 1),
+            ..row(key, filter, filter, Some(rotation), day * DAY)
+        };
+        let dust = |a: &str, b: &str| cmp(a, b, 0.02, broad, vec![new_dust(900.0)]);
+        Book::build(
+            vec![
+                at("a", "HA", 100.0, 0),
+                at("b", "HA", 103.6, 1),
+                at("c", "HA", 100.0, 10),
+                at("d", "HA", 103.6, 11),
+                at("o1", "OIII", 100.0, 0),
+                at("o2", "OIII", 100.0, 10),
+            ],
+            vec![
+                alike("a", "b"),
+                alike("c", "d"),
+                dust("a", "c"),
+                dust("b", "d"),
+                dust("b", "c"),
+                dust("o1", "o2"),
+            ],
+            vec![],
+            vec![],
+            |_| rules(),
+        )
+    }
+
+    #[test]
+    fn a_range_carries_across_camera_side_dust_only() {
+        // Camera-side dust: the pair before it and the pair after it are
+        // one range, measured in two groups.
+        let book = across_dust(0.002);
+        let ha = book
+            .families
+            .iter()
+            .position(|f| f.filter.as_deref() == Some("HA"))
+            .unwrap();
+        assert_eq!(book.events.len(), 1, "{:?}", book.events);
+        assert!(book.events[0].camera_side);
+        assert_eq!(book.families[ha].carry_class, vec![0, 0]);
+        let ranges = &book.families[ha].alike_ranges;
+        assert_eq!(ranges.len(), 1, "{ranges:?}");
+        assert_eq!(ranges[0].groups.len(), 2);
+        // A broad change with it (vignetting) carries nothing: one pair on
+        // each side is not enough on either.
+        let book = across_dust(0.03);
+        let ha = book
+            .families
+            .iter()
+            .position(|f| f.filter.as_deref() == Some("HA"))
+            .unwrap();
+        assert_eq!(book.families[ha].carry_class, vec![0, 1]);
+        assert!(book.families[ha].alike_ranges.is_empty());
+    }
+
+    /// Ha flats at `(key, angle, day)`, each on its own night.
+    fn nights_book(sessions: &[(&str, f64, i64)], comparisons: Vec<ComparisonRow>) -> Book {
+        let rows = sessions
+            .iter()
+            .map(|(key, rotation, day)| ResponseRow {
+                night: format!("2026-09-{:02}", day + 1),
+                ..row(key, "HA", "Ha", Some(*rotation), day * DAY)
+            })
+            .collect();
+        Book::build(rows, comparisons, vec![], vec![], |_| rules())
+    }
+
+    // Regression from the review of bc5d5286 (High, Q1): C925's G and R range 101.9–104.2° "(2 pairs,
+    // 3 nights)" is one 104.2° session (08-24) compared with two ~102°
+    // sessions. One session at one end -- a gradient of its twilight, a
+    // header that changed while the rotator did not -- makes the range alone.
+    #[test]
+    fn review_repro_one_session_at_an_end_grants_no_range() {
+        let book = nights_book(
+            &[("a", 101.99, 0), ("b", 101.93, 10), ("c", 104.2, 13)],
+            vec![alike("a", "c"), alike("b", "c")],
+        );
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert!(spans(&book).is_empty(), "{:?}", spans(&book));
+    }
+
+    // Regression from the review of bc5d5286 (High, Q2): a chain of alike neighbours spans ends that
+    // were never compared. 100° and 116° flats never met, yet a light at
+    // 100° may take the 116° flats; with the tolerance added at each end, a
+    // light at 98.1° may take flats at 117.9°.
+    #[test]
+    fn review_repro_a_chain_does_not_grant_ends_never_compared() {
+        let book = nights_book(
+            &[
+                ("a", 100.0, 0),
+                ("b", 104.0, 1),
+                ("c", 108.0, 2),
+                ("d", 112.0, 3),
+                ("e", 116.0, 4),
+            ],
+            vec![
+                alike("a", "b"),
+                alike("b", "c"),
+                alike("c", "d"),
+                alike("d", "e"),
+            ],
+        );
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert!(
+            book.alike_range(0, 100.0, 116.0, 2.0).is_none(),
+            "{:?}",
+            spans(&book)
+        );
+    }
+
+    // Regression from the review of bc5d5286 (Medium, Q2): the tolerance counts at both ends. Two
+    // ~2.3° pairs (C925 G/R shape, here with distinct sessions) let a light
+    // at 99.95° take flats at 106.15°, 6.2° off, over a measured 2.3°.
+    #[test]
+    fn review_repro_the_tolerance_is_not_added_at_both_ends() {
+        let book = nights_book(
+            &[
+                ("a", 101.9, 0),
+                ("b", 104.2, 1),
+                ("c", 101.9, 2),
+                ("d", 104.2, 3),
+            ],
+            vec![alike("a", "b"), alike("c", "d")],
+        );
+        assert_eq!(spans(&book).len(), 1, "{:?}", spans(&book));
+        assert!(book.alike_range(0, 99.95, 106.15, 2.0).is_none());
+    }
+
+    // Regression from the review of bc5d5286 (High, Q2): UltraCat131 Hα's 0.0–163.8° shape. Before new
+    // dust, 0° and 113.9° measured alike; after it, 53.5°, 113.7° and 163.8°.
+    // No pair spans the change, yet the union is one range, so a light at 0°
+    // after the dust may take 53.5° flats that were never compared with any
+    // 0° flat, and no apart pair can veto it (cross-group pairs are skipped).
+    #[test]
+    fn review_repro_a_range_is_not_stitched_across_a_change() {
+        let book = nights_book(
+            &[
+                ("a", 0.0, 0),
+                ("b", 113.9, 1),
+                ("d", 113.7, 10),
+                ("c", 53.5, 11),
+                ("e", 163.8, 12),
+                ("f", 53.5, 13),
+            ],
+            vec![
+                alike("a", "b"),
+                cmp("b", "d", 0.02, 0.002, vec![new_dust(900.0)]),
+                alike("c", "d"),
+                alike("d", "e"),
+                alike("e", "f"),
+            ],
+        );
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert_eq!(
+            book.events.len(),
+            1,
+            "{:?} {:?}",
+            book.events,
+            book.families
+        );
+        assert!(
+            book.alike_range(0, 0.0, 53.5, 2.0).is_none(),
+            "{:?}",
+            spans(&book)
+        );
     }
 
     #[test]
@@ -2126,5 +3028,154 @@ mod tests {
                 "{windows:?}"
             );
         }
+    }
+
+    /// C925's OIII flats at 82.2° and 72.6°, shot within one flat window,
+    /// measure alike: one light path, whatever the rotator recorded.
+    #[test]
+    fn clusters_far_apart_that_measure_alike_are_one_family() {
+        let responses = vec![
+            row("oiii82", "OIII", "OIII", Some(82.2), 0),
+            row("oiii72", "OIII", "OIII", Some(72.6), DAY / 2),
+            row("oiii104", "OIII", "OIII", Some(104.2), DAY),
+        ];
+        let unmeasured = Book::build(responses.clone(), vec![], vec![], vec![], |_| rules());
+        assert_eq!(unmeasured.families.len(), 3, "never compared: apart");
+        let book = Book::build(
+            responses,
+            vec![
+                cmp("oiii82", "oiii72", 0.0023, 0.0037, vec![]),
+                cmp("oiii82", "oiii104", 0.03, 0.02, vec![]),
+                cmp("oiii72", "oiii104", 0.032, 0.02, vec![]),
+            ],
+            vec![],
+            vec![],
+            |_| rules(),
+        );
+        assert_eq!(book.families.len(), 2, "{:?}", book.families);
+        let joined = book
+            .families
+            .iter()
+            .position(|family| family.sessions.len() == 2)
+            .unwrap();
+        assert_eq!(book.angle_label(joined), "72.6° & 82.2°");
+        assert_eq!(book.families[joined].groups.len(), 1);
+        // Its key is its earliest session's first flat, whatever joins
+        // later.
+        assert_eq!(book.families[joined].key, "OIII:oiii82-f1");
+        // The angle term still counts the pair at two angles.
+        assert_eq!(book.angle_terms["rig"].pairs, 3);
+    }
+
+    #[test]
+    fn a_pair_apart_within_one_window_keeps_two_angles_apart() {
+        // Alike as neighbours days apart, apart on one morning: the angle
+        // matters, and the likeness was a coincidence of time.
+        let responses = vec![
+            row("a10", "R", "R", Some(10.0), 0),
+            row("a90", "R", "R", Some(90.0), 600),
+            row("b90", "R", "R", Some(90.0), 5 * DAY),
+        ];
+        let book = Book::build(
+            responses,
+            vec![
+                cmp("a10", "a90", 0.02, 0.003, vec![]),
+                cmp("a10", "b90", 0.002, 0.001, vec![]),
+                cmp("a90", "b90", 0.001, 0.001, vec![]),
+            ],
+            vec![],
+            vec![],
+            |_| rules(),
+        );
+        assert_eq!(book.families.len(), 2, "{:?}", book.families);
+        // Neighbours in every other cluster are asked for, whatever the
+        // header says.
+        let unmeasured = Book::build(
+            vec![
+                row("a10", "R", "R", Some(10.0), 0),
+                row("c90", "R", "R", Some(90.0), 9 * DAY),
+            ],
+            vec![],
+            vec![],
+            vec![],
+            |_| rules(),
+        );
+        assert_eq!(unmeasured.pairs_to_compare(), vec![(0, 1)]);
+    }
+
+    #[test]
+    fn a_change_in_two_response_families_of_one_filter_is_camera_side() {
+        let responses = |alike: bool| {
+            let comparisons = vec![
+                cmp(
+                    "r0-before",
+                    "r0-after",
+                    0.016,
+                    0.001,
+                    vec![new_dust(1418.0)],
+                ),
+                cmp(
+                    "r90-before",
+                    "r90-after",
+                    0.016,
+                    0.001,
+                    vec![new_dust(1418.0)],
+                ),
+                // The two angles on the first morning.
+                cmp(
+                    "r0-before",
+                    "r90-before",
+                    if alike { 0.002 } else { 0.03 },
+                    0.002,
+                    vec![],
+                ),
+            ];
+            Book::build(
+                vec![
+                    row("r0-before", "R", "R", Some(0.0), 0),
+                    row("r90-before", "R", "R", Some(90.0), 600),
+                    row("r0-after", "R", "R", Some(0.0), 4 * DAY),
+                    row("r90-after", "R", "R", Some(90.0), 6 * DAY),
+                ],
+                comparisons,
+                vec![],
+                vec![],
+                |_| rules(),
+            )
+        };
+        let apart = responses(false);
+        assert_eq!(apart.families.len(), 2);
+        assert_eq!(apart.events.len(), 1, "{:?}", apart.events);
+        assert!(apart.events[0].camera_side, "seen in two light paths");
+        // One light path at two angles: one family, one filter, its own.
+        let alike = responses(true);
+        assert_eq!(alike.families.len(), 1);
+        assert!(alike.events.iter().all(|event| !event.camera_side));
+    }
+
+    #[test]
+    fn two_flat_sessions_allow_for_their_noise() {
+        let mut responses = vec![
+            row("a", "L", "L", Some(3.2), 0),
+            row("b", "L", "L", Some(3.2), DAY),
+        ];
+        let comparison = ComparisonRow {
+            sigma: 0.001,
+            ..cmp("a", "b", 0.0115, 0.001, vec![])
+        };
+        // Three flats each: 1.15% is past the 1% limit.
+        let three = Book::build(
+            responses.clone(),
+            vec![comparison.clone()],
+            vec![],
+            vec![],
+            |_| rules(),
+        );
+        assert_eq!(three.families[0].groups.len(), 2);
+        // Two flats in one of them: 1.15% less two spreads is within it.
+        responses[1].frames = 2;
+        responses[1].frame_uuids.truncate(2);
+        let two = Book::build(responses, vec![comparison], vec![], vec![], |_| rules());
+        assert_eq!(two.families[0].groups.len(), 1);
     }
 }

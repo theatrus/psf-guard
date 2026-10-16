@@ -4,7 +4,9 @@ import type {
   CalibrationKind,
   CalibrationSession,
   CalibrationValidDirection,
+  FlatClockRun,
 } from '../../api/types';
+import { timeLabel } from './flatGroupLabels';
 
 export const KIND_LABELS: Record<CalibrationKind, string> = {
   bias: 'Bias',
@@ -59,9 +61,23 @@ export function fileName(path: string): string {
   return path.split(/[\\/]/).pop() || path;
 }
 
-export function formatTime(timestamp?: number | null): string {
+/**
+ * When a frame was shot, with its zone: on its rig's clock when its frames
+ * record one (`2026-08-19 04:58 UTC−7`), as its flats were shot by, else on
+ * the viewer's (`2026-08-19 04:58 PDT`). Flat groups' change windows read
+ * the same way.
+ */
+export function formatTime(timestamp?: number | null, clock?: readonly FlatClockRun[]): string {
   if (timestamp === undefined || timestamp === null) return 'Time unknown';
-  return new Date(timestamp * 1000).toLocaleString();
+  return timeLabel(timestamp, clock);
+}
+
+/**
+ * When the server did something, such as build a master, on the viewer's
+ * clock with its zone (`2026-10-14 09:55 PDT`): no rig's clock was involved.
+ */
+export function serverTime(timestamp: number): string {
+  return timeLabel(timestamp);
 }
 
 const seconds = (value: number) => `${Number(value.toFixed(2))}s`;
