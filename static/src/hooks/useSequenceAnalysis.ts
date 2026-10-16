@@ -6,7 +6,7 @@ import type {
   ProjectSequenceAnalysisRequest,
   SequenceAnalysisRequest,
 } from '../api/types';
-import { useState, useCallback, useMemo } from 'react';
+import { useMemo } from 'react';
 import type { BasisScores, QualityScoreScope } from '../utils/qualityScore';
 import {
   penaltyKeyOf,
@@ -33,31 +33,40 @@ function targetAnalysisKey(
   ];
 }
 
-export function useSequenceAnalysis(dbId: string | null | undefined) {
-  const [request, setRequest] = useState<SequenceAnalysisRequest | null>(null);
+/**
+ * The Sequence view's analysis of one target, optionally one filter.
+ *
+ * The scope comes from the caller's render, not from an effect, so a view
+ * that mounts with the analysis already cached has it on its first render.
+ * The Sequence view's keys listen only once a strip is drawn; an analysis
+ * that arrived one render late left them deaf to a key pressed as the
+ * detail closed back into Sequence.
+ */
+export function useSequenceAnalysis(
+  dbId: string | null | undefined,
+  targetId: number | null | undefined,
+  filterName?: string,
+) {
   // Key and payload derive from the same snapshot: reading the store again
   // at fetch time could cache a response computed with new scales under a
   // key naming the old ones.
   const penalties = useScoringPreferences();
+  const request: SequenceAnalysisRequest | null = targetId
+    ? { target_id: targetId, filter_name: filterName }
+    : null;
 
   const query = useQuery({
     queryKey: targetAnalysisKey(dbId, request?.target_id, request?.filter_name, penalties),
     queryFn: () =>
       apiClient.analyzeSequence(dbId!, { ...request!, ...penaltyParamsOf(penalties) }),
-    enabled: !!dbId && !!request?.target_id,
+    enabled: !!dbId && !!request,
     staleTime: 60000,
   });
 
-  const analyze = useCallback((req: SequenceAnalysisRequest) => {
-    setRequest(req);
-  }, []);
-
   return {
-    analyze,
     data: query.data,
     isLoading: query.isLoading && !!request,
     error: query.error,
-    reset: () => setRequest(null),
   };
 }
 

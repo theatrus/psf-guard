@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderHook, waitFor, act } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
@@ -9,8 +9,8 @@ import { useScopedQuality, useSequenceAnalysis, useImageQuality } from '../useSe
 import normalFixture from '../../__fixtures__/sequence-analysis-normal.json';
 import imageQualityFixture from '../../__fixtures__/image-quality-context.json';
 
-function createWrapper() {
-  const queryClient = new QueryClient({
+function createQueryClient() {
+  return new QueryClient({
     defaultOptions: {
       queries: {
         retry: false,
@@ -18,6 +18,9 @@ function createWrapper() {
       },
     },
   });
+}
+
+function createWrapper(queryClient = createQueryClient()) {
   return function Wrapper({ children }: { children: ReactNode }) {
     // Scoring reads the link's values over the person's defaults.
     return (
@@ -31,8 +34,8 @@ function createWrapper() {
 }
 
 describe('useSequenceAnalysis', () => {
-  it('starts with no data and not loading', () => {
-    const { result } = renderHook(() => useSequenceAnalysis('test'), {
+  it('starts with no data and not loading without a target', () => {
+    const { result } = renderHook(() => useSequenceAnalysis('test', undefined), {
       wrapper: createWrapper(),
     });
 
@@ -41,19 +44,15 @@ describe('useSequenceAnalysis', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('fetches data after analyze() is called', async () => {
+  it('fetches the analysis for its target', async () => {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(normalFixture);
       }),
     );
 
-    const { result } = renderHook(() => useSequenceAnalysis('test'), {
+    const { result } = renderHook(() => useSequenceAnalysis('test', 1, 'L'), {
       wrapper: createWrapper(),
-    });
-
-    act(() => {
-      result.current.analyze({ target_id: 1, filter_name: 'L' });
     });
 
     await waitFor(() => {
@@ -65,35 +64,57 @@ describe('useSequenceAnalysis', () => {
     expect(result.current.isLoading).toBe(false);
   });
 
-  it('resets state when reset() is called', async () => {
+  it('has a cached analysis on its first render', async () => {
+    // Closing the detail mounts the Sequence view afresh. Its keys listen
+    // only once the strip is drawn, so the analysis must be there on the
+    // first render, not one render after an effect asks for it.
+    server.use(
+      http.get('/api/db/:dbId/analysis/sequence', () => {
+        return HttpResponse.json(normalFixture);
+      }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const first = renderHook(() => useSequenceAnalysis('test', 1, 'L'), {
+      wrapper: createWrapper(queryClient),
+    });
+    await waitFor(() => {
+      expect(first.result.current.data).toBeDefined();
+    });
+    first.unmount();
+
+    const renders: Array<ReturnType<typeof useSequenceAnalysis>> = [];
+    renderHook(() => {
+      const analysis = useSequenceAnalysis('test', 1, 'L');
+      renders.push(analysis);
+      return analysis;
+    }, { wrapper: createWrapper(queryClient) });
+
+    expect(renders[0].data?.sequences[0].target_name).toBe('M42');
+    expect(renders[0].isLoading).toBe(false);
+  });
+
+  it('drops the analysis when the target is cleared', async () => {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {
         return HttpResponse.json(normalFixture);
       }),
     );
 
-    const { result } = renderHook(() => useSequenceAnalysis('test'), {
-      wrapper: createWrapper(),
-    });
-
-    // Trigger analysis
-    act(() => {
-      result.current.analyze({ target_id: 1 });
-    });
+    const { result, rerender } = renderHook(
+      ({ targetId }: { targetId: number | null }) => useSequenceAnalysis('test', targetId),
+      { wrapper: createWrapper(), initialProps: { targetId: 1 as number | null } },
+    );
 
     await waitFor(() => {
       expect(result.current.data).toBeDefined();
     });
 
-    // Reset
-    act(() => {
-      result.current.reset();
-    });
+    rerender({ targetId: null });
 
-    // After reset, query is disabled (no target_id), so data becomes undefined
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isLoading).toBe(false);
   });
 
   it('handles server errors', async () => {
@@ -106,12 +127,8 @@ describe('useSequenceAnalysis', () => {
       }),
     );
 
-    const { result } = renderHook(() => useSequenceAnalysis('test'), {
+    const { result } = renderHook(() => useSequenceAnalysis('test', 9999), {
       wrapper: createWrapper(),
-    });
-
-    act(() => {
-      result.current.analyze({ target_id: 9999 });
     });
 
     await waitFor(() => {
