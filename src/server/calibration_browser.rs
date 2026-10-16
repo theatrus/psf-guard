@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use crate::calibration::browse::{
     self, BrowsedFrame, FrameDetail, FrameFilter, FramePage, FrameSort, GradeFilter,
-    RecordedLibraryMaster, SessionPage, MIN_COMPARE_FLATS,
+    RecordedLibraryMaster, SessionPage, SessionPageAt, MIN_COMPARE_FLATS,
 };
 use crate::calibration::{CalibrationFrameSummary, CalibrationKind, FrameSpan};
 use crate::server::api::ApiResponse;
@@ -71,6 +71,9 @@ pub struct ListQuery {
     pub sort: Option<FrameSort>,
     pub page: Option<usize>,
     pub per_page: Option<usize>,
+    /// Sessions only: list the page holding this session instead of
+    /// `page`, and say whether the filters keep it.
+    pub locate: Option<String>,
 }
 
 impl ListQuery {
@@ -207,14 +210,19 @@ pub async fn list_sessions(
             .missing
             .unwrap_or(false)
             .then(|| missing_files(library.kept(&filter), &roots));
-        library.sessions_page(
+        // A link to one session opens the page that lists it.
+        let at = match query.locate.as_deref().filter(|id| !id.is_empty()) {
+            Some(id) => SessionPageAt::Holding(id),
+            None => SessionPageAt::Number(query.page.unwrap_or(0)),
+        };
+        library.sessions_page_at(
             &filter,
             |row| {
                 missing
                     .as_ref()
                     .is_none_or(|missing| missing.contains(&row.frame.frame_uuid))
             },
-            query.page.unwrap_or(0),
+            at,
             query.per_page,
         )
     })
@@ -748,7 +756,7 @@ fn library_master(
     }
 }
 
-fn project_names(conn: &Connection) -> HashMap<i32, String> {
+pub(crate) fn project_names(conn: &Connection) -> HashMap<i32, String> {
     // A catalog with no project table names none.
     conn.prepare("SELECT Id, name FROM project")
         .and_then(|mut statement| {

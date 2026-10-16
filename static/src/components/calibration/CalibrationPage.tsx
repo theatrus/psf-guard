@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { useLocation } from 'react-router-dom';
 import { apiClient } from '../../api/client';
@@ -18,16 +18,20 @@ import CalibrationFrameViewer from './CalibrationFrameViewer';
 import CalibrationMasterList from './CalibrationMasterList';
 import CalibrationSessionList from './CalibrationSessionList';
 import { FlatGroupsSummary, FlatSessionGroupLine } from './FlatGroupMarks';
+import FlatGroupDetail from './FlatGroupDetail';
+import FlatGroupList from './FlatGroupList';
 import FlatRatioViewer from './FlatRatioViewer';
 import { fileName, nightLabel, plural, sessionDetails, sessionTitle } from './calibrationLabels';
+import { browseGroups } from './flatGroupBrowse';
 import { indexFlatGroups } from './flatGroupIndex';
 import { findPair } from './flatGroupLabels';
-import { useFlatGroups } from './useFlatGroups';
+import { flatGroupsKey, useFlatGroups } from './useFlatGroups';
 import { scopeRigsLabel, useProjectScope, widenText, type CalibrationScope } from './calibrationScope';
 import { useCalibrationActions } from './useCalibrationActions';
 import type { ValidityChoice } from './useCalibrationActions';
 import { ALL_RIGS, listFilters, useCalibrationUrlState } from './useCalibrationUrlState';
-import type { CalibrationTab } from './useCalibrationUrlState';
+import type { CalibrationFilterState, CalibrationTab } from './useCalibrationUrlState';
+import { findGridNavigationIndex } from '../../utils/gridNavigation';
 import './CalibrationPage.css';
 
 const SESSIONS_PER_PAGE = 50;
@@ -198,7 +202,7 @@ export default function CalibrationPage() {
         <p className="calibration-empty">{databases?.length === 0 ? 'No databases yet.' : 'Loading…'}</p>
       ) : (
         <CalibrationLibrary key={dbId} dbId={dbId} dbName={database?.name ?? dbId} state={state}
-          scopeChip={scopeChip} scopeRevision={scopeUse?.revision}
+          scope={scope} scopeChip={scopeChip} scopeRevision={scopeUse?.revision}
           scopeError={scope ? scopeQuery.error?.message ?? null : null} />
       )}
     </div>
@@ -227,6 +231,7 @@ function CalibrationLibrary({
   dbId,
   dbName,
   state,
+  scope,
   scopeChip,
   scopeRevision,
   scopeError,
@@ -234,6 +239,8 @@ function CalibrationLibrary({
   dbId: string;
   dbName: string;
   state: ReturnType<typeof useCalibrationUrlState>;
+  /** The project the page is scoped to, when it is. */
+  scope: CalibrationScope | null;
   /** The project scope's chip, first in the filter bar. */
   scopeChip?: ReactNode;
   /** The scope's revision: the lists ask again when it changes. */
@@ -291,7 +298,7 @@ function CalibrationLibrary({
         </p>
       ) : (
         <CalibrationFrames dbId={dbId} canManage={canManage} actions={actions}
-          rigs={summary.data?.rigs ?? []} state={state} scopeChip={scopeChip} scopeRevision={scopeRevision} />
+          rigs={summary.data?.rigs ?? []} state={state} scope={scope} scopeChip={scopeChip} scopeRevision={scopeRevision} />
       )}
     </>
   );
@@ -303,6 +310,7 @@ function CalibrationFrames({
   actions,
   rigs,
   state,
+  scope,
   scopeChip,
   scopeRevision,
 }: {
@@ -311,10 +319,12 @@ function CalibrationFrames({
   actions: ReturnType<typeof useCalibrationActions>;
   rigs: NonNullable<Awaited<ReturnType<typeof apiClient.getCalibrationLibrary>>>['rigs'];
   state: ReturnType<typeof useCalibrationUrlState>;
+  scope: CalibrationScope | null;
   scopeChip?: ReactNode;
   scopeRevision?: string;
 }) {
   const { filters, page, session: sessionId, frame: frameUuid, selectSession, selectFrame, ratio, openRatio } = state;
+  const { selectGroup } = state;
   const listed = useMemo(() => listFilters(filters), [filters]);
   // A scoped list is asked again when its scope's revision moves on.
   const revision = filters.project !== undefined ? scopeRevision ?? null : null;
@@ -324,7 +334,42 @@ function CalibrationFrames({
   const flatRigs = useMemo(() => flat.groups.data?.rigs ?? [], [flat.groups.data]);
   const flatIndex = useMemo(() => indexFlatGroups(flatRigs), [flatRigs]);
   const chosenRig = filters.rig && filters.rig !== ALL_RIGS ? filters.rig : undefined;
-  const rigsInView = chosenRig ? flatRigs.filter((rig) => rig.rig_uuid === chosenRig) : flatRigs;
+  const rigsInView = useMemo(
+    () => (chosenRig ? flatRigs.filter((rig) => rig.rig_uuid === chosenRig) : flatRigs),
+    [chosenRig, flatRigs],
+  );
+
+  // Groups: the sidebar lists flat groups instead of sessions. It is
+  // offered whenever there are groups to list: the list can hold flats
+  // (Type All or Flat) and the rigs in view have measured some.
+  const scopeSessions = useMemo(
+    () => (scope?.use ? new Set(scope.use.sessions) : undefined),
+    [scope?.use],
+  );
+  const groupBrowse = useMemo(
+    () => browseGroups(rigsInView, { filter: filters.filter, rotation: filters.rotation, scopeSessions }),
+    [filters.filter, filters.rotation, rigsInView, scopeSessions],
+  );
+  const groupsOffered = flatsListed && !!flat.groups.data?.available
+    && rigsInView.some((rig) => rig.families.length > 0);
+  const browse = groupsOffered ? state.browse : 'sessions';
+  const groupEntry = browse === 'groups' ? groupBrowse.find(state.group) : undefined;
+  // The first group is chosen until a person chooses; a key that now
+  // names a regrouped group by one of its sessions is put in its own name.
+  useEffect(() => {
+    if (browse !== 'groups' || !flat.groups.data) return;
+    const chosen = groupBrowse.find(state.group);
+    const next = chosen?.key ?? (groupBrowse.navigable[0] ?? groupBrowse.entries[0])?.key;
+    if (next && next !== state.group) selectGroup(next);
+  }, [browse, flat.groups.data, groupBrowse, selectGroup, state.group]);
+  const groupUse = useQuery({
+    queryKey: [...flatGroupsKey(dbId), 'use'],
+    queryFn: () => apiClient.getFlatGroupUse(dbId),
+    enabled: browse === 'groups',
+    placeholderData: keepPreviousData,
+    // Asked again while a newer answer is worked out.
+    refetchInterval: (query) => (query.state.data?.refreshing ? 5_000 : false),
+  });
   // Closing the comparison hands focus back to the Compare that opened it,
   // which also brings the list back to where it was.
   const opener = useRef<HTMLElement | null>(null);
@@ -347,12 +392,48 @@ function CalibrationFrames({
     if (opener.current?.isConnected) opener.current.focus();
   }, [ratio, returnFocus]);
   const pair = ratio ? findPair(flatRigs, ratio.earlier, ratio.later) : {};
+  const sessionsKey = (shown: typeof listed, at: number, scoped: string | null) =>
+    ['db', dbId, 'calibrations', 'sessions', shown, at, scoped] as const;
   const sessions = useQuery({
-    queryKey: ['db', dbId, 'calibrations', 'sessions', listed, page, revision],
+    queryKey: sessionsKey(listed, page, revision),
     queryFn: () => apiClient.getCalibrationSessions(dbId, { ...listed, page, per_page: SESSIONS_PER_PAGE }),
+    enabled: browse === 'sessions',
     // Keep the old list while a new one loads, so nothing below it jumps.
     placeholderData: keepPreviousData,
   });
+
+  // A group's session opens in the session list, on the page that holds
+  // it. Filters that leave it out give way: first the narrowing ones, then
+  // the project scope, as its ✕ would.
+  const queryClient = useQueryClient();
+  const [opening, setOpening] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const openGroupSession = async (id: string) => {
+    const unnarrowed: Partial<CalibrationFilterState> = {
+      filter: undefined, exposure: undefined, tempMin: undefined, tempMax: undefined, from: undefined,
+      to: undefined, grade: undefined, keptOut: undefined, missing: undefined, rotation: undefined,
+    };
+    const tries: Partial<CalibrationFilterState>[] = [{}, unnarrowed];
+    if (filters.project !== undefined) tries.push({ ...unnarrowed, project: undefined });
+    setOpening(id);
+    setOpenError(null);
+    try {
+      for (const changes of tries) {
+        const shown = listFilters({ ...filters, ...changes });
+        const found = await apiClient.getCalibrationSessions(dbId, { ...shown, locate: id, per_page: SESSIONS_PER_PAGE });
+        if (!found.located) continue;
+        const scoped = shown.project !== undefined ? revision : null;
+        queryClient.setQueryData(sessionsKey(shown, found.page, scoped), { ...found, located: undefined });
+        state.openGroupSession(id, found.page, changes);
+        return;
+      }
+      setOpenError('That session is no longer in the library.');
+    } catch (error) {
+      setOpenError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setOpening(null);
+    }
+  };
   const sessionList = useMemo(() => sessions.data?.sessions ?? [], [sessions.data]);
   const strip = useQuery({
     queryKey: ['db', dbId, 'calibrations', 'frames', listed, sessionId, filters.sort, revision],
@@ -362,7 +443,7 @@ function CalibrationFrames({
       sort: filters.sort ?? 'oldest',
       per_page: STRIP_FRAMES,
     }),
-    enabled: !!sessionId,
+    enabled: !!sessionId && browse === 'sessions',
     placeholderData: (previous, query) =>
       // The last strip stays while the same session reloads, not another's.
       query?.queryKey[5] === sessionId ? previous : undefined,
@@ -373,7 +454,7 @@ function CalibrationFrames({
   const detail = useQuery({
     queryKey: ['db', dbId, 'calibrations', 'frame', frameUuid],
     queryFn: () => apiClient.getCalibrationFrame(dbId, frameUuid!),
-    enabled: !!frameUuid,
+    enabled: !!frameUuid && browse === 'sessions',
     placeholderData: keepPreviousData,
   });
 
@@ -381,11 +462,11 @@ function CalibrationFrames({
   // chooses; a session or frame the filters or the page drop gives way to
   // the first one left.
   useEffect(() => {
-    if (sessions.isPlaceholderData || sessionList.length === 0) return;
+    if (browse !== 'sessions' || sessions.isPlaceholderData || sessionList.length === 0) return;
     if (!sessionId || !sessionList.some((entry) => entry.id === sessionId)) {
       selectSession(sessionList[0].id);
     }
-  }, [selectSession, sessionId, sessionList, sessions.isPlaceholderData]);
+  }, [browse, selectSession, sessionId, sessionList, sessions.isPlaceholderData]);
   useEffect(() => {
     if (!sessionId || !strip.data || strip.isPlaceholderData) return;
     if (frames.length === 0) return;
@@ -404,7 +485,7 @@ function CalibrationFrames({
   const compare = (current ?? (shownDetail?.session === sessionId ? shownDetail : undefined))?.compare ?? false;
   const sessionIndex = sessionList.findIndex((entry) => entry.id === sessionId);
 
-  const hotkeys = { enabled: !state.master, preventDefault: true };
+  const hotkeys = { enabled: !state.master && browse === 'sessions', preventDefault: true };
   useHotkeys('left', () => {
     if (frameIndex > 0) selectFrame(frames[frameIndex - 1].frame_uuid);
   }, hotkeys, [frameIndex, frames, selectFrame]);
@@ -419,19 +500,42 @@ function CalibrationFrames({
   }, hotkeys, [selectSession, sessionIndex, sessionList]);
   useHotkeys('c', () => {
     if (compare) state.setView(state.view === 'session' ? 'frame' : 'session');
-  }, { enabled: !state.master }, [compare, state.setView, state.view]);
+  }, { enabled: !state.master && browse === 'sessions' }, [compare, state.setView, state.view]);
 
-  // Keep the chosen session in sight in its list as the keys move it.
+  // ↑ ↓ move through the groups in scope, as through Grid and Sequence.
   const listRef = useRef<HTMLDivElement>(null);
+  const moveGroup = useCallback((direction: 'prev' | 'next') => {
+    const items = groupBrowse.navigable;
+    const index = items.findIndex((entry) => entry.key === groupEntry?.key);
+    if (index < 0) {
+      if (items[0]) selectGroup(items[0].key);
+      return;
+    }
+    const next = findGridNavigationIndex(items, index, direction, (entry) =>
+      listRef.current?.querySelector(`[data-group-key="${entry.key}"]`)?.getBoundingClientRect() ?? null);
+    if (next !== index) selectGroup(items[next].key);
+  }, [groupBrowse.navigable, groupEntry?.key, selectGroup]);
+  const groupHotkeys = { enabled: !state.master && browse === 'groups', preventDefault: true };
+  useHotkeys('up', () => moveGroup('prev'), groupHotkeys, [moveGroup]);
+  useHotkeys('down', () => moveGroup('next'), groupHotkeys, [moveGroup]);
+
+  // Keep the chosen session or group in sight in its list as the keys move it.
+  const shownKey = browse === 'groups' ? groupEntry?.key : sessionId;
   useEffect(() => {
     const list = listRef.current?.querySelector('ul');
-    const item = sessionId ? list?.querySelector<HTMLElement>(`[data-session-id="${sessionId}"]`) : null;
+    const selector = browse === 'groups' ? 'data-group-key' : 'data-session-id';
+    const item = shownKey ? list?.querySelector<HTMLElement>(`[${selector}="${shownKey}"]`) : null;
     if (!list || !item) return;
     const top = item.offsetTop;
     const bottom = top + item.offsetHeight;
-    if (top < list.scrollTop) list.scrollTop = top;
+    // A step past the edge scrolls by the step; a jump, such as a group
+    // opened from a link, brings it to the middle.
+    const far = top > list.scrollTop + list.clientHeight + item.offsetHeight
+      || bottom < list.scrollTop - item.offsetHeight;
+    if (browse === 'groups' && far) list.scrollTop = top - (list.clientHeight - item.offsetHeight) / 2;
+    else if (top < list.scrollTop) list.scrollTop = top;
     else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
-  }, [sessionId, sessionList.length]);
+  }, [browse, shownKey, sessionList.length, groupBrowse.entries.length]);
 
   const markSession = (direction: ValidityChoice) =>
     actions.mark.mutate({ frameUuids: frames.map((frame) => frame.frame_uuid), direction });
@@ -459,23 +563,52 @@ function CalibrationFrames({
         <FlatGroupsSummary view={flat.groups.data} error={flat.groups.error} rigs={rigsInView}
           progress={flat.progress} measuring={flat.measuring} canManage={canManage} />
       )}
-      {sessions.error && <p className="calibration-error">Could not read the sessions: {sessions.error.message}</p>}
+      {sessions.error && browse === 'sessions' && (
+        <p className="calibration-error">Could not read the sessions: {sessions.error.message}</p>
+      )}
       <div className="calibration-layout">
         <div className="calibration-sessions-column" ref={listRef}>
-          <p className="calibration-muted calibration-count">
-            {sessions.data
-              ? `${plural(sessions.data.total, 'session')} · ${plural(sessions.data.frames, 'frame')}`
-              : 'Loading…'}
-          </p>
-          {sessions.data && sessions.data.total === 0 && (
-            <p className="calibration-empty">No frames match these filters.</p>
+          {groupsOffered && (
+            <div className="tool-segmented calibration-browse-toggle" role="group" aria-label="List">
+              <button type="button" aria-pressed={browse === 'sessions'} data-testid="calibration-browse-sessions"
+                onClick={() => state.setBrowse('sessions')}>
+                Sessions
+              </button>
+              <button type="button" aria-pressed={browse === 'groups'} data-testid="calibration-browse-groups"
+                onClick={() => state.setBrowse('groups')}>
+                Groups
+              </button>
+            </div>
           )}
-          <CalibrationSessionList sessions={sessionList} selected={sessionId} showRig={rigs.length > 1}
-            page={page} perPage={sessions.data?.per_page ?? SESSIONS_PER_PAGE} total={sessions.data?.total ?? 0}
-            onSelect={(id) => selectSession(id)} onPage={state.setPage}
-            flatGroups={flatsListed && flat.groups.data?.available
-              ? { index: flatIndex, open: ratio, onCompare: compareFlats }
-              : undefined} />
+          {browse === 'groups' ? (
+            <>
+              <p className="calibration-muted calibration-count">
+                {`${plural(groupBrowse.navigable.length, 'group')} · ${plural(groupBrowse.families.length, 'filter and angle', 'filters and angles')}`}
+              </p>
+              {groupBrowse.entries.length === 0 && (
+                <p className="calibration-empty">No flat groups match these filters.</p>
+              )}
+              <FlatGroupList families={groupBrowse.families} selected={groupEntry?.key}
+                showRig={rigsInView.length > 1} scopeName={scope?.name} onSelect={selectGroup} />
+            </>
+          ) : (
+            <>
+              <p className="calibration-muted calibration-count">
+                {sessions.data
+                  ? `${plural(sessions.data.total, 'session')} · ${plural(sessions.data.frames, 'frame')}`
+                  : 'Loading…'}
+              </p>
+              {sessions.data && sessions.data.total === 0 && (
+                <p className="calibration-empty">No frames match these filters.</p>
+              )}
+              <CalibrationSessionList sessions={sessionList} selected={sessionId} showRig={rigs.length > 1}
+                page={page} perPage={sessions.data?.per_page ?? SESSIONS_PER_PAGE} total={sessions.data?.total ?? 0}
+                onSelect={(id) => selectSession(id)} onPage={state.setPage}
+                flatGroups={flatsListed && flat.groups.data?.available
+                  ? { index: flatIndex, open: ratio, onCompare: compareFlats }
+                  : undefined} />
+            </>
+          )}
         </div>
         <div className="calibration-main">
           {ratio && flatsListed && (
@@ -492,7 +625,27 @@ function CalibrationFrames({
               onClose={closeRatio}
             />
           )}
-          {sessionId && (
+          {browse === 'groups' && openError && (
+            <p className="calibration-error" role="alert">Could not open the session: {openError}</p>
+          )}
+          {browse === 'groups' && groupEntry && (
+            <FlatGroupDetail key={groupEntry.key}
+              dbId={dbId}
+              entry={groupEntry}
+              use={groupUse.data}
+              useError={groupUse.error}
+              scope={scope ? { projectId: scope.projectId, name: scope.name } : undefined}
+              canManage={canManage}
+              open={ratio}
+              onCompare={compareFlats}
+              onOpenSession={(id) => void openGroupSession(id)}
+              opening={opening}
+            />
+          )}
+          {browse === 'groups' && groupEntry && groupBrowse.navigable.length > 1 && (
+            <p className="calibration-muted calibration-hint">↑ ↓ groups</p>
+          )}
+          {browse === 'sessions' && sessionId && (
             <div className="calibration-session-bar">
               <div>
                 <h2>{session ? sessionTitle(session) : 'Session'}</h2>
@@ -530,14 +683,14 @@ function CalibrationFrames({
               )}
             </div>
           )}
-          {sessionId && strip.data && frames.length === 0 && (
+          {browse === 'sessions' && sessionId && strip.data && frames.length === 0 && (
             <p className="calibration-empty">No frames of this session match the filters.</p>
           )}
-          {frames.length > 0 && (
+          {browse === 'sessions' && frames.length > 0 && (
             <CalibrationFrameStrip dbId={dbId} frames={frames} selected={frameUuid}
               stretch={state.stretch} onSelect={selectFrame} />
           )}
-          {frameUuid && (
+          {browse === 'sessions' && frameUuid && (
             <div className="calibration-frame">
               <CalibrationFrameViewer
                 dbId={dbId}
@@ -565,7 +718,7 @@ function CalibrationFrames({
               />
             </div>
           )}
-          {frameIndex >= 0 && frames.length > 1 && (
+          {browse === 'sessions' && frameIndex >= 0 && frames.length > 1 && (
             <p className="calibration-muted calibration-hint">
               Frame {frameIndex + 1} of {frames.length} · ← → frames · ↑ ↓ sessions{compare ? ' · C compare' : ''}
             </p>

@@ -599,6 +599,70 @@ Like the other filters, the angle and the two sessions compared live in
 the address. A link to the old **Flat groups** tab opens Frames on flats
 with the same rig, filter, angle and comparison.
 
+### Browse by group
+
+**Sessions | Groups** at the top of Frames' sidebar lists the flat groups
+themselves instead of sessions. It is there whenever the list can hold
+flats (**Type** is All or Flat) and the rigs in view have measured groups:
+offered only when Type is Flat it would hide from someone browsing All,
+where groups already mark the sessions, and offered whenever the list
+holds flats it would open on nothing for a rig grouping by time. The
+address keeps the choice as `calBrowse=groups`.
+
+The Groups list holds one entry per group, by rig and by family (one
+filter at one angle, named from the measured sessions: **G · 3.2°**, with
+the night it begins when two families share that name). Groups run newest
+first, so the list reads as a timeline, and the split between two
+neighbours sits between them with its reason: **Change · new dust 1.6%**,
+**Split · pattern 2.6%**. Each entry is marked:
+
+- **Current**: the family's newest group, the one a light shot now takes.
+- **Partly measured**: a flat session of its filter and angle within its
+  nights (or after them, for the current group) is not measured, or has
+  too few flats to measure.
+- **Change after**: a change follows it, its own split or a change of the
+  whole rig after its newest flats.
+
+↑ and ↓ move between groups, as in Images and Sequence. **Filter** and
+**Angle** narrow the list; the other filters are about frames and leave
+it alone.
+
+Choosing a group shows it in the main column:
+
+- **Members**: its nights, oldest first, as a strip. Each opens its
+  session in the session list, on the page that holds it; a filter that
+  hides the session gives way, then the project scope.
+- **Why they belong together**: every pair of its nights measured against
+  each other, with dust and light pattern against the rig's limits, the
+  widest of each, and **Edit limits**.
+- **Its edges**: the split or change on each side, with **Compare**, the
+  same ratio picture as a split in the session list.
+- **What it feeds**: the recorded flat masters with sources in it, each
+  linking to Masters, and the lights whose flat master it is, by project.
+  A project's line opens Images on those lights' filter and the time they
+  were shot. Lights shot during a change whose side is unknown
+  (undetermined), lights given its flats from another angle, carried
+  across a change, or from the far side of one are counted apart, and the
+  flagged ones have a link of their own. The counts come from the light
+  headers the calibration check keeps; until it has read them all, the
+  page says how many it has not.
+
+The address names the group as `calGroup=<key>`. The key is the first,
+by id, of the sessions holding the group's oldest night, so it survives a
+regroup that keeps that night, and a key naming any session of a group
+opens that group: a link still lands after nights join or split.
+
+In a project scope, Groups lists the groups holding the project's
+sessions, each with its neighbour on either side, dimmed and marked
+**Neighbour**: a group's edges are where its flats stop being right, and
+the group across an edge is what Compare sets it against. Groups further
+off are left out, and a gap row counts them. ↑ and ↓ keep to the
+project's own groups. **✕** on the chip widens to the rig's whole
+library, still in Groups.
+
+On a phone the sidebar stacks above the group, a short scrolling picker,
+as the session list does.
+
 ### Settings and checks
 
 Three settings sit under **Settings › Calibration › Flat groups**, global
@@ -622,7 +686,19 @@ sessions. `GET /api/db/{db}/calibrations/flat-groups/ratio?earlier=&later=&stret
 answers `202` while the picture is queued and the PNG once it is ready;
 `POST /api/db/{db}/calibrations/generation-status` reports on it with
 `{"target": "ratio", …}`. In a light's calibration explanation the flat
-kind gains `chosen_by`, `basis` and `alike`.
+kind gains `chosen_by`, `basis` and `alike`. Each group carries its `key`
+and `pairs`, the pairs of its sessions measured against each other.
+
+`GET /api/db/{db}/calibrations/flat-groups/use` returns, by group key, the
+recorded flat masters with sources in it and the lights whose flat master
+it is, by project and by how their flats were chosen, with how many
+lights the calibration check has not read yet (`pending`). It matches
+lights from the headers that check keeps, on a read-only connection of its
+own, and keeps the answer until a project's calibration key or kept
+headers change; after a change it serves the last answer, marked
+`refreshing`, while one refresh works out the next.
+`calibrations/sessions?locate=<session>` lists the page holding that
+session and says whether the filters keep it (`located`).
 
 `project=<id>` on `calibrations/sessions`, `calibrations/frames`,
 `calibrations/masters` and `calibrations/flat-groups` keeps what that

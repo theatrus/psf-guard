@@ -11,6 +11,9 @@ import type {
 
 export type CalibrationTab = 'frames' | 'masters' | 'scheduler';
 
+/** What Frames' sidebar lists: sessions, or flat groups. */
+export type CalibrationBrowse = 'sessions' | 'groups';
+
 /** The tab flat groups once had. Its links open Frames, on flats. */
 const OLD_GROUPS_TAB = 'groups';
 
@@ -146,6 +149,9 @@ export function useCalibrationUrlState() {
   const earlier = getParam('calEarlier');
   const later = getParam('calLater');
   const ratio = useMemo(() => (earlier && later ? { earlier, later } : null), [earlier, later]);
+  const browse: CalibrationBrowse = getParam('calBrowse') === 'groups' ? 'groups' : 'sessions';
+  // A flat group by its key (see FlatGroup.key).
+  const group = getParam('calGroup');
 
   const setTab = useCallback(
     (next: CalibrationTab) =>
@@ -190,6 +196,33 @@ export function useCalibrationUrlState() {
     () => updateParams({ calTab: null, calKind: 'flat' }),
     [updateParams]
   );
+  /** List sessions or flat groups. A comparison open in one stays open. */
+  const setBrowse = useCallback(
+    (next: CalibrationBrowse) => updateParams({ calBrowse: next === 'groups' ? 'groups' : null }),
+    [updateParams]
+  );
+  const selectGroup = useCallback((key: string | null) => updateParams({ calGroup: key }), [updateParams]);
+  /** Leave the Groups list for one of a group's sessions, on the page of
+   *  the session list that holds it. The group stays in the address, so
+   *  Groups opens on it again. */
+  const openGroupSession = useCallback(
+    (id: string, sessionPage: number, filterChanges: Partial<CalibrationFilterState> = {}) => {
+      const updates: Record<string, string | null> = {
+        calBrowse: null,
+        calSession: id,
+        calFrame: null,
+        calView: null,
+        calPage: sessionPage > 0 ? String(sessionPage) : null,
+        calEarlier: null,
+        calLater: null,
+      };
+      for (const [key, value] of Object.entries(filterChanges) as [keyof CalibrationFilterState, unknown][]) {
+        updates[FILTER_KEYS[key]] = value === undefined || value === null || value === '' ? null : String(value);
+      }
+      updateParams(updates);
+    },
+    [updateParams]
+  );
   /** Open the ratio picture of two flat sessions, or close it. */
   const openRatio = useCallback(
     (pair: { earlier: string; later: string } | null) =>
@@ -210,6 +243,7 @@ export function useCalibrationUrlState() {
         calView: null,
         calEarlier: null,
         calLater: null,
+        calGroup: null,
         ...Object.fromEntries(Object.values(FILTER_KEYS).map((key) => [key, null])),
         calProject: project === undefined ? null : String(project),
       }),
@@ -239,6 +273,8 @@ export function useCalibrationUrlState() {
     full,
     master,
     ratio,
+    browse,
+    group,
     oldGroupsLink,
     setTab,
     setFilters,
@@ -251,6 +287,9 @@ export function useCalibrationUrlState() {
     setFull,
     openMaster,
     openRatio,
+    setBrowse,
+    selectGroup,
+    openGroupSession,
     openOldGroupsLink,
     resetForDatabase,
     setDatabase,

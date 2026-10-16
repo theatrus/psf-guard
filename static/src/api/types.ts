@@ -2590,6 +2590,9 @@ export interface CalibrationSessionPage {
   frames: number;
   facets: CalibrationFacets;
   night_boundary_seconds: number;
+  /** Asked for the page holding one session (`locate`): whether the
+   *  filters keep it. When they do not, this is the first page. */
+  located?: boolean;
 }
 
 export type CalibrationGradeFilter = CalibrationGrade | 'ungraded';
@@ -2616,6 +2619,8 @@ export interface CalibrationListFilters {
   sort?: CalibrationFrameSort;
   page?: number;
   per_page?: number;
+  /** Sessions only: the page holding this session, in place of `page`. */
+  locate?: string;
 }
 
 /** A calibration rig in a project's scope. */
@@ -4106,11 +4111,64 @@ export interface FlatFamily {
 }
 
 export interface FlatGroup {
+  /** Stable across a regroup where it can be: the first, by id, of the
+   *  Calibration page's sessions holding its oldest member. Any member's
+   *  session finds the group again. */
+  key: string;
   first_night: string;
   last_night: string;
   frames: number;
   /** Newest first. */
   sessions: FlatSession[];
+  /** Every pair of its sessions measured against each other, oldest first. */
+  pairs?: FlatMemberPair[];
+}
+
+/** Two sessions of one group, measured against each other. */
+export interface FlatMemberPair {
+  earlier_response: string;
+  later_response: string;
+  earlier_night: string;
+  later_night: string;
+  dust_pct: number;
+  broad_pct: number;
+}
+
+/** Lights by how their flats were chosen. */
+export interface FlatGroupLightCounts {
+  total: number;
+  /** The nearest flats, or its own side of each change. */
+  own: number;
+  other_angle: number;
+  corrected: number;
+  undetermined: number;
+  no_same_side: number;
+}
+
+/** What one flat group feeds: its masters and the lights that take it. */
+export interface FlatGroupUse {
+  key: string;
+  masters: { id: string; label: string; created_at: number; sources: number; in_group: number }[];
+  lights: FlatGroupLightCounts;
+  projects: {
+    project_id: number;
+    name: string | null;
+    lights: FlatGroupLightCounts;
+    filters: string[];
+    /** Unix seconds: the first and last of those lights. */
+    first: number | null;
+    last: number | null;
+  }[];
+}
+
+export interface FlatGroupUseView {
+  /** Groups something uses; one not listed feeds nothing. */
+  groups: FlatGroupUse[];
+  lights: number;
+  /** Lights the calibration check has not read yet. */
+  pending: number;
+  unread: number;
+  refreshing: boolean;
 }
 
 export interface FlatSession {

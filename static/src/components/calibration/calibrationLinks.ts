@@ -68,18 +68,49 @@ export function calibrationGridHref(
   filterNames: readonly string[] = [],
   night?: NightDates,
 ): string {
+  return lightsGridHref(search, dbId, projectId, { calib, filterNames, dates: night });
+}
+
+/** Grid filters a link to some of a project's lights sets. */
+export interface LightsGridFilters {
+  /** A calibration level or finding code (utils/calibrationFilter). */
+  calib?: string;
+  filterNames?: readonly string[];
+  dates?: NightDates;
+}
+
+/** The Images grid for one project's lights, narrowed by `filters`, with
+ *  every other grid filter cleared so it shows exactly them. */
+export function lightsGridHref(
+  search: string,
+  dbId: string,
+  projectId: number,
+  { calib, filterNames = [], dates }: LightsGridFilters,
+): string {
   const params = withoutPlanningParams(search);
   for (const key of GRID_FILTER_KEYS) params.delete(key);
   params.set('db', dbId);
   params.set('project', String(projectId));
-  params.set('calib', calib);
+  if (calib) params.set('calib', calib);
   // Each value encoded on its own, as the grid's list filters write them.
   if (filterNames.length > 0) params.set('filter', filterNames.map(encodeURIComponent).join(','));
-  if (night) {
-    params.set('dateStart', night.dateStart);
-    params.set('dateEnd', night.dateEnd);
+  if (dates) {
+    params.set('dateStart', dates.dateStart);
+    params.set('dateEnd', dates.dateEnd);
   }
   return `/grid?${keepScoringInScope(search, params)}`;
+}
+
+/** Slack either side of a span of lights' times: a light's catalog time
+ *  and its header's can differ by a moment. */
+const SPAN_SLACK_MS = 15 * 60 * 1000;
+
+/** The grid's date filter for lights shot from `first` to `last`, Unix seconds. */
+export function spanDates(first: number, last: number): NightDates {
+  return {
+    dateStart: new Date(first * 1000 - SPAN_SLACK_MS).toISOString(),
+    dateEnd: new Date(last * 1000 + SPAN_SLACK_MS).toISOString(),
+  };
 }
 
 /** One master in the Calibration page's Masters list. */

@@ -45,9 +45,9 @@ const RIG: FlatGroupsRig = {
   families: [{
     key: 'R:3', filter: 'R', rotation: 3,
     groups: [
-      { first_night: '2026-09-20', last_night: '2026-09-20', frames: 10, sessions: [response('r-0920', '2026-09-20', ['s-r0920'])] },
+      { key: 's-r0920', first_night: '2026-09-20', last_night: '2026-09-20', frames: 10, sessions: [response('r-0920', '2026-09-20', ['s-r0920'])] },
       {
-        first_night: '2026-09-07', last_night: '2026-09-16', frames: 20,
+        key: 's-r0907', first_night: '2026-09-07', last_night: '2026-09-16', frames: 20,
         sessions: [
           response('r-0916', '2026-09-16', ['s-r0916'], { dust_pct: 0.09, broad_pct: 0.01 }),
           response('r-0907', '2026-09-07', ['s-r0907']),
@@ -62,8 +62,8 @@ const RIG: FlatGroupsRig = {
   }, {
     key: 'G:3', filter: 'G', rotation: 3,
     groups: [
-      { first_night: '2026-09-13', last_night: '2026-09-13', frames: 10, sessions: [response('g-0913', '2026-09-13', ['s-g0913'])] },
-      { first_night: '2026-09-10', last_night: '2026-09-10', frames: 10, sessions: [response('g-0910', '2026-09-10', ['s-g0910'])] },
+      { key: 's-g0913', first_night: '2026-09-13', last_night: '2026-09-13', frames: 10, sessions: [response('g-0913', '2026-09-13', ['s-g0913'])] },
+      { key: 's-g0910', first_night: '2026-09-10', last_night: '2026-09-10', frames: 10, sessions: [response('g-0910', '2026-09-10', ['s-g0910'])] },
     ],
     splits: [{
       before_response: 'g-0910', after_response: 'g-0913', before_night: '2026-09-10', after_night: '2026-09-13',

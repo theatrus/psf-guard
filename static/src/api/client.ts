@@ -100,6 +100,7 @@ import type { GuidFillReport, GuidReport,
   CalibrationFramePreviewDescriptor,
   CalibrationQualityStatus,
   FlatGroupsView,
+  FlatGroupUseView,
   FlatRatioPreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
@@ -1731,6 +1732,16 @@ export const apiClient = {
       { params: project === undefined ? {} : { project } }
     );
     if (!data.data) throw new Error(data.error || 'Failed to read the flat groups');
+    return data.data;
+  },
+
+  /** What each flat group feeds: its flat masters and the lights that take it. */
+  getFlatGroupUse: async (dbId: string): Promise<FlatGroupUseView> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<FlatGroupUseView>>(
+      dbPath(dbId, '/calibrations/flat-groups/use')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read what the flat groups feed');
     return data.data;
   },
 

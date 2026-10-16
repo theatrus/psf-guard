@@ -97,13 +97,30 @@ pub struct SplitView {
     pub spots: Vec<SpotView>,
 }
 
+/// Two sessions of one group measured against each other.
+#[derive(Debug, Serialize)]
+pub struct MemberPairView {
+    pub earlier_response: String,
+    pub later_response: String,
+    pub earlier_night: String,
+    pub later_night: String,
+    pub dust_pct: f64,
+    pub broad_pct: f64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct GroupView {
+    /// A name for the group that outlives a regroup where it can
+    /// ([`group_key`]). Any member session finds the group again.
+    pub key: String,
     pub first_night: String,
     pub last_night: String,
     pub frames: usize,
     /// Newest first.
     pub sessions: Vec<SessionView>,
+    /// Every pair of its sessions measured against each other, oldest
+    /// first: why they share a group.
+    pub pairs: Vec<MemberPairView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -236,6 +253,19 @@ fn browser_sessions<'a>(
     out
 }
 
+/// A group's key: the first, by id, of the browser's sessions holding its
+/// oldest member's flats, else that member's response key. It keeps off
+/// the response key where it can, since that changes with the measuring
+/// algorithm, and a regroup that keeps the oldest member keeps it.
+pub(crate) fn group_key(oldest: &SessionView) -> String {
+    oldest
+        .sessions
+        .iter()
+        .min()
+        .cloned()
+        .unwrap_or_else(|| oldest.response_key.clone())
+}
+
 fn read_only(path: &str) -> Result<rusqlite::Connection, AppError> {
     crate::server::database_context::open_scheduler_connection_with_flags(
         path,
@@ -244,7 +274,7 @@ fn read_only(path: &str) -> Result<rusqlite::Connection, AppError> {
     .map_err(AppError::db)
 }
 
-fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
+pub(crate) fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
     if !store::tables_exist(conn) {
         return Ok(FlatGroupsView {
             available: false,
@@ -335,8 +365,27 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
                 .iter()
                 .map(|i| book.sessions[*i].row.frame_uuids.len())
                 .sum();
+            let mut pairs = Vec::new();
+            for (position, earlier) in group.iter().enumerate() {
+                for later in &group[position + 1..] {
+                    if let Some(c) = book.comparison(*earlier, *later) {
+                        let (a, b) = (&book.sessions[*earlier].row, &book.sessions[*later].row);
+                        pairs.push(MemberPairView {
+                            earlier_response: a.response_key.clone(),
+                            later_response: b.response_key.clone(),
+                            earlier_night: a.night.clone(),
+                            later_night: b.night.clone(),
+                            dust_pct: pct(c.dust),
+                            broad_pct: pct(c.broad),
+                        });
+                    }
+                }
+            }
+            let key = group_key(&sessions[0]);
             sessions.reverse();
             groups.push(GroupView {
+                key,
+                pairs,
                 first_night: book.sessions[group[0]].row.night.clone(),
                 last_night: book.sessions[*group.last().expect("not empty")]
                     .row
@@ -716,14 +765,29 @@ pub fn status_job(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::calibration::test_frames::write_frame;
     use crate::calibration::tests::{RulesInForce, POLICY_LOCK};
 
     /// Two mornings of three flats each, measured 2% apart.
     fn measured_catalog(dir: &std::path::Path) -> rusqlite::Connection {
-        let metas: Vec<_> = ["2026-09-10T14:0", "2026-09-14T14:0"]
+        catalog_of(dir, &["2026-09-10T14:0", "2026-09-14T14:0"], |a, b| {
+            if a.night == b.night {
+                0.0
+            } else {
+                0.02
+            }
+        })
+    }
+
+    /// Mornings of three flats each, measured apart by `differ`.
+    pub(crate) fn catalog_of(
+        dir: &std::path::Path,
+        mornings: &[&str],
+        differ: impl Fn(&store::ResponseRow, &store::ResponseRow) -> f64,
+    ) -> rusqlite::Connection {
+        let metas: Vec<_> = mornings
             .iter()
             .flat_map(|morning| {
                 (0..3).map(move |index| {
@@ -743,8 +807,66 @@ mod tests {
         let tx = conn.transaction().unwrap();
         crate::calibration::import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
         tx.commit().unwrap();
-        flat_groups::testing::measure_as(&conn, |a, b| if a.night == b.night { 0.0 } else { 0.02 });
+        flat_groups::testing::measure_as(&conn, differ);
         conn
+    }
+
+    #[test]
+    fn a_group_is_keyed_by_its_oldest_session_and_lists_the_pairs_that_join_it() {
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        // 09-10 and 09-12 alike; 09-16 has new dust.
+        let conn = catalog_of(
+            temp.path(),
+            &["2026-09-10T14:0", "2026-09-12T14:0", "2026-09-16T14:0"],
+            |a, b| {
+                if (a.night == "2026-09-16") != (b.night == "2026-09-16") {
+                    0.02
+                } else {
+                    0.002
+                }
+            },
+        );
+        let library = crate::calibration::browse::library_frames(&conn).unwrap();
+        let session_of = |night: &str| {
+            library
+                .frames
+                .iter()
+                .find(|row| row.night.as_deref() == Some(night))
+                .map(|row| row.session.clone())
+                .unwrap()
+        };
+
+        let view = build_view(&conn).unwrap();
+        let family = &view.rigs[0].families[0];
+        assert_eq!(family.groups.len(), 2);
+        let (newer, older) = (&family.groups[0], &family.groups[1]);
+        assert_eq!(older.key, session_of("2026-09-10"), "its oldest night");
+        assert_eq!(newer.key, session_of("2026-09-16"));
+        assert_eq!(older.pairs.len(), 1, "the two nights measured alike");
+        let pair = &older.pairs[0];
+        assert_eq!(
+            (pair.earlier_night.as_str(), pair.later_night.as_str()),
+            ("2026-09-10", "2026-09-12")
+        );
+        assert!((pair.dust_pct - 0.2).abs() < 1e-9, "{}", pair.dust_pct);
+        assert!(newer.pairs.is_empty(), "one night has no pair");
+
+        // A wider limit joins all three: the key stays with the oldest.
+        let rig_uuid = library.frames[0].frame.rig_uuid.clone();
+        let _rules = RulesInForce::with(
+            &[],
+            &[(
+                rig_uuid.as_str(),
+                "Scope",
+                &[("flat_split_dust_pct", serde_json::json!(3.0))],
+            )],
+        );
+        let view = build_view(&conn).unwrap();
+        let groups = &view.rigs[0].families[0].groups;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].key, session_of("2026-09-10"));
+        assert!(groups[0].pairs.len() >= 2);
     }
 
     #[test]

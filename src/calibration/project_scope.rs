@@ -35,6 +35,52 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+/// What one light's master of one kind is made from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MasterFrames {
+    /// A master from other software, used as it is.
+    External(String),
+    /// Raw frames, by UUID; empty when the light has none.
+    Raw(BTreeSet<String>),
+}
+
+/// What a light's master of `kind` is made from, as a stack builds it: a
+/// flat from the far side of a change is never used, the frames are cut to
+/// the one coherent set a master takes, and an external master the policy
+/// adopts stands in for them.
+pub fn master_frames(selected: &CalibrationSelection, kind: CalibrationKind) -> MasterFrames {
+    let frames = match kind {
+        CalibrationKind::Bias => &selected.bias,
+        CalibrationKind::Dark => &selected.dark,
+        CalibrationKind::DarkFlat => &selected.dark_flat,
+        CalibrationKind::Flat => &selected.flat,
+    };
+    let held_back: HashSet<&str> = selected.flat_held_back.iter().map(String::as_str).collect();
+    let rules = &selected.rules;
+    let (externals, raw): (Vec<&CalibrationFrame>, Vec<&CalibrationFrame>) = frames
+        .iter()
+        .filter(|frame| {
+            kind != CalibrationKind::Flat || !held_back.contains(frame.frame_uuid.as_str())
+        })
+        .partition(|frame| frame.is_master);
+    let raw: Vec<CalibrationFrame> = raw.into_iter().cloned().collect();
+    let subset = coherent_master_subset(kind, &raw, rules);
+    let adopted = match rules.external_masters {
+        ExternalMasterPolicy::Prefer => externals.first(),
+        ExternalMasterPolicy::Fallback if subset.len() < MIN_MASTER_FRAMES => externals.first(),
+        _ => None,
+    };
+    match adopted {
+        Some(master) => MasterFrames::External(master.frame_uuid.clone()),
+        None => MasterFrames::Raw(
+            subset
+                .iter()
+                .map(|frame| frame.frame_uuid.clone())
+                .collect(),
+        ),
+    }
+}
+
 /// What a project's lights take from the library, before it is named in
 /// the browser's terms.
 #[derive(Debug, Clone, Default)]
@@ -69,42 +115,22 @@ impl LightUse {
         selected: &CalibrationSelection,
         seen: &mut HashSet<(CalibrationKind, BTreeSet<String>)>,
     ) {
-        let held_back: HashSet<&str> = selected.flat_held_back.iter().map(String::as_str).collect();
-        let rules = &selected.rules;
-        for (kind, frames) in [
-            (CalibrationKind::Bias, &selected.bias),
-            (CalibrationKind::Dark, &selected.dark),
-            (CalibrationKind::DarkFlat, &selected.dark_flat),
-            (CalibrationKind::Flat, &selected.flat),
+        for kind in [
+            CalibrationKind::Bias,
+            CalibrationKind::Dark,
+            CalibrationKind::DarkFlat,
+            CalibrationKind::Flat,
         ] {
-            // As a stack builds: a flat from the far side of a change is
-            // never used, and an external master is used as it is.
-            let (externals, raw): (Vec<&CalibrationFrame>, Vec<&CalibrationFrame>) = frames
-                .iter()
-                .filter(|frame| {
-                    kind != CalibrationKind::Flat || !held_back.contains(frame.frame_uuid.as_str())
-                })
-                .partition(|frame| frame.is_master);
-            let raw: Vec<CalibrationFrame> = raw.into_iter().cloned().collect();
-            let subset = coherent_master_subset(kind, &raw, rules);
-            let adopted = match rules.external_masters {
-                ExternalMasterPolicy::Prefer => externals.first(),
-                ExternalMasterPolicy::Fallback if subset.len() < MIN_MASTER_FRAMES => {
-                    externals.first()
+            match master_frames(selected, kind) {
+                MasterFrames::External(uuid) => {
+                    self.frames.insert(uuid);
                 }
-                _ => None,
-            };
-            if let Some(master) = adopted {
-                self.frames.insert(master.frame_uuid.clone());
-                continue;
-            }
-            let set: BTreeSet<String> = subset
-                .iter()
-                .map(|frame| frame.frame_uuid.clone())
-                .collect();
-            self.frames.extend(set.iter().cloned());
-            if !set.is_empty() && seen.insert((kind, set.clone())) {
-                self.master_sets.entry(kind).or_default().push(set);
+                MasterFrames::Raw(set) => {
+                    self.frames.extend(set.iter().cloned());
+                    if !set.is_empty() && seen.insert((kind, set.clone())) {
+                        self.master_sets.entry(kind).or_default().push(set);
+                    }
+                }
             }
         }
         // Corrected flats are carried across a change by a map made from a
