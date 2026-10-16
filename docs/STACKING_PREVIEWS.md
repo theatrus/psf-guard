@@ -648,7 +648,7 @@ at the scheduler's next look, within 15 seconds, as one build per channel
 marked `automatic`. If a build of yours, other work you started, another
 build, or a quality analysis of its database holds it back, the header lists
 it as **Refreshing stacks**, marked **waiting**, with what it waits for, and
-counts it as waiting: `1 running · 1 waiting`. A build you start stops a
+counts it with an hourglass beside the running count. A build you start stops a
 running automatic build; that refresh is listed as waiting at once, with how
 far its build had got, and resumes from the build's checkpoint as soon as
 yours is done, without settling again. New frames that arrive while it waits

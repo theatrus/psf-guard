@@ -5,7 +5,7 @@ import type {
   SpatialScanStatus,
   StackActivityEntry,
 } from '../../../api/types';
-import { activityItems, countText, lineLengths, summarize } from '../activityItems';
+import { activityItems, lineLengths, summarize } from '../activityItems';
 
 function scan(processed: number, total: number, stage = 'astrometry'): SpatialScanStatus {
   return {
@@ -324,7 +324,6 @@ describe('header activity items', () => {
     const summary = summarize(items);
     // Waiting work's last progress does not count toward the chip's.
     expect(summary).toEqual({ count: 5, running: 2, waiting: 3, percent: 40 });
-    expect(countText(summary)).toBe('2 running · 3 waiting');
     expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 0 });
   });
 
@@ -348,12 +347,5 @@ describe('header activity items', () => {
         detail: 'Waiting for a quality scan · 2/8 targets',
       },
     ]);
-  });
-
-  it('counts jobs plainly until one waits', () => {
-    expect(countText({ count: 1, running: 1, waiting: 0, percent: null })).toBe('1 job');
-    expect(countText({ count: 3, running: 3, waiting: 0, percent: null })).toBe('3 jobs');
-    expect(countText({ count: 3, running: 1, waiting: 2, percent: null })).toBe('1 running · 2 waiting');
-    expect(countText({ count: 2, running: 0, waiting: 2, percent: null })).toBe('0 running · 2 waiting');
   });
 });

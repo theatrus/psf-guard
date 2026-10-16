@@ -94,7 +94,10 @@ test('lists automatic work as waiting while a person builds, then running once',
   await stubActivity(page);
   await page.goto('/');
   const chip = page.getByRole('button', { name: /^Background jobs/ });
-  await expect(chip).toHaveText(/1 running · 3 waiting/);
+  // Icons with counts keep the chip small; each says its words on hover.
+  await expect(chip.getByTitle('1 running')).toBeVisible();
+  await expect(chip.getByTitle('3 waiting')).toBeVisible();
+  await expect(chip).toHaveAccessibleName(/1 running, 3 waiting/);
   await chip.click();
   const list = page.getByRole('region', { name: 'Background jobs' });
   const rows = list.getByRole('listitem');
@@ -115,9 +118,10 @@ test('lists automatic work as waiting while a person builds, then running once',
   // The build ends: the refresh runs as its build, listed once, and the
   // analysis goes on.
   personBuilding = false;
-  await expect(chip).toHaveText(/2 jobs/, { timeout: 10_000 });
+  await expect(chip.getByTitle('2 running')).toBeVisible({ timeout: 10_000 });
+  await expect(chip.locator('.activity-count[data-job-state="waiting"]')).toHaveCount(0);
   await expect(rows).toHaveCount(2);
-  await expect(list.locator('[data-job-state="waiting"]')).toHaveCount(0);
+  await expect(list.locator('li[data-job-state="waiting"]')).toHaveCount(0);
   await expect(list).not.toContainText('Refreshing stacks');
   await expect(rows.filter({ hasText: 'Beta Field · L' })).toHaveCount(1);
 });
@@ -128,12 +132,14 @@ test('keeps the waiting count on a phone without widening the page', async ({ pa
   await page.goto('/');
   const chip = page.getByRole('button', { name: /^Background jobs/ });
   await expect(chip).toHaveAccessibleName(/1 running, 3 waiting/);
-  // The full count does not fit; running and waiting still show.
-  await expect(chip.locator('.activity-chip-waiting')).toHaveText('1·3');
-  await expect(chip.locator('.activity-chip-count')).toBeHidden();
+  // The percent stands for running work; how many wait still shows.
+  await expect(chip.getByTitle('3 waiting')).toBeVisible();
+  await expect(chip.getByTitle('1 running')).toBeHidden();
+  const chipBox = await chip.boundingBox();
+  expect(chipBox!.width).toBeLessThan(110);
   await chip.click();
   const list = page.getByRole('region', { name: 'Background jobs' });
-  await expect(list.locator('[data-job-state="waiting"]')).toHaveCount(3);
+  await expect(list.locator('li[data-job-state="waiting"]')).toHaveCount(3);
   const widths = await page.evaluate(() => ({
     scroll: document.documentElement.scrollWidth,
     inner: window.innerWidth,

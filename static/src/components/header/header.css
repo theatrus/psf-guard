@@ -139,14 +139,37 @@
   color: var(--color-text-primary);
 }
 
-.activity-chip-count {
+/* How many jobs run and wait: an icon and a count each, the words for a
+   screen reader and the tooltip. */
+.activity-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
   color: var(--color-text-secondary);
 }
 
-/* `1·2`: running and waiting, where the count does not fit. */
-.activity-chip-waiting {
-  display: none;
+.activity-count[data-job-state='waiting'] {
   color: var(--state-waiting-fg);
+}
+
+.activity-count-icon {
+  flex: 0 0 auto;
+}
+
+.activity-count-name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .activity-chip.is-finished {
@@ -354,7 +377,10 @@ div.activity-error {
 }
 
 .activity-row-state {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 0.2rem;
   font-variant-numeric: tabular-nums;
   color: var(--color-text-secondary);
 }
@@ -499,13 +525,10 @@ div.activity-error {
     max-width: none;
   }
 
+  /* The percent says how running work goes; only how many wait shows. */
   .live-chip .utility-label,
-  .activity-chip-count {
+  .activity-chip .activity-count[data-job-state='running'] {
     display: none;
-  }
-
-  .activity-chip-waiting {
-    display: inline;
   }
 
   /* Phone utility buttons are 32px squares; the chip needs its percent. */

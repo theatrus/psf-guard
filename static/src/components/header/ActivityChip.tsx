@@ -1,11 +1,11 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import { Hourglass, Play } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
 import {
-  countText,
   lineLengths,
   type ActivityControl,
   type ActivityItem,
@@ -111,12 +111,45 @@ function ScanErrorRow({
 }
 
 /** The row's corner: its place in a line, waiting, or its progress. */
-function stateText(item: ActivityItem): string {
+function stateText(item: ActivityItem): ReactNode {
   if (item.status === 'queued') {
     return item.position != null && item.queue ? `queued · ${item.position + 1}` : 'queued';
   }
-  if (item.status === 'waiting') return 'waiting';
+  if (item.status === 'waiting') {
+    return (
+      <>
+        <Hourglass className="activity-count-icon" size={11} aria-hidden="true" />
+        waiting
+      </>
+    );
+  }
   return item.percent != null ? `${Math.round(item.percent)}%` : 'working';
+}
+
+/** One icon and its count, named in words for a screen reader and a
+ *  tooltip. Nothing when the count is zero. */
+function JobCount({ count, state }: { count: number; state: 'running' | 'waiting' }) {
+  if (count === 0) return null;
+  const Icon = state === 'running' ? Play : Hourglass;
+  const name = `${count} ${state}`;
+  return (
+    <span className="activity-count" data-job-state={state} title={name}>
+      <Icon className="activity-count-icon" size={12} aria-hidden="true" />
+      <span aria-hidden="true">{count}</span>
+      <span className="activity-count-name">{name}</span>
+    </span>
+  );
+}
+
+/** How many jobs run and wait, as icons with counts, so the chip stays
+ *  small. */
+function JobCounts({ running, waiting }: { running: number; waiting: number }) {
+  return (
+    <span className="activity-counts">
+      <JobCount count={running} state="running" />
+      <JobCount count={waiting} state="waiting" />
+    </span>
+  );
 }
 
 function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowControls }) {
@@ -340,8 +373,8 @@ export default function ActivityChip() {
   const percent = summary.percent == null ? null : Math.round(summary.percent);
   const { running, waiting } = summary;
   const label = [
-    percent != null ? `${percent}% done` : running > 0 ? 'Working' : 'Waiting',
-    `${running} running`,
+    percent != null ? `${percent}% done` : running > 0 ? 'Working' : '',
+    running > 0 ? `${running} running` : '',
     waiting > 0 ? `${waiting} waiting` : '',
     scanError ? 'a quality scan had errors' : '',
   ].filter(Boolean).join(', ');
@@ -401,13 +434,7 @@ export default function ActivityChip() {
           <>
             <ProgressRing percent={summary.percent} idle={running === 0} />
             {percent != null && <span className="activity-chip-percent">{percent}%</span>}
-            <span className="activity-chip-count">{countText(summary)}</span>
-            {/* A phone hides the count; how many wait still shows. */}
-            {waiting > 0 && (
-              <span className="activity-chip-waiting" aria-hidden="true">
-                {running}·{waiting}
-              </span>
-            )}
+            <JobCounts running={running} waiting={waiting} />
           </>
         )}
       </button>
@@ -416,9 +443,7 @@ export default function ActivityChip() {
           <div className="activity-popover-head">
             <span>Background jobs</span>
             <span className="activity-popover-counts">
-              {idleWithErrors
-                ? 'Nothing running'
-                : `${running} running${waiting > 0 ? ` · ${waiting} waiting` : ''}`}
+              {idleWithErrors ? 'Nothing running' : <JobCounts running={running} waiting={waiting} />}
             </span>
           </div>
           {scanErrors.map((note) => (

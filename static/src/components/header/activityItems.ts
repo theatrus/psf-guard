@@ -474,10 +474,3 @@ export function summarize(items: ActivityItem[]): ActivitySummary {
       : null,
   };
 }
-
-/** The chip's count: `3 jobs` while all run, `1 running · 2 waiting` once
- *  any waits. */
-export function countText(summary: ActivitySummary): string {
-  if (summary.waiting === 0) return `${summary.count} job${summary.count === 1 ? '' : 's'}`;
-  return `${summary.running} running · ${summary.waiting} waiting`;
-}

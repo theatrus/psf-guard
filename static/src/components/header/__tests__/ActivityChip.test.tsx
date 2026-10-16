@@ -64,6 +64,13 @@ function mockServer({
   );
 }
 
+/** The chip's or list's icon counts, by the words each stands for. */
+function counts(element: HTMLElement): string[] {
+  return Array.from(element.querySelectorAll('.activity-count')).map(
+    (count) => count.getAttribute('title') ?? ''
+  );
+}
+
 function Location() {
   const location = useLocation();
   return <output aria-label="Location">{`${location.pathname}${location.search}`}</output>;
@@ -104,7 +111,7 @@ describe('ActivityChip', () => {
     });
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
-    await waitFor(() => expect(chip).toHaveTextContent('2 running · 1 waiting'));
+    await waitFor(() => expect(counts(chip)).toEqual(['2 running', '1 waiting']));
     // The scan is 40% and the running build 80%; the queued one waits.
     expect(chip).toHaveTextContent('60%');
     expect(chip).toHaveAccessibleName('Background jobs: 60% done, 2 running, 1 waiting');
@@ -156,12 +163,15 @@ describe('ActivityChip', () => {
     });
     renderChip();
     const chip = () => screen.getByRole('button', { name: /Background jobs/ });
-    await waitFor(() => expect(chip()).toHaveTextContent('1 running · 3 waiting'));
+    await waitFor(() => expect(counts(chip())).toEqual(['1 running', '3 waiting']));
+    // Icons with counts; the words are there for a screen reader.
+    expect(within(chip()).getByText('3 waiting')).toHaveClass('activity-count-name');
+    expect(within(chip()).getByTitle('3 waiting').querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
     // Only the person's build counts toward the progress.
     expect(chip()).toHaveAccessibleName('Background jobs: 30% done, 1 running, 3 waiting');
     await userEvent.click(chip());
     const list = await screen.findByRole('region', { name: 'Background jobs' });
-    expect(list).toHaveTextContent('1 running · 3 waiting');
+    expect(counts(list.querySelector('.activity-popover-head')!)).toEqual(['1 running', '3 waiting']);
     let rows = within(list).getAllByRole('listitem');
     // The person's build first; the settling refresh is not work yet.
     expect(rows.map((row) => row.getAttribute('data-job-state'))).toEqual([
@@ -184,7 +194,7 @@ describe('ActivityChip', () => {
 
     // The person's build ends: the refresh runs as its build, listed once.
     personBuilding = false;
-    await waitFor(() => expect(chip()).toHaveTextContent('2 jobs'), { timeout: 3000 });
+    await waitFor(() => expect(counts(chip())).toEqual(['2 running']), { timeout: 3000 });
     rows = within(screen.getByRole('region', { name: 'Background jobs' })).getAllByRole('listitem');
     expect(rows).toHaveLength(2);
     expect(rows.some((row) => row.textContent?.includes('Refreshing stacks'))).toBe(false);
@@ -193,6 +203,18 @@ describe('ActivityChip', () => {
       'running'
     );
   }, 10_000);
+
+  it('shows no running count when only waiting work is left', async () => {
+    mockServer({
+      reapplies: () => [
+        { database_id: 'askar', project_id: 1, target_id: 42, label: 'Alpha M44 · G', waiting_for: 'a preview' },
+      ],
+    });
+    renderChip();
+    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    await waitFor(() => expect(counts(chip)).toEqual(['1 waiting']));
+    expect(chip).toHaveAccessibleName('Background jobs: 1 waiting');
+  });
 
   it('keeps the queue open after a click until a second click or Escape', async () => {
     mockServer({ stacks: () => [stack('R', 'running', 1, 4)] });
@@ -259,7 +281,7 @@ describe('ActivityChip', () => {
     await userEvent.click(within(list).getByRole('button', { name: 'Dismiss the quality scan errors in Askar' }));
     await waitFor(() => expect(chip()).not.toHaveAccessibleName(/had errors/));
     expect(within(list).queryByRole('note')).toBeNull();
-    expect(chip()).toHaveTextContent('1 job');
+    expect(counts(chip())).toEqual(['1 running']);
   }, 15_000);
 
   it('takes a row to the view showing what it works on', async () => {
@@ -299,10 +321,10 @@ describe('ActivityChip', () => {
     });
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
-    await waitFor(() => expect(chip).toHaveTextContent('2 jobs'));
+    await waitFor(() => expect(counts(chip)).toEqual(['2 running']));
     scanning = false;
     await waitFor(() => expect(chip).toHaveAccessibleName(/a quality scan had errors/), { timeout: 3000 });
-    expect(chip).toHaveTextContent('1 job');
+    expect(counts(chip)).toEqual(['1 running']);
     await userEvent.hover(chip);
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(within(list).getByRole('note')).toHaveTextContent('Askar: 2 frames failed — no stars found');
@@ -416,7 +438,7 @@ describe('ActivityChip', () => {
     // Once it starts, it is an automatic build like any other.
     building = true;
     const chip = await screen.findByRole('button', { name: /Background jobs/ }, { timeout: 7000 });
-    expect(chip).toHaveTextContent('1 job');
+    expect(counts(chip)).toEqual(['1 running']);
     await userEvent.click(chip);
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(list).not.toHaveTextContent('Automatic refresh');
