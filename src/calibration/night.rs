@@ -2156,7 +2156,7 @@ mod tests {
         let read: Option<i64> = conn
             .query_row(
                 "SELECT site_read_at FROM psf_guard_calibration_frame
-                 WHERE source_path LIKE '%/f0.fits'",
+                 WHERE source_path LIKE '%f0.fits'",
                 [],
                 |row| row.get(0),
             )
