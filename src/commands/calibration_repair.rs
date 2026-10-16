@@ -5,8 +5,11 @@
 use anyhow::{bail, Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-use crate::calibration::{self, DuplicateReport, FileAccess};
+use crate::calibration::{self, CheckStage, Checking, DuplicateReport, FileAccess};
 
 pub fn repair_duplicates(db: &Path, dry_run: bool, map_prefix: Option<&str>) -> Result<()> {
     let files = match map_prefix {
@@ -23,10 +26,56 @@ pub fn repair_duplicates(db: &Path, dry_run: bool, map_prefix: Option<&str>) -> 
     } else {
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX
     };
+    // A repair holds the catalog's repair lock from its check to its
+    // commit, so a server cannot repair the catalog meanwhile, nor this
+    // run repair one a server is repairing.
+    let _lock =
+        if dry_run {
+            None
+        } else {
+            Some(calibration::repair_lock(db).with_context(|| {
+                format!("locking {}", calibration::repair_lock_path(db).display())
+            })?)
+        };
     let mut conn = Connection::open_with_flags(db, flags)
         .with_context(|| format!("opening {}", db.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(30))?;
     let snapshot = calibration::duplicate_snapshot(&conn)?;
-    let report = calibration::plan_duplicate_repair(&snapshot, &files);
+    let began = std::time::Instant::now();
+    let workers = crate::concurrency::plan_workers(
+        None,
+        &crate::concurrency::WorkerPolicy::default(),
+        crate::concurrency::Priority::Interactive,
+        None,
+    )
+    .workers;
+    let stop = AtomicBool::new(false);
+    let last = Mutex::new(Instant::now());
+    let progress = |stage: CheckStage, done: usize, total: usize| {
+        let mut last = last.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if done == total || last.elapsed() >= Duration::from_secs(2) {
+            *last = Instant::now();
+            let what = match stage {
+                CheckStage::Files => "Checking files",
+                CheckStage::Copies => "Comparing copies",
+            };
+            eprintln!("{what} {done} of {total}");
+        }
+    };
+    let report = calibration::plan_duplicate_repair_checked(
+        &snapshot,
+        &files,
+        &Checking {
+            workers,
+            progress: &progress,
+            stop: &stop,
+        },
+    )
+    .map_err(|_| anyhow::anyhow!("the check was stopped"))?;
+    eprintln!(
+        "Checked the files in {:.2}s on {workers} thread(s).",
+        began.elapsed().as_secs_f64()
+    );
     print_report(&report);
     if report.is_empty() {
         println!("Nothing to repair.");
@@ -36,7 +85,9 @@ pub fn repair_duplicates(db: &Path, dry_run: bool, map_prefix: Option<&str>) -> 
         println!("Dry run: nothing was changed.");
         return Ok(());
     }
+    let applying = Instant::now();
     let outcome = calibration::apply_duplicate_repair(&mut conn, &report)?;
+    eprintln!("Applied in {:.2}s.", applying.elapsed().as_secs_f64());
     println!(
         "Repaired {} exposure(s): {} row(s) merged, {} moved to a live copy, {} master(s) to rebuild. No file was moved or deleted.",
         outcome.groups, outcome.rows_removed, outcome.repointed, outcome.masters_removed
@@ -115,5 +166,30 @@ fn print_report(report: &DuplicateReport) {
                 }
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_command_line_waits_its_turn_behind_a_server_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        let catalog = dir.path().join("catalog.sqlite");
+        let conn = Connection::open(&catalog).unwrap();
+        calibration::ensure_schema(&conn).unwrap();
+        drop(conn);
+        // A server is repairing this catalog.
+        let server = calibration::repair_lock(&catalog).unwrap();
+        let refused = repair_duplicates(&catalog, false, None).unwrap_err();
+        assert!(
+            format!("{refused:#}").contains("another repair of this catalog is running"),
+            "{refused:#}"
+        );
+        // A dry run writes nothing, so it needs no lock.
+        repair_duplicates(&catalog, true, None).unwrap();
+        drop(server);
+        repair_duplicates(&catalog, false, None).unwrap();
     }
 }

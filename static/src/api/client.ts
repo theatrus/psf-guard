@@ -140,8 +140,7 @@ import type { GuidFillReport, GuidReport,
   CatalogInstallStatus,
   CalibrationLibrarySummary,
   CalibrationMutationOutcome,
-  CalibrationDuplicateReport,
-  CalibrationRepairOutcome,
+  CalibrationDuplicateStatus,
   CalibrationFrameDetail,
   CalibrationFramePage,
   CalibrationProjectScope,
@@ -1952,25 +1951,47 @@ export const apiClient = {
     return data.data;
   },
 
-  /** Exposures the library records more than once, and the repair that
-   *  would merge them. */
-  getCalibrationDuplicates: async (dbId: string): Promise<CalibrationDuplicateReport> => {
+  /** Where the duplicate check or repair stands, with the latest plan:
+   *  exposures the library records more than once. Does no work. */
+  getCalibrationDuplicates: async (dbId: string): Promise<CalibrationDuplicateStatus> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.get<ApiResponse<CalibrationDuplicateReport>>(
+    const { data } = await apiInstance.get<ApiResponse<CalibrationDuplicateStatus>>(
       dbPath(dbId, '/calibrations/duplicates')
     );
     if (!data.data) throw new Error(data.error || 'Failed to read calibration duplicates');
     return data.data;
   },
 
-  /** Apply the previewed repair; refused when the library has changed. */
-  repairCalibrationDuplicates: async (dbId: string, token: string): Promise<CalibrationRepairOutcome> => {
+  /** Start a check for duplicates (or join the one running); poll the
+   *  status for its plan. */
+  checkCalibrationDuplicates: async (dbId: string): Promise<CalibrationDuplicateStatus> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.post<ApiResponse<CalibrationRepairOutcome>>(
+    const { data } = await apiInstance.post<ApiResponse<CalibrationDuplicateStatus>>(
+      dbPath(dbId, '/calibrations/duplicates/check')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to check for calibration duplicates');
+    return data.data;
+  },
+
+  /** Start the previewed repair; poll the status. It applies nothing when
+   *  the plan has changed, and says what changed. */
+  repairCalibrationDuplicates: async (dbId: string, token: string): Promise<CalibrationDuplicateStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<CalibrationDuplicateStatus>>(
       dbPath(dbId, '/calibrations/duplicates/repair'),
       { token }
     );
     if (!data.data) throw new Error(data.error || 'Failed to repair calibration duplicates');
+    return data.data;
+  },
+
+  /** Stop the check or repair running: a repair rolls back whole. */
+  stopCalibrationDuplicates: async (dbId: string): Promise<CalibrationDuplicateStatus> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<CalibrationDuplicateStatus>>(
+      dbPath(dbId, '/calibrations/duplicates/stop')
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to stop the duplicate check');
     return data.data;
   },
 

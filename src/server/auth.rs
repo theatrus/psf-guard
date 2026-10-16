@@ -916,10 +916,13 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
     // but they do not change catalog grades, plans, files, or server config.
     // A page saying it shows a rig's flats lifts that rig's measuring for a
     // while, and may queue a check that writes flat measurements; it never
-    // changes the frames, grades or plans a catalog records.
+    // changes the frames, grades or plans a catalog records. A duplicate
+    // check reads rows and files and writes nothing; the repair is an
+    // editor's.
     !(path.ends_with("/astrometry")
         || path.ends_with("/satellites")
         || path.ends_with("/calibrations/flat-measure/watch")
+        || path.ends_with("/calibrations/duplicates/check")
         || path.contains("/stack-previews")
         || path == "/astrometry/catalogs/validate")
 }
@@ -1140,6 +1143,25 @@ mod tests {
             assert!(requires_write(
                 &Method::POST,
                 &format!("/db/test/calibrations/frame-sites/{action}"),
+                true,
+            ));
+        }
+        // A duplicate check is a display calculation; the repair and Stop
+        // are an editor's.
+        assert!(!requires_write(
+            &Method::POST,
+            "/db/test/calibrations/duplicates/check",
+            true,
+        ));
+        assert!(requires_write(
+            &Method::POST,
+            "/db/test/calibrations/duplicates/check",
+            false,
+        ));
+        for action in ["repair", "stop"] {
+            assert!(requires_write(
+                &Method::POST,
+                &format!("/db/test/calibrations/duplicates/{action}"),
                 true,
             ));
         }

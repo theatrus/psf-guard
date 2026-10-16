@@ -39,9 +39,11 @@ pub use rules::{
 };
 use std::sync::Arc;
 pub use twins::{
-    apply_repair as apply_duplicate_repair, duplicate_snapshot,
-    plan_repair as plan_duplicate_repair, DuplicateReport, DuplicateSnapshot, FileAccess,
-    InvalidatedMaster, RepairError, RepairOutcome, TwinGroup, TwinMember,
+    apply_repair as apply_duplicate_repair, apply_repair_with as apply_duplicate_repair_with,
+    duplicate_snapshot, plan_repair as plan_duplicate_repair,
+    plan_repair_checked as plan_duplicate_repair_checked, repair_lock, repair_lock_path,
+    CheckStage, Checking, DuplicateReport, DuplicateSnapshot, FileAccess, InvalidatedMaster,
+    RepairError, RepairLock, RepairLockError, RepairOutcome, Stopped, TwinGroup, TwinMember,
 };
 /// Synthetic frames for tests elsewhere in the crate.
 #[cfg(test)]
@@ -7199,25 +7201,54 @@ fn record_master(
     master: RecordedMaster,
     inputs: MasterInputs<'_>,
 ) -> Result<()> {
-    // A repair or a forget may have removed a source row, or a master this
-    // one is built on, while it was being built — from another process, the
-    // command line, too. A record citing a row that is gone would never be
-    // found again, and would keep the rows' masters from being rebuilt
-    // whole, so the master is left unrecorded and is built afresh.
+    // The check below and the write are one transaction, so a duplicate
+    // repair, which holds the write lock while it merges, either finishes
+    // before the check sees its rows or starts after the master is
+    // recorded and removes it with the others.
+    let own_transaction = conn.is_autocommit();
+    if own_transaction {
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+    }
+    let recorded =
+        record_master_unless_changed(conn, kind, frames, source_hash, path, master, inputs);
+    if own_transaction {
+        if recorded.is_ok() {
+            conn.execute_batch("COMMIT")?;
+        } else {
+            let _ = conn.execute_batch("ROLLBACK");
+        }
+    }
+    recorded
+}
+
+fn record_master_unless_changed(
+    conn: &Connection,
+    kind: CalibrationKind,
+    frames: &[CalibrationFrame],
+    source_hash: &str,
+    path: &Path,
+    master: RecordedMaster,
+    inputs: MasterInputs<'_>,
+) -> Result<()> {
+    // A repair or a forget may have removed a source row, moved a kept row
+    // to a twin's file, or removed a master this one is built on, while it
+    // was being built — from another process, the command line, too. A
+    // record citing a row that is gone, or that now names another file,
+    // would never be found again, and would keep the rows' masters from
+    // being rebuilt whole, so the master is left unrecorded and is built
+    // afresh.
     let gone = frames
         .iter()
-        .map(|frame| frame.frame_uuid.as_str())
-        .filter(|uuid| {
-            !conn
-                .query_row(
-                    "SELECT 1 FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
-                    [uuid],
-                    |_| Ok(()),
-                )
-                .optional()
-                .ok()
-                .flatten()
-                .is_some()
+        .filter(|frame| {
+            conn.query_row(
+                "SELECT source_fingerprint FROM psf_guard_calibration_frame WHERE frame_uuid = ?1",
+                [&frame.frame_uuid],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .is_none_or(|fingerprint| fingerprint != frame.source_fingerprint)
         })
         .collect::<Vec<_>>();
     let dependency_gone = [inputs.bias_dependency, inputs.dark_dependency]
@@ -7237,7 +7268,7 @@ fn record_master(
         });
     if !gone.is_empty() || dependency_gone {
         tracing::warn!(
-            "not recording the {} master at {}: its inputs changed while it was built ({} frame row(s) gone{})",
+            "not recording the {} master at {}: its inputs changed while it was built ({} frame row(s) gone or moved{})",
             kind.as_str(),
             path.display(),
             gone.len(),

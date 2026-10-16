@@ -3,6 +3,7 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type {
   CacheRefreshProgress,
+  CalibrationDuplicateStatus,
   FlatMeasureStatus,
   FrameSitesStatus,
   QualityBackfillStatus,
@@ -13,6 +14,7 @@ import { useAllDatabases, useMergedTargets } from '../../hooks/useDatabases';
 import { useStackActivity } from '../../hooks/useStackActivity';
 import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
 import { flatMeasureKey, flatMeasurePollMs } from '../calibration/flatMeasureLabel';
+import { duplicatesKey, duplicatesPollMs } from '../calibration/duplicateJob';
 import { activityItems, summarize, type DatabaseActivity, type ProjectOf } from './activityItems';
 import { frameSitesKey } from '../calibration/frameSitesKey';
 
@@ -44,6 +46,8 @@ function busy(db: DatabaseActivity): boolean {
     || db.backfill?.progress.running
     || db.flats?.active
     || db.sites?.active
+    // A repair changes frames, masters and grades; a check changes nothing.
+    || (db.duplicates?.state === 'running' && db.duplicates.action === 'repair')
   );
 }
 
@@ -138,6 +142,20 @@ export function useHeaderActivity() {
     })),
   });
 
+  // A duplicate check or repair runs only when a person starts one, and
+  // starting it puts its status in this shared query, so it is read once
+  // and then polled only while it runs.
+  const duplicates = useQueries({
+    queries: databases.map((db) => ({
+      queryKey: duplicatesKey(db.id),
+      queryFn: () => apiClient.getCalibrationDuplicates(db.id),
+      refetchInterval: (query: { state: { data?: CalibrationDuplicateStatus } }) =>
+        duplicatesPollMs(query.state.data),
+      refetchIntervalInBackground: false,
+      retry: false,
+    })),
+  });
+
   const perDb: DatabaseActivity[] = databases.map((db, index) => ({
     dbId: db.id,
     dbName: db.name,
@@ -146,6 +164,7 @@ export function useHeaderActivity() {
     backfill: backfills[index]?.data,
     flats: flats[index]?.data,
     sites: sites[index]?.data,
+    duplicates: duplicates[index]?.data,
   }));
   const items = activityItems(perDb, stacks, wbpp.data, projectOf, {
     scheduled,

@@ -124,6 +124,12 @@ Then:
   fails, Stop and Resume (a note on Calibration while stopped), a row in
   the job line, a wait for interactive work before each chunk, and what it
   placed handed on at most every 45 s.
+- The duplicate check and repair (`calibration_duplicates.rs`) follow it at
+  `Interactive`: a person starts each run, which holds the guard, leases the
+  interactive share for its file checks, reads and writes on connections of
+  its own, and shows in the job line with Stop. A run that ends frees the
+  runner in the same step that records its end, so a page that sees the end
+  can start the next run at once.
 - Calibration grading (`calibration_quality.rs`) is a Background runner per
   catalog with a status route, but it has no row in the job line yet.
 - Calibration health (`calibration_health.rs`), quality backfill and scans

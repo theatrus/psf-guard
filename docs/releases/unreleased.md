@@ -50,6 +50,15 @@
   frame or grade changed meanwhile, and its row turns into the running
   build without appearing twice. One you stopped yourself stays stopped.
 
+- **Repair duplicates** on the Calibration page works on large libraries
+  behind a reverse proxy. Before, Apply waited for any stack build in
+  progress and could end in a gateway timeout with nothing repaired. The
+  check and the repair now run as jobs, on the page and in the header's job
+  line: "Checking files 812 of 2,140", then "Merging 37 of 203", with
+  Stop. A stopped repair writes nothing. Apply no longer fails because a
+  stack recorded a master or grading ran since the preview. When the
+  duplicates themselves changed, it shows what changed and the new plan.
+  The command line and a server can no longer repair one catalog at once.
 - Collaboration imports preserve Starfront's physical-filter/data-band mapping
   and OSC camera and Bortle limits in reviewed plans. Reports carry the data
   bands explicitly, and work for bands disabled by the project stays held.

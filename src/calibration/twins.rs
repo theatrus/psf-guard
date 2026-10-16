@@ -21,9 +21,10 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::UNIX_EPOCH;
 
@@ -235,6 +236,19 @@ type Resolve = dyn Fn(&Path) -> Option<PathBuf> + Send + Sync;
 #[derive(Clone)]
 pub struct FileAccess {
     resolve: Arc<Resolve>,
+    /// What [`check_files`] found, by recorded path: read from here
+    /// rather than from disk again.
+    known: Option<Arc<HashMap<PathBuf, KnownFile>>>,
+}
+
+/// One recorded path as [`check_files`] found it.
+#[derive(Debug, Clone, Default)]
+struct KnownFile {
+    /// Its size, when it is a file this machine reads.
+    size: Option<u64>,
+    /// Its content sample, when one was taken: `Some(None)` for a file
+    /// that could not be sampled.
+    sample: Option<Option<String>>,
 }
 
 impl std::fmt::Debug for FileAccess {
@@ -253,6 +267,7 @@ impl FileAccess {
     pub fn resolving(resolve: impl Fn(&Path) -> Option<PathBuf> + Send + Sync + 'static) -> Self {
         Self {
             resolve: Arc::new(resolve),
+            known: None,
         }
     }
 
@@ -270,16 +285,37 @@ impl FileAccess {
         (self.resolve)(path).filter(|local| local.is_file())
     }
 
+    fn known(&self, path: &Path) -> Option<&KnownFile> {
+        self.known.as_ref()?.get(path)
+    }
+
     pub fn exists(&self, path: &Path) -> bool {
-        self.local(path).is_some()
+        match self.known(path) {
+            Some(known) => known.size.is_some(),
+            None => self.local(path).is_some(),
+        }
     }
 
     fn size(&self, path: &Path) -> Option<u64> {
-        let local = self.local(path)?;
-        std::fs::metadata(local).ok().map(|metadata| metadata.len())
+        if let Some(known) = self.known(path) {
+            return known.size;
+        }
+        self.stat(path)
+    }
+
+    /// The size of the file `path` reads as here, with one metadata call.
+    fn stat(&self, path: &Path) -> Option<u64> {
+        let local = (self.resolve)(path)?;
+        std::fs::metadata(local)
+            .ok()
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len())
     }
 
     fn sample(&self, path: &Path) -> Option<String> {
+        if let Some(sample) = self.known(path).and_then(|known| known.sample.clone()) {
+            return sample;
+        }
         content_sample(&self.local(path)?)
     }
 }
@@ -634,8 +670,8 @@ struct MasterLink {
     created_at: i64,
 }
 
-/// The rows and masters a repair is planned from, and a digest of them that
-/// says whether the catalog has changed since.
+/// The rows and masters a repair is planned from, and a digest of the rows
+/// that could be duplicates, which says whether they have changed since.
 #[derive(Debug, Clone, Default)]
 pub struct DuplicateSnapshot {
     rows: Vec<RecordedRow>,
@@ -698,8 +734,43 @@ pub fn duplicate_snapshot(conn: &Connection) -> Result<DuplicateSnapshot> {
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<HashMap<String, String>>>()?;
 
+    let digest = candidate_digest(&rows);
+    Ok(DuplicateSnapshot {
+        rows,
+        masters,
+        rig_names,
+        digest,
+    })
+}
+
+/// The rows that share an [`ExposureKey`] with another row, by key, oldest
+/// first: the only rows a repair can plan from.
+fn candidates(rows: &[RecordedRow]) -> BTreeMap<ExposureKey, Vec<&RecordedRow>> {
+    let mut by_key: BTreeMap<ExposureKey, Vec<&RecordedRow>> = BTreeMap::new();
+    for row in rows {
+        if let Some(key) = ExposureKey::new(
+            row.kind,
+            row.captured_at,
+            Path::new(&row.source_path),
+            &row.rig_uuid,
+        ) {
+            by_key.entry(key).or_default().push(row);
+        }
+    }
+    by_key.retain(|_, rows| rows.len() > 1);
+    for rows in by_key.values_mut() {
+        rows.sort_by_key(|row| row.id);
+    }
+    by_key
+}
+
+/// A digest of what a plan reads from the catalog: the rows that share an
+/// exposure key with another. Grading, flat measuring, a new master or a
+/// new frame of another exposure leave it as it is, so a preview stays
+/// good while background work writes to the catalog.
+fn candidate_digest(rows: &[RecordedRow]) -> String {
     let mut hasher = Sha256::new();
-    for row in &rows {
+    for row in candidates(rows).values().flatten() {
         hasher.update(
             format!(
                 "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1e}",
@@ -717,31 +788,11 @@ pub fn duplicate_snapshot(conn: &Connection) -> Result<DuplicateSnapshot> {
             .as_bytes(),
         );
     }
-    let mut sorted = masters.iter().collect::<Vec<_>>();
-    sorted.sort_by(|left, right| left.uuid.cmp(&right.uuid));
-    for master in sorted {
-        hasher.update(
-            format!(
-                "M{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1e}",
-                master.uuid,
-                master.sources.join(","),
-                master.bias,
-                master.dark
-            )
-            .as_bytes(),
-        );
-    }
-    let digest = hasher
+    hasher
         .finalize()
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect();
-    Ok(DuplicateSnapshot {
-        rows,
-        masters,
-        rig_names,
-        digest,
-    })
+        .collect()
 }
 
 fn master_links(conn: &Connection) -> Result<Vec<MasterLink>> {
@@ -883,8 +934,9 @@ pub struct DuplicateReport {
     /// Kept rows that move to a twin's file.
     pub repointed: usize,
     pub masters: Vec<InvalidatedMaster>,
-    /// Hands the plan to [`apply_repair`]; any change to the catalog or to
-    /// which files are there gives another.
+    /// Hands the plan to [`apply_repair`]. A change to the rows that could
+    /// be duplicates, or to which of their files are there, gives another;
+    /// a change elsewhere in the catalog does not.
     pub token: String,
     #[serde(skip)]
     snapshot_digest: String,
@@ -893,6 +945,43 @@ pub struct DuplicateReport {
 impl DuplicateReport {
     pub fn is_empty(&self) -> bool {
         self.groups.is_empty()
+    }
+
+    /// An empty plan, for a test to fill in.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self {
+            groups: Vec::new(),
+            rows_removed: 0,
+            missing_rows: 0,
+            physical_rows: 0,
+            repointed: 0,
+            masters: Vec::new(),
+            token: String::new(),
+            snapshot_digest: String::new(),
+        }
+    }
+}
+
+impl TwinGroup {
+    /// A group with nothing in it, for a test to fill in.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self {
+            kind: CalibrationKind::Dark,
+            captured_at: None,
+            file_name: String::new(),
+            rig_uuid: String::new(),
+            rig_name: None,
+            keep: String::new(),
+            path: String::new(),
+            repointed: false,
+            physical: false,
+            members: Vec::new(),
+            repoint: None,
+            twins: Vec::new(),
+            validity: None,
+        }
     }
 }
 
@@ -905,23 +994,9 @@ impl DuplicateReport {
 /// left too: it may be a disk that is not mounted. The oldest row of each
 /// group is kept.
 pub fn plan_repair(snapshot: &DuplicateSnapshot, files: &FileAccess) -> DuplicateReport {
-    let mut by_key: BTreeMap<ExposureKey, Vec<&RecordedRow>> = BTreeMap::new();
-    for row in &snapshot.rows {
-        if let Some(key) = ExposureKey::new(
-            row.kind,
-            row.captured_at,
-            Path::new(&row.source_path),
-            &row.rig_uuid,
-        ) {
-            by_key.entry(key).or_default().push(row);
-        }
-    }
-
+    let by_key = candidates(&snapshot.rows);
     let mut groups = Vec::new();
     for (key, rows) in &by_key {
-        if rows.len() < 2 {
-            continue;
-        }
         let (live, dead): (Vec<&RecordedRow>, Vec<&RecordedRow>) = rows
             .iter()
             .partition(|row| files.exists(Path::new(&row.source_path)));
@@ -1060,9 +1135,9 @@ pub fn plan_repair(snapshot: &DuplicateSnapshot, files: &FileAccess) -> Duplicat
             plan.update(format!("\u{1f}T{path}:{fingerprint}").as_bytes());
         }
     }
-    for master in &masters {
-        plan.update(format!("M{}", master.master_uuid).as_bytes());
-    }
+    // The masters are not part of the token: a master built since the
+    // preview from one of these rows goes too when the repair applies,
+    // and one built from other rows is no business of the repair's.
     let token = plan
         .finalize()
         .iter()
@@ -1080,6 +1155,130 @@ pub fn plan_repair(snapshot: &DuplicateSnapshot, files: &FileAccess) -> Duplicat
         token,
         snapshot_digest: snapshot.digest.clone(),
     }
+}
+
+/// What a file check is doing, for a job's progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStage {
+    /// Whether each file the rows record is there, and its size.
+    Files,
+    /// The two ends of copies that could hold one exposure.
+    Copies,
+}
+
+/// How a plan checks its files: on `workers` threads, telling `progress`
+/// of each file done, and stopping between files once `stop` is set.
+pub struct Checking<'a> {
+    pub workers: usize,
+    pub progress: &'a (dyn Fn(CheckStage, usize, usize) + Sync),
+    pub stop: &'a AtomicBool,
+}
+
+/// A check stopped when asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stopped;
+
+/// [`plan_repair`], with the files checked first in parallel: each file
+/// the rows that could be duplicates record is looked at once, and copies
+/// are read only where two on disk share a size. Over a network share
+/// this is most of a plan's time.
+pub fn plan_repair_checked(
+    snapshot: &DuplicateSnapshot,
+    files: &FileAccess,
+    checking: &Checking<'_>,
+) -> std::result::Result<DuplicateReport, Stopped> {
+    let checked = check_files(snapshot, files, checking)?;
+    Ok(plan_repair(snapshot, &checked))
+}
+
+/// Run `work` for each of `len` items on the checking threads, in order.
+fn each_checked<T: Send>(
+    len: usize,
+    stage: CheckStage,
+    checking: &Checking<'_>,
+    work: impl Fn(usize) -> T + Sync,
+) -> std::result::Result<Vec<T>, Stopped> {
+    let results = (0..len).map(|_| Mutex::new(None)).collect::<Vec<_>>();
+    let done = AtomicUsize::new(0);
+    (checking.progress)(stage, 0, len);
+    crate::concurrency::parallel_index(len, checking.workers, |index| {
+        if checking.stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let value = work(index);
+        *results[index]
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(value);
+        let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
+        (checking.progress)(stage, finished, len);
+    });
+    if checking.stop.load(Ordering::Relaxed) {
+        return Err(Stopped);
+    }
+    Ok(results
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .expect("every item was checked")
+        })
+        .collect())
+}
+
+fn check_files(
+    snapshot: &DuplicateSnapshot,
+    files: &FileAccess,
+    checking: &Checking<'_>,
+) -> std::result::Result<FileAccess, Stopped> {
+    let by_key = candidates(&snapshot.rows);
+    let paths = by_key
+        .values()
+        .flatten()
+        .map(|row| PathBuf::from(&row.source_path))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let sizes = each_checked(paths.len(), CheckStage::Files, checking, |index| {
+        files.size(&paths[index])
+    })?;
+    let size_of = paths
+        .iter()
+        .cloned()
+        .zip(sizes)
+        .collect::<HashMap<PathBuf, Option<u64>>>();
+    // Only copies on disk that share a size with another copy of the same
+    // exposure key are read, byte for byte at both ends.
+    let mut to_sample = BTreeSet::new();
+    for rows in by_key.values() {
+        let mut by_size: HashMap<u64, Vec<&Path>> = HashMap::new();
+        for row in rows {
+            let path = Path::new(&row.source_path);
+            if let Some(Some(size)) = size_of.get(path) {
+                by_size.entry(*size).or_default().push(path);
+            }
+        }
+        for same in by_size.into_values().filter(|same| same.len() > 1) {
+            to_sample.extend(same.into_iter().map(Path::to_path_buf));
+        }
+    }
+    let to_sample = to_sample.into_iter().collect::<Vec<_>>();
+    let samples = each_checked(to_sample.len(), CheckStage::Copies, checking, |index| {
+        files.sample(&to_sample[index])
+    })?;
+    let mut known = size_of
+        .into_iter()
+        .map(|(path, size)| (path, KnownFile { size, sample: None }))
+        .collect::<HashMap<_, _>>();
+    for (path, sample) in to_sample.into_iter().zip(samples) {
+        if let Some(entry) = known.get_mut(&path) {
+            entry.sample = Some(sample);
+        }
+    }
+    Ok(FileAccess {
+        resolve: Arc::clone(&files.resolve),
+        known: Some(Arc::new(known)),
+    })
 }
 
 fn row_copy<'a>(key: &'a ExposureKey, row: &'a RecordedRow) -> ExposureCopy<'a> {
@@ -1164,8 +1363,10 @@ pub struct RepairOutcome {
 /// Why a repair was not applied.
 #[derive(Debug)]
 pub enum RepairError {
-    /// The catalog changed after the plan was made.
+    /// The rows the plan was made from changed after it was made.
     Stale,
+    /// Stop was asked for: nothing was written.
+    Stopped,
     Failed(anyhow::Error),
 }
 
@@ -1175,6 +1376,7 @@ impl std::fmt::Display for RepairError {
             Self::Stale => formatter.write_str(
                 "the calibration library changed since the preview; preview the repair again",
             ),
+            Self::Stopped => formatter.write_str("the repair was stopped; nothing was changed"),
             Self::Failed(error) => write!(formatter, "{error:#}"),
         }
     }
@@ -1206,8 +1408,25 @@ pub fn apply_repair(
     conn: &mut Connection,
     report: &DuplicateReport,
 ) -> std::result::Result<RepairOutcome, RepairError> {
+    apply_repair_with(conn, report, &|_, _| {}, &AtomicBool::new(false))
+}
+
+/// [`apply_repair`], telling `progress` of each exposure merged, and
+/// stopping between exposures once `stop` is set. A stopped repair rolls
+/// back whole: nothing is written.
+///
+/// The rows that could be duplicates must be as they were planned from,
+/// or [`RepairError::Stale`]. The masters are read again here, so one built
+/// since the preview from a row that goes, or on such a master, goes too.
+pub fn apply_repair_with(
+    conn: &mut Connection,
+    report: &DuplicateReport,
+    progress: &dyn Fn(usize, usize),
+    stop: &AtomicBool,
+) -> std::result::Result<RepairOutcome, RepairError> {
     let transaction = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if duplicate_snapshot(&transaction)?.digest != report.snapshot_digest {
+    let current = duplicate_snapshot(&transaction)?;
+    if current.digest != report.snapshot_digest {
         return Err(RepairError::Stale);
     }
     if report.is_empty() {
@@ -1217,18 +1436,44 @@ pub fn apply_repair(
     let now = chrono::Utc::now().timestamp();
     let remote_table = table_exists(&transaction, "psf_guard_remote_calibration_file");
 
-    for master in &report.masters {
-        transaction.execute(
-            "DELETE FROM psf_guard_calibration_master WHERE master_uuid = ?1",
-            [&master.master_uuid],
-        )?;
+    // Every row that goes, and every kept row that moves to a twin's file.
+    let changed = report
+        .groups
+        .iter()
+        .flat_map(|group| {
+            group
+                .members
+                .iter()
+                .filter(|member| !member.keep)
+                .map(|member| member.frame_uuid.as_str())
+                .chain(group.repointed.then_some(group.keep.as_str()))
+        })
+        .collect::<HashSet<_>>();
+    let invalid = citing(&current.masters, &changed);
+    let mut invalid_masters = current
+        .masters
+        .iter()
+        .filter(|master| invalid.contains(&master.uuid))
+        .collect::<Vec<_>>();
+    invalid_masters.sort_by(|left, right| left.uuid.cmp(&right.uuid));
+    {
+        let mut statement = transaction
+            .prepare("DELETE FROM psf_guard_calibration_master WHERE master_uuid = ?1")?;
+        for master in &invalid_masters {
+            statement.execute([&master.uuid])?;
+        }
     }
     let mut outcome = RepairOutcome {
         groups: report.groups.len(),
-        masters_removed: report.masters.len(),
+        masters_removed: invalid_masters.len(),
         ..Default::default()
     };
-    for group in &report.groups {
+    let total = report.groups.len();
+    progress(0, total);
+    for (index, group) in report.groups.iter().enumerate() {
+        if stop.load(Ordering::Relaxed) {
+            return Err(RepairError::Stopped);
+        }
         let removed = group
             .members
             .iter()
@@ -1275,12 +1520,16 @@ pub fn apply_repair(
                 .collect::<Vec<_>>()
                 .join("; ")
         );
+        progress(index + 1, total);
     }
-    for master in &report.masters {
+    if stop.load(Ordering::Relaxed) {
+        return Err(RepairError::Stopped);
+    }
+    for master in &invalid_masters {
         tracing::info!(
             "calibration repair: {} master {} will be built again",
             master.kind,
-            master.master_uuid
+            master.uuid
         );
     }
     prune_twins(&transaction)?;
@@ -1647,6 +1896,70 @@ pub(crate) fn fold_merged(conn: &Connection, map: &HashMap<String, String>) -> R
         tracing::info!("calibration sync: merged {merged} into {keep}, as the source's repair did");
     }
     Ok(outcome)
+}
+
+/// Held while a repair applies, so the command line and a server never
+/// repair one catalog at once. It is a lock on a file beside the catalog,
+/// which the operating system lets go of when the process ends, however it
+/// ends. The file stays: removing it could hand the lock to two at once.
+#[derive(Debug)]
+pub struct RepairLock {
+    _file: Option<std::fs::File>,
+}
+
+/// Why a repair could not take [`RepairLock`].
+#[derive(Debug)]
+pub enum RepairLockError {
+    /// Another process, or another repair here, holds it.
+    Busy,
+    Failed(std::io::Error),
+}
+
+impl std::fmt::Display for RepairLockError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy => formatter.write_str(
+                "another repair of this catalog is running, from the command line or a server; try again when it has finished",
+            ),
+            Self::Failed(error) => write!(formatter, "could not lock the catalog for a repair: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for RepairLockError {}
+
+/// The lock file of `catalog`'s repairs.
+pub fn repair_lock_path(catalog: &Path) -> PathBuf {
+    let mut name = catalog.as_os_str().to_owned();
+    name.push(".psf-guard-repair.lock");
+    PathBuf::from(name)
+}
+
+/// Take `catalog`'s repair lock, without waiting. On a file system that
+/// cannot lock files the repair goes ahead unlocked, with a warning: a
+/// guard rail must not make the repair impossible.
+pub fn repair_lock(catalog: &Path) -> std::result::Result<RepairLock, RepairLockError> {
+    let path = repair_lock_path(catalog);
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(RepairLockError::Failed)?;
+    match file.try_lock() {
+        Ok(()) => Ok(RepairLock { _file: Some(file) }),
+        Err(std::fs::TryLockError::WouldBlock) => Err(RepairLockError::Busy),
+        Err(std::fs::TryLockError::Error(error))
+            if error.kind() == std::io::ErrorKind::Unsupported =>
+        {
+            tracing::warn!(
+                "{} cannot be locked ({error}); repairing without the lock",
+                path.display()
+            );
+            Ok(RepairLock { _file: None })
+        }
+        Err(std::fs::TryLockError::Error(error)) => Err(RepairLockError::Failed(error)),
+    }
 }
 
 #[cfg(test)]

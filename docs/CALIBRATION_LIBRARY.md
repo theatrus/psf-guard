@@ -424,8 +424,9 @@ twice.
 
 Tick **Duplicates** among the Calibration page's filters
 (`calDupes=true` in the address) to list every exposure recorded more than
-once. Each group shows its files, which are missing, and which row a repair
-keeps. **Rig** and **Type** narrow the list, and the view offers no other
+once. The view checks the library when it opens and has no list yet, and
+**Check again** checks it afresh. Each group shows its files, which are
+missing, and which row a repair keeps. **Rig** and **Type** narrow the list, and the view offers no other
 filters. A row whose file is gone only joins a twin that is on disk. A group
 whose copies are all on a disk that is not mounted is left alone. When only
 some of its copies are, a row on the unmounted disk reads as missing and
@@ -448,23 +449,58 @@ library, whatever the filters show. **Apply** then, for each exposure:
   moves, and every master built on one of those, so stacks build them again.
   Stacks key on the frames they use, so their previews rebuild too.
 
-A master that was being built while the repair ran is not recorded if a row
-it used has gone; the next stack builds it again.
+A repair does not wait for a stack build. A master a build records while
+the repair runs is not recorded if a row it used has gone or moved to
+another file, and one recorded before the repair is removed with the
+others; the next stack builds it again.
 
-No file is moved or deleted. Apply is refused when the library, or which
-files are on disk, has changed since the preview; preview again. A second
-repair finds nothing to do. Repair needs database management: the desktop
-app, or a server started with `--allow-database-management`.
+No file is moved or deleted. A second repair finds nothing to do. Repair
+needs database management: the desktop app, or a server started with
+`--allow-database-management`.
+
+The check and the repair run as jobs, not inside the page's request. Each
+shows what it does and how far it has got, on the page and in the header's
+job line: "Checking files 812 of 2,140", "Comparing copies", then for a
+repair "Merging 37 of 203". **Stop** ends a check at once. It ends a repair
+between exposures and rolls it back whole, so nothing is written. Closing
+the dialog leaves the job running. When it is done, the page reports what
+the repair did.
+
+Apply checks the files again, then applies only if the plan is still the
+one previewed. The plan depends on the rows that could be duplicates, on
+which of their files are on disk, and on the copies' contents. Grading,
+flat measuring, a stack recording a master, or new frames of other
+exposures do not change it. When the plan has changed, Apply writes
+nothing. It says which exposures were added, dropped or changed, and shows
+the new plan to Apply or close.
+
+A catalog is repaired by one process at a time. A repair holds a lock file
+beside the catalog (`<catalog>.psf-guard-repair.lock`), so a server and the
+command line cannot repair the same catalog at once. The second to start is
+refused and names the other. The file stays when the repair ends.
 
 From the command line, `psf-guard calibration repair-duplicates <db>
---dry-run` prints the same plan without writing, and without `--dry-run`
-applies it. A server open on the same catalog sees the change at its next
-scan, regrade or restart. For a dry run against a catalog copied from another machine,
-`--map-prefix /mnt/share=/Volumes/share` reads the recorded paths through
-this machine's mount. The API is `GET /api/db/{db}/calibrations/duplicates`,
-which returns the groups, the plan and a `token`, and
-`POST /api/db/{db}/calibrations/duplicates/repair` with that `token`, which
-answers `409` when the plan has changed.
+--dry-run` prints the same plan without writing. Without `--dry-run` it
+applies the plan, holding the lock. Both print their progress and timings
+on standard error. A server open on the same catalog sees the change at its
+next scan, regrade or restart. For a dry run against a catalog copied from
+another machine, `--map-prefix /mnt/share=/Volumes/share` reads the
+recorded paths through this machine's mount.
+
+The API:
+
+- `GET /api/db/{db}/calibrations/duplicates` answers at once with the job's
+  status. That holds `state` (`idle`, `running`, `done`, `stopped` or
+  `failed`), `action`, `stage`, `done` and `total`, and the run number. It
+  also holds the latest plan in `report`, with its `token`, the last applied
+  repair in `repaired`, and `changed` when a repair found the plan moved
+  on.
+- `POST …/duplicates/check` starts a check, or joins the one running.
+- `POST …/duplicates/repair` with `{token}` starts a repair.
+- `POST …/duplicates/stop` stops the run.
+
+The start routes answer `202` with the status. Starting a run while the
+other kind runs answers `409`.
 
 #### Repairs and sync
 
