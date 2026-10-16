@@ -239,11 +239,56 @@ pub(super) fn readable_path(path: &str) -> Result<(), String> {
         return Err("The path may not contain `.` or `..` segments".into());
     }
     // An archive holds every catalog and, perhaps, the server's secrets: it
-    // is a person's to download, never an agent's.
-    if route.starts_with("/backups/files") {
-        return Err("Backup archives are not handed to agents; get_backups lists them".into());
+    // is a person's to download, never an agent's. The backup tools read
+    // what an agent may see; `api_get` reads no backup route, under any
+    // spelling of it.
+    let spelled = normalized_route(route);
+    if spelled
+        .split('/')
+        .any(|segment| segment == ".." || segment == ".")
+    {
+        return Err("The path may not contain `.` or `..` segments".into());
+    }
+    if spelled == "/backups" || spelled.starts_with("/backups/") {
+        return Err(
+            "Backups are read with get_backups and get_activity; archives are not handed to agents"
+                .into(),
+        );
     }
     Ok(())
+}
+
+/// A route as a router might match it: percent escapes decoded, runs of
+/// `/` made one, a trailing `/` and any fragment dropped, in lower case.
+fn normalized_route(route: &str) -> String {
+    let route = route.split('#').next().unwrap_or(route);
+    let bytes = route.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let hex = |at: usize| bytes.get(at).and_then(|byte| (*byte as char).to_digit(16));
+        match (bytes[index], hex(index + 1), hex(index + 2)) {
+            (b'%', Some(high), Some(low)) => {
+                decoded.push((high * 16 + low) as u8);
+                index += 3;
+            }
+            (byte, _, _) => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    let decoded = String::from_utf8_lossy(&decoded).to_lowercase();
+    let mut out = String::with_capacity(decoded.len());
+    for ch in decoded.chars() {
+        if !(ch == '/' && out.ends_with('/')) {
+            out.push(ch);
+        }
+    }
+    while out.len() > 1 && out.ends_with('/') {
+        out.pop();
+    }
+    out
 }
 
 /// Readable routes, for `api_routes`: the path pattern and what it answers.
@@ -280,14 +325,6 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
     ),
     ("/processing-setups", "Saved stack processing setups"),
     ("/update-notice", "Newer release notice"),
-    (
-        "/backups",
-        "Backups: schedule, archives, the run under way (editor, database management)",
-    ),
-    (
-        "/backups/status",
-        "The backup under way and the last one (editor, database management)",
-    ),
     ("/db/{db}/projects", "Projects (plain list)"),
     (
         "/db/{db}/projects/overview",
@@ -573,8 +610,20 @@ mod tests {
         assert!(readable_path("/mcp").is_err());
         assert!(readable_path("/mcp/anything").is_err());
         assert!(readable_path("/db/../settings").is_err());
-        assert!(readable_path("/backups").is_ok());
-        assert!(readable_path("/backups/files/downloads/psf-guard-backup.zip").is_err());
+        for backup in [
+            "/backups",
+            "/backups/status",
+            "/backups/files/downloads/psf-guard-backup.zip",
+            "//backups/files/downloads/a.zip",
+            "/Backups/files/downloads/a.zip",
+            "/%62ackups/files/downloads/a.zip",
+            "/backups%2Ffiles%2Fdownloads%2Fa.zip",
+            "/backups/?x=1",
+            "/db/%2e%2e/backups",
+        ] {
+            assert!(readable_path(backup).is_err(), "{backup}");
+        }
+        assert!(readable_path("/db/test/backupsish").is_ok());
         assert_eq!(
             with_query("/x", [("q", Some("NGC 7635".into())), ("skip", None)]),
             "/x?q=NGC%207635"

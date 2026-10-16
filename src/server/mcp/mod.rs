@@ -973,6 +973,17 @@ impl PsfGuardMcp {
         Parameters(args): Parameters<ExplainArgs>,
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
+        const KINDS: [&str; 4] = ["bias", "dark", "dark_flat", "flat"];
+        if let Some(unknown) = args.kinds.iter().flatten().find(|kind| {
+            !KINDS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(kind.trim()))
+        }) {
+            return Ok(failure(&format!(
+                "No calibration kind {unknown:?}; kinds are {}",
+                KINDS.join(", ")
+            )));
+        }
         let db = database!(self, &args.database);
         let path = format!(
             "/db/{}/images/{}/calibration",
@@ -986,7 +997,7 @@ impl PsfGuardMcp {
             kinds.retain(|kind| {
                 kind["kind"]
                     .as_str()
-                    .is_some_and(|kind| wanted.iter().any(|w| w.eq_ignore_ascii_case(kind)))
+                    .is_some_and(|kind| wanted.iter().any(|w| w.trim().eq_ignore_ascii_case(kind)))
             });
         }
         Ok(text_result(&account))

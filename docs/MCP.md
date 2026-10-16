@@ -101,7 +101,7 @@ read, below `/api`, as you.
 | `get_stack_image` | The stack's preview as an image: as the app shows it, or with the background stretched hard (`stretch: "background"`); crop by fractions of the frame, up to 2048 px | |
 | `get_stack_calibration` | The masters a stack applied, per session: frames each was built from, with their sensor temperatures and nights, outlier rejection, the lights it calibrated | |
 | `explain_calibration` | Why one light got, or missed, each master: for bias, dark, dark flat and flat, every frame the library holds for its camera by night, with sensor temperatures, used, matching but unused, refused with the readings that disagree, or taken though graded suspect; what each master would span; and the light's calibration health findings, each naming the kinds it is about. For flats with measured grouping, the family and how it was chosen (alike range included), the side of a change the flats came from, and a person's choices and the options for one. `kinds` keeps only some kinds, such as `["flat"]` | |
-| `get_flat_groups` | Each rig's flat groups: limits, angle term, the rig's clock; per family its groups by night with each session's `response_key`, the splits and joins between groups with why and the dust counted by kind and shape with the deepest few, a person's split or join and whether the measurements agree; change events, unmeasured sessions, orphaned choices. Narrow by `project_id` or `rig`; `full` returns every dust outline | |
+| `get_flat_groups` | Each rig's flat groups: limits, angle term, the rig's clock; per family its groups by night with each session's `response_key`, the splits and joins between groups with why and their dust (every mark counted by kind and shape, the deepest three named), a person's split or join and whether the measurements agree; change events, unmeasured sessions, orphaned choices. Narrow by `project_id` or `rig`; `full` returns the route's answer, with the outlines of each change's deepest 12 marks | |
 | `get_flat_group_use` | What each flat group feeds: its flat masters, and the lights that take it by how their flats were chosen and by project | |
 | `get_calibration_project_scope` | What one project's lights use from the library: sessions, masters, rigs, headers still being read | |
 | `list_calibration_sessions`, `list_calibration_frames` | The library a page at a time, narrowed by project, rig, kind, filter, session, flat group, grade, kept out or nights | |
@@ -155,12 +155,12 @@ read, below `/api`, as you.
 | `set_calibration_frame_choice` | Use anyway, keep out, or clear the choice on calibration frames | yes |
 | `set_flat_group_override` | Split a flat family's groups at a session, join two groups, or reset the choice | yes, plus management |
 | `set_light_flat_choice` | Put lights before or after a change, give them one group's flats, or reset their choices | yes, plus management |
-| `stop_flat_measuring`, `resume_flat_measuring` | Pause flat measuring, or take up what was paused | yes |
-| `stop_frame_sites`, `resume_frame_sites` | Pause reading frame sites, or take it up again | yes |
+| `cancel_flat_measuring`, `resume_flat_measuring` | Pause flat measuring, or take up what was paused | yes |
+| `cancel_frame_sites`, `resume_frame_sites` | Pause reading frame sites, or take it up again | yes |
 | `check_calibration_duplicates` | Check the library for exposures recorded more than once; writes nothing | read access, as in the app |
 | `repair_calibration_duplicates` | Merge them, with the token of a check | yes, plus management |
-| `stop_calibration_duplicates` | Stop the check or repair; a repair rolls back whole | yes |
-| `start_backup`, `stop_backup` | Back up now, never with secrets, to the download area or the schedule's folder; stop the run | yes, plus management |
+| `cancel_calibration_duplicates` | Stop the check or repair; a repair rolls back whole | yes |
+| `start_backup`, `cancel_backup` | Back up now (`meta` unless `full` is asked for), never with secrets, to the download area or the schedule's folder; stop the run | yes, plus management |
 
 Jobs return at once. Poll `get_jobs` for one database's jobs, or
 `get_activity` for stack builds, WBPP runs and backups across databases.
@@ -203,8 +203,10 @@ turn anything fixed to the sensor into streaks.
 the side its flats came from. `get_flat_groups` shows the rig's groups and
 why each split: dust, light pattern or vignetting against the limits, with
 the dust counted by kind (new, gone, moved) and shape (compact, disk,
-donut, patch) and the deepest few named. Dust that moved only as far as
-focus travel explains is counted apart and does not split groups.
+donut, patch) and the deepest three named. The counts cover every mark
+the comparison found; the route lists only the deepest 12. Dust that
+moved only as far as focus travel explains is counted apart and does not
+split groups.
 `get_calibration_frame` shows one flat's own dust beside its session's.
 
 A person's choices change which flats lights take, and need write access
@@ -222,13 +224,15 @@ the library changed since, saying what changed.
 
 ## Backups
 
-`get_backups`, `start_backup` and `stop_backup` need write access and
+`get_backups`, `start_backup` and `cancel_backup` need write access and
 database management, as Settings › Backups does. An agent never handles
 secrets: `start_backup` refuses `include_secrets`, whoever signs in, and
 writes only to the download area or the folder the schedule already uses,
-not a folder of its choosing. Archives are listed without download paths,
-and `api_get` refuses the download route. A person downloads an archive,
-or makes one with secrets, from Settings. Restore is not offered.
+not a folder of its choosing. It copies the server's settings and stores
+(`meta`) unless the agent asks for `full`, which adds every catalog.
+Archives are listed without download paths, and `api_get` reads no
+`/backups` route. A person downloads an archive, or makes one with
+secrets, from Settings. Restore is not offered.
 
 ## Try it with curl
 

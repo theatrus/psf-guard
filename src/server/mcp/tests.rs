@@ -476,23 +476,23 @@ async fn an_agent_reads_flat_groups_and_its_flat_choices_wait_for_database_manag
     assert_eq!(lights["lights"], 1, "{lights}");
 
     // The reset queued the rig's lights; Stop pauses it, Resume takes it up.
-    let stopped = tool(&app, "stop_flat_measuring", json!({ "database": db }))
+    let stopped = tool(&app, "cancel_flat_measuring", json!({ "database": db }))
         .await
         .unwrap();
     assert_eq!(stopped["state"], "stopped", "{stopped}");
     tool(&app, "resume_flat_measuring", json!({ "database": db }))
         .await
         .unwrap();
-    tool(&app, "stop_flat_measuring", json!({ "database": db }))
+    tool(&app, "cancel_flat_measuring", json!({ "database": db }))
         .await
         .unwrap();
-    tool(&app, "stop_frame_sites", json!({ "database": db }))
+    tool(&app, "cancel_frame_sites", json!({ "database": db }))
         .await
         .unwrap();
     tool(&app, "resume_frame_sites", json!({ "database": db }))
         .await
         .unwrap();
-    tool(&app, "stop_frame_sites", json!({ "database": db }))
+    tool(&app, "cancel_frame_sites", json!({ "database": db }))
         .await
         .unwrap();
 
@@ -510,8 +510,23 @@ async fn an_agent_reads_flat_groups_and_its_flat_choices_wait_for_database_manag
         "calibration_duplicates",
     ] {
         assert!(jobs.get(job).is_some(), "{job} missing: {jobs}");
+        // The loopback caller with no accounts may read every part.
+        assert!(
+            jobs[job].get("unavailable").is_none(),
+            "{job} unavailable: {jobs}"
+        );
     }
     assert_eq!(jobs["flat_measure"]["state"], "stopped", "{jobs}");
+
+    // A kind the account does not know is refused, not filtered to nothing.
+    let unknown = tool(
+        &app,
+        "explain_calibration",
+        json!({ "database": db, "image_id": 7, "kinds": ["flat", "flats"] }),
+    )
+    .await
+    .unwrap_err();
+    assert!(unknown.contains("\"flats\""), "{unknown}");
 }
 
 #[tokio::test]
@@ -557,6 +572,19 @@ async fn a_duplicate_repair_takes_the_token_of_a_check_and_database_management()
     assert_eq!(frame_rows(&state), 2, "a refused repair changes nothing");
 
     state.set_allow_database_management(true);
+    // A token that is not the plan's applies nothing, and says what changed.
+    tool(
+        &app,
+        "repair_calibration_duplicates",
+        json!({ "database": db, "token": "stale" }),
+    )
+    .await
+    .unwrap();
+    let stale = settled_duplicates(&app, None).await;
+    assert!(stale["changed"].is_object(), "{stale}");
+    assert_eq!(frame_rows(&state), 2, "a stale token merges nothing");
+    let token = stale["report"]["token"].as_str().unwrap().to_string();
+
     tool(
         &app,
         "repair_calibration_duplicates",
@@ -608,8 +636,15 @@ async fn a_read_only_token_reads_and_checks_but_does_not_choose() {
             "set_light_flat_choice",
             json!({ "database": db, "image_ids": [7], "choice": "reset" }),
         ),
-        ("stop_flat_measuring", json!({ "database": db })),
+        (
+            "get_light_flat_options",
+            json!({ "database": db, "image_ids": [7] }),
+        ),
+        ("cancel_flat_measuring", json!({ "database": db })),
+        ("resume_flat_measuring", json!({ "database": db })),
+        ("cancel_frame_sites", json!({ "database": db })),
         ("resume_frame_sites", json!({ "database": db })),
+        ("cancel_calibration_duplicates", json!({ "database": db })),
         (
             "repair_calibration_duplicates",
             json!({ "database": db, "token": "any" }),
@@ -698,9 +733,8 @@ async fn backups_through_mcp_never_carry_secrets_or_hand_out_an_archive() {
     .unwrap_err();
     assert!(no_folder.contains("no folder"), "{no_folder}");
 
-    tool(&app, "start_backup", json!({ "scope": "meta" }))
-        .await
-        .unwrap();
+    // An agent that names no scope gets the small one.
+    tool(&app, "start_backup", json!({})).await.unwrap();
     backup_ends(&state).await;
     let last = state.backups.last_run().unwrap();
     assert!(last.error.is_none(), "{:?}", last.error);
@@ -708,6 +742,7 @@ async fn backups_through_mcp_never_carry_secrets_or_hand_out_an_archive() {
     assert_eq!(overview["backups_total"], 1, "{overview}");
     let archive = &overview["backups"][0];
     assert_eq!(archive["secrets"], "redacted", "{overview}");
+    assert_eq!(archive["scope"], "meta", "{overview}");
     assert!(archive.get("download_path").is_none(), "{overview}");
     let name = archive["file_name"].as_str().unwrap();
     let download = tool(
@@ -718,6 +753,10 @@ async fn backups_through_mcp_never_carry_secrets_or_hand_out_an_archive() {
     .await
     .unwrap_err();
     assert!(download.contains("not handed to agents"), "{download}");
+    let listing = tool(&app, "api_get", json!({ "path": "/backups" }))
+        .await
+        .unwrap_err();
+    assert!(listing.contains("get_backups"), "{listing}");
     let activity = tool(&app, "get_activity", json!({})).await.unwrap();
     assert_eq!(
         activity["backup"]["last_run"]["outcome"], "succeeded",
@@ -734,6 +773,13 @@ async fn backups_through_mcp_never_carry_secrets_or_hand_out_an_archive() {
         .await
         .unwrap();
     assert!(activity["backup"]["unavailable"].is_string(), "{activity}");
+    for name in ["start_backup", "cancel_backup"] {
+        let refused = tool_as(&app, Some(&viewer), name, json!({}))
+            .await
+            .unwrap_err();
+        assert!(refused.contains("read-only"), "{name}: {refused}");
+    }
+    assert!(state.backups.job().is_none(), "a viewer started nothing");
     let refused = tool_as(
         &app,
         Some(&editor),
@@ -755,7 +801,7 @@ async fn backups_through_mcp_never_carry_secrets_or_hand_out_an_archive() {
 
     // Without database management, backups are refused, as in the app.
     state.set_allow_database_management(false);
-    for name in ["start_backup", "get_backups", "stop_backup"] {
+    for name in ["start_backup", "get_backups", "cancel_backup"] {
         let refused = tool_as(&app, Some(&editor), name, json!({}))
             .await
             .unwrap_err();
@@ -842,6 +888,29 @@ fn a_change_s_dust_is_counted_and_its_deepest_marks_named() {
         .collect();
     assert_eq!(deepest, ["compact", "disk", "compact"]);
     assert!(dust["deepest"][0].get("bounds").is_none());
+    assert!(dust.get("listed_at_most").is_none(), "{dust}");
+}
+
+/// The counts come from the route's totals of every spot, not from the
+/// deepest 12 it lists.
+#[test]
+fn a_change_s_dust_counts_every_spot_from_the_route_s_totals() {
+    let spots: Vec<Value> = (0..12)
+        .map(|i| json!({ "kind": "new", "shape": "compact", "peak_pct": -1.0 - f64::from(i) }))
+        .collect();
+    let totals = json!({
+        "counted": 31, "within_tolerance": 4, "listed": 12,
+        "by_kind": { "new": 29, "gone": 2 },
+        "by_shape": { "compact": 30, "disk": 1 },
+    });
+    let dust = super::calibration::summarize_spots(&spots, Some(&totals));
+    assert_eq!(dust["counted"], 31);
+    assert_eq!(dust["within_focus_travel"], 4);
+    assert_eq!(dust["by_kind"], json!({ "new": 29, "gone": 2 }));
+    assert_eq!(dust["by_shape"], json!({ "compact": 30, "disk": 1 }));
+    assert_eq!(dust["listed"], 12);
+    assert_eq!(dust["deepest"][0]["peak_pct"], -12.0);
+    assert!(dust.get("listed_at_most").is_none(), "{dust}");
 }
 
 #[test]
@@ -865,4 +934,64 @@ fn a_duplicate_plan_is_listed_a_page_at_a_time() {
     assert_eq!(report["masters_total"], 25);
     assert_eq!(report["masters"].as_array().unwrap().len(), 20);
     assert_eq!(report["token"], "t");
+}
+
+/// `api_get` reaches no backup route, the archive download included,
+/// under any spelling a router might match (#887 review).
+#[tokio::test]
+async fn api_get_refuses_backup_archives_under_any_spelling() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = backup_state(&dir, true);
+    let app = app(&state);
+    tool(&app, "start_backup", json!({ "scope": "meta" }))
+        .await
+        .unwrap();
+    backup_ends(&state).await;
+    let overview = tool(&app, "get_backups", json!({})).await.unwrap();
+    let name = overview["backups"][0]["file_name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for path in [
+        format!("/backups/files/downloads/{name}"),
+        format!("/backups/files/downloads/{name}/"),
+        format!("/backups/%66iles/downloads/{name}"),
+        format!("/backups/files%2Fdownloads%2F{name}"),
+        format!("/backups//files/downloads/{name}"),
+        format!("//backups/files/downloads/{name}"),
+        format!("/Backups/files/downloads/{name}"),
+        format!("/backups/files/downloads/{name}?x=1"),
+        format!("/backups/files/downloads/{name}#frag"),
+        format!("/%62ackups/files/downloads/{name}"),
+    ] {
+        let error = tool(&app, "api_get", json!({ "path": path }))
+            .await
+            .expect_err(&path);
+        assert!(
+            error.contains("not handed to agents"),
+            "{path}: reached the archive: {error}"
+        );
+    }
+}
+
+/// The flat-groups route lists at most 12 spots a change, deepest first.
+/// Without the route's totals, a summary of a full list says it may be
+/// cut rather than presenting 12 as the change's count (#887 review).
+#[test]
+fn a_change_s_dust_without_route_totals_says_its_list_may_be_cut() {
+    let spots: Vec<Value> = (0..12)
+        .map(|i| {
+            json!({
+                "kind": "new", "shape": "compact", "darker": true, "x": i, "y": 0,
+                "radius": 4.0, "peak_pct": -1.0 - f64::from(i), "bounds": [0, 0, 1, 1],
+                "within_tolerance": false, "offset_px": null,
+            })
+        })
+        .collect();
+    let dust = super::calibration::summarize_spots(&spots, None);
+    assert_eq!(dust["counted"], 12);
+    assert!(
+        dust.get("listed_at_most").is_some() || dust.get("capped").is_some(),
+        "a full list of 12 reads as exactly 12 marks: {dust}"
+    );
 }

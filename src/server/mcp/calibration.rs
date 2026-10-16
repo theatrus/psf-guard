@@ -35,9 +35,9 @@ pub struct FlatGroupsArgs {
     pub project_id: Option<i32>,
     /// Only this rig: its `rig_uuid`, or part of its name.
     pub rig: Option<String>,
-    /// Return the route's whole answer, every dust mark's outline and every
-    /// pair of a group's sessions included. Large; leave it off unless the
-    /// summary is not enough.
+    /// Return the route's whole answer: the outlines of each change's
+    /// deepest 12 dust marks and every pair of a group's sessions included.
+    /// Large; leave it off unless the summary is not enough.
     #[serde(default)]
     pub full: bool,
 }
@@ -216,7 +216,7 @@ impl PsfGuardMcp {
     // ---------- Flat groups ----------
 
     #[tool(
-        description = "Each rig's flat groups, from what flat measuring found: per rig its limits, angle term and clock (its UTC offset over time, from its night_zone setting or its frames' headers); per family (filter and measured angle range) its groups newest first, each with its nights, flats and sessions by `response_key`, and the splits between groups with why (dust, light pattern or vignetting against the limits), the dust they show counted by kind and shape with the deepest few, and any split or join a person made (`choice`, with whether the measurements agree, or why it no longer applies). Also the rig's change events, its unmeasured flat sessions, and orphaned choices. Reads no pixels."
+        description = "Each rig's flat groups, from what flat measuring found: per rig its limits, angle term and clock (its UTC offset over time, from its night_zone setting or its frames' headers); per family (filter and measured angle range) its groups newest first, each with its nights, flats and sessions by `response_key`, and the splits between groups with why (dust, light pattern or vignetting against the limits), the dust they show (every mark of the comparison counted by kind and shape, dust that moved only within focus travel apart, and the deepest three named), and any split or join a person made (`choice`, with whether the measurements agree, or why it no longer applies). Also the rig's change events, its unmeasured flat sessions, and orphaned choices. Reads no pixels."
     )]
     async fn get_flat_groups(
         &self,
@@ -401,7 +401,7 @@ impl PsfGuardMcp {
     #[tool(
         description = "Stop flat measuring for a database: what runs and waits is paused until those rigs' flats change, resume_flat_measuring, or the next start. Needs write access."
     )]
-    async fn stop_flat_measuring(
+    async fn cancel_flat_measuring(
         &self,
         Parameters(args): Parameters<CalibrationJobArgs>,
         ctx: RequestContext<RoleServer>,
@@ -411,7 +411,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Resume the flat measuring that stop_flat_measuring paused. Flat measuring starts on its own after an import, sync or change; this takes up only what was stopped. Needs write access. Follow it with get_jobs."
+        description = "Resume the flat measuring that cancel_flat_measuring paused. Flat measuring starts on its own after an import, sync or change; this takes up only what was stopped. Needs write access. Follow it with get_jobs."
     )]
     async fn resume_flat_measuring(
         &self,
@@ -425,7 +425,7 @@ impl PsfGuardMcp {
     #[tool(
         description = "Stop reading frame sites for a database (the job that finds where older calibration frames were shot, so their nights split at local noon). Paused until the next change, resume_frame_sites, or the next start. Needs write access."
     )]
-    async fn stop_frame_sites(
+    async fn cancel_frame_sites(
         &self,
         Parameters(args): Parameters<CalibrationJobArgs>,
         ctx: RequestContext<RoleServer>,
@@ -435,7 +435,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Resume reading frame sites after stop_frame_sites. Needs write access. Follow it with get_jobs."
+        description = "Resume reading frame sites after cancel_frame_sites. Needs write access. Follow it with get_jobs."
     )]
     async fn resume_frame_sites(
         &self,
@@ -499,7 +499,7 @@ impl PsfGuardMcp {
     #[tool(
         description = "Stop the calibration duplicate check or repair running. A repair stopped part way rolls back whole. Needs write access."
     )]
-    async fn stop_calibration_duplicates(
+    async fn cancel_calibration_duplicates(
         &self,
         Parameters(args): Parameters<CalibrationJobArgs>,
         ctx: RequestContext<RoleServer>,
@@ -569,8 +569,36 @@ fn items(value: &Value, key: &str) -> Vec<Value> {
 
 /// A change's dust, summed up: marks counted and those within focus
 /// travel, by kind (`new`, `gone`, `moved`) and shape, and the deepest few
-/// that count.
-pub(super) fn summarize_spots(spots: &[Value]) -> Value {
+/// that count. The route lists only the deepest
+/// [`crate::server::flat_groups::LISTED_SPOTS`] spots and counts every one
+/// in `totals`; the counts come from those. Without them the counts are of
+/// the list alone, and a full list says it may have been cut.
+pub(super) fn summarize_spots(spots: &[Value], totals: Option<&Value>) -> Value {
+    let mut summary = count_listed_spots(spots);
+    match totals.filter(|totals| totals.is_object()) {
+        Some(totals) => {
+            for (from, to) in [
+                ("counted", "counted"),
+                ("within_tolerance", "within_focus_travel"),
+                ("by_kind", "by_kind"),
+                ("by_shape", "by_shape"),
+            ] {
+                if let Some(value) = totals.get(from) {
+                    summary[to] = value.clone();
+                }
+            }
+            summary["listed"] = json!(spots.len());
+        }
+        None if spots.len() >= crate::server::flat_groups::LISTED_SPOTS => {
+            summary["listed_at_most"] = json!(crate::server::flat_groups::LISTED_SPOTS);
+        }
+        None => {}
+    }
+    summary
+}
+
+/// [`summarize_spots`] of the listed spots alone.
+fn count_listed_spots(spots: &[Value]) -> Value {
     let mut by_kind = std::collections::BTreeMap::<String, usize>::new();
     let mut by_shape = std::collections::BTreeMap::<String, usize>::new();
     let mut counted: Vec<&Value> = Vec::new();
@@ -658,7 +686,7 @@ fn compact_split(split: &Value) -> Value {
             "by_hand",
         ],
     );
-    out["dust"] = summarize_spots(&items(split, "spots"));
+    out["dust"] = summarize_spots(&items(split, "spots"), split.get("spot_totals"));
     let vignetting = compact_vignetting(split);
     if !vignetting.is_empty() {
         out["vignetting"] = json!(vignetting);
@@ -700,7 +728,7 @@ fn compact_event(event: &Value) -> Value {
             "within_flat_run",
         ],
     );
-    out["dust"] = summarize_spots(&items(event, "spots"));
+    out["dust"] = summarize_spots(&items(event, "spots"), event.get("spot_totals"));
     let vignetting = compact_vignetting(event);
     if !vignetting.is_empty() {
         out["vignetting"] = json!(vignetting);

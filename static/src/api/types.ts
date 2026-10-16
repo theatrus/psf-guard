@@ -4363,6 +4363,18 @@ export interface FlatUnmeasuredSession {
   sessions?: string[];
 }
 
+/** Every spot of a comparison, counted before its list is cut to the
+ *  deepest 12. */
+export interface FlatSpotTotals {
+  /** Spots that count: not moved within focus travel. */
+  counted: number;
+  within_tolerance: number;
+  by_kind: Record<string, number>;
+  by_shape: Record<string, number>;
+  /** How many `spots` lists. */
+  listed: number;
+}
+
 /** A change seen across one rig's flats at once. */
 export interface FlatChangeEvent {
   key: string;
@@ -4377,7 +4389,9 @@ export interface FlatChangeEvent {
   rotations: (number | null)[];
   vignetting_pct?: number;
   vignetting?: FlatVignettingChange[];
+  /** The deepest 12 spots; `spot_totals` counts every one. */
   spots: FlatSpot[];
+  spot_totals?: FlatSpotTotals;
   /** The pair whose ratio picture shows it. */
   before_response: string;
   after_response: string;
@@ -4548,7 +4562,9 @@ export interface FlatSplit {
   vignetting?: FlatVignettingChange[];
   reason: string;
   event_key: string | null;
+  /** The deepest 12 spots; `spot_totals` counts every one. */
   spots: FlatSpot[];
+  spot_totals?: FlatSpotTotals;
   /** `split`: a person split where the nights measure alike; `joined`: a
    *  measured split a person joined. The numbers are the measurements. */
   by_hand?: 'split' | 'joined' | null;

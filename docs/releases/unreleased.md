@@ -16,7 +16,8 @@
   calibration scope; it can split or join groups, put lights on a side of a
   change, Use anyway a suspect frame, check and repair calibration
   duplicates with the check's token, stop and resume flat measuring and
-  frame sites, and back up now. `get_jobs` lists every background job,
+  frame sites, and back up now (settings only, unless it asks for every
+  catalog). `get_jobs` lists every background job,
   `explain_calibration` can keep only the flats, and each write needs the
   same access and database management as in the app. Backups through MCP
   never include secrets and never hand an archive out. See

@@ -98,6 +98,62 @@ impl SpotView {
     }
 }
 
+/// The spots a split or change lists, deepest first, at most this many.
+pub const LISTED_SPOTS: usize = 12;
+
+/// Every spot of a split or change, counted before the list is cut to
+/// [`LISTED_SPOTS`]: so a count reads the whole comparison, not the list.
+#[derive(Debug, Default, Serialize, PartialEq)]
+pub struct SpotTotals {
+    /// Spots that count: not moved within focus travel.
+    pub counted: usize,
+    /// Dust both sessions hold that moved no further than focus travel
+    /// explains: drawn, not counted.
+    pub within_tolerance: usize,
+    /// Of those that count, by `new`, `gone` or `moved`, and by shape.
+    pub by_kind: BTreeMap<String, usize>,
+    pub by_shape: BTreeMap<String, usize>,
+    /// How many `spots` lists, of every spot.
+    pub listed: usize,
+}
+
+impl SpotTotals {
+    pub fn of(spots: &[metric::Spot]) -> Self {
+        let word = |value: serde_json::Result<serde_json::Value>| {
+            value
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "unknown".into())
+        };
+        let mut totals = Self {
+            listed: spots.len().min(LISTED_SPOTS),
+            ..Self::default()
+        };
+        for spot in spots {
+            if spot.within_tolerance {
+                totals.within_tolerance += 1;
+                continue;
+            }
+            totals.counted += 1;
+            *totals
+                .by_kind
+                .entry(word(serde_json::to_value(spot.kind)))
+                .or_default() += 1;
+            *totals
+                .by_shape
+                .entry(word(serde_json::to_value(spot.shape)))
+                .or_default() += 1;
+        }
+        totals
+    }
+}
+
+/// The deepest [`LISTED_SPOTS`] of a comparison's spots, as the view lists
+/// them.
+fn listed_spots(spots: &[metric::Spot]) -> Vec<SpotView> {
+    spots.iter().take(LISTED_SPOTS).map(SpotView::of).collect()
+}
+
 /// A change of vignetting between two sessions: where, and how deep.
 #[derive(Debug, Serialize)]
 pub struct VignettingView {
@@ -143,7 +199,9 @@ pub struct SplitView {
     pub reason: String,
     /// The change event this split belongs to.
     pub event_key: Option<String>,
+    /// The deepest [`LISTED_SPOTS`] spots, and every spot counted.
     pub spots: Vec<SpotView>,
+    pub spot_totals: SpotTotals,
     /// Set when a person's choice made it (`split`, where the nights
     /// measure alike) or undid it (`joined`, a measured split inside a
     /// group now). The numbers above are the measurements either way.
@@ -280,7 +338,9 @@ pub struct EventView {
     pub camera_side: bool,
     pub filters: Vec<String>,
     pub rotations: Vec<Option<f64>>,
+    /// The deepest [`LISTED_SPOTS`] spots, and every spot counted.
     pub spots: Vec<SpotView>,
+    pub spot_totals: SpotTotals,
     /// A before and an after session to compare.
     pub before_response: String,
     pub after_response: String,
@@ -701,7 +761,8 @@ pub(crate) fn build_view_with_frames(
                     .collect(),
                 reason: split_reason(&book, *b, boundary, &limits),
                 event_key: boundary_event.get(b).cloned(),
-                spots: boundary.spots.iter().take(12).map(SpotView::of).collect(),
+                spots: listed_spots(&boundary.spots),
+                spot_totals: SpotTotals::of(&boundary.spots),
                 by_hand: boundary.by_hand,
                 choice: choice.map(|index| OverrideView::of(&book, &book.overrides[index])),
             }
@@ -761,7 +822,8 @@ pub(crate) fn build_view_with_frames(
             camera_side: event.camera_side,
             filters: event.filters.iter().map(|f| f.to_uppercase()).collect(),
             rotations: event.rotations.clone(),
-            spots: event.spots.iter().take(12).map(SpotView::of).collect(),
+            spots: listed_spots(&event.spots),
+            spot_totals: SpotTotals::of(&event.spots),
             before_response,
             after_response,
             within_flat_run: event.within_flat_run,
@@ -1228,6 +1290,48 @@ pub(crate) mod tests {
     use super::*;
     use crate::calibration::test_frames::write_frame;
     use crate::calibration::tests::{RulesInForce, POLICY_LOCK};
+
+    /// A comparison of 15 spots lists the deepest 12 and counts all 15.
+    #[test]
+    fn spot_totals_count_every_spot_not_only_those_listed() {
+        use seiza_calibration::dust::DustShape;
+        let spot = |kind, shape, within_tolerance| metric::Spot {
+            kind,
+            darker: true,
+            x: 1.0,
+            y: 1.0,
+            radius: 4.0,
+            area: 50.0,
+            peak: 0.01,
+            shape,
+            hole: None,
+            bounds: [0; 4],
+            within_tolerance,
+            offset: None,
+            distance_mm: None,
+        };
+        let mut spots = vec![spot(metric::SpotKind::New, DustShape::Compact, false); 12];
+        spots.push(spot(metric::SpotKind::Gone, DustShape::Disk, false));
+        spots.push(spot(metric::SpotKind::Moved, DustShape::Donut, false));
+        spots.push(spot(metric::SpotKind::Moved, DustShape::Donut, true));
+        let totals = SpotTotals::of(&spots);
+        assert_eq!(listed_spots(&spots).len(), LISTED_SPOTS);
+        assert_eq!(totals.listed, LISTED_SPOTS);
+        assert_eq!(totals.counted, 14);
+        assert_eq!(totals.within_tolerance, 1);
+        assert_eq!(
+            totals.by_kind,
+            BTreeMap::from([("gone".into(), 1), ("moved".into(), 1), ("new".into(), 12)])
+        );
+        assert_eq!(
+            totals.by_shape,
+            BTreeMap::from([
+                ("compact".into(), 12),
+                ("disk".into(), 1),
+                ("donut".into(), 1)
+            ])
+        );
+    }
 
     /// Two mornings of three flats each, measured 2% apart.
     fn measured_catalog(dir: &std::path::Path) -> rusqlite::Connection {

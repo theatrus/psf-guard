@@ -30,9 +30,9 @@ pub(super) const NO_SECRETS: &str = "Backups made through MCP never include secr
 #[serde(rename_all = "snake_case")]
 pub enum BackupScopeArg {
     /// PSF Guard's settings, accounts and stores: small.
-    Meta,
-    /// The settings and every registered catalog.
     #[default]
+    Meta,
+    /// The settings and every registered catalog: ask for it by name.
     Full,
 }
 
@@ -56,7 +56,8 @@ pub struct BackupsArgs {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct StartBackupArgs {
-    /// `full` (default) or `meta`.
+    /// `meta` (default) or `full`, which copies every catalog and must be
+    /// asked for.
     #[serde(default)]
     pub scope: BackupScopeArg,
     /// `downloads` (default) or `schedule_folder`.
@@ -87,7 +88,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Back up now: the server's settings and stores (`meta`) or those and every catalog (`full`), to the download area or the schedule's folder. Never with secrets. One backup runs at a time; it returns at once, and get_backups or get_activity follows it. Needs write access and database management."
+        description = "Back up now: the server's settings and stores (`meta`, the default) or those and every catalog (`full`, only when asked for), to the download area or the schedule's folder. Never with secrets. One backup runs at a time; it returns at once, and get_backups or get_activity follows it. Needs write access and database management."
     )]
     async fn start_backup(
         &self,
@@ -127,7 +128,7 @@ impl PsfGuardMcp {
     #[tool(
         description = "Stop the backup running: it ends at its next step and leaves nothing of itself in the folder. Needs write access and database management."
     )]
-    async fn stop_backup(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
+    async fn cancel_backup(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
         self.answer(&ctx, Method::POST, "/backups/stop", None).await
     }
 }
