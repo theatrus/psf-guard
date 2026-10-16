@@ -728,15 +728,22 @@ impl AppState {
     /// it may go on, so a job's status can list it as waiting rather than
     /// running, but not for every passing preview. Returns false once the
     /// server is stopping.
-    pub fn wait_for_interactive_work(
+    pub fn wait_for_interactive_work(&self, nap: Duration, note: impl FnMut(Option<&str>)) -> bool {
+        self.wait_for_interactive_work_unless(nap, || false, note)
+    }
+
+    /// [`Self::wait_for_interactive_work`], ending early too once `stop`
+    /// says so, so a job's own Stop works while it waits.
+    pub fn wait_for_interactive_work_unless(
         &self,
         nap: Duration,
+        stop: impl Fn() -> bool,
         mut note: impl FnMut(Option<&str>),
     ) -> bool {
         let began = Instant::now();
         let mut noted: Option<String> = None;
         while let Some(name) = self.interactive_job_name() {
-            if self.shutdown.is_stopping() {
+            if self.shutdown.is_stopping() || stop() {
                 break;
             }
             if began.elapsed() >= WAIT_NOTE_AFTER && noted.as_deref() != Some(name.as_str()) {

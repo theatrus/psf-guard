@@ -94,17 +94,27 @@ secrets** (`--include-secrets`):
 Account password hashes, API token hashes and remote upload key hashes are
 kept either way: they are what PSF Guard itself stores, and a restore
 without them would lose every account. The manifest says whether secrets are
-in the archive and what was removed. Archives are written readable only by
-their owner on macOS and Linux; keep one with secrets as private as the
-config folder.
+in the archive and what was removed.
+
+Secrets go only into a server folder, at a person's request: someone signed
+in to the server, or the desktop app. They are never offered as a download,
+and an API token can neither ask for them, schedule them, nor download an
+archive that holds them.
+
+On a local macOS or Linux disk, archives are written readable only by their
+owner. FAT, exFAT and SMB shares do not keep those permissions, and on
+Windows an archive takes its folder's: keep an archive with secrets in a
+folder only you can read.
 
 ## Back up now
 
 Choose the scope and whether to include secrets, then **Back up now**. In a
 browser, leave the folder empty to download the archive; the server keeps
-it in `<cache>/backup-downloads/` for a day. In the desktop app, choose a
-folder with **Browse…**. The run shows in Settings and in the header's job
-line, with a Stop button.
+it in `<cache>/backup-downloads/` for a day, and sweeps older ones every 30
+seconds and at start. In the desktop app, choose a folder with **Browse…**.
+A folder you name is created if its parent is there; a missing parent, such
+as an unmounted disk, fails the backup. The run shows in Settings and in the
+header's job line, with a Stop button.
 
 ## Scheduled backups
 
@@ -114,8 +124,12 @@ Turn on **Back up on a schedule** and choose:
   local time. Midday is the default: imaging runs at night, so catalogs are
   quiet by day.
 - **Folder**: required; the beside-the-registry `backups` folder is
-  suggested. Another disk is better. Settings warns when the folder is inside
-  a catalog's folder, an image folder, or PSF Guard's generated folders.
+  suggested. Another disk is better. Saving creates the folder; a folder
+  whose disk is not mounted is refused. A run never creates folders, so a
+  disk unmounted later fails the run ("destination not found: is its disk
+  mounted?") instead of filling the system disk. Settings warns when the
+  folder is inside a catalog's folder, an image folder, or PSF Guard's
+  generated folders.
 - **What to back up**: settings and catalogs by default.
 - **Include secrets**: off by default.
 - **How many to keep**: the newest 7 by default, or every one younger than a
@@ -125,13 +139,30 @@ Scheduled backups are off until you turn them on. A run is a background job:
 it waits while work you started runs, such as a stack build, and the job
 line lists it as waiting meanwhile. A server that was off at the scheduled
 time runs once when it comes back. A run that fails is tried again an hour
-later; a stopped run waits for the next scheduled time.
+later; a stopped run waits for the next scheduled time. Both hold across a
+restart: PSF Guard keeps them in `backup-state.json` beside the registry.
+Stop works while a run waits, too.
 
-After a successful run the schedule removes its own older archives by the
-rule you chose. It removes only files named like a scheduled backup whose
-manifest says the schedule made them, so archives you made by hand, or other
-files in the folder, stay. It also clears work-in-progress files a crashed
-run left there over a day ago.
+After a complete run the schedule removes its own older archives by the
+rule you chose:
+
+- It removes only files named like a scheduled backup whose manifest says
+  this install's schedule made them. Archives you made by hand, another
+  install's archives in a shared folder, and other files stay. Saving the
+  schedule gives the install an id, which every archive records.
+- A run that left anything out, such as a catalog it could not reach,
+  removes nothing.
+- An archive holding a catalog the new archive lacks stays, so the last copy
+  of a catalog is never removed. After you change the scope from settings
+  and catalogs to settings only, remove the older full archives by hand.
+
+Every run also clears work-in-progress files a crashed run left in its
+folder over a day ago.
+
+Archives are saved under a temporary name and renamed into place without
+replacing any file. On a file system that cannot rename without replacing,
+such as exFAT, the archive first claims its name with a new empty file and
+then replaces that.
 
 Settings shows the next run, the last run and its result, and lists the
 archives in the schedule's folder and the download area, with a download
@@ -180,7 +211,8 @@ image folder paths in Settings › Databases if they differ.
   One run at a time, server-wide, on its own thread; the handler only
   queues it. It follows [the background job contract](design/background-jobs.md):
   a scheduled run is `Background` work that yields through
-  `AppState::wait_for_interactive_work`, holds one background worker lease
+  `AppState::wait_for_interactive_work_unless`, so Stop also ends a wait,
+  holds one background worker lease
   while it compresses, and holds the server's stop until it has cleaned up.
 - CLI: `src/commands/backup.rs`.
 - UI: `static/src/components/BackupSettings.tsx`, and the job line row in

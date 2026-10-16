@@ -103,7 +103,7 @@ describe('BackupSettings', () => {
     render(<BackupSettings />, { wrapper: wrapper() });
     const card = await screen.findByRole('region', { name: 'Back up now' });
     expect(within(card).getByText(/all 2 catalogs/)).toHaveTextContent('About 120.0 MB');
-    expect(within(card).getByText(/2 peer keys, collaboration sign-ins/)).toBeInTheDocument();
+    expect(within(card).getByText(/Never offered as a download/)).toBeInTheDocument();
     expect(within(card).getByLabelText(/Save on the server/)).toHaveValue('');
     fireEvent.click(within(card).getByRole('button', { name: 'Back up now' }));
     await waitFor(() =>
@@ -112,7 +112,12 @@ describe('BackupSettings', () => {
     const progress = await within(card).findByRole('progressbar', { name: 'Backup progress' });
     expect(progress).toHaveAttribute('aria-valuenow', '25');
     expect(within(card).getByText('Copying catalog imaging-rig · 3/9 files')).toBeInTheDocument();
-    expect(within(card).getByRole('button', { name: 'Back up now' })).toBeDisabled();
+    const button = within(card).getByRole('button', { name: 'Back up now' });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription('A backup is running.');
+    // The bar is not a live region; only the stage is read out.
+    expect(progress.closest('[role="status"], [aria-live]')).toBeNull();
+    expect(card.querySelector('[aria-live="polite"]')).toHaveTextContent('Backup: Copying');
     fireEvent.click(within(card).getByRole('button', { name: 'Stop' }));
     await waitFor(() => expect(stopped).toBe(true));
     expect(await within(card).findByText('Stopping…')).toBeInTheDocument();
@@ -130,8 +135,14 @@ describe('BackupSettings', () => {
     render(<BackupSettings />, { wrapper: wrapper() });
     const card = await screen.findByRole('region', { name: 'Back up now' });
     fireEvent.click(within(card).getByRole('radio', { name: /Settings only/ }));
-    fireEvent.click(within(card).getByRole('checkbox', { name: /Include secrets/ }));
+    // Secrets are never offered as a download.
+    const secrets = within(card).getByRole('checkbox', { name: /Include secrets/ });
+    expect(secrets).toBeDisabled();
+    expect(within(card).getByText(/Never offered as a download/)).toBeInTheDocument();
     fireEvent.change(within(card).getByLabelText(/Save on the server/), { target: { value: '/rig/backups' } });
+    expect(secrets).toBeEnabled();
+    expect(within(card).getByText(/2 peer keys, collaboration sign-ins/)).toBeInTheDocument();
+    fireEvent.click(secrets);
     expect(await within(card).findByText(/holds the catalog Imaging Rig/)).toBeInTheDocument();
     fireEvent.click(within(card).getByRole('button', { name: 'Back up now' }));
     await waitFor(() =>
@@ -213,13 +224,20 @@ describe('BackupSettings', () => {
     expect(within(card).getByText('Not scheduled')).toBeInTheDocument();
     const save = within(card).getByRole('button', { name: 'Save schedule' });
     expect(save).toBeDisabled();
+    expect(save).toHaveAccessibleDescription('No changes to save.');
     fireEvent.click(within(card).getByRole('checkbox', { name: /Back up on a schedule/ }));
     expect(within(card).getByLabelText(/^Folder/)).toHaveValue('/home/astro/.config/psf-guard/backups');
-    fireEvent.change(within(card).getByLabelText('How often'), { target: { value: 'weekly' } });
-    fireEvent.change(within(card).getByLabelText('Weekday'), { target: { value: '2' } });
-    fireEvent.change(within(card).getByLabelText('Time of day'), { target: { value: '12:30' } });
-    fireEvent.change(within(card).getByLabelText('Keep by'), { target: { value: 'age' } });
-    fireEvent.change(within(card).getByLabelText('Days to keep'), { target: { value: '30' } });
+    fireEvent.change(within(card).getByLabelText('Every'), { target: { value: 'weekly' } });
+    fireEvent.change(within(card).getByLabelText('On'), { target: { value: '2' } });
+    fireEvent.change(within(card).getByLabelText('At'), { target: { value: '12:30' } });
+    fireEvent.change(within(card).getByLabelText('Keep'), { target: { value: 'age' } });
+    fireEvent.change(within(card).getByLabelText('Keep (days)'), { target: { value: '0' } });
+    expect(save).toHaveAccessibleDescription('Keep a whole number from 1 to 3650.');
+    fireEvent.change(within(card).getByLabelText('Keep (days)'), { target: { value: '30' } });
+    // Each control is named by the words shown beside it.
+    expect(within(card).getByRole('combobox', { name: 'Every' })).toHaveValue('weekly');
+    expect(within(card).getByRole('combobox', { name: 'On' })).toHaveValue('2');
+    expect(within(card).getByLabelText('At')).toHaveAccessibleDescription("The server's local time.");
     fireEvent.click(save);
     await waitFor(() =>
       expect(saved).toEqual({

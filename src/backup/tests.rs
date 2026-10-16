@@ -343,6 +343,7 @@ fn pruning_touches_only_the_schedules_own_archives() {
     let setup = setup();
     let plan = plan(&setup.locations, &setup.registry, BackupScope::Meta, false);
     let destination = setup.root.join("backups");
+    std::fs::create_dir(&destination).unwrap();
     let mut scheduled = Vec::new();
     for day in 0..4 {
         let written = write(
@@ -383,7 +384,7 @@ fn pruning_touches_only_the_schedules_own_archives() {
     let removed = prune(
         &destination,
         schedule::Retention::Count { count: 2 },
-        None,
+        Some(&destination.join(&scheduled[3])),
         moment(4 * 86_400).timestamp(),
     )
     .unwrap();
@@ -400,7 +401,7 @@ fn pruning_touches_only_the_schedules_own_archives() {
     let removed = prune(
         &destination,
         schedule::Retention::Age { days: 1 },
-        None,
+        Some(&destination.join(&scheduled[3])),
         moment(30 * 86_400).timestamp(),
     )
     .unwrap();
@@ -414,6 +415,7 @@ fn the_archive_just_written_survives_a_prune() {
     let setup = setup();
     let plan = plan(&setup.locations, &setup.registry, BackupScope::Meta, false);
     let destination = setup.root.join("backups");
+    std::fs::create_dir(&destination).unwrap();
     let older = write(
         &plan,
         &destination,
@@ -506,4 +508,221 @@ fn a_custom_registry_name_finds_its_own_siblings() {
         .collect();
     assert!(files.contains(&PathBuf::from("/x/registry.auth.json")));
     assert!(files.contains(&PathBuf::from("/x/registry.director-meta.sqlite")));
+}
+
+/// A schedule pointed at a removable disk or NAS mount must not write onto
+/// the system disk while it is unmounted by creating every missing folder
+/// up to the mount point.
+#[test]
+fn a_folder_on_a_missing_mount_is_not_created() {
+    let setup = setup();
+    let plan = plan(&setup.locations, &setup.registry, BackupScope::Meta, false);
+    let mount = setup.root.join("Volumes").join("BackupDisk");
+    let result = write(
+        &plan,
+        &mount.join("psf-guard"),
+        Trigger::Schedule,
+        moment(0),
+        &Hooks::quiet(),
+    );
+    let error = format!("{:#}", result.as_ref().unwrap_err());
+    assert!(error.contains("is its disk mounted?"), "{error}");
+    assert!(
+        !mount.exists(),
+        "created the mount point and wrote {:?}",
+        result.map(|written| written.path)
+    );
+    // A scheduled run needs its folder to be there; a person's run creates
+    // the last folder, but not its parents.
+    let missing = setup.root.join("present").join("backups");
+    std::fs::create_dir(setup.root.join("present")).unwrap();
+    assert!(write(
+        &plan,
+        &missing,
+        Trigger::Schedule,
+        moment(0),
+        &Hooks::quiet()
+    )
+    .is_err());
+    write(&plan, &missing, Trigger::Manual, moment(0), &Hooks::quiet()).unwrap();
+    assert!(write(
+        &plan,
+        &setup.root.join("absent").join("backups"),
+        Trigger::Manual,
+        moment(0),
+        &Hooks::quiet()
+    )
+    .is_err());
+}
+
+/// Two installs (the desktop app and a server, or two registries)
+/// scheduled into one NAS folder must not prune each other's backups: the
+/// manifest says which install made each.
+#[test]
+fn two_installs_sharing_a_folder_keep_their_own_archives() {
+    let desktop = setup();
+    let server = setup();
+    let shared = desktop.root.join("nas");
+    std::fs::create_dir(&shared).unwrap();
+    let desktop_plan = plan(
+        &desktop.locations,
+        &desktop.registry,
+        BackupScope::Meta,
+        false,
+    );
+    let server_plan = plan(
+        &server.locations,
+        &server.registry,
+        BackupScope::Meta,
+        false,
+    );
+    let mine = write(
+        &desktop_plan,
+        &shared,
+        Trigger::Schedule,
+        moment(0),
+        &Hooks::quiet(),
+    )
+    .unwrap();
+    let theirs = write(
+        &server_plan,
+        &shared,
+        Trigger::Schedule,
+        moment(60),
+        &Hooks::quiet(),
+    )
+    .unwrap();
+    prune(
+        &shared,
+        schedule::Retention::Count { count: 1 },
+        Some(&theirs.path),
+        moment(120).timestamp(),
+    )
+    .unwrap();
+    assert!(
+        mine.path.exists(),
+        "the server pruned the desktop app's only backup"
+    );
+}
+
+/// By hand: run with PSF_GUARD_REVIEW_DIR set to a folder on exFAT, FAT or
+/// SMB to check an archive is saved there.
+#[cfg(unix)]
+#[test]
+#[ignore]
+fn writes_into_the_folder_named_by_env() {
+    let Ok(folder) = std::env::var("PSF_GUARD_REVIEW_DIR") else {
+        return;
+    };
+    let setup = setup();
+    let plan = plan(&setup.locations, &setup.registry, BackupScope::Full, false);
+    let written = write(
+        &plan,
+        Path::new(&folder),
+        Trigger::Schedule,
+        Utc::now(),
+        &Hooks::quiet(),
+    )
+    .unwrap_or_else(|error| panic!("{error:#}"));
+    assert!(written.path.exists());
+    assert_eq!(
+        read_manifest(&written.path).unwrap().trigger,
+        Trigger::Schedule
+    );
+    use std::os::unix::fs::PermissionsExt;
+    eprintln!(
+        "wrote {} mode {:o}",
+        written.path.display(),
+        std::fs::metadata(&written.path)
+            .unwrap()
+            .permissions()
+            .mode()
+    );
+}
+
+/// Where a file system cannot rename without replacing (exFAT answers
+/// ENOTSUP), the archive claims its name with an exclusive create and
+/// renames over that placeholder, still never over someone else's file.
+#[test]
+fn the_fallback_save_claims_the_name_and_never_replaces_a_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("archive.zip");
+    let mut file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+    std::io::Write::write_all(&mut file, b"archive").unwrap();
+    persist_over_claim(file, &target).unwrap_or_else(|(_, error)| panic!("{error}"));
+    assert_eq!(std::fs::read(&target).unwrap(), b"archive");
+
+    let theirs = dir.path().join("theirs.zip");
+    std::fs::write(&theirs, "someone else's").unwrap();
+    let file = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+    let (back, error) = persist_over_claim(file, &theirs).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(
+        back.path().exists(),
+        "the archive is handed back to try another name"
+    );
+    assert_eq!(std::fs::read_to_string(&theirs).unwrap(), "someone else's");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unsupported_no_replace_rename_is_recognised() {
+    assert!(no_replace_unsupported(&std::io::Error::from_raw_os_error(
+        libc::ENOTSUP
+    )));
+    assert!(no_replace_unsupported(&std::io::Error::from_raw_os_error(
+        libc::EINVAL
+    )));
+    assert!(!no_replace_unsupported(&std::io::Error::from_raw_os_error(
+        libc::EEXIST
+    )));
+    assert!(!no_replace_unsupported(&std::io::Error::from_raw_os_error(
+        libc::EACCES
+    )));
+}
+
+/// A scheduled run that could not reach a catalog keeps the older archive
+/// that holds it, whatever the retention says, and says what it missed.
+#[test]
+fn an_archive_holding_a_catalog_the_new_one_lacks_is_kept() {
+    let setup = setup();
+    let destination = setup.root.join("scheduled");
+    std::fs::create_dir(&destination).unwrap();
+    let full = plan(&setup.locations, &setup.registry, BackupScope::Full, false);
+    let complete = write(
+        &full,
+        &destination,
+        Trigger::Schedule,
+        moment(0),
+        &Hooks::quiet(),
+    )
+    .unwrap();
+    std::fs::rename(
+        setup.root.join("rig").join("schedulerdb.sqlite"),
+        setup.root.join("rig").join("away.sqlite"),
+    )
+    .unwrap();
+    let partial_plan = plan(&setup.locations, &setup.registry, BackupScope::Full, false);
+    let partial = write(
+        &partial_plan,
+        &destination,
+        Trigger::Schedule,
+        moment(86_400),
+        &Hooks::quiet(),
+    )
+    .unwrap();
+    assert!(partial
+        .manifest
+        .problems
+        .iter()
+        .any(|problem| problem.contains("catalog imaging-rig")));
+    let removed = prune(
+        &destination,
+        schedule::Retention::Count { count: 1 },
+        Some(&partial.path),
+        moment(86_400).timestamp(),
+    )
+    .unwrap();
+    assert!(removed.is_empty(), "{removed:?}");
+    assert!(complete.path.exists());
 }

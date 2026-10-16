@@ -196,7 +196,14 @@ async fn the_servers_stop_ends_a_run_and_waits_for_it() {
     assert!(!tick(&fixture.state, Utc::now()));
 }
 
-fn schedule(fixture: &Fixture, settings: BackupSettings) {
+/// Save a schedule as Settings does: the folder made, an install id kept.
+fn schedule(fixture: &Fixture, mut settings: BackupSettings) {
+    if let Some(folder) = settings.destination_path().map(PathBuf::from)
+        && !folder.exists()
+    {
+        std::fs::create_dir(&folder).unwrap();
+    }
+    settings.install_id = Some("test-install".into());
     let mut registry = DbRegistry::load_or_init(&fixture.registry).unwrap();
     registry.backups = Some(settings);
     registry.save(&fixture.registry).unwrap();
@@ -231,7 +238,11 @@ fn a_due_schedule_runs_once_then_waits_for_its_next_slot() {
         .unwrap()
         .backups
         .unwrap();
-    let next = fixture.state.backups.next_run_at(&settings, now).unwrap();
+    let next = fixture
+        .state
+        .backups
+        .next_run_at(&settings, "test-install", now)
+        .unwrap();
     assert!(next > now.timestamp());
     assert!(next <= now.timestamp() + 2 * 86_400);
     // The listing finds it in the schedule's folder.
@@ -259,7 +270,11 @@ fn a_failed_scheduled_run_waits_an_hour_before_the_next_try() {
     let last = wait_for_the_run(&fixture.state);
     assert_eq!(last.outcome, Outcome::Failed);
     assert!(last.error.is_some());
-    let next = fixture.state.backups.next_run_at(&settings, now).unwrap();
+    let next = fixture
+        .state
+        .backups
+        .next_run_at(&settings, "test-install", now)
+        .unwrap();
     assert!(next >= now.timestamp() + 3000, "retries after an hour");
     assert!(!tick(&fixture.state, Utc::now()));
 }
@@ -291,7 +306,7 @@ fn a_stopped_scheduled_run_waits_for_the_next_slot() {
         fixture
             .state
             .backups
-            .next_run_at(&settings, Utc::now())
+            .next_run_at(&settings, "test-install", Utc::now())
             .unwrap()
             > now.timestamp()
     );
@@ -454,4 +469,338 @@ async fn saving_a_schedule_validates_and_stamps_it() {
         settings.retention,
         backup::schedule::Retention::Age { days: 14 }
     );
+}
+
+/// A scheduled run that leaves a catalog out (unreachable, or "kept
+/// changing") must not prune: after `count` such days the last archive
+/// holding that catalog would be gone.
+#[test]
+fn a_partial_scheduled_backup_keeps_the_last_complete_one() {
+    let fixture = fixture(10);
+    let folder = fixture.root.join("scheduled");
+    let now = Utc::now();
+    schedule(
+        &fixture,
+        BackupSettings {
+            enabled: true,
+            time: "00:00".into(),
+            destination: Some(folder.display().to_string()),
+            since: Some(now.timestamp() - 3 * 86_400),
+            retention: backup::schedule::Retention::Count { count: 1 },
+            ..Default::default()
+        },
+    );
+    assert!(tick(&fixture.state, now));
+    let complete = wait_for_the_run(&fixture.state).file_name.unwrap();
+    // The NAS holding the catalog drops off before the next day's run.
+    let catalog = fixture.root.join("rig").join("schedulerdb.sqlite");
+    std::fs::rename(&catalog, fixture.root.join("rig").join("away.sqlite")).unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+    assert!(tick(&fixture.state, now + chrono::Duration::hours(25)));
+    let partial = wait_for_the_run(&fixture.state);
+    assert_eq!(partial.outcome, Outcome::Succeeded);
+    assert!(!partial.problems.is_empty() || !partial.pruned.is_empty());
+    assert!(
+        folder.join(&complete).exists(),
+        "pruned the only archive with the catalog: {:?}",
+        partial.pruned
+    );
+}
+
+/// Stop ends a scheduled run that is waiting for a person's work, without
+/// waiting for that work to end.
+#[test]
+fn stop_ends_a_scheduled_run_that_waits_for_interactive_work() {
+    let fixture = fixture(10);
+    let now = Utc::now();
+    schedule(
+        &fixture,
+        BackupSettings {
+            enabled: true,
+            time: "00:00".into(),
+            destination: Some(fixture.root.join("s").display().to_string()),
+            since: Some(now.timestamp() - 3 * 86_400),
+            ..Default::default()
+        },
+    );
+    let stack_build = fixture.state.begin_named_interactive_job("Stack build");
+    assert!(tick(&fixture.state, now));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(fixture.state.backups.stop());
+    let began = std::time::Instant::now();
+    while fixture.state.backups.job().is_some() && began.elapsed() < Duration::from_secs(3) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let still_running = fixture.state.backups.job().is_some();
+    drop(stack_build);
+    wait_for_the_run(&fixture.state);
+    assert!(!still_running, "Stop waited for the person's work to end");
+}
+
+/// Archives in the download area go after a day even when no other
+/// download run comes along: the schedule's tick sweeps them.
+#[test]
+fn a_download_older_than_a_day_goes_without_another_download() {
+    let fixture = fixture(1);
+    let registry = DbRegistry::load_or_init(&fixture.registry).unwrap();
+    let plan = backup::plan(
+        &locations(&fixture.state, fixture.registry.clone()),
+        &registry,
+        BackupScope::Meta,
+        true,
+    );
+    std::fs::create_dir_all(downloads_folder(&fixture.state)).unwrap();
+    let old = backup::write(
+        &plan,
+        &downloads_folder(&fixture.state),
+        Trigger::Manual,
+        Utc::now() - chrono::Duration::days(3),
+        &backup::Hooks::quiet(),
+    )
+    .unwrap();
+    // The server keeps running: the schedule ticks, Settings looks.
+    tick(&fixture.state, Utc::now());
+    overview(&fixture.state, &fixture.registry).unwrap();
+    assert!(!old.path.exists(), "a three-day-old download is still kept");
+}
+
+/// A read-write API token, which may not even list API tokens, must not
+/// take the peer keys, collaboration tokens and server TOML tokens out in
+/// the clear through "include secrets".
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_api_token_cannot_take_secrets_out() {
+    let fixture = fixture(1);
+    let state = &fixture.state;
+    let mut accounts = AuthRegistry::default();
+    accounts
+        .add(
+            AuthUserRecord::new("editor", AccessRole::ReadWrite, "editor-password").unwrap(),
+            false,
+        )
+        .unwrap();
+    let (token, record) = AuthTokenRecord::mint("editor", "script", false, None).unwrap();
+    accounts.tokens.push(record);
+    state.set_server_auth(
+        crate::server::auth::ServerAuth::from_sources(None, &accounts, 3000).unwrap(),
+    );
+    let response = crate::server::api_router(Arc::clone(state))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/backups/run")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"scope":"meta","include_secrets":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    if state.backups.job().is_some() {
+        tokio::task::block_in_place(|| wait_for_the_run(state));
+    }
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn secrets_are_never_offered_as_a_download() {
+    let fixture = fixture(1);
+    let response = crate::server::api_router(Arc::clone(&fixture.state))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/backups/run")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"scope":"meta","include_secrets":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(fixture.state.backups.job().is_none());
+    // To a server folder, from the desktop app or a signed-in person: yes.
+    let folder = fixture.root.join("private");
+    let body = serde_json::json!({
+        "scope": "meta", "include_secrets": true, "destination": folder.display().to_string(),
+    });
+    let response = crate::server::api_router(Arc::clone(&fixture.state))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/backups/run")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    tokio::task::spawn_blocking({
+        let state = Arc::clone(&fixture.state);
+        move || wait_for_the_run(&state)
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_api_token_cannot_download_an_archive_with_secrets_or_schedule_one() {
+    let fixture = fixture(1);
+    let state = &fixture.state;
+    let folder = fixture.root.join("scheduled");
+    schedule(
+        &fixture,
+        BackupSettings {
+            destination: Some(folder.display().to_string()),
+            ..Default::default()
+        },
+    );
+    let registry = DbRegistry::load_or_init(&fixture.registry).unwrap();
+    let locations = locations(state, fixture.registry.clone());
+    let with_secrets = backup::write(
+        &backup::plan(&locations, &registry, BackupScope::Meta, true),
+        &folder,
+        Trigger::Manual,
+        Utc::now(),
+        &backup::Hooks::quiet(),
+    )
+    .unwrap();
+    let without = backup::write(
+        &backup::plan(&locations, &registry, BackupScope::Meta, false),
+        &folder,
+        Trigger::Manual,
+        Utc::now() + chrono::Duration::seconds(1),
+        &backup::Hooks::quiet(),
+    )
+    .unwrap();
+    let mut accounts = AuthRegistry::default();
+    accounts
+        .add(
+            AuthUserRecord::new("editor", AccessRole::ReadWrite, "editor-password").unwrap(),
+            false,
+        )
+        .unwrap();
+    let (token, record) = AuthTokenRecord::mint("editor", "script", false, None).unwrap();
+    accounts.tokens.push(record);
+    state.set_server_auth(
+        crate::server::auth::ServerAuth::from_sources(None, &accounts, 3000).unwrap(),
+    );
+    assert_eq!(
+        status_of(
+            state,
+            "GET",
+            &format!("/backups/files/destination/{}", with_secrets.file_name),
+            Some(&token)
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        status_of(
+            state,
+            "GET",
+            &format!("/backups/files/destination/{}", without.file_name),
+            Some(&token)
+        )
+        .await,
+        StatusCode::OK
+    );
+    let response = crate::server::api_router(Arc::clone(state))
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/backups/settings")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "destination": folder.display().to_string(), "include_secrets": true,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[test]
+fn a_stopped_or_failed_run_is_remembered_across_a_restart() {
+    let fixture = fixture(4000);
+    fixture.state.backups.load_state(&fixture.registry);
+    fixture
+        .state
+        .backups
+        .set_step_pause(Duration::from_millis(30));
+    let now = Utc::now();
+    let settings = BackupSettings {
+        enabled: true,
+        time: "00:00".into(),
+        destination: Some(fixture.root.join("s").display().to_string()),
+        since: Some(now.timestamp() - 3 * 86_400),
+        ..Default::default()
+    };
+    schedule(&fixture, settings.clone());
+    assert!(tick(&fixture.state, now));
+    fixture.state.backups.stop();
+    assert_eq!(wait_for_the_run(&fixture.state).outcome, Outcome::Stopped);
+    assert!(state_path_for(&fixture.registry).is_file());
+    // A new server reads the same registry folder.
+    let restarted = BackupManager::default();
+    restarted.load_state(&fixture.registry);
+    let next = restarted
+        .next_run_at(&settings, "test-install", Utc::now())
+        .unwrap();
+    assert!(
+        next > Utc::now().timestamp(),
+        "the stopped run would start again at once"
+    );
+}
+
+#[test]
+fn saving_the_schedule_mints_one_install_id_and_makes_its_folder() {
+    let fixture = fixture(1);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let folder = fixture.root.join("made-by-save");
+    let save = |body: serde_json::Value| {
+        let app = crate::server::api_router(Arc::clone(&fixture.state));
+        runtime.block_on(async move {
+            app.oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/backups/settings")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+        })
+    };
+    let body = serde_json::json!({"enabled": true, "destination": folder.display().to_string()});
+    assert_eq!(save(body.clone()), StatusCode::OK);
+    assert!(folder.is_dir());
+    let first = DbRegistry::load_or_init(&fixture.registry)
+        .unwrap()
+        .backups
+        .unwrap()
+        .install_id
+        .unwrap();
+    let mut forged = body;
+    forged["install_id"] = serde_json::json!("someone-else");
+    assert_eq!(save(forged), StatusCode::OK);
+    let second = DbRegistry::load_or_init(&fixture.registry)
+        .unwrap()
+        .backups
+        .unwrap()
+        .install_id
+        .unwrap();
+    assert_eq!(first, second);
+    // A folder on a disk that is not there is refused, and not made.
+    let unmounted = fixture.root.join("Volumes").join("Backup").join("psf");
+    let body = serde_json::json!({"enabled": true, "destination": unmounted.display().to_string()});
+    assert_eq!(save(body), StatusCode::BAD_REQUEST);
+    assert!(!fixture.root.join("Volumes").exists());
 }

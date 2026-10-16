@@ -65,6 +65,10 @@ pub struct BackupSettings {
     /// before it never count as missed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub since: Option<i64>,
+    /// This install's id, minted when the schedule is first saved. Archives
+    /// carry it, and pruning removes only archives with the same id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_id: Option<String>,
 }
 
 impl Default for BackupSettings {
@@ -79,6 +83,7 @@ impl Default for BackupSettings {
             include_secrets: false,
             retention: Retention::default(),
             since: None,
+            install_id: None,
         }
     }
 }

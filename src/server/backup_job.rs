@@ -19,12 +19,14 @@ use crate::backup::{
 };
 use crate::db_registry::DbRegistry;
 use crate::server::api::ApiResponse;
+use crate::server::auth::RequestAccess;
 use crate::server::handlers::{
     require_database_management_allowed, require_registry_path, update_registry, AppError,
 };
 use crate::server::state::AppState;
+use anyhow::Context;
 use axum::{
-    extract::{Path as UrlPath, State},
+    extract::{Extension, Path as UrlPath, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -132,6 +134,32 @@ pub struct BackupManager {
     director_meta: RwLock<Option<PathBuf>>,
     /// Pause between SQLite steps; tests slow it down.
     step_pause: RwLock<Option<Duration>>,
+    /// Where a stopped or failed scheduled run is remembered across
+    /// restarts, beside the registry.
+    state_path: RwLock<Option<PathBuf>>,
+}
+
+/// What the schedule keeps across restarts: a stopped run waits for its
+/// next slot, and a failed one an hour, even when the server restarts.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+struct SavedState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    held_since: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retry_after: Option<i64>,
+}
+
+/// `backup-state.json` beside the standard registry, `<stem>.backup-state.json`
+/// beside another.
+pub fn state_path_for(registry: &Path) -> PathBuf {
+    if registry.file_name().and_then(|name| name.to_str()) == Some("config.json") {
+        return registry.with_file_name("backup-state.json");
+    }
+    let stem = registry
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("config");
+    registry.with_file_name(format!("{stem}.backup-state.json"))
 }
 
 impl BackupManager {
@@ -139,6 +167,54 @@ impl BackupManager {
     pub fn set_locations(&self, server_config: Option<PathBuf>, director_meta: Option<PathBuf>) {
         *self.server_config.write().unwrap() = server_config;
         *self.director_meta.write().unwrap() = director_meta;
+    }
+
+    /// Read what the schedule remembered before a restart, and keep it
+    /// beside `registry` from now on.
+    pub fn load_state(&self, registry: &Path) {
+        let path = state_path_for(registry);
+        let saved: SavedState = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.held_since = saved.held_since;
+            inner.retry_after = saved.retry_after;
+        }
+        *self.state_path.write().unwrap() = Some(path);
+    }
+
+    /// Change what the schedule remembers, and save it.
+    fn remember(&self, change: impl FnOnce(&mut Inner)) {
+        let saved = {
+            let mut inner = self.inner.lock().unwrap();
+            change(&mut inner);
+            SavedState {
+                held_since: inner.held_since,
+                retry_after: inner.retry_after,
+            }
+        };
+        let Some(path) = self.state_path.read().unwrap().clone() else {
+            return;
+        };
+        let write = || -> std::io::Result<()> {
+            if saved == SavedState::default() {
+                return match std::fs::remove_file(&path) {
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                    _ => Ok(()),
+                };
+            }
+            let temporary = path.with_extension("json.tmp");
+            std::fs::write(&temporary, serde_json::to_vec_pretty(&saved)?)?;
+            std::fs::rename(&temporary, &path)
+        };
+        if let Err(error) = write() {
+            tracing::warn!(
+                "Could not save the backup schedule's state to {}: {error}",
+                path.display()
+            );
+        }
     }
 
     fn update(&self, change: impl FnOnce(&mut JobStatus)) {
@@ -173,9 +249,9 @@ impl BackupManager {
         *self.step_pause.write().unwrap() = Some(pause);
     }
 
-    /// The newest scheduled archive in `folder`, reading the folder only
-    /// when it is not the one last read.
-    fn newest_scheduled(&self, folder: &Path) -> Option<i64> {
+    /// The newest archive this install's schedule wrote in `folder`,
+    /// reading the folder only when it is not the one last read.
+    fn newest_scheduled(&self, folder: &Path, install: &str) -> Option<i64> {
         if let Some((known, newest)) = &self.inner.lock().unwrap().newest_scheduled
             && known == folder
         {
@@ -183,7 +259,10 @@ impl BackupManager {
         }
         let newest = backup::list(folder)
             .into_iter()
-            .find(|listing| listing.trigger == Trigger::Schedule)
+            .find(|listing| {
+                listing.trigger == Trigger::Schedule
+                    && listing.install_id.as_deref() == Some(install)
+            })
             .map(|listing| listing.created_unix);
         self.inner.lock().unwrap().newest_scheduled = Some((folder.to_path_buf(), newest));
         newest
@@ -191,9 +270,14 @@ impl BackupManager {
 
     /// When the schedule runs next, as unix seconds; at or before now means
     /// due. `None` when off.
-    pub fn next_run_at(&self, settings: &BackupSettings, now: DateTime<Utc>) -> Option<i64> {
+    pub fn next_run_at(
+        &self,
+        settings: &BackupSettings,
+        install: &str,
+        now: DateTime<Utc>,
+    ) -> Option<i64> {
         let folder = PathBuf::from(settings.destination_path()?);
-        let newest = self.newest_scheduled(&folder);
+        let newest = self.newest_scheduled(&folder, install);
         let (held, retry) = {
             let inner = self.inner.lock().unwrap();
             (inner.held_since, inner.retry_after)
@@ -207,10 +291,11 @@ impl BackupManager {
 
     /// A changed schedule starts afresh: no held run, no pending retry.
     fn schedule_changed(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.held_since = None;
-        inner.retry_after = None;
-        inner.newest_scheduled = None;
+        self.remember(|inner| {
+            inner.held_since = None;
+            inner.retry_after = None;
+            inner.newest_scheduled = None;
+        });
     }
 }
 
@@ -375,9 +460,11 @@ fn run(
     let started = Utc::now();
     let scheduled = request.trigger == Trigger::Schedule;
     let cancelled = || manager.cancel.load(Ordering::SeqCst) || state.shutdown.is_stopping();
+    // A scheduled run waits while a person's work runs, but Stop ends the
+    // wait as it ends the run.
     let yield_now = || {
         if scheduled {
-            state.wait_for_interactive_work(NAP, |waiting_for| {
+            state.wait_for_interactive_work_unless(NAP, cancelled, |waiting_for| {
                 manager.update(|job| job.waiting_for = waiting_for.map(str::to_string))
             });
         }
@@ -403,7 +490,14 @@ fn run(
             .unwrap_or(backup::SQLITE_STEP_PAUSE),
     };
 
-    let registry = DbRegistry::load_or_init(&registry_path);
+    // The download area is PSF Guard's own, below the cache: made as needed.
+    let ready = if location == Location::Downloads {
+        std::fs::create_dir_all(&destination)
+            .with_context(|| format!("creating {}", destination.display()))
+    } else {
+        Ok(())
+    };
+    let registry = ready.and_then(|_| DbRegistry::load_or_init(&registry_path));
     let result = registry.and_then(|registry| {
         let plan = backup::plan(
             &locations(state, registry_path.clone()),
@@ -449,26 +543,31 @@ fn run(
                 job.current = None;
             });
             if scheduled {
-                let retention = registry.backups.map(|s| s.retention).unwrap_or_default();
-                match backup::prune(&destination, retention, Some(&written.path), finished_at) {
-                    Ok(pruned) => last.pruned = pruned,
-                    Err(error) => last
-                        .problems
-                        .push(format!("could not remove older backups: {error:#}")),
+                // A run that left something out keeps every older archive:
+                // one of them may be the last copy of what it missed.
+                if written.manifest.problems.is_empty() {
+                    let retention = registry.backups.map(|s| s.retention).unwrap_or_default();
+                    match backup::prune(&destination, retention, Some(&written.path), finished_at) {
+                        Ok(pruned) => last.pruned = pruned,
+                        Err(error) => last
+                            .problems
+                            .push(format!("could not remove older backups: {error:#}")),
+                    }
                 }
-                let mut inner = manager.inner.lock().unwrap();
-                inner.newest_scheduled = Some((destination.clone(), Some(started.timestamp())));
-                inner.held_since = None;
-                inner.retry_after = None;
+                manager.remember(|inner| {
+                    inner.newest_scheduled = Some((destination.clone(), Some(started.timestamp())));
+                    inner.held_since = None;
+                    inner.retry_after = None;
+                });
             } else if location == Location::Downloads {
-                tidy_downloads(&destination, &written.path, finished_at);
+                tidy_downloads(&destination, Some(&written.path), finished_at);
             }
         }
         Err(error) if error.downcast_ref::<backup::Cancelled>().is_some() => {
             tracing::info!("💾 Backup stopped");
             last.outcome = Outcome::Stopped;
             if scheduled {
-                manager.inner.lock().unwrap().held_since = Some(finished_at);
+                manager.remember(|inner| inner.held_since = Some(finished_at));
             }
         }
         Err(error) => {
@@ -476,8 +575,9 @@ fn run(
             last.outcome = Outcome::Failed;
             last.error = Some(format!("{error:#}"));
             if scheduled {
-                manager.inner.lock().unwrap().retry_after =
-                    Some(finished_at + RETRY_AFTER.as_secs() as i64);
+                manager.remember(|inner| {
+                    inner.retry_after = Some(finished_at + RETRY_AFTER.as_secs() as i64)
+                });
             }
         }
     }
@@ -486,14 +586,16 @@ fn run(
     inner.job = None;
 }
 
-/// Archives made for a download are kept a day, three at most.
-fn tidy_downloads(folder: &Path, keep: &Path, now_unix: i64) {
+/// Archives made for a download are kept a day, three at most. Swept after
+/// each download run, on every tick of the schedule and at start.
+fn tidy_downloads(folder: &Path, keep: Option<&Path>, now_unix: i64) {
     for (index, listing) in backup::list(folder).into_iter().enumerate() {
         let old = now_unix - listing.created_unix > DOWNLOADS_MAX_AGE.as_secs() as i64;
-        if listing.path != keep && (index >= DOWNLOADS_KEPT || old) {
+        if keep != Some(listing.path.as_path()) && (index >= DOWNLOADS_KEPT || old) {
             let _ = std::fs::remove_file(&listing.path);
         }
     }
+    backup::remove_stale_temporaries(folder);
 }
 
 /// Look at the schedule once: start a run when one is due. Returns whether
@@ -502,16 +604,18 @@ pub fn tick(state: &Arc<AppState>, now: DateTime<Utc>) -> bool {
     if state.shutdown.is_stopping() || state.backups.job().is_some() {
         return false;
     }
+    tidy_downloads(&downloads_folder(state), None, now.timestamp());
     let Ok(registry_path) = require_registry_path(state) else {
         return false;
     };
-    let Some(settings) = DbRegistry::load_or_init(&registry_path)
-        .ok()
-        .and_then(|registry| registry.backups)
-    else {
+    let Ok(registry) = DbRegistry::load_or_init(&registry_path) else {
         return false;
     };
-    let Some(next) = state.backups.next_run_at(&settings, now) else {
+    let Some(settings) = registry.backups.clone() else {
+        return false;
+    };
+    let install = backup::install_id(&registry, &registry_path);
+    let Some(next) = state.backups.next_run_at(&settings, &install, now) else {
         return false;
     };
     if next > now.timestamp() {
@@ -531,8 +635,9 @@ pub fn tick(state: &Arc<AppState>, now: DateTime<Utc>) -> bool {
         Err(StartError::Busy) => false,
         Err(StartError::Invalid(message)) => {
             tracing::warn!("💾 Scheduled backup could not start: {message}");
-            state.backups.inner.lock().unwrap().retry_after =
-                Some(now.timestamp() + RETRY_AFTER.as_secs() as i64);
+            state.backups.remember(|inner| {
+                inner.retry_after = Some(now.timestamp() + RETRY_AFTER.as_secs() as i64)
+            });
             false
         }
     }
@@ -541,7 +646,15 @@ pub fn tick(state: &Arc<AppState>, now: DateTime<Utc>) -> bool {
 /// The schedule's loop, for the server's life. It reads the registry each
 /// tick, so a schedule changed in Settings applies without a restart.
 pub fn spawn(state: Arc<AppState>) {
+    if let Ok(registry) = require_registry_path(&state) {
+        state.backups.load_state(&registry);
+    }
     tokio::spawn(async move {
+        let sweeping = Arc::clone(&state);
+        let _ = tokio::task::spawn_blocking(move || {
+            tidy_downloads(&downloads_folder(&sweeping), None, Utc::now().timestamp())
+        })
+        .await;
         loop {
             if !state.shutdown.sleep(TICK).await {
                 return;
@@ -639,7 +752,11 @@ fn overview(state: &AppState, registry_path: &Path) -> Result<BackupsOverview, A
     );
     backups.sort_by_key(|backup| std::cmp::Reverse(backup.listing.created_unix));
     Ok(BackupsOverview {
-        next_run_at: state.backups.next_run_at(&settings, Utc::now()),
+        next_run_at: state.backups.next_run_at(
+            &settings,
+            &backup::install_id(&registry, registry_path),
+            Utc::now(),
+        ),
         suggested_destination: registry_path
             .with_file_name("backups")
             .display()
@@ -684,9 +801,22 @@ pub async fn get_backup_status(
     })))
 }
 
+/// Whether a request came with an API token rather than a person's session
+/// or the desktop app.
+fn by_api_token(access: &Option<Extension<RequestAccess>>) -> bool {
+    access
+        .as_ref()
+        .is_some_and(|Extension(access)| access.api_token)
+}
+
+const SECRETS_NEED_A_PERSON: &str = "Backups with secrets are made only by a person signed in \
+     to the server, or in the desktop app, and saved to a server folder; an API token cannot \
+     ask for one.";
+
 /// PUT /api/backups/settings
 pub async fn update_backup_settings(
     State(state): State<Arc<AppState>>,
+    access: Option<Extension<RequestAccess>>,
     Json(mut wanted): Json<BackupSettings>,
 ) -> Result<Json<ApiResponse<BackupsOverview>>, AppError> {
     let registry_path = require_backups(&state)?;
@@ -694,8 +824,34 @@ pub async fn update_backup_settings(
     wanted
         .validate()
         .map_err(|error| AppError::BadRequest(format!("{error:#}")))?;
+    if wanted.include_secrets && by_api_token(&access) {
+        return Err(AppError::Forbidden(SECRETS_NEED_A_PERSON.into()));
+    }
+    // The schedule writes only into a folder that is there, so an unmounted
+    // disk fails a run instead of filling the system disk. Saving makes the
+    // last folder, as a person's own action.
+    if wanted.enabled
+        && let Some(folder) = wanted.destination_path().map(PathBuf::from)
+        && !folder.is_dir()
+    {
+        let parent_exists = folder.parent().is_some_and(Path::is_dir);
+        if folder.exists() || !parent_exists {
+            return Err(AppError::BadRequest(format!(
+                "destination not found: is its disk mounted? ({})",
+                folder.display()
+            )));
+        }
+        std::fs::create_dir(&folder).map_err(|error| {
+            AppError::BadRequest(format!("could not create {}: {error}", folder.display()))
+        })?;
+    }
     let changed = update_registry(&state, |registry| {
         let before = registry.backups.clone().unwrap_or_default();
+        // The id is the server's: kept once minted, whatever was sent.
+        wanted.install_id = before
+            .install_id
+            .clone()
+            .or_else(|| Some(uuid::Uuid::new_v4().to_string()));
         wanted.since = if before.timing_differs(&wanted) || before.since.is_none() {
             Some(Utc::now().timestamp())
         } else {
@@ -726,9 +882,12 @@ pub struct RunBackupRequest {
     pub destination: Option<String>,
 }
 
-/// POST /api/backups/run: queue a backup now. 202 while it runs.
+/// POST /api/backups/run: queue a backup now. 202 while it runs. Secrets
+/// are kept only in a server folder, at a person's request: never in an
+/// archive to download, nor for an API token.
 pub async fn run_backup(
     State(state): State<Arc<AppState>>,
+    access: Option<Extension<RequestAccess>>,
     Json(request): Json<RunBackupRequest>,
 ) -> Result<Response, AppError> {
     require_backups(&state)?;
@@ -738,6 +897,17 @@ pub async fn run_backup(
         .map(str::trim)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from);
+    if request.include_secrets {
+        if by_api_token(&access) {
+            return Err(AppError::Forbidden(SECRETS_NEED_A_PERSON.into()));
+        }
+        if destination.is_none() {
+            return Err(AppError::Forbidden(
+                "Secrets are never offered as a download; choose a server folder to keep them."
+                    .into(),
+            ));
+        }
+    }
     let request = RunRequest {
         trigger: Trigger::Manual,
         scope: request.scope,
@@ -825,6 +995,7 @@ pub async fn check_destination(
 /// GET /api/backups/files/{location}/{name}: one archive, as a download.
 pub async fn download_backup(
     State(state): State<Arc<AppState>>,
+    access: Option<Extension<RequestAccess>>,
     UrlPath((location, name)): UrlPath<(String, String)>,
 ) -> Result<Response, AppError> {
     let registry_path = require_backups(&state)?;
@@ -841,6 +1012,21 @@ pub async fn download_backup(
         _ => return Err(AppError::NotFound),
     };
     let path = folder.join(&name);
+    if by_api_token(&access) {
+        let holds_secrets = {
+            let path = path.clone();
+            tokio::task::spawn_blocking(move || {
+                backup::read_manifest(&path)
+                    .map(|manifest| manifest.secrets == backup::SecretsMode::Included)
+                    .unwrap_or(true)
+            })
+            .await
+            .unwrap_or(true)
+        };
+        if holds_secrets {
+            return Err(AppError::Forbidden(SECRETS_NEED_A_PERSON.into()));
+        }
+    }
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| AppError::NotFoundMessage("That backup is no longer there.".into()))?;

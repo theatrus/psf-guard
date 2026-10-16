@@ -13,7 +13,7 @@ import {
   type BackupsOverview,
 } from '../api/backupTypes';
 import { isTauriApp } from '../utils/tauri';
-import { describeJob, jobPercent } from '../utils/backupJob';
+import { describeJob, jobPercent, jobStage } from '../utils/backupJob';
 import PathField from './PathField';
 import './BackupSettings.css';
 
@@ -82,24 +82,44 @@ function SecretsToggle({
   overview,
   checked,
   onChange,
+  heldOff,
 }: {
   overview: BackupsOverview;
   checked: boolean;
   onChange: (value: boolean) => void;
+  /** Why secrets cannot be kept here, when they cannot. */
+  heldOff?: string;
 }) {
   const held = secretsList(overview);
   return (
     <label className="review-preference">
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <input
+        type="checkbox"
+        checked={checked && !heldOff}
+        disabled={!!heldOff}
+        onChange={(event) => onChange(event.target.checked)}
+      />
       <span>
         Include secrets
         <small>
-          {held.length > 0
-            ? `PSF Guard holds ${held.join(', ')}. Left out, you enter them again after a restore. Included, anyone with the archive can use them.`
-            : 'PSF Guard holds no peer keys or tokens now. Account passwords are kept as hashes either way.'}
+          {heldOff
+            ? heldOff
+            : held.length > 0
+              ? `PSF Guard holds ${held.join(', ')}. Left out, you enter them again after a restore. Included, anyone with the archive can use them.`
+              : 'PSF Guard holds no peer keys or tokens now. Account passwords are kept as hashes either way.'}
         </small>
       </span>
     </label>
+  );
+}
+
+/** Why a button is disabled, in words beside it. */
+function DisabledReason({ id, reason }: { id: string; reason: string | null }) {
+  if (!reason) return null;
+  return (
+    <span className="backup-action-note" id={id}>
+      {reason}
+    </span>
   );
 }
 
@@ -161,7 +181,11 @@ function ScopeChoice({
 function JobProgress({ job, onStop, stopping }: { job: BackupJob; onStop: () => void; stopping: boolean }) {
   const percent = jobPercent(job);
   return (
-    <div className="backup-job" role="status">
+    <div className="backup-job">
+      {/* Read out when the stage changes, not on every second's progress. */}
+      <span className="backup-announce" aria-live="polite">
+        {jobStage(job)}
+      </span>
       <div className="backup-job-head">
         <strong>{job.trigger === 'schedule' ? 'Scheduled backup' : 'Backing up'}</strong>
         <span className="muted">{describeJob(job)}</span>
@@ -242,6 +266,12 @@ function BackupNow({ overview, job }: { overview: BackupsOverview; job: BackupJo
     ? overview.backups.find((listing) => listing.file_name === last.file_name)
     : undefined;
   const needsFolder = desktop && !folder.trim();
+  const toDownload = !desktop && !folder.trim();
+  const blocked = job
+    ? 'A backup is running.'
+    : needsFolder
+      ? 'Choose a folder to save it in.'
+      : null;
 
   return (
     <section className="backup-card" aria-labelledby="backup-now-heading">
@@ -251,7 +281,16 @@ function BackupNow({ overview, job }: { overview: BackupsOverview; job: BackupJo
         stacks and masters are left out: PSF Guard makes them again.
       </p>
       <ScopeChoice overview={overview} value={scope} onChange={setScope} name="backup-now-scope" />
-      <SecretsToggle overview={overview} checked={secrets} onChange={setSecrets} />
+      <SecretsToggle
+        overview={overview}
+        checked={secrets}
+        onChange={setSecrets}
+        heldOff={
+          toDownload
+            ? 'Never offered as a download. Choose a server folder below to keep peer keys and tokens in the archive.'
+            : undefined
+        }
+      />
       <label className="backup-folder" htmlFor="backup-now-folder">
         <span>
           {desktop ? 'Save to' : 'Save on the server'}
@@ -274,13 +313,19 @@ function BackupNow({ overview, job }: { overview: BackupsOverview; job: BackupJo
         <button
           type="button"
           className="save-button"
-          disabled={!!job || run.isPending || needsFolder}
+          disabled={!!blocked || run.isPending}
+          aria-describedby={blocked ? 'backup-now-why' : undefined}
           onClick={() =>
-            run.mutate({ scope, include_secrets: secrets, destination: folder.trim() || null })
+            run.mutate({
+              scope,
+              include_secrets: secrets && !toDownload,
+              destination: folder.trim() || null,
+            })
           }
         >
           Back up now
         </button>
+        <DisabledReason id="backup-now-why" reason={blocked} />
       </div>
       {run.isError && <p className="error-text" role="alert">{(run.error as Error).message}</p>}
       {stop.isError && <p className="error-text" role="alert">{(stop.error as Error).message}</p>}
@@ -333,6 +378,13 @@ function BackupSchedule({ overview }: { overview: BackupsOverview }) {
   };
   const dirty = JSON.stringify(next) !== JSON.stringify(saved);
   const folderMissing = draft.enabled && !(draft.destination ?? '').trim();
+  const saveBlocked = !keepValid
+    ? `Keep a whole number from 1 to ${draft.retention.kind === 'count' ? 1000 : 3650}.`
+    : folderMissing
+      ? 'Choose a folder to turn the schedule on.'
+      : !dirty
+        ? 'No changes to save.'
+        : null;
   const set = (change: Partial<Schedule>) => setDraft((current) => ({ ...current, ...change }));
   const lastScheduled = overview.last_run?.trigger === 'schedule' ? overview.last_run : null;
   const due = overview.next_run_at != null && overview.next_run_at * 1000 <= Date.now();
@@ -363,46 +415,47 @@ function BackupSchedule({ overview }: { overview: BackupsOverview }) {
           <small>Off by default.</small>
         </span>
       </label>
-      <fieldset className="calibration-settings-group calibration-matching-group" disabled={!draft.enabled}>
+      <fieldset className="calibration-settings-group backup-fields" disabled={!draft.enabled}>
         <legend>When</legend>
-        <label className="review-preference">
-          <span>Every</span>
+        <div className="backup-field">
+          <label htmlFor="backup-every">Every</label>
           <select
+            id="backup-every"
             value={draft.frequency}
-            aria-label="How often"
             onChange={(event) => set({ frequency: event.target.value as Schedule['frequency'] })}
           >
             <option value="daily">Day</option>
             <option value="weekly">Week</option>
           </select>
-        </label>
+        </div>
         {draft.frequency === 'weekly' && (
-          <label className="review-preference">
-            <span>On</span>
+          <div className="backup-field">
+            <label htmlFor="backup-weekday">On</label>
             <select
+              id="backup-weekday"
               value={draft.weekday}
-              aria-label="Weekday"
               onChange={(event) => set({ weekday: Number(event.target.value) })}
             >
               {WEEKDAYS.map((day, index) => (
                 <option key={day} value={index}>{day}</option>
               ))}
             </select>
-          </label>
+          </div>
         )}
-        <label className="review-preference">
-          <span>
-            At
-            <small>The server&apos;s local time.</small>
-          </span>
+        <div className="backup-field">
+          <label htmlFor="backup-time">At</label>
           <input
+            id="backup-time"
             type="time"
             step={60}
-            aria-label="Time of day"
+            aria-describedby="backup-time-hint"
             value={draft.time}
             onChange={(event) => set({ time: event.target.value })}
           />
-        </label>
+          <small className="backup-field-hint" id="backup-time-hint">
+            The server&apos;s local time.
+          </small>
+        </div>
       </fieldset>
       <fieldset className="calibration-settings-group" disabled={!draft.enabled}>
         <legend>Where and what</legend>
@@ -434,20 +487,14 @@ function BackupSchedule({ overview }: { overview: BackupsOverview }) {
         checked={draft.include_secrets}
         onChange={(include_secrets) => set({ include_secrets })}
       />
-      <fieldset className="calibration-settings-group calibration-matching-group">
+      <fieldset className="calibration-settings-group backup-fields">
         <legend>How many to keep</legend>
-        <label className="review-preference">
-          <span>
-            Keep
-            <small>
-              {draft.retention.kind === 'count'
-                ? 'Older scheduled backups go once there are more.'
-                : 'Older scheduled backups go; the newest always stays.'}
-            </small>
-          </span>
+        <div className="backup-field">
+          <label htmlFor="backup-keep-by">Keep</label>
           <span className="backup-keep">
             <select
-              aria-label="Keep by"
+              id="backup-keep-by"
+              aria-describedby="backup-keep-hint"
               value={draft.retention.kind}
               onChange={(event) =>
                 set({
@@ -465,23 +512,30 @@ function BackupSchedule({ overview }: { overview: BackupsOverview }) {
               type="number"
               min={1}
               max={draft.retention.kind === 'count' ? 1000 : 3650}
-              aria-label={draft.retention.kind === 'count' ? 'Backups to keep' : 'Days to keep'}
+              aria-label={draft.retention.kind === 'count' ? 'Keep (backups)' : 'Keep (days)'}
               aria-invalid={!keepValid}
               value={keep}
               onChange={(event) => setKeep(event.target.value)}
             />
           </span>
-        </label>
+          <small className="backup-field-hint" id="backup-keep-hint">
+            {draft.retention.kind === 'count'
+              ? 'Older scheduled backups go once there are more.'
+              : 'Older scheduled backups go; the newest always stays.'}
+          </small>
+        </div>
       </fieldset>
       <div className="settings-actions">
         <button
           type="button"
           className="save-button"
-          disabled={!dirty || !keepValid || folderMissing || save.isPending}
+          disabled={!!saveBlocked || save.isPending}
+          aria-describedby={saveBlocked ? 'backup-save-why' : undefined}
           onClick={() => save.mutate(next)}
         >
           {save.isPending ? 'Saving…' : 'Save schedule'}
         </button>
+        <DisabledReason id="backup-save-why" reason={saveBlocked} />
       </div>
       {save.isError && <p className="error-text" role="alert">{(save.error as Error).message}</p>}
       <dl className="backup-schedule-status">

@@ -72,11 +72,11 @@ test('saves a weekly schedule to a folder and says when it runs next', async ({ 
   await card.getByRole('checkbox', { name: /Back up on a schedule/ }).check();
   const folder = path.join(tmpBase(), 'scheduled-backups');
   await card.getByLabel(/^Folder/).fill(folder);
-  await card.getByLabel('How often').selectOption('weekly');
-  await card.getByLabel('Weekday').selectOption('Wednesday');
-  await card.getByLabel('Time of day').fill('12:30');
-  await card.getByLabel('Keep by').selectOption('age');
-  await card.getByLabel('Days to keep').fill('30');
+  await card.getByLabel('Every', { exact: true }).selectOption('weekly');
+  await card.getByLabel('On', { exact: true }).selectOption('Wednesday');
+  await card.getByLabel('At', { exact: true }).fill('12:30');
+  await card.getByLabel('Keep', { exact: true }).selectOption('age');
+  await card.getByLabel('Keep (days)').fill('30');
   await card.getByRole('button', { name: 'Save schedule' }).click();
   await expect(card.getByRole('button', { name: 'Save schedule' })).toBeDisabled();
   await expect(card.locator('.backup-schedule-status dd').first()).not.toHaveText('Not scheduled');

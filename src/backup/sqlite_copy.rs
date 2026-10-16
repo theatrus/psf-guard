@@ -129,8 +129,11 @@ fn run_steps(backup: &Backup<'_, '_>, wal: bool, hooks: &StepHooks) -> Result<Co
             }
             StepResult::More => {
                 busy_since = None;
-                if last_remaining.is_some_and(|last| remaining > last) {
-                    // Someone wrote to the source: SQLite started over.
+                // A step always copies pages, so `remaining` falls unless
+                // someone wrote to the source and SQLite started over. A
+                // restart before every step leaves it where it was, so equal
+                // counts as a restart too.
+                if last_remaining.is_some_and(|last| remaining >= last) {
                     stats.restarts += 1;
                     if wal && stats.restarts >= RESTARTS_BEFORE_ALL_AT_ONCE {
                         pages = -1;
@@ -403,6 +406,79 @@ mod tests {
         let error =
             copy_online(&source, &dir.path().join("copy.sqlite"), &quiet(&|| true)).unwrap_err();
         assert!(error.downcast_ref::<Cancelled>().is_some(), "{error:#}");
+    }
+
+    /// A transaction that stamps the first and last rows lands before every
+    /// step, so SQLite restarts the copy at every step. After each restart
+    /// `remaining` is `total - pages` again, the same as before: that must
+    /// still count as a restart, or a WAL copy never grows to one step and a
+    /// rollback-journal copy never gives up. Stopped after 500 steps.
+    fn copy_with_a_write_before_every_step(journal: &str) -> (Result<(i64, i64)>, i64) {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("catalog.sqlite");
+        catalog(&source, 1500);
+        Connection::open(&source)
+            .unwrap()
+            .execute_batch(&format!(
+                "PRAGMA journal_mode = {journal};
+                 ALTER TABLE acquiredimage ADD COLUMN stamp INTEGER DEFAULT 0;"
+            ))
+            .unwrap();
+        let writer = Connection::open(&source).unwrap();
+        let steps = std::cell::Cell::new(0i64);
+        let before = || {
+            steps.set(steps.get() + 1);
+            writer
+                .execute(
+                    "UPDATE acquiredimage SET stamp = ?1 WHERE id IN (1, 1500)",
+                    [steps.get()],
+                )
+                .unwrap();
+        };
+        let cancelled = || steps.get() > 500;
+        let hooks = StepHooks {
+            pause: Duration::ZERO,
+            cancelled: &cancelled,
+            before_step: &before,
+            progress: &|_, _| {},
+        };
+        let copy = dir.path().join("copy.sqlite");
+        let result = copy_online(&source, &copy, &hooks).map(|_| {
+            let read = open_read_only(&copy).unwrap();
+            let stamp = |id: i64| -> i64 {
+                read.query_row(
+                    "SELECT stamp FROM acquiredimage WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+            };
+            (stamp(1), stamp(1500))
+        });
+        (result, steps.get())
+    }
+
+    #[test]
+    fn a_rollback_copy_written_before_every_step_finishes_or_gives_up() {
+        // Bounded steps finish it, or the copy gives up: never "stopped".
+        let (result, steps) = copy_with_a_write_before_every_step("DELETE");
+        match result {
+            Ok((first, last)) => assert_eq!(first, last, "a torn copy"),
+            Err(error) => {
+                assert!(
+                    error.downcast_ref::<Cancelled>().is_none(),
+                    "no restart counted; ran {steps} steps until stopped"
+                );
+                assert!(format!("{error:#}").contains("kept changing"), "{error:#}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_wal_copy_written_before_every_step_finishes_as_one_snapshot() {
+        let (result, steps) = copy_with_a_write_before_every_step("WAL");
+        let (first, last) = result.unwrap_or_else(|error| panic!("after {steps} steps: {error:#}"));
+        assert_eq!(first, last, "a torn copy");
     }
 
     #[test]

@@ -18,6 +18,14 @@ export function describeJob(job: BackupJob): string {
   return job.files_total > 0 ? `${what} · ${job.files_done}/${job.files_total} files` : what;
 }
 
+/** The stage alone, for a screen reader: it changes a few times a run,
+ *  where the file count and percent change every second. */
+export function jobStage(job: BackupJob): string {
+  if (job.stopping) return 'Stopping the backup';
+  if (job.waiting_for) return `Backup waiting for ${job.waiting_for}`;
+  return `Backup: ${STAGES[job.stage] ?? job.stage}`;
+}
+
 export function jobPercent(job: BackupJob): number | null {
   return job.bytes_total > 0 ? Math.min(100, (job.bytes_done / job.bytes_total) * 100) : null;
 }

@@ -227,6 +227,32 @@ pub struct BackupPlan {
     pub items: Vec<PlanItem>,
     pub omitted: Vec<Omitted>,
     pub catalogs: Vec<CatalogRecord>,
+    /// Which install made the archive; pruning touches only its own.
+    pub install_id: String,
+}
+
+/// The install a backup belongs to: the id the schedule saved in the
+/// registry, or, before one is saved, one derived from the registry's path
+/// and the machine's name. Two installs sharing a backup folder each prune
+/// only their own archives.
+pub fn install_id(registry: &DbRegistry, registry_path: &Path) -> String {
+    if let Some(id) = registry
+        .backups
+        .as_ref()
+        .and_then(|settings| settings.install_id.as_deref())
+        .filter(|id| !id.trim().is_empty())
+    {
+        return id.to_string();
+    }
+    let path = dunce::canonicalize(registry_path).unwrap_or_else(|_| registry_path.to_path_buf());
+    let machine = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    hasher.update([0]);
+    hasher.update(machine.as_bytes());
+    format!("path-{}", &hex(&hasher.finalize())[..16])
 }
 
 impl BackupPlan {
@@ -324,6 +350,7 @@ pub fn plan(
         items,
         omitted,
         catalogs,
+        install_id: install_id(registry, &locations.registry),
     }
 }
 
@@ -380,6 +407,9 @@ pub struct Manifest {
     pub created_unix: i64,
     pub trigger: Trigger,
     pub scope: BackupScope,
+    /// The install that made it; pruning touches only its own archives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_id: Option<String>,
     pub secrets: SecretsMode,
     /// What the secrets setting means for this archive, in words.
     pub secrets_note: String,
@@ -475,8 +505,8 @@ pub fn write(
     created: DateTime<Utc>,
     hooks: &Hooks,
 ) -> Result<Written> {
-    std::fs::create_dir_all(destination)
-        .with_context(|| format!("creating {}", destination.display()))?;
+    prepare_destination(destination, trigger)?;
+    remove_stale_temporaries(destination);
     let staging = tempfile::Builder::new()
         .prefix(TEMP_PREFIX)
         .tempdir_in(destination)
@@ -508,7 +538,18 @@ pub fn write(
 
     let mut zip = zip::ZipWriter::new(archive_file.as_file_mut());
     let mut files = Vec::new();
-    let mut problems = Vec::new();
+    // A catalog the plan could not reach is a problem of this backup too,
+    // so the schedule does not prune on its account.
+    let mut problems: Vec<String> = plan
+        .catalogs
+        .iter()
+        .filter_map(|catalog| {
+            catalog
+                .problem
+                .as_ref()
+                .map(|problem| format!("catalog {}: {problem}", catalog.id))
+        })
+        .collect();
     let mut catalogs = plan.catalogs.clone();
     for (index, item) in plan.items.iter().enumerate() {
         cancelled()?;
@@ -633,6 +674,7 @@ pub fn write(
         created_unix: created.timestamp(),
         trigger,
         scope: plan.scope,
+        install_id: Some(plan.install_id.clone()),
         secrets: if plan.include_secrets {
             SecretsMode::Included
         } else {
@@ -677,6 +719,75 @@ pub fn write(
     })
 }
 
+/// Make sure the destination folder is there without creating a mount
+/// point. Only the last folder is created, and a scheduled run creates
+/// none: an unmounted disk then fails the run instead of filling the system
+/// disk.
+fn prepare_destination(destination: &Path, trigger: Trigger) -> Result<()> {
+    if destination.is_dir() {
+        return Ok(());
+    }
+    if destination.exists() {
+        anyhow::bail!("{} is not a folder", destination.display());
+    }
+    let parent_exists = destination
+        .parent()
+        .is_some_and(|parent| parent.as_os_str().is_empty() || parent.is_dir());
+    if trigger == Trigger::Schedule || !parent_exists {
+        anyhow::bail!(
+            "destination not found: is its disk mounted? ({})",
+            destination.display()
+        );
+    }
+    std::fs::create_dir(destination).with_context(|| format!("creating {}", destination.display()))
+}
+
+/// Whether a rename failed because the file system cannot rename without
+/// replacing, as exFAT, FAT and some network shares cannot.
+fn no_replace_unsupported(error: &std::io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::Unsupported | std::io::ErrorKind::InvalidInput
+    ) {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        matches!(
+            error.raw_os_error(),
+            Some(code) if code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// The fallback where a no-replace rename is unsupported: claim the name
+/// with an exclusive create, which every file system supports, then rename
+/// over that empty placeholder, which is ours. A file already there is
+/// never replaced: the claim fails with `AlreadyExists`.
+fn persist_over_claim(
+    file: tempfile::NamedTempFile,
+    path: &Path,
+) -> std::result::Result<(), (tempfile::NamedTempFile, std::io::Error)> {
+    if let Err(error) = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        return Err((file, error));
+    }
+    match file.persist(path) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(path);
+            Err((error.file, error.error))
+        }
+    }
+}
+
 /// Rename the finished archive into place without replacing a file there.
 fn persist(
     file: tempfile::NamedTempFile,
@@ -692,14 +803,24 @@ fn persist(
             format!("{stem}-{attempt}.zip")
         };
         let path = destination.join(&candidate);
-        match file.persist_noclobber(&path) {
+        let failed = match file.persist_noclobber(&path) {
             Ok(_) => return Ok((path, candidate)),
-            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                file = error.file;
+            Err(error) if no_replace_unsupported(&error.error) => {
+                match persist_over_claim(error.file, &path) {
+                    Ok(()) => return Ok((path, candidate)),
+                    Err((back, error)) => {
+                        file = back;
+                        error
+                    }
+                }
             }
             Err(error) => {
-                return Err(error.error).with_context(|| format!("saving {}", path.display()));
+                file = error.file;
+                error.error
             }
+        };
+        if failed.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(failed).with_context(|| format!("saving {}", path.display()));
         }
     }
     anyhow::bail!("could not find a free name for {name}")
@@ -780,6 +901,12 @@ pub struct Listing {
     pub psf_guard_version: String,
     pub catalogs: usize,
     pub problems: usize,
+    /// The install that made it.
+    #[serde(skip)]
+    pub install_id: Option<String>,
+    /// The catalogs it holds, by slug.
+    #[serde(skip)]
+    pub catalog_ids: Vec<String>,
 }
 
 /// The archives in `dir` this module wrote, newest first. A file that only
@@ -809,6 +936,13 @@ pub fn list(dir: &Path) -> Vec<Listing> {
                 psf_guard_version: manifest.psf_guard_version,
                 catalogs: manifest.catalogs.iter().filter(|c| c.included).count(),
                 problems: manifest.problems.len(),
+                install_id: manifest.install_id,
+                catalog_ids: manifest
+                    .catalogs
+                    .into_iter()
+                    .filter(|c| c.included)
+                    .map(|c| c.id)
+                    .collect(),
             })
         })
         .collect();
@@ -821,9 +955,18 @@ pub fn list(dir: &Path) -> Vec<Listing> {
 }
 
 /// Remove the scheduled archives in `dir` that `retention` no longer keeps,
-/// never `keep`, and work in progress a dead run left over a day ago. Only
-/// files this module wrote for the schedule are touched: the name pattern
-/// and a manifest saying so. Returns the names removed.
+/// and work in progress a dead run left over a day ago. `keep` is the
+/// archive the run just wrote, and the measure of what may go:
+///
+/// - only archives the schedule wrote are touched: the name pattern and a
+///   manifest saying so;
+/// - only those of `keep`'s install, so two installs sharing a folder keep
+///   each other's;
+/// - never one holding a catalog `keep` lacks, so a run that could not
+///   reach a catalog does not remove the last copy of it;
+/// - never `keep` itself. Without a readable `keep`, nothing is pruned.
+///
+/// Returns the names removed.
 pub fn prune(
     dir: &Path,
     retention: schedule::Retention,
@@ -831,9 +974,25 @@ pub fn prune(
     now_unix: i64,
 ) -> Result<Vec<String>> {
     let mut removed = Vec::new();
+    remove_stale_temporaries(dir);
+    let Some(kept) = keep.and_then(|keep| read_manifest(keep).ok()) else {
+        return Ok(removed);
+    };
+    let Some(install) = kept.install_id.clone() else {
+        return Ok(removed);
+    };
+    let kept_catalogs: std::collections::BTreeSet<String> = kept
+        .catalogs
+        .iter()
+        .filter(|catalog| catalog.included)
+        .map(|catalog| catalog.id.clone())
+        .collect();
     let scheduled: Vec<Listing> = list(dir)
         .into_iter()
-        .filter(|listing| listing.trigger == Trigger::Schedule)
+        .filter(|listing| {
+            listing.trigger == Trigger::Schedule
+                && listing.install_id.as_deref() == Some(install.as_str())
+        })
         .collect();
     let doomed: Vec<&Listing> = match retention {
         schedule::Retention::Count { count } => {
@@ -849,19 +1008,24 @@ pub fn prune(
         }
     };
     for listing in doomed {
-        if keep.is_some_and(|keep| keep == listing.path) {
+        if keep.is_some_and(|keep| keep == listing.path)
+            || listing
+                .catalog_ids
+                .iter()
+                .any(|catalog| !kept_catalogs.contains(catalog))
+        {
             continue;
         }
         std::fs::remove_file(&listing.path)
             .with_context(|| format!("removing {}", listing.path.display()))?;
         removed.push(listing.file_name.clone());
     }
-    remove_stale_temporaries(dir);
     Ok(removed)
 }
 
-/// Staging folders and partial archives from a run that died.
-fn remove_stale_temporaries(dir: &Path) {
+/// Staging folders and partial archives from a run that died over a day
+/// ago. Every run sweeps its folder first.
+pub fn remove_stale_temporaries(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
