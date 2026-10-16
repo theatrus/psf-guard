@@ -109,6 +109,8 @@
 - The thumbnail size slider in Images and Sequence counts every step of a
   quick run of arrow keys. On a busy page it used to snap back between
   steps, so some were lost.
+- An arrow pressed just as the image detail closes back into Sequence moves
+  the Sequence cursor. It used to be lost while the strip redrew.
 - With reduced motion turned on in the system, loading spinners hold still.
 - The reload button left the header. **Rescan image folders**, under ⋯ in
   Images and Sequence, looks for image files added since the last scan

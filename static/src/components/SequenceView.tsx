@@ -154,9 +154,12 @@ export default function SequenceView() {
   const grading = useGrading(dbId!);
   // Calibration marks for the chips and the Poor calibration choice.
   const calibration = useCalibrationMarks(dbId, projectId, targetId != null);
-  const { analyze, data: analysisData, isLoading: isAnalyzing, error: analysisError } = useSequenceAnalysis(dbId);
-
   const filterName = searchParams.get('filterName') || undefined;
+  const {
+    data: analysisData,
+    isLoading: isAnalyzing,
+    error: analysisError,
+  } = useSequenceAnalysis(dbId, targetId, filterName);
   const requestedScoreScope = searchParams.get('scoreScope');
   const { order, setOrder } = useImageOrder();
   const {
@@ -255,13 +258,6 @@ export default function SequenceView() {
       setSelectedImages(inferredSelection ?? new Set());
     }
   }, [selectionScope, setSelectedImages]);
-
-  // Auto-analyze when target is selected
-  useEffect(() => {
-    if (targetId) {
-      analyze({ target_id: targetId, filter_name: filterName });
-    }
-  }, [targetId, filterName, analyze]);
 
   const sequences = useMemo(() => analysisData?.sequences ?? [], [analysisData?.sequences]);
   const rollups = useMemo(
