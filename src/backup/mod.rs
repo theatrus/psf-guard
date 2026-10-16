@@ -469,6 +469,9 @@ pub struct Written {
     pub file_name: String,
     pub bytes: u64,
     pub manifest: Manifest,
+    /// A settings file could not be copied: older archives may hold the
+    /// only copy of it.
+    pub settings_incomplete: bool,
 }
 
 /// The archive's name: `psf-guard-backup-2026-10-16T130000Z-full.zip`, with
@@ -551,6 +554,7 @@ pub fn write(
         })
         .collect();
     let mut catalogs = plan.catalogs.clone();
+    let mut settings_incomplete = false;
     for (index, item) in plan.items.iter().enumerate() {
         cancelled()?;
         (hooks.yield_now)();
@@ -598,6 +602,9 @@ pub fn write(
                 let message = format!("{label}: {error:#}");
                 tracing::warn!("Backup left out {message}");
                 problems.push(message.clone());
+                if item.role != FileRole::Catalog {
+                    settings_incomplete = true;
+                }
                 if let Some(record) = catalogs
                     .iter_mut()
                     .find(|record| Some(&record.id) == item.catalog_id.as_ref())
@@ -712,6 +719,7 @@ pub fn write(
     }
     drop(staging);
     Ok(Written {
+        settings_incomplete,
         path,
         file_name,
         bytes,
@@ -966,20 +974,20 @@ pub fn list(dir: &Path) -> Vec<Listing> {
 ///   reach a catalog does not remove the last copy of it;
 /// - never `keep` itself. Without a readable `keep`, nothing is pruned.
 ///
-/// Returns the names removed.
+/// Returns what it removed, and what it kept for the catalogs `keep` lacks.
 pub fn prune(
     dir: &Path,
     retention: schedule::Retention,
     keep: Option<&Path>,
     now_unix: i64,
-) -> Result<Vec<String>> {
-    let mut removed = Vec::new();
+) -> Result<Pruned> {
+    let mut pruned = Pruned::default();
     remove_stale_temporaries(dir);
     let Some(kept) = keep.and_then(|keep| read_manifest(keep).ok()) else {
-        return Ok(removed);
+        return Ok(pruned);
     };
     let Some(install) = kept.install_id.clone() else {
-        return Ok(removed);
+        return Ok(pruned);
     };
     let kept_catalogs: std::collections::BTreeSet<String> = kept
         .catalogs
@@ -1008,19 +1016,36 @@ pub fn prune(
         }
     };
     for listing in doomed {
-        if keep.is_some_and(|keep| keep == listing.path)
-            || listing
-                .catalog_ids
-                .iter()
-                .any(|catalog| !kept_catalogs.contains(catalog))
-        {
+        if keep.is_some_and(|keep| keep == listing.path) {
+            continue;
+        }
+        let missing: Vec<&String> = listing
+            .catalog_ids
+            .iter()
+            .filter(|catalog| !kept_catalogs.contains(*catalog))
+            .collect();
+        if !missing.is_empty() {
+            pruned.kept.push(listing.file_name.clone());
+            pruned.kept_for.extend(missing.into_iter().cloned());
             continue;
         }
         std::fs::remove_file(&listing.path)
             .with_context(|| format!("removing {}", listing.path.display()))?;
-        removed.push(listing.file_name.clone());
+        pruned.removed.push(listing.file_name.clone());
     }
-    Ok(removed)
+    Ok(pruned)
+}
+
+/// What [`prune`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pruned {
+    /// Archives removed.
+    pub removed: Vec<String>,
+    /// Archives the retention would remove, kept because they hold a
+    /// catalog the new archive lacks.
+    pub kept: Vec<String>,
+    /// Those catalogs, by slug.
+    pub kept_for: std::collections::BTreeSet<String>,
 }
 
 /// Staging folders and partial archives from a run that died over a day

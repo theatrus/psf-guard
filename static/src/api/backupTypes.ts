@@ -54,6 +54,12 @@ export interface BackupLastRun {
   error: string | null;
   problems: string[];
   pruned: string[];
+  /** Older archives kept because they hold catalogs this run left out. */
+  prune_kept: string[];
+  /** Those catalogs, by name. */
+  prune_kept_for: string[];
+  /** Why the run removed nothing, when it did not prune. */
+  prune_skipped: string | null;
 }
 
 export interface BackupListing {

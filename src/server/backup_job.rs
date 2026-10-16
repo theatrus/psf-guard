@@ -108,6 +108,13 @@ pub struct LastRun {
     pub problems: Vec<String>,
     /// Older scheduled archives the run removed.
     pub pruned: Vec<String>,
+    /// Older archives the retention would remove, kept because they hold
+    /// catalogs this run left out.
+    pub prune_kept: Vec<String>,
+    /// Those catalogs, by name.
+    pub prune_kept_for: Vec<String>,
+    /// Why the run removed nothing at all, when it did not prune.
+    pub prune_skipped: Option<String>,
 }
 
 #[derive(Default)]
@@ -443,6 +450,9 @@ impl Drop for RunnerClaim<'_> {
                 error: Some("the backup stopped unexpectedly".into()),
                 problems: Vec::new(),
                 pruned: Vec::new(),
+                prune_kept: Vec::new(),
+                prune_kept_for: Vec::new(),
+                prune_skipped: None,
             });
         }
     }
@@ -527,6 +537,9 @@ fn run(
         error: None,
         problems: Vec::new(),
         pruned: Vec::new(),
+        prune_kept: Vec::new(),
+        prune_kept_for: Vec::new(),
+        prune_skipped: None,
     };
     match result {
         Ok((registry, written)) => {
@@ -543,12 +556,38 @@ fn run(
                 job.current = None;
             });
             if scheduled {
-                // A run that left something out keeps every older archive:
-                // one of them may be the last copy of what it missed.
-                if written.manifest.problems.is_empty() {
-                    let retention = registry.backups.map(|s| s.retention).unwrap_or_default();
+                // A catalog this run could not reach keeps the older
+                // archives that hold it (`prune` sees to that), and the rest
+                // go as usual, so an unplugged disk does not stop pruning.
+                // A settings file it could not copy is in no manifest's
+                // catalog list, so then nothing is removed.
+                if written.settings_incomplete {
+                    last.prune_skipped = Some(
+                        "This run could not copy a settings file, so every older backup was \
+                         kept."
+                            .into(),
+                    );
+                } else {
+                    let retention = registry
+                        .backups
+                        .as_ref()
+                        .map(|s| s.retention)
+                        .unwrap_or_default();
                     match backup::prune(&destination, retention, Some(&written.path), finished_at) {
-                        Ok(pruned) => last.pruned = pruned,
+                        Ok(pruned) => {
+                            last.pruned = pruned.removed;
+                            last.prune_kept = pruned.kept;
+                            last.prune_kept_for = pruned
+                                .kept_for
+                                .iter()
+                                .map(|id| {
+                                    registry
+                                        .find(id)
+                                        .map(|entry| entry.name.clone())
+                                        .unwrap_or_else(|| id.clone())
+                                })
+                                .collect();
+                        }
                         Err(error) => last
                             .problems
                             .push(format!("could not remove older backups: {error:#}")),
@@ -995,7 +1034,6 @@ pub async fn check_destination(
 /// GET /api/backups/files/{location}/{name}: one archive, as a download.
 pub async fn download_backup(
     State(state): State<Arc<AppState>>,
-    access: Option<Extension<RequestAccess>>,
     UrlPath((location, name)): UrlPath<(String, String)>,
 ) -> Result<Response, AppError> {
     let registry_path = require_backups(&state)?;
@@ -1012,20 +1050,29 @@ pub async fn download_backup(
         _ => return Err(AppError::NotFound),
     };
     let path = folder.join(&name);
-    if by_api_token(&access) {
-        let holds_secrets = {
-            let path = path.clone();
-            tokio::task::spawn_blocking(move || {
-                backup::read_manifest(&path)
-                    .map(|manifest| manifest.secrets == backup::SecretsMode::Included)
-                    .unwrap_or(true)
-            })
-            .await
-            .unwrap_or(true)
-        };
-        if holds_secrets {
-            return Err(AppError::Forbidden(SECRETS_NEED_A_PERSON.into()));
-        }
+    if !path.is_file() {
+        return Err(AppError::NotFoundMessage(
+            "That backup is no longer there.".into(),
+        ));
+    }
+    // An archive with secrets stays on the server's disk, for everyone: as
+    // does one whose manifest cannot say it holds none.
+    let holds_secrets = {
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || {
+            backup::read_manifest(&path)
+                .map(|manifest| manifest.secrets == backup::SecretsMode::Included)
+                .unwrap_or(true)
+        })
+        .await
+        .unwrap_or(true)
+    };
+    if holds_secrets {
+        return Err(AppError::Forbidden(
+            "This backup holds secrets, or cannot say it holds none, so it is never offered \
+             as a download. It stays on the server's disk."
+                .into(),
+        ));
     }
     let file = tokio::fs::File::open(&path)
         .await

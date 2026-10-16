@@ -804,3 +804,99 @@ fn saving_the_schedule_mints_one_install_id_and_makes_its_folder() {
     assert_eq!(save(body), StatusCode::BAD_REQUEST);
     assert!(!fixture.root.join("Volumes").exists());
 }
+
+/// A catalog that stays unreachable must not stop pruning for good: later
+/// runs that lack it prune each other, and only the archives holding it are
+/// kept, which the last run says.
+#[test]
+fn an_unreachable_catalog_does_not_stop_pruning() {
+    let fixture = fixture(10);
+    let folder = fixture.root.join("scheduled");
+    let now = Utc::now();
+    schedule(
+        &fixture,
+        BackupSettings {
+            enabled: true,
+            time: "00:00".into(),
+            destination: Some(folder.display().to_string()),
+            since: Some(now.timestamp() - 3 * 86_400),
+            retention: backup::schedule::Retention::Count { count: 1 },
+            ..Default::default()
+        },
+    );
+    assert!(tick(&fixture.state, now));
+    let complete = wait_for_the_run(&fixture.state).file_name.unwrap();
+    let catalog = fixture.root.join("rig").join("schedulerdb.sqlite");
+    std::fs::rename(&catalog, fixture.root.join("rig").join("away.sqlite")).unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+    assert!(tick(&fixture.state, now + chrono::Duration::hours(25)));
+    let second = wait_for_the_run(&fixture.state);
+    assert_eq!(second.prune_kept, vec![complete.clone()]);
+    assert_eq!(second.prune_kept_for, vec!["Imaging Rig".to_string()]);
+    assert!(second.prune_skipped.is_none());
+    std::thread::sleep(Duration::from_millis(1100));
+    assert!(tick(&fixture.state, now + chrono::Duration::hours(50)));
+    let third = wait_for_the_run(&fixture.state);
+    assert_eq!(third.outcome, Outcome::Succeeded);
+    assert_eq!(third.pruned, vec![second.file_name.clone().unwrap()]);
+    assert_eq!(third.prune_kept, vec![complete.clone()]);
+    assert!(folder.join(&complete).exists());
+    assert!(folder.join(third.file_name.unwrap()).exists());
+    assert_eq!(backup::list(&folder).len(), 2);
+}
+
+/// An archive with secrets, or one whose manifest cannot be read, is never
+/// offered as a download: not to the desktop app, a signed-in person or a
+/// token alike.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_one_downloads_an_archive_with_secrets_or_an_unreadable_manifest() {
+    let fixture = fixture(1);
+    let state = &fixture.state;
+    let folder = fixture.root.join("scheduled");
+    schedule(
+        &fixture,
+        BackupSettings {
+            destination: Some(folder.display().to_string()),
+            ..Default::default()
+        },
+    );
+    let registry = DbRegistry::load_or_init(&fixture.registry).unwrap();
+    let locations = locations(state, fixture.registry.clone());
+    let with_secrets = backup::write(
+        &backup::plan(&locations, &registry, BackupScope::Meta, true),
+        &folder,
+        Trigger::Manual,
+        Utc::now(),
+        &backup::Hooks::quiet(),
+    )
+    .unwrap();
+    let without = backup::write(
+        &backup::plan(&locations, &registry, BackupScope::Meta, false),
+        &folder,
+        Trigger::Manual,
+        Utc::now() + chrono::Duration::seconds(1),
+        &backup::Hooks::quiet(),
+    )
+    .unwrap();
+    let unreadable = "psf-guard-backup-2026-10-16T130005Z-meta.zip";
+    std::fs::write(folder.join(unreadable), "not a zip").unwrap();
+    let get = |name: String| async move {
+        status_of(
+            state,
+            "GET",
+            &format!("/backups/files/destination/{name}"),
+            None,
+        )
+        .await
+    };
+    assert_eq!(
+        get(with_secrets.file_name.clone()).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(get(unreadable.to_string()).await, StatusCode::FORBIDDEN);
+    assert_eq!(get(without.file_name.clone()).await, StatusCode::OK);
+    assert_eq!(
+        get("psf-guard-backup-2026-10-16T130006Z-meta.zip".into()).await,
+        StatusCode::NOT_FOUND
+    );
+}

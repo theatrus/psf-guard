@@ -97,9 +97,11 @@ without them would lose every account. The manifest says whether secrets are
 in the archive and what was removed.
 
 Secrets go only into a server folder, at a person's request: someone signed
-in to the server, or the desktop app. They are never offered as a download,
-and an API token can neither ask for them, schedule them, nor download an
-archive that holds them.
+in to the server, or the desktop app. An API token can neither ask for them
+nor schedule them. An archive that holds them is never offered as a
+download, to anyone, nor is one whose manifest cannot be read: it stays on
+the server's disk, and the Backups list says so in place of the Download
+link.
 
 On a local macOS or Linux disk, archives are written readable only by their
 owner. FAT, exFAT and SMB shares do not keep those permissions, and on
@@ -150,11 +152,14 @@ rule you chose:
   this install's schedule made them. Archives you made by hand, another
   install's archives in a shared folder, and other files stay. Saving the
   schedule gives the install an id, which every archive records.
-- A run that left anything out, such as a catalog it could not reach,
-  removes nothing.
 - An archive holding a catalog the new archive lacks stays, so the last copy
-  of a catalog is never removed. After you change the scope from settings
-  and catalogs to settings only, remove the older full archives by hand.
+  of a catalog is never removed. A catalog that stays unreachable, such as
+  one on an unplugged disk, does not stop pruning: later archives without it
+  still replace each other, the archives holding it stay, and Settings says
+  "Kept N older backups because they hold <catalog>, which this run left
+  out." After you change the scope from settings and catalogs to settings
+  only, remove the older full archives by hand.
+- A run that could not copy a settings file removes nothing, and says so.
 
 Every run also clears work-in-progress files a crashed run left in its
 folder over a day ago.

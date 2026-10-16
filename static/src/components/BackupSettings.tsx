@@ -37,6 +37,11 @@ function when(unix: number): string {
 
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
+/** `A`, `A and B`, `A, B and C`. */
+function listNames(names: string[]): string {
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
 function secretsList(overview: BackupsOverview): string[] {
   const { peer_keys, collaboration_credentials, server_config_tokens } = overview.secrets;
   return [
@@ -231,7 +236,7 @@ function LastRunNote({ run, listing }: { run: BackupLastRun; listing?: BackupLis
         Backed up {finished}: <code>{run.file_name}</code>, {formatBytes(run.bytes ?? 0)}, {where}.
         {run.pruned.length > 0 && ` Removed ${run.pruned.length} older.`}
       </span>
-      {listing && !isTauriApp() && (
+      {listing && !isTauriApp() && listing.secrets !== 'included' && (
         <a className="header-button" href={apiClient.backupDownloadUrl(listing.download_path)} download>
           Download
         </a>
@@ -239,6 +244,14 @@ function LastRunNote({ run, listing }: { run: BackupLastRun; listing?: BackupLis
       {run.problems.map((problem) => (
         <span key={problem} className="backup-note is-caution">Left out: {problem}</span>
       ))}
+      {run.prune_kept.length > 0 && (
+        <span className="backup-note is-caution">
+          Kept {run.prune_kept.length} older backup{run.prune_kept.length === 1 ? '' : 's'} because{' '}
+          {run.prune_kept.length === 1 ? 'it holds' : 'they hold'} {listNames(run.prune_kept_for)}, which
+          this run left out.
+        </span>
+      )}
+      {run.prune_skipped && <span className="backup-note is-caution">{run.prune_skipped}</span>}
     </div>
   );
 }
@@ -594,7 +607,7 @@ function BackupList({ overview }: { overview: BackupsOverview }) {
                 <code className="backup-row-file">{listing.file_name}</code>
               </span>
               <span className="backup-row-size">{formatBytes(listing.bytes)}</span>
-              {!desktop && (
+              {!desktop && listing.secrets !== 'included' && (
                 <a
                   className="header-button"
                   href={apiClient.backupDownloadUrl(listing.download_path)}
@@ -603,6 +616,9 @@ function BackupList({ overview }: { overview: BackupsOverview }) {
                 >
                   Download
                 </a>
+              )}
+              {!desktop && listing.secrets === 'included' && (
+                <span className="backup-row-note">Holds secrets: stays on the server&apos;s disk.</span>
               )}
             </li>
           ))}

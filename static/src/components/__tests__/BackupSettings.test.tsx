@@ -157,12 +157,18 @@ describe('BackupSettings', () => {
       psf_guard_version: '0.11.0', catalogs: 2, problems: 0, location: 'destination' as const,
       download_path: `/backups/files/destination/${NAME}`,
     };
+    const SECRET = 'psf-guard-backup-2026-10-15T130000Z-meta.zip';
     serve(() => overview({
-      backups: [listing],
+      backups: [listing, {
+        ...listing, file_name: SECRET, scope: 'meta', trigger: 'manual', secrets: 'included', bytes: 13_000,
+        created_unix: 1_790_900_000, download_path: `/backups/files/destination/${SECRET}`,
+      }],
       last_run: {
         trigger: 'schedule', scope: 'full', started_at: 1_791_000_000, finished_at: 1_791_000_060,
         outcome: 'succeeded', location: 'destination', destination: '/mnt/nas/backups', file_name: NAME,
-        bytes: 52_000_000, error: null, problems: [], pruned: ['old.zip'],
+        bytes: 52_000_000, error: null, problems: ['catalog observatory: /mnt/obs/db.sqlite is not reachable'],
+        pruned: ['old.zip'], prune_kept: ['older-with-observatory.zip'],
+        prune_kept_for: ['Observatory Rig'], prune_skipped: null,
       },
     }));
     render(<BackupSettings />, { wrapper: wrapper() });
@@ -173,6 +179,12 @@ describe('BackupSettings', () => {
     expect(within(list).getByText('52.0 MB')).toBeInTheDocument();
     const now = screen.getByRole('region', { name: 'Back up now' });
     expect(within(now).getByText(/Removed 1 older/)).toBeInTheDocument();
+    expect(within(now).getByText(
+      'Kept 1 older backup because it holds Observatory Rig, which this run left out.'
+    )).toBeInTheDocument();
+    // An archive with secrets is never offered as a download.
+    expect(within(list).queryByRole('link', { name: `Download ${SECRET}` })).not.toBeInTheDocument();
+    expect(within(list).getByText(/Holds secrets: stays on the server's disk/)).toBeInTheDocument();
     expect(screen.getByText(/succeeded, 52.0 MB/)).toBeInTheDocument();
   });
 

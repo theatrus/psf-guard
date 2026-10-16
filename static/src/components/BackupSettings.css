@@ -246,6 +246,12 @@
   white-space: nowrap;
 }
 
+.backup-settings .backup-row-note {
+  max-width: 11rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
 .backup-settings .backup-row-size {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -262,9 +268,14 @@
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .backup-settings .backup-row .header-button {
+  .backup-settings .backup-row .header-button,
+  .backup-settings .backup-row-note {
     grid-column: 1 / -1;
     justify-self: start;
+  }
+
+  .backup-settings .backup-row-note {
+    max-width: none;
   }
 
   /* On a phone the label sits above its control, which keeps its width. */

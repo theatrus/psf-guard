@@ -387,7 +387,8 @@ fn pruning_touches_only_the_schedules_own_archives() {
         Some(&destination.join(&scheduled[3])),
         moment(4 * 86_400).timestamp(),
     )
-    .unwrap();
+    .unwrap()
+    .removed;
     assert_eq!(removed, vec![scheduled[1].clone(), scheduled[0].clone()]);
     for kept in [&scheduled[2], &scheduled[3], &manual, &impostor] {
         assert!(destination.join(kept).exists(), "{kept} was removed");
@@ -404,7 +405,8 @@ fn pruning_touches_only_the_schedules_own_archives() {
         Some(&destination.join(&scheduled[3])),
         moment(30 * 86_400).timestamp(),
     )
-    .unwrap();
+    .unwrap()
+    .removed;
     assert_eq!(removed, vec![scheduled[2].clone()]);
     assert!(destination.join(&scheduled[3]).exists());
     assert!(destination.join(&manual).exists());
@@ -716,13 +718,41 @@ fn an_archive_holding_a_catalog_the_new_one_lacks_is_kept() {
         .problems
         .iter()
         .any(|problem| problem.contains("catalog imaging-rig")));
-    let removed = prune(
+    let pruned = prune(
         &destination,
         schedule::Retention::Count { count: 1 },
         Some(&partial.path),
         moment(86_400).timestamp(),
     )
     .unwrap();
-    assert!(removed.is_empty(), "{removed:?}");
+    assert!(pruned.removed.is_empty(), "{pruned:?}");
+    assert_eq!(pruned.kept, vec![complete.file_name.clone()]);
+    assert_eq!(
+        pruned.kept_for.into_iter().collect::<Vec<_>>(),
+        vec!["imaging-rig".to_string()]
+    );
     assert!(complete.path.exists());
+    assert!(!partial.settings_incomplete, "only a catalog was missed");
+
+    // The catalog stays away: later partial runs still prune each other,
+    // and only the complete archive is kept for it.
+    let later = write(
+        &partial_plan,
+        &destination,
+        Trigger::Schedule,
+        moment(2 * 86_400),
+        &Hooks::quiet(),
+    )
+    .unwrap();
+    let pruned = prune(
+        &destination,
+        schedule::Retention::Count { count: 1 },
+        Some(&later.path),
+        moment(2 * 86_400).timestamp(),
+    )
+    .unwrap();
+    assert_eq!(pruned.removed, vec![partial.file_name.clone()]);
+    assert_eq!(pruned.kept, vec![complete.file_name.clone()]);
+    assert!(complete.path.exists());
+    assert!(later.path.exists());
 }
