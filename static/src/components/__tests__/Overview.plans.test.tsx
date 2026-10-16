@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -113,11 +113,18 @@ describe('the Library with Planning', () => {
     await waitFor(() => expect(names()).toEqual(['Pelican']));
   });
 
-  it("changes a project's state in its database from the row", async () => {
+  it("changes a project's state in its database from the row, once confirmed", async () => {
     setDisplayPreferences(compact);
     const puts: { path: string; body: unknown }[] = [];
     mount('/', puts);
     const select = await screen.findByRole('combobox', { name: 'State of Pelican in RedCat' });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    // Refused: nothing is written and the select keeps the saved state.
+    fireEvent.change(select, { target: { value: '2' } });
+    expect(confirm).toHaveBeenLastCalledWith(expect.stringContaining('Set Pelican to Inactive in RedCat?'));
+    expect(select).toHaveValue('1');
+    expect(select).not.toBeDisabled();
+    expect(puts).toEqual([]);
     fireEvent.change(select, { target: { value: '2' } });
     // The write in flight shows its choice and takes no second one.
     expect(select).toBeDisabled();
@@ -126,5 +133,7 @@ describe('the Library with Planning', () => {
     expect(await screen.findByText('Pelican is now Inactive on RedCat.')).toBeInTheDocument();
     expect(puts).toEqual([{ path: 'redcat/2', body: { state: 2 } }]);
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'State of Pelican in RedCat' })).not.toBeDisabled());
+    expect(confirm).toHaveBeenCalledTimes(2);
+    confirm.mockRestore();
   });
 });

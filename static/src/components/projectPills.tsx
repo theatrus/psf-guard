@@ -20,17 +20,26 @@ export function StatePill({ state }: { state: number | null | undefined }) {
   return <span className={`library-pill library-pill-state is-state-${state}`}>{stateLabel(state)}</span>;
 }
 
-/** The state as a select, when the user may write the database: choosing
- *  one writes the project row in Target Scheduler at once. */
+/** The state as a select, when the user may write the database: a choice
+ *  asks first, then writes the project row in Target Scheduler, which the
+ *  rig's scheduler acts on. */
 export function StateControl({ state, name, dbName, editable, pending = null, onChange }: { state: number | null | undefined; name: string; dbName: string; editable: boolean; pending?: number | null; onChange: (state: number) => void }) {
   if (!editable || state === null || state === undefined) return <StatePill state={state} />;
   // While a write is in flight the select shows the choice and takes no
   // other: arrow keys on a closed select fire a change per step.
   const shown = pending ?? state;
-  return <select className={`library-pill library-pill-state is-state-${shown}`} value={shown} aria-label={`State of ${name} in ${dbName}`} disabled={pending !== null}
-    title="Target Scheduler project state in this database" onChange={event => onChange(Number(event.target.value))}>
-    {[0, 1, 2, 3].map(value => <option key={value} value={value}>{stateLabel(value)}</option>)}
-  </select>;
+  const choose = (next: number) => {
+    // The select is controlled, so a refusal leaves it on the saved state.
+    if (pending !== null || next === state) return;
+    if (window.confirm(`Set ${name} to ${stateLabel(next)} in ${dbName}? Target Scheduler acts on it from its next pick.`)) onChange(next);
+  };
+  // The pill draws the caret, inside its rounded edge.
+  return <span className={`library-pill library-pill-state library-pill-select is-state-${shown}`}>
+    <select value={shown} aria-label={`State of ${name} in ${dbName}`} disabled={pending !== null}
+      title="Target Scheduler project state in this database" onChange={event => choose(Number(event.target.value))}>
+      {[0, 1, 2, 3].map(value => <option key={value} value={value}>{stateLabel(value)}</option>)}
+    </select>
+  </span>;
 }
 
 /** Accepted frames against the goal, with a small bar; "Done" once the goal
