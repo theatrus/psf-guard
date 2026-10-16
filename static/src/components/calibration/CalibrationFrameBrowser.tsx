@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { apiClient } from '../../api/client';
@@ -80,9 +80,31 @@ export default function CalibrationFrameBrowser({
     placeholderData: keepPreviousData,
   });
 
+  // Forget a frame, and show its neighbour after it: the next in the
+  // strip, else the one before. The neighbour is chosen when the request
+  // answers and again when the list drops the frame, whichever comes
+  // first, so both choose the same frame. The list without the forgotten
+  // frame can render before the address shows the first choice; the
+  // effect below then still sees the forgotten frame, and without this
+  // would choose the first frame left over the neighbour.
+  const forgotten = useRef<{ uuid: string; next: string | null } | null>(null);
+  const forget = (uuid: string) => {
+    const index = frames.findIndex((frame) => frame.frame_uuid === uuid);
+    const next = index < 0 ? undefined : frames[index + 1] ?? frames[index - 1];
+    const after = { uuid, next: next?.frame_uuid ?? null };
+    forgotten.current = after;
+    actions.forget.mutate([uuid], {
+      onSuccess: () => {
+        // Unless another frame was chosen meanwhile.
+        if (forgotten.current === after) onSelectFrame(after.next);
+      },
+    });
+  };
+
   // The first frame is chosen until a person chooses; a frame the list
-  // drops gives way to the first one left, and an empty list chooses none,
-  // so Keep out and Forget never reach a frame it does not show.
+  // drops gives way to the first one left, or after Forget to its
+  // neighbour, and an empty list chooses none, so Keep out and Forget
+  // never reach a frame it does not show.
   const listed = frames.some((frame) => frame.frame_uuid === frameUuid);
   useEffect(() => {
     if (!ready) return;
@@ -90,8 +112,17 @@ export default function CalibrationFrameBrowser({
       if (frameUuid) onSelectFrame(null);
       return;
     }
-    if (!frameUuid || !listed) onSelectFrame(frames[0].frame_uuid);
+    if (frameUuid && listed) return;
+    const after = forgotten.current?.uuid === frameUuid ? forgotten.current : null;
+    const neighbour = after?.next && frames.some((frame) => frame.frame_uuid === after.next) ? after.next : null;
+    onSelectFrame(neighbour ?? frames[0].frame_uuid);
   }, [frameUuid, frames, listed, onSelectFrame, ready]);
+  // Another frame chosen ends what Forget asked for.
+  useEffect(() => {
+    if (forgotten.current && frameUuid !== forgotten.current.uuid && frameUuid !== forgotten.current.next) {
+      forgotten.current = null;
+    }
+  }, [frameUuid]);
   // A frame the list does not hold is not drawn, once the list is in.
   const shown = frameUuid && (listed || !ready) ? frameUuid : null;
 
@@ -125,11 +156,6 @@ export default function CalibrationFrameBrowser({
     if (compare) onView(view === 'session' ? 'frame' : 'session');
   }, { enabled: keysEnabled }, [compare, onView, view]);
 
-  const nextAfterForget = () => {
-    const next = frames[frameIndex + 1] ?? frames[frameIndex - 1];
-    onSelectFrame(next ? next.frame_uuid : null);
-  };
-
   return (
     <>
       {ready && frames.length === 0 && empty}
@@ -162,7 +188,7 @@ export default function CalibrationFrameBrowser({
             error={detail.error ? detail.error.message : null}
             canManage={canManage}
             actions={actions}
-            onForgotten={nextAfterForget}
+            onForget={forget}
           />
         </div>
       )}
