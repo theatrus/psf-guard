@@ -162,3 +162,72 @@ pub(crate) fn synthetic(
         data,
     }
 }
+
+/// Record that the lights of `light`'s imaging session were read and
+/// follow the family at its recorded angle, as the measuring job would
+/// store it: the light is added to the catalog's lights (one imaging
+/// session of its own), and the answer is kept under the key its
+/// candidates give now.
+pub(crate) fn lights_confirm_their_family(
+    conn: &Connection,
+    light: &crate::commands::import::headers::FrameMeta,
+) {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS acquiredimage (Id INTEGER PRIMARY KEY, projectId INTEGER,
+            targetId INTEGER, acquireddate INTEGER, filtername TEXT, gradingStatus INTEGER,
+            metadata TEXT);",
+    )
+    .unwrap();
+    let at = light.timestamp.expect("the light's time");
+    conn.execute(
+        "INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername, gradingStatus,
+         metadata) VALUES (1, 1, ?1, ?2, 0, '{}')",
+        rusqlite::params![at, light.filter],
+    )
+    .unwrap();
+    super::family_store::add_table(conn).unwrap();
+    let rules = crate::calibration::rules::rules_for_light(light);
+    let rig = crate::calibration::rules::light_rig_uuid(light);
+    let angle = light.rotator_position.expect("the light's angle");
+    let library = LibrarySnapshot::load(conn).unwrap();
+    let book = library.flat_book();
+    let compatible = library.flat_family_compatible(light, &rules);
+    let candidates: Vec<usize> = book
+        .family_candidates(&rig, Some(at), angle, &compatible)
+        .into_iter()
+        .map(|(family, _)| family)
+        .collect();
+    assert!(
+        candidates.len() >= 2,
+        "the lights are asked between families"
+    );
+    let chosen = book
+        .at_recorded(&candidates, angle, rules.rotation_deg)
+        .into_iter()
+        .next()
+        .expect("a family at the light's angle");
+    let session = book.imaging_session(&rig, at).expect("its imaging session");
+    super::family_store::upsert(
+        conn,
+        &super::measure::rows::FamilyEvidenceRow {
+            session_key: session.key.clone(),
+            filter: super::model::canonical_filter(light.filter.as_deref().unwrap_or("")),
+            target: String::new(),
+            angle,
+            angle_low: angle,
+            angle_high: angle,
+            start: session.start,
+            end: session.end,
+            key: book.family_evidence_key(&candidates, &rig, session.start, angle),
+            candidates: candidates
+                .iter()
+                .map(|f| book.families[*f].key.clone())
+                .collect(),
+            chosen: Some(book.families[chosen].key.clone()),
+            lights: 1,
+            targets: Vec::new(),
+            pairs: Vec::new(),
+        },
+    )
+    .unwrap();
+}

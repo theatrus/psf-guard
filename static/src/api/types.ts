@@ -2845,17 +2845,27 @@ export interface CalibrationKindExplanation {
 /** The response family a light's flats come from, and how it was chosen. */
 export interface FlatFamilyNote {
   key: string;
-  /** Filter and measured angle range: "OIII at 72.6° & 82.2°". */
+  /** Filter, as the flats name it, and measured angle range: "OIII at
+   *  72.6° & 82.2°". */
   label: string;
-  /** `angle`: at its recorded angle; `prior`: the only family near it;
-   *  `pixels`: its own lights follow these flats; `nearest`: nothing stood
-   *  clear, so the nearest angle. */
-  by: 'angle' | 'prior' | 'pixels' | 'nearest';
-  /** `pixels`: how many lights, of which targets, said so. */
+  /** `angle`: the only family near it, at its recorded angle; `pixels`:
+   *  its own lights follow these flats; `nearest`: the family at its
+   *  recorded angle, its lights not read or unable to tell; `disputed`:
+   *  its lights pointed to another family and nothing confirmed it. */
+  by: 'angle' | 'pixels' | 'nearest' | 'disputed';
+  /** `pixels` and `disputed`: how many lights, of which targets, said so. */
   lights?: number;
   targets?: string[];
+  /** `pixels`: whether they moved it off its recorded angle, and what
+   *  confirmed the move ("its OIII lights", "the rotator's epochs"). */
+  moved?: boolean;
+  corroborated?: string | null;
   /** `nearest`: its lights were read and could not tell. */
   undecided?: boolean;
+  /** `disputed`: the family its lights pointed to. */
+  pointed?: string;
+  /** Whether the family has flats at the light's recorded angle. */
+  at_recorded: boolean;
   light_angle: number;
   /** How far the rotator's epochs turn the light's angle into the flats'. */
   shift: number;

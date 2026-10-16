@@ -2106,6 +2106,12 @@ impl LibrarySnapshot {
         };
         let policy = rules.external_masters;
         let family = self.flat_family(light, &rules);
+        // The family serves the light's flats when it has flats at the
+        // angle the light recorded, or its own pixels chose it. A family
+        // its lights only pointed to is a Check, not flats.
+        let serving = family
+            .as_ref()
+            .filter(|choice| choice.at_recorded || choice.by_pixels());
         for candidate in &self.frames {
             if candidate.is_master && policy == ExternalMasterPolicy::Ignore {
                 continue;
@@ -2139,7 +2145,7 @@ impl LibrarySnapshot {
                         && dark_within_reach(candidate, light.timestamp, &rules)
                 }
                 CalibrationKind::DarkFlat => false,
-                CalibrationKind::Flat => match self.family_admits(family.as_ref(), candidate) {
+                CalibrationKind::Flat => match self.family_admits(serving, candidate, &rules) {
                     Some(admitted) => {
                         admitted && {
                             // Its family was chosen for the light: matched at
@@ -2178,7 +2184,7 @@ impl LibrarySnapshot {
         sort_candidates(&mut selected.bias, light.timestamp);
         sort_candidates(&mut selected.dark, light.timestamp);
         sort_candidates(&mut selected.flat, light.timestamp);
-        if let Some(family) = &family {
+        if let Some(family) = serving {
             // Within its family, the flats at the angle the light recorded
             // first, as before families: measured alike is not identical.
             // Then those within the angle prior, then the rest, each in
@@ -2315,21 +2321,46 @@ impl LibrarySnapshot {
         compatible
     }
 
-    /// Whether a flat may serve a light whose response family was chosen:
-    /// `Some(true)` for a flat of that family, `Some(false)` for one of
-    /// another family with an angle, or one not measured when the family
-    /// took flats at another angle than the light's; `None` to match it by
-    /// angle as before (no family chosen, a flat whose family records no
-    /// angle, or one not measured at the light's own angle).
+    /// Whether a flat may serve a light whose response family serves it:
+    /// `None` to match it by angle as before (no family serves, a flat whose
+    /// family records no angle, or one not measured while the family is at
+    /// the light's recorded angle); `Some(false)` for a flat of another
+    /// family with an angle, or one not measured when its own pixels moved
+    /// the light to another angle; `Some(true)` for a flat of its family
+    /// that its evidence reaches. A flat of its family at the light's
+    /// recorded angle always is. One at another angle is only when the
+    /// light's own pixels chose the family, or its session measured alike
+    /// with a session of the family at the light's recorded angle: a header
+    /// or an epoch alone never hands a light flats at another angle.
     fn family_admits(
         &self,
         family: Option<&flat_groups::lights::FamilyChoice>,
         candidate: &CalibrationFrame,
+        rules: &Rules,
     ) -> Option<bool> {
         let family = family?;
-        match self.flat_book.family_of_frame(&candidate.frame_uuid) {
-            Some(of) if of == family.family => Some(true),
-            Some(of) if self.flat_book.families[of].angles.is_empty() => None,
+        let book = &self.flat_book;
+        match book.family_of_frame(&candidate.frame_uuid) {
+            Some(of) if of == family.family => {
+                let at_angle = self.measured_angle(candidate, rules).is_some_and(|flat| {
+                    rotation_gap(family.light_angle, flat) <= rules.rotation_deg
+                });
+                Some(
+                    at_angle
+                        || family.by_pixels()
+                        || book
+                            .session_of_frame(&candidate.frame_uuid)
+                            .is_some_and(|session| {
+                                book.alike_with_angle(
+                                    of,
+                                    session,
+                                    family.light_angle,
+                                    rules.rotation_deg,
+                                )
+                            }),
+                )
+            }
+            Some(of) if book.families[of].angles.is_empty() => None,
             Some(_) => Some(false),
             None if family.moved() => Some(false),
             None => None,

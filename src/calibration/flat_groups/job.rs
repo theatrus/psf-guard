@@ -576,11 +576,17 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         .filter(|rig| pass.scope.reads_lights(rig) && rig_is_measured(rig))
         .collect();
     rigs.sort_by_key(|rig| !(pass.goes_first)(rig));
+    // The lights' rotator offsets, which the family stage's candidates are
+    // turned by: from the lights' metadata and the solves in the catalog's
+    // cache folder that changed since the last pass.
+    if !rigs.is_empty() && (pass.keep_going)() {
+        super::gather_angles(conn, pass.dir.parent())?;
+    }
     let frames_read = AtomicUsize::new(0);
     let mut measured_rigs: BTreeSet<String> = BTreeSet::new();
     let mut current: Vec<String> = Vec::new();
     let mut tried: std::collections::HashSet<(String, String)> = Default::default();
-    let mut family_keep: Vec<(String, String, String)> = Vec::new();
+    let mut family_keep: Vec<family_store::Kept> = Vec::new();
     let mut family_rigs: BTreeSet<String> = BTreeSet::new();
     'rigs: for rig in rigs {
         let report = |stage: &'static str, done: usize, total: usize| Progress {
@@ -756,7 +762,7 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         let questions = family_job::questions(&pass, &library, &book, rig)?;
         let todo: Vec<&family_job::Question> = questions
             .iter()
-            .filter(|question| !family_job::answered(&book, question))
+            .filter(|question| !family_job::answered(question))
             .collect();
         let total = todo.len();
         for (done, question) in todo.iter().enumerate() {

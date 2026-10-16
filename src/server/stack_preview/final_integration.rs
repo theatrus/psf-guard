@@ -712,6 +712,7 @@ mod tests {
             ("before-0", "2026-09-10T14:0", 0.0),
             ("after-0", "2026-09-14T14:0", 0.0),
             ("after-110", "2026-09-14T14:3", 110.6),
+            ("other-104", "2026-09-14T14:4", 104.0),
         ] {
             for index in 0..3 {
                 frames.push(write(
@@ -735,18 +736,24 @@ mod tests {
             tx.commit().unwrap();
         }
         // New dust between the mornings at 0°; the after morning's two
-        // angles measure alike, which is the rig's angle term.
+        // angles measure alike, which is the rig's angle term. Flats at
+        // 104° measure apart from every other: another family the light's
+        // angle could reach.
         crate::calibration::flat_groups::testing::measure_as(&conn, |a, b| {
-            if a.night != b.night {
+            if a.rotation == Some(104.0) || b.rotation == Some(104.0) || a.night != b.night {
                 0.02
             } else {
                 0.0
             }
         });
         let light_meta = crate::commands::import::headers::read_frame_meta(&light);
+        // Its own pixels chose the family at its angle: the family's flats
+        // at its other angle may serve it.
+        crate::calibration::flat_groups::testing::lights_confirm_their_family(&conn, &light_meta);
         let selected = crate::calibration::select_for_light(&conn, &light_meta).unwrap();
         let family = selected.flat_family.as_ref().expect("its measured family");
-        assert_eq!(family.label, "HA at 0.0° & 110.6°");
+        assert_eq!(family.label, "Ha at 0.0° & 110.6°");
+        assert!(family.by_pixels(), "{family:?}");
         assert_eq!(
             family.light_rotation,
             LightRotation::Measured { degrees: 0.0 }

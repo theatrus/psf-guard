@@ -70,15 +70,27 @@ pub struct EvidenceRow {
     pub fits: Vec<EvidenceFit>,
 }
 
-/// What an imaging session's own lights said, in one filter, about which
-/// response family their flats come from.
+/// What some of an imaging session's lights said about which response
+/// family their flats come from: the lights of one filter, one target and
+/// one recorded angle (lights within the rig's rotation tolerance of each
+/// other), so a background never mixes two fields or two angles.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FamilyEvidenceRow {
     pub session_key: String,
     /// Canonical filter name.
     pub filter: String,
-    /// The candidates and the sessions standing for them, digested
-    /// (`Book::family_evidence_key`).
+    pub target: String,
+    /// The lights' middle recorded angle, and the lowest and highest.
+    pub angle: f64,
+    pub angle_low: f64,
+    pub angle_high: f64,
+    /// The first and last of the lights, Unix seconds.
+    pub start: i64,
+    pub end: i64,
+    /// The candidates, the sessions standing for them, which of those
+    /// measured alike, and the choice algorithm, digested
+    /// (`Book::family_evidence_key`): a row whose key is not the current
+    /// one is not read.
     pub key: String,
     /// The candidate families' keys.
     pub candidates: Vec<String>,
@@ -104,4 +116,12 @@ pub struct FamilyPairRow {
     pub carried: Option<f64>,
     pub spread: Option<f64>,
     pub verdict: Option<Verdict>,
+}
+
+impl FamilyEvidenceRow {
+    /// Where it is kept, besides the session and filter: its target and
+    /// lowest angle.
+    pub fn angle_key(&self) -> String {
+        format!("{:.1}", self.angle_low)
+    }
 }

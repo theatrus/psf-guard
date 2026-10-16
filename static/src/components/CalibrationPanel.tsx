@@ -46,13 +46,15 @@ const UNSETTLED_BASES = new Set(['no_same_side', 'undetermined']);
 function familyBasisLabel(family: FlatFamilyNote): string {
   switch (family.by) {
     case 'pixels':
-      return 'chosen by its own pixels';
+      return family.moved
+        ? `moved by its own pixels, confirmed by ${family.corroborated ?? 'other evidence'}`
+        : 'chosen by its own pixels';
     case 'nearest':
       return family.undecided
-        ? 'nearest angle: its lights could not tell'
-        : 'nearest angle: its lights not read yet';
-    case 'prior':
-      return 'the only family near its angle';
+        ? 'at its recorded angle: its lights could not tell'
+        : 'at its recorded angle: its lights not read yet';
+    case 'disputed':
+      return `check: its lights point to ${family.pointed ?? 'another family'}, unconfirmed`;
     default:
       return 'its angles measure alike';
   }
@@ -456,7 +458,9 @@ function KindAccount({ kind, parts, folded, level, lightNight, hrefFor }: KindAc
           {kind.chosen_by && (
             <p
               className={`light-calibration-part light-calibration-chosen-by${
-                kind.basis && UNSETTLED_BASES.has(kind.basis.basis) ? ' is-check' : ''
+                (kind.basis && UNSETTLED_BASES.has(kind.basis.basis)) || kind.family?.by === 'disputed'
+                  ? ' is-check'
+                  : ''
               }`}
               data-testid="calibration-flat-chosen-by"
             >

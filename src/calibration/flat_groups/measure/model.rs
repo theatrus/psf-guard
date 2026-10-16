@@ -565,10 +565,12 @@ impl Book {
     /// Join rotation clusters of one family key whose sessions measure
     /// alike, closest first. Two clusters join when some pair of their
     /// sessions, shot within one flat window or neighbours in time, is
-    /// alike within the limits, and no pair shot within one window is
-    /// apart: complete linkage over the pairs that speak to the angle. A
-    /// pair far apart in time may differ by a change of dust as well as by
-    /// its angle, so only its likeness counts. Clusters never measured
+    /// alike within the limits, and no such pair is apart: complete linkage
+    /// over the pairs that speak to the angle. A pair apart keeps the
+    /// clusters apart, so a light is never handed flats that measured apart
+    /// from its own angle's, unless a change of dust explains it: a third
+    /// session, beside one of the pair at its angle, measured alike with
+    /// the other and apart from its own neighbour. Clusters never measured
     /// alike stay apart.
     fn join_alike_clusters(&self, families: &mut Vec<FamilyDraft>, limits: &Limits) {
         loop {
@@ -609,7 +611,10 @@ impl Book {
                     (self.sessions[*a].first - self.sessions[*b].first).abs() <= limits.window;
                 let neighbours =
                     right_neighbours.contains(b) || self.neighbours_in(*b, left).contains(a);
-                if within && distance > 1.0 {
+                if (within || neighbours)
+                    && distance > 1.0
+                    && !self.apart_by_a_change(*a, *b, left, right, limits)
+                {
                     return None;
                 }
                 if (within || neighbours) && distance <= 1.0 {
@@ -618,6 +623,27 @@ impl Book {
             }
         }
         alike
+    }
+
+    /// Whether sessions `a` (of `left`) and `b` (of `right`), measured
+    /// apart, differ by a change of dust rather than by their angles: a
+    /// session at one's angle measured alike with the other, and apart
+    /// from the one beside it. A morning's two angles alike, and the same
+    /// angle apart from an earlier morning, is new dust, not the angle.
+    fn apart_by_a_change(
+        &self,
+        a: usize,
+        b: usize,
+        left: &[usize],
+        right: &[usize],
+        limits: &Limits,
+    ) -> bool {
+        let alike = |x: usize, y: usize| self.pair_distance(x, y, limits).is_some_and(|d| d <= 1.0);
+        let apart = |x: usize, y: usize| self.pair_distance(x, y, limits).is_some_and(|d| d > 1.0);
+        left.iter().any(|c| *c != a && alike(*c, b) && apart(a, *c))
+            || right
+                .iter()
+                .any(|c| *c != b && alike(a, *c) && apart(*c, b))
     }
 
     /// How far two sessions measured apart against `limits`, with the noise
@@ -631,6 +657,15 @@ impl Book {
         } else {
             limits.distance(comparison)
         })
+    }
+
+    /// Whether two sessions both record angles, in different rotation
+    /// clusters: a pair at two angles. A session whose flats record no
+    /// angle sits at the angle it measured alike with, never at another.
+    pub fn at_two_angles(&self, a: usize, b: usize) -> bool {
+        self.angle(a).is_some()
+            && self.angle(b).is_some()
+            && self.cluster_of[a] != self.cluster_of[b]
     }
 
     /// A session's recorded rotator angle, when it has a usable one.
@@ -738,8 +773,17 @@ impl Book {
             }
             let mut boundaries = Vec::new();
             for pair in groups.windows(2) {
-                let before = *pair[0].last().expect("groups are not empty");
-                let after = pair[1][0];
+                let last = *pair[0].last().expect("groups are not empty");
+                let first = pair[1][0];
+                // The change is told by the nearest pair across it at one
+                // angle: a family's two angles differ by their light path
+                // too, so a pair at two angles says nothing of the change.
+                let (before, after) = pair[0]
+                    .iter()
+                    .flat_map(|a| pair[1].iter().map(move |b| (*a, *b)))
+                    .filter(|(a, b)| !self.at_two_angles(*a, *b))
+                    .min_by_key(|(a, b)| (self.sessions[*b].first - self.sessions[*a].last, *a, *b))
+                    .unwrap_or((last, first));
                 let neighbour = self.comparison(before, after);
                 let distance = self.pair_distance(before, after, &limits);
                 let drift = if distance.is_none_or(|d| d <= 1.0) {
@@ -764,8 +808,8 @@ impl Book {
                     family: family_index,
                     before,
                     after,
-                    start: self.sessions[before].last,
-                    end: self.sessions[after].first,
+                    start: self.sessions[last].last,
+                    end: self.sessions[first].first,
                     dust: neighbour.map(|c| c.dust),
                     broad: neighbour.map(|c| c.broad),
                     drift,
@@ -807,7 +851,13 @@ impl Book {
         for family in &self.families {
             for g in 1..family.groups.len().saturating_sub(1) {
                 let (left, right) = (family.boundaries[g - 1], family.boundaries[g]);
-                if !self.outliers.contains(&left) && !self.outliers.contains(&right) {
+                let change = |b: usize| {
+                    !self.outliers.contains(&b) && {
+                        let boundary = &self.boundaries[b];
+                        !self.at_two_angles(boundary.before, boundary.after)
+                    }
+                };
+                if change(left) && change(right) {
                     bounded.push((left, right));
                 }
             }
@@ -931,7 +981,15 @@ impl Book {
         // Each merge's members, by its root.
         let mut merged: Vec<Vec<usize>> = (0..self.boundaries.len()).map(|i| vec![i]).collect();
         let bounded = self.bounded_groups();
-        let apart = |i: usize| self.outliers.contains(&i) || self.spanning.contains(&i);
+        // A boundary between two angles of one family is a split of the
+        // family, never a change: the two angles may differ by the angle
+        // alone.
+        let across_angles = |i: usize| {
+            let boundary = &self.boundaries[i];
+            self.at_two_angles(boundary.before, boundary.after)
+        };
+        let apart =
+            |i: usize| self.outliers.contains(&i) || self.spanning.contains(&i) || across_angles(i);
         for i in 0..self.boundaries.len() {
             for j in (i + 1)..self.boundaries.len() {
                 if apart(i) || apart(j) {

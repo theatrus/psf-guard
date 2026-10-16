@@ -1,14 +1,21 @@
 //! The measuring pass's last stage: ask lights whose angle points at two
 //! or more response families which one their flats come from.
 //!
-//! For each imaging session and filter whose lights have two or more
-//! candidate families ([`Book::family_candidates`]): the sky background of
-//! up to [`evidence::MAX_LIGHTS`] of its lights, fitted against each pair of
-//! the candidates' flats (the session of each family nearest in time) by
-//! Seiza's `flat_response::choice`. The answer is kept per session and
-//! filter ([`super::family_store`]), so choosing flats reads no pixels.
+//! The lights of one imaging session are asked per filter, target and
+//! recorded angle (lights within the rig's rotation tolerance of each
+//! other), so a background never mixes two fields or two angles. For each
+//! such group whose lights have two or more candidate families
+//! ([`Book::family_candidates`]): the sky background of up to
+//! [`evidence::MAX_LIGHTS`] of its lights, fitted against each pair of the
+//! candidates' flats (the session of each family that stands for it,
+//! [`Book::family_representative`]) by Seiza's `flat_response::choice`. The
+//! answer is kept per group ([`super::family_store`]), so choosing flats
+//! reads no pixels. A group whose answer is still current under its key is
+//! not asked again, and no file of it is read, not even a header.
 
+use super::family_store::Kept;
 use super::job::{pedestal_for, read_binned, session_plane, Pass, PedestalTable};
+use super::lights::wrap;
 use super::measure::rows::{FamilyEvidenceRow, FamilyPairRow};
 use super::metric::Plane;
 use super::model::{canonical_filter, Book};
@@ -21,25 +28,56 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// One light of an imaging session, as the stage needs it.
+#[derive(Debug, Clone)]
 struct Light {
     path: PathBuf,
-    target: String,
     at: i64,
-    /// Its mechanical angle from N.I.N.A.'s record, else none.
+    /// Its mechanical angle from N.I.N.A.'s record, else from its header.
     angle: Option<f64>,
 }
 
-/// The lights of each imaging session and filter that the stage asks:
-/// those with two or more candidate families, with the candidates.
+/// One group of an imaging session's lights the stage asks: one filter,
+/// one target, one recorded angle, with two or more candidate families.
 pub(crate) struct Question {
     session: usize,
     rig: String,
     filter: String,
+    target: String,
     lights: Vec<Light>,
     candidates: Vec<usize>,
-    /// The asked lights' middle angle.
+    /// The lights' middle, lowest and highest recorded angles.
     angle: f64,
+    low: f64,
+    high: f64,
+    start: i64,
+    end: i64,
     key: String,
+    /// Its answer is kept under its current key: nothing to read.
+    answered: bool,
+}
+
+/// Groups of lights within `tolerance` of each other's angle, around the
+/// circle, each in angle order.
+fn angle_groups(mut lights: Vec<Light>, tolerance: f64) -> Vec<Vec<Light>> {
+    lights.sort_by(|a, b| {
+        a.angle
+            .unwrap_or(f64::NAN)
+            .rem_euclid(360.0)
+            .total_cmp(&b.angle.unwrap_or(f64::NAN).rem_euclid(360.0))
+            .then(a.at.cmp(&b.at))
+    });
+    let mut groups: Vec<Vec<Light>> = Vec::new();
+    for light in lights {
+        let joins = groups.last().and_then(|group| group.last()).is_some_and(|last| {
+            matches!((last.angle, light.angle), (Some(a), Some(b)) if wrap(b - a).abs() <= tolerance)
+        });
+        if joins {
+            groups.last_mut().expect("joined").push(light);
+        } else {
+            groups.push(vec![light]);
+        }
+    }
+    groups
 }
 
 pub(crate) fn questions(
@@ -60,6 +98,9 @@ pub(crate) fn questions(
     ) else {
         return Ok(out);
     };
+    let tolerance = crate::calibration::rules::rules_for_rig(for_rig)
+        .rotation_deg
+        .min(super::model::ROTATION_CLUSTER_DEG);
     for (index, session) in book.imaging.iter().enumerate() {
         let measured: Vec<&String> = session
             .rigs
@@ -72,7 +113,7 @@ pub(crate) fn questions(
         if rig.as_str() != for_rig {
             continue;
         }
-        let mut by_filter: BTreeMap<String, Vec<Light>> = BTreeMap::new();
+        let mut by_target: BTreeMap<(String, String), Vec<Light>> = BTreeMap::new();
         for id in &session.lights {
             let row: Option<(Option<String>, String, Option<String>, i64)> = statement
                 .query_row([id], |row| {
@@ -92,80 +133,129 @@ pub(crate) fn questions(
                 .ok()
                 .and_then(|value| value.get("RotatorMechanicalPosition")?.as_f64())
                 .filter(|angle| angle.is_finite());
-            by_filter
-                .entry(filter.unwrap_or_default())
+            by_target
+                .entry((filter.unwrap_or_default(), target.unwrap_or_default()))
                 .or_default()
-                .push(Light {
-                    path,
-                    target: target.unwrap_or_default(),
-                    at,
-                    angle,
-                });
+                .push(Light { path, at, angle });
         }
-        for (filter, lights) in by_filter {
+        let kept = book.family_evidence.get(&session.key);
+        for ((filter, target), mut lights) in by_target {
             if lights.len() < evidence::MIN_LIGHTS {
                 continue;
             }
-            // The first light's header: its sensor, optics and rig.
-            let mut meta = crate::commands::import::headers::read_frame_meta(&lights[0].path);
-            if crate::calibration::rules::light_rig_uuid(&meta) != **rig {
-                continue;
-            }
-            meta.filter = Some(filter.clone());
-            let rules = crate::calibration::rules_for_light(&meta);
-            let compatible = library.flat_family_compatible(&meta, &rules);
-            if compatible.len() < 2 {
-                continue;
-            }
-            let mut asked: BTreeSet<usize> = BTreeSet::new();
-            let mut angles: Vec<f64> = Vec::new();
-            for light in &lights {
-                let Some(angle) = light.angle.or(meta.rotator_position) else {
-                    continue;
-                };
-                let candidates = book.family_candidates(rig, Some(light.at), angle, &compatible);
-                if candidates.len() >= 2 {
-                    asked.extend(candidates.iter().map(|(family, _)| *family));
-                    angles.push(angle);
+            // Lights N.I.N.A. recorded no angle for: their headers' angle.
+            if lights.iter().any(|light| light.angle.is_none()) {
+                let meta = crate::commands::import::headers::read_frame_meta(&lights[0].path);
+                for light in lights.iter_mut().filter(|light| light.angle.is_none()) {
+                    light.angle = meta.rotator_position;
                 }
             }
-            if asked.len() < 2 {
-                continue;
+            let canonical = canonical_filter(&filter);
+            for group in angle_groups(lights, tolerance) {
+                let angles: Vec<f64> = group.iter().filter_map(|light| light.angle).collect();
+                if group.len() < evidence::MIN_LIGHTS || angles.len() != group.len() {
+                    continue;
+                }
+                let mut sorted = angles.clone();
+                sorted.sort_by(f64::total_cmp);
+                let (low, high, angle) = (
+                    group[0].angle.unwrap_or_default(),
+                    group[group.len() - 1].angle.unwrap_or_default(),
+                    sorted[sorted.len() / 2],
+                );
+                let (start, end) = (
+                    group.iter().map(|light| light.at).min().unwrap_or_default(),
+                    group.iter().map(|light| light.at).max().unwrap_or_default(),
+                );
+                let place = |row: &FamilyEvidenceRow| {
+                    row.filter == canonical
+                        && row.target == target
+                        && row.angle_key() == format!("{low:.1}")
+                };
+                // Kept and current: nothing to read, not even a header.
+                if let Some(row) = kept
+                    .into_iter()
+                    .flatten()
+                    .find(|row| place(row) && book.family_evidence_current(row, rig, session.start))
+                {
+                    out.push(Question {
+                        session: index,
+                        rig: (*rig).clone(),
+                        filter: canonical.clone(),
+                        target: target.clone(),
+                        lights: Vec::new(),
+                        candidates: Vec::new(),
+                        angle: row.angle,
+                        low: row.angle_low,
+                        high: row.angle_high,
+                        start: row.start,
+                        end: row.end,
+                        key: row.key.clone(),
+                        answered: true,
+                    });
+                    continue;
+                }
+                // The first light's header: its sensor, optics and rig.
+                let mut meta = crate::commands::import::headers::read_frame_meta(&group[0].path);
+                if crate::calibration::rules::light_rig_uuid(&meta) != **rig {
+                    continue;
+                }
+                meta.filter = Some(filter.clone());
+                let rules = crate::calibration::rules_for_light(&meta);
+                let compatible = library.flat_family_compatible(&meta, &rules);
+                if compatible.len() < 2 {
+                    continue;
+                }
+                let mut asked: BTreeSet<usize> = BTreeSet::new();
+                for light in &group {
+                    let candidates = book.family_candidates(
+                        rig,
+                        Some(light.at),
+                        light.angle.unwrap_or(angle),
+                        &compatible,
+                    );
+                    if candidates.len() >= 2 {
+                        asked.extend(candidates.iter().map(|(family, _)| *family));
+                    }
+                }
+                if asked.len() < 2 {
+                    continue;
+                }
+                let candidates: Vec<usize> = asked.into_iter().collect();
+                let key = book.family_evidence_key(&candidates, rig, session.start, angle);
+                out.push(Question {
+                    session: index,
+                    rig: (*rig).clone(),
+                    filter: canonical.clone(),
+                    target: target.clone(),
+                    lights: group,
+                    candidates,
+                    angle,
+                    low,
+                    high,
+                    start,
+                    end,
+                    key,
+                    answered: false,
+                });
             }
-            let candidates: Vec<usize> = asked.into_iter().collect();
-            // The lights' middle angle stands for them.
-            angles.sort_by(f64::total_cmp);
-            let angle = angles[angles.len() / 2];
-            let key = book.family_evidence_key(&candidates, rig, session.start, angle);
-            out.push(Question {
-                session: index,
-                rig: (*rig).clone(),
-                filter: canonical_filter(&filter),
-                lights,
-                candidates,
-                angle,
-                key,
-            });
         }
     }
     Ok(out)
 }
 
 /// Whether a question's answer is kept under its current key.
-pub(crate) fn answered(book: &Book, question: &Question) -> bool {
-    book.family_evidence
-        .get(&(
-            book.imaging[question.session].key.clone(),
-            question.filter.clone(),
-        ))
-        .is_some_and(|row| row.key == question.key)
+pub(crate) fn answered(question: &Question) -> bool {
+    question.answered
 }
 
-/// The row a question keeps: `(session, filter, key)`.
-pub(crate) fn kept(book: &Book, question: &Question) -> (String, String, String) {
+/// The place a question's row is kept under.
+pub(crate) fn kept(book: &Book, question: &Question) -> Kept {
     (
         book.imaging[question.session].key.clone(),
         question.filter.clone(),
+        question.target.clone(),
+        format!("{:.1}", question.low),
         question.key.clone(),
     )
 }
@@ -251,9 +341,7 @@ pub(crate) fn answer(
         None => choice::ResponseChoice::default(),
     };
     let key_of = |position: usize| book.families[question.candidates[position]].key.clone();
-    let mut targets: Vec<String> = picked.iter().map(|light| light.target.clone()).collect();
-    targets.sort();
-    targets.dedup();
+    let targets = vec![question.target.clone()];
     tracing::debug!(
         "family evidence {} {}: winners {:?} of {:?}",
         session.key,
@@ -270,10 +358,7 @@ pub(crate) fn answer(
         // nothing to choose among.
         _ if picked_choice.any_unfitted() => None,
         several => {
-            let angle = picked
-                .iter()
-                .find_map(|light| light.angle)
-                .or(meta.rotator_position);
+            let angle = Some(question.angle);
             angle.and_then(|angle| {
                 several.iter().copied().min_by(|a, b| {
                     let gap = |position: usize| {
@@ -291,6 +376,12 @@ pub(crate) fn answer(
     Some(FamilyEvidenceRow {
         session_key: session.key.clone(),
         filter: question.filter.clone(),
+        target: question.target.clone(),
+        angle: question.angle,
+        angle_low: question.low,
+        angle_high: question.high,
+        start: question.start,
+        end: question.end,
         key: question.key.clone(),
         candidates: (0..question.candidates.len()).map(key_of).collect(),
         chosen: chosen.map(key_of),

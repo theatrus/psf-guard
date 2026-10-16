@@ -586,21 +586,33 @@ of the light's angle:
   is constant until the rotator is re-homed or the camera re-seated, so
   each run of lights with one offset is an epoch, and a light compared
   with flats of another epoch is turned by the difference.
-- **One candidate**: its flats.
+- **One candidate**: its flats, when it has flats at the light's recorded
+  angle. A header or an epoch alone never hands a light flats at another
+  angle.
 - **Two or more**: the light's own pixels choose. The measuring job takes
-  the sky background of up to eight of the imaging session's lights and
-  fits it against what tells each pair of candidates apart, weighed
-  against the same fit where nothing differs (Seiza's
-  `flat_response::choice`). The family the lights follow wins when it
-  stands clear of every other. Over a nebula they usually cannot tell, and
-  the light takes the family nearest its angle; the panel says so. The
-  answer is kept per imaging session and filter, so choosing flats reads
-  no pixel.
-- **None** within 10°: flats are matched by angle as before.
+  the sky background of up to eight lights of each imaging session,
+  filter, target and angle, and fits it against what tells each pair of
+  candidates apart, weighed against the same fit where nothing differs
+  (Seiza's `flat_response::choice`). The family the lights follow wins
+  when it stands clear of every other. The answer is kept, so choosing
+  flats reads no pixel.
+  - Pixels that pick the family at the light's recorded angle confirm it.
+  - Pixels that pick a family at another angle move the light only when
+    something else agrees: the rotator's epochs put the light at that
+    family's angle, or the session's lights of another filter, at the
+    same angles, moved the same way. Otherwise the light keeps the family
+    at its recorded angle and gets a Check.
+  - Over a nebula the lights usually cannot tell, and the light keeps the
+    family at its recorded angle; the panel says so.
+- **None** within 10°, or none at its recorded angle that its pixels
+  confirm: flats are matched by angle as before.
 
 Within its family a light takes the flats at its own angle first, then
 those within 10° of it, then the rest; the family's far angles serve
-where nothing nearer lies on its side of a change. A light whose flats sit at another angle than it recorded is read
+where nothing nearer lies on its side of a change. A flat at another
+angle serves only when the light's own pixels chose the family, or when
+its session measured alike with the family's flats at the light's
+angle. A light whose flats sit at another angle than it recorded is read
 at its flats' angle when a stack judges it against its masters, so the
 stacker does not refuse the master its family chose.
 
@@ -638,9 +650,10 @@ Calibration panel says which of these chose its flats, under **Chosen
 by**, with the change and how the light was placed. When its family was
 not simply the one at its recorded angle, **Flat family** names it with
 its measured angle range and how it was chosen: *chosen by its own
-pixels*, *the only family near its angle*, *its angles measure alike*,
-or *nearest angle*, with whether its lights could not tell or have not
-been read yet. When its flat master
+pixels*, *moved by its own pixels* with what confirmed it, *its angles
+measure alike*, or *at its recorded angle*, with whether its lights
+could not tell or have not been read yet. A move nothing confirmed reads
+*check: its lights point to …*. When its flat master
 mixes nights, the panel says how alike they measured.
 
 An export, and a WBPP run, place the same flats a stack takes. WBPP

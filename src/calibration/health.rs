@@ -613,7 +613,15 @@ impl HealthLibrary {
         if let Some(finding) = self.mixed_flats(flat.raw(), rules) {
             found.push(Check::MixedFlats, finding);
         }
-        if let Some(reason) = super::flat_groups::describe_flag(&selected.flat_basis, rules) {
+        // A change it cannot be placed against, or a family its own lights
+        // point away from that nothing confirms.
+        let flag = super::flat_groups::describe_flag(&selected.flat_basis, rules).or_else(|| {
+            selected
+                .flat_family
+                .as_ref()
+                .and_then(super::flat_groups::describe_family_flag)
+        });
+        if let Some(reason) = flag {
             found.push(
                 Check::FlatsDiffer,
                 check(HealthCode::FlatsDiffer, reason).about([CalibrationKind::Flat]),

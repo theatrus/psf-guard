@@ -66,7 +66,8 @@ struct LightReport {
     flagged: bool,
     /// The response family its flats come from, when one was chosen.
     family: Option<String>,
-    /// How: `angle`, `prior`, `pixels` or `nearest`.
+    /// How: `angle`, `pixels`, `pixels-moved` (off its recorded angle),
+    /// `nearest` or `disputed`.
     family_by: Option<String>,
     /// Its flats' recorded angles.
     flat_angles: Vec<f64>,
@@ -353,7 +354,11 @@ fn light_reports(
         let family = selected.flat_family.as_ref();
         let family_by = family
             .and_then(|family| serde_json::to_value(family).ok())
-            .and_then(|value| value.get("by")?.as_str().map(str::to_string));
+            .and_then(|value| value.get("by")?.as_str().map(str::to_string))
+            .map(|by| match family {
+                Some(family) if family.by_pixels() && !family.at_recorded => format!("{by}-moved"),
+                _ => by,
+            });
         let basis = serde_json::to_value(&selected.flat_basis)?
             .get("basis")
             .and_then(|b| b.as_str())
@@ -378,7 +383,8 @@ fn light_reports(
             .into_iter()
             .flatten()
             .reduce(|a, b| format!("{a}. {b}")),
-            flagged: selected.flat_basis.flags(),
+            flagged: selected.flat_basis.flags()
+                || selected.flat_family.as_ref().is_some_and(|f| f.flags()),
             basis,
             family: family.map(|family| family.label.clone()),
             family_by,

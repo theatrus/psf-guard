@@ -41,10 +41,6 @@ pub const ANGLE_PRIOR_DEG: f64 = 10.0;
 pub const EPOCH_JUMP_DEG: f64 = 2.5;
 /// Bump when equal lights and candidates may choose differently.
 pub const FAMILY_EVIDENCE_VERSION: u32 = 1;
-/// The largest spread a light's own pixels may decide with when they move
-/// its flats away from the family at its recorded angle: half what decides
-/// which side of a change it is on.
-pub const MOVE_MAX_SPREAD: f64 = 0.15;
 
 /// The signed angle from `b` to `a`, in (−180, 180].
 pub fn wrap(difference: f64) -> f64 {
@@ -164,8 +160,8 @@ impl AngleEpochs {
     }
 }
 
-/// What lights said, by imaging session key and canonical filter.
-pub type FamilyEvidence = HashMap<(String, String), FamilyEvidenceRow>;
+/// What lights said, by imaging session key.
+pub type FamilyEvidence = HashMap<String, Vec<FamilyEvidenceRow>>;
 
 /// How a light's response family was chosen.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -173,16 +169,29 @@ pub type FamilyEvidence = HashMap<(String, String), FamilyEvidenceRow>;
 pub enum FamilyBasis {
     /// The only candidate, at the light's recorded angle.
     Angle,
-    /// The only candidate, within the prior but not at the recorded angle:
-    /// reached through the rotator's epochs or the family's measured range.
-    Prior,
-    /// Its imaging session's own lights follow this family's flats.
-    Pixels { lights: usize, targets: Vec<String> },
-    /// Nothing stood clear between the candidates: the family at the
-    /// light's recorded angle, else the nearest through the rotator's
-    /// epochs. `undecided` when the lights were read and could not tell;
-    /// otherwise they have not been read yet.
+    /// Its imaging session's own lights follow this family's flats. `moved`
+    /// when that is not the family at its recorded angle; a move stands
+    /// only when `corroborated` says what else points there.
+    Pixels {
+        lights: usize,
+        targets: Vec<String>,
+        moved: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        corroborated: Option<String>,
+    },
+    /// Two or more candidates, and its lights could not tell them apart
+    /// (`undecided`) or have not been read: the family at its recorded
+    /// angle stands.
     Nearest { undecided: bool },
+    /// Its lights point to another family (`pointed`) than the one at its
+    /// recorded angle, and nothing confirms it: it keeps the flats at its
+    /// recorded angle and is flagged.
+    Disputed {
+        #[serde(skip)]
+        pointed: usize,
+        lights: usize,
+        targets: Vec<String>,
+    },
 }
 
 /// The response family a light's flats come from.
@@ -198,12 +207,25 @@ pub struct FamilyChoice {
     /// How far the light's angle turns into the chosen family's nearest
     /// session's epoch: 0 when nothing re-homed.
     pub shift: f64,
+    /// Whether the family has flats at the light's recorded angle.
+    pub at_recorded: bool,
 }
 
 impl FamilyChoice {
-    /// Whether the choice took flats at an angle the light did not record.
+    /// Whether the choice took a family with no flats at the angle the
+    /// light recorded.
     pub fn moved(&self) -> bool {
-        !matches!(self.basis, FamilyBasis::Angle)
+        !self.at_recorded
+    }
+
+    /// Whether its own pixels chose the family.
+    pub fn by_pixels(&self) -> bool {
+        matches!(self.basis, FamilyBasis::Pixels { .. })
+    }
+
+    /// Whether the light is worth a look for it.
+    pub fn flags(&self) -> bool {
+        matches!(self.basis, FamilyBasis::Disputed { .. })
     }
 }
 
@@ -312,9 +334,11 @@ impl Book {
             .min_by_key(|index| ((self.sessions[*index].first - at).abs(), *index))
     }
 
-    /// The key a session's family evidence is kept under: the candidates
-    /// and the sessions that stand for them. New flats nearer the session,
-    /// or a family that joined another, ask the lights again.
+    /// The key a session's family evidence is kept under: the candidates,
+    /// the sessions that stand for them, which pairs of those measured
+    /// alike (they are not fitted), and the versions of this and Seiza's
+    /// choice. New flats nearer the session, a family that joined another,
+    /// or a comparison that changed ask the lights again.
     pub fn family_evidence_key(
         &self,
         candidates: &[usize],
@@ -323,39 +347,187 @@ impl Book {
         angle: f64,
     ) -> String {
         use sha2::Digest;
-        let mut parts: Vec<String> = candidates
+        let mut sorted: Vec<usize> = candidates.to_vec();
+        sorted.sort_by(|a, b| self.families[*a].key.cmp(&self.families[*b].key));
+        let representatives: Vec<Option<usize>> = sorted
             .iter()
-            .map(|family| {
+            .map(|family| self.family_representative(*family, rig, at, angle))
+            .collect();
+        let mut parts: Vec<String> = sorted
+            .iter()
+            .zip(&representatives)
+            .map(|(family, representative)| {
                 format!(
                     "{}={}",
                     self.families[*family].key,
-                    self.family_representative(*family, rig, at, angle)
-                        .map_or("-", |i| self.sessions[i].row.response_key.as_str())
+                    representative.map_or("-", |i| self.sessions[i].row.response_key.as_str())
                 )
             })
             .collect();
-        parts.sort();
+        for (i, a) in representatives.iter().enumerate() {
+            for b in &representatives[i + 1..] {
+                if let (Some(a), Some(b)) = (a, b) {
+                    parts.push(format!("alike={}", self.measured_alike(&[*a, *b])));
+                }
+            }
+        }
         let digest = sha2::Sha256::digest(
-            format!("{FAMILY_EVIDENCE_VERSION}\u{1f}{}", parts.join(",")).as_bytes(),
+            format!(
+                "{FAMILY_EVIDENCE_VERSION}\u{1f}{}\u{1f}{}",
+                super::choice::CHOICE_ALGORITHM_VERSION,
+                parts.join(",")
+            )
+            .as_bytes(),
         );
         digest.iter().take(12).map(|b| format!("{b:02x}")).collect()
     }
 
-    /// What the lights of `session` said in `filter`, when they were read.
+    /// Whether a row's key is still the one its candidates, their sessions
+    /// and comparisons give now: a row of another state is not read.
+    pub fn family_evidence_current(&self, row: &FamilyEvidenceRow, rig: &str, start: i64) -> bool {
+        let candidates: Option<Vec<usize>> = row
+            .candidates
+            .iter()
+            .map(|key| self.families.iter().position(|family| family.key == *key))
+            .collect();
+        candidates.is_some_and(|candidates| {
+            self.family_evidence_key(&candidates, rig, start, row.angle) == row.key
+        })
+    }
+
+    /// What the lights of `session` in `filter` near `at` and `angle` said,
+    /// when they were read and the answer is current: the row of their
+    /// target and angle.
     pub fn family_evidence_for(
         &self,
+        rig: &str,
         session: &ImagingSession,
         filter: &str,
+        at: i64,
+        angle: f64,
+        tolerance: f64,
     ) -> Option<&FamilyEvidenceRow> {
+        let filter = canonical_filter(filter);
+        // A light's header time and its catalog time differ by up to an
+        // exposure.
+        const SLACK: i64 = 900;
         self.family_evidence
-            .get(&(session.key.clone(), canonical_filter(filter)))
+            .get(&session.key)?
+            .iter()
+            .filter(|row| row.filter == filter)
+            .filter(|row| row.start - SLACK <= at && at <= row.end + SLACK)
+            .filter(|row| {
+                wrap(angle - row.angle_low) >= -tolerance
+                    && wrap(angle - row.angle_high) <= tolerance
+            })
+            .filter(|row| self.family_evidence_current(row, rig, session.start))
+            .min_by(|a, b| {
+                wrap(angle - a.angle)
+                    .abs()
+                    .total_cmp(&wrap(angle - b.angle).abs())
+            })
+    }
+
+    /// Whether `session` of `family` measured alike with one of the
+    /// family's sessions at `angle`, within the rig's `tolerance`: then its
+    /// flats, at another angle, describe the light path of a light at
+    /// `angle` by measurement.
+    pub fn alike_with_angle(
+        &self,
+        family: usize,
+        session: usize,
+        angle: f64,
+        tolerance: f64,
+    ) -> bool {
+        self.families[family].sessions.iter().any(|other| {
+            *other != session
+                && self.sessions[*other]
+                    .row
+                    .rotation
+                    .filter(|r| r.is_finite())
+                    .is_some_and(|flat| wrap(angle - flat).abs() <= tolerance)
+                && self.measured_alike(&[session, *other])
+        })
+    }
+
+    /// The families a light at `angle` has flats of at that angle, within
+    /// the rig's `tolerance`.
+    pub(crate) fn at_recorded(&self, families: &[usize], angle: f64, tolerance: f64) -> Vec<usize> {
+        families
+            .iter()
+            .copied()
+            .filter(|family| {
+                self.families[*family].sessions.iter().any(|index| {
+                    self.sessions[*index]
+                        .row
+                        .rotation
+                        .filter(|r| r.is_finite())
+                        .is_some_and(|flat| wrap(angle - flat).abs() <= tolerance)
+                })
+            })
+            .collect()
+    }
+
+    /// What besides a light's pixels points to `family`, when they move it
+    /// off the family at its recorded angle: the rotator's epochs turning
+    /// its angle onto the family, or the lights of another filter of the
+    /// same imaging session moved onto a family at the same angles.
+    fn corroboration(
+        &self,
+        rig: &str,
+        session: &ImagingSession,
+        row: &FamilyEvidenceRow,
+        family: usize,
+        (at, angle): (i64, f64),
+        tolerance: f64,
+    ) -> Option<String> {
+        let (shifted, _) = self.family_gaps(family, rig, Some(at), angle);
+        if shifted <= tolerance {
+            return Some("the rotator's epochs".into());
+        }
+        let spans = &self.families[family].angles;
+        let same_angles = |other: usize| {
+            self.families[other].angles.iter().any(|a| {
+                spans
+                    .iter()
+                    .any(|b| a.gap_to(b.low) <= tolerance || b.gap_to(a.low) <= tolerance)
+            })
+        };
+        self.family_evidence
+            .get(&session.key)?
+            .iter()
+            .filter(|other| other.filter != row.filter)
+            .filter(|other| self.family_evidence_current(other, rig, session.start))
+            .find_map(|other| {
+                let chosen = other.chosen.as_deref()?;
+                let index = self.families.iter().position(|f| f.key == chosen)?;
+                // Moved too: no flat of its choice at its lights' angle.
+                let moved = self
+                    .at_recorded(&[index], other.angle, tolerance)
+                    .is_empty();
+                // Named as its flats name the filter: "its Ha lights".
+                let filter = self.families[index]
+                    .filter
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or(&other.filter);
+                (moved && same_angles(index)).then(|| format!("its {filter} lights"))
+            })
     }
 
     /// The response family a light's flats come from, or `None` to match
-    /// them by angle as before: the light records no angle, or no family
-    /// lies within the prior. `compatible` are the families whose flats
-    /// pass every gate but the angle; `tolerance` the rig's rotation
-    /// tolerance.
+    /// them by angle as before: the light records no angle, no family lies
+    /// within the prior, or none has flats at its recorded angle and its
+    /// own pixels did not choose one.
+    ///
+    /// Header and epoch data only widen the candidates: without the
+    /// lights' word, the family at the light's recorded angle stands. The
+    /// lights' word confirms that family freely, but moves the light to
+    /// another only when something else points there too
+    /// ([`Self::corroboration`]); otherwise the light keeps its recorded
+    /// family and is flagged (`Disputed`). `compatible` are the families
+    /// whose flats pass every gate but the angle; `tolerance` the rig's
+    /// rotation tolerance.
     pub fn choose_family(
         &self,
         rig: &str,
@@ -367,18 +539,17 @@ impl Book {
     ) -> Option<FamilyChoice> {
         let angle = angle.filter(|a| a.is_finite())?;
         let candidates = self.family_candidates(rig, at, angle, compatible);
-        let (by_epoch, _) = *candidates.first()?;
-        // Without the lights' word, the family at the angle the light
-        // recorded stands, as before families; the epochs only widen the
-        // candidates. With none at its recorded angle, the nearest through
-        // the epochs.
-        let at_recorded = candidates
-            .iter()
-            .map(|(family, _)| (*family, self.family_gaps(*family, rig, at, angle).1))
-            .filter(|(_, recorded)| *recorded <= tolerance)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(family, _)| family);
-        let nearest = at_recorded.unwrap_or(by_epoch);
+        if candidates.is_empty() {
+            return None;
+        }
+        let ordered: Vec<usize> = candidates.iter().map(|(family, _)| *family).collect();
+        let at_recorded = self
+            .at_recorded(&ordered, angle, tolerance)
+            .into_iter()
+            .min_by(|a, b| {
+                let gap = |f: usize| self.family_gaps(f, rig, at, angle).1;
+                gap(*a).total_cmp(&gap(*b))
+            });
         let shift_to = |family: usize| {
             at.and_then(|at| {
                 let session = self.family_representative(family, rig, at, angle)?;
@@ -386,75 +557,83 @@ impl Book {
             })
             .unwrap_or(0.0)
         };
-        let ordered: Vec<usize> = candidates.iter().map(|(family, _)| *family).collect();
         let choice = |family: usize, basis: FamilyBasis| FamilyChoice {
             family,
             basis,
             candidates: ordered.clone(),
             light_angle: angle,
             shift: shift_to(family),
+            at_recorded: at_recorded == Some(family),
         };
-        if candidates.len() == 1 {
-            let (_, recorded) = self.family_gaps(nearest, rig, at, angle);
-            let at_angle = self.families[nearest]
-                .angles
-                .iter()
-                .any(|span| span.gap_to(angle) <= tolerance)
-                || recorded <= tolerance;
-            return Some(choice(
-                nearest,
-                if at_angle {
-                    FamilyBasis::Angle
-                } else {
-                    FamilyBasis::Prior
-                },
-            ));
-        }
-        let evidence = at
-            .and_then(|at| self.imaging_session(rig, at))
+        let session = at.and_then(|at| self.imaging_session(rig, at));
+        let row = session
+            .zip(at)
             .zip(filter)
-            .and_then(|(session, filter)| self.family_evidence_for(session, filter));
-        if let Some(row) = evidence {
-            let keys: Vec<&str> = ordered
-                .iter()
-                .map(|family| self.families[*family].key.as_str())
-                .collect();
-            let covered = keys
-                .iter()
-                .all(|key| row.candidates.iter().any(|c| c == key));
-            // Away from the family at its recorded angle only on a tight
-            // fit: over a nebula a spread near the limit decides a change's
-            // side safely, but moving a light's flats to another angle
-            // against its own record wants more.
-            let tight = |chosen: &str| {
-                row.pairs
+            .and_then(|((session, at), filter)| {
+                self.family_evidence_for(rig, session, filter, at, angle, tolerance)
+            });
+        let covered = row.is_some_and(|row| {
+            ordered.iter().all(|family| {
+                row.candidates
                     .iter()
-                    .filter(|pair| pair.first == chosen || pair.second == chosen)
-                    .filter(|pair| {
-                        pair.verdict
-                            .is_some_and(|v| v != super::rows::Verdict::Undecided)
-                    })
-                    .all(|pair| pair.spread.is_some_and(|spread| spread <= MOVE_MAX_SPREAD))
-            };
-            if covered
-                && let Some(chosen) = row.chosen.as_deref()
-                && let Some(family) = ordered
+                    .any(|key| *key == self.families[*family].key)
+            })
+        });
+        if let (Some(row), Some(session), Some(at), true) = (row, session, at, covered) {
+            let chosen = row.chosen.as_deref().and_then(|key| {
+                ordered
                     .iter()
                     .copied()
-                    .find(|family| self.families[*family].key == chosen)
-                && (at_recorded.is_none_or(|recorded| recorded == family) || tight(chosen))
-            {
-                return Some(choice(
-                    family,
-                    FamilyBasis::Pixels {
+                    .find(|f| self.families[*f].key == key)
+            });
+            match chosen {
+                Some(family) if at_recorded == Some(family) => {
+                    return Some(choice(
+                        family,
+                        FamilyBasis::Pixels {
+                            lights: row.lights,
+                            targets: row.targets.clone(),
+                            moved: false,
+                            corroborated: None,
+                        },
+                    ));
+                }
+                Some(family) => {
+                    if let Some(by) =
+                        self.corroboration(rig, session, row, family, (at, angle), tolerance)
+                    {
+                        return Some(choice(
+                            family,
+                            FamilyBasis::Pixels {
+                                lights: row.lights,
+                                targets: row.targets.clone(),
+                                moved: true,
+                                corroborated: Some(by),
+                            },
+                        ));
+                    }
+                    let disputed = FamilyBasis::Disputed {
+                        pointed: family,
                         lights: row.lights,
                         targets: row.targets.clone(),
-                    },
-                ));
+                    };
+                    return Some(choice(at_recorded.unwrap_or(family), disputed));
+                }
+                None => {
+                    return at_recorded
+                        .map(|family| choice(family, FamilyBasis::Nearest { undecided: true }));
+                }
             }
-            return Some(choice(nearest, FamilyBasis::Nearest { undecided: covered }));
         }
-        Some(choice(nearest, FamilyBasis::Nearest { undecided: false }))
+        let family = at_recorded?;
+        Some(choice(
+            family,
+            if candidates.len() == 1 {
+                FamilyBasis::Angle
+            } else {
+                FamilyBasis::Nearest { undecided: false }
+            },
+        ))
     }
 }
 
@@ -591,142 +770,233 @@ mod tests {
             .is_none());
     }
 
+    /// The epochs of a light shot `shift` degrees off the flats' offset.
+    fn turned(shift: f64) -> AngleEpochs {
+        AngleEpochs::from_samples(vec![
+            ("rig".into(), 0, 76.0),
+            ("rig".into(), 5 * DAY, 76.0 + shift),
+        ])
+    }
+
     #[test]
-    fn a_re_homed_rotator_reaches_the_family_its_light_path_is_in() {
+    fn a_re_homed_rotator_widens_the_candidates_but_moves_nothing_alone() {
         let mut book = book();
-        // The flats were shot in an epoch whose offset is 20° less than the
-        // light's: a light recorded at 82° sits where 102° flats did.
-        book.epochs =
-            AngleEpochs::from_samples(vec![("rig".into(), 0, 76.0), ("rig".into(), 5 * DAY, 96.0)]);
+        // A light recorded at 82° sits where 102° flats did, by the epochs.
+        book.epochs = turned(20.0);
         let all: Vec<usize> = (0..book.families.len()).collect();
         let choice = book
             .choose_family("rig", Some("OIII"), Some(10 * DAY), Some(82.0), &all, 2.0)
             .unwrap();
-        // Both are candidates: the header's and the epoch's. Unread, the
-        // family at its recorded angle stands, as before families.
+        // Both are candidates, and unread the family at its recorded angle
+        // stands.
         assert_eq!(choice.candidates.len(), 2);
         assert_eq!(book.angle_label(choice.family), "82.2°");
         assert_eq!(choice.basis, FamilyBasis::Nearest { undecided: false });
-        // Recorded at 85°, no family within 2° of it: the epoch's nearest.
-        let choice = book
+        assert!(choice.at_recorded && !choice.moved());
+        // Recorded at 85°, no family at its angle: the epochs alone hand it
+        // nothing, and its flats are matched by angle as before.
+        assert!(book
             .choose_family("rig", Some("OIII"), Some(10 * DAY), Some(85.0), &all, 2.0)
-            .unwrap();
-        assert_eq!(book.angle_label(choice.family), "102.0°");
-        assert!((choice.shift - 20.0).abs() < 1e-9);
-        assert!(
-            super::super::super::describe_family(&super::super::super::FlatFamily::of(
-                &book, &choice
-            ))
-            .unwrap()
-            .contains("105.0° in the flats' rotator epoch")
-        );
+            .is_none());
+    }
 
-        // Its own pixels move it off its recorded family only on a tight
-        // fit.
-        let session = book.imaging[0].key.clone();
-        let key = |rotation: f64| {
-            book.families
-                .iter()
-                .find(|f| f.rotation == Some(rotation))
-                .unwrap()
-                .key
-                .clone()
-        };
-        let (k82, k102) = (key(82.2), key(102.0));
-        let row = |spread: f64| FamilyEvidenceRow {
-            session_key: session.clone(),
+    /// What the lights of the book's imaging session at `angle` said:
+    /// the family at `chosen` degrees, under the key the book gives their
+    /// candidates now.
+    fn said(book: &Book, angle: f64, chosen: f64) -> FamilyEvidenceRow {
+        let session = &book.imaging[0];
+        let candidates: Vec<usize> = (0..book.families.len()).collect();
+        FamilyEvidenceRow {
+            session_key: session.key.clone(),
             filter: "oiii".into(),
-            key: "k".into(),
-            candidates: vec![k82.clone(), k102.clone()],
-            chosen: Some(k102.clone()),
+            target: "M 27".into(),
+            angle,
+            angle_low: angle - 0.1,
+            angle_high: angle + 0.1,
+            start: session.start,
+            end: session.end,
+            key: book.family_evidence_key(&candidates, "rig", session.start, angle),
+            candidates: book.families.iter().map(|f| f.key.clone()).collect(),
+            chosen: book
+                .families
+                .iter()
+                .find(|f| f.rotation == Some(chosen))
+                .map(|f| f.key.clone()),
             lights: 8,
-            targets: vec!["Sh2 140".into()],
-            pairs: vec![super::super::rows::FamilyPairRow {
-                first: k82.clone(),
-                second: k102.clone(),
-                outcome: "fit".into(),
-                carried: Some(1.0),
-                spread: Some(spread),
-                verdict: Some(super::super::rows::Verdict::After),
-            }],
-        };
-        for (spread, expected) in [(0.21, "82.2°"), (0.1, "102.0°")] {
-            book.family_evidence
-                .insert((session.clone(), "oiii".into()), row(spread));
-            let choice = book
-                .choose_family(
-                    "rig",
-                    Some("OIII"),
-                    Some(10 * DAY + 300),
-                    Some(82.0),
-                    &all,
-                    2.0,
-                )
-                .unwrap();
-            assert_eq!(book.angle_label(choice.family), expected, "{spread}");
+            targets: vec!["M 27".into()],
+            pairs: Vec::new(),
         }
     }
 
+    fn with(mut book: Book, row: FamilyEvidenceRow) -> Book {
+        book.family_evidence
+            .insert(row.session_key.clone(), vec![row]);
+        book
+    }
+
     #[test]
-    fn the_lights_own_pixels_choose_between_candidates() {
+    fn the_lights_own_pixels_confirm_the_recorded_family_freely() {
         let mut book = book();
+        book.epochs = turned(20.0);
+        let row = said(&book, 82.0, 82.2);
+        let book = with(book, row);
         let all: Vec<usize> = (0..book.families.len()).collect();
-        // Two candidates within the prior of a light at 92°.
-        let candidates: Vec<String> = book
-            .family_candidates("rig", Some(10 * DAY), 92.0, &all)
-            .iter()
-            .map(|(f, _)| book.families[*f].key.clone())
-            .collect();
-        assert_eq!(candidates.len(), 2);
-        let session = book.imaging[0].key.clone();
-        let row = |chosen: Option<String>| FamilyEvidenceRow {
-            session_key: session.clone(),
-            filter: "oiii".into(),
-            key: "k".into(),
-            candidates: candidates.clone(),
-            chosen,
+        let choice = book
+            .choose_family(
+                "rig",
+                Some("OIII"),
+                Some(10 * DAY + 300),
+                Some(82.0),
+                &all,
+                2.0,
+            )
+            .unwrap();
+        assert_eq!(book.angle_label(choice.family), "82.2°");
+        assert!(matches!(
+            choice.basis,
+            FamilyBasis::Pixels {
+                moved: false,
+                lights: 8,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn the_lights_own_pixels_move_a_light_only_when_something_else_agrees() {
+        let all: Vec<usize> = (0..2).collect();
+        let at = Some(10 * DAY + 300);
+        // Recorded at 92°: 82.2° and 102.0° both lie within the prior, and
+        // neither at its angle. Its lights point to 82.2°.
+        let alone = with(book(), said(&book(), 92.0, 82.2));
+        let choice = alone
+            .choose_family("rig", Some("OIII"), at, Some(92.0), &all, 2.0)
+            .unwrap();
+        // Nothing else agrees: the move is a Check, and no family serves.
+        assert!(
+            matches!(choice.basis, FamilyBasis::Disputed { .. }),
+            "{choice:?}"
+        );
+        assert!(choice.flags() && choice.moved() && !choice.by_pixels());
+
+        // The rotator's epochs put the light at 82.2°: the move stands.
+        let mut turned_book = book();
+        turned_book.epochs = turned(-9.8);
+        let row = said(&turned_book, 92.0, 82.2);
+        let turned_book = with(turned_book, row);
+        let choice = turned_book
+            .choose_family("rig", Some("OIII"), at, Some(92.0), &all, 2.0)
+            .unwrap();
+        assert!(
+            matches!(
+                &choice.basis,
+                FamilyBasis::Pixels { moved: true, corroborated: Some(by), .. }
+                    if by == "the rotator's epochs"
+            ),
+            "{choice:?}"
+        );
+
+        // An answer of another state (a candidate's flats changed) is not
+        // read: unread, and with no family at its angle, nothing serves.
+        let mut stale = said(&book(), 92.0, 82.2);
+        stale.key = "an older key".into();
+        let stale_book = with(book(), stale);
+        assert!(stale_book
+            .choose_family("rig", Some("OIII"), at, Some(92.0), &all, 2.0)
+            .is_none());
+    }
+
+    #[test]
+    fn another_filter_moved_to_the_same_angles_corroborates_a_move() {
+        // OIII and Hα flats at 82° and 102°, apart; both filters' lights of
+        // one session, recorded at 92°, point to 82°.
+        let limits = Limits {
+            measured: true,
+            dust: 0.01,
+            broad: 0.02,
+            window: DAY,
+            rotation: 2.0,
+        };
+        let imaging = imaging_sessions(
+            vec![
+                (1, Some("p".into()), 10 * DAY),
+                (2, Some("p".into()), 10 * DAY + 600),
+            ],
+            |_| vec!["rig".into()],
+        );
+        let ha = |key: &str, rotation: f64, at: i64| ResponseRow {
+            family_key: "HA".into(),
+            filter: Some("Ha".into()),
+            ..row(key, rotation, at)
+        };
+        let mut book = Book::build(
+            vec![
+                row("o82", 82.2, 0),
+                row("o102", 102.0, 600),
+                ha("h82", 82.1, 900),
+                ha("h102", 102.1, 1200),
+            ],
+            vec![apart("o82", "o102"), apart("h82", "h102")],
+            vec![],
+            imaging,
+            |_| limits,
+        );
+        let session = book.imaging[0].clone();
+        let of = |filter: &str| -> Vec<usize> {
+            (0..book.families.len())
+                .filter(|f| book.families[*f].filter.as_deref() == Some(filter))
+                .collect()
+        };
+        let (oiii, ha_families) = (of("OIII"), of("Ha"));
+        let at82 = |families: &[usize]| {
+            families
+                .iter()
+                .copied()
+                .find(|f| book.families[*f].rotation.is_some_and(|r| r < 90.0))
+                .unwrap()
+        };
+        let row = |filter: &str, families: &[usize]| FamilyEvidenceRow {
+            session_key: session.key.clone(),
+            filter: filter.into(),
+            target: "M 27".into(),
+            angle: 92.0,
+            angle_low: 91.9,
+            angle_high: 92.1,
+            start: session.start,
+            end: session.end,
+            key: book.family_evidence_key(families, "rig", session.start, 92.0),
+            candidates: families
+                .iter()
+                .map(|f| book.families[*f].key.clone())
+                .collect(),
+            chosen: Some(book.families[at82(families)].key.clone()),
             lights: 8,
             targets: vec!["M 27".into()],
             pairs: Vec::new(),
         };
-        let o82 = book
-            .families
-            .iter()
-            .position(|f| f.rotation == Some(82.2))
+        let one = vec![row("oiii", &oiii)];
+        let both = vec![row("oiii", &oiii), row("ha", &ha_families)];
+        let at = Some(10 * DAY + 300);
+        book.family_evidence.insert(session.key.clone(), one);
+        let choice = book
+            .choose_family("rig", Some("OIII"), at, Some(92.0), &oiii, 2.0)
             .unwrap();
-        book.family_evidence.insert(
-            (session.clone(), "oiii".into()),
-            row(Some(book.families[o82].key.clone())),
+        assert!(
+            matches!(choice.basis, FamilyBasis::Disputed { .. }),
+            "{choice:?}"
         );
+        book.family_evidence.insert(session.key.clone(), both);
         let choice = book
-            .choose_family(
-                "rig",
-                Some("OIII"),
-                Some(10 * DAY + 300),
-                Some(92.0),
-                &all,
-                2.0,
-            )
+            .choose_family("rig", Some("OIII"), at, Some(92.0), &oiii, 2.0)
             .unwrap();
-        assert_eq!(choice.family, o82);
-        assert!(matches!(
-            choice.basis,
-            FamilyBasis::Pixels { lights: 8, .. }
-        ));
-        // The lights could not tell: the nearest angle, undecided.
-        book.family_evidence
-            .insert((session.clone(), "oiii".into()), row(None));
-        let choice = book
-            .choose_family(
-                "rig",
-                Some("OIII"),
-                Some(10 * DAY + 300),
-                Some(92.0),
-                &all,
-                2.0,
-            )
-            .unwrap();
-        assert_eq!(choice.basis, FamilyBasis::Nearest { undecided: true });
+        assert!(
+            matches!(
+                &choice.basis,
+                FamilyBasis::Pixels { moved: true, corroborated: Some(by), .. }
+                    if by == "its Ha lights"
+            ),
+            "{choice:?}"
+        );
     }
 
     #[test]
