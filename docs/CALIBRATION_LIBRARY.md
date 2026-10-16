@@ -1044,8 +1044,11 @@ off are left out, and a gap row counts them. ↑ and ↓ keep to the
 project's own groups. **✕** on the chip widens to the rig's whole
 library, still in Groups.
 
-On a phone the sidebar stacks above the group, a short scrolling picker,
-as the session list does.
+On a wide screen the sidebar sticks beside the frame as the page scrolls
+and fits the window; its list scrolls on its own, so a long group detail
+below the image never hides the list's foot. On a phone the sidebar
+stacks above the group, a short scrolling picker, as the session list
+does.
 
 ### Settings and checks
 
