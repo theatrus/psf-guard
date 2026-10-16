@@ -4,6 +4,8 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- A project's state pill in the Library asks before it changes the
+  state in Target Scheduler, and its caret now sits inside the pill.
 - Settings looks the same on every tab. Each panel sits in a card of
   one width, related fields share a box named in the accent, and each
   control sits beside its label. Fields, buttons and disabled buttons

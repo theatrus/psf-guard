@@ -301,6 +301,17 @@
 .library-pill-state.is-state-1 { color: var(--color-status-good); background: var(--color-status-good-bg); }
 .library-pill-state.is-state-2 { color: var(--color-text-hint); }
 .library-pill-state.is-state-3 { color: var(--color-text-hint); text-decoration: line-through; }
+/* The state select: the pill around it, the select bare inside and the
+   caret drawn in the state's colour within the pill's rounded edge. */
+.library-pill-select { position: relative; padding-right: 22px; }
+.library-pill-select select { -webkit-appearance: none; appearance: none; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-decoration: inherit; cursor: pointer; box-shadow: none; }
+.library-pill-select select:focus-visible { outline: none; }
+.library-pill-select:focus-within { outline: 2px solid var(--state-focus-border); outline-offset: 1px; }
+.library-pill-select select:disabled { cursor: progress; }
+.library-pill-select select option { background: var(--color-bg-elevated); color: var(--color-text-primary); text-decoration: none; }
+.library-pill-select::after { content: ''; position: absolute; top: 50%; right: 8px; width: 10px; height: 10px; margin-top: -5px; background: currentColor; pointer-events: none;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat; }
 .library-pill-progress { color: var(--color-text-primary); }
 .library-pill-progress.is-open { color: var(--color-text-secondary); }
 .library-pill-progress.is-done { color: var(--color-status-good); background: var(--color-status-good-bg); }

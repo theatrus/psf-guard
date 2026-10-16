@@ -95,8 +95,6 @@
 /* Inside a Planning panel the page's button rule would dress it as a button. */
 .director-page .director-link-button, .director-page .director-link-button:hover:not(:disabled) { display: inline; min-height: 0; padding: 0; border: 0; background: none; color: var(--color-primary); }
 a.library-planning { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
-select.library-pill-state { appearance: auto; border: 0; cursor: pointer; font: inherit; font-size: 12px; }
-select.library-pill-state option { color: var(--color-text-primary); background: var(--color-bg-surface); }
 .director-page .project-open-main { display: flex; color: inherit; text-decoration: none; }
 .director-page .project-open-main:hover { color: inherit; }
 .director-stage-badge { flex: none; padding: 2px 7px; border: 1px solid var(--color-success); border-radius: 999px; background: var(--color-success-alpha-20); color: var(--color-success); font-size: 0.72rem; font-weight: 700; }
