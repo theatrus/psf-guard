@@ -18,7 +18,7 @@ use axum::Json;
 use rusqlite::OpenFlags;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -97,13 +97,43 @@ pub struct SplitView {
     pub spots: Vec<SpotView>,
 }
 
+/// Two sessions of one group measured against each other.
+#[derive(Debug, Serialize)]
+pub struct MemberPairView {
+    pub earlier_response: String,
+    pub later_response: String,
+    pub earlier_night: String,
+    pub later_night: String,
+    pub dust_pct: f64,
+    pub broad_pct: f64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct GroupView {
+    /// A name for the group that outlives a regroup where it can
+    /// ([`group_key`]). Any member session finds the group again.
+    pub key: String,
     pub first_night: String,
     pub last_night: String,
     pub frames: usize,
     /// Newest first.
     pub sessions: Vec<SessionView>,
+    /// Why they share a group: each session against the next in time, and
+    /// the pairs that differ most in dust and in light pattern, oldest
+    /// first. One per neighbour, so a long group stays small.
+    pub pairs: Vec<MemberPairView>,
+    /// The most any two of its sessions measured apart, over every pair
+    /// measured, with how many were.
+    pub widest: Option<WidestView>,
+}
+
+/// The largest differences within one group.
+#[derive(Debug, Serialize)]
+pub struct WidestView {
+    pub dust_pct: f64,
+    pub broad_pct: f64,
+    /// Pairs of its sessions measured against each other.
+    pub compared: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -236,6 +266,77 @@ fn browser_sessions<'a>(
     out
 }
 
+/// A group's key: the first, by id, of the browser's sessions holding its
+/// oldest member's flats, else that member's response key. It keeps off
+/// the response key where it can, since that changes with the measuring
+/// algorithm, and a regroup that keeps the oldest member keeps it. A
+/// browser session that holds flats of two families (a night shot at two
+/// gains, say) would name two groups, so there the key also carries a
+/// digest of the family's key. `shared` holds such sessions.
+pub(crate) fn group_key(
+    oldest: &SessionView,
+    family_key: &str,
+    shared: &HashSet<String>,
+) -> String {
+    match oldest.sessions.iter().min() {
+        Some(session) if shared.contains(session) => {
+            let digest: String = Sha256::digest(family_key.as_bytes())[..4]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            format!("{session}~{digest}")
+        }
+        Some(session) => session.clone(),
+        None => oldest.response_key.clone(),
+    }
+}
+
+/// The pairs a group shows: each session against the next in time, and
+/// the widest in dust and in light pattern; with the widest of all.
+fn member_pairs(book: &model::Book, group: &[usize]) -> (Vec<MemberPairView>, Option<WidestView>) {
+    let mut measured: Vec<(usize, usize, f64, f64)> = Vec::new();
+    for (position, earlier) in group.iter().enumerate() {
+        for later in &group[position + 1..] {
+            if let Some(c) = book.comparison(*earlier, *later) {
+                measured.push((*earlier, *later, c.dust, c.broad));
+            }
+        }
+    }
+    let widest = |of: fn(&(usize, usize, f64, f64)) -> f64| {
+        measured
+            .iter()
+            .max_by(|a, b| of(a).total_cmp(&of(b)))
+            .map(|pair| (pair.0, pair.1))
+    };
+    let keep: HashSet<(usize, usize)> = group
+        .windows(2)
+        .map(|pair| (pair[0], pair[1]))
+        .chain(widest(|pair| pair.2))
+        .chain(widest(|pair| pair.3))
+        .collect();
+    let pairs = measured
+        .iter()
+        .filter(|pair| keep.contains(&(pair.0, pair.1)))
+        .map(|(earlier, later, dust, broad)| {
+            let (a, b) = (&book.sessions[*earlier].row, &book.sessions[*later].row);
+            MemberPairView {
+                earlier_response: a.response_key.clone(),
+                later_response: b.response_key.clone(),
+                earlier_night: a.night.clone(),
+                later_night: b.night.clone(),
+                dust_pct: pct(*dust),
+                broad_pct: pct(*broad),
+            }
+        })
+        .collect();
+    let summary = (!measured.is_empty()).then(|| WidestView {
+        dust_pct: pct(measured.iter().map(|pair| pair.2).fold(0.0, f64::max)),
+        broad_pct: pct(measured.iter().map(|pair| pair.3).fold(0.0, f64::max)),
+        compared: measured.len(),
+    });
+    (pairs, summary)
+}
+
 fn read_only(path: &str) -> Result<rusqlite::Connection, AppError> {
     crate::server::database_context::open_scheduler_connection_with_flags(
         path,
@@ -244,12 +345,26 @@ fn read_only(path: &str) -> Result<rusqlite::Connection, AppError> {
     .map_err(AppError::db)
 }
 
-fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
+pub(crate) fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
+    Ok(build_view_with_frames(conn)?.0)
+}
+
+/// Each group's frames, by UUID: the flats its measured sessions combine.
+pub(crate) type FrameGroups = HashMap<String, String>;
+
+/// [`build_view`], with the key of the group each measured flat is in.
+pub(crate) fn build_view_with_frames(
+    conn: &rusqlite::Connection,
+) -> anyhow::Result<(FlatGroupsView, FrameGroups)> {
+    let mut frame_groups = FrameGroups::new();
     if !store::tables_exist(conn) {
-        return Ok(FlatGroupsView {
-            available: false,
-            rigs: Vec::new(),
-        });
+        return Ok((
+            FlatGroupsView {
+                available: false,
+                rigs: Vec::new(),
+            },
+            frame_groups,
+        ));
     }
     let book = flat_groups::load_book(conn)?;
     let names: HashMap<String, String> = crate::calibration::rig_listing(conn)
@@ -263,6 +378,25 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
         .frames
         .iter()
         .map(|row| (row.frame.frame_uuid.as_str(), row.session.as_str()))
+        .collect();
+    // Browser sessions holding flats of more than one family.
+    let mut families_of: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for family in &book.families {
+        for index in &family.sessions {
+            for uuid in &book.sessions[*index].row.frame_uuids {
+                if let Some(session) = session_of.get(uuid.as_str()) {
+                    families_of
+                        .entry(session)
+                        .or_default()
+                        .insert(family.key.as_str());
+                }
+            }
+        }
+    }
+    let shared: HashSet<String> = families_of
+        .into_iter()
+        .filter(|(_, families)| families.len() > 1)
+        .map(|(session, _)| session.to_string())
         .collect();
     let rule_book = crate::calibration::rules::rule_book();
     let mut rigs: BTreeMap<String, RigView> = BTreeMap::new();
@@ -335,8 +469,18 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
                 .iter()
                 .map(|i| book.sessions[*i].row.frame_uuids.len())
                 .sum();
+            let (pairs, widest) = member_pairs(&book, group);
+            let key = group_key(&sessions[0], &family.key, &shared);
+            for index in group {
+                for uuid in &book.sessions[*index].row.frame_uuids {
+                    frame_groups.insert(uuid.clone(), key.clone());
+                }
+            }
             sessions.reverse();
             groups.push(GroupView {
+                key,
+                pairs,
+                widest,
                 first_night: book.sessions[group[0]].row.night.clone(),
                 last_night: book.sessions[*group.last().expect("not empty")]
                     .row
@@ -443,10 +587,13 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
             )
         });
     }
-    Ok(FlatGroupsView {
-        available: true,
-        rigs: rigs.into_values().collect(),
-    })
+    Ok((
+        FlatGroupsView {
+            available: true,
+            rigs: rigs.into_values().collect(),
+        },
+        frame_groups,
+    ))
 }
 
 /// Keep only the families a project's lights touch: those with a session
@@ -488,6 +635,85 @@ fn scoped(view: FlatGroupsView, sessions: &BTreeSet<String>) -> FlatGroupsView {
 pub struct FlatGroupsQuery {
     /// Keep only the families this project's lights touch.
     pub project: Option<i32>,
+}
+
+/// Where one of the Calibration page's flat sessions would sit among the
+/// flat groups, measured or not (its flats all kept out, say): the family
+/// it would join, by the settings part of the family's key, and its night
+/// and angle.
+#[derive(Debug, Default, PartialEq, Serialize)]
+pub struct SessionPlace {
+    pub rig_uuid: Option<String>,
+    /// The family's settings: a [`FamilyView::key`] begins with it and `:`.
+    pub family_key: Option<String>,
+    pub night: Option<String>,
+    pub rotation: Option<f64>,
+}
+
+/// [`SessionPlace`] of the browser's session `session`: its flats planned
+/// as the background pass plans sessions, as though none were kept out.
+pub(crate) fn place_of(conn: &rusqlite::Connection, session: &str) -> anyhow::Result<SessionPlace> {
+    let browsed = crate::calibration::browse::library_frames(conn)?;
+    let wanted: HashSet<&str> = browsed
+        .frames
+        .iter()
+        .filter(|row| {
+            row.session == session && row.frame.kind == crate::calibration::CalibrationKind::Flat
+        })
+        .map(|row| row.frame.frame_uuid.as_str())
+        .collect();
+    if wanted.is_empty() {
+        return Ok(SessionPlace::default());
+    }
+    let library = crate::calibration::LibrarySnapshot::load(conn)?;
+    let frames: Vec<crate::calibration::CalibrationFrame> = library
+        .frames()
+        .iter()
+        .cloned()
+        .map(|mut frame| {
+            if wanted.contains(frame.frame_uuid.as_str()) {
+                frame.kept_out = None;
+            }
+            frame
+        })
+        .collect();
+    let boundary = crate::calibration::catalog_night_boundary(conn);
+    Ok(job::plan_sessions(&frames, boundary)
+        .into_iter()
+        .find(|plan| {
+            plan.frames
+                .iter()
+                .any(|frame| wanted.contains(frame.frame_uuid.as_str()))
+        })
+        .map(|plan| SessionPlace {
+            rig_uuid: Some(plan.rig_uuid),
+            family_key: Some(plan.family_key),
+            night: Some(plan.night),
+            rotation: plan.rotation,
+        })
+        .unwrap_or_default())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlaceQuery {
+    pub session: String,
+}
+
+/// `GET /api/db/{db}/calibrations/flat-groups/place?session=` — the family,
+/// night and angle a flat session would take among the groups, so a link
+/// to a group by a session no group holds now still finds one.
+pub async fn get_session_place(
+    ctx: DbContext,
+    Query(query): Query<PlaceQuery>,
+) -> Result<Json<ApiResponse<SessionPlace>>, AppError> {
+    let path = ctx.database_path.clone();
+    let place = tokio::task::spawn_blocking(move || {
+        let conn = read_only(&path)?;
+        place_of(&conn, &query.session).map_err(AppError::db)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("placing a flat session: {error}")))??;
+    Ok(Json(ApiResponse::success(place)))
 }
 
 /// `GET /api/db/{db}/calibrations/flat-groups` — every rig's flat groups,
@@ -716,14 +942,29 @@ pub fn status_job(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::calibration::test_frames::write_frame;
     use crate::calibration::tests::{RulesInForce, POLICY_LOCK};
 
     /// Two mornings of three flats each, measured 2% apart.
     fn measured_catalog(dir: &std::path::Path) -> rusqlite::Connection {
-        let metas: Vec<_> = ["2026-09-10T14:0", "2026-09-14T14:0"]
+        catalog_of(dir, &["2026-09-10T14:0", "2026-09-14T14:0"], |a, b| {
+            if a.night == b.night {
+                0.0
+            } else {
+                0.02
+            }
+        })
+    }
+
+    /// Mornings of three flats each, measured apart by `differ`.
+    pub(crate) fn catalog_of(
+        dir: &std::path::Path,
+        mornings: &[&str],
+        differ: impl Fn(&store::ResponseRow, &store::ResponseRow) -> f64,
+    ) -> rusqlite::Connection {
+        let metas: Vec<_> = mornings
             .iter()
             .flat_map(|morning| {
                 (0..3).map(move |index| {
@@ -743,8 +984,190 @@ mod tests {
         let tx = conn.transaction().unwrap();
         crate::calibration::import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
         tx.commit().unwrap();
-        flat_groups::testing::measure_as(&conn, |a, b| if a.night == b.night { 0.0 } else { 0.02 });
+        flat_groups::testing::measure_as(&conn, differ);
         conn
+    }
+
+    #[test]
+    fn a_group_is_keyed_by_its_oldest_session_and_lists_the_pairs_that_join_it() {
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        // 09-10 and 09-12 alike; 09-16 has new dust.
+        let conn = catalog_of(
+            temp.path(),
+            &["2026-09-10T14:0", "2026-09-12T14:0", "2026-09-16T14:0"],
+            |a, b| {
+                if (a.night == "2026-09-16") != (b.night == "2026-09-16") {
+                    0.02
+                } else {
+                    0.002
+                }
+            },
+        );
+        let library = crate::calibration::browse::library_frames(&conn).unwrap();
+        let session_of = |night: &str| {
+            library
+                .frames
+                .iter()
+                .find(|row| row.night.as_deref() == Some(night))
+                .map(|row| row.session.clone())
+                .unwrap()
+        };
+
+        let view = build_view(&conn).unwrap();
+        let family = &view.rigs[0].families[0];
+        assert_eq!(family.groups.len(), 2);
+        let (newer, older) = (&family.groups[0], &family.groups[1]);
+        assert_eq!(older.key, session_of("2026-09-10"), "its oldest night");
+        assert_eq!(newer.key, session_of("2026-09-16"));
+        assert_eq!(older.pairs.len(), 1, "the two nights measured alike");
+        let pair = &older.pairs[0];
+        assert_eq!(
+            (pair.earlier_night.as_str(), pair.later_night.as_str()),
+            ("2026-09-10", "2026-09-12")
+        );
+        assert!((pair.dust_pct - 0.2).abs() < 1e-9, "{}", pair.dust_pct);
+        assert!(newer.pairs.is_empty(), "one night has no pair");
+
+        // A wider limit joins all three: the key stays with the oldest.
+        let rig_uuid = library.frames[0].frame.rig_uuid.clone();
+        let _rules = RulesInForce::with(
+            &[],
+            &[(
+                rig_uuid.as_str(),
+                "Scope",
+                &[("flat_split_dust_pct", serde_json::json!(3.0))],
+            )],
+        );
+        let view = build_view(&conn).unwrap();
+        let groups = &view.rigs[0].families[0].groups;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].key, session_of("2026-09-10"));
+        assert!(groups[0].pairs.len() >= 2);
+    }
+
+    #[test]
+    fn a_long_group_sends_its_neighbouring_pairs_and_the_widest() {
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        // Four alike nights; 09-10 and 09-14 differ most.
+        let conn = catalog_of(
+            temp.path(),
+            &[
+                "2026-09-10T14:0",
+                "2026-09-11T14:0",
+                "2026-09-12T14:0",
+                "2026-09-13T14:0",
+            ],
+            |a, b| {
+                let pair = [a.night.as_str(), b.night.as_str()];
+                if pair.contains(&"2026-09-10") && pair.contains(&"2026-09-12") {
+                    0.009
+                } else {
+                    0.002
+                }
+            },
+        );
+        let view = build_view(&conn).unwrap();
+        let group = &view.rigs[0].families[0].groups[0];
+        assert_eq!(group.sessions.len(), 4);
+        let widest = group.widest.as_ref().expect("measured");
+        assert!((widest.dust_pct - 0.9).abs() < 1e-9, "{}", widest.dust_pct);
+        let nights: Vec<(&str, &str)> = group
+            .pairs
+            .iter()
+            .map(|pair| (pair.earlier_night.as_str(), pair.later_night.as_str()))
+            .collect();
+        for adjacent in [
+            ("2026-09-10", "2026-09-11"),
+            ("2026-09-11", "2026-09-12"),
+            ("2026-09-12", "2026-09-13"),
+        ] {
+            assert!(nights.contains(&adjacent), "{nights:?}");
+        }
+        assert!(nights.contains(&("2026-09-10", "2026-09-12")), "the widest");
+        assert!(group.pairs.len() <= 5 && group.pairs.len() < widest.compared.max(6));
+    }
+
+    #[test]
+    fn a_session_whose_flats_are_all_kept_out_is_placed_in_its_family() {
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let conn = catalog_of(
+            temp.path(),
+            &["2026-09-10T14:0", "2026-09-12T14:0", "2026-09-14T14:0"],
+            |_, _| 0.002,
+        );
+        let library = crate::calibration::browse::library_frames(&conn).unwrap();
+        let oldest = library
+            .frames
+            .iter()
+            .find(|row| row.night.as_deref() == Some("2026-09-10"))
+            .map(|row| row.session.clone())
+            .unwrap();
+        // Every flat of the oldest night kept out, and the groups worked
+        // out again: no group holds that session any more.
+        conn.execute(
+            "INSERT OR REPLACE INTO psf_guard_calibration_frame_quality
+                 (frame_uuid, override_choice, override_at, updated_at)
+             SELECT frame_uuid, 'exclude', 1, 1 FROM psf_guard_calibration_frame
+             WHERE frame_uuid IN (SELECT frame_uuid FROM psf_guard_calibration_frame
+                                  WHERE captured_at < 1789100000)",
+            [],
+        )
+        .unwrap();
+        let keep: Vec<String> = store::load_responses(&conn)
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.night != "2026-09-10")
+            .map(|row| row.response_key)
+            .collect();
+        store::retain_responses(&conn, &keep).unwrap();
+        flat_groups::testing::measure_as(&conn, |_, _| 0.002);
+        let view = build_view(&conn).unwrap();
+        let family = &view.rigs[0].families[0];
+        assert!(family
+            .groups
+            .iter()
+            .flat_map(|group| &group.sessions)
+            .all(|session| !session.sessions.contains(&oldest)));
+
+        let place = place_of(&conn, &oldest).unwrap();
+        assert_eq!(place.night.as_deref(), Some("2026-09-10"));
+        let prefix = format!("{}:", place.family_key.expect("a family"));
+        assert!(family.key.starts_with(&prefix), "{} / {prefix}", family.key);
+        assert_eq!(
+            place_of(&conn, "no such session").unwrap(),
+            SessionPlace::default()
+        );
+    }
+
+    #[test]
+    fn a_session_two_families_share_keys_each_group_apart() {
+        let session = |id: &str| SessionView {
+            response_key: "r".into(),
+            night: "2026-09-10".into(),
+            first: 0,
+            last: 0,
+            frames: 3,
+            combined: 3,
+            noise_pct: None,
+            bin: None,
+            width: None,
+            height: None,
+            previous: None,
+            sessions: vec![id.into(), "z".into()],
+        };
+        let none = HashSet::new();
+        assert_eq!(group_key(&session("s1"), "R:3", &none), "s1");
+        let shared = HashSet::from(["s1".to_string()]);
+        let (a, b) = (
+            group_key(&session("s1"), "R:3:g100", &shared),
+            group_key(&session("s1"), "R:3:g0", &shared),
+        );
+        assert!(a.starts_with("s1~") && b.starts_with("s1~"));
+        assert_ne!(a, b);
+        assert_eq!(group_key(&session("s1"), "R:3:g100", &shared), a, "stable");
     }
 
     #[test]

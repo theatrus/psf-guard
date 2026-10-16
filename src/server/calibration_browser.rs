@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use crate::calibration::browse::{
     self, BrowsedFrame, FrameDetail, FrameFilter, FramePage, FrameSort, GradeFilter,
-    RecordedLibraryMaster, SessionPage, MIN_COMPARE_FLATS,
+    RecordedLibraryMaster, SessionPage, SessionPageAt, MIN_COMPARE_FLATS,
 };
 use crate::calibration::{CalibrationFrameSummary, CalibrationKind, FrameSpan};
 use crate::server::api::ApiResponse;
@@ -71,6 +71,11 @@ pub struct ListQuery {
     pub sort: Option<FrameSort>,
     pub page: Option<usize>,
     pub per_page: Option<usize>,
+    /// Sessions only: list the page holding this session instead of
+    /// `page`, and say whether the filters keep it.
+    pub locate: Option<String>,
+    /// Keep only these sessions, comma-separated: a flat group's nights.
+    pub sessions: Option<String>,
 }
 
 impl ListQuery {
@@ -104,8 +109,27 @@ impl ListQuery {
             let scope = crate::server::calibration_scope::scope_for(state, &ctx.0, project).await?;
             filter.within = Some(Arc::new(scope.sessions.clone()));
         }
+        narrow_to_sessions(&mut filter, self.sessions.as_deref());
         Ok(filter)
     }
+}
+
+/// Keep only the sessions `sessions` names, comma-separated, as a flat
+/// group's frames are listed, within whatever the filter keeps already.
+fn narrow_to_sessions(filter: &mut FrameFilter, sessions: Option<&str>) {
+    let Some(list) = sessions.filter(|list| !list.is_empty()) else {
+        return;
+    };
+    let wanted: std::collections::BTreeSet<String> = list
+        .split(',')
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let within = match filter.within.take() {
+        Some(scope) => scope.intersection(&wanted).cloned().collect(),
+        None => wanted,
+    };
+    filter.within = Some(Arc::new(within));
 }
 
 fn read_library(ctx: &DatabaseContext) -> Result<browse::LibraryFrames, AppError> {
@@ -207,14 +231,19 @@ pub async fn list_sessions(
             .missing
             .unwrap_or(false)
             .then(|| missing_files(library.kept(&filter), &roots));
-        library.sessions_page(
+        // A link to one session opens the page that lists it.
+        let at = match query.locate.as_deref().filter(|id| !id.is_empty()) {
+            Some(id) => SessionPageAt::Holding(id),
+            None => SessionPageAt::Number(query.page.unwrap_or(0)),
+        };
+        library.sessions_page_at(
             &filter,
             |row| {
                 missing
                     .as_ref()
                     .is_none_or(|missing| missing.contains(&row.frame.frame_uuid))
             },
-            query.page.unwrap_or(0),
+            at,
             query.per_page,
         )
     })
@@ -748,7 +777,7 @@ fn library_master(
     }
 }
 
-fn project_names(conn: &Connection) -> HashMap<i32, String> {
+pub(crate) fn project_names(conn: &Connection) -> HashMap<i32, String> {
     // A catalog with no project table names none.
     conn.prepare("SELECT Id, name FROM project")
         .and_then(|mut statement| {
@@ -890,4 +919,34 @@ pub async fn download_master_fits(
             .await
             .map_err(joined)??;
     stack_masters::serve_file(&path, "application/fits", Some(&label)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn within(filter: &FrameFilter) -> Vec<String> {
+        filter
+            .within
+            .as_ref()
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_flat_groups_sessions_narrow_the_list_within_a_project_scope() {
+        let mut filter = FrameFilter::default();
+        narrow_to_sessions(&mut filter, None);
+        assert!(filter.within.is_none(), "nothing asked, nothing narrowed");
+        narrow_to_sessions(&mut filter, Some("s1,s2,"));
+        assert_eq!(within(&filter), vec!["s1", "s2"]);
+
+        // Within a project's scope: only the sessions both keep.
+        let mut scoped = FrameFilter {
+            within: Some(Arc::new(["s2".to_string(), "s3".to_string()].into())),
+            ..FrameFilter::default()
+        };
+        narrow_to_sessions(&mut scoped, Some("s1,s2"));
+        assert_eq!(within(&scoped), vec!["s2"]);
+    }
 }

@@ -281,3 +281,360 @@
   gap: 0.35rem;
   overflow-wrap: anywhere;
 }
+
+/* Frames' sidebar lists sessions or flat groups. */
+.calibration-browse-toggle {
+  margin-bottom: 0.5rem;
+}
+
+/* The Groups list: a family's heading, its groups newest first, and the
+   split or change between neighbours, so it reads as a timeline. */
+.flat-group-list li.flat-group-family {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.35rem 0.2rem 0.15rem;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.flat-group-list li.flat-group-family:not(:first-child) {
+  margin-top: 0.4rem;
+}
+
+.flat-group-list li.flat-group-edge {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.1rem 0.6rem;
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.flat-group-list li.flat-group-edge[data-kind='event'] {
+  color: var(--color-text-secondary);
+  font-weight: 600;
+}
+
+.flat-group-list li.flat-group-edge[data-kind='gap'] {
+  font-style: italic;
+}
+
+/* A neighbour outside the project in scope, shown for its edge. */
+.flat-group-list li[data-context] button {
+  border-style: dashed;
+  opacity: 0.6;
+}
+
+.flat-group-list li[data-context] button:hover,
+.flat-group-list li[data-context] button[aria-current='true'] {
+  opacity: 1;
+}
+
+.flat-group-list li button:focus-visible,
+.flat-group-member:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
+}
+
+.flat-group-mark[data-mark='current'] {
+  background: var(--color-primary-alpha-20);
+  color: var(--color-text-primary);
+}
+
+.flat-group-mark[data-mark='change'] {
+  background: var(--color-bg-quaternary);
+  color: var(--color-text-primary);
+}
+
+/* A group's colour, as its rows in the session list carry it. */
+.flat-group-detail-head[data-flat-tone='1'],
+.flat-group-members[data-flat-tone='1'] {
+  --flat-group-tone: var(--color-flat-group-1);
+}
+
+.flat-group-detail-head[data-flat-tone='2'],
+.flat-group-members[data-flat-tone='2'] {
+  --flat-group-tone: var(--color-flat-group-2);
+}
+
+.flat-group-detail-head[data-flat-tone='3'],
+.flat-group-members[data-flat-tone='3'] {
+  --flat-group-tone: var(--color-flat-group-3);
+}
+
+.flat-group-detail-head[data-flat-tone='4'],
+.flat-group-members[data-flat-tone='4'] {
+  --flat-group-tone: var(--color-flat-group-4);
+}
+
+/* One group in the main column. */
+.flat-group-detail {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.flat-group-detail h2,
+.flat-group-detail h3 {
+  margin: 0;
+}
+
+.flat-group-detail h2 {
+  font-size: 1.05rem;
+  overflow-wrap: anywhere;
+}
+
+.flat-group-detail h3 {
+  font-size: 0.9rem;
+}
+
+.flat-group-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.flat-group-detail-head > div {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.flat-group-section {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.7rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+  font-size: 0.85rem;
+}
+
+.flat-group-section p {
+  overflow-wrap: anywhere;
+}
+
+/* Its nights, oldest first, as a strip; each opens its session. */
+.flat-group-members {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0 0 0.2rem;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.flat-group-member {
+  display: grid;
+  flex: none;
+  gap: 0.1rem;
+  min-width: 6.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border-secondary);
+  border-top: 4px solid var(--flat-group-tone, var(--color-border-secondary));
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.flat-group-member:hover {
+  border-color: var(--color-primary-alpha-50);
+  border-top-color: var(--flat-group-tone, var(--color-primary-alpha-50));
+}
+
+.flat-group-member.is-unmeasured {
+  border-top-style: dashed;
+  border-top-color: var(--color-border-tertiary);
+}
+
+.flat-group-member.is-static {
+  cursor: default;
+}
+
+.flat-group-member[aria-busy='true'] {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+/* The pairs measured within it, each against the rig's limits. */
+.flat-group-pairs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.flat-group-pairs th,
+.flat-group-pairs td {
+  padding: 0.2rem 0.4rem;
+  border-bottom: 1px solid var(--color-border-tertiary);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.flat-group-pairs thead th {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.flat-group-pairs tbody th {
+  font-weight: 500;
+  white-space: normal;
+}
+
+.flat-group-bar {
+  display: inline-block;
+  width: 3.5rem;
+  height: 0.4rem;
+  margin-right: 0.4rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+  vertical-align: middle;
+}
+
+.flat-group-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--color-text-muted);
+}
+
+.flat-group-edges,
+.flat-group-masters,
+.flat-group-projects {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.flat-group-edge-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 0.6rem;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  border: 1px dashed var(--color-border-tertiary);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.flat-group-edge-detail .flat-mark-compare {
+  flex: none;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.flat-group-masters li,
+.flat-group-projects li {
+  overflow-wrap: anywhere;
+}
+
+.flat-group-detail a {
+  color: var(--color-link);
+}
+
+.flat-group-detail a:hover {
+  color: var(--color-link-hover);
+}
+
+.flat-group-detail a:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+  .flat-group-pairs th,
+  .flat-group-pairs td {
+    padding: 0.2rem 0.25rem;
+  }
+
+  .flat-group-bar {
+    display: none;
+  }
+}
+
+/* A flat group's frames in the strip: each night marked where it begins,
+   in the group's colour. */
+.calibration-strip-run {
+  display: flex;
+  align-items: stretch;
+}
+
+.calibration-strip-run:not(:first-child) {
+  margin-left: 0.5rem;
+}
+
+.calibration-strip-run[data-flat-tone='1'] {
+  --flat-group-tone: var(--color-flat-group-1);
+}
+
+.calibration-strip-run[data-flat-tone='2'] {
+  --flat-group-tone: var(--color-flat-group-2);
+}
+
+.calibration-strip-run[data-flat-tone='3'] {
+  --flat-group-tone: var(--color-flat-group-3);
+}
+
+.calibration-strip-run[data-flat-tone='4'] {
+  --flat-group-tone: var(--color-flat-group-4);
+}
+
+.calibration-strip-run-label {
+  display: grid;
+  align-content: center;
+  gap: 0.15rem;
+  width: 5.4rem;
+  padding: 0 0.45rem;
+  border-left: 3px solid var(--flat-group-tone, var(--color-border-tertiary));
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.calibration-strip-run-label strong {
+  color: var(--color-text-primary);
+  font-size: 0.75rem;
+}
+
+/* A group's name above its frames, with its colour. */
+.flat-group-detail-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+/* A member night: its card shows it in the strip; the link opens it. */
+.flat-group-member-card {
+  display: grid;
+  justify-items: start;
+  gap: 0.2rem;
+}
+
+.flat-group-member[aria-current='true'] {
+  border-color: var(--state-on-border);
+  border-top-color: var(--flat-group-tone, var(--state-on-border));
+  background: var(--state-on-bg);
+}
+
+.flat-group-open-session {
+  padding-left: 0.2rem;
+  font-size: 0.75rem;
+}

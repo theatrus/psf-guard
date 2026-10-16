@@ -82,6 +82,28 @@ describe('detail next and previous', () => {
     await waitFor(() => expect(result.current.path).toBe('/detail/100'));
   });
 
+  it('walk only one flat group\'s lights, and none until they are known', async () => {
+    let known = false;
+    server.use(
+      http.get('/api/db/:dbId/calibrations/flat-groups/use', () => {
+        const counts = { total: 2, own: 2, other_angle: 0, corrected: 0, undetermined: 0, no_same_side: 0 };
+        return HttpResponse.json({ success: true, error: null, status: 'ready', data: known ? {
+          computed: true, lights: 2, pending: 0, unread: 0, refreshing: false, group_found: true,
+          groups: [{ key: 'g1', masters: [], lights: counts,
+            projects: [{ project_id: 1, name: 'Bubble', lights: counts, image_ids: [1, 4] }] }],
+        } : { computed: false, groups: [], lights: 0, pending: 0, unread: 0, refreshing: true } });
+      }),
+    );
+    const { result } = navigation('/detail/1?db=c925&project=1&flatGroup=c925:g1', 1);
+    // The frames are in, the group's lights not yet: nothing to walk.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(result.current.allImages).toEqual([]);
+    known = true;
+    await waitFor(() => expect(result.current.allImages.map((entry) => entry.id)).toEqual([1, 4]), { timeout: 6_000 });
+    act(() => result.current.goToNext());
+    await waitFor(() => expect(result.current.path).toBe('/detail/4'));
+  });
+
   it('walk it newest first when the grid shows it that way', async () => {
     const { result } = navigation('/detail/3?db=c925&project=1&order=newest', 3);
     await waitFor(() => expect(result.current.allImages.map((entry) => entry.id)).toEqual([3, 1, 4, 2]));

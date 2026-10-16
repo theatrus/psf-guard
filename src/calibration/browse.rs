@@ -162,6 +162,19 @@ pub struct SessionPage {
     pub frames: usize,
     pub facets: LibraryFacets,
     pub night_boundary_seconds: i64,
+    /// Asked for the page holding one session: whether the filters keep
+    /// it. When they do not, this is the first page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub located: Option<bool>,
+}
+
+/// Which page of sessions to list.
+#[derive(Debug, Clone, Copy)]
+pub enum SessionPageAt<'a> {
+    /// A page by its number, from 0.
+    Number(usize),
+    /// The page holding this session.
+    Holding(&'a str),
 }
 
 /// One number a frame was measured by, beside its session's.
@@ -546,6 +559,18 @@ impl LibraryFrames {
         page: usize,
         per_page: Option<usize>,
     ) -> SessionPage {
+        self.sessions_page_at(filter, also, SessionPageAt::Number(page), per_page)
+    }
+
+    /// [`Self::sessions_page`], at a page by its number or the page holding
+    /// one session, so a link to a session lands where the list shows it.
+    pub fn sessions_page_at(
+        &self,
+        filter: &FrameFilter,
+        also: impl Fn(&BrowsedFrame) -> bool,
+        at: SessionPageAt<'_>,
+        per_page: Option<usize>,
+    ) -> SessionPage {
         let mut sessions = sessions_of(
             self.frames
                 .iter()
@@ -554,6 +579,16 @@ impl LibraryFrames {
         );
         let frames = sessions.iter().map(|session| session.frames).sum();
         let total = sessions.len();
+        let (page, located) = match at {
+            SessionPageAt::Number(page) => (page, None),
+            SessionPageAt::Holding(id) => {
+                let (size, _, _) = page_bounds(total, 0, per_page);
+                match sessions.iter().position(|session| session.id == id) {
+                    Some(index) => (index / size, Some(true)),
+                    None => (0, Some(false)),
+                }
+            }
+        };
         let (per_page, start, end) = page_bounds(total, page, per_page);
         SessionPage {
             sessions: sessions.drain(start..end).collect(),
@@ -563,6 +598,7 @@ impl LibraryFrames {
             frames,
             facets: facets(&self.frames),
             night_boundary_seconds: self.night_boundary_seconds,
+            located,
         }
     }
 }
@@ -1280,6 +1316,36 @@ mod tests {
             12 * 3600,
         );
         assert_eq!(facets(&rows).rotations, vec![1.0, 114.0]);
+    }
+
+    #[test]
+    fn a_session_is_found_on_its_page() {
+        let night = |days: i64| {
+            let mut frame = summary(CalibrationKind::Flat);
+            frame.frame_uuid = format!("f{days}");
+            frame.captured_at = frame.captured_at.map(|at| at + days * 86_400);
+            frame
+        };
+        let library = LibraryFrames {
+            frames: assign_sessions((0..5).map(night).collect(), 12 * 3600),
+            rigs: HashMap::new(),
+            night_boundary_seconds: 12 * 3600,
+        };
+        let filter = FrameFilter::default();
+        let all = library.sessions_page(&filter, |_| true, 0, Some(10));
+        assert_eq!(all.located, None);
+        // Newest first: the oldest night is the fifth, on the third page.
+        let oldest = all.sessions[4].id.clone();
+        let page =
+            library.sessions_page_at(&filter, |_| true, SessionPageAt::Holding(&oldest), Some(2));
+        assert_eq!((page.page, page.located), (2, Some(true)));
+        assert_eq!(page.sessions[0].id, oldest);
+        let page =
+            library.sessions_page_at(&filter, |_| true, SessionPageAt::Holding("gone"), Some(2));
+        assert_eq!(
+            (page.page, page.located, page.sessions.len()),
+            (0, Some(false), 2)
+        );
     }
 
     #[test]

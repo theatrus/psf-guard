@@ -35,6 +35,52 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+/// What one light's master of one kind is made from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MasterFrames {
+    /// A master from other software, used as it is.
+    External(String),
+    /// Raw frames, by UUID; empty when the light has none.
+    Raw(BTreeSet<String>),
+}
+
+/// What a light's master of `kind` is made from, as a stack builds it: a
+/// flat from the far side of a change is never used, the frames are cut to
+/// the one coherent set a master takes, and an external master the policy
+/// adopts stands in for them.
+pub fn master_frames(selected: &CalibrationSelection, kind: CalibrationKind) -> MasterFrames {
+    let frames = match kind {
+        CalibrationKind::Bias => &selected.bias,
+        CalibrationKind::Dark => &selected.dark,
+        CalibrationKind::DarkFlat => &selected.dark_flat,
+        CalibrationKind::Flat => &selected.flat,
+    };
+    let held_back: HashSet<&str> = selected.flat_held_back.iter().map(String::as_str).collect();
+    let rules = &selected.rules;
+    let (externals, raw): (Vec<&CalibrationFrame>, Vec<&CalibrationFrame>) = frames
+        .iter()
+        .filter(|frame| {
+            kind != CalibrationKind::Flat || !held_back.contains(frame.frame_uuid.as_str())
+        })
+        .partition(|frame| frame.is_master);
+    let raw: Vec<CalibrationFrame> = raw.into_iter().cloned().collect();
+    let subset = coherent_master_subset(kind, &raw, rules);
+    let adopted = match rules.external_masters {
+        ExternalMasterPolicy::Prefer => externals.first(),
+        ExternalMasterPolicy::Fallback if subset.len() < MIN_MASTER_FRAMES => externals.first(),
+        _ => None,
+    };
+    match adopted {
+        Some(master) => MasterFrames::External(master.frame_uuid.clone()),
+        None => MasterFrames::Raw(
+            subset
+                .iter()
+                .map(|frame| frame.frame_uuid.clone())
+                .collect(),
+        ),
+    }
+}
+
 /// What a project's lights take from the library, before it is named in
 /// the browser's terms.
 #[derive(Debug, Clone, Default)]
@@ -69,42 +115,22 @@ impl LightUse {
         selected: &CalibrationSelection,
         seen: &mut HashSet<(CalibrationKind, BTreeSet<String>)>,
     ) {
-        let held_back: HashSet<&str> = selected.flat_held_back.iter().map(String::as_str).collect();
-        let rules = &selected.rules;
-        for (kind, frames) in [
-            (CalibrationKind::Bias, &selected.bias),
-            (CalibrationKind::Dark, &selected.dark),
-            (CalibrationKind::DarkFlat, &selected.dark_flat),
-            (CalibrationKind::Flat, &selected.flat),
+        for kind in [
+            CalibrationKind::Bias,
+            CalibrationKind::Dark,
+            CalibrationKind::DarkFlat,
+            CalibrationKind::Flat,
         ] {
-            // As a stack builds: a flat from the far side of a change is
-            // never used, and an external master is used as it is.
-            let (externals, raw): (Vec<&CalibrationFrame>, Vec<&CalibrationFrame>) = frames
-                .iter()
-                .filter(|frame| {
-                    kind != CalibrationKind::Flat || !held_back.contains(frame.frame_uuid.as_str())
-                })
-                .partition(|frame| frame.is_master);
-            let raw: Vec<CalibrationFrame> = raw.into_iter().cloned().collect();
-            let subset = coherent_master_subset(kind, &raw, rules);
-            let adopted = match rules.external_masters {
-                ExternalMasterPolicy::Prefer => externals.first(),
-                ExternalMasterPolicy::Fallback if subset.len() < MIN_MASTER_FRAMES => {
-                    externals.first()
+            match master_frames(selected, kind) {
+                MasterFrames::External(uuid) => {
+                    self.frames.insert(uuid);
                 }
-                _ => None,
-            };
-            if let Some(master) = adopted {
-                self.frames.insert(master.frame_uuid.clone());
-                continue;
-            }
-            let set: BTreeSet<String> = subset
-                .iter()
-                .map(|frame| frame.frame_uuid.clone())
-                .collect();
-            self.frames.extend(set.iter().cloned());
-            if !set.is_empty() && seen.insert((kind, set.clone())) {
-                self.master_sets.entry(kind).or_default().push(set);
+                MasterFrames::Raw(set) => {
+                    self.frames.extend(set.iter().cloned());
+                    if !set.is_empty() && seen.insert((kind, set.clone())) {
+                        self.master_sets.entry(kind).or_default().push(set);
+                    }
+                }
             }
         }
         // Corrected flats are carried across a change by a map made from a
@@ -271,6 +297,67 @@ fn digest_query(
 /// - this project's lights, and no other project's.
 pub fn scope_revision(conn: &Connection, project_id: i32) -> Result<String> {
     let mut hasher = Sha256::new();
+    library_revision(conn, &mut hasher)?;
+    // One project's lights, as health reads them: rejected or not, when,
+    // with what filter and file.
+    digest_query(
+        conn,
+        "SELECT Id, gradingStatus = 2, acquireddate, filtername,
+                CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.FileName') END
+         FROM acquiredimage WHERE projectId = ?1 ORDER BY Id",
+        [project_id],
+        &mut hasher,
+    )?;
+    Ok(short_hex(hasher))
+}
+
+/// What matching every project's lights against the library depends on,
+/// as a digest: [`scope_revision`]'s library inputs, with every project's
+/// lights and names. Grading the library in the background changes it only
+/// where a grade keeps a frame out or lets one back in.
+pub fn catalog_revision(conn: &Connection) -> Result<String> {
+    let mut hasher = Sha256::new();
+    library_revision(conn, &mut hasher)?;
+    let has = |table: &str| {
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |_| Ok(()),
+        )
+        .is_ok()
+    };
+    if has("acquiredimage") {
+        digest_query(
+            conn,
+            "SELECT projectId, Id, gradingStatus = 2, acquireddate, filtername,
+                    CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.FileName') END
+             FROM acquiredimage ORDER BY Id",
+            [],
+            &mut hasher,
+        )?;
+    }
+    if has("project") {
+        digest_query(
+            conn,
+            "SELECT Id, name FROM project ORDER BY Id",
+            [],
+            &mut hasher,
+        )?;
+    }
+    Ok(short_hex(hasher))
+}
+
+fn short_hex(hasher: Sha256) -> String {
+    hasher.finalize()[..12]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The library's part of a revision: each frame's identity, file, validity
+/// mark and whether it is kept out; the recorded masters by count and
+/// newest; flat grouping's measurements; the settings and night boundary.
+fn library_revision(conn: &Connection, hasher: &mut Sha256) -> Result<()> {
     if super::schema_exists(conn) {
         let kept = if super::quality::table_exists(conn) {
             "CASE WHEN q.override_choice = 'use' THEN 0
@@ -291,34 +378,21 @@ pub fn scope_revision(conn: &Connection, project_id: i32) -> Result<String> {
                  ORDER BY f.frame_uuid"
             ),
             [],
-            &mut hasher,
+            hasher,
         )?;
         digest_query(
             conn,
             "SELECT COUNT(*), MAX(created_at) FROM psf_guard_calibration_master",
             [],
-            &mut hasher,
+            hasher,
         )?;
     }
-    super::flat_groups::store::digest_rows(conn, &mut hasher)?;
+    super::flat_groups::store::digest_rows(conn, hasher)?;
     hasher.update(super::health::settings_digest(
         super::catalog_night_boundary(conn),
     ));
     hasher.update(b"\x1d");
-    // One project's lights, as health reads them: rejected or not, when,
-    // with what filter and file.
-    digest_query(
-        conn,
-        "SELECT Id, gradingStatus = 2, acquireddate, filtername,
-                CASE WHEN json_valid(metadata) THEN json_extract(metadata, '$.FileName') END
-         FROM acquiredimage WHERE projectId = ?1 ORDER BY Id",
-        [project_id],
-        &mut hasher,
-    )?;
-    Ok(hasher.finalize()[..12]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    Ok(())
 }
 
 #[cfg(test)]

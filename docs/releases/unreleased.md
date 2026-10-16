@@ -37,6 +37,18 @@
   Askar 120's calibration** widens to the rig's whole library. Opened from
   the Library, it shows the whole library as before. On Calibration the
   header's Rig · target control names the rig only.
+- **Calibration › Frames** can list flat groups instead of sessions:
+  **Sessions | Groups** at the top of the sidebar. Groups run newest first
+  by filter and angle, with the split between neighbours and its reason
+  in between, and mark the current group, one partly measured and one a
+  change follows; ↑ and ↓ move between them. A group shows its flats in
+  the same image browser as a session, night by night with each night
+  marked, then its nights, how alike they measured against the rig's
+  limits, the change on each side with Compare, and what it feeds: its
+  flat masters and the lights that take it, by project, each linking to
+  Images on exactly those lights. The group lives in the address, and
+  scoped to a project the list holds that project's groups with their
+  neighbours dimmed.
 
 - **Settings › Server** can fix the desktop app's localhost port, so browser,
   API, and agent connections keep the same address across restarts. A port

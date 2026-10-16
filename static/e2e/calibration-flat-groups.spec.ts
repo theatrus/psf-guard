@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type APIRequestContext } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resetDatabases, tmpBase } from './helpers';
@@ -53,8 +53,9 @@ test.afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test('splits two nights of flats at new dust and compares them', async ({ page, request }) => {
-  test.setTimeout(120_000);
+/** Two nights of three Hα flats, the second with new dust, imported and
+ *  measured into two groups split by one change. */
+async function twoGroups(request: APIRequestContext): Promise<string> {
   fs.mkdirSync(path.join(root, 'FLAT'), { recursive: true });
   for (let index = 0; index < 3; index++) {
     writeFlat(path.join(root, 'FLAT', `clean-${index}.fits`), `2026-09-10T14:0${index}:00`, index, false);
@@ -80,6 +81,89 @@ test('splits two nights of flats at new dust and compares them', async ({ page, 
       return `${family?.groups.length ?? 0} groups, ${view.rigs[0]?.events.length ?? 0} changes`;
     }, { timeout: 90_000 })
     .toBe('2 groups, 1 changes');
+  return dbId;
+}
+
+test('browses the flat groups themselves, one group at a time', async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const dbId = await twoGroups(request);
+
+  await page.goto(`/#/calibration?db=${dbId}`);
+  const toggle = page.getByRole('group', { name: 'List' });
+  await toggle.getByRole('button', { name: 'Groups' }).click();
+  await expect(page).toHaveURL(/calBrowse=groups/);
+  const list = page.getByRole('navigation', { name: 'Flat groups' });
+  const entries = list.getByTestId('flat-group-entry');
+  await expect(entries).toHaveCount(2);
+  await expect(entries.first()).toHaveAccessibleName(/^Group 2 · ha · no rotator · 09-14 · 1 night · 3 flats$/i);
+  // The newest is chosen first and is the current group; the change sits
+  // between the two.
+  await expect(entries.first()).toHaveAttribute('aria-current', 'true');
+  await expect(entries.first()).toContainText('Current');
+  await expect(entries.nth(1)).toContainText('Change after');
+  await expect(list.getByTestId('flat-group-edge')).toContainText(/Change · new dust/);
+  const detail = page.getByTestId('flat-group-detail');
+  const heading = page.getByTestId('flat-group-header').getByRole('heading', { level: 2 });
+  await expect(heading).toHaveText(/^Group 2 of 2 · ha · no rotator$/i);
+
+  // Its flats in the strip, as a session's are: its night marked, the
+  // first in the viewer with its numbers, and ← → step through them.
+  const strip = page.getByRole('list', { name: 'Frames' });
+  await expect(strip.getByTestId('calibration-strip-run')).toHaveText(['2026-09-143 flats']);
+  await expect(strip.getByRole('button')).toHaveCount(3);
+  await expect(strip.getByRole('button').first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.calibration-frame')).toBeVisible();
+  await expect(page.getByText(/^Frame 1 of 3 · ← → frames · ↑ ↓ groups/)).toBeVisible();
+  await page.keyboard.press('ArrowRight');
+  await expect(strip.getByRole('button').nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page).toHaveURL(/calFrame=/);
+  await expect(page.getByText(/^Frame 2 of 3 /)).toBeVisible();
+
+  // ↓ moves to the older group, which the address keeps across a reload.
+  await page.keyboard.press('ArrowDown');
+  await expect(entries.nth(1)).toHaveAttribute('aria-current', 'true');
+  const key = new URL(page.url().replace('/#/', '/')).searchParams.get('calGroup');
+  expect(key).toBeTruthy();
+  await page.reload();
+  await expect(heading).toHaveText(/^Group 1 of 2 · ha · no rotator$/i);
+  await expect(entries.nth(1)).toHaveAttribute('aria-current', 'true');
+
+  // Its edge compares across the change with the shared picture.
+  const edge = detail.getByTestId('flat-group-newer-edge');
+  await expect(edge).toContainText(/After it · Change · new dust/);
+  await edge.getByTestId('flat-group-compare').click();
+  const image = page.getByTestId('flat-ratio-viewer').getByTestId('flat-ratio-image');
+  await expect
+    .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth), { timeout: 60_000 })
+    .toBe(SIDE);
+  await page.getByTestId('flat-ratio-viewer').getByRole('button', { name: 'Close' }).click();
+  await expect(detail.getByTestId('flat-group-feeds')).toContainText(/master/i);
+
+  // A phone stacks the picker above the group, and nothing runs off the side.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(list).toBeVisible();
+  await expect(detail).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  // A member's card shows its night in the strip; Open session drops into
+  // its session in the session list.
+  await detail.getByTestId('flat-group-member').first().click();
+  await expect(detail.getByTestId('flat-group-member').first()).toHaveAttribute('aria-current', 'true');
+  await expect(page).toHaveURL(/calBrowse=groups/);
+  await detail.getByTestId('flat-group-open-session').first().click();
+  await expect(page).not.toHaveURL(/calBrowse=/);
+  const sessions = page.getByRole('navigation', { name: 'Sessions' });
+  await expect(sessions.locator('[aria-current="true"]')).toContainText('2026-09-10');
+  await expect(toggle.getByRole('button', { name: 'Sessions' })).toHaveAttribute('aria-pressed', 'true');
+  // Groups opens on the same group again.
+  await toggle.getByRole('button', { name: 'Groups' }).click();
+  await expect(heading).toHaveText(/^Group 1 of 2 · ha · no rotator$/i);
+});
+
+test('splits two nights of flats at new dust and compares them', async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const dbId = await twoGroups(request);
 
   // Flat groups live in Frames: each flat session carries its group, and
   // the split sits between the two nights.

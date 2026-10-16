@@ -18,6 +18,7 @@ pub mod export_job;
 pub mod export_settings;
 pub mod exposure_groups;
 pub mod extract;
+pub mod flat_group_use;
 pub mod flat_groups;
 pub mod flat_history;
 pub mod handlers;
@@ -261,6 +262,14 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/calibrations/flat-groups/ratio",
             get(flat_groups::get_ratio_picture),
+        )
+        .route(
+            "/calibrations/flat-groups/use",
+            get(flat_group_use::get_flat_group_use),
+        )
+        .route(
+            "/calibrations/flat-groups/place",
+            get(flat_groups::get_session_place),
         )
         .route(
             "/calibrations/frames",

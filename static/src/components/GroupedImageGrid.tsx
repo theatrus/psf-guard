@@ -9,7 +9,7 @@ import { GradingStatus } from '../api/types';
 import { useGrading } from '../hooks/useGrading';
 import { useSpatialScan } from '../hooks/useSpatialScan';
 import { useStableScrollAnchor } from '../hooks/useStableScrollAnchor';
-import { useDbProjectTarget, useGridState, useFilters, useImageOrder } from '../hooks/useUrlState';
+import { useDbProjectTarget, useGridState, useFilters, useImageOrder, useUrlParams } from '../hooks/useUrlState';
 import { cardIsOnScreen, useReorderAnchor, viewIsAtRest } from '../hooks/useReorderAnchor';
 import type { ImageOrder } from '../utils/imageOrder';
 import { useNewFrameIds } from '../hooks/useNewFrames';
@@ -18,6 +18,7 @@ import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
 import { imageFilterCount } from '../utils/imageFilterCount';
 import ViewToolbar from './toolbar/ViewToolbar';
+import ScopeChip from './toolbar/ScopeChip';
 import RescanImageFolders from './toolbar/RescanImageFolders';
 import SelectionBar from './toolbar/SelectionBar';
 import ImageOrderToggle from './toolbar/ImageOrderToggle';
@@ -55,6 +56,7 @@ import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
 import { useNavigateNow } from '../hooks/useNavigateNow';
 import { chipFocus } from '../utils/calibrationFocus';
 import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
+import { useFlatGroupLights } from '../hooks/useFlatGroupLights';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
 import ScoringChangedNote from './ScoringChangedNote';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
@@ -171,6 +173,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const calibrationFilterActive = filters.calibration.length > 0;
   const calibration = useCalibrationMarks(dbId, projectId, calibrationFilterActive || showCalibrationChip);
   const calibrationFilterReady = !calibration.isLoading && !calibration.error;
+  // One flat group's lights, from the Calibration page's group detail.
+  const flatGroup = useFlatGroupLights(dbId ?? null, filters.flatGroup);
+  const { updateParams } = useUrlParams();
+  const clearFlatGroup = useCallback(() => updateParams({ flatGroup: null }), [updateParams]);
 
   // Filter images based on current filters
   const filteredImages = useMemo(() => {
@@ -219,6 +225,12 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
         && !matchesCalibrationFilter(filters.calibration, calibration.marks.get(image.id))) {
         return false;
       }
+
+      // Flat group filter: none until its lights are known, so nothing
+      // the bulk actions reach is outside the group.
+      if (flatGroup.active && (!flatGroup.ready || !flatGroup.ids.has(image.id))) {
+        return false;
+      }
       
       return true;
     });
@@ -231,6 +243,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     calibrationFilterActive,
     calibrationFilterReady,
     calibration.marks,
+    flatGroup.active,
+    flatGroup.ready,
+    flatGroup.ids,
   ]);
 
   const availableFlagsForScope = useMemo(
@@ -712,6 +727,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     filters.searchTerm,
     filters.flags,
     filters.calibration,
+    filters.flatGroup ?? '',
   ].join('\u0000');
   const previousSelectionFilterKey = useRef(selectionFilterKey);
   useEffect(() => {
@@ -904,7 +920,14 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               currentFilters={filters}
             />
           )}
-          activeFilters={imageFilterCount(filters)}
+          activeFilters={imageFilterCount(filters, dbId)}
+          scope={flatGroup.active ? (
+            <ScopeChip
+              name={flatGroup.flagged ? 'Flagged lights of a flat group' : 'Lights of a flat group'}
+              removeLabel="Show every light, not only the flat group's"
+              onRemove={clearFlatGroup}
+            />
+          ) : undefined}
           onClearFilters={clearFilters}
           controls={(
             <ThumbnailSizeControl
@@ -1030,6 +1053,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               {filters.searchTerm && ` • "${filters.searchTerm}"`}
               {calibrationFilterActive && ` • ${filters.calibration.map(calibrationFilterLabel).join(', ')}`}
               {calibrationFilterActive && calibration.updating && ' (updating)'}
+              {flatGroup.active && ` • ${flatGroupSummary(flatGroup)}`}
               {' • '}
               <span className="grid-quality-state" title={qualityStatus.title}>
                 {qualityStatus.label}
@@ -1185,7 +1209,16 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           
           {imageGroups.length === 0 && (
             <div className="empty-state">
-              {shouldShowDateHint ? (
+              {flatGroup.active && !flatGroup.ready ? (
+                <div data-testid="flat-group-filter-state" role="status">
+                  <p>{flatGroupEmptyText(flatGroup)}</p>
+                  {flatGroup.state !== 'finding' && (
+                    <button type="button" className="empty-state-action" onClick={clearFlatGroup}>
+                      Show every light
+                    </button>
+                  )}
+                </div>
+              ) : shouldShowDateHint ? (
                 <div>
                   <p>No images found in the selected date range.</p>
                   <p>Try clearing the date filters or selecting a broader range.</p>
@@ -1222,4 +1255,31 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
       )}
     </>
   );
+}
+
+/** The flat-group filter in the grid's summary line. */
+function flatGroupSummary(flatGroup: ReturnType<typeof useFlatGroupLights>): string {
+  const what = flatGroup.flagged ? 'Flagged lights of one flat group' : 'Lights of one flat group';
+  switch (flatGroup.state) {
+    case 'missing':
+      return 'This flat group no longer exists';
+    case 'failed':
+      return `${what}: could not be found`;
+    case 'finding':
+      return `${what} (finding them…)`;
+    default:
+      return flatGroup.updating ? `${what} (updating)` : what;
+  }
+}
+
+/** What the grid says while the flat-group filter shows nothing. */
+function flatGroupEmptyText(flatGroup: ReturnType<typeof useFlatGroupLights>): string {
+  switch (flatGroup.state) {
+    case 'missing':
+      return 'This flat group no longer exists: its nights were grouped again. Open Calibration › Groups to find the group now.';
+    case 'failed':
+      return `Could not find the group's lights: ${flatGroup.error}. Trying again in a while.`;
+    default:
+      return "Finding the group's lights…";
+  }
 }

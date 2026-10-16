@@ -2590,6 +2590,9 @@ export interface CalibrationSessionPage {
   frames: number;
   facets: CalibrationFacets;
   night_boundary_seconds: number;
+  /** Asked for the page holding one session (`locate`): whether the
+   *  filters keep it. When they do not, this is the first page. */
+  located?: boolean;
 }
 
 export type CalibrationGradeFilter = CalibrationGrade | 'ungraded';
@@ -2616,6 +2619,10 @@ export interface CalibrationListFilters {
   sort?: CalibrationFrameSort;
   page?: number;
   per_page?: number;
+  /** Sessions only: the page holding this session, in place of `page`. */
+  locate?: string;
+  /** Keep only these sessions, comma-separated: a flat group's nights. */
+  sessions?: string;
 }
 
 /** A calibration rig in a project's scope. */
@@ -4106,11 +4113,86 @@ export interface FlatFamily {
 }
 
 export interface FlatGroup {
+  /** Stable across a regroup where it can be: the first, by id, of the
+   *  Calibration page's sessions holding its oldest member. Any member's
+   *  session finds the group again. */
+  key: string;
   first_night: string;
   last_night: string;
   frames: number;
   /** Newest first. */
   sessions: FlatSession[];
+  /** Why they share a group: each session against the next in time, and
+   *  the pairs that differ most in dust and in light pattern, oldest first. */
+  pairs?: FlatMemberPair[];
+  /** The most any two of its sessions measured apart, over every pair
+   *  measured, with how many were. */
+  widest?: { dust_pct: number; broad_pct: number; compared: number } | null;
+}
+
+/** Two sessions of one group, measured against each other. */
+export interface FlatMemberPair {
+  earlier_response: string;
+  later_response: string;
+  earlier_night: string;
+  later_night: string;
+  dust_pct: number;
+  broad_pct: number;
+}
+
+/** Lights by how their flats were chosen. */
+export interface FlatGroupLightCounts {
+  total: number;
+  /** The nearest flats, or its own side of each change. */
+  own: number;
+  other_angle: number;
+  corrected: number;
+  undetermined: number;
+  no_same_side: number;
+}
+
+/** What one flat group feeds: its masters and the lights that take it. */
+export interface FlatGroupUse {
+  key: string;
+  masters: { id: string; label: string; created_at: number; sources: number; in_group: number }[];
+  lights: FlatGroupLightCounts;
+  projects: {
+    project_id: number;
+    name: string | null;
+    lights: FlatGroupLightCounts;
+    /** The lights by id, sent only for the group asked for. */
+    image_ids?: number[];
+    /** Of them, those flagged for their flats. */
+    flagged_ids?: number[];
+  }[];
+}
+
+export interface FlatGroupUseView {
+  /** False until the first answer is worked out: nothing else is known. */
+  computed: boolean;
+  /** Groups something uses; one not listed feeds nothing. */
+  groups: FlatGroupUse[];
+  lights: number;
+  /** Lights the calibration check has not read yet. */
+  pending: number;
+  unread: number;
+  /** A newer answer is being worked out; this is the last one kept. */
+  refreshing: boolean;
+  /** Why the last attempt at the current answer failed; tried again later. */
+  error?: string | null;
+  /** Asked for one group: whether its key names a group now. */
+  group_found?: boolean | null;
+  /** The key of the group asked for, when found by one of its sessions. */
+  group_key?: string | null;
+}
+
+/** Where a flat session would sit among the flat groups. */
+export interface FlatSessionPlace {
+  rig_uuid: string | null;
+  /** A family's key begins with it and `:`. */
+  family_key: string | null;
+  night: string | null;
+  rotation: number | null;
 }
 
 export interface FlatSession {

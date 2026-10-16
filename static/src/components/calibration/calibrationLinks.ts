@@ -53,7 +53,7 @@ export function nightDates(night: string, boundarySeconds: number): NightDates |
 }
 
 /** Grid keys a link to some lights clears, so the grid shows exactly them. */
-const GRID_FILTER_KEYS = ['target', 'mosaic', 'status', 'filter', 'flag', 'calib', 'dateStart', 'dateEnd', 'search', 'selected', 'current', 'expanded'];
+const GRID_FILTER_KEYS = ['target', 'mosaic', 'status', 'filter', 'flag', 'calib', 'flatGroup', 'dateStart', 'dateEnd', 'search', 'selected', 'current', 'expanded'];
 
 /**
  * The Images grid for one project's lights that a calibration level or
@@ -68,16 +68,38 @@ export function calibrationGridHref(
   filterNames: readonly string[] = [],
   night?: NightDates,
 ): string {
+  return lightsGridHref(search, dbId, projectId, { calib, filterNames, dates: night });
+}
+
+/** Grid filters a link to some of a project's lights sets. */
+export interface LightsGridFilters {
+  /** A calibration level or finding code (utils/calibrationFilter). */
+  calib?: string;
+  filterNames?: readonly string[];
+  dates?: NightDates;
+  /** One flat group's lights (utils/flatGroupFilter). */
+  flatGroup?: string;
+}
+
+/** The Images grid for one project's lights, narrowed by `filters`, with
+ *  every other grid filter cleared so it shows exactly them. */
+export function lightsGridHref(
+  search: string,
+  dbId: string,
+  projectId: number,
+  { calib, filterNames = [], dates, flatGroup }: LightsGridFilters,
+): string {
   const params = withoutPlanningParams(search);
   for (const key of GRID_FILTER_KEYS) params.delete(key);
   params.set('db', dbId);
   params.set('project', String(projectId));
-  params.set('calib', calib);
+  if (calib) params.set('calib', calib);
+  if (flatGroup) params.set('flatGroup', flatGroup);
   // Each value encoded on its own, as the grid's list filters write them.
   if (filterNames.length > 0) params.set('filter', filterNames.map(encodeURIComponent).join(','));
-  if (night) {
-    params.set('dateStart', night.dateStart);
-    params.set('dateEnd', night.dateEnd);
+  if (dates) {
+    params.set('dateStart', dates.dateStart);
+    params.set('dateEnd', dates.dateEnd);
   }
   return `/grid?${keepScoringInScope(search, params)}`;
 }

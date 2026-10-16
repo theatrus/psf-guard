@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { Fragment, useEffect, useRef } from 'react';
 import { apiClient } from '../../api/client';
 import type { BrowsedCalibrationFrame, CalibrationFrameStretch } from '../../api/types';
 import { useAsyncImage } from '../../hooks/useAsyncImage';
@@ -65,16 +65,30 @@ function Thumb({ dbId, frame, index, stretch, selected, onSelect }: ThumbProps) 
   );
 }
 
+/** A run of frames the strip marks off, such as one night of a flat group. */
+export interface FrameRun {
+  key: string;
+  /** Its name, first: `2026-10-03`. */
+  label: string;
+  /** More about it: `10 flats`. */
+  detail?: string;
+  /** The colour of the group it belongs to, 1 to 4. */
+  tone?: number;
+}
+
 interface CalibrationFrameStripProps {
   dbId: string;
   frames: BrowsedCalibrationFrame[];
   selected: string | null;
   stretch: CalibrationFrameStretch;
   onSelect: (uuid: string) => void;
+  /** Mark where each run begins, with its name. */
+  runOf?: (frame: BrowsedCalibrationFrame) => FrameRun;
 }
 
-/** The frames of one session in capture order, as small pictures. */
-export default function CalibrationFrameStrip({ dbId, frames, selected, stretch, onSelect }: CalibrationFrameStripProps) {
+/** Frames in order as small pictures: one session's, or a flat group's
+ *  night by night, each night marked where it begins. */
+export default function CalibrationFrameStrip({ dbId, frames, selected, stretch, onSelect, runOf }: CalibrationFrameStripProps) {
   const listRef = useRef<HTMLOListElement>(null);
   // Keep the chosen frame in sight as the arrow keys move through the
   // strip. Only the strip scrolls; the page stays where the reader left it.
@@ -89,17 +103,31 @@ export default function CalibrationFrameStrip({ dbId, frames, selected, stretch,
   }, [selected, frames.length]);
   return (
     <ol className="calibration-strip" ref={listRef} aria-label="Frames">
-      {frames.map((frame, index) => (
-        <Thumb
-          key={frame.frame_uuid}
-          dbId={dbId}
-          frame={frame}
-          index={index}
-          stretch={stretch}
-          selected={frame.frame_uuid === selected}
-          onSelect={onSelect}
-        />
-      ))}
+      {frames.map((frame, index) => {
+        const run = runOf?.(frame);
+        const starts = run && (index === 0 || runOf?.(frames[index - 1]).key !== run.key);
+        return (
+          <Fragment key={frame.frame_uuid}>
+            {starts && (
+              <li className="calibration-strip-run" data-flat-tone={run.tone} data-run={run.key}
+                data-testid="calibration-strip-run">
+                <span className="calibration-strip-run-label">
+                  <strong>{run.label}</strong>
+                  {run.detail && <span>{run.detail}</span>}
+                </span>
+              </li>
+            )}
+            <Thumb
+              dbId={dbId}
+              frame={frame}
+              index={index}
+              stretch={stretch}
+              selected={frame.frame_uuid === selected}
+              onSelect={onSelect}
+            />
+          </Fragment>
+        );
+      })}
     </ol>
   );
 }
