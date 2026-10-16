@@ -12,6 +12,9 @@
 //!
 //! See `docs/design/flat-grouping.md`.
 
+mod epochs;
+pub mod family_job;
+pub mod family_store;
 pub mod job;
 pub mod measure;
 #[cfg(test)]
@@ -20,7 +23,8 @@ pub mod store;
 #[cfg(test)]
 pub(crate) mod testing;
 
-pub use measure::{evidence, metric, model};
+pub use measure::{choice, evidence, lights, metric, model};
+pub use seiza_calibration::LightRotation;
 
 use anyhow::Result;
 use model::{AngleTerm, Book, Event, Placement, Side};
@@ -78,9 +82,23 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
         return Ok(Arc::new(Book::default()));
     }
     let profile_rigs = ProfileRigs::read(conn);
+    // The catalog's cache folder, where PSF Guard's solves sit beside the
+    // flat responses.
+    let cache: Option<PathBuf> = conn
+        .path()
+        .filter(|path| !path.is_empty())
+        .and_then(|path| response_dir(Path::new(path)))
+        .and_then(|dir| dir.parent().map(Path::to_path_buf));
     let mut hasher = Sha256::new();
     profile_rigs.digest(&mut hasher);
     store::digest_rows(conn, &mut hasher)?;
+    family_store::digest(conn, &mut hasher)?;
+    // A new solve can move a light's epoch.
+    let solves = cache
+        .as_ref()
+        .and_then(|cache| std::fs::read_dir(cache.join("astrometry")).ok())
+        .map_or(0, |entries| entries.count());
+    hasher.update(solves.to_le_bytes());
     hasher.update(
         super::rules::rule_book()
             .digest()
@@ -106,13 +124,24 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
         return Ok(Arc::clone(book));
     }
     let lights = imaging_lights(conn)?;
-    let book = Arc::new(Book::build(
+    let mut book = Book::build(
         store::load_responses(conn)?,
         store::load_comparisons(conn)?,
         store::load_evidence(conn, evidence::EVIDENCE_ALGORITHM_VERSION)?,
         model::imaging_sessions(lights, |profile| profile_rigs.rigs_of(profile)),
         rig_limits,
-    ));
+    );
+    let angles = epochs::light_angles(conn, |profile| profile_rigs.rigs_of(profile));
+    let solved = cache
+        .as_deref()
+        .map(|cache| epochs::solved_angles(cache, &angles))
+        .unwrap_or_default();
+    book.epochs = epochs::epochs(&angles, &solved);
+    book.family_evidence = family_store::load(conn)?
+        .into_iter()
+        .map(|row| ((row.session_key.clone(), row.filter.clone()), row))
+        .collect();
+    let book = Arc::new(book);
     MEMO.lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(catalog, (digest, Arc::clone(&book)));
@@ -465,6 +494,118 @@ impl FlatBasis {
             },
             (_, next) => next,
         }
+    }
+}
+
+/// The response family a light's flats come from, when grouping measured
+/// it: which family, how it was chosen, and the gate a stack holds the
+/// light to for it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FlatFamily {
+    /// The family's key (`model::Family::key`).
+    pub key: String,
+    /// Its filter and measured angle range: "OIII at 72.6° & 82.2°".
+    pub label: String,
+    /// How it was chosen.
+    #[serde(flatten)]
+    pub basis: lights::FamilyBasis,
+    /// The light's recorded angle, and how far the rotator's epochs turn
+    /// it into the family's nearest session.
+    pub light_angle: f64,
+    pub shift: f64,
+    /// The candidates within the angle prior, nearest first, as labels.
+    pub candidates: Vec<String>,
+    /// How the stacker's gate reads the light's angle: as recorded, or as
+    /// the angle of the flats its master is built from when the family
+    /// took flats at another angle (seiza-calibration's `LightRotation`).
+    pub light_rotation: LightRotation,
+}
+
+impl FlatFamily {
+    pub fn of(book: &Book, choice: &lights::FamilyChoice) -> Self {
+        let label = |family: usize| {
+            format!(
+                "{} at {}",
+                book.families[family]
+                    .filter
+                    .as_deref()
+                    .map(str::to_uppercase)
+                    .unwrap_or_else(|| "flats".into()),
+                book.angle_label(family)
+            )
+        };
+        Self {
+            key: book.families[choice.family].key.clone(),
+            label: label(choice.family),
+            basis: choice.basis.clone(),
+            light_angle: choice.light_angle,
+            shift: choice.shift,
+            candidates: choice.candidates.iter().map(|f| label(*f)).collect(),
+            light_rotation: LightRotation::Recorded,
+        }
+    }
+
+    /// Whether the light's own pixels chose it.
+    pub fn by_pixels(&self) -> bool {
+        matches!(self.basis, lights::FamilyBasis::Pixels { .. })
+    }
+}
+
+/// How a light's response family was chosen, for its Calibration panel:
+/// `None` when the flats are simply the ones at its recorded angle.
+pub fn describe_family(family: &FlatFamily) -> Option<String> {
+    use lights::FamilyBasis;
+    let angle = if family.shift.abs() >= 0.5 {
+        format!(
+            "{:.1}° recorded, {:.1}° in the flats' rotator epoch",
+            family.light_angle,
+            (family.light_angle + family.shift).rem_euclid(360.0)
+        )
+    } else {
+        format!("{:.1}° recorded", family.light_angle)
+    };
+    let others: Vec<&String> = family
+        .candidates
+        .iter()
+        .filter(|candidate| **candidate != family.label)
+        .collect();
+    let others = others
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    match &family.basis {
+        FamilyBasis::Angle => family.label.contains(" & ").then(|| {
+            format!(
+                "Flats of the {} family, whose flats at those angles measure alike ({angle})",
+                family.label
+            )
+        }),
+        FamilyBasis::Prior => Some(format!(
+            "Flats of the {} family: the only family within {:.0}° of its angle ({angle})",
+            family.label,
+            lights::ANGLE_PRIOR_DEG
+        )),
+        FamilyBasis::Pixels { lights, targets } => Some(format!(
+            "Chosen by its own pixels: its imaging session's lights ({lights} of {}) follow the              flats of the {} family rather than {others} ({angle})",
+            if targets.is_empty() {
+                "its targets".to_string()
+            } else {
+                targets.join(", ")
+            },
+            family.label
+        )),
+        FamilyBasis::Nearest { undecided } => Some(format!(
+            "Flats of the {} family, the nearest angle: {} could stand in within {:.0}° of its              angle, and {} ({angle})",
+            family.label,
+            others,
+            lights::ANGLE_PRIOR_DEG,
+            if *undecided {
+                "its imaging session's lights could not tell them apart"
+            } else {
+                "its lights have not been read to tell them apart yet"
+            }
+        )),
     }
 }
 

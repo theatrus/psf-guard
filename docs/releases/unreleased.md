@@ -4,6 +4,17 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Flats are matched by what they measure, not only by the rotator angle
+  they record. Angles whose flats measure alike are one **response
+  family**, named in Calibration › Frames by its measured angle range
+  (`72.6° & 82.2°`). A light takes its family's flats, its own angle's
+  first, and a stack reads it at its flats' angle instead of refusing
+  them. Where two families lie within 10° of a light's angle, as after a
+  rotator re-homed, the light's own pixels choose between them; the
+  Calibration panel names the **Flat family** and whether its own pixels
+  chose it or, when they could not tell, the nearest angle was taken.
+  Nights of only two flats are measured and grouped too.
+
 - The header's background jobs keep automatic work in view while your own
   work runs. A database quality analysis, an automatic stack refresh, or a
   re-apply of processing that steps aside for a build, scan, or solve you

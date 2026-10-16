@@ -44,8 +44,9 @@ use std::time::UNIX_EPOCH;
 /// Bump when the rules or what a result keeps change, so every kept result
 /// is computed again. 2: each finding keeps its lights' ids. 3: measured
 /// flat groups: mixed nights only when unmeasured, flats across a change.
-/// 4: grouping by time checks mixed nights as version 2 did.
-pub const HEALTH_ALGORITHM_VERSION: u32 = 4;
+/// 4: grouping by time checks mixed nights as version 2 did. 5: flats by
+/// measured response family.
+pub const HEALTH_ALGORITHM_VERSION: u32 = 5;
 
 /// Flats further than this from a light are worth a look, though they are
 /// within the age limit that makes a light one that cannot be calibrated,
@@ -967,6 +968,8 @@ pub fn library_digest(conn: &Connection) -> Result<String> {
     hasher.update(b"\x1d");
     // What flat grouping measured decides which flats a light takes.
     super::flat_groups::store::digest_rows(conn, &mut hasher)?;
+    // So does which family the lights' own pixels chose.
+    super::flat_groups::family_store::digest(conn, &mut hasher)?;
     Ok(hex(hasher))
 }
 

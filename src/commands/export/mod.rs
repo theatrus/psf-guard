@@ -1867,8 +1867,9 @@ mod tests {
         }
 
         /// Flats of the light's angle exist only after new dust; the rig's
-        /// flats measure alike across angles. The export takes the flats
-        /// from before the dust at the other angle, never the dusty set.
+        /// flats measure alike across angles, so they are one response
+        /// family. The export takes the family's flats from before the dust
+        /// at the other angle, never the dusty set.
         #[test]
         fn a_light_before_new_dust_exports_its_side_s_flats_at_another_angle() {
             let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -1915,12 +1916,9 @@ mod tests {
                 ),
                 "{placed:?}"
             );
-            assert_eq!(plan.flat_choices.len(), 1);
-            assert_eq!(plan.flat_choices[0].2.basis, "other_angle");
+            // Its family's flats on its side are its nearest: nothing to
+            // warn about.
             assert!(plan.flat_warnings().is_empty());
-            let script = wbpp::shell_script(&plan, &wbpp::WbppScriptSpec::default());
-            assert!(script.contains("own side of every change"), "{script}");
-            assert!(script.contains("at another rotator angle"), "{script}");
 
             // Grouped by time, it takes the dusty flats at its angle, as before.
             let _rules = RulesInForce::global(&[("flat_grouping", json!("time"))]);
@@ -1977,8 +1975,11 @@ mod tests {
                 3,
                 &["ROTATANG=                 90.0"],
             );
+            // The angles differ by their own shadows: three response
+            // families, none of them measured alike with another.
             crate::calibration::flat_groups::testing::measure_as(&library.conn, |a, b| {
-                if night(a) < "2026-09-12" && night(b) > "2026-09-12" {
+                if (night(a) < "2026-09-12" && night(b) > "2026-09-12") || a.rotation != b.rotation
+                {
                     0.02
                 } else {
                     0.0

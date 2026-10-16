@@ -140,7 +140,13 @@ pub struct WidestView {
 pub struct FamilyView {
     pub key: String,
     pub filter: Option<String>,
+    /// The middle angle of its largest rotation cluster.
     pub rotation: Option<f64>,
+    /// Its measured angle range: the recorded angles of each rotation
+    /// cluster that measured alike and joined it.
+    pub angles: Vec<model::AngleSpan>,
+    /// That range in words: "100.1–104.4°", "72.6° & 82.2°", "no angle".
+    pub angle_label: String,
     /// Newest first; `splits[i]` lies between `groups[i + 1]` and
     /// `groups[i]`.
     pub groups: Vec<GroupView>,
@@ -434,7 +440,7 @@ pub(crate) fn build_view_with_frames(
                 .map(move |b| (*b, event.key.clone()))
         })
         .collect();
-    for family in &book.families {
+    for (family_index, family) in book.families.iter().enumerate() {
         let rig = rigs
             .entry(family.rig_uuid.clone())
             .or_insert_with(|| rig_view(&family.rig_uuid, &book));
@@ -516,6 +522,8 @@ pub(crate) fn build_view_with_frames(
             key: family.key.clone(),
             filter: family.filter.clone(),
             rotation: family.rotation,
+            angles: family.angles.clone(),
+            angle_label: book.angle_label(family_index),
             groups,
             splits,
         });

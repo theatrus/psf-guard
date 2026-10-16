@@ -1,6 +1,6 @@
 use super::*;
 use crate::calibration::flat_groups::job::{Rigs, Scope};
-use crate::calibration::flat_groups::{metric, store};
+use crate::calibration::flat_groups::store;
 use crate::calibration::import_calibration_frames;
 use crate::calibration::test_frames::write_frame_with;
 use crate::commands::import::headers::{read_frame_meta, FrameMeta};
@@ -26,7 +26,7 @@ fn session(
     (0..3)
         .map(|index| {
             let path = dir.join(format!("{name}-{index}.fits"));
-            let plane = metric::tests::synthetic(
+            let plane = crate::calibration::flat_groups::testing::synthetic(
                 SIZE.0,
                 SIZE.1,
                 dust,
@@ -239,8 +239,9 @@ fn forgetting_a_flat_measures_only_its_session_again() {
     crate::calibration::forget_frame(&mut library.conn, &uuid).unwrap();
     assert_eq!(touched, Rigs::of([library.a.clone()]));
     let outcome = library.pass(&state, &job, Scope::flats(touched));
-    // Two flats are too few: the session waits, and nothing else is read.
-    assert_eq!((outcome.measured, outcome.frames_read), (0, 0));
+    // Two flats still make a response: the session is measured again from
+    // its two, and nothing else is read.
+    assert_eq!((outcome.measured, outcome.frames_read), (1, 2));
     assert_eq!(library.measured_rigs().len(), 2);
 }
 

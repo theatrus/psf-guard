@@ -2,7 +2,7 @@
 //! pass, grouped, and then chosen for lights on either side of a change.
 
 use super::model::{Placement, Side};
-use super::{metric, FlatBasis};
+use super::FlatBasis;
 use crate::calibration::test_frames::write_frame_with;
 use crate::calibration::{
     corrected_flat_master, import_calibration_frames, select_for_light, BuiltMaster,
@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 const SIZE: (usize, usize) = (240, 160);
 /// The shadow that turns up between the two mornings.
 const DUST: (f32, f32, f32, f32) = (120.0, 70.0, 16.0, 0.03);
+/// A shadow cast ahead of the rotator: it lands here only at 90°, so flats
+/// at 0° and 90° measure apart and stay two response families.
+const AT_90: (f32, f32, f32, f32) = (50.0, 120.0, 14.0, 0.025);
 
 /// One morning's flats: three frames of one filter at one angle.
 struct Session {
@@ -27,8 +30,18 @@ struct Session {
 }
 
 fn write_session(dir: &Path, session: &Session, seed: u64) -> Vec<FrameMeta> {
-    let dust: &[(f32, f32, f32, f32)] = if session.dusty { &[DUST] } else { &[] };
-    write_session_with(dir, session, seed, dust)
+    let mut dust: Vec<(f32, f32, f32, f32)> = Vec::new();
+    if session.dusty {
+        dust.push(DUST);
+    }
+    // Ha at 90° sees a reflection no other filter or angle shows: its
+    // flats measure apart from Ha at 0°, so the two stay two response
+    // families, while OIII at 0° and 90° measure alike and give the rig
+    // its angle term.
+    if session.filter == "Ha" && session.rotation == Some(90.0) {
+        dust.push(AT_90);
+    }
+    write_session_with(dir, session, seed, &dust)
 }
 
 /// [`write_session`] with the shadows given.
@@ -41,7 +54,7 @@ fn write_session_with(
     (0..3)
         .map(|index| {
             let path = dir.join(format!("{}-{index}.fits", session.name));
-            let plane = metric::tests::synthetic(
+            let plane = super::testing::synthetic(
                 SIZE.0,
                 SIZE.1,
                 dust,
@@ -675,8 +688,9 @@ fn forgetting_a_flat_has_its_session_measured_again() {
     assert_eq!(super::store::load_responses(&conn).unwrap().len(), 1);
     assert!(super::store::load_comparisons(&conn).unwrap().is_empty());
     let (outcome, _) = pass_counting_yields(&conn, &dir);
-    // Two flats are too few to measure: the session waits for more.
-    assert_eq!((outcome.measured, outcome.compared), (0, 0));
+    // Two flats still make a response, as they make a master: the session
+    // is measured again from the two left, and compared again.
+    assert_eq!((outcome.measured, outcome.compared), (1, 1));
 }
 
 /// Three mornings of Ha flats: at 101.5° on either side of a morning whose
@@ -843,7 +857,12 @@ fn two_changes(dir: &Path, ninety: &[(&'static str, &'static str, Shadows)]) -> 
             rotation: Some(rotation),
             dusty: false,
         };
-        frames.extend(write_session_with(dir, &session, seed as u64 + 1, dust));
+        // Ha at 90° is its own response family (see [`write_session`]).
+        let mut shadows = dust.to_vec();
+        if rotation == 90.0 {
+            shadows.push(AT_90);
+        }
+        frames.extend(write_session_with(dir, &session, seed as u64 + 1, &shadows));
     }
     measured_frames(dir, &frames).0
 }
@@ -944,7 +963,19 @@ fn flats_of_unknown_angle_alone_on_the_lights_side_are_kept() {
             rotation,
             dusty,
         };
-        frames.extend(write_session(temp.path(), &session, seed as u64 + 1));
+        let mut dust: Vec<(f32, f32, f32, f32)> = Vec::new();
+        if dusty {
+            dust.push(DUST);
+        }
+        if rotation == Some(90.0) {
+            dust.push(AT_90);
+        }
+        frames.extend(write_session_with(
+            temp.path(),
+            &session,
+            seed as u64 + 1,
+            &dust,
+        ));
     }
     let (conn, _) = measured_frames(temp.path(), &frames);
     let book = super::load_book(&conn).unwrap();
@@ -1027,4 +1058,203 @@ fn focal_lengths_within_the_tolerance_are_one_class() {
     assert!(classes.contains(&("after-oiii-0".to_string(), Some(1645.0))));
     assert!(classes.contains(&("before-oiii-0".to_string(), None)));
     assert!(classes.contains(&("before-ha-0".to_string(), Some(2350.0))));
+}
+
+/// Flats at 82.2° and 72.6° shot one morning, alike, as C925's OIII. A
+/// light at 77° between them had no flats within 2° of its angle; it now
+/// takes its family's, and its stack reads it at their angle.
+#[test]
+fn a_light_between_two_angles_that_measure_alike_takes_their_flats() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let (conn, _) = measured_library(
+        temp.path(),
+        &[
+            Session {
+                name: "ha-82",
+                captured: "2026-09-10T14:00",
+                filter: "Ha",
+                rotation: Some(82.2),
+                dusty: false,
+            },
+            Session {
+                name: "ha-72",
+                captured: "2026-09-10T14:30",
+                filter: "Ha",
+                rotation: Some(72.6),
+                dusty: false,
+            },
+        ],
+    );
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(book.families.len(), 1, "{:?}", book.families);
+    assert_eq!(book.angle_label(0), "72.6° & 82.2°");
+
+    let between = light(temp.path(), "2026-09-12T04:00:00", 77.0);
+    let selected = select_for_light(&conn, &between).unwrap();
+    assert!(!selected.flat.is_empty());
+    let family = selected.flat_family.as_ref().expect("its family");
+    assert_eq!(family.label, "HA at 72.6° & 82.2°");
+    assert!(matches!(family.basis, super::lights::FamilyBasis::Prior));
+    // The stack's gate reads it at its master's flats' angle.
+    let angle = selected.flat[0].rotation.unwrap();
+    assert_eq!(
+        selected.match_tolerances().light_rotation,
+        seiza_calibration::LightRotation::Measured { degrees: angle }
+    );
+    assert!(super::describe_family(family)
+        .unwrap()
+        .contains("the only family within 10°"));
+
+    // At one of the angles: its own angle's flats come first, read as
+    // recorded.
+    let at_72 = light(temp.path(), "2026-09-12T05:00:00", 72.6);
+    let selected = select_for_light(&conn, &at_72).unwrap();
+    assert_eq!(names(&selected.flat)[0], "ha-72");
+    assert!(selected.match_tolerances().light_rotation.is_recorded());
+
+    // Far from both: no family near it, so nothing, as before.
+    let far = light(temp.path(), "2026-09-12T06:00:00", 30.0);
+    let selected = select_for_light(&conn, &far).unwrap();
+    assert!(selected.flat.is_empty() && selected.flat_family.is_none());
+
+    // Grouping by time knows no families.
+    let _time = crate::calibration::tests::RulesInForce::global(&[(
+        "flat_grouping",
+        serde_json::json!("time"),
+    )]);
+    let selected = select_for_light(&conn, &between).unwrap();
+    assert!(selected.flat.is_empty() && selected.flat_family.is_none());
+}
+
+/// Ha flats at 0° and at 8° one morning, apart: a shadow ahead of the
+/// rotator lands at 8° only. Lights recorded at 4° lie within the angle
+/// prior of both, and were shot through the 8° light path. The pass reads
+/// them and their own pixels choose the 8° family; selection follows,
+/// reading no pixel.
+#[test]
+fn the_lights_own_pixels_choose_their_family() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let mut frames = Vec::new();
+    for (seed, (name, captured, rotation, shadows)) in [
+        ("ha-0", "2026-09-10T14:00", 0.0, &[][..]),
+        ("ha-8", "2026-09-10T14:30", 8.0, &[AT_90][..]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let session = Session {
+            name,
+            captured,
+            filter: "Ha",
+            rotation: Some(rotation),
+            dusty: false,
+        };
+        frames.extend(write_session_with(
+            temp.path(),
+            &session,
+            seed as u64 + 1,
+            shadows,
+        ));
+    }
+    let (conn, responses) = measured_frames(temp.path(), &frames);
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(book.families.len(), 2, "{:?}", book.families);
+
+    // Five lights at 4°, through the 8° path, with a little sky noise.
+    conn.execute_batch(
+        "CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, projectId INTEGER,
+            targetId INTEGER, acquireddate INTEGER, filtername TEXT, gradingStatus INTEGER,
+            metadata TEXT);
+         CREATE TABLE target (Id INTEGER PRIMARY KEY, name TEXT);
+         INSERT INTO target (Id, name) VALUES (1, 'M 27');",
+    )
+    .unwrap();
+    for index in 0..5u64 {
+        let name = format!("light-{index}.fits");
+        let path = temp.path().join(&name);
+        let plane =
+            super::testing::synthetic(SIZE.0, SIZE.1, &[AT_90], 0.0, &[], 0.002, 50 + index);
+        let captured = format!("2026-09-11T04:0{index}:00");
+        write_frame_with(
+            &path,
+            "LIGHT",
+            SIZE,
+            &captured,
+            &["ROTATANG=                  4.0"],
+            |x, y| 1_000.0 * f64::from(plane.data[y * SIZE.0 + x]),
+        );
+        let at = chrono::NaiveDateTime::parse_from_str(&captured, "%Y-%m-%dT%H:%M:%S")
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        conn.execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+             gradingStatus, metadata) VALUES (?1, 1, 1, ?2, 'Ha', 0, ?3)",
+            rusqlite::params![
+                index as i64 + 1,
+                at,
+                serde_json::json!({ "FileName": path, "RotatorMechanicalPosition": 4.0 })
+                    .to_string()
+            ],
+        )
+        .unwrap();
+    }
+    let dir = temp.path().to_path_buf();
+    let outcome = super::job::run(super::job::Pass {
+        conn: &conn,
+        dir: &responses,
+        scope: super::job::Scope::everything(),
+        keep_going: &|| true,
+        yield_now: &|| {},
+        progress: &mut |_| {},
+        goes_first: &|_| false,
+        find_light: &|name: &str| Some(dir.join(name)).filter(|path| path.is_file()),
+        pool: None,
+    })
+    .unwrap();
+    assert_eq!(outcome.families, 1, "{outcome:?}");
+
+    let book = super::load_book(&conn).unwrap();
+    let eight = book
+        .families
+        .iter()
+        .position(|family| family.rotation == Some(8.0))
+        .unwrap();
+    let row = book
+        .family_evidence
+        .values()
+        .next()
+        .expect("the lights' word");
+    assert_eq!(
+        row.chosen.as_deref(),
+        Some(book.families[eight].key.as_str()),
+        "{row:?}"
+    );
+    assert_eq!(row.lights, 5);
+
+    let light = read_frame_meta(&temp.path().join("light-2.fits"));
+    let selected = select_for_light(&conn, &light).unwrap();
+    let family = selected.flat_family.as_ref().expect("its family");
+    assert!(family.by_pixels(), "{family:?}");
+    assert_eq!(names(&selected.flat)[0], "ha-8");
+    assert!(super::describe_family(family)
+        .unwrap()
+        .starts_with("Chosen by its own pixels"));
+
+    // A second pass reads nothing: the answer is kept under its key.
+    let again = super::job::run(super::job::Pass {
+        conn: &conn,
+        dir: &responses,
+        scope: super::job::Scope::everything(),
+        keep_going: &|| true,
+        yield_now: &|| {},
+        progress: &mut |_| {},
+        goes_first: &|_| false,
+        find_light: &|name: &str| Some(dir.join(name)).filter(|path| path.is_file()),
+        pool: None,
+    })
+    .unwrap();
+    assert_eq!((again.families, again.frames_read), (0, 0), "{again:?}");
 }

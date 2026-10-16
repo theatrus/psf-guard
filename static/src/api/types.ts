@@ -2837,6 +2837,30 @@ export interface CalibrationKindExplanation {
   basis?: FlatBasis;
   /** Flats only: the master mixes nights measured alike. Fractions, not percent. */
   alike?: { nights: number; dust: number; broad: number };
+  /** Flats only: the response family they come from, when measured grouping
+   *  chose one at another angle than the light's, or by its own pixels. */
+  family?: FlatFamilyNote;
+}
+
+/** The response family a light's flats come from, and how it was chosen. */
+export interface FlatFamilyNote {
+  key: string;
+  /** Filter and measured angle range: "OIII at 72.6° & 82.2°". */
+  label: string;
+  /** `angle`: at its recorded angle; `prior`: the only family near it;
+   *  `pixels`: its own lights follow these flats; `nearest`: nothing stood
+   *  clear, so the nearest angle. */
+  by: 'angle' | 'prior' | 'pixels' | 'nearest';
+  /** `pixels`: how many lights, of which targets, said so. */
+  lights?: number;
+  targets?: string[];
+  /** `nearest`: its lights were read and could not tell. */
+  undecided?: boolean;
+  light_angle: number;
+  /** How far the rotator's epochs turn the light's angle into the flats'. */
+  shift: number;
+  /** The families within the angle prior, nearest first. */
+  candidates: string[];
 }
 
 /** A measured change near a light, as its account names it. Fractions. */
@@ -4129,11 +4153,17 @@ export interface FlatSpot {
   peak_pct: number;
 }
 
-/** One filter at one angle on one rig. */
+/** One filter's response family on one rig: the angles whose flats
+ *  measure alike. */
 export interface FlatFamily {
   key: string;
   filter: string | null;
+  /** The middle angle of its largest rotation cluster. */
   rotation: number | null;
+  /** Its measured angle range, one span per rotation cluster that joined. */
+  angles?: { low: number; high: number }[];
+  /** That range in words: "100.1–104.4°", "72.6° & 82.2°", "no angle". */
+  angle_label?: string;
   /** Newest first. */
   groups: FlatGroup[];
   /** `splits[i]` lies between `groups[i + 1]` (older) and `groups[i]` (newer). */

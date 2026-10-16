@@ -45,35 +45,7 @@ pub struct ComparisonRow {
 }
 
 /// What an imaging session's own lights say about one change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Verdict {
-    /// The lights lack the change: shot before it.
-    Before,
-    /// The lights carry the change: shot after it.
-    After,
-    /// The lights cannot tell, as over a nebula.
-    Undecided,
-}
-
-impl Verdict {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Verdict::Before => "before",
-            Verdict::After => "after",
-            Verdict::Undecided => "undecided",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "before" => Some(Verdict::Before),
-            "after" => Some(Verdict::After),
-            "undecided" => Some(Verdict::Undecided),
-            _ => None,
-        }
-    }
-}
+pub use super::evidence::Verdict;
 
 /// One filter's fit within an imaging session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,4 +68,40 @@ pub struct EvidenceRow {
     pub event_key: String,
     pub verdict: Verdict,
     pub fits: Vec<EvidenceFit>,
+}
+
+/// What an imaging session's own lights said, in one filter, about which
+/// response family their flats come from.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FamilyEvidenceRow {
+    pub session_key: String,
+    /// Canonical filter name.
+    pub filter: String,
+    /// The candidates and the sessions standing for them, digested
+    /// (`Book::family_evidence_key`).
+    pub key: String,
+    /// The candidate families' keys.
+    pub candidates: Vec<String>,
+    /// The family the lights follow, when one stood clear.
+    pub chosen: Option<String>,
+    pub lights: usize,
+    pub targets: Vec<String>,
+    /// Each pair of candidates, as the lights' background fitted it.
+    pub pairs: Vec<FamilyPairRow>,
+}
+
+/// One pair of candidate families against a session's background.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FamilyPairRow {
+    pub first: String,
+    pub second: String,
+    /// `alike` (nothing compact tells them apart), `unfitted` (the
+    /// background could not be weighed against them) or `fit`.
+    #[serde(default)]
+    pub outcome: String,
+    /// 0 follows `first`, 1 follows `second`; absent when nothing compact
+    /// tells the two apart.
+    pub carried: Option<f64>,
+    pub spread: Option<f64>,
+    pub verdict: Option<Verdict>,
 }

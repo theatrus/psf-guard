@@ -8,6 +8,7 @@ import type {
   CalibrationKind,
   CalibrationKindExplanation,
   CalibrationNightFrames,
+  FlatFamilyNote,
   ImageCalibrationExplanation,
   LightCalibrationFinding,
 } from '../api/types';
@@ -40,6 +41,22 @@ interface CalibrationPanelProps {
 
 /** Bases that leave a light's flats from across a change: worth a check. */
 const UNSETTLED_BASES = new Set(['no_same_side', 'undetermined']);
+
+/** How a light's flat family was chosen, in a few words. */
+function familyBasisLabel(family: FlatFamilyNote): string {
+  switch (family.by) {
+    case 'pixels':
+      return 'chosen by its own pixels';
+    case 'nearest':
+      return family.undecided
+        ? 'nearest angle: its lights could not tell'
+        : 'nearest angle: its lights not read yet';
+    case 'prior':
+      return 'the only family near its angle';
+    default:
+      return 'its angles measure alike';
+  }
+}
 
 /** A fraction as a percent with one decimal: `0.2%`. */
 /** A fraction in percent: two decimals below 1%, and `<0.01%` below that. */
@@ -425,6 +442,16 @@ function KindAccount({ kind, parts, folded, level, lightNight, hrefFor }: KindAc
               <span className="light-calibration-part-label">Also match, not used</span>
               <ul>{kind.matching_unused.map((night) => nightRow(night, 'unused'))}</ul>
             </div>
+          )}
+          {kind.family && (
+            <p className="light-calibration-part" data-testid="calibration-flat-family">
+              <span className="light-calibration-part-label">Flat family</span>
+              <span>
+                {kind.family.label}
+                {' · '}
+                <span className="light-calibration-muted">{familyBasisLabel(kind.family)}</span>
+              </span>
+            </p>
           )}
           {kind.chosen_by && (
             <p

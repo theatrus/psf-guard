@@ -239,6 +239,35 @@ describe('CalibrationPanel', () => {
     expect(screen.queryByTestId('calibration-flat-alike')).toBeNull();
   });
 
+  it('names the flat family its own pixels chose', async () => {
+    show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
+      chosen_by: 'Chosen by its own pixels: its imaging session\'s lights (8 of M 27) follow the flats of '
+        + 'the OIII at 72.6° & 82.2° family rather than OIII at 100.1–104.4° (77.0° recorded)',
+      family: {
+        key: 'OIII:s-oiii72', label: 'OIII at 72.6° & 82.2°', by: 'pixels', lights: 8, targets: ['M 27'],
+        light_angle: 77, shift: 0, candidates: ['OIII at 72.6° & 82.2°', 'OIII at 100.1–104.4°'],
+      },
+    })] });
+    fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
+    const family = await screen.findByTestId('calibration-flat-family');
+    expect(family).toHaveTextContent('Flat family');
+    expect(family).toHaveTextContent('OIII at 72.6° & 82.2°');
+    expect(family).toHaveTextContent('chosen by its own pixels');
+    expect(screen.getByTestId('calibration-flat-chosen-by')).toHaveTextContent('follow the flats of');
+  });
+
+  it('says when no flat family stood clear and the nearest angle was taken', async () => {
+    show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
+      family: {
+        key: 'OIII:s-oiii72', label: 'OIII at 82.2°', by: 'nearest', undecided: true,
+        light_angle: 82, shift: 0, candidates: ['OIII at 82.2°', 'OIII at 72.6°'],
+      },
+    })] });
+    fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
+    expect(await screen.findByTestId('calibration-flat-family'))
+      .toHaveTextContent('nearest angle: its lights could not tell');
+  });
+
   it('says so when the library has no finding for the light', async () => {
     show('/detail/8?db=c925&project=1', { ...explanation, findings: [] });
     // No mark: folded, and it says why without asking for the account.
