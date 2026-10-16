@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useHotkeys } from 'react-hotkeys-hook';
-import { ChartColumn, Check, Columns2, FolderInput, Layers, RotateCcw, ScanSearch, X } from 'lucide-react';
+import { ChartColumn, Check, Columns2, FolderInput, Layers, RotateCcw, ScanSearch, SplitSquareVertical, X } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type { Image, ProjectMosaic } from '../api/types';
 import { GradingStatus } from '../api/types';
@@ -58,6 +58,8 @@ import { chipFocus } from '../utils/calibrationFocus';
 import { calibrationFilterLabel, matchesCalibrationFilter } from '../utils/calibrationFilter';
 import { useFlatGroupLights } from '../hooks/useFlatGroupLights';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
+import FlatSideDialog from './FlatSideDialog';
+import { useFlatChoiceAccess } from './calibration/useFlatGroupChoices';
 import ScoringChangedNote from './ScoringChangedNote';
 import TimeBreakMark from './TimeBreakMark';
 import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
@@ -124,6 +126,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   const { advanceOnGrade, showCalibrationChip } = useDisplayPreferences();
   const [lastSelectedImageId, setLastSelectedImageId] = useState<number | null>(null);
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
+  // The selected lights whose flat side is being chosen.
+  const [flatSideIds, setFlatSideIds] = useState<number[] | null>(null);
+  const canChooseFlats = useFlatChoiceAccess();
   const gridScopeKey = JSON.stringify([dbId, projectId, targetId]);
   const organizationNavigationFromRef = useRef<string | null>(null);
   const selectionAnchorIdRef = useRef<number | null>(null);
@@ -1131,6 +1136,18 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 <Layers size={14} aria-hidden="true" />
                 <span className="tool-button-label">Stack selected</span>
               </button>
+              {canChooseFlats && dbId && (
+                <button
+                  type="button"
+                  className="tool-button"
+                  data-testid="flat-side-action"
+                  title="Put the selected lights before or after a measured flat change"
+                  onClick={() => setFlatSideIds([...selectedImages])}
+                >
+                  <SplitSquareVertical size={14} aria-hidden="true" />
+                  <span className="tool-button-label">Flat side…</span>
+                </button>
+              )}
             </SelectionBar>
           )}
         />
@@ -1270,6 +1287,9 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
             navigate(`/grid?${params}`);
           }}
         />
+      )}
+      {flatSideIds && dbId && (
+        <FlatSideDialog dbId={dbId} imageIds={flatSideIds} onClose={() => setFlatSideIds(null)} />
       )}
     </>
   );

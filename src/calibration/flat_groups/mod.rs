@@ -17,13 +17,16 @@ pub mod family_job;
 pub mod family_store;
 pub mod job;
 pub mod measure;
+pub mod override_store;
+#[cfg(test)]
+mod override_tests;
 #[cfg(test)]
 mod selection_tests;
 pub mod store;
 #[cfg(test)]
 pub(crate) mod testing;
 
-pub use measure::{choice, evidence, lights, metric, model};
+pub use measure::{choice, evidence, lights, metric, model, overrides};
 pub use seiza_calibration::LightRotation;
 
 use anyhow::Result;
@@ -89,6 +92,8 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
     // stored: a new solve reaches the book through them, never through a
     // look at the cache here.
     family_store::digest(conn, &mut hasher)?;
+    // A person's splits, joins and choices for lights.
+    override_store::digest(conn, &mut hasher)?;
     hasher.update(
         super::rules::rule_book()
             .digest()
@@ -114,13 +119,17 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
         return Ok(Arc::clone(book));
     }
     let lights = imaging_lights(conn)?;
-    let mut book = Book::build(
+    let nights = super::Nights::load(conn);
+    let mut book = Book::build_with_overrides(
         store::load_responses(conn)?,
         store::load_comparisons(conn)?,
         store::load_evidence(conn, evidence::EVIDENCE_ALGORITHM_VERSION)?,
         model::imaging_sessions(lights, |profile| profile_rigs.rigs_of(profile)),
         rig_limits,
+        override_store::load_group_overrides(conn)?,
+        |rig, frame| nights.frame(rig, frame).boundary_seconds,
     );
+    book.light_choices = override_store::load_light_choices(conn)?;
     book.epochs = epochs::epochs(&family_store::load_angles(conn)?);
     for row in family_store::load(conn)? {
         book.family_evidence
@@ -272,6 +281,10 @@ pub struct EventNote {
     pub filters: Vec<String>,
     /// "new dust: 2 shadows near (1,460, 3,570)".
     pub what: String,
+    /// A split a person made where the flats measure alike, not a
+    /// measured change.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub by_hand: bool,
 }
 
 impl EventNote {
@@ -284,8 +297,19 @@ impl EventNote {
             broad: event.broad,
             camera_side: event.camera_side,
             filters: event.filters.iter().cloned().collect(),
-            what: describe_spots(&event.spots, event.dust, event.broad),
+            what: describe_what(event),
+            by_hand: event.by_hand,
         }
+    }
+}
+
+/// What a change is, in a few words: its spots, or that a person split
+/// the flats there.
+pub fn describe_what(event: &Event) -> String {
+    if event.by_hand {
+        "split by you where the flats measure alike".into()
+    } else {
+        describe_spots(&event.spots, event.dust, event.broad)
     }
 }
 
@@ -379,6 +403,130 @@ pub enum FlatBasis {
         #[serde(skip_serializing_if = "Option::is_none")]
         then: Option<Box<FlatBasis>>,
     },
+    /// A person chose the group its flats come from, over every change.
+    Group { group: GroupNote },
+}
+
+/// A group of one family, as a light's account names it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GroupNote {
+    /// The family's label: "R at 104.0°".
+    pub family: String,
+    pub first_night: String,
+    pub last_night: String,
+    pub sessions: usize,
+}
+
+impl GroupNote {
+    pub fn of(book: &Book, family: usize, group: usize) -> Option<Self> {
+        let sessions = book.families.get(family)?.groups.get(group)?;
+        let night = |index: usize| book.sessions[index].row.night.clone();
+        Some(Self {
+            family: family_label(book, family),
+            first_night: night(*sessions.first()?),
+            last_night: night(*sessions.last()?),
+            sessions: sessions.len(),
+        })
+    }
+
+    /// "R at 104.0°, 2026-08-12 to 2026-08-24".
+    pub fn label(&self) -> String {
+        if self.first_night == self.last_night {
+            format!("{}, {}", self.family, self.first_night)
+        } else {
+            format!(
+                "{}, {} to {}",
+                self.family, self.first_night, self.last_night
+            )
+        }
+    }
+}
+
+/// A family's filter and measured angle range: "OIII at 72.6° & 82.2°".
+pub fn family_label(book: &Book, family: usize) -> String {
+    format!(
+        "{} at {}",
+        book.families[family]
+            .filter
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("flats"),
+        book.angle_label(family)
+    )
+}
+
+/// What a person can choose for one light's flats.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChoiceOptions {
+    /// Changes it can be put on a side of: those whose window holds it,
+    /// those its flats were chosen around, and those with a choice.
+    pub changes: Vec<ChangeOption>,
+    /// Groups its flats can come from: every group of the families whose
+    /// flats pass its other gates, the one it takes now first.
+    pub groups: Vec<GroupOption>,
+}
+
+/// One change a light can be put on a side of.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChangeOption {
+    pub key: String,
+    pub start: i64,
+    pub end: i64,
+    /// "new dust: 1 shadow near (1423, 3545)".
+    pub what: String,
+    pub camera_side: bool,
+    pub filters: Vec<String>,
+    /// Where its time, session or pixels put the light, and by which.
+    pub side: Option<Side>,
+    pub by: &'static str,
+    /// The side a person chose, when one did.
+    pub chosen: Option<Side>,
+    /// The light was shot inside the change's window.
+    pub inside: bool,
+}
+
+/// One group a light can take.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GroupOption {
+    /// The response key of the group's first session: what a choice names.
+    pub response_key: String,
+    pub family: String,
+    pub first_night: String,
+    pub last_night: String,
+    pub sessions: usize,
+    /// The light's flats come from it now.
+    pub current: bool,
+    /// A person chose it for the light.
+    pub chosen: bool,
+}
+
+/// A person's choice for a light, as its account shows it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChoiceNote {
+    pub choice: overrides::LightChoice,
+    /// The change it is about, as recorded; none for a group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_key: Option<String>,
+    /// What it was about, in words.
+    pub label: String,
+    pub chosen_at: i64,
+    /// Why it does not apply, when it finds nothing to apply to. It stays
+    /// recorded until a person resets it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orphaned: Option<String>,
+}
+
+impl ChoiceNote {
+    pub fn of(row: &overrides::LightChoiceRow, orphaned: Option<String>) -> Option<Self> {
+        Some(Self {
+            choice: row.choice?,
+            change_key: (row.change_key != overrides::GROUP_CHOICE_KEY)
+                .then(|| row.change_key.clone()),
+            label: row.label.clone(),
+            chosen_at: row.chosen_at,
+            orphaned,
+        })
+    }
 }
 
 impl FlatBasis {
@@ -393,7 +541,7 @@ impl FlatBasis {
     /// The change it chose around, when one touches the light.
     pub fn event(&self) -> Option<&EventNote> {
         match self {
-            FlatBasis::Nearest => None,
+            FlatBasis::Nearest | FlatBasis::Group { .. } => None,
             FlatBasis::SameSide { event, .. }
             | FlatBasis::OtherAngle { event, .. }
             | FlatBasis::Corrected { event, .. }
@@ -411,6 +559,7 @@ impl FlatBasis {
             FlatBasis::Corrected { .. } => "corrected",
             FlatBasis::NoSameSide { .. } => "no_same_side",
             FlatBasis::Undetermined { .. } => "undetermined",
+            FlatBasis::Group { .. } => "group",
         }
     }
 
@@ -529,11 +678,24 @@ pub struct FlatFamily {
 }
 
 /// Where a light stands against a change, as selection reads it: the one
-/// place choosing flats asks.
-// TODO(#878): a person's choice of side for the light's session comes
-// first; route it through here (`place_light(book, choices, …)`).
-pub fn place_light(book: &Book, event: &model::Event, at: i64) -> model::Placement {
-    book.place(event, at)
+/// place choosing flats asks. A side a person chose for the light comes
+/// first, over its time, its imaging session and its pixels
+/// (`Placement::Person`); otherwise the book places it.
+pub fn place_light(
+    book: &Book,
+    choices: &overrides::ResolvedChoices,
+    event: &model::Event,
+    at: i64,
+) -> model::Placement {
+    let chosen = book
+        .events
+        .iter()
+        .position(|candidate| std::ptr::eq(candidate, event))
+        .and_then(|index| choices.side_of(index));
+    match chosen {
+        Some(side) => model::Placement::Person { side },
+        None => book.place(event, at),
+    }
 }
 
 /// A family's [`model::AlikeRange`] as a light's account names it.
@@ -568,17 +730,7 @@ impl AlikeRangeNote {
 
 impl FlatFamily {
     pub fn of(book: &Book, choice: &lights::FamilyChoice) -> Self {
-        let label = |family: usize| {
-            format!(
-                "{} at {}",
-                book.families[family]
-                    .filter
-                    .as_deref()
-                    .map(str::trim)
-                    .unwrap_or("flats"),
-                book.angle_label(family)
-            )
-        };
+        let label = |family: usize| family_label(book, family);
         Self {
             key: book.families[choice.family].key.clone(),
             label: label(choice.family),
@@ -679,6 +831,10 @@ pub fn describe_family(family: &FlatFamily) -> Option<String> {
             }
         )),
         FamilyBasis::Disputed { .. } => describe_family_flag(family),
+        FamilyBasis::Person => Some(format!(
+            "Chosen by you: flats of the {} family ({angle})",
+            family.label
+        )),
     };
     let range = family.alike_range.as_ref().map(describe_alike_range);
     match (basis, range) {
@@ -785,6 +941,9 @@ pub fn describe_change(event: &EventNote, rules: &super::Rules) -> String {
 /// shadows near (1460, 3570), up to 1.6% of the sky background (limit 1%)".
 pub fn describe_event(event: &EventNote, rules: &super::Rules) -> String {
     let limit = |key: &str, value: f64| format!("limit {}%{}", value, rules.set_by_suffix(key));
+    if event.by_hand {
+        return event.what.clone();
+    }
     if event.dust > 0.0 {
         format!(
             "{}, up to {:.1}% of the sky background ({})",
@@ -891,9 +1050,21 @@ pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String>
             }
         ),
         Placement::Undetermined { .. } => "nothing tells which side it is on".into(),
+        Placement::Person { side } => format!(
+            "chosen by you: {} the change",
+            if *side == Side::Before {
+                "before"
+            } else {
+                "after"
+            }
+        ),
     };
     match basis {
         FlatBasis::Nearest => None,
+        FlatBasis::Group { group } => Some(format!(
+            "Chosen by you: flats of the group {}, whatever the measured changes say",
+            group.label()
+        )),
         FlatBasis::SameSide {
             event,
             placement,
@@ -958,6 +1129,7 @@ mod basis_tests {
             broad: 0.0,
             camera_side: true,
             filters: Vec::new(),
+            by_hand: false,
         }
     }
 

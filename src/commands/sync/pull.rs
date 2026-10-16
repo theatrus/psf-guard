@@ -1333,9 +1333,24 @@ pub fn calibration_choice_line(
     if choices.cleared > 0 {
         parts.push(format!("{} back to their grade", choices.cleared));
     }
+    let frames = !parts.is_empty();
+    if choices.flat_groups > 0 {
+        parts.push(format!(
+            "{} flat group split(s) or join(s)",
+            choices.flat_groups
+        ));
+    }
+    if choices.flat_lights > 0 {
+        parts.push(format!("{} light flat choice(s)", choices.flat_lights));
+    }
     Some(format!(
-        "calibration choices: {}; masters built from these frames change",
-        parts.join(", ")
+        "calibration choices: {}; {}",
+        parts.join(", "),
+        if frames {
+            "masters built from these frames change"
+        } else {
+            "the flats these lights take may change"
+        }
     ))
 }
 

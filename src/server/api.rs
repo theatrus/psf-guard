@@ -660,6 +660,13 @@ pub struct SchedulerSyncCalibrationCounts {
     pub used_anyway: usize,
     /// Frames whose choice the pull clears, leaving their grade to decide.
     pub cleared: usize,
+    /// Splits and joins of flat groups the pull sets or resets.
+    #[serde(default)]
+    pub flat_groups: usize,
+    /// Lights whose side of a flat change, or group, the pull sets or
+    /// resets.
+    #[serde(default)]
+    pub flat_lights: usize,
 }
 
 /// Grade-push counts. Present only for `push_grades`.

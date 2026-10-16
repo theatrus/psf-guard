@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation } from 'react-router-dom';
 import { apiClient } from '../api/client';
@@ -20,6 +20,7 @@ import { openSettings } from '../utils/settingsIntent';
 import { useAccess } from '../auth/access';
 import { calibrationPageHref } from './calibration/calibrationLinks';
 import DetailSection from './DetailSection';
+import FlatChoicePicker from './FlatChoicePicker';
 import { CalibrationIcon } from './ScoreChipIcons';
 import {
   FINDING_HINTS,
@@ -45,6 +46,8 @@ const UNSETTLED_BASES = new Set(['no_same_side', 'undetermined']);
 /** How a light's flat family was chosen, in a few words. */
 function familyBasisLabel(family: FlatFamilyNote): string {
   switch (family.by) {
+    case 'person':
+      return 'chosen by you';
     case 'pixels':
       return family.moved
         ? `moved by its own pixels, confirmed by ${family.corroborated ?? 'other evidence'}`
@@ -268,6 +271,7 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
             level={chosen?.level ?? null}
             lightNight={explanation.light.night}
             hrefFor={(night) => calibrationHref(kind.kind, night)}
+            extra={kind.kind === 'flat' ? <FlatChoicePicker dbId={dbId} imageId={imageId} kind={kind} rig={explanation.rules?.rig_uuid} /> : null}
           />
         );
       })}
@@ -347,9 +351,11 @@ interface KindAccountProps {
   level: LightCalibrationFinding['level'] | null;
   lightNight: string | null;
   hrefFor: (night?: string) => string;
+  /** What a person can choose for these frames, below how they were chosen. */
+  extra?: ReactNode;
 }
 
-function KindAccount({ kind, parts, folded, level, lightNight, hrefFor }: KindAccountProps) {
+function KindAccount({ kind, parts, folded, level, lightNight, hrefFor, extra }: KindAccountProps) {
   const [allRefused, setAllRefused] = useState(false);
   const label = calibrationKindLabel(kind.kind);
   const focused = (part: CalibrationPart) => (parts.has(part) ? ` is-focus is-${level}` : '');
@@ -477,6 +483,7 @@ function KindAccount({ kind, parts, folded, level, lightNight, hrefFor }: KindAc
               <span>{kind.chosen_by}</span>
             </p>
           )}
+          {extra}
           {kind.refused.length > 0 && (
             <div className={`light-calibration-part${focused('refused')}`}>
               <span className="light-calibration-part-label">Refused</span>

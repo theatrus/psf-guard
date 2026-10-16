@@ -58,12 +58,15 @@ pub struct LightCounts {
     pub undetermined: usize,
     /// Every flat from the other side of a change, flagged.
     pub no_same_side: usize,
+    /// A person chose this group's flats for it.
+    pub chosen: usize,
 }
 
 impl LightCounts {
     fn add(&mut self, basis: &FlatBasis) {
         self.total += 1;
         match basis {
+            FlatBasis::Group { .. } => self.chosen += 1,
             FlatBasis::Nearest | FlatBasis::SameSide { .. } => self.own += 1,
             FlatBasis::OtherAngle { .. } => self.other_angle += 1,
             FlatBasis::Corrected { .. } => self.corrected += 1,

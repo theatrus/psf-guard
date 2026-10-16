@@ -192,6 +192,8 @@ pub enum FamilyBasis {
         lights: usize,
         targets: Vec<String>,
     },
+    /// A person chose one of its groups for the light.
+    Person,
 }
 
 /// The response family a light's flats come from.

@@ -1953,3 +1953,159 @@ fn a_range_does_not_cross_a_change_that_is_not_camera_side_dust() {
         .as_ref()
         .is_none_or(|family| family.alike_range.is_none()));
 }
+
+/// Catalog `light` as image `id` with `guid`, so a person's choice can name
+/// it.
+fn catalogued(conn: &Connection, light: &FrameMeta, id: i64, guid: &str) {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS acquiredimage (Id INTEGER PRIMARY KEY, projectId INTEGER,
+             targetId INTEGER, acquireddate INTEGER, filtername TEXT, gradingStatus INTEGER,
+             metadata TEXT, profileId TEXT, guid TEXT)",
+    )
+    .unwrap();
+    let name = light
+        .path
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    conn.execute(
+        "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+             gradingStatus, metadata, profileId, guid)
+         VALUES (?1, 1, 1, ?2, ?3, 0, ?4, 'profile', ?5)",
+        rusqlite::params![
+            id,
+            light.timestamp.unwrap(),
+            light.filter.clone().unwrap_or_default(),
+            format!(r#"{{"FileName": "C:\\Lights\\{name}"}}"#),
+            guid
+        ],
+    )
+    .unwrap();
+}
+
+fn choose(conn: &Connection, row: super::overrides::LightChoiceRow) {
+    super::override_store::set_light_choices(conn, &[row]).unwrap();
+}
+
+fn side_row(
+    guid: &str,
+    event: &super::model::Event,
+    side: super::overrides::LightChoice,
+) -> super::overrides::LightChoiceRow {
+    super::overrides::LightChoiceRow {
+        light_guid: guid.into(),
+        change_key: event.key.clone(),
+        rig_uuid: event.rig_uuid.clone(),
+        change_start: Some(event.start),
+        change_end: Some(event.end),
+        choice: Some(side),
+        group_frame: None,
+        group_session_key: None,
+        label: "a side".into(),
+        chosen_at: 100,
+    }
+}
+
+/// A light shot while the dust arrived takes nothing through the family's
+/// alike range: its side is unknown. Put before the change by hand, it
+/// takes the 104.0° flats from before, through the range, read at their
+/// angle by the stacker's gate.
+#[test]
+fn a_side_chosen_by_hand_lets_an_alike_range_serve_the_light() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = dust_then_alike_angles(temp.path(), true);
+    let during = light(temp.path(), "2026-09-05T04:00:00", 100.9);
+    catalogued(&conn, &during, 1, "g-during");
+    let selected = select_for_light(&conn, &during).unwrap();
+    assert!(!names(&selected.flat).contains(&"ha-104-before".to_string()));
+
+    let event = super::load_book(&conn).unwrap().events[0].clone();
+    choose(
+        &conn,
+        side_row("g-during", &event, super::overrides::LightChoice::Before),
+    );
+    let selected = select_for_light(&conn, &during).unwrap();
+    assert_eq!(names(&selected.flat), ["ha-104-before"]);
+    assert_eq!(
+        selected.match_tolerances().light_rotation,
+        seiza_calibration::LightRotation::Measured { degrees: 104.0 }
+    );
+    let family = selected.flat_family.as_ref().expect("its family");
+    assert!(family.alike_range.is_some(), "{family:?}");
+    assert_eq!(selected.flat_choices.len(), 1);
+    assert!(!selected.flat_basis.flags(), "{:?}", selected.flat_basis);
+}
+
+/// A group chosen by hand gives its flats at their angle, through the
+/// stacker's gate, over the change: a light after the dust at 101.9° takes
+/// the 104.0° flats from before it.
+#[test]
+fn a_group_chosen_by_hand_is_read_at_its_flats_angle() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = dust_then_alike_angles(temp.path(), true);
+    let after = light(temp.path(), "2026-09-14T04:00:00", 101.9);
+    catalogued(&conn, &after, 1, "g-after");
+    let book = super::load_book(&conn).unwrap();
+    let before = book
+        .sessions
+        .iter()
+        .find(|s| s.row.filter.as_deref() == Some("Ha") && s.row.night == "2026-09-01")
+        .expect("Ha before the dust");
+    choose(
+        &conn,
+        super::overrides::LightChoiceRow {
+            light_guid: "g-after".into(),
+            change_key: super::overrides::GROUP_CHOICE_KEY.into(),
+            rig_uuid: before.row.rig_uuid.clone(),
+            change_start: None,
+            change_end: None,
+            choice: Some(super::overrides::LightChoice::Group),
+            group_frame: before.row.frame_uuids.first().cloned(),
+            group_session_key: Some(before.row.session_key.clone()),
+            label: "the group before the dust".into(),
+            chosen_at: 100,
+        },
+    );
+    let selected = select_for_light(&conn, &after).unwrap();
+    assert_eq!(names(&selected.flat), ["ha-104-before"]);
+    assert!(matches!(selected.flat_basis, FlatBasis::Group { .. }));
+    assert_eq!(
+        selected.match_tolerances().light_rotation,
+        seiza_calibration::LightRotation::Measured { degrees: 104.0 }
+    );
+}
+
+/// Choices for one light, and the tables themselves, leave every other
+/// light's candidates, and so its stack's key, as they were.
+#[test]
+fn choices_leave_other_lights_stack_keys_alone() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let conn = dust_then_alike_angles(temp.path(), true);
+    let lights = [
+        light(temp.path(), "2026-08-31T04:00:00", 100.9),
+        light(temp.path(), "2026-09-14T04:00:00", 101.9),
+        light(temp.path(), "2026-09-12T04:00:00", 104.2),
+    ];
+    let keys = |conn: &Connection| -> Vec<String> {
+        lights
+            .iter()
+            .map(|light| {
+                crate::calibration::selection_hash(&select_for_light(conn, light).unwrap(), false)
+            })
+            .collect()
+    };
+    let first = keys(&conn);
+    let chosen = light(temp.path(), "2026-09-05T04:00:00", 100.9);
+    catalogued(&conn, &chosen, 9, "g-chosen");
+    super::override_store::add_tables(&conn).unwrap();
+    let event = super::load_book(&conn).unwrap().events[0].clone();
+    choose(
+        &conn,
+        side_row("g-chosen", &event, super::overrides::LightChoice::Before),
+    );
+    assert_eq!(keys(&conn), first);
+}

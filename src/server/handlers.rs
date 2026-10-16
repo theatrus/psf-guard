@@ -1060,6 +1060,8 @@ pub(crate) async fn execute_scheduler_sync_paths(
                                     kept_out: summary.calibration_choices.kept_out,
                                     used_anyway: summary.calibration_choices.used_anyway,
                                     cleared: summary.calibration_choices.cleared,
+                                    flat_groups: summary.calibration_choices.flat_groups,
+                                    flat_lights: summary.calibration_choices.flat_lights,
                                 }),
                                 grade_filled: summary.grade_filled,
                                 grade_preserved: summary.grade_preserved,

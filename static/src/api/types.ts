@@ -2303,6 +2303,10 @@ export interface SchedulerSyncCalibrationCounts {
   used_anyway: number;
   /** Frames whose choice the pull clears, leaving their grade to decide. */
   cleared: number;
+  /** Splits and joins of flat groups the pull sets or resets. */
+  flat_groups?: number;
+  /** Lights whose flat side or group the pull sets or resets. */
+  flat_lights?: number;
 }
 
 export interface SchedulerSyncResponse {
@@ -2848,6 +2852,60 @@ export interface CalibrationKindExplanation {
   /** Flats only: the response family they come from, when measured grouping
    *  chose one at another angle than the light's, or by its own pixels. */
   family?: FlatFamilyNote;
+  /** Flats only: a person's choices for this light, in force or orphaned. */
+  choices?: FlatChoiceNote[];
+  /** Flats only, with measured grouping: what a person can choose. */
+  choice_options?: FlatChoiceOptions;
+}
+
+/** A person's choice for one light's flats. */
+export interface FlatChoiceNote {
+  choice: 'before' | 'after' | 'group';
+  /** The change it is about, as recorded; absent for a group. */
+  change_key?: string;
+  /** What it was about, in words. */
+  label: string;
+  chosen_at: number;
+  /** Why it does not apply now: its change or flats are gone. It stays until reset. */
+  orphaned?: string;
+}
+
+/** What a person can choose for one light's flats. */
+export interface FlatChoiceOptions {
+  /** Changes it can be put on a side of: its window holds the light, its
+   *  flats were chosen around it, or a person chose a side. */
+  changes: FlatChangeOption[];
+  /** Groups its flats can come from, the one it takes now first. */
+  groups: FlatGroupOption[];
+}
+
+export interface FlatChangeOption {
+  key: string;
+  start: number;
+  end: number;
+  what: string;
+  camera_side: boolean;
+  filters: string[];
+  /** Where its time, session or pixels put the light. */
+  side: 'before' | 'after' | null;
+  by: 'time' | 'session' | 'pixels' | 'undetermined' | 'person';
+  /** The side a person chose. */
+  chosen: 'before' | 'after' | null;
+  /** The light was shot inside the change's window. */
+  inside: boolean;
+}
+
+export interface FlatGroupOption {
+  /** Its first session's response key: what a choice names. */
+  response_key: string;
+  family: string;
+  first_night: string;
+  last_night: string;
+  sessions: number;
+  /** The light's flats come from it now. */
+  current: boolean;
+  /** A person chose it. */
+  chosen: boolean;
 }
 
 /** The response family a light's flats come from, and how it was chosen. */
@@ -2860,7 +2918,7 @@ export interface FlatFamilyNote {
    *  its own lights follow these flats; `nearest`: the family at its
    *  recorded angle, its lights not read or unable to tell; `disputed`:
    *  its lights pointed to another family and nothing confirmed it. */
-  by: 'angle' | 'pixels' | 'nearest' | 'disputed';
+  by: 'angle' | 'pixels' | 'nearest' | 'disputed' | 'person';
   /** `pixels` and `disputed`: how many lights, of which targets, said so. */
   lights?: number;
   targets?: string[];
@@ -2909,6 +2967,8 @@ export interface FlatEventNote {
   camera_side: boolean;
   filters: string[];
   what: string;
+  /** A split a person made where the flats measure alike. */
+  by_hand?: boolean;
 }
 
 /** Which side of a change a light was put on, and by what. */
@@ -2916,7 +2976,8 @@ export type FlatPlacement =
   | { by: 'time'; side: 'before' | 'after' }
   | { by: 'session'; side: 'before' | 'after'; start: number; end: number }
   | { by: 'pixels'; side: 'before' | 'after'; targets: string[]; filters: string[]; lights: number }
-  | { by: 'undetermined'; session: [number, number] | null; pixels: string | null };
+  | { by: 'undetermined'; session: [number, number] | null; pixels: string | null }
+  | { by: 'person'; side: 'before' | 'after' };
 
 /** How a light's flats were chosen around a measured change. */
 export type FlatBasis =
@@ -2943,7 +3004,11 @@ export type FlatBasis =
       };
     }
   | { basis: 'no_same_side'; event: FlatEventNote; placement: FlatPlacement }
-  | { basis: 'undetermined'; event: FlatEventNote; placement: FlatPlacement };
+  | { basis: 'undetermined'; event: FlatEventNote; placement: FlatPlacement }
+  | {
+      basis: 'group';
+      group: { family: string; first_night: string; last_night: string; sessions: number };
+    };
 
 /** Why one light got the calibration it did, and what is wrong with it. */
 export interface ImageCalibrationExplanation {
@@ -4201,6 +4266,30 @@ export interface FlatGroupsRig {
   events: FlatChangeEvent[];
   families: FlatFamily[];
   unmeasured: FlatUnmeasuredSession[];
+  /** A person's splits and joins that find nothing to apply to now. */
+  orphaned?: FlatGroupOverride[];
+}
+
+/** A person's split or join of one family's groups. */
+export interface FlatGroupOverride {
+  choice: 'split' | 'join' | null;
+  /** The edge in words when it was made. */
+  label: string;
+  chosen_at: number;
+  /** The recorded edge: what a reset names. */
+  anchor_frame: string;
+  /** In force: whether the measurements alone group the same. */
+  agrees: boolean | null;
+  /** Why it no longer applies; it stays until reset. */
+  orphaned: string | null;
+  /** A camera-side change it stands against; both stay in force. */
+  conflict: {
+    key: string;
+    start: number;
+    end: number;
+    what: string;
+    filters: string[];
+  } | null;
 }
 
 export interface FlatClockRun {
@@ -4269,6 +4358,8 @@ export interface FlatFamily {
   groups: FlatGroup[];
   /** `splits[i]` lies between `groups[i + 1]` (older) and `groups[i]` (newer). */
   splits: FlatSplit[];
+  /** Measured splits a person joined, newest first; each lies inside a group now. */
+  joins?: FlatSplit[];
 }
 
 export interface FlatGroup {
@@ -4308,6 +4399,8 @@ export interface FlatGroupLightCounts {
   corrected: number;
   undetermined: number;
   no_same_side: number;
+  /** A person chose this group's flats for it. */
+  chosen?: number;
 }
 
 /** What one flat group feeds: its masters and the lights that take it. */
@@ -4384,6 +4477,32 @@ export interface FlatSplit {
   reason: string;
   event_key: string | null;
   spots: FlatSpot[];
+  /** `split`: a person split where the nights measure alike; `joined`: a
+   *  measured split a person joined. The numbers are the measurements. */
+  by_hand?: 'split' | 'joined' | null;
+  /** The person's split or join at this edge. */
+  choice?: FlatGroupOverride | null;
+}
+
+/** The changes a set of lights were shot during, for the Images bulk action. */
+export interface FlatLightChoiceOptions {
+  changes: {
+    key: string;
+    /** The change's rig: its window reads on the rig's clock. */
+    rig_uuid: string;
+    start: number;
+    end: number;
+    what: string;
+    camera_side: boolean;
+    filters: string[];
+    /** Of the lights, those shot inside its window. */
+    lights: number;
+    chosen_before: number;
+    chosen_after: number;
+  }[];
+  /** Lights with any choice in force. */
+  with_choices: number;
+  without_guid: number;
 }
 
 /** What the calibration quality job is doing. */

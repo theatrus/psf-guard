@@ -1,0 +1,51 @@
+.flat-side-dialog {
+  width: min(36rem, 100%);
+}
+
+.flat-side-note {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.flat-side-error {
+  color: var(--color-error);
+  font-size: 0.85rem;
+}
+
+.flat-side-changes {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.flat-side-changes li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.8rem;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: 6px;
+}
+
+.flat-side-what {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.flat-side-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.flat-side-buttons button[aria-pressed='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
+}

@@ -71,6 +71,15 @@
   from the command line, with `--dry-run`. Restoring is by hand; see
   [Backups](../BACKUPS.md).
 
+- Flat groups can be split and joined by hand in Calibration › Frames ›
+  Groups (**Split here**, **Join**), and a light can be put before or
+  after a change, or given one group's flats, from its Calibration panel
+  or, for a selection, with **Flat side…** in Images. Your choice wins
+  over the measurements and is drawn as yours (*Split by you · Reset*),
+  with the measured numbers beside it; a join that crosses a camera-side
+  change says so. Choices whose flats or change are gone are kept and
+  shown as no longer applied. They travel with Merge catalogs and
+  `sync pull`, and need database management to change.
 - The header's background jobs keep automatic work in view while your own
   work runs. A database quality analysis, an automatic stack refresh, or a
   re-apply of processing that steps aside for a build, scan, or solve you
