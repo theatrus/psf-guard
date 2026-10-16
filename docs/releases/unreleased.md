@@ -538,7 +538,10 @@
   pressed quickly in a row could step one image instead of two; and →
   pressed just as the detail closed opened the next image again instead of
   moving the Images cursor.
-- Two changes to a view made in the same moment both stay in its address.
-  Before, one could be lost: a frame selected just as another was, a group
-  expanded or a filter chosen while the view was still updating, or the
-  frame Calibration sets aside when you switch between Sessions and Groups.
+- Changes made in quick succession in Images, Sequence, Compare and
+  Calibration all stay in the address. Before, one could undo another: a
+  frame selected just as another was, two groups opened or closed in a
+  row, Sequence putting back a frame it had just dropped from the
+  selection, or the frame Calibration sets aside when you switch between
+  Sessions and Groups. Forgetting a calibration frame now always shows the
+  next one, not sometimes the first.

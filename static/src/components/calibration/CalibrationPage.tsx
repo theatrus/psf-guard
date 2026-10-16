@@ -588,6 +588,7 @@ function CalibrationFrames({
       ready={framesReady}
       frameUuid={frameUuid}
       onSelectFrame={selectFrame}
+      onKeepListedFrame={state.keepListedFrame}
       zoomKey={browse === 'groups' ? `group:${groupEntry?.key ?? ''}` : sessionId ?? ''}
       runOf={browse === 'groups' ? groupRunOf : undefined}
       view={state.view}

@@ -22,6 +22,9 @@ interface CalibrationFrameBrowserProps {
   ready: boolean;
   frameUuid: string | null;
   onSelectFrame: (uuid: string | null) => void;
+  /** Choose `fallback` unless the frame chosen now, which may not have
+   *  rendered yet, is one of `listed`. */
+  onKeepListedFrame: (listed: readonly string[], fallback: string | null) => void;
   /** What the viewer keeps its zoom across: a session, or a flat group. */
   zoomKey: string;
   /** Divide the strip into runs, such as the nights of a flat group. */
@@ -56,6 +59,7 @@ export default function CalibrationFrameBrowser({
   ready,
   frameUuid,
   onSelectFrame,
+  onKeepListedFrame,
   zoomKey,
   runOf,
   view,
@@ -104,19 +108,19 @@ export default function CalibrationFrameBrowser({
   // The first frame is chosen until a person chooses; a frame the list
   // drops gives way to the first one left, or after Forget to its
   // neighbour, and an empty list chooses none, so Keep out and Forget
-  // never reach a frame it does not show.
+  // never reach a frame it does not show. The choice is made against the
+  // frame the address holds now, which may be one chosen a moment ago
+  // that this render does not show yet: that one stays if listed.
   const listed = frames.some((frame) => frame.frame_uuid === frameUuid);
   useEffect(() => {
     if (!ready) return;
-    if (frames.length === 0) {
-      if (frameUuid) onSelectFrame(null);
-      return;
-    }
     if (frameUuid && listed) return;
+    if (frames.length === 0 && !frameUuid) return;
+    const uuids = frames.map((frame) => frame.frame_uuid);
     const after = forgotten.current?.uuid === frameUuid ? forgotten.current : null;
-    const neighbour = after?.next && frames.some((frame) => frame.frame_uuid === after.next) ? after.next : null;
-    onSelectFrame(neighbour ?? frames[0].frame_uuid);
-  }, [frameUuid, frames, listed, onSelectFrame, ready]);
+    const neighbour = after?.next && uuids.includes(after.next) ? after.next : null;
+    onKeepListedFrame(uuids, neighbour ?? uuids[0] ?? null);
+  }, [frameUuid, frames, listed, onKeepListedFrame, ready]);
   // Another frame chosen ends what Forget asked for.
   useEffect(() => {
     if (forgotten.current && frameUuid !== forgotten.current.uuid && frameUuid !== forgotten.current.next) {

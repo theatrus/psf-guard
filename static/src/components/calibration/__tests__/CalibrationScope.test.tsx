@@ -1,8 +1,7 @@
-import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
+import { createMemoryRouter, RouterProvider, useLocation, useSearchParams } from 'react-router-dom';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { server } from '../../../test/msw-server';
 import CalibrationPage from '../CalibrationPage';
@@ -116,16 +115,11 @@ afterEach(async () => {
 
 function renderPage(entry: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
-        <Routes>
-          <Route path="/calibration" element={<>{children}<Location /><Header /></>} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>
+  const router = createMemoryRouter(
+    [{ path: '/calibration', element: <><CalibrationPage /><Location /><Header /></> }],
+    { initialEntries: [entry] },
   );
-  const page = render(<CalibrationPage />, { wrapper });
+  const page = render(<QueryClientProvider client={client}><RouterProvider router={router} /></QueryClientProvider>);
   pages.push({ client, unmount: page.unmount });
   return page;
 }

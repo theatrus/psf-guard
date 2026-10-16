@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
-import { useDbProjectTarget, useUrlParams } from '../../hooks/useUrlState';
+import { useDbProjectTarget, useLatestSearchParams, useUrlParams } from '../../hooks/useUrlState';
 import { useAccess } from '../../auth/access';
 import ProjectExposureGrouping from '../ProjectExposureGrouping';
 import { imageDetailPath } from '../../utils/imageDetailRoutes';
@@ -60,7 +60,7 @@ export default function StacksView() {
   const { data: mosaic } = useProjectMosaic(mosaicScope ? dbId : null, mosaicScope ? projectId : null);
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams] = useSearchParams();
+  const latestParams = useLatestSearchParams();
   const handed = (location.state as StackSelectionState | null)?.stackImageIds;
   // How wide the cards are: a size in the link, else one chosen earlier in
   // this browser, else they fill the row (one card, or two on a wide screen).
@@ -110,8 +110,8 @@ export default function StacksView() {
     return chosen.length >= 2 ? chosen : null;
   }, [handed, images]);
   const openImage = useCallback(
-    (imageId: number) => navigate(imageDetailPath(imageId, searchParams, 'grid')),
-    [navigate, searchParams]
+    (imageId: number) => navigate(imageDetailPath(imageId, latestParams(), 'grid')),
+    [latestParams, navigate]
   );
 
   // WBPP runs go in the folders the PixInsight settings define, so an
@@ -192,7 +192,7 @@ export default function StacksView() {
           <button
             type="button"
             className="link-button"
-            onClick={() => navigate(`${location.pathname}${location.search}`, { replace: true, state: null })}
+            onClick={() => navigate(`${location.pathname}?${latestParams()}`, { replace: true, state: null })}
           >
             Stack every image instead
           </button>

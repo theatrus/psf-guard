@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { delay, http, HttpResponse } from 'msw';
-import { MemoryRouter, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
+import { createMemoryRouter, RouterProvider, useLocation, useSearchParams } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '../../../api/client';
 import { AccessContext, useAccess } from '../../../auth/access';
@@ -221,18 +221,18 @@ function WithAccess({ canWrite, children }: { canWrite: boolean; children: React
 
 function renderPage(entry: string, { canWrite = true }: { canWrite?: boolean } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const wrapper = ({ children }: { children: ReactNode }) => (
+  // The app's kind of router: a data router.
+  const router = createMemoryRouter(
+    [{ path: '/calibration', element: <><CalibrationPage /><Location /><Scope /></> }],
+    { initialEntries: [entry] },
+  );
+  return render(
     <QueryClientProvider client={client}>
       <WithAccess canWrite={canWrite}>
-        <MemoryRouter initialEntries={[entry]}>
-          <Routes>
-            <Route path="/calibration" element={<>{children}<Location /><Scope /></>} />
-          </Routes>
-        </MemoryRouter>
+        <RouterProvider router={router} />
       </WithAccess>
-    </QueryClientProvider>
+    </QueryClientProvider>,
   );
-  return render(<CalibrationPage />, { wrapper });
 }
 
 const params = () => new URLSearchParams(screen.getByRole('status', { name: 'location' }).textContent ?? '');

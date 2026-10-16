@@ -2,6 +2,7 @@ import {
   UNSAFE_DataRouterContext,
   UNSAFE_NavigationContext,
   useLocation,
+  useNavigate,
   useSearchParams,
 } from 'react-router-dom';
 import { useCallback, useContext, useMemo, useRef } from 'react';
@@ -55,45 +56,87 @@ function numberArrayParamOf(value: string | null): number[] {
   return value ? value.split(',').map(id => parseInt(id, 10)).filter(id => !isNaN(id)) : [];
 }
 
+/** A location's path within the app and its search, as a router holds it. */
+export interface LatestUrl {
+  pathname: string;
+  search: string;
+}
+
+let warnedNoLatestUrl = false;
+
 /**
- * The search the router holds now, read when called rather than when the
+ * The URL the router holds now, read when called rather than when the
  * caller last rendered.
  *
  * The router takes a navigation at once but shows it as a transition, so
- * for a while every component still renders the search before it. A write
+ * for a while every component still renders the URL before it. A write
  * built from a rendered search drops any write made since: an effect's
  * rig, then another component's session, and the rig is gone. Both kinds
  * of router the app and its tests use hold the latest location
- * synchronously: a data router in its state, a history-backed one in its
- * history. Null for a router that shows neither.
+ * synchronously: a data router in its state (read through React Router's
+ * UNSAFE_ contexts), a history-backed one in its history. Null, with a
+ * warning in development, for a router that shows neither.
  */
-function useLatestSearch(): () => string | null {
+export function useLatestUrl(): () => LatestUrl | null {
   const router = useContext(UNSAFE_DataRouterContext)?.router;
-  const { navigator } = useContext(UNSAFE_NavigationContext);
+  const { navigator, basename } = useContext(UNSAFE_NavigationContext);
   return useCallback(() => {
-    if (router) return router.state.location.search;
-    const history = navigator as { location?: { search?: unknown } };
-    const search = history.location?.search;
-    return typeof search === 'string' ? search : null;
-  }, [navigator, router]);
+    const location = router
+      ? router.state.location
+      : (navigator as { location?: { pathname?: unknown; search?: unknown } }).location;
+    if (typeof location?.pathname !== 'string' || typeof location.search !== 'string') {
+      if (import.meta.env.DEV && !warnedNoLatestUrl) {
+        warnedNoLatestUrl = true;
+        console.warn('useLatestUrl: this router shows no latest location; URL writes fall back to the rendered one and may drop a write made in the same moment.');
+      }
+      return null;
+    }
+    return { pathname: withoutBasename(location.pathname, basename), search: location.search };
+  }, [basename, navigator, router]);
+}
+
+function withoutBasename(pathname: string, basename: string): string {
+  if (!basename || basename === '/') return pathname;
+  if (!pathname.toLowerCase().startsWith(basename.toLowerCase())) return pathname;
+  return pathname.slice(basename.length) || '/';
+}
+
+/**
+ * The params of the URL as it stands, for a navigation built from them,
+ * such as one to another view that carries the scope. Read when called, so
+ * a write made a moment before and not yet rendered is kept. Same-view
+ * changes go through `updateParams` instead.
+ */
+export function useLatestSearchParams(): () => URLSearchParams {
+  const latestUrl = useLatestUrl();
+  const { search } = useLocation();
+  const renderedRef = useRef(search);
+  renderedRef.current = search;
+  return useCallback(
+    () => new URLSearchParams(latestUrl()?.search ?? renderedRef.current),
+    [latestUrl],
+  );
 }
 
 /**
  * Hook for managing URL search parameters as state.
  *
  * The getters read the params this render shows. `updateParams` writes to
- * the URL as it stands when called, so writes compose: two in one tick,
- * from this hook or any other, or one made after another view was pushed
- * in the same moment, all land. Each write replaces the current history
- * entry.
+ * the URL as it stands when called, path and search alike, so writes
+ * compose: two in one tick, from this hook or any other, or one made after
+ * another view was pushed in the same moment, all land. Each write
+ * replaces the current history entry.
  */
 export function useUrlParams() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const latestSearch = useLatestSearch();
+  const navigate = useNavigate();
+  const latestUrl = useLatestUrl();
   const setSearchParamsRef = useRef(setSearchParams);
-  const latestSearchRef = useRef(latestSearch);
+  const navigateRef = useRef(navigate);
+  const latestUrlRef = useRef(latestUrl);
   setSearchParamsRef.current = setSearchParams;
-  latestSearchRef.current = latestSearch;
+  navigateRef.current = navigate;
+  latestUrlRef.current = latestUrl;
   // Only for a router that does not show its latest location: the params
   // this hook last wrote, until a render shows newer ones.
   const fallbackRef = useRef(searchParams);
@@ -126,14 +169,17 @@ export function useUrlParams() {
 
   /** Write `updates` over the URL as it stands. Pass a function of those
    *  params to change a value from what it is now rather than from what
-   *  the caller last rendered, which may be a write behind. */
+   *  the caller last rendered, which may be a write behind; it returns
+   *  null to leave the URL as it is. */
   const updateParams = useCallback((
-    updates: ParamUpdates | ((latest: URLSearchParams) => ParamUpdates),
+    updates: ParamUpdates | ((latest: URLSearchParams) => ParamUpdates | null),
     options: UpdateParamsOptions = {},
   ) => {
-    const newParams = new URLSearchParams(latestSearchRef.current() ?? fallbackRef.current);
+    const latest = latestUrlRef.current();
+    const newParams = new URLSearchParams(latest?.search ?? fallbackRef.current);
     const scope = scopeKey(newParams);
     const changes = typeof updates === 'function' ? updates(new URLSearchParams(newParams)) : updates;
+    if (changes === null) return;
 
     Object.entries(changes).forEach(([key, value]) => {
       if (value === null || value === undefined || value === '' || value === 'all') {
@@ -152,7 +198,14 @@ export function useUrlParams() {
     // A view's own scoring stays with the database and project it was set in.
     if (scopeKey(newParams) !== scope) dropScoringParams(newParams);
     fallbackRef.current = newParams;
-    setSearchParamsRef.current(newParams, { replace: true, flushSync: options.immediate === true });
+    const navigateOptions = { replace: true, flushSync: options.immediate === true };
+    if (latest) {
+      // The path read with the search: a history router would otherwise
+      // put the search on the path this hook last rendered.
+      void navigateRef.current({ pathname: latest.pathname, search: `?${newParams}` }, navigateOptions);
+    } else {
+      setSearchParamsRef.current(newParams, navigateOptions);
+    }
   }, []);
   
   return {

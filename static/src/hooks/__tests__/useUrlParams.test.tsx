@@ -2,14 +2,15 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import {
+  createHashRouter,
   createMemoryRouter,
   MemoryRouter,
   RouterProvider,
   useLocation,
   useNavigate,
 } from 'react-router-dom';
-import { describe, expect, it } from 'vitest';
-import { useGridState, useUrlParams } from '../useUrlState';
+import { describe, expect, it, vi } from 'vitest';
+import { useGridState, useLatestUrl, useUrlParams } from '../useUrlState';
 import { useCalibrationUrlState } from '../../components/calibration/useCalibrationUrlState';
 
 /**
@@ -22,8 +23,16 @@ import { useCalibrationUrlState } from '../../components/calibration/useCalibrat
 type Kind = 'data router' | 'memory router';
 
 function Search() {
-  return <output aria-label="search">{useLocation().search}</output>;
+  const { pathname, search } = useLocation();
+  return (
+    <>
+      <output aria-label="search">{search}</output>
+      <output aria-label="path">{pathname}</output>
+    </>
+  );
 }
+
+const path = () => screen.getByRole('status', { name: 'path' }).textContent;
 
 const search = () => new URLSearchParams(screen.getByRole('status', { name: 'search' }).textContent ?? '');
 
@@ -112,7 +121,7 @@ function WriteRenderWrite() {
   );
 }
 
-/** One click: another view pushed, then a write to the view it shows. */
+/** One click: another view pushed, then a write, which lands on it. */
 function PushThenWrite() {
   const navigate = useNavigate();
   const { updateParams } = useUrlParams();
@@ -120,7 +129,7 @@ function PushThenWrite() {
     <button
       type="button"
       onClick={() => {
-        void navigate('/grid?db=a&project=2');
+        void navigate('/sequence?db=a&project=2');
         updateParams({ calRig: 'c925' });
       }}
     >
@@ -184,10 +193,12 @@ describe.each<Kind>(['data router', 'memory router'])('useUrlParams with a %s', 
     const { back } = mount(kind, <PushThenWrite />);
     fireEvent.click(screen.getByRole('button', { name: 'Write' }));
     await waitFor(() => expect(search().get('calRig')).toBe('c925'));
+    expect(path()).toBe('/sequence');
     expect(search().get('project')).toBe('2');
     // The push is the one new entry: Back returns to the view it left.
     await act(async () => { await back(); });
     await waitFor(() => expect(search().get('project')).toBe('1'));
+    expect(path()).toBe('/grid');
     expect(search().has('calRig')).toBe(false);
   });
 
@@ -274,3 +285,37 @@ function SelectRenderAdd() {
     </button>
   );
 }
+
+describe('useLatestUrl', () => {
+  function Latest() {
+    const latestUrl = useLatestUrl();
+    const [read, setRead] = useState('');
+    return (
+      <button type="button" onClick={() => setRead(JSON.stringify(latestUrl()))}>
+        {read || 'Read'}
+      </button>
+    );
+  }
+
+  // React Router's UNSAFE_ contexts are how the hook reads the router; a
+  // release that moved them would make every write fall back quietly.
+  it.each([
+    ['the app\'s hash router', () => createHashRouter([{ path: '/grid', element: <Latest /> }])],
+    ['a memory data router', () => createMemoryRouter(
+      [{ path: '/grid', element: <Latest /> }], { initialEntries: ['/grid?db=a'] },
+    )],
+  ])('reads the location %s holds', async (_name, make) => {
+    window.location.hash = '#/grid?db=a';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      render(<RouterProvider router={make()} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Read' }));
+      expect(JSON.parse(screen.getByRole('button').textContent ?? 'null'))
+        .toEqual({ pathname: '/grid', search: '?db=a' });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      window.location.hash = '';
+    }
+  });
+});

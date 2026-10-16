@@ -181,6 +181,19 @@ export function useCalibrationUrlState() {
     [updateParams]
   );
   const selectFrame = useCallback((uuid: string | null) => updateParams({ calFrame: uuid }), [updateParams]);
+  /** Choose `fallback` unless the frame the URL holds now is one of
+   *  `listed`. A list that changed under a frame chosen a moment before,
+   *  such as the next one after Forget, keeps that frame: the frame this
+   *  render shows may be the one it replaced. */
+  const keepListedFrame = useCallback(
+    (listed: readonly string[], fallback: string | null) =>
+      updateParams((latest) => {
+        const now = latest.get('calFrame');
+        if (now ? listed.includes(now) : fallback === null) return null;
+        return { calFrame: fallback };
+      }),
+    [updateParams]
+  );
   const setView = useCallback(
     (next: CalibrationFrameView) => updateParams({ calView: next === 'session' ? 'session' : null }),
     [updateParams]
@@ -309,6 +322,7 @@ export function useCalibrationUrlState() {
     setPage,
     selectSession,
     selectFrame,
+    keepListedFrame,
     setView,
     setStretch,
     setFull,

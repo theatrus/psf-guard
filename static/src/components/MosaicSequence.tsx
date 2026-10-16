@@ -6,7 +6,7 @@ import { imageDetailPath } from '../utils/imageDetailRoutes';
 import { mosaicLabel } from '../hooks/useProjectMosaic';
 import { useCalibrationMarks } from '../hooks/useCalibrationMarks';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
-import { useImageOrder } from '../hooks/useUrlState';
+import { useImageOrder, useLatestSearchParams } from '../hooks/useUrlState';
 import { useNewFrameIds } from '../hooks/useNewFrames';
 import { useNavigateNow } from '../hooks/useNavigateNow';
 
@@ -23,6 +23,8 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
   const navigate = useNavigate();
   const navigateNow = useNavigateNow();
   const [searchParams] = useSearchParams();
+  // Moves start from the URL as it stands; see useLatestSearchParams.
+  const latestParams = useLatestSearchParams();
   const filterName = searchParams.get('filterName') || undefined;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const { showCalibrationChip } = useDisplayPreferences();
@@ -46,7 +48,7 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
   );
 
   const withParams = (change: (params: URLSearchParams) => void) => {
-    const params = new URLSearchParams(searchParams);
+    const params = latestParams();
     change(params);
     navigate(`/sequence?${params}`);
   };
@@ -103,13 +105,13 @@ export default function MosaicSequence({ dbId, mosaic, images }: MosaicSequenceP
                   image={image}
                   calibration={calibration.marks.get(image.id)}
                   onCalibrationClick={(mark) =>
-                    navigateNow(imageDetailPath(image.id, searchParams, 'sequence', mark.codes[0]))}
+                    navigateNow(imageDetailPath(image.id, latestParams(), 'sequence', mark.codes[0]))}
                   isSelected={image.id === selectedId}
                   isNew={newImageIds.has(image.id)}
                   qualityPresentation="compact"
                   lazyPreview
                   onClick={() => setSelectedId(image.id)}
-                  onDoubleClick={() => navigateNow(imageDetailPath(image.id, searchParams, 'sequence'))}
+                  onDoubleClick={() => navigateNow(imageDetailPath(image.id, latestParams(), 'sequence'))}
                 />
               </li>
             );
