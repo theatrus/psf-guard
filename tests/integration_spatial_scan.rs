@@ -709,6 +709,32 @@ async fn the_image_list_names_each_lights_night_at_its_rigs_local_noon() {
 
     let tmp = tempfile::tempdir().unwrap();
     let (app, _state) = create_test_app(conn, tmp.path());
+    let nights_of = |json: &Value| -> Vec<(i64, String)> {
+        let mut nights: Vec<(i64, String)> = json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|image| {
+                (
+                    image["id"].as_i64().unwrap(),
+                    image["night"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+        nights.sort();
+        nights
+    };
+    // A view that asks for the catalog's quiet hours gets them.
+    let (status, json) = get_json(
+        app.clone(),
+        "/api/db/test/images?project_id=1&target_id=1&limit=10&nights=catalog",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    assert_eq!(
+        nights_of(&json),
+        vec![(1, "2024-01-15".to_string()), (2, "2024-01-16".to_string())]
+    );
     let (status, json) =
         get_json(app, "/api/db/test/images?project_id=1&target_id=1&limit=10").await;
     assert_eq!(status, StatusCode::OK, "body: {json}");

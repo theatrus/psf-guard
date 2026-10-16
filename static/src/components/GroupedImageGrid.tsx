@@ -63,8 +63,10 @@ import { useFlatChoiceAccess } from './calibration/useFlatGroupChoices';
 import ScoringChangedNote from './ScoringChangedNote';
 import TimeBreakMark from './TimeBreakMark';
 import TimeMarksChoice from './TimeMarksChoice';
+import NightSplitChoice from './NightSplitChoice';
 import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
+import { nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -149,13 +151,16 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   }, [latestParams, navigateNow]);
   
   // Fetch ALL images (no pagination for grouping) with periodic refresh
+  // Nights as the view splits them, the server's setting or the link's.
+  const nightSplit = useNightSplit();
   const { data: allImages = [], isLoading: imagesLoading } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.split],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId || undefined, // null becomes undefined for API
         target_id: targetId || undefined,
         limit: 10000, // Get all images
+        nights: nightSplit.override ?? undefined,
       }),
     enabled: !!dbId && projectId !== undefined, // Need dbId and a project (or null=all-in-this-db)
     refetchInterval: 30000, // Refresh every 30 seconds
@@ -959,7 +964,10 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
               icons
             />
           )}
-          viewNote={order === 'newest' ? 'newest first' : undefined}
+          viewNote={[
+          order === 'newest' ? 'newest first' : undefined,
+          nightSplitNote(nightSplit.override, nightSplit.setting),
+        ].filter(Boolean).join(', ') || undefined}
           view={(
             <>
               <div className="toolbar-field">
@@ -982,6 +990,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
                 title="The frames in each group by capture time. Date and Session groups always start with the newest night."
               />
               <TimeMarksChoice id="grid-time-marks" />
+              <NightSplitChoice id="grid-night-split" />
               <div className="toolbar-field">
                 <span className="toolbar-caption">Chips</span>
                 <SecondaryScoreToggle />

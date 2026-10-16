@@ -15,7 +15,10 @@
   light finds its rig through its Target Scheduler profile, so lights a
   western rig shoots after midnight UTC stay on the night they began. The night and hour marks
   can be set to nights and hours, nights only, or off, from **Marks** in
-  the View panel or Settings › Review.
+  the View panel or Settings › Review. **Lights' nights split at** in
+  Settings › Calibration puts lights back on the catalog's quiet hours,
+  for every rig or one, and **Nights split at** in the View panel shows
+  the other split in one view, through its link.
 - Images and Sequence mark where frames cross into another night or hour.
   A line and the night's date sit in the gap before a night's first frame,
   every other night takes a faint band, and thinner lines mark the hours

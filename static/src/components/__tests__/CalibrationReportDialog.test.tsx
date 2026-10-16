@@ -86,6 +86,27 @@ describe('CalibrationReportDialog', () => {
     expect(asked).toEqual(['default', 'true']);
   });
 
+  it('names nights as the view splits them, the link\'s nights over the setting', async () => {
+    const asked: (string | null)[] = [];
+    server.use(
+      http.get('/api/db/c925/projects/1/calibration-report', ({ request }) => {
+        asked.push(new URL(request.url).searchParams.get('nights'));
+        return HttpResponse.json({ success: true, error: null, data: {
+          warnings: [], kinds: [], lights_missing_files: 0, nights: [], night_boundary_seconds: 43200,
+        } });
+      }),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/grid?db=c925&project=1&nights=catalog']}>
+          <CalibrationReportDialog open dbId="c925" projectId={1} projectName="Bubble" onClose={() => {}} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(asked).toContain('catalog'));
+  });
+
   it('opens the lights of a finding or a night in the Images grid', async () => {
     const health = {
       project_id: 1, level: 'poor', checked: 362, missing_files: 0, poor_lights: 120, check_lights: 17,

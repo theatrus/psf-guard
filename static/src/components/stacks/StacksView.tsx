@@ -14,6 +14,7 @@ import { DEFAULT_WBPP_OPTIONS } from '../../api/types';
 import WbppStacks from './WbppStacks';
 import MosaicStacks from './MosaicStacks';
 import { useProjectMosaic } from '../../hooks/useProjectMosaic';
+import { useNightSplit } from '../../hooks/useNightSplit';
 import './stacks.css';
 
 /** What Images hands over when a person stacks a selection. */
@@ -92,13 +93,16 @@ export default function StacksView() {
   const access = useAccess();
 
   // The same query as Images, so moving between the two reads one cache.
+  // Nights as the view splits them, the server's setting or the link's.
+  const nightSplit = useNightSplit();
   const { data: images = [], isLoading } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.split],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId || undefined,
         target_id: targetId || undefined,
         limit: 10000,
+        nights: nightSplit.override ?? undefined,
       }),
     enabled: !!dbId && projectId != null,
     refetchInterval: 30000,

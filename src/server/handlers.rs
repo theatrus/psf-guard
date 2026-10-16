@@ -2807,6 +2807,21 @@ pub struct CalibrationReportQuery {
     /// Count rejected lights too; the report leaves them out by default.
     #[serde(default)]
     pub include_rejected: bool,
+    /// The view's night split, `rig` or `catalog`, over the `light_nights`
+    /// setting, so the report names the nights the view groups by.
+    #[serde(default)]
+    pub nights: Option<String>,
+}
+
+/// A view's night split from its link, over the `light_nights` setting.
+#[derive(Debug, Default, Deserialize)]
+pub struct NightsQuery {
+    #[serde(default)]
+    pub nights: Option<String>,
+}
+
+fn nights_view(raw: Option<&str>) -> Option<crate::calibration::LightNightSplit> {
+    raw.and_then(crate::calibration::LightNightSplit::parse)
 }
 
 /// `GET /api/db/{db_id}/projects/{project_id}/calibration-report` — how the
@@ -2832,6 +2847,7 @@ pub async fn get_project_calibration_report(
             project_id,
             &directory_tree,
             query.include_rejected,
+            nights_view(query.nights.as_deref()),
         )
     })
     .await
@@ -2845,6 +2861,7 @@ pub async fn get_project_calibration_report(
 async fn project_calibration_gaps(
     ctx: &DbContext,
     project_id: i32,
+    nights: Option<crate::calibration::LightNightSplit>,
 ) -> Result<crate::calibration::ProjectCalibrationGaps, AppError> {
     let directory_tree = ctx
         .get_directory_tree()
@@ -2856,7 +2873,7 @@ async fn project_calibration_gaps(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
         .map_err(|error| anyhow::anyhow!("opening {database_path}: {error}"))?;
-        crate::calibration::project_calibration_gaps(&conn, project_id, &directory_tree)
+        crate::calibration::project_calibration_gaps(&conn, project_id, &directory_tree, nights)
     })
     .await
     .map_err(|error| AppError::InternalError(format!("calibration check task: {error}")))?
@@ -2869,9 +2886,10 @@ async fn project_calibration_gaps(
 pub async fn get_project_calibration_gaps(
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
+    Query(query): Query<NightsQuery>,
 ) -> Result<Json<ApiResponse<crate::calibration::ProjectCalibrationGaps>>, AppError> {
     Ok(Json(ApiResponse::success(
-        project_calibration_gaps(&ctx, project_id).await?,
+        project_calibration_gaps(&ctx, project_id, nights_view(query.nights.as_deref())).await?,
     )))
 }
 
@@ -2890,7 +2908,8 @@ pub async fn reject_uncalibrated_lights(
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(request): Json<RejectUncalibratedRequest>,
 ) -> Result<Json<ApiResponse<BatchGradeResponse>>, AppError> {
-    let gaps = project_calibration_gaps(&ctx, project_id).await?;
+    // The digest is the same whichever split names the nights.
+    let gaps = project_calibration_gaps(&ctx, project_id, None).await?;
     if gaps.digest != request.digest {
         return Err(AppError::Conflict(
             "The lights that cannot be calibrated changed since the check; check again".into(),
@@ -4566,6 +4585,7 @@ pub async fn get_images(
         let light_nights = crate::calibration::LightNights::load_with_catalog(
             &conn,
             crate::server::sky_coverage::cached_night_boundary(&ctx, &conn)?,
+            nights_view(params.nights.as_deref()),
         );
 
         // Each frame's camera setup, and a few frames of each to read the size

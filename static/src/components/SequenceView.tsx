@@ -33,6 +33,7 @@ import { useNightBoundary } from '../hooks/useNightBoundary';
 import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
 import TimeBreakMark from './TimeBreakMark';
 import TimeMarksChoice from './TimeMarksChoice';
+import NightSplitChoice from './NightSplitChoice';
 import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import SequenceCutoffControl from './SequenceCutoffControl';
 import {
@@ -87,6 +88,7 @@ import {
   selectionRuleOf,
   type SelectionRuleId,
 } from '../utils/sequenceSelectionRules';
+import { nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
 
 interface SequenceChoice {
   key: string;
@@ -207,13 +209,16 @@ export default function SequenceView() {
   });
 
   // Fetch images for the target (for preview URLs)
+  // Nights as the view splits them, the server's setting or the link's.
+  const nightSplit = useNightSplit();
   const { data: images = [] } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.split],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId || undefined,
         target_id: targetId || undefined,
         limit: 10000,
+        nights: nightSplit.override ?? undefined,
       }),
     enabled: !!dbId && projectId !== undefined,
   });
@@ -989,7 +994,10 @@ export default function SequenceView() {
             )}
           </>
         )}
-        viewNote={order === 'newest' ? 'newest first' : undefined}
+        viewNote={[
+          order === 'newest' ? 'newest first' : undefined,
+          nightSplitNote(nightSplit.override, nightSplit.setting),
+        ].filter(Boolean).join(', ') || undefined}
         view={(
           <>
             <ImageOrderToggle
@@ -998,6 +1006,7 @@ export default function SequenceView() {
               title="The frames and the session tabs by capture time. The score chart keeps time left to right."
             />
             <TimeMarksChoice id="sequence-time-marks" />
+            <NightSplitChoice id="sequence-night-split" />
             <div className="toolbar-field">
               <span className="toolbar-caption">Chips</span>
               <SecondaryScoreToggle />

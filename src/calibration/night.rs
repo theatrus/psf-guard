@@ -39,7 +39,7 @@
 //! records them from each frame's header, lights' too; [`backfill_frame_sites`]
 //! reads them for frames imported before, as the server's frame-sites job.
 
-use super::rules::rules_for_rig;
+use super::rules::{rules_for_rig, LightNightSplit};
 use crate::commands::import::headers::{parse_fits_datetime, FrameMeta};
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -450,10 +450,10 @@ impl Nights {
 
 /// Where lights split, for the views that group them by night: Images'
 /// date groups and night marks, Sequence's marks, the detail's next and
-/// previous. A light carries no site in the catalog, but its Target
-/// Scheduler profile is bound to the rigs it was shot with
-/// (`psf_guard_rig_binding`, written as calibration frames and lights are
-/// imported), and those rigs know their local noon ([`Nights`]).
+/// previous, and the calibration reports. A light carries no site in the
+/// catalog, but its Target Scheduler profile is bound to the rigs it was
+/// shot with (`psf_guard_rig_binding`, written as calibration frames and
+/// lights are imported), and those rigs know their local noon ([`Nights`]).
 ///
 /// A profile's lights split as its rigs do. Where its rigs disagree, as
 /// two cameras of one profile placed by different means, the surest source
@@ -461,6 +461,10 @@ impl Nights {
 /// them share. A light whose profile no rig is bound to splits at the
 /// global night setting if there is one, else where every placed rig of
 /// the catalog agrees, else at the catalog's quiet hours, as before.
+///
+/// The `light_nights` setting can put a rig's lights, or every light that
+/// no rig is bound to, back on the catalog's quiet hours. A view's override
+/// (`nights=` in its link) sets one split for every light it shows.
 #[derive(Debug, Clone)]
 pub struct LightNights {
     by_profile: HashMap<String, RigNight>,
@@ -468,17 +472,36 @@ pub struct LightNights {
 }
 
 impl LightNights {
-    pub fn load(conn: &Connection) -> Self {
-        Self::from_nights(conn, &Nights::load(conn))
+    pub fn load(conn: &Connection, view: Option<LightNightSplit>) -> Self {
+        Self::from_nights(conn, &Nights::load(conn), view)
     }
 
     /// [`LightNights::load`] with the catalog's split given.
-    pub fn load_with_catalog(conn: &Connection, catalog: i64) -> Self {
-        Self::from_nights(conn, &Nights::load_with_catalog(conn, catalog))
+    pub fn load_with_catalog(
+        conn: &Connection,
+        catalog: i64,
+        view: Option<LightNightSplit>,
+    ) -> Self {
+        Self::from_nights(conn, &Nights::load_with_catalog(conn, catalog), view)
     }
 
-    pub fn from_nights(conn: &Connection, nights: &Nights) -> Self {
-        let mut rigs_by_profile: HashMap<String, Vec<RigNight>> = HashMap::new();
+    /// Each profile's split from `nights`. `view` overrides the
+    /// `light_nights` setting for every light, as a view's link asks.
+    pub fn from_nights(conn: &Connection, nights: &Nights, view: Option<LightNightSplit>) -> Self {
+        let catalog = RigNight {
+            boundary_seconds: nights.catalog,
+            source: NightSource::Catalog,
+        };
+        if view == Some(LightNightSplit::Catalog) {
+            return Self {
+                by_profile: HashMap::new(),
+                unbound: catalog,
+            };
+        }
+        // No rig is called "": its rules are the global ones.
+        let split_of = |rig: &str| view.unwrap_or_else(|| rules_for_rig(rig).light_nights);
+
+        let mut rigs_by_profile: HashMap<String, Vec<(String, RigNight)>> = HashMap::new();
         if table_exists(conn, "psf_guard_rig_binding") {
             let bindings: Vec<(String, String)> = conn
                 .prepare("SELECT profile_id, rig_uuid FROM psf_guard_rig_binding")
@@ -489,18 +512,27 @@ impl LightNights {
                 })
                 .unwrap_or_default();
             for (profile, rig) in bindings {
+                let night = nights.rig(&rig);
                 rigs_by_profile
                     .entry(profile)
                     .or_default()
-                    .push(nights.rig(&rig));
+                    .push((rig, night));
             }
         }
+        // A profile's lights follow its surest rig, and that rig's setting
+        // says whether they split at its noon or the catalog's.
         let by_profile = rigs_by_profile
             .into_iter()
-            .filter_map(|(profile, splits)| Some((profile, surest(&splits)?)))
+            .filter_map(|(profile, rigs)| {
+                let (rig, night) = surest(&rigs)?;
+                let night = match split_of(&rig) {
+                    LightNightSplit::Rig => night,
+                    LightNightSplit::Catalog => catalog,
+                };
+                Some((profile, night))
+            })
             .collect();
 
-        // No rig is called "": its rules are the global ones.
         let global = nights.rig("");
         let placed: BTreeSet<i64> = nights
             .rigs
@@ -508,7 +540,9 @@ impl LightNights {
             .filter(|night| night.source != NightSource::Catalog)
             .map(|night| night.boundary_seconds)
             .collect();
-        let unbound = if global.source == NightSource::Setting {
+        let unbound = if split_of("") == LightNightSplit::Catalog {
+            catalog
+        } else if global.source == NightSource::Setting {
             global
         } else if placed.len() == 1 {
             nights
@@ -519,10 +553,7 @@ impl LightNights {
                 .min_by_key(|night| source_rank(night.source))
                 .unwrap_or(global)
         } else {
-            RigNight {
-                boundary_seconds: nights.catalog,
-                source: NightSource::Catalog,
-            }
+            catalog
         };
         Self {
             by_profile,
@@ -553,26 +584,30 @@ fn source_rank(source: NightSource) -> u8 {
     }
 }
 
-/// The split a profile's rigs give its lights: the surest source, then the
-/// split most of them share, then the earliest.
-fn surest(splits: &[RigNight]) -> Option<RigNight> {
-    let best = splits.iter().map(|night| source_rank(night.source)).min()?;
-    let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
-    for night in splits
+/// The rig whose split a profile's lights take: the surest source, then
+/// the split most of them share, then the earliest split, then the first
+/// rig by id.
+fn surest(rigs: &[(String, RigNight)]) -> Option<(String, RigNight)> {
+    let best = rigs
         .iter()
-        .filter(|night| source_rank(night.source) == best)
+        .map(|(_, night)| source_rank(night.source))
+        .min()?;
+    let mut counts: BTreeMap<i64, usize> = BTreeMap::new();
+    for (_, night) in rigs
+        .iter()
+        .filter(|(_, night)| source_rank(night.source) == best)
     {
         *counts.entry(night.boundary_seconds).or_default() += 1;
     }
     let (boundary_seconds, _) = counts
         .iter()
         .max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))?;
-    splits
-        .iter()
-        .find(|night| {
+    rigs.iter()
+        .filter(|(_, night)| {
             night.boundary_seconds == *boundary_seconds && source_rank(night.source) == best
         })
-        .copied()
+        .min_by(|a, b| a.0.cmp(&b.0))
+        .cloned()
 }
 
 /// From when a rig's clock kept an offset: the time of the first frame
@@ -1832,7 +1867,7 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         super::super::ensure_schema(&conn).unwrap();
         note_light(&conn, "c925", "ASI2600MM", Some(C925_LONGITUDE));
-        let lights = LightNights::load(&conn);
+        let lights = LightNights::load(&conn, None);
         let split = lights.of_profile(Some("c925"));
         assert_eq!(split.source, NightSource::Site);
         assert_eq!(split.boundary_seconds, solar_noon(C925_LONGITUDE));
@@ -1866,7 +1901,7 @@ mod tests {
         super::super::ensure_schema(&conn).unwrap();
         note_light(&conn, "home", "ASI2600MM", Some(C925_LONGITUDE));
         note_light(&conn, "remote", "ASI6200MM", Some(149.07));
-        let lights = LightNights::load(&conn);
+        let lights = LightNights::load(&conn, None);
         assert_eq!(
             lights.of_profile(Some("home")).boundary_seconds,
             solar_noon(C925_LONGITUDE)
@@ -1883,6 +1918,70 @@ mod tests {
         );
     }
 
+    /// The `light_nights` setting puts a rig's lights, or every light, back
+    /// on the catalog's quiet hours; a view's override beats the setting.
+    #[test]
+    fn the_setting_and_a_view_choose_the_rig_or_the_catalog_split() {
+        use super::super::rules::{set_test_rule_book, RigLayer, RuleBook};
+        let _policy = super::super::tests::POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let conn = Connection::open_in_memory().unwrap();
+        super::super::ensure_schema(&conn).unwrap();
+        note_light(&conn, "home", "ASI2600MM", Some(C925_LONGITUDE));
+        let rig: String = conn
+            .query_row(
+                "SELECT rig_uuid FROM psf_guard_rig_binding WHERE profile_id = 'home'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let catalog = super::super::catalog_night_boundary(&conn);
+        let split = |view| LightNights::load(&conn, view).of_profile(Some("home"));
+
+        assert_eq!(split(None).boundary_seconds, solar_noon(C925_LONGITUDE));
+        let by_catalog = split(Some(LightNightSplit::Catalog));
+        assert_eq!(
+            (by_catalog.boundary_seconds, by_catalog.source),
+            (catalog, NightSource::Catalog)
+        );
+
+        // The rig's own setting.
+        set_test_rule_book(Some(RuleBook::new(
+            BTreeMap::new(),
+            BTreeMap::from([(
+                rig.clone(),
+                RigLayer {
+                    name: None,
+                    values: BTreeMap::from([(
+                        "light_nights".to_string(),
+                        serde_json::json!("catalog"),
+                    )]),
+                },
+            )]),
+        )));
+        assert_eq!(split(None).source, NightSource::Catalog);
+        // A view that asks for rig nights shows them anyway.
+        assert_eq!(
+            split(Some(LightNightSplit::Rig)).boundary_seconds,
+            solar_noon(C925_LONGITUDE)
+        );
+
+        // The global setting: every light, bound or not.
+        set_test_rule_book(Some(RuleBook::new(
+            BTreeMap::from([("light_nights".to_string(), serde_json::json!("catalog"))]),
+            BTreeMap::new(),
+        )));
+        assert_eq!(split(None).source, NightSource::Catalog);
+        assert_eq!(
+            LightNights::load(&conn, None)
+                .of_profile(Some("other"))
+                .source,
+            NightSource::Catalog
+        );
+        set_test_rule_book(None);
+    }
+
     /// Two rigs of one profile placed by different means: the site wins
     /// over a rig placed only by the catalog.
     #[test]
@@ -1893,9 +1992,24 @@ mod tests {
         };
         let site = by_longitude(C925_LONGITUDE);
         let clock = by_clock(-7 * HOUR);
-        assert_eq!(surest(&[catalog, site, clock]), Some(site));
-        assert_eq!(surest(&[catalog, clock, clock]), Some(clock));
-        assert_eq!(surest(&[catalog]), Some(catalog));
+        let rigs = |nights: &[(&str, RigNight)]| -> Vec<(String, RigNight)> {
+            nights
+                .iter()
+                .map(|(rig, night)| (rig.to_string(), *night))
+                .collect()
+        };
+        assert_eq!(
+            surest(&rigs(&[("a", catalog), ("b", site), ("c", clock)])),
+            Some(("b".to_string(), site))
+        );
+        assert_eq!(
+            surest(&rigs(&[("a", catalog), ("c", clock), ("b", clock)])),
+            Some(("b".to_string(), clock))
+        );
+        assert_eq!(
+            surest(&rigs(&[("a", catalog)])),
+            Some(("a".to_string(), catalog))
+        );
         assert_eq!(surest(&[]), None);
     }
 

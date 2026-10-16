@@ -266,6 +266,10 @@ pub struct ImageQuery {
     pub filter_name: Option<String>,
     pub limit: Option<i32>,
     pub offset: Option<i32>,
+    /// The view's night split, `rig` or `catalog`, over the `light_nights`
+    /// calibration setting.
+    #[serde(default)]
+    pub nights: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

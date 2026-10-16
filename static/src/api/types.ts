@@ -372,6 +372,8 @@ export interface ImageQuery {
   status?: 'pending' | 'accepted' | 'rejected';
   limit?: number;
   offset?: number;
+  /** The view's night split over the server's setting (useNightSplit). */
+  nights?: 'rig' | 'catalog';
 }
 
 export interface UpdateGradeRequest {

@@ -1146,6 +1146,33 @@ describe('SequenceView: selection rules', () => {
     }
   });
 
+  it('splits nights at the catalog\'s quiet hours when the View panel asks, through its link', async () => {
+    setupDefaultHandlers();
+    const asked: (string | null)[] = [];
+    server.use(http.get('/api/db/:dbId/images', ({ request }) => {
+      asked.push(new URL(request.url).searchParams.get('nights'));
+      return HttpResponse.json({ success: true, data: mockImages, error: null, status: 'ready' });
+    }));
+    const user = userEvent.setup();
+    const params = renderWithLocation();
+    await cards();
+    const choice = screen.getByLabelText('Nights split at');
+    expect(choice).toHaveValue('rig');
+    expect([...choice.querySelectorAll('option')].map((option) => option.textContent))
+      .toEqual(["The rig's local noon (setting)", "The catalog's quiet hours"]);
+    expect(asked.every((value) => value === null)).toBe(true);
+
+    await user.selectOptions(choice, 'catalog');
+    await waitFor(() => expect(params().get('nights')).toBe('catalog'));
+    await waitFor(() => expect(asked).toContain('catalog'));
+    expect(choice).toHaveClass('is-set');
+    expect(screen.getByRole('button', { name: /View \(catalog nights\)/ })).toBeInTheDocument();
+
+    // The setting's own choice clears the link.
+    await user.selectOptions(choice, 'rig');
+    await waitFor(() => expect(params().get('nights')).toBeNull());
+  });
+
   it('keeps the clicks a reloaded URL carries', async () => {
     setupDefaultHandlers();
     renderWithLocation('/sequence?db=test&project=1&target=1&cutoff=0.80&selectRule=below-cutoff&selected=1,3,7,10');

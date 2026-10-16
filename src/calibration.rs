@@ -34,8 +34,8 @@ pub use night::{
     SiteBackfill, SiteBackfillOutcome,
 };
 pub use rules::{
-    rule_book, rules_for_light, rules_for_rig, Check, CheckMode, RuleBook, RuleNote, RuleSource,
-    RuleValues, Rules,
+    rule_book, rules_for_light, rules_for_rig, Check, CheckMode, LightNightSplit, RuleBook,
+    RuleNote, RuleSource, RuleValues, Rules,
 };
 use std::sync::Arc;
 pub use twins::{
@@ -3461,6 +3461,7 @@ pub fn project_calibration_gaps(
     conn: &Connection,
     project_id: i32,
     directory_tree: &crate::directory_tree::DirectoryTree,
+    nights_view: Option<LightNightSplit>,
 ) -> Result<ProjectCalibrationGaps> {
     let db = crate::db::Database::new(conn);
     let rows = db
@@ -3472,7 +3473,7 @@ pub fn project_calibration_gaps(
     let profile = rows
         .iter()
         .find_map(|(image, _, _)| image.profile_id.as_deref());
-    let boundary = LightNights::from_nights(conn, &nights)
+    let boundary = LightNights::from_nights(conn, &nights, nights_view)
         .of_profile(profile)
         .boundary_seconds;
     let mut lights = Vec::new();
@@ -3509,8 +3510,12 @@ pub fn project_calibration_gaps(
             .then_with(|| left.filter.cmp(&right.filter))
             .then_with(|| left.image_id.cmp(&right.image_id))
     });
+    // In image order, not the night order shown: the digest names which
+    // lights would be rejected and why, whichever split names their nights.
+    let mut hashed: Vec<&_> = lights.iter().collect();
+    hashed.sort_by_key(|light| light.image_id);
     let mut hasher = Sha256::new();
-    for light in &lights {
+    for light in hashed {
         hasher.update(light.image_id.to_le_bytes());
         hasher.update(light.reason.as_bytes());
         hasher.update(b"\0");
@@ -4377,6 +4382,7 @@ pub fn project_calibration_report(
     project_id: i32,
     directory_tree: &crate::directory_tree::DirectoryTree,
     include_rejected: bool,
+    nights_view: Option<LightNightSplit>,
 ) -> Result<ProjectCalibrationReport> {
     let db = crate::db::Database::new(conn);
     let rows = db
@@ -4391,7 +4397,7 @@ pub fn project_calibration_report(
     let profile = rows
         .iter()
         .find_map(|(image, _, _)| image.profile_id.as_deref());
-    let boundary = LightNights::from_nights(conn, &rig_nights)
+    let boundary = LightNights::from_nights(conn, &rig_nights, nights_view)
         .of_profile(profile)
         .boundary_seconds;
     let frame_night = |frame: &CalibrationFrame| {
@@ -13093,7 +13099,7 @@ pub(crate) mod tests {
             .query_row("SELECT id FROM project LIMIT 1", [], |row| row.get(0))
             .unwrap();
         let tree = crate::directory_tree::DirectoryTree::build_multiple(&[temp.path()]).unwrap();
-        let report = project_calibration_report(&conn, project_id, &tree, false).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, false, None).unwrap();
 
         assert_eq!(report.nights.len(), 2);
         // Newest night first; it has no same-night flats.
@@ -13134,7 +13140,7 @@ pub(crate) mod tests {
             [night_two],
         )
         .unwrap();
-        let report = project_calibration_report(&conn, project_id, &tree, false).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, false, None).unwrap();
         assert_eq!(report.nights.len(), 1);
         assert_eq!(report.nights[0].night, oldest.night);
         assert_eq!(report.rejected_lights, 1);
@@ -13143,7 +13149,7 @@ pub(crate) mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("same-night flats")));
-        let report = project_calibration_report(&conn, project_id, &tree, true).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, true, None).unwrap();
         assert_eq!(report.nights.len(), 2);
         assert_eq!(report.rejected_lights, 1);
         assert!(report.rejected_included);
@@ -13152,7 +13158,7 @@ pub(crate) mod tests {
         // reads as missing.
         conn.execute("UPDATE acquiredimage SET gradingStatus = 2", [])
             .unwrap();
-        let report = project_calibration_report(&conn, project_id, &tree, false).unwrap();
+        let report = project_calibration_report(&conn, project_id, &tree, false, None).unwrap();
         assert!(report.nights.is_empty());
         assert_eq!(report.rejected_lights, 2);
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
