@@ -61,6 +61,7 @@ export type CollaborationWorkInput =
   | { operation: 'transfer_policy'; automatic: boolean; mode: string }
   | { operation: 'transfer_outputs'; selection: ContributionSelection }
   | { operation: 'prepare_transfer'; request: import('./transferTypes').TransferRequest }
+  | { operation: 'upload_pending'; request: import('./transferTypes').TransferRequest }
   | { operation: 'transfer_control'; id: string; revision: number; action: import('./transferTypes').TransferAction }
   | { operation: 'report_inputs' }
   | { operation: 'report_candidates'; import_id: string; catalog: string; observing_night?: string }

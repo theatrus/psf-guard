@@ -7,16 +7,16 @@ import type { TransferAction, TransferJob, TransferManifest } from '../../api/tr
 import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
 import './CollaborationTransfers.css';
 
-const transferLabel = (state: TransferJob['state']) => ({ preparing: 'Preparing', review: 'Awaiting review', queued: 'Queued', uploading: 'Uploading', paused: 'Paused', retry: 'Retry scheduled', needs_review: 'Needs attention', complete: 'Delivered', cancelled: 'Cancelled' })[state];
+const transferLabel = (state: TransferJob['state']) => ({ preparing: 'Checking files', review: 'Review required', queued: 'Pending', uploading: 'Uploading', paused: 'Paused', retry: 'Retry scheduled', needs_review: 'Needs attention', complete: 'Uploaded', cancelled: 'Cancelled' })[state];
 const transferBytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 
 export function TransferControls({ job, busy, run }: { job: TransferJob; busy: boolean; run: (action: TransferAction) => void }) {
   const active = ['preparing', 'queued', 'uploading', 'retry'].includes(job.state);
   return <div className="director-actions">
-    {job.state === 'review' && <button type="button" disabled={busy} onClick={() => run('approve')}><Check size={16} />Upload reviewed package</button>}
+    {job.state === 'review' && <button type="button" disabled={busy} onClick={() => run('approve')}><Check size={16} />Upload reviewed files</button>}
     {active && <button type="button" title="Pause transfer" aria-label="Pause transfer" disabled={busy} onClick={() => run('pause')}><Pause size={16} /></button>}
     {['paused', 'retry'].includes(job.state) && <button type="button" title="Resume transfer" aria-label="Resume transfer" disabled={busy} onClick={() => run('resume')}><Play size={16} /></button>}
-    {['needs_review', 'cancelled'].includes(job.state) && <button type="button" title="Prepare and review again" aria-label="Prepare and review again" disabled={busy} onClick={() => run('retry')}><RotateCw size={16} /></button>}
+    {['needs_review', 'cancelled'].includes(job.state) && <button type="button" title="Review and retry" aria-label="Review and retry" disabled={busy} onClick={() => run('retry')}><RotateCw size={16} /></button>}
     {!['complete', 'cancelled'].includes(job.state) && <button type="button" title="Cancel pending transfer" aria-label="Cancel pending transfer" disabled={busy} onClick={() => run('cancel')}><X size={16} /></button>}
   </div>;
 }
@@ -55,8 +55,8 @@ export default function CollaborationTransfers({ connection, selection, canWrite
       </select></label></div>
     {output?.wbpp && <label><input type="checkbox" disabled={!canWrite} checked={confirmed} onChange={e => setConfirmed(e.target.checked ? confirmationKey : null)} />I confirm this WBPP stack contains the selected images</label>}
     <button type="button" disabled={!canWrite || mutation.isPending || !selectionReady || !validOutput || (!!output?.wbpp && !confirmed)}
-      onClick={() => mutation.mutate({ operation: 'prepare_transfer', request: { selection, ...(output ? { output: { job_id: output.job_id, group_index: output.group_index, revision: output.revision } } : {}), confirm_wbpp_membership: confirmed } })}>
-      <Upload size={16} />Prepare file package
+      onClick={() => mutation.mutate({ operation: 'upload_pending', request: { selection, ...(output ? { output: { job_id: output.job_id, group_index: output.group_index, revision: output.revision } } : {}), confirm_wbpp_membership: confirmed } })}>
+      <Upload size={16} />Upload pending
     </button>
     {[outputs.error, activity.error, mutation.error].filter(Boolean).map((e, i) => <p key={i} role="alert">{e!.message}</p>)}
     {jobs.map(job => <section key={job.id} aria-label={`Transfer ${job.label}`}>
@@ -64,10 +64,10 @@ export default function CollaborationTransfers({ connection, selection, canWrite
       {job.current_file && <p>{job.current_file}</p>}
       {job.error && <p role="alert">{job.error}</p>}
       {job.warnings?.map(w => <p key={w}>{w}</p>)}
-      {job.state === 'review' && <button type="button" disabled={!canWrite || mutation.isPending} onClick={() => mutation.mutate({ operation: 'transfer_manifest', id: job.id, revision: job.revision })}><Eye size={16} />Inspect package</button>}
+      {job.total_files > 0 && <button type="button" disabled={!canWrite || mutation.isPending} onClick={() => mutation.mutate({ operation: 'transfer_manifest', id: job.id, revision: job.revision })}><Eye size={16} />Inspect files</button>}
       {manifest?.id === job.id && manifest.revision === job.revision && <div>
         <p>{manifest.value.files.length} file{manifest.value.files.length === 1 ? '' : 's'} · Panel {manifest.value.panel}{manifest.value.night ? ` · ${manifest.value.night}` : ''}</p>
-        <div className="collaboration-transfer-files"><table aria-label="Package files"><thead><tr><th>File</th><th>Type</th><th>Size</th></tr></thead><tbody>
+        <div className="collaboration-transfer-files"><table aria-label="Transfer files"><thead><tr><th>File</th><th>Type</th><th>Size</th></tr></thead><tbody>
           {manifest.value.files.map((file, i) => <tr key={`${file.kind}:${file.source.path}:${i}`}><td title={file.source.path}>{file.source.path.split(/[\\/]/).at(-1)}</td><td>{file.kind}</td><td>{transferBytes(file.source.bytes)}</td></tr>)}
         </tbody></table></div>
         <details><summary>Technical manifest</summary><pre>{JSON.stringify(manifest.value, null, 2)}</pre></details>

@@ -18,10 +18,11 @@ enable acquisition, and PSF Guard Sync stays separate from it.
 
 In a rig's **Collaboration > Reports > Contribution files**, select accepted
 images from an activated visit, then choose **Raw lights and matched calibration**
-or an existing PSF Guard/WBPP stack. **Prepare file package** runs in the
-background. Inspect its manifest and warnings, then **Upload reviewed package**.
-Raw packages take exactly the calibration inputs an export selects, including
-measured flat groups and the matched dark-flat dependencies. A package requiring
+or an existing PSF Guard/WBPP stack, then choose **Upload pending**. Matching,
+validation and checksums run in the background; normal uploads need no second
+approval. **Inspect files** is optional. Raw uploads take exactly the calibration
+inputs an export selects, including measured flat groups and matched dark-flat
+dependencies. A transfer requiring
 corrected flats asks for an existing stack instead of sending unsuitable raws.
 WBPP stacks require confirmation of their input images because WBPP does not
 currently record their exact membership here. File delivery creates no extra
@@ -31,15 +32,21 @@ exposure credit and does not submit a contribution report.
 off by default. It uses the rig's bound database and can send raw packages or
 matching PSF Guard stacks. WBPP delivery is manual. Keep grading and file
 availability up to date; a source or calibration change holds the package for
-review. Starfront must enable file collection for the project, and the telescope
-credential must have a Discord owner.
-Raw automation queues only new exposures. Held and cancelled packages stay
-reserved; use **Retry** to prepare them again for manual review.
+review. Incomplete calibration also requires review when the export policy allows
+those lights. Starfront must enable file collection for the project, and the
+telescope credential must have a Discord owner.
+Raw automation queues new exposures and changed source revisions without hashing
+old frames on every scan. Held and cancelled transfers stay reserved; use
+**Review and retry** for exceptions. A new upload request cannot bypass an existing
+review hold on the same images.
 
 The header's background activity shows **Transfers**, with file/byte progress
-and Pause, Resume, Retry and Cancel. Completed-file receipts survive app or
-service restarts. An interrupted file restarts from its beginning because the
-current server has no byte-range resume. An outage does not block check-ins or
+and Pause, Resume, Retry and Cancel. A shared ledger records uploads per server,
+project, remote owner, file kind and SHA-256 content revision. Previously uploaded
+files, including shared calibration, are not sent again for another job at the
+same destination. A different destination or changed bytes remain pending.
+Receipts survive app or service restarts. An interrupted file restarts from its
+beginning because the current server has no byte-range resume. An outage does not block check-ins or
 local acquisition. Paused and attention states remain visible without a spinner.
 
 Starfront currently receives files, not the per-light calibration manifest;

@@ -682,7 +682,7 @@ defined in [Authentication and credential ownership](#authentication-and-credent
 
 ## File delivery
 
-Status: Starfront file packages, durable queue, manual review and opt-in
+Status: Starfront file delivery, durable queue, exception review and opt-in
 automatic delivery implemented. The draft still has no standard file routes.
 Remote calibration manifests and server-computed checksums remain upstream work.
 Director and Sync do not gain collaboration clients or upload credentials.
@@ -726,8 +726,14 @@ and discard the temporary copy afterwards. Never rewrite an original or put an
 entire night's data in memory. The transfer worker is separate from control
 check-ins and never holds a database writer across file or network work.
 
-**Durability and controls.** Meta schema 31 adds transfer jobs and policies,
-immutable package definitions, indexed artifacts, per-file receipts and activity summaries.
+**Durability and controls.** Meta schema 32 adds a shared delivery ledger to
+transfer jobs, policies, package definitions, indexed artifacts, job receipts
+and activity summaries. The ledger key is canonical server URL, project, remote
+owner, kind and SHA-256 content hash; bytes must also match. Record it atomically
+with the job acknowledgment. Reuse it across jobs and calibration sets, never
+across different destinations or file revisions. Job-local receipts remain for
+progress and restart. Legacy receipts are preserved during migration; current
+remote listings can populate the ledger without sending those bytes again.
 Requests and prepared packages are durable;
 each file acknowledgment is committed before the next file. Compare-and-swap
 revisions keep an in-flight worker from undoing Pause or Cancel. Startup recovers
@@ -736,15 +742,24 @@ stay unchanged. Network errors, rate limits and full storage back off; credentia
 collection-policy, source or provenance conflicts need attention. Retry after an
 ambiguous receipt uses the same content name. Current Starfront does not resume
 byte ranges: an interrupted file restarts, not the entire package.
-Manual re-preparation always returns to review, including jobs first created by
-an automatic policy. Disabling automatic uploads stops admitting new packages;
+Normal manual requests use **Upload pending** and authorize background preparation
+followed by upload. Automatic requests behave the same. Only exceptional
+calibration/provenance/destination conditions require review. WBPP retains its
+explicit input-membership confirmation. The legacy `prepare_transfer` operation
+still requires approval; opening an old prepared job never grants consent.
+Retrying an exception returns to review, including jobs first created by
+an automatic policy. A fresh manual request on the same held images also requires
+review. Disabling automatic uploads stops admitting new work;
 pause or cancel already queued work separately.
 Re-preparation clears local receipts and checks the current owner's remote file
-listing; acknowledgments from another owner cannot skip delivery. Automatic raw
-packages contain only image GUIDs not already admitted for that assignment and
-panel, capped at 4,096 per package. Held and cancelled requests stay reserved
-until an operator retries them, rather than being silently replaced by each new
-exposure. Stack selection keeps its full input cohort.
+listing and destination-scoped ledger; acknowledgments from another owner cannot
+skip delivery. Automatic raw admission uses catalog GUIDs and cheap source stamps
+(path, size and modification time); only new or changed sources are hashed.
+Actual delivery identity is still the SHA-256 of the bytes, not a stamp. Completed
+sources whose stamps change become eligible again. New jobs are capped at 4,096
+images. Unfinished work stays reserved while running or paused. Held and
+cancelled requests need an operator retry, rather than being silently replaced
+by each new exposure. Stack selection keeps its full input cohort.
 
 Use the existing shutdown guard, stop claiming work when shutdown begins, and
 cancel a stalled HTTP stream while retaining the queue. Preparation observes
@@ -764,13 +779,13 @@ scientific report delivery remain independent, with separate receipts.
 **Known upstream gap.** The current file API collects bytes by project/person/
 kind; it cannot associate a light with its flat/dark set or represent a corrected
 master dependency. Keep the versioned manifest locally and show that limitation
-in review. Do not claim the remote coordinator will reproduce PSF Guard's
+with the transfer status. Do not claim the remote coordinator will reproduce PSF Guard's
 calibration merely because the selected files were delivered. A future upstream
 manifest extension can publish these relationships without changing acquisition
 or credit ownership. Do not automatically delete remote files after regrading;
 report corrections and withdrawals still need their own protocol.
 
-`POST /collaboration/{id}/work` adds `transfer_outputs`, `prepare_transfer`,
+`POST /collaboration/{id}/work` adds `transfer_outputs`, `upload_pending`, `prepare_transfer`,
 `transfer_manifest`, `transfer_control` and `transfer_policy`. Mutations retain
 the operator and database-management gates. Preparation is queued rather than
 hashing within the request. `GET /transfers` returns durable activity summaries

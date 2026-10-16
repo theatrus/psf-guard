@@ -7,7 +7,7 @@ import { applyRealSchema } from '../e2e/fixtures/sync';
 import { openSettings } from '../e2e/helpers';
 import type { TransferJob } from '../src/api/transferTypes';
 
-test('file packages offer stacks and remain visible and controllable in background activity', async ({ page, request }, testInfo) => {
+test('pending uploads offer stacks and remain visible and controllable in background activity', async ({ page, request }, testInfo) => {
   const root = mkdtempSync(path.join(process.env.PSF_GUARD_DIRECTOR_E2E_TMP!, 'transfers-'));
   const dbPath = path.join(root, 'catalog.sqlite'); const db = new Database(dbPath); applyRealSchema(db);
   db.prepare("INSERT INTO project (Id,profileId,name,description,state,priority,isMosaic,flatsHandling,guid) VALUES(1,'profile','M31','',1,1,0,0,?)").run(randomUUID()); db.close();
@@ -27,11 +27,12 @@ test('file packages offer stacks and remain visible and controllable in backgrou
         { job_id: 'a'.repeat(64), group_index: 0, revision: 'revision', label: 'PSF Guard · M31 · OIII', wbpp: false, matches_selection: true },
         { job_id: 'b'.repeat(64), group_index: 0, revision: 'revision', label: 'WBPP · M31 · OIII', wbpp: true },
       ] }; break;
-      case 'prepare_transfer': jobs.push({ id: randomUUID(), connection_id: connection, revision: 1, state: 'review', catalog: slug, label: 'M31', total_files: 1, completed_files: 0, total_bytes: 10485760, completed_bytes: 0, sent_bytes: 0, current_file: '', error: null, next_attempt_ms: 0, warnings: ['Calibration associations are retained locally.'], manifest: null }); data = { transfer: jobs[0] }; break;
+      case 'upload_pending': jobs.push({ id: randomUUID(), connection_id: connection, revision: 1, state: 'uploading', catalog: slug, label: 'M31', total_files: 1, completed_files: 0, total_bytes: 10485760, completed_bytes: 0, sent_bytes: 3145728, current_file: 'matched-flat-stack.fits', error: null, next_attempt_ms: 0, warnings: ['Calibration associations are retained locally.'], manifest: null }); data = { transfer: jobs[0] }; break;
       case 'transfer_manifest': data = { transfer_manifest: { version: 1, task: 'test-task', night: '2026-10-05', panel: 0, lights: [image], calibration: ['matched-flat'], output: 'PSF Guard stack', files: [{ kind: 'light', source: { path: 'C:/catalog/stacks/matched-flat-stack.fits', bytes: 10485760 } }] } }; break;
       case 'transfer_control':
         jobs[0].revision++; jobs[0].state = input.action === 'approve' || input.action === 'resume' ? 'uploading' : input.action === 'pause' ? 'paused' : 'cancelled';
         if (jobs[0].state === 'uploading') { jobs[0].sent_bytes = 3145728; jobs[0].current_file = 'matched-flat-stack.fits'; }
+        else { jobs[0].sent_bytes = 0; jobs[0].current_file = ''; }
         data = { transfer: jobs[0] }; break;
     }
     await route.fulfill({ json: { success: true, data } });
@@ -45,37 +46,46 @@ test('file packages offer stacks and remain visible and controllable in backgrou
   await collaboration.getByLabel('Select M31-OIII.fits').check();
   await page.setViewportSize({ width: 1440, height: 1100 });
   await settings.locator('.modal-body').evaluate(el => { el.scrollTop = 0; });
-  await page.screenshot({ path: testInfo.outputPath('settings-context-1440.png') });
+  await page.screenshot({ path: testInfo.outputPath('settings-context-1440.png'), animations: 'disabled' });
   const files = collaboration.getByRole('region', { name: 'Contribution files' });
   await expect(files.getByLabel('Upload accepted collaboration files automatically')).not.toBeChecked();
   await files.getByLabel('Files to send').selectOption({ label: 'WBPP · M31 · OIII' });
-  await expect(files.getByRole('button', { name: 'Prepare file package' })).toBeDisabled();
+  await expect(files.getByRole('button', { name: 'Upload pending' })).toBeDisabled();
   await files.evaluate(el => el.scrollIntoView({ block: 'start' }));
   await settings.locator('.modal-body').evaluate(el => { el.scrollTop -= 200; });
-  await page.screenshot({ path: testInfo.outputPath('wbpp-confirmation-1440.png') });
+  await page.screenshot({ path: testInfo.outputPath('wbpp-confirmation-1440.png'), animations: 'disabled' });
   await files.getByLabel('I confirm this WBPP stack contains the selected images').check();
-  await expect(files.getByRole('button', { name: 'Prepare file package' })).toBeEnabled();
+  await expect(files.getByRole('button', { name: 'Upload pending' })).toBeEnabled();
   await files.getByLabel('Files to send').selectOption({ label: 'PSF Guard · M31 · OIII' });
-  await files.getByRole('button', { name: 'Prepare file package' }).click();
-  await expect(files).toContainText('Awaiting review');
-  expect(operations.find(o => o.operation === 'prepare_transfer')).toMatchObject({ request: { output: { job_id: 'a'.repeat(64) }, selection: { image_guids: [image], catalog: slug, import_id: visit } } });
-  await files.getByRole('button', { name: 'Inspect package' }).click(); await expect(files).toContainText('matched-flat');
+  await files.getByRole('button', { name: 'Upload pending' }).click();
+  await expect(files).toContainText('Uploading');
+  await expect(files.getByRole('button', { name: 'Upload reviewed files' })).toHaveCount(0);
+  expect(operations.find(o => o.operation === 'upload_pending')).toMatchObject({ request: { output: { job_id: 'a'.repeat(64) }, selection: { image_guids: [image], catalog: slug, import_id: visit } } });
+  await files.getByRole('button', { name: 'Inspect files' }).click(); await expect(files).toContainText('matched-flat');
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1100 });
     await files.evaluate(el => el.scrollIntoView({ block: 'start' }));
     if (width >= 800) await settings.locator('.modal-body').evaluate(el => { el.scrollTop -= 200; });
     expect(await files.evaluate(el => el.scrollWidth <= el.clientWidth)).toBeTruthy();
-    await page.screenshot({ path: testInfo.outputPath(`transfers-${width}.png`) });
+    await page.screenshot({ path: testInfo.outputPath(`transfers-${width}.png`), animations: 'disabled' });
   }
-  await files.getByRole('button', { name: 'Upload reviewed package' }).click(); await expect(files).toContainText('Uploading');
+  // Inject an exceptional server reply to verify that only this path needs approval.
+  jobs[0].state = 'review'; jobs[0].sent_bytes = 0; jobs[0].current_file = '';
+  jobs[0].warnings = ['Review these files before uploading. This transfer was prepared for review or follows an earlier upload exception.'];
+  await expect(files).toContainText('Review required');
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await files.evaluate(el => el.scrollIntoView({ block: 'start' }));
+  await settings.locator('.modal-body').evaluate(el => { el.scrollTop -= 200; });
+  await page.screenshot({ path: testInfo.outputPath('exception-review-1440.png'), animations: 'disabled' });
+  await files.getByRole('button', { name: 'Upload reviewed files' }).click(); await expect(files).toContainText('Uploading');
   await settings.getByRole('button', { name: 'Done', exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: /^Background jobs:/ }).click();
   const activity = page.getByRole('region', { name: 'Background jobs' }); await expect(activity).toContainText('Transfers');
   await expect(activity).toContainText('3.0 MiB');
-  await page.screenshot({ path: testInfo.outputPath('background-uploading-1440.png') });
+  await page.screenshot({ path: testInfo.outputPath('background-uploading-1440.png'), animations: 'disabled' });
   await activity.getByRole('button', { name: 'Pause transfer' }).click(); await expect(activity).toContainText('Paused');
-  await page.screenshot({ path: testInfo.outputPath('background-paused-1440.png') });
+  await page.screenshot({ path: testInfo.outputPath('background-paused-1440.png'), animations: 'disabled' });
   await expect(activity.locator('.activity-row').filter({ hasText: 'Transfers' }).locator('.is-indeterminate')).toHaveCount(0);
   await page.reload(); await page.getByRole('button', { name: /^Background jobs:/ }).click();
   const restored = page.getByRole('region', { name: 'Background jobs' }); await expect(restored).toContainText('Paused');

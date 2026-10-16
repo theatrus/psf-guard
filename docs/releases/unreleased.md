@@ -19,13 +19,16 @@
 - Collaboration imports preserve Starfront's physical-filter/data-band mapping
   and OSC camera and Bortle limits in reviewed plans. Reports carry the data
   bands explicitly, and work for bands disabled by the project stays held.
-- Collaboration **Reports > Contribution files** prepares raw accepted lights
+- Collaboration **Reports > Contribution files > Upload pending** sends raw accepted lights
   with the same matched calibration inputs as exports, or an existing PSF Guard
-  or WBPP stack. Review and upload manually, or opt into automatic raw/PSF Guard
+  or WBPP stack. Matching and validation run in the background; only exceptions
+  require review. Upload manually, or opt into automatic raw/PSF Guard
   stack delivery for the rig's database. **Transfers** in background activity
   shows progress, Pause, Resume, Retry and Cancel. Completed-file receipts
   survive restart; interrupted files retry without duplicating server files.
-  Automatic raw delivery queues only new exposures. Re-preparing a package checks
+  Delivery receipts are shared across jobs by destination and file content revision,
+  so shared calibration files are not repeatedly uploaded. Automatic raw delivery
+  queues new exposures and changed source revisions. Retrying an exception checks
   the current remote owner's receipts, and automation settings wait for their
   saved policy before allowing edits.
 

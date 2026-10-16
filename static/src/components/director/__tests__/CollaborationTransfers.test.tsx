@@ -6,12 +6,33 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../../../test/msw-server';
 import CollaborationTransfers from '../CollaborationTransfers';
 
-function setup() {
+function setup(selectionReady = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  render(<QueryClientProvider client={client}><CollaborationTransfers connection="connection" selection={{ catalog: 'rig', import_id: 'visit', panel: 0, image_guids: [] }} canWrite active selectionReady={false} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><CollaborationTransfers connection="connection" selection={{ catalog: 'rig', import_id: 'visit', panel: 0, image_guids: selectionReady ? ['image'] : [] }} canWrite active selectionReady={selectionReady} /></QueryClientProvider>);
 }
 
 describe('Transfer automation policy', () => {
+  it('uploads pending files without a mandatory prepare or approval step', async () => {
+    const jobs: Record<string, unknown>[] = [];
+    const requests: Record<string, unknown>[] = [];
+    server.use(
+      http.get('/api/director/v1/transfers', () => HttpResponse.json({ success: true, data: { jobs, policies: [] } })),
+      http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {
+        const input = await request.json() as Record<string, unknown>;
+        requests.push(input);
+        if (input.operation === 'upload_pending') jobs.push({ id: 'job', connection_id: 'connection', revision: 1, state: 'queued', label: 'M31', total_files: 1, completed_files: 0, total_bytes: 100, completed_bytes: 0, sent_bytes: 0, warnings: [] });
+        return HttpResponse.json({ success: true, data: input.operation === 'transfer_outputs' ? { outputs: [] } : { transfer: jobs[0] } });
+      }),
+    );
+    setup(true);
+    await userEvent.click(screen.getByRole('button', { name: 'Upload pending' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Pending');
+    expect(screen.queryByRole('button', { name: /Prepare|Upload reviewed/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Inspect files' })).toBeEnabled();
+    expect(requests.filter(r => r.operation === 'upload_pending')).toEqual([{ operation: 'upload_pending', request: { selection: { catalog: 'rig', import_id: 'visit', panel: 0, image_guids: ['image'] }, confirm_wbpp_membership: false } }]);
+    expect(requests.some(r => r.operation === 'transfer_control')).toBe(false);
+  });
+
   it('waits for the saved policy and preserves consent when changing file mode', async () => {
     let release!: () => void;
     const ready = new Promise<void>(resolve => { release = resolve; });

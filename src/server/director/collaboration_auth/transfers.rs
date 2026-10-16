@@ -1,6 +1,6 @@
 //! Host-owned file transport. Queue checkpoints live in the meta store.
 use super::*;
-use psf_guard_director_meta::transfer::{Job, State as TransferState};
+use psf_guard_director_meta::transfer::{Destination, FileDelivery, Job, State as TransferState};
 use workflows::evidence::{self, Selection};
 mod prepare;
 mod worker;
@@ -15,6 +15,21 @@ pub(super) struct Request {
     confirm_wbpp_membership: bool,
     #[serde(default)]
     automatic: bool,
+    #[serde(default)]
+    upload_pending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    attempt: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    source_versions: std::collections::BTreeMap<Uuid, String>,
+}
+
+impl Request {
+    fn review_required(&self, manifest: &Value) -> bool {
+        !(self.automatic || self.upload_pending)
+            || manifest["review_reasons"]
+                .as_array()
+                .is_some_and(|reasons| !reasons.is_empty())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -120,6 +135,7 @@ pub(super) async fn start(
     service: Arc<Service>,
     b: &ConnectionBinding,
     mut request: Request,
+    upload_pending: bool,
 ) -> Result<Value, Failure> {
     if state.shutdown.is_stopping() {
         return Err(Failure(
@@ -136,6 +152,21 @@ pub(super) async fn start(
     }
     let connection = b.id;
     request.automatic = false;
+    let selection = request.selection.clone();
+    let review_required = service
+        .clone()
+        .query(move |s| {
+            s.transfer_review_required(
+                connection,
+                selection.import_id,
+                selection.panel,
+                &selection.image_guids,
+            )
+        })
+        .await?;
+    request.upload_pending = upload_pending && !review_required;
+    request.attempt = upload_pending.then(Uuid::new_v4);
+    request.source_versions.clear();
     let value = serde_json::to_value(request).map_err(|_| invalid())?;
     let now = workflows::now_ms()?;
     let job = service

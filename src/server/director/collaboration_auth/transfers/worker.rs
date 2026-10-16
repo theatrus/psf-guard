@@ -103,21 +103,40 @@ async fn run(state: &Arc<AppState>, service: Arc<Service>, job: &mut Job) -> Res
     if job.package.is_none() {
         let (copy, plan, request, rig) =
             (catalog.clone(), import.clone(), request.clone(), b.rig_id);
-        let automatic = request.automatic;
+        let admission = request.clone();
         let shutdown = state.shutdown.clone();
-        let package = blocking(move || {
+        let mut package = blocking(move || {
             prepare::build(&copy, &plan, &request, identity.id, rig, || {
                 shutdown.is_stopping()
             })
         })
         .await??;
+        let review_required = admission.review_required(&package.manifest);
+        if !admission.automatic && !admission.upload_pending {
+            package.warnings.push("Review these files before uploading. This transfer was prepared for review or follows an earlier upload exception.".into());
+        }
+        if admission.output.is_none() {
+            let versions = package.manifest["lights"]
+                .as_array()
+                .ok_or_else(invalid)?
+                .iter()
+                .map(|light| {
+                    let id = light["image_guid"].as_str().ok_or_else(invalid)?;
+                    Ok((
+                        id.to_owned(),
+                        Value::String(prepare::source_version(&light["source"])?),
+                    ))
+                })
+                .collect::<Result<serde_json::Map<_, _>, Failure>>()?;
+            job.request["source_versions"] = Value::Object(versions);
+        }
         job.completed
             .retain(|name| package.artifacts.iter().any(|a| &a.name == name));
         job.package = Some(serde_json::to_value(package).map_err(|_| invalid())?);
-        job.state = if automatic {
-            TransferState::Queued
-        } else {
+        job.state = if review_required {
             TransferState::Review
+        } else {
+            TransferState::Queued
         };
         job.error = None;
         *job = save(service, job.clone()).await?;
@@ -205,6 +224,36 @@ async fn run(state: &Arc<AppState>, service: Arc<Service>, job: &mut Job) -> Res
             ))
         })
         .collect::<std::collections::BTreeSet<_>>();
+    if !deliver_files(state, service.clone(), job, &b, &package, &token, &received).await? {
+        return Ok(());
+    }
+    validate(&catalog, &import, &request, &package).await?;
+    job.state = TransferState::Complete;
+    *job = save(service, job.clone()).await?;
+    Ok(())
+}
+
+async fn deliver_files(
+    state: &Arc<AppState>,
+    service: Arc<Service>,
+    job: &mut Job,
+    b: &ConnectionBinding,
+    package: &Package,
+    token: &str,
+    received: &std::collections::BTreeSet<(String, String, u64)>,
+) -> Result<bool, Failure> {
+    let destination = Destination {
+        base_url: package.base_url.clone(),
+        project: package.project.clone(),
+        owner: package.owner.clone().ok_or_else(invalid)?,
+    };
+    let delivered = service
+        .clone()
+        .query({
+            let destination = destination.clone();
+            move |s| s.delivered_files(&destination)
+        })
+        .await?;
     let completed = job
         .completed
         .iter()
@@ -229,18 +278,29 @@ async fn run(state: &Arc<AppState>, service: Arc<Service>, job: &mut Job) -> Res
             .await?
             .ok_or_else(invalid)?;
         if current != job.revision {
-            return Ok(());
+            return Ok(false);
         }
         let already =
-            received.contains(&(artifact.name.clone(), artifact.kind.clone(), artifact.bytes));
-        if !already && !upload(state, service.clone(), job, &b, &package, artifact, &token).await? {
-            return Ok(());
+            delivered.contains(&(artifact.kind.clone(), artifact.hash.clone(), artifact.bytes))
+                || received.contains(&(
+                    artifact.name.clone(),
+                    artifact.kind.clone(),
+                    artifact.bytes,
+                ));
+        if !already && !upload(state, service.clone(), job, b, package, artifact, token).await? {
+            return Ok(false);
         }
-        let (id, revision, name, bytes) =
-            (job.id, job.revision, artifact.name.clone(), artifact.bytes);
+        let (id, revision) = (job.id, job.revision);
+        let receipt = FileDelivery {
+            destination: destination.clone(),
+            name: artifact.name.clone(),
+            kind: artifact.kind.clone(),
+            hash: artifact.hash.clone(),
+            bytes: artifact.bytes,
+        };
         job.revision = service
             .clone()
-            .run(move |s| s.acknowledge_transfer_file(id, revision, &name, bytes))
+            .run(move |s| s.acknowledge_transfer_delivery(id, revision, &receipt))
             .await?;
         job.completed.push(artifact.name.clone());
         *service
@@ -250,10 +310,7 @@ async fn run(state: &Arc<AppState>, service: Arc<Service>, job: &mut Job) -> Res
             .map_err(|_| invalid())? = Progress::default();
         tracing::info!(transfer_id=%job.id,file=%artifact.name,bytes=artifact.bytes,already,completed=job.completed.len(),total=package.artifacts.len(),"Collaboration file acknowledged");
     }
-    validate(&catalog, &import, &request, &package).await?;
-    job.state = TransferState::Complete;
-    *job = save(service, job.clone()).await?;
-    Ok(())
+    Ok(true)
 }
 
 async fn automatic(state: &Arc<AppState>, service: Arc<Service>) -> Result<(), Failure> {
@@ -322,19 +379,39 @@ async fn automatic(state: &Arc<AppState>, service: Arc<Service>) -> Result<(), F
                 if remaining == 0 {
                     break;
                 }
+                let mut source_versions = std::collections::BTreeMap::new();
                 if policy["mode"] == "raw" {
+                    source_versions = blocking({
+                        let catalog = catalogs[0].1.clone();
+                        let selection = selection.clone();
+                        move || prepare::source_versions(&catalog, &selection)
+                    })
+                    .await??;
                     let (connection, import, panel) = (b.id, selection.import_id, selection.panel);
                     let claimed = service
                         .clone()
-                        .query(move |s| s.raw_transfer_images(connection, import, panel))
+                        .query(move |s| s.raw_transfer_sources(connection, import, panel))
                         .await?;
-                    selection.image_guids.retain(|id| !claimed.contains(id));
+                    selection.image_guids.retain(|id| {
+                        source_versions.get(id).is_some_and(|version| {
+                            !claimed.get(id).is_some_and(|versions| {
+                                versions.contains(&None)
+                                    || versions.contains(&Some(version.clone()))
+                            })
+                        })
+                    });
                     selection
                         .image_guids
                         .truncate(psf_guard_director_interop::collaboration::MAX_REPORT_FRAMES);
                     if selection.image_guids.is_empty() {
                         continue;
                     }
+                    let selected = selection
+                        .image_guids
+                        .iter()
+                        .copied()
+                        .collect::<std::collections::BTreeSet<_>>();
+                    source_versions.retain(|id, _| selected.contains(id));
                 }
                 let output = if policy["mode"] == "psf_guard" {
                     let (catalog, plan) = match prepare::context(
@@ -374,6 +451,9 @@ async fn automatic(state: &Arc<AppState>, service: Arc<Service>) -> Result<(), F
                     output,
                     confirm_wbpp_membership: false,
                     automatic: true,
+                    upload_pending: false,
+                    attempt: None,
+                    source_versions,
                 };
                 let value = serde_json::to_value(request).map_err(|_| invalid())?;
                 let key = Uuid::new_v5(&id, &serde_json::to_vec(&value).map_err(|_| invalid())?);
@@ -720,6 +800,70 @@ mod tests {
             warnings: vec![],
         };
         (dir, state, service, job, b, package, artifact, server)
+    }
+
+    #[tokio::test]
+    async fn shared_delivery_ledger_skips_repeated_jobs_but_uploads_changed_bytes() {
+        let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = sent.clone();
+        let remote = Router::new().route("/api/v1/projects/{project}/files/{name}", put(move |request: HttpRequest<Body>| {
+            let seen = seen.clone();
+            async move {
+                let name = request.uri().path().rsplit('/').next().unwrap().to_owned();
+                let bytes = to_bytes(request.into_body(), 1_048_576).await.unwrap();
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Json(json!({"file":{"name":name,"kind":"light","bytes":bytes.len(),"user":"owner"}}))
+            }
+        }));
+        let (_dir, state, service, mut job, b, mut package, mut artifact, server) =
+            upload_fixture(remote).await;
+        for n in 0..3 {
+            if n > 0 {
+                let connection = b.id;
+                job = service
+                    .clone()
+                    .run(move |s| s.create_transfer(connection, json!({"batch":n}), 100))
+                    .await
+                    .unwrap();
+                job.state = TransferState::Uploading;
+            }
+            if n == 2 {
+                seiza_fits::write_f32_image(
+                    &artifact.path,
+                    2,
+                    2,
+                    seiza_fits::F32ImageData::Mono(&[2.0; 4]),
+                    &[],
+                )
+                .unwrap();
+                (artifact.hash, artifact.bytes, artifact.modified) =
+                    prepare::hash_file(&artifact.path).unwrap();
+            }
+            artifact.name = format!("psfg-light-{}.fits", artifact.hash);
+            package.artifacts = vec![artifact.clone()];
+            job.package = Some(serde_json::to_value(&package).unwrap());
+            job = save(service.clone(), job).await.unwrap();
+            assert!(deliver_files(
+                &state,
+                service.clone(),
+                &mut job,
+                &b,
+                &package,
+                "test-token",
+                &Default::default()
+            )
+            .await
+            .unwrap());
+            assert_eq!(job.completed.len(), 1);
+            assert_eq!(
+                sent.load(std::sync::atomic::Ordering::SeqCst),
+                if n == 2 { 2 } else { 1 }
+            );
+            job.state = TransferState::Complete;
+            job = save(service.clone(), job).await.unwrap();
+        }
+        server.abort();
+        server.await.ok();
     }
 
     #[tokio::test]

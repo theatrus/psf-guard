@@ -1,6 +1,36 @@
 //! Durable file delivery, separate from scientific contribution credit.
 use super::*;
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone, Debug)]
+pub struct Destination {
+    pub base_url: String,
+    pub project: String,
+    pub owner: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileDelivery {
+    pub destination: Destination,
+    pub name: String,
+    pub kind: String,
+    pub hash: String,
+    pub bytes: u64,
+}
+
+pub(crate) fn create_delivery_table(conn: &Connection) -> Result<(), Error> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS collaboration_file_delivery(base_url TEXT NOT NULL,project TEXT NOT NULL,owner TEXT NOT NULL,kind TEXT NOT NULL,sha256 TEXT NOT NULL,bytes INTEGER NOT NULL CHECK(bytes>=0),PRIMARY KEY(base_url,project,owner,kind,sha256));")?;
+    validate_delivery_table(conn)
+}
+
+pub(crate) fn validate_delivery_table(conn: &Connection) -> Result<(), Error> {
+    conn.prepare(
+        "SELECT base_url,project,owner,kind,sha256,bytes FROM collaboration_file_delivery LIMIT 0",
+    )
+    .map_err(|_| Error::CorruptDatabase)?;
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,24 +91,68 @@ pub(crate) fn validate_tables(conn: &Connection) -> Result<(), Error> {
 }
 
 impl MetaStore {
-    /// Raw frames already admitted for this assignment, including held and
-    /// cancelled work. A later exposure must not silently replace that work.
-    pub fn raw_transfer_images(
+    pub fn transfer_review_required(
         &self,
         connection: Uuid,
         import: Uuid,
         panel: u32,
-    ) -> Result<std::collections::BTreeSet<Uuid>, Error> {
-        let mut stmt = self.connection.prepare("SELECT DISTINCT image.value FROM collaboration_transfer t JOIN collaboration_transfer_definition d ON d.id=t.id, json_each(d.request,'$.selection.image_guids') image WHERE t.connection_id=?1 AND json_extract(d.request,'$.selection.import_id')=?2 AND json_extract(d.request,'$.selection.panel')=?3 AND json_extract(d.request,'$.output') IS NULL")?;
+        images: &[Uuid],
+    ) -> Result<bool, Error> {
+        let images = serde_json::to_string(images).map_err(|_| Error::InvalidInput)?;
+        Ok(self.connection.query_row("SELECT EXISTS(SELECT 1 FROM collaboration_transfer t JOIN collaboration_transfer_definition d ON d.id=t.id, json_each(d.request,'$.selection.image_guids') old WHERE t.connection_id=?1 AND json_extract(d.request,'$.selection.import_id')=?2 AND json_extract(d.request,'$.selection.panel')=?3 AND json_extract(t.payload,'$.state') IN ('needs_review','review') AND old.value IN (SELECT value FROM json_each(?4)))",params![connection.to_string(),import.to_string(),panel,images],|r|r.get(0))?)
+    }
+
+    /// Completed source stamps avoid rehashing old frames. `None` reserves a
+    /// frame in unfinished or cancelled work, irrespective of later revisions.
+    pub fn raw_transfer_sources(
+        &self,
+        connection: Uuid,
+        import: Uuid,
+        panel: u32,
+    ) -> Result<BTreeMap<Uuid, BTreeSet<Option<String>>>, Error> {
+        let mut stmt = self.connection.prepare("SELECT image.value,CASE WHEN json_extract(t.payload,'$.state')='complete' THEN COALESCE(json_extract(d.request,'$.source_versions.' || image.value),'') ELSE NULL END FROM collaboration_transfer t JOIN collaboration_transfer_definition d ON d.id=t.id, json_each(d.request,'$.selection.image_guids') image WHERE t.connection_id=?1 AND json_extract(d.request,'$.selection.import_id')=?2 AND json_extract(d.request,'$.selection.panel')=?3 AND json_extract(d.request,'$.output') IS NULL")?;
         let images = stmt
             .query_map(
                 params![connection.to_string(), import.to_string(), panel],
-                |r| r.get::<_, String>(0),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        images
+        let mut sources = BTreeMap::<_, BTreeSet<_>>::new();
+        for (id, version) in images {
+            sources
+                .entry(Uuid::parse_str(&id).map_err(|_| Error::CorruptDatabase)?)
+                .or_default()
+                .insert(version);
+        }
+        Ok(sources)
+    }
+
+    pub fn delivered_files(
+        &self,
+        destination: &Destination,
+    ) -> Result<BTreeSet<(String, String, u64)>, Error> {
+        let mut stmt = self.connection.prepare("SELECT kind,sha256,bytes FROM collaboration_file_delivery WHERE base_url=?1 AND project=?2 AND owner=?3")?;
+        let files = stmt
+            .query_map(
+                params![destination.base_url, destination.project, destination.owner],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        files
             .into_iter()
-            .map(|id| Uuid::parse_str(&id).map_err(|_| Error::CorruptDatabase))
+            .map(|(kind, hash, bytes)| {
+                Ok((
+                    kind,
+                    hash,
+                    u64::try_from(bytes).map_err(|_| Error::CorruptDatabase)?,
+                ))
+            })
             .collect()
     }
 
@@ -287,6 +361,41 @@ impl MetaStore {
         name: &str,
         bytes: u64,
     ) -> Result<u64, Error> {
+        self.acknowledge_transfer_file_inner(id, revision, name, bytes, None)
+    }
+
+    pub fn acknowledge_transfer_delivery(
+        &mut self,
+        id: Uuid,
+        revision: u64,
+        delivery: &FileDelivery,
+    ) -> Result<u64, Error> {
+        if delivery.hash.len() != 64
+            || !delivery.hash.bytes().all(|b| b.is_ascii_hexdigit())
+            || delivery.destination.base_url.is_empty()
+            || delivery.destination.project.is_empty()
+            || delivery.destination.owner.is_empty()
+            || delivery.kind.is_empty()
+        {
+            return Err(Error::InvalidInput);
+        }
+        self.acknowledge_transfer_file_inner(
+            id,
+            revision,
+            &delivery.name,
+            delivery.bytes,
+            Some(delivery),
+        )
+    }
+
+    fn acknowledge_transfer_file_inner(
+        &mut self,
+        id: Uuid,
+        revision: u64,
+        name: &str,
+        bytes: u64,
+        delivery: Option<&FileDelivery>,
+    ) -> Result<u64, Error> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -306,11 +415,16 @@ impl MetaStore {
         if !belongs {
             return Err(Error::InvalidInput);
         }
+        if let Some(delivery) = delivery {
+            tx.execute("INSERT INTO collaboration_file_delivery VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(base_url,project,owner,kind,sha256) DO UPDATE SET bytes=excluded.bytes",
+                params![delivery.destination.base_url,delivery.destination.project,delivery.destination.owner,delivery.kind,delivery.hash,bytes as i64])?;
+        }
         let added = tx.execute(
             "INSERT OR IGNORE INTO collaboration_transfer_receipt VALUES(?1,?2,?3)",
             params![id.to_string(), name, bytes as i64],
         )?;
         if added == 0 {
+            tx.commit()?;
             return Ok(revision);
         }
         job.revision = revision
@@ -355,6 +469,8 @@ impl MetaStore {
                 job.completed.clear();
                 if let Some(request) = job.request.as_object_mut() {
                     request.insert("automatic".into(), Value::Bool(false));
+                    request.insert("upload_pending".into(), Value::Bool(false));
+                    request.remove("source_versions");
                 }
                 State::Preparing
             }

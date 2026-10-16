@@ -63,6 +63,9 @@ enum Input {
     PrepareTransfer {
         request: transfers::Request,
     },
+    UploadPending {
+        request: transfers::Request,
+    },
     TransferControl {
         id: Uuid,
         revision: u64,
@@ -227,7 +230,10 @@ async fn execute(
             return transfers::outputs(state, service, &b, selection.clone()).await
         }
         Input::PrepareTransfer { request } => {
-            return transfers::start(state, service, &b, request.clone()).await
+            return transfers::start(state, service, &b, request.clone(), false).await
+        }
+        Input::UploadPending { request } => {
+            return transfers::start(state, service, &b, request.clone(), true).await
         }
         Input::TransferControl {
             id,
@@ -446,6 +452,7 @@ async fn connected(
         | Input::ReportInputs {}
         | Input::TransferOutputs { .. }
         | Input::PrepareTransfer { .. }
+        | Input::UploadPending { .. }
         | Input::TransferControl { .. }
         | Input::TransferPolicy { .. }
         | Input::TransferManifest { .. }

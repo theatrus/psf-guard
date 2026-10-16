@@ -160,6 +160,7 @@ pub(super) fn manifest(
     let mut associations = Vec::new();
     let mut calibration_sets = BTreeMap::new();
     let mut files = BTreeMap::new();
+    let mut review_reasons = BTreeSet::new();
     let mut warnings=vec!["Starfront stores these files but does not receive the per-light calibration manifest yet. The manifest is retained locally.".to_owned()];
     for (guid, (image, target, target_guid)) in &rows {
         if stopping() {
@@ -208,6 +209,9 @@ pub(super) fn manifest(
             return Err(held(
                 "A selected light would be left out by the calibration export policy",
             ));
+        }
+        if request.output.is_none() && gap.is_some() {
+            review_reasons.insert("Some lights have incomplete calibration. Review the selected files before uploading.".to_owned());
         }
         if request.output.is_none() && selected.flat_basis.correction().is_some() {
             return Err(held("This package needs corrected flats. Select an existing PSF Guard or WBPP stack instead of raw files"));
@@ -312,16 +316,50 @@ pub(super) fn manifest(
         warnings.push("This is an integrated stack, not a raw exposure. File delivery does not create a contribution report.".into());
     }
     let paths = files.into_keys().collect::<Vec<_>>();
+    warnings.extend(review_reasons.iter().cloned());
     let stamps = paths
         .iter()
         .map(|(kind, path)| Ok(json!({"kind":kind,"source":stamp(path)?})))
         .collect::<Result<Vec<_>, Failure>>()?;
     Ok((
         json!({"version":1,"task":import.share().task_id,"source_digest":import.digest(),"night":request.selection.observing_night,
-        "panel":request.selection.panel,"lights":associations,"calibration_sets":calibration_sets,"output":output_manifest,"files":stamps}),
+        "panel":request.selection.panel,"lights":associations,"calibration_sets":calibration_sets,"output":output_manifest,"files":stamps,"review_reasons":review_reasons}),
         paths,
         warnings,
     ))
+}
+
+pub(super) fn source_version(source: &Value) -> Result<String, Failure> {
+    Ok(psf_guard_director_interop::collaboration::digest(
+        &serde_json::to_vec(source).map_err(|_| invalid())?,
+    ))
+}
+
+/// Admission uses cheap filesystem stamps, never a read of every old frame.
+/// Delivery still hashes the bytes and records that content revision.
+pub(super) fn source_versions(
+    catalog: &DatabaseContext,
+    selection: &Selection,
+) -> Result<BTreeMap<Uuid, String>, Failure> {
+    let conn = crate::server::database_context::open_scheduler_connection_with_flags(
+        &catalog.database_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|_| invalid())?;
+    let mut versions = BTreeMap::new();
+    for ids in selection
+        .image_guids
+        .chunks(psf_guard_director_interop::collaboration::MAX_REPORT_FRAMES)
+    {
+        for (guid, (image, target, _)) in evidence::selected_rows(&conn, ids)? {
+            if let Ok(source) =
+                evidence::saved_path(catalog, &image, &target).and_then(|path| stamp(&path))
+            {
+                versions.insert(guid, source_version(&source)?);
+            }
+        }
+    }
+    Ok(versions)
 }
 
 fn stamp(path: &std::path::Path) -> Result<Value, Failure> {
@@ -532,7 +570,20 @@ mod tests {
             output: None,
             confirm_wbpp_membership: false,
             automatic: false,
+            upload_pending: false,
+            attempt: None,
+            source_versions: BTreeMap::new(),
         };
+        let mut pending = request.clone();
+        pending.upload_pending = true;
+        assert!(!pending.review_required(&json!({"review_reasons":[]})));
+        assert!(!pending.review_required(&json!({"warnings":["Calibration manifest stays local"]})));
+        assert!(pending.review_required(&json!({"review_reasons":["Incomplete calibration"]})));
+        assert!(request.review_required(&json!({"review_reasons":[]}))); // old Prepare requests retain their consent boundary
+        let mut automatic = request.clone();
+        automatic.automatic = true;
+        assert!(!automatic.review_required(&json!({"review_reasons":[]})));
+        assert!(automatic.review_required(&json!({"review_reasons":["Incomplete calibration"]})));
         let (snapshot, paths, _) = manifest(&catalog, &import, &request, || false).unwrap();
         let meta = crate::commands::import::headers::read_frame_meta(&light);
         let export = calibration::export_destinations(
@@ -571,6 +622,16 @@ mod tests {
             compact["lights"][1]["calibration_set"]
         );
         assert!(serde_json::to_vec(&compact).unwrap().len() < 20000);
+        let mut large = request.selection.clone();
+        let tx = conn.transaction().unwrap();
+        for id in 3..5003 {
+            let guid = Uuid::new_v4();
+            large.image_guids.push(guid);
+            tx.execute("INSERT INTO acquiredimage(Id,guid,gradingStatus,filtername,metadata,acquireddate) VALUES(?1,?2,1,'OIII',?3,1791171000)", rusqlite::params![id,guid.to_string(),json!({"FileName":"light.fits"}).to_string()]).unwrap();
+        }
+        tx.commit().unwrap();
+        assert_eq!(source_versions(&catalog, &large).unwrap().len(), 5001);
+        let before = source_versions(&catalog, &request.selection).unwrap();
         let package = build(
             &catalog,
             &import,
@@ -597,6 +658,10 @@ mod tests {
         conn.execute("UPDATE acquiredimage SET gradingStatus=1", [])
             .unwrap();
         frame(&light, "LIGHT", "OIII", 150.0, "2026-10-05T04:50:00");
+        assert_ne!(
+            source_versions(&catalog, &request.selection).unwrap(),
+            before
+        );
         let error = manifest(&catalog, &import, &request, || false).unwrap_err();
         assert!(error.1.contains("exposure does not match"));
     }

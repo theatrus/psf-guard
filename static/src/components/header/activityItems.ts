@@ -21,7 +21,7 @@ export type ActivityQueue = 'stack' | 'wbpp';
 /**
  * Where a job stands. `running`: at work now. `queued`: in a line a person
  * can reorder. `waiting`: automatic work that has stepped aside for other
- * work, such as a build a person started; it resumes on its own.
+ * work, such as a build a person started, or a transfer awaiting retry or review.
  */
 export type ActivityStatus = 'running' | 'queued' | 'waiting';
 
@@ -451,7 +451,7 @@ export function activityItems(
 
 export function transferItem(job: TransferJob): ActivityItem {
   const active = job.state === 'uploading' || job.state === 'preparing';
-  const labels = { preparing: 'Preparing', review: 'Awaiting review', queued: 'Queued', uploading: 'Uploading', paused: 'Paused', retry: 'Retry scheduled', needs_review: 'Needs attention', complete: 'Delivered', cancelled: 'Cancelled' };
+  const labels = { preparing: 'Checking files', review: 'Review required', queued: 'Pending', uploading: 'Uploading', paused: 'Paused', retry: 'Retry scheduled', needs_review: 'Needs attention', complete: 'Uploaded', cancelled: 'Cancelled' };
   return { key: `transfer:${job.id}`, kind: 'transfer', title: 'Transfers', scope: `${job.catalog} · ${job.label}`,
     detail: job.error ?? `${job.completed_files}/${job.total_files} files · ${((job.completed_bytes + job.sent_bytes) / 1024 / 1024).toFixed(1)} MiB`,
     status: active ? 'running' : job.state === 'queued' ? 'queued' : 'waiting', stateLabel: labels[job.state], transfer: job, background: true,
@@ -471,7 +471,7 @@ export function lineLengths(items: ActivityItem[]): Record<ActivityQueue, number
 export interface ActivitySummary {
   count: number;
   running: number;
-  /** Automatic work that stepped aside and resumes on its own. */
+  /** Automatic work that stepped aside, and held transfers. */
   waiting: number;
   /** Jobs in a line a person can reorder, such as builds they asked for. */
   queued: number;

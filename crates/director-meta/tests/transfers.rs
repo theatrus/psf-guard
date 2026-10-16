@@ -1,6 +1,6 @@
 use psf_guard_director_meta::{
     collaboration_connection::{ConnectionBinding, ConnectionState},
-    transfer::State,
+    transfer::{Destination, FileDelivery, State},
     Error, MetaStore, Uuid,
 };
 use serde_json::json;
@@ -173,6 +173,7 @@ fn manual_retry_of_an_automatic_package_requires_review() {
         .unwrap();
     assert_eq!(retried.state, State::Preparing);
     assert_eq!(retried.request["automatic"], false);
+    assert_eq!(retried.request["upload_pending"], false);
     assert!(retried.package.is_none());
 }
 
@@ -230,22 +231,178 @@ fn raw_admission_excludes_old_images_without_bypassing_held_work() {
             Some(json!({"job_id":"stack"})),
         ),
     ] {
-        let mut job = store.create_transfer(connection, json!({"selection":{"import_id":task,"panel":panel,"image_guids":[image]},"output":output}), 100).unwrap();
+        let mut job = store.create_transfer(connection, json!({"selection":{"import_id":task,"panel":panel,"image_guids":[image]},"source_versions":{image.to_string():"revision-one"},"output":output}), 100).unwrap();
         job.state = state;
         store.save_transfer(job).unwrap();
     }
-    let claimed = store.raw_transfer_images(connection, import, 0).unwrap();
-    assert_eq!(claimed, [delivered, held, cancelled].into_iter().collect());
+    let claimed = store.raw_transfer_sources(connection, import, 0).unwrap();
+    assert_eq!(
+        claimed
+            .keys()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [delivered, held, cancelled].into_iter().collect()
+    );
+    assert_eq!(
+        claimed[&delivered],
+        [Some("revision-one".into())].into_iter().collect()
+    );
+    assert!(claimed[&held].contains(&None));
+    assert!(claimed[&cancelled].contains(&None));
     assert!(store
-        .raw_transfer_images(Uuid::new_v4(), import, 0)
+        .raw_transfer_sources(Uuid::new_v4(), import, 0)
         .unwrap()
         .is_empty());
     let new = Uuid::new_v4();
     let remaining: Vec<_> = [delivered, held, cancelled, new]
         .into_iter()
-        .filter(|id| !claimed.contains(id))
+        .filter(|id| {
+            !claimed.get(id).is_some_and(|versions| {
+                versions.contains(&None) || versions.contains(&Some("revision-one".into()))
+            })
+        })
         .collect();
     assert_eq!(remaining, [new]);
+    let changed: Vec<_> = [delivered, held, cancelled, new]
+        .into_iter()
+        .filter(|id| {
+            !claimed.get(id).is_some_and(|versions| {
+                versions.contains(&None) || versions.contains(&Some("revision-two".into()))
+            })
+        })
+        .collect();
+    assert_eq!(changed, [delivered, new]);
+    assert!(store
+        .transfer_review_required(connection, import, 0, &[held])
+        .unwrap());
+    assert!(!store
+        .transfer_review_required(connection, import, 0, &[delivered, new])
+        .unwrap());
+    assert!(!store
+        .transfer_review_required(connection, import, 1, &[held])
+        .unwrap());
+}
+
+#[test]
+fn delivery_ledger_is_shared_by_jobs_but_scoped_to_destination_and_content() {
+    let (dir, mut store, connection) = setup();
+    let destination = Destination {
+        base_url: "https://example.com/".into(),
+        project: "m31".into(),
+        owner: "owner-one".into(),
+    };
+    let receipt = FileDelivery {
+        destination: destination.clone(),
+        name: "flat.fits".into(),
+        kind: "flat".into(),
+        hash: "a".repeat(64),
+        bytes: 100,
+    };
+    for n in 0..2 {
+        let mut job = store
+            .create_transfer(connection, json!({"batch":n}), 100)
+            .unwrap();
+        job.state = State::Uploading;
+        job.package = Some(json!({"artifacts":[{"name":"flat.fits","bytes":100}]}));
+        let job = store.save_transfer(job).unwrap();
+        let revision = store
+            .acknowledge_transfer_delivery(job.id, job.revision, &receipt)
+            .unwrap();
+        assert_eq!(
+            store
+                .acknowledge_transfer_delivery(job.id, revision, &receipt)
+                .unwrap(),
+            revision
+        );
+        let mut wrong = receipt.clone();
+        wrong.hash = "b".repeat(64);
+        assert!(matches!(
+            store.acknowledge_transfer_delivery(job.id, job.revision, &wrong),
+            Err(Error::Conflict)
+        ));
+    }
+    drop(store);
+    let store = MetaStore::open(&dir.path().join("meta.sqlite")).unwrap();
+    let files = store.delivered_files(&destination).unwrap();
+    assert_eq!(
+        files,
+        [("flat".into(), "a".repeat(64), 100)].into_iter().collect()
+    );
+    assert!(!files.contains(&("flat".into(), "b".repeat(64), 100)));
+    assert!(!files.contains(&("light".into(), "a".repeat(64), 100)));
+    assert!(!files.contains(&("flat".into(), "a".repeat(64), 200)));
+    for other in [
+        Destination {
+            owner: "owner-two".into(),
+            ..destination.clone()
+        },
+        Destination {
+            project: "m42".into(),
+            ..destination.clone()
+        },
+        Destination {
+            base_url: "https://other.example/".into(),
+            ..destination.clone()
+        },
+    ] {
+        assert!(store.delivered_files(&other).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn schema_31_upgrade_keeps_job_receipts_and_adds_the_shared_ledger() {
+    let (dir, mut store, connection) = setup();
+    let mut job = store.create_transfer(connection, json!({}), 100).unwrap();
+    job.state = State::Uploading;
+    job.package = Some(json!({"artifacts":[{"name":"old.fits","bytes":100}]}));
+    let job = store.save_transfer(job).unwrap();
+    store
+        .acknowledge_transfer_file(job.id, job.revision, "old.fits", 100)
+        .unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(dir.path().join("meta.sqlite")).unwrap();
+    conn.execute_batch("DROP TABLE collaboration_file_delivery; PRAGMA user_version=31")
+        .unwrap();
+    drop(conn);
+    let store = MetaStore::open(&dir.path().join("meta.sqlite")).unwrap();
+    assert_eq!(
+        store.transfer(job.id).unwrap().unwrap().completed,
+        ["old.fits"]
+    );
+    assert!(store
+        .delivered_files(&Destination {
+            base_url: "https://example.com/".into(),
+            project: "m31".into(),
+            owner: "owner".into()
+        })
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn delivery_ledger_migration_collision_keeps_schema_31_and_existing_data() {
+    let (dir, store, _) = setup();
+    drop(store);
+    let conn = rusqlite::Connection::open(dir.path().join("meta.sqlite")).unwrap();
+    conn.execute_batch("DROP TABLE collaboration_file_delivery; CREATE TABLE collaboration_file_delivery(unrelated INTEGER); INSERT INTO collaboration_file_delivery VALUES(42); PRAGMA user_version=31").unwrap();
+    assert!(matches!(
+        MetaStore::open(&dir.path().join("meta.sqlite")),
+        Err(Error::CorruptDatabase)
+    ));
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+            .unwrap(),
+        31
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT unrelated FROM collaboration_file_delivery",
+            [],
+            |r| r.get::<_, i32>(0)
+        )
+        .unwrap(),
+        42
+    );
 }
 
 #[test]
