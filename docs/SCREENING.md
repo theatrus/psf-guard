@@ -366,15 +366,17 @@ a report's night links to the same lights and a same-night flat is the
 one Images would show beside it. The AstroBin
 export and the sky coverage still split at the catalog's split.
 
-**Lights' nights split at** in Settings › Calibration chooses between the
-rig's local noon (the default) and the catalog's quiet hours, for every
+**Nights end** in Settings › Calibration chooses **At each rig's noon**
+(the default) or **Same time for all rigs**, the catalog's daytime gap
+when nothing is shot, for every
 rig or, as a rig's own setting, for one rig's lights; a light no rig is
 bound to follows the global choice. The server keeps it, so every view
-and viewer splits alike. **Nights split at** in the Images and Sequence
+and viewer splits alike. **Nights end** in the Images and Sequence
 View panel shows the other split in that view alone: the link carries it
 as `nights=rig` or `nights=catalog`, the image list and the calibration
-reports name their nights by it, and the View button says **catalog
-nights** or **rig nights** while it differs from the setting. Choosing the
+reports name their nights by it, and the View button says **nights:
+same for all rigs** or **nights: each rig's noon** while it differs from
+the setting. Choosing the
 setting's own split there clears it.
 
 A link that names no group by today's keys but names one by the UTC date

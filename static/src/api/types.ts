@@ -1704,8 +1704,10 @@ export interface CalibrationRigSettings {
   name: string;
   /** Frame size and binning. */
   detail?: string;
-  /** The databases that record it. */
+  /** The databases that record it, by name. */
   databases: string[];
+  /** The same databases by id, in the same order. Absent from older servers. */
+  database_ids?: string[];
   frames: number;
   /** Its own values; a key not listed inherits. */
   rules: CalibrationRuleValues;

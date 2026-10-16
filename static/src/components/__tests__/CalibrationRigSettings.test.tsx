@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import type { CalibrationRigSettings as RigSettings } from '../../api/types';
 import { server } from '../../test/msw-server';
+import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from '../../utils/settingsIntent';
 import { CALIBRATION_RULE_FIELDS } from '../../test/calibrationRuleFields';
 import CalibrationRigSettings from '../CalibrationRigSettings';
 
@@ -59,12 +60,26 @@ describe('CalibrationRigSettings', () => {
     expect(within(editor).getByRole('button', { name: 'Dark reach: own value' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(editor).getByLabelText('No matching flat')).toHaveValue('advisory');
     // The rest inherit, and say from where.
-    const thin = within(editor).getByRole('button', { name: 'Thin master below: own value' });
+    const thin = within(editor).getByRole('button', { name: 'Thin master: own value' });
     expect(thin).toHaveAttribute('aria-pressed', 'false');
     expect(thin.closest('.calibration-rule-row')).toHaveTextContent('4 frames · global');
     expect(
       within(editor).getByRole('button', { name: 'Flat age limit: own value' }).closest('.calibration-rule-row'),
     ).toHaveTextContent('60 days · default');
+  });
+
+  it('sends its note\'s Rigs link to Settings › Rigs', async () => {
+    server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current([]))));
+    const asked: OpenSettingsDetail[] = [];
+    const listen = (event: Event) => asked.push((event as CustomEvent<OpenSettingsDetail>).detail);
+    window.addEventListener(OPEN_SETTINGS_EVENT, listen);
+    try {
+      render(<CalibrationRigSettings />, { wrapper: wrapper() });
+      fireEvent.click(await screen.findByRole('button', { name: 'Rigs' }));
+      expect(asked).toEqual([{ intent: 'rigs' }]);
+    } finally {
+      window.removeEventListener(OPEN_SETTINGS_EVENT, listen);
+    }
   });
 
   it('sets a value for one rig, starting from the one it inherits, and saves only its own', async () => {
@@ -81,8 +96,8 @@ describe('CalibrationRigSettings', () => {
     const editor = screen.getByRole('region', { name: /calibration settings/ });
     const save = within(editor).getByRole('button', { name: 'Save rig' });
     expect(save).toBeDisabled();
-    fireEvent.click(within(editor).getByRole('button', { name: 'Thin master below: own value' }));
-    const thin = within(editor).getByLabelText('Thin master below');
+    fireEvent.click(within(editor).getByRole('button', { name: 'Thin master: own value' }));
+    const thin = within(editor).getByLabelText('Thin master');
     expect(thin).toHaveValue(4);
     fireEvent.change(thin, { target: { value: '' } });
     expect(within(editor).getByText('Enter a value, or let it inherit.')).toBeInTheDocument();
@@ -92,8 +107,8 @@ describe('CalibrationRigSettings', () => {
     await waitFor(() => expect(saved).toEqual({ name: 'Askar 120 · ASI2600MM', rules: { thin_master_frames: 3 } }));
     await waitFor(() => expect(screen.getByRole('button', { name: /Askar 120/ })).toHaveTextContent('1 own value'));
     // Letting it inherit again takes the field away.
-    fireEvent.click(within(editor).getByRole('button', { name: 'Thin master below: own value' }));
-    expect(within(editor).queryByLabelText('Thin master below')).not.toBeInTheDocument();
+    fireEvent.click(within(editor).getByRole('button', { name: 'Thin master: own value' }));
+    expect(within(editor).queryByLabelText('Thin master')).not.toBeInTheDocument();
     expect(within(editor).getByRole('button', { name: 'Save rig' })).toBeEnabled();
   });
 
@@ -109,16 +124,16 @@ describe('CalibrationRigSettings', () => {
     render(<CalibrationRigSettings />, { wrapper: wrapper() });
     fireEvent.click(await screen.findByRole('button', { name: /C925/ }));
     const editor = screen.getByRole('region', { name: /calibration settings/ });
-    const own = within(editor).getByRole('button', { name: 'Night starts at noon in: own value' });
+    const own = within(editor).getByRole('button', { name: "Rig's time zone: own value" });
     // Automatic until the rig says otherwise.
-    expect(own.closest('.calibration-rule-row')).toHaveTextContent("From its frames' site · default");
+    expect(own.closest('.calibration-rule-row')).toHaveTextContent("Automatic (from frames) · default");
     fireEvent.click(own);
-    const zone = within(editor).getByLabelText('Night starts at noon in');
+    const zone = within(editor).getByLabelText("Rig's time zone");
     expect(zone).toHaveValue('auto');
     fireEvent.change(zone, { target: { value: '-8' } });
     fireEvent.click(within(editor).getByRole('button', { name: 'Save rig' }));
     await waitFor(() => expect(saved).toEqual({ name: 'C925 · ASI2600MM', rules: { night_zone: '-8' } }));
-    await waitFor(() => expect(within(editor).getByLabelText('Night starts at noon in')).toHaveValue('-8'));
+    await waitFor(() => expect(within(editor).getByLabelText("Rig's time zone")).toHaveValue('-8'));
     expect(within(editor).getByRole('option', { name: 'UTC−8' })).toBeInTheDocument();
   });
 
@@ -181,7 +196,7 @@ describe('CalibrationRigSettings', () => {
       { wrapper: wrapper() },
     );
     const editor = await screen.findByRole('region', { name: 'Askar 120 · ASI2600MM calibration settings' });
-    const dust = within(editor).getByLabelText('Dust that splits flats');
+    const dust = within(editor).getByLabelText('Dust split');
     expect(dust).toHaveValue(3);
     await waitFor(() => expect(dust).toHaveFocus());
     // Its group is open because the rig sets a value in it.
@@ -199,18 +214,18 @@ describe('CalibrationRigSettings', () => {
     );
     const view = render(page());
     const editor = await screen.findByRole('region', { name: 'Askar 120 · ASI2600MM calibration settings' });
-    const own = within(editor).getByRole('button', { name: 'Thin master below: own value' });
+    const own = within(editor).getByRole('button', { name: 'Thin master: own value' });
     fireEvent.click(own);
     expect(own).toHaveAttribute('aria-pressed', 'true');
     // The parent draws again, and the settings come back with a global change.
     view.rerender(page());
-    expect(within(editor).getByRole('button', { name: 'Thin master below: own value' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(editor).getByRole('button', { name: 'Thin master: own value' })).toHaveAttribute('aria-pressed', 'true');
     queryClient.setQueryData(
       ['calibration-settings'],
       current([rig(REDCAT, 'RedCat 51 · ASI533MC')], { thin_master_frames: 6 }).data,
     );
     await waitFor(() => expect(screen.getByRole('button', { name: /RedCat 51/ })).toBeInTheDocument());
-    expect(within(editor).getByRole('button', { name: 'Thin master below: own value' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(editor).getByRole('button', { name: 'Thin master: own value' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(editor).getByRole('button', { name: 'Save rig' })).toBeEnabled();
   });
 

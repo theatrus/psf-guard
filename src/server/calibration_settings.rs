@@ -77,8 +77,11 @@ pub struct RigSettingsView {
     /// Its frame size and binning, which tell two rigs of one name apart.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    /// The databases that record it.
+    /// The databases that record it, by name.
     pub databases: Vec<String>,
+    /// The same databases by id, in the same order, so Settings › Rigs can
+    /// link each catalog to the calibration rigs it records.
+    pub database_ids: Vec<String>,
     /// Calibration frames those databases hold from it.
     pub frames: usize,
     /// Its own values; a key not listed inherits.
@@ -283,22 +286,22 @@ async fn rig_views(
     state: &Arc<AppState>,
     settings: Option<&CalibrationSettings>,
 ) -> Vec<RigSettingsView> {
-    let catalogs: Vec<(String, String)> = state
+    let catalogs: Vec<(String, String, String)> = state
         .all_databases()
         .iter()
-        .map(|ctx| (ctx.name.clone(), ctx.database_path.clone()))
+        .map(|ctx| (ctx.id.clone(), ctx.name.clone(), ctx.database_path.clone()))
         .collect();
     let listed = tokio::task::spawn_blocking(move || {
         catalogs
             .into_iter()
-            .filter_map(|(name, path)| {
+            .filter_map(|(id, name, path)| {
                 let conn = crate::server::database_context::open_scheduler_connection_with_flags(
                     &path,
                     OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
                 )
                 .ok()?;
                 match crate::calibration::rig_listing(&conn) {
-                    Ok(rigs) => Some((name, rigs)),
+                    Ok(rigs) => Some((id, name, rigs)),
                     Err(error) => {
                         tracing::debug!("listing rigs in {path}: {error:#}");
                         None
@@ -309,8 +312,17 @@ async fn rig_views(
     })
     .await
     .unwrap_or_default();
+    merge_rig_views(listed, settings)
+}
+
+/// Merges each catalog's rigs by UUID, keeping the catalogs that record a
+/// rig by name and by id, then adds the rigs with values of their own.
+fn merge_rig_views(
+    listed: Vec<(String, String, Vec<crate::calibration::RigListing>)>,
+    settings: Option<&CalibrationSettings>,
+) -> Vec<RigSettingsView> {
     let mut views: BTreeMap<String, RigSettingsView> = BTreeMap::new();
-    for (database, rigs) in listed {
+    for (database_id, database, rigs) in listed {
         for rig in rigs {
             let view = views
                 .entry(rig.rig_uuid.clone())
@@ -319,12 +331,14 @@ async fn rig_views(
                     name: rig.name.clone(),
                     detail: rig_detail(&rig),
                     databases: Vec::new(),
+                    database_ids: Vec::new(),
                     frames: 0,
                     rules: RuleValues::new(),
                 });
             view.frames += rig.frames;
-            if !view.databases.contains(&database) {
+            if !view.database_ids.contains(&database_id) {
                 view.databases.push(database.clone());
+                view.database_ids.push(database_id.clone());
             }
         }
     }
@@ -340,6 +354,7 @@ async fn rig_views(
                 name: rig.name.clone().unwrap_or_else(|| "Unnamed rig".into()),
                 detail: None,
                 databases: Vec::new(),
+                database_ids: Vec::new(),
                 frames: 0,
                 rules: RuleValues::new(),
             });
@@ -675,6 +690,30 @@ mod tests {
         let request: Result<UpdateRigSettingsRequest, _> =
             serde_json::from_value(json!({"rules": {}, "colour": "red"}));
         assert!(request.is_err(), "unknown keys are refused");
+    }
+
+    #[test]
+    fn a_rig_names_every_catalog_that_records_it_by_name_and_id() {
+        let rig = |uuid: &str, frames| crate::calibration::RigListing {
+            rig_uuid: uuid.into(),
+            name: "C925".into(),
+            width: Some(6248),
+            height: Some(4176),
+            binning_x: Some(1),
+            binning_y: Some(1),
+            frames,
+        };
+        let views = merge_rig_views(
+            vec![
+                ("db-a".into(), "C925".into(), vec![rig("u1", 10)]),
+                ("db-b".into(), "C925 copy".into(), vec![rig("u1", 5)]),
+            ],
+            None,
+        );
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].databases, vec!["C925", "C925 copy"]);
+        assert_eq!(views[0].database_ids, vec!["db-a", "db-b"]);
+        assert_eq!(views[0].frames, 15);
     }
 
     #[test]

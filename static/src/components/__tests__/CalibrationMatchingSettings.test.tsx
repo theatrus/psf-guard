@@ -42,7 +42,7 @@ describe('CalibrationMatchingSettings', () => {
     };
     try {
       render(<CalibrationMatchingSettings focusField="flat_split_dust_pct" />, { wrapper: wrapper() });
-      const dust = await screen.findByLabelText('Dust that splits flats');
+      const dust = await screen.findByLabelText('Dust split');
       await waitFor(() => expect(dust).toHaveFocus());
       expect(dust.closest('fieldset')).toHaveTextContent('Flat groups');
       expect(scrolled).toEqual([dust.closest('[data-rule]')]);
@@ -54,7 +54,7 @@ describe('CalibrationMatchingSettings', () => {
   it('shows each default as the empty field\'s placeholder and nothing to save', async () => {
     server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current())));
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const rotation = await screen.findByLabelText('Flat rotation tolerance');
+    const rotation = await screen.findByLabelText('Flat rotation');
     expect(rotation).toHaveValue(null);
     expect(rotation).toHaveAttribute('placeholder', '2');
     expect(screen.getByLabelText('Dark reach')).toHaveAttribute('placeholder', '183');
@@ -186,7 +186,7 @@ describe('CalibrationMatchingSettings', () => {
     const exclude = await screen.findByRole('checkbox', { name: /Leave out lights that can't be calibrated/ });
     expect(exclude).not.toBeChecked();
     // One setting for stacks and every export alike.
-    expect(screen.getByText(/Stacks, WBPP runs and every export leave them out/)).toBeInTheDocument();
+    expect(screen.getByText(/Stacks, WBPP runs and exports skip them/)).toBeInTheDocument();
     fireEvent.click(exclude);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(saved).toMatchObject({ exclude_uncalibrated: true }));
@@ -231,8 +231,8 @@ describe('CalibrationMatchingSettings', () => {
     fireEvent.click(toggle);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(toggle).toBeDisabled());
-    expect(screen.getByLabelText('Flat rotation tolerance')).toBeDisabled();
-    expect(screen.getByLabelText('Masters from other software')).toBeDisabled();
+    expect(screen.getByLabelText('Flat rotation')).toBeDisabled();
+    expect(screen.getByLabelText('External masters')).toBeDisabled();
     expect(screen.getByLabelText('No matching flat')).toBeDisabled();
     finishSave();
     await waitFor(() => expect(toggle).toBeEnabled());
@@ -262,7 +262,7 @@ describe('CalibrationMatchingSettings', () => {
       }),
     );
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const thin = await screen.findByLabelText('Thin master below');
+    const thin = await screen.findByLabelText('Thin master');
     stored = { dark_reach_days: 30 };
     fireEvent.change(thin, { target: { value: '4' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -303,7 +303,7 @@ describe('CalibrationMatchingSettings', () => {
     // A rig's save hands back the settings with a rig changed.
     const answer = current({ thin_master_frames: 3 }).data;
     queryClient.setQueryData(['calibration-settings'], answer);
-    await waitFor(() => expect(screen.getByLabelText('Thin master below')).toHaveValue(3));
+    await waitFor(() => expect(screen.getByLabelText('Thin master')).toHaveValue(3));
     expect(screen.getByLabelText('Dark reach')).toHaveValue(45);
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });

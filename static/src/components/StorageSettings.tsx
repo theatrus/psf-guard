@@ -198,7 +198,7 @@ function StorageFolders({ current, canManage }: { current: StorageSettingsData; 
       )}
       {editable && (
         <div className="storage-folder-actions">
-          <button type="button" className="btn btn-primary" disabled={!dirty || save.isPending} onClick={submit}>
+          <button type="button" className="save-button" disabled={!dirty || save.isPending} onClick={submit}>
             {save.isPending ? 'Saving…' : 'Save folders'}
           </button>
           {pending && (

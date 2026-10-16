@@ -443,9 +443,9 @@
 .tauri-settings .db-entry {
   margin-bottom: 8px;
   overflow: hidden;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 4px;
-  background-color: var(--color-bg-input);
+  border: 1px solid var(--color-group-border);
+  border-radius: 8px;
+  background-color: var(--color-group-bg);
 }
 
 .tauri-settings .db-entry.editing {
@@ -1413,7 +1413,6 @@
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
-  max-width: 34rem;
 }
 
 .review-preferences h3 {
@@ -1649,7 +1648,6 @@
 }
 
 .stack-method-settings {
-  max-width: 44rem;
   margin-bottom: 1.5rem;
 }
 
@@ -2307,4 +2305,327 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: all;
+}
+
+/* ------------------------------------------------------------------------
+   One system for every Settings tab. Each tab's panels sit in the
+   .settings-setups grid, one card each and one width for all. Inside a
+   card, a group of fields is a box with its name in the accent, and its
+   rows put each control beside its label, divided by a hairline. Fields
+   share one size and the theme's input tokens. Later rules here win over
+   the per-panel rules above.
+   ------------------------------------------------------------------------ */
+.tauri-settings .settings-setups {
+  gap: 20px;
+  max-width: 64rem;
+}
+
+.tauri-settings .settings-setups > * {
+  padding: 20px 22px 22px;
+  border-color: var(--color-card-border);
+  border-radius: 12px;
+  background: var(--color-card-bg);
+}
+
+/* A card's own title, whatever level its panel gave it. */
+.tauri-settings .settings-setups > * > h2,
+.tauri-settings .settings-setups > * > h3,
+.tauri-settings .settings-setups > * > .director-toolbar h2,
+.tauri-settings .settings-setups > * > .user-management-heading h3 {
+  margin: 0 0 6px;
+  color: var(--color-text-primary);
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.tauri-settings .settings-setups > * > h3 + h3,
+.tauri-settings .settings-setups > * > * + h3 {
+  margin-top: 18px;
+}
+
+/* Words under a title or a field: one size and one grey. */
+.tauri-settings .settings-setups .review-preferences-note,
+.tauri-settings .settings-setups .calibration-group-note,
+.tauri-settings .settings-setups .review-preference small,
+.tauri-settings .settings-setups .director-muted,
+.tauri-settings .settings-setups .muted,
+.tauri-settings .settings-setups > * > p {
+  color: var(--color-field-help);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+/* Fields: one height, one padding and the theme's well, in every panel. */
+.tauri-settings :where(
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image']),
+    select,
+    textarea
+  ) {
+  box-sizing: border-box;
+  min-height: 2.1rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.tauri-settings :where(select) {
+  padding-right: 1.6rem;
+}
+
+.tauri-settings :where(
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image']),
+    select,
+    textarea
+  ):hover:not(:disabled, :focus-visible) {
+  border-color: var(--color-input-border-hover);
+}
+
+/* A group of fields: a box, named in the accent. */
+.tauri-settings .settings-setups .calibration-settings-group,
+.tauri-settings .settings-setups .calibration-grades,
+.tauri-settings .settings-setups .calibration-rig-group,
+.tauri-settings .settings-setups .rig-profile-form fieldset,
+.tauri-settings .settings-setups .scoring-defaults-group {
+  margin: 16px 0 0;
+  padding: 4px 16px 14px;
+  border: 1px solid var(--color-group-border);
+  border-radius: 10px;
+  background: var(--color-group-bg);
+}
+
+.tauri-settings .settings-setups .calibration-settings-group legend,
+.tauri-settings .settings-setups .calibration-grades > summary,
+.tauri-settings .settings-setups .calibration-rig-group > summary,
+.tauri-settings .settings-setups .rig-profile-form legend,
+.tauri-settings .settings-setups .scoring-defaults-group legend {
+  margin: 0 0 8px;
+  padding: 0 6px;
+  color: var(--color-group-legend);
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tauri-settings .settings-setups .calibration-grades > summary,
+.tauri-settings .settings-setups .calibration-rig-group > summary {
+  margin: 8px 0;
+  padding: 0;
+}
+
+/* A group nested in a group (a collapsible one, or a stacking choice)
+   keeps its words but not a second box. */
+.tauri-settings .settings-setups .calibration-settings-group .calibration-settings-group,
+.tauri-settings .settings-setups .calibration-grades > fieldset,
+.tauri-settings .settings-setups .calibration-rig-group > fieldset,
+.tauri-settings .settings-setups .stack-method-choices {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+/* Rows: label and help, then the control right beside them, with a
+   hairline between rows. */
+.tauri-settings .settings-setups .review-preference {
+  color: var(--color-field-label);
+  font-size: 0.93rem;
+}
+
+.tauri-settings .settings-setups .calibration-settings-group .review-preference + .review-preference,
+.tauri-settings .settings-setups .calibration-settings-group .calibration-rule-row + .calibration-rule-row,
+.tauri-settings .settings-setups .scoring-default + .scoring-default,
+.tauri-settings .settings-setups .wbpp-option + .wbpp-option {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-row-divider);
+}
+
+.tauri-settings .settings-setups .calibration-matching-group .review-preference,
+.tauri-settings .settings-setups .wbpp-option,
+.tauri-settings .settings-setups .scoring-default {
+  grid-template-columns: minmax(0, 30rem) minmax(11rem, 18rem);
+  justify-content: start;
+  column-gap: 2rem;
+}
+
+.tauri-settings .settings-setups .calibration-matching-group .calibration-rule-row:has(.calibration-rule-limits) {
+  grid-template-columns: minmax(0, 30rem) minmax(11rem, 22rem);
+}
+
+.tauri-settings .settings-setups .calibration-matching-group input:not([type='checkbox']),
+.tauri-settings .settings-setups .calibration-matching-group select,
+.tauri-settings .settings-setups .wbpp-option select,
+.tauri-settings .settings-setups .calibration-rule-setting,
+.tauri-settings .settings-setups .calibration-rule-limits {
+  justify-self: start;
+  justify-content: flex-start;
+}
+
+.tauri-settings .settings-setups .calibration-rule-setting .error-text,
+.tauri-settings .settings-setups .calibration-rule-inherited {
+  text-align: left;
+}
+
+@media (max-width: 640px) {
+  .tauri-settings .settings-setups .calibration-matching-group .review-preference,
+  .tauri-settings .settings-setups .wbpp-option,
+  .tauri-settings .settings-setups .scoring-default,
+  .tauri-settings .settings-setups .calibration-matching-group .calibration-rule-row:has(.calibration-rule-limits) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Planning's panels (Rigs, Exposure templates) inside a card: its lists
+   and forms keep their shape, in Settings' sizes and fields. */
+.tauri-settings .settings-setups.director-page .director-toolbar {
+  margin: 0 0 6px;
+}
+
+.tauri-settings .settings-setups.director-page .director-toolbar h2 {
+  font-size: 1.05rem;
+}
+
+.tauri-settings .settings-setups.director-page .director-rig-title {
+  font-size: 1rem;
+}
+
+.tauri-settings .settings-setups.director-page button {
+  min-height: 2.1rem;
+  font-size: 0.9rem;
+}
+
+.tauri-settings .settings-setups.director-page .director-rigs + .director-sites {
+  margin-top: 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-card-border);
+}
+
+.tauri-settings .settings-setups.director-page :is(
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'], [type='image']),
+    select,
+    textarea
+  ) {
+  min-height: 2.1rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.tauri-settings .settings-setups.director-page select {
+  padding-right: 1.6rem;
+}
+
+.tauri-settings .settings-setups.director-page .rig-profile-field > span:first-child {
+  color: var(--color-field-label);
+  font-size: 0.85rem;
+  opacity: 1;
+}
+
+/* An inline link that acts, such as Rigs in a note: the accent, underlined. */
+.tauri-settings .link-button {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--color-primary-alpha-50);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.tauri-settings .link-button:hover {
+  text-decoration-color: currentColor;
+}
+
+/* Buttons in a card: one height and one shape. The action that saves is
+   the green one; every other is the neutral button. */
+.tauri-settings .settings-setups :is(.save-button, .browse-button, .header-button, button:not([class])) {
+  box-sizing: border-box;
+  min-height: 2.1rem;
+  padding: 0.35rem 0.95rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.tauri-settings .settings-setups :is(.header-button, button:not([class])) {
+  border: 1px solid transparent;
+  background-color: var(--color-button-neutral-bg);
+  color: var(--color-text-primary);
+}
+
+.tauri-settings .settings-setups :is(.browse-button, .header-button, button:not([class])):hover:not(:disabled) {
+  background-color: var(--color-button-neutral-hover);
+}
+
+/* A button that cannot act yet stays readable. */
+.tauri-settings .settings-setups :is(.save-button, .browse-button, .header-button, .cancel-button, button:not([class])):is(:disabled, [aria-disabled='true']) {
+  background-color: var(--color-button-disabled-bg);
+  color: var(--color-button-disabled-text);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* A plain group of fields (Review's display choices, Backups' rows): the
+   same box and rows as the calibration groups. */
+.tauri-settings .settings-setups .settings-group {
+  min-width: 0;
+  margin: 16px 0 0;
+  padding: 4px 16px 14px;
+  border: 1px solid var(--color-group-border);
+  border-radius: 10px;
+  background: var(--color-group-bg);
+}
+
+.tauri-settings .settings-setups .settings-group > legend {
+  margin: 0 0 8px;
+  padding: 0 6px;
+  color: var(--color-group-legend);
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tauri-settings .settings-setups .settings-group > .review-preference + .review-preference {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-row-divider);
+}
+
+.tauri-settings .settings-setups .settings-group > .review-preference:not(:has(> input[type='checkbox'])),
+.tauri-settings .settings-setups .backup-field {
+  display: grid;
+  grid-template-columns: minmax(0, 30rem) minmax(11rem, 18rem);
+  justify-content: start;
+  align-items: start;
+  column-gap: 2rem;
+}
+
+.tauri-settings .settings-setups .settings-group > .review-preference > select {
+  width: 100%;
+  min-width: 0;
+}
+
+/* A label led by its chip's icon keeps the icon on its line. */
+.tauri-settings .settings-setups .review-preference .review-preference-title {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tauri-settings .settings-setups .review-preference .review-preference-title .score-chip-icon {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .tauri-settings .settings-setups .settings-group > .review-preference:not(:has(> input[type='checkbox'])),
+  .tauri-settings .settings-setups .backup-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

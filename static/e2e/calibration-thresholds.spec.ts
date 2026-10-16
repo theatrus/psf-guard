@@ -181,7 +181,7 @@ test('a thin-master flag clears when the limit is loosened globally, then for on
 
   // Loosened for every rig: the thin limit becomes three.
   let settings = await openCalibrationSettings(page);
-  const thin = settings.getByLabel('Thin master below', { exact: true });
+  const thin = settings.getByLabel('Thin master', { exact: true });
   await expect(thin).toHaveAttribute('placeholder', '5');
   await thin.fill('3');
   const saved = page.waitForResponse((response) =>
@@ -193,7 +193,7 @@ test('a thin-master flag clears when the limit is loosened globally, then for on
   panel = await calibrationPanel(page, dbId, askar);
   await expect(panel.getByText('The library calibrates this light with no findings.')).toBeVisible();
   await expect(panel.getByRole('list', { name: 'Settings that differ from the defaults' }))
-    .toContainText('Thin master below3 framesglobal');
+    .toContainText('Thin master3 framesglobal');
 
   // Back to the default: both rigs are flagged again.
   expect((await request.put('/api/settings/calibration', {
@@ -207,12 +207,12 @@ test('a thin-master flag clears when the limit is loosened globally, then for on
   const editor = page.getByRole('region', { name: `${ASKAR_RIG} calibration settings` });
   await expect(editor).toBeVisible();
   await expect(page.getByRole('button', { name: new RegExp(`^${ASKAR_RIG}`) })).toHaveAttribute('aria-expanded', 'true');
-  const own = editor.getByRole('button', { name: 'Thin master below: own value' });
+  const own = editor.getByRole('button', { name: 'Thin master: own value' });
   await expect(own).toHaveAttribute('aria-pressed', 'false');
   await expect(own.locator('xpath=ancestor::div[contains(@class, "calibration-rule-row")]'))
     .toContainText('5 frames · default');
   await own.click();
-  await editor.getByLabel('Thin master below', { exact: true }).fill('3');
+  await editor.getByLabel('Thin master', { exact: true }).fill('3');
   const rigSaved = page.waitForResponse((response) =>
     response.request().method() === 'PUT' && response.url().includes('/api/settings/calibration/rigs/'));
   await editor.getByRole('button', { name: 'Save rig' }).click();
@@ -227,7 +227,7 @@ test('a thin-master flag clears when the limit is loosened globally, then for on
   await expect(panel.getByText('The library calibrates this light with no findings.')).toBeVisible();
   await expect(panel.getByText(`Checked by ${ASKAR_RIG}'s own settings`)).toBeVisible();
   await expect(panel.getByRole('list', { name: 'Settings that differ from the defaults' }))
-    .toContainText('Thin master below3 framesthis rig');
+    .toContainText('Thin master3 framesthis rig');
   await panel.screenshot({ path: testInfo.outputPath('panel-cleared.png') });
   panel = await calibrationPanel(page, dbId, redcat);
   await expect(panel.getByRole('button', { name: /Its dark master would use only 3 frames/ })).toBeVisible();
@@ -236,9 +236,9 @@ test('a thin-master flag clears when the limit is loosened globally, then for on
   // The settings read the same after a reload.
   await page.reload();
   settings = await openCalibrationSettings(page);
-  await expect(settings.getByLabel('Thin master below', { exact: true })).toHaveValue('');
+  await expect(settings.getByLabel('Thin master', { exact: true })).toHaveValue('');
   await page.getByRole('button', { name: new RegExp(`^${ASKAR_RIG}`) }).click();
-  await expect(page.getByRole('region', { name: `${ASKAR_RIG} calibration settings` }).getByLabel('Thin master below', { exact: true }))
+  await expect(page.getByRole('region', { name: `${ASKAR_RIG} calibration settings` }).getByLabel('Thin master', { exact: true }))
     .toHaveValue('3');
 });
 
@@ -256,7 +256,7 @@ test('the calibration checks fit a phone', async ({ page, request }) => {
     .toBe(4);
   await page.goto('/');
   const settings = await openCalibrationSettings(page);
-  await expect(settings.getByLabel('Thin master below', { exact: true })).toBeVisible();
+  await expect(settings.getByLabel('Thin master', { exact: true })).toBeVisible();
   const fits = (locator: ReturnType<Page['locator']>) =>
     locator.evaluate((element) => element.scrollWidth <= element.clientWidth + 1);
   expect(await fits(settings)).toBe(true);
@@ -267,9 +267,9 @@ test('the calibration checks fit a phone', async ({ page, request }) => {
   await rig.click();
   const editor = page.getByRole('region', { name: `${ASKAR_RIG} calibration settings` });
   // The light checks start open; the other groups unfold.
-  await editor.getByRole('button', { name: 'Thin master below: own value' }).click();
-  await expect(editor.getByLabel('Thin master below', { exact: true })).toBeVisible();
-  await editor.getByText('Dark masters').click();
+  await editor.getByRole('button', { name: 'Thin master: own value' }).click();
+  await expect(editor.getByLabel('Thin master', { exact: true })).toBeVisible();
+  await editor.getByText('Dark masters', { exact: true }).click();
   await editor.getByRole('button', { name: 'Dark reach: own value' }).click();
   await expect(editor.getByLabel('Dark reach', { exact: true })).toBeVisible();
   expect(await fits(page.locator('.calibration-rig-settings'))).toBe(true);

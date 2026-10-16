@@ -9,7 +9,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "rotation_tolerance_deg",
     "group": "matching",
-    "label": "Flat rotation tolerance",
+    "label": "Flat rotation",
     "help": "How far a flat's rotator angle may sit from the light it corrects. Wider accepts a rotator that re-homes loosely; one master still takes flats within 2° of each other.",
     "effect": "matching",
     "kind": {
@@ -24,7 +24,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "focal_length_tolerance_mm",
     "group": "matching",
-    "label": "Flat focal length tolerance",
+    "label": "Flat focal length",
     "help": "How far a flat's recorded focal length may sit from the light's, as when a profile's focal length was refined. One master still takes flats within 1 mm of each other.",
     "effect": "matching",
     "kind": {
@@ -39,7 +39,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "dark_temperature_tolerance_c",
     "group": "matching",
-    "label": "Dark temperature tolerance",
+    "label": "Dark temperature",
     "help": "How far a dark's sensor temperature may sit from the light's, and a dark flat's from its flat's. Wider lets a rig that cannot hold its set point use darks shot a little warmer or cooler; one master still takes darks within 1 °C of each other.",
     "effect": "matching",
     "kind": {
@@ -80,7 +80,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "external_masters",
     "group": "matching",
-    "label": "Masters from other software",
+    "label": "External masters",
     "help": "A master from PixInsight, Siril or another tool is matched on what its header kept and used as it is.",
     "effect": "matching",
     "kind": {
@@ -88,11 +88,11 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
       "options": [
         {
           "value": "prefer",
-          "label": "Use them whenever one matches"
+          "label": "Whenever one matches"
         },
         {
           "value": "fallback",
-          "label": "Only when raw frames cannot build one"
+          "label": "Only if raw frames can't build one"
         },
         {
           "value": "ignore",
@@ -105,7 +105,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "night_zone",
     "group": "matching",
-    "label": "Night starts at noon in",
+    "label": "Rig's time zone",
     "help": "Calibration splits a rig's frames into nights at local noon, so a dusk or dawn flat run stays one session. Automatic takes noon from the site longitude its frames record (the N.I.N.A. profile's), else from its computer's clock, else from when the catalog's lights are quiet. Pick the rig's standard offset when its frames record no site or a wrong one; daylight saving moves noon by an hour, which no night notices.",
     "effect": "grades",
     "kind": {
@@ -113,7 +113,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
       "options": [
         {
           "value": "auto",
-          "label": "From its frames' site"
+          "label": "Automatic (from frames)"
         },
         {
           "value": "-12",
@@ -345,7 +345,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "flat_split_dust_pct",
     "group": "flat_groups",
-    "label": "Dust that splits flats",
+    "label": "Dust split",
     "help": "The largest dust difference two nights' flats may have and still share a master: what moved, new or vanished dust would leave in a light calibrated with the other night's flats, in percent of the sky background.",
     "effect": "matching",
     "kind": {
@@ -360,7 +360,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "flat_split_pattern_pct",
     "group": "flat_groups",
-    "label": "Light pattern that splits flats",
+    "label": "Light pattern split",
     "help": "The largest broad difference two nights' flats may have, such as a changed vignette, after a straight gradient is removed, in percent of the sky background.",
     "effect": "matching",
     "kind": {
@@ -391,7 +391,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "flat_check_age_days",
     "group": "checks",
-    "label": "Flats worth a look after",
+    "label": "Flat age warning",
     "help": "Lights whose flats were shot further away than this, but within the age limit, are worth a look.",
     "effect": "flags",
     "kind": {
@@ -407,7 +407,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "thin_master_frames",
     "group": "checks",
-    "label": "Thin master below",
+    "label": "Thin master",
     "help": "A bias or dark master built from fewer frames puts its own read noise into every light.",
     "effect": "flags",
     "kind": {
@@ -851,7 +851,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "grade_flat_carried_spots",
     "group": "grades",
-    "label": "Spots carried into a flat master",
+    "label": "Carried flat spots",
     "help": "Changing spots in most of a set's flats, which its master keeps. Decides the 'changing spots in flats' light check.",
     "effect": "grades",
     "kind": {

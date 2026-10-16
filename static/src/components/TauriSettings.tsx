@@ -1735,9 +1735,9 @@ export default function TauriSettings({
           id={`settings-panel-${currentTab}`}
           aria-labelledby={`settings-tab-${currentTab}`}
         >
-          {currentTab === 'review' && <ReviewPreferences />}
+          {currentTab === 'review' && <div className="settings-setups"><ReviewPreferences /></div>}
           {currentTab === 'databases' && (
-          <>
+          <div className="settings-setups">
           {!hasDatabases && managementAllowed && (
             <div className="welcome-message">
               <h3>🚀 Welcome to PSF Guard!</h3>
@@ -1938,22 +1938,22 @@ export default function TauriSettings({
           </div>
 
           {managementAllowed && showAddForm && !editingId && renderDatabaseForm(null)}
-          </>
+          </div>
           )}
 
-          {currentTab === 'catalogs' && <SeizaCatalogControls />}
+          {currentTab === 'catalogs' && <div className="settings-setups"><SeizaCatalogControls /></div>}
 
           {/* Planning's panels keep Planning's controls; the container adds no padding. */}
-          {currentTab === 'rigs' && <div className="director-page director-embedded"><DirectorRigs /></div>}
+          {currentTab === 'rigs' && <div className="settings-setups director-page director-embedded"><DirectorRigs /></div>}
 
-          {currentTab === 'templates' && <div className="director-page director-embedded"><TemplateLibrary /></div>}
+          {currentTab === 'templates' && <div className="settings-setups director-page director-embedded"><TemplateLibrary /></div>}
 
           {currentTab === 'sync' && (
-            <>
+            <div className="settings-setups">
               <SchedulerSyncControls databases={databases} disabled={isApplying} />
               <RemoteSyncPreviews databases={databases} disabled={isApplying} />
               <RemotePeerSync databases={databases} disabled={isApplying} />
-            </>
+            </div>
           )}
 
           {currentTab === 'setups' && (
@@ -1993,17 +1993,21 @@ export default function TauriSettings({
 
           {currentTab === 'backups' && <BackupSettings />}
 
-          {currentTab === 'server' && <DesktopServerSettings />}
-          {currentTab === 'agents' && <AgentsSettings onServerSettings={isTauri ? () => setActiveTab('server') : undefined} />}
+          {currentTab === 'server' && <div className="settings-setups"><DesktopServerSettings /></div>}
+          {currentTab === 'agents' && (
+            <div className="settings-setups">
+              <AgentsSettings onServerSettings={isTauri ? () => setActiveTab('server') : undefined} />
+            </div>
+          )}
 
           {currentTab === 'users' && (
-            <>
+            <div className="settings-setups">
               <UserManagement currentUsername={access.status.username} />
               <ApiTokenManagement
                 currentUsername={access.status.username}
                 isEditor={access.status.role === 'read_write'}
               />
-            </>
+            </div>
           )}
         </div>
 

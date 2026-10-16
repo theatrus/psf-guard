@@ -2216,8 +2216,7 @@ mod tests {
             assert!(
                 plan.calibration_settings
                     .iter()
-                    .any(|line| line.starts_with("Dark temperature tolerance")
-                        && line.ends_with("(global)")),
+                    .any(|line| line.starts_with("Dark temperature") && line.ends_with("(global)")),
                 "{plan:?}"
             );
         }
@@ -2304,7 +2303,7 @@ mod tests {
             assert!(
                 plan.calibration_settings
                     .iter()
-                    .any(|line| line.starts_with("Masters from other software")),
+                    .any(|line| line.starts_with("External masters")),
                 "{plan:?}"
             );
         }
