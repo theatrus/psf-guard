@@ -92,6 +92,7 @@ fn create_test_app(conn: Connection, cache_dir: &std::path::Path) -> (Router, Ar
     }
 
     let db_routes: Router<Arc<AppState>> = Router::new()
+        .route("/images", get(handlers::get_images))
         .route("/analysis/sequence", get(handlers::analyze_sequence))
         .route(
             "/analysis/spatial-scan",
@@ -626,4 +627,55 @@ async fn stale_filename_entries_are_ignored() {
         "stale entry must not be merged: {}",
         img1
     );
+}
+
+/// The image list tells the grid each frame's size, so its thumbnail takes
+/// the frame's shape. Frames of one camera setup share a size, read once
+/// from the header of the first that can be read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_image_list_carries_each_frames_size_from_one_header() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    seed_target_with_images(&conn, 3);
+    let tmp = tempfile::tempdir().unwrap();
+    let images = tmp.path().join("images");
+    std::fs::create_dir_all(&images).unwrap();
+    // The first frame cannot be read; the second answers for all three.
+    std::fs::write(images.join("frame_0000.fits"), b"not a fits").unwrap();
+    let cards = [
+        "SIMPLE  =                    T".to_string(),
+        format!("BITPIX  = {:>20}", 16),
+        "NAXIS   =                    2".to_string(),
+        format!("NAXIS1  = {:>20}", 3200),
+        format!("NAXIS2  = {:>20}", 3200),
+        "END".to_string(),
+    ];
+    let mut header: Vec<u8> = cards
+        .iter()
+        .flat_map(|card| format!("{card:<80}").into_bytes())
+        .collect();
+    header.resize(2880, b' ');
+    std::fs::write(images.join("frame_0001.fits"), header).unwrap();
+
+    let (app, state) = create_test_app(conn, tmp.path());
+    {
+        let mut dbs = state.databases.write().unwrap();
+        let mut ctx = (**dbs.get("test").unwrap()).clone();
+        ctx.image_dirs = vec![images.to_string_lossy().into_owned()];
+        ctx.image_dir_paths = vec![images.clone()];
+        dbs.insert("test".to_string(), Arc::new(ctx));
+    }
+
+    let (status, json) =
+        get_json(app, "/api/db/test/images?project_id=1&target_id=1&limit=10").await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    let listed = json["data"].as_array().unwrap();
+    assert_eq!(listed.len(), 3);
+    for image in listed {
+        assert_eq!(
+            image["frame_size"],
+            serde_json::json!({ "width": 3200, "height": 3200 }),
+            "{image}"
+        );
+    }
 }

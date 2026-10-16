@@ -101,6 +101,9 @@ export interface Image {
   filesystem_path: string | null;
   /** Calibrated and registered copies of this light (absent when none). */
   copies?: ImageCopy[];
+  /** The frame's size in pixels, read once per camera setup, to shape its
+   *  thumbnail. Absent until the server has read it. */
+  frame_size?: { width: number; height: number };
 }
 
 /** A calibrated or registered copy of a light that other software wrote. */

@@ -6585,12 +6585,9 @@
 }
 
 /* Time-ordered image gallery */
+/* The strip is a .filter-images grid too, and takes its gaps and padding:
+   Sequence and Images lay their cards out alike. */
 .sequence-strip {
-  --card-gap: 0.5rem;
-  --card-row-gap: 1rem;
-  display: grid;
-  gap: var(--card-row-gap) var(--card-gap);
-  padding: 1rem 1rem 0.75rem;
   align-items: flex-start;
 }
 

@@ -22,6 +22,7 @@ pub mod flat_group_use;
 pub mod flat_groups;
 pub mod flat_history;
 pub mod flat_measure;
+pub mod frame_shapes;
 pub mod handlers;
 pub mod import_job;
 pub mod master_cleanup;

@@ -213,6 +213,10 @@ pub struct ImageResponse {
     /// detail can switch to.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub copies: Vec<ImageCopy>,
+    /// The frame's size in pixels, from one header of its camera setup
+    /// (see `frame_shapes`), for shaping its thumbnail. Absent until known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame_size: Option<crate::server::frame_shapes::FrameSize>,
 }
 
 /// One calibrated or registered copy of a light.

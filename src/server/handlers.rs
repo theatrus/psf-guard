@@ -4494,107 +4494,162 @@ pub async fn get_images(
     ctx: DbContext,
     Query(params): Query<ImageQuery>,
 ) -> Result<Json<ApiResponse<Vec<ImageResponse>>>, AppError> {
-    let conn = ctx.db();
-    let conn = conn.lock().map_err(AppError::db)?;
-    let db = Database::new(&conn);
+    use crate::server::frame_shapes::{Candidate, SetupKey};
 
-    let ambiguous_names = db.ambiguous_project_names().map_err(AppError::db)?;
+    // Read the catalog under the connection's lock, then let it go before
+    // any file is touched for the frames' sizes.
+    let (mut response, setups, candidates) = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        let db = Database::new(&conn);
 
-    // Convert status string to GradingStatus enum
-    let status_filter = params.status.as_ref().and_then(|s| match s.as_str() {
-        "pending" => Some(GradingStatus::Pending),
-        "accepted" => Some(GradingStatus::Accepted),
-        "rejected" => Some(GradingStatus::Rejected),
-        _ => None,
-    });
+        let ambiguous_names = db.ambiguous_project_names().map_err(AppError::db)?;
 
-    let offset = params.offset.unwrap_or(0).max(0) as usize;
-    let limit = params.limit.unwrap_or(100).max(0) as usize;
-    let filter_name = params
-        .filter_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty());
-    let images = match filter_name {
-        // The scoped query cannot filter by filter name, so page after it.
-        Some(wanted) => db
-            .query_images_scoped(status_filter, params.project_id, params.target_id, None, 0)
-            .map_err(AppError::db)?
+        // Convert status string to GradingStatus enum
+        let status_filter = params.status.as_ref().and_then(|s| match s.as_str() {
+            "pending" => Some(GradingStatus::Pending),
+            "accepted" => Some(GradingStatus::Accepted),
+            "rejected" => Some(GradingStatus::Rejected),
+            _ => None,
+        });
+
+        let offset = params.offset.unwrap_or(0).max(0) as usize;
+        let limit = params.limit.unwrap_or(100).max(0) as usize;
+        let filter_name = params
+            .filter_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        let images = match filter_name {
+            // The scoped query cannot filter by filter name, so page after it.
+            Some(wanted) => db
+                .query_images_scoped(status_filter, params.project_id, params.target_id, None, 0)
+                .map_err(AppError::db)?
+                .into_iter()
+                .filter(|(image, _, _)| image.filter_name.eq_ignore_ascii_case(wanted))
+                .skip(offset)
+                .take(limit)
+                .collect(),
+            None => db
+                .query_images_scoped(
+                    status_filter,
+                    params.project_id,
+                    params.target_id,
+                    Some(limit),
+                    offset,
+                )
+                .map_err(AppError::db)?,
+        };
+
+        let mut exposure_groups = std::collections::HashMap::new();
+        let projects: std::collections::HashSet<_> = images
+            .iter()
+            .map(|(image, _, _)| image.project_id)
+            .collect();
+        for project_id in projects {
+            exposure_groups.insert(
+                project_id,
+                crate::server::exposure_groups::cached_project_groups(&ctx, &conn, project_id)?,
+            );
+        }
+
+        let guids: Vec<&str> = images
+            .iter()
+            .filter_map(|(image, _, _)| image.guid.as_deref())
+            .collect();
+        let mut copies = crate::frame_derivatives::derivatives_for_lights(&conn, &guids)
+            .map_err(|error| AppError::InternalError(format!("reading copies: {error:#}")))?;
+
+        // Each frame's camera setup, and a few frames of each to read the size
+        // from. A delayed remote upload may still be arriving: not one of them.
+        let mut setups = Vec::with_capacity(images.len());
+        let mut candidates: std::collections::HashMap<SetupKey, Vec<Candidate>> =
+            std::collections::HashMap::new();
+
+        let response: Vec<ImageResponse> = images
             .into_iter()
-            .filter(|(image, _, _)| image.filter_name.eq_ignore_ascii_case(wanted))
-            .skip(offset)
-            .take(limit)
-            .collect(),
-        None => db
-            .query_images_scoped(
-                status_filter,
-                params.project_id,
-                params.target_id,
-                Some(limit),
-                offset,
-            )
-            .map_err(AppError::db)?,
+            .map(|(img, proj_name, target_name)| {
+                let copies = img
+                    .guid
+                    .as_deref()
+                    .and_then(|guid| copies.remove(guid))
+                    .unwrap_or_default()
+                    .iter()
+                    .map(ImageCopy::from)
+                    .collect();
+                let metadata: serde_json::Value = serde_json::from_str(&img.metadata)
+                    .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+                let setup = SetupKey::of(&img, &metadata);
+                let file_name = metadata["FileName"]
+                    .as_str()
+                    .and_then(|name| name.split(&['\\', '/'][..]).next_back())
+                    .filter(|name| !name.is_empty());
+                if let Some(file_name) = file_name
+                    && !ctx.requires_delayed_file_identity(img.id)
+                {
+                    let frames = candidates.entry(setup.clone()).or_default();
+                    if frames.len() < 3 {
+                        frames.push(Candidate {
+                            image: img.clone(),
+                            target_name: target_name.clone(),
+                            file_name: file_name.to_string(),
+                        });
+                    }
+                }
+                setups.push(setup);
+
+                let project_display_name = match img.profile_id.as_ref() {
+                    Some(profile_id) => {
+                        display_project_name(&proj_name, profile_id, &ambiguous_names)
+                    }
+                    None => proj_name.clone(),
+                };
+
+                ImageResponse {
+                    id: img.id,
+                    exposure_group: exposure_groups
+                        .get(&img.project_id)
+                        .and_then(|groups| groups.by_image.get(&img.id))
+                        .cloned(),
+                    project_id: img.project_id,
+                    project_name: proj_name,
+                    project_display_name,
+                    target_id: img.target_id,
+                    target_name,
+                    acquired_date: img.acquired_date,
+                    filter_name: img.filter_name,
+                    grading_status: img.grading_status,
+                    reject_reason: img.reject_reason,
+                    metadata,
+                    filesystem_path: None, // Not calculated for bulk operations for performance
+                    copies,
+                    frame_size: None,
+                }
+            })
+            .collect();
+        (response, setups, candidates)
     };
 
-    let mut exposure_groups = std::collections::HashMap::new();
-    let projects: std::collections::HashSet<_> = images
-        .iter()
-        .map(|(image, _, _)| image.project_id)
-        .collect();
-    for project_id in projects {
-        exposure_groups.insert(
-            project_id,
-            crate::server::exposure_groups::cached_project_groups(&ctx, &conn, project_id)?,
-        );
+    // One header per camera setup, kept for the life of the server.
+    let resolver_ctx = std::sync::Arc::clone(&ctx.0);
+    let sizes = crate::server::frame_shapes::sizes_for(
+        &ctx.frame_shapes,
+        candidates,
+        move |frame: &Candidate| {
+            find_fits_file(
+                &resolver_ctx,
+                &frame.image,
+                &frame.target_name,
+                &frame.file_name,
+            )
+            .ok()
+        },
+    )
+    .await;
+    for (image, setup) in response.iter_mut().zip(&setups) {
+        image.frame_size = sizes.get(setup).copied();
     }
-
-    let guids: Vec<&str> = images
-        .iter()
-        .filter_map(|(image, _, _)| image.guid.as_deref())
-        .collect();
-    let mut copies = crate::frame_derivatives::derivatives_for_lights(&conn, &guids)
-        .map_err(|error| AppError::InternalError(format!("reading copies: {error:#}")))?;
-
-    let response: Vec<ImageResponse> = images
-        .into_iter()
-        .map(|(img, proj_name, target_name)| {
-            let copies = img
-                .guid
-                .as_deref()
-                .and_then(|guid| copies.remove(guid))
-                .unwrap_or_default()
-                .iter()
-                .map(ImageCopy::from)
-                .collect();
-            let metadata: serde_json::Value = serde_json::from_str(&img.metadata)
-                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-
-            let project_display_name = match img.profile_id.as_ref() {
-                Some(profile_id) => display_project_name(&proj_name, profile_id, &ambiguous_names),
-                None => proj_name.clone(),
-            };
-
-            ImageResponse {
-                id: img.id,
-                exposure_group: exposure_groups
-                    .get(&img.project_id)
-                    .and_then(|groups| groups.by_image.get(&img.id))
-                    .cloned(),
-                project_id: img.project_id,
-                project_name: proj_name,
-                project_display_name,
-                target_id: img.target_id,
-                target_name,
-                acquired_date: img.acquired_date,
-                filter_name: img.filter_name,
-                grading_status: img.grading_status,
-                reject_reason: img.reject_reason,
-                metadata,
-                filesystem_path: None, // Not calculated for bulk operations for performance
-                copies,
-            }
-        })
-        .collect();
 
     Ok(Json(ApiResponse::success(response)))
 }
@@ -4793,6 +4848,8 @@ pub async fn get_image(
         metadata,
         filesystem_path: filesystem_path_string,
         copies,
+        // The detail draws the frame itself; only the grid needs the hint.
+        frame_size: None,
     };
 
     Ok(Json(ApiResponse::success(response)))

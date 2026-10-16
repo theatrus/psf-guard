@@ -71,3 +71,22 @@ describe('ImageCard text', () => {
     expect(container.querySelector('.image-signals')).toBeEmptyDOMElement();
   });
 });
+
+describe('ImageCard preview shape', () => {
+  const preview = (frame_size?: { width: number; height: number }) =>
+    card({ image: { ...image, frame_size } }).container.querySelector<HTMLElement>('.image-preview')!;
+
+  it('takes the frame\'s own shape, so a square or 4:3 sensor fills its card', () => {
+    expect(preview({ width: 3200, height: 3200 }).style.aspectRatio).toBe('1 / 1');
+    expect(preview({ width: 4096, height: 3072 }).style.aspectRatio).toBe('1.3333333333333333 / 1');
+  });
+
+  it('keeps the 3:2 from the stylesheet until the size is known', () => {
+    expect(preview().style.aspectRatio).toBe('');
+  });
+
+  it('holds an odd ROI between a portrait 3:5 and a 5:2 strip', () => {
+    expect(preview({ width: 6000, height: 500 }).style.aspectRatio).toBe('2.5 / 1');
+    expect(preview({ width: 500, height: 6000 }).style.aspectRatio).toBe('0.6 / 1');
+  });
+});
