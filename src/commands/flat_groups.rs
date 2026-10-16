@@ -337,8 +337,8 @@ fn light_reports(
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
-    let nights = crate::calibration::Nights::load(conn);
-    let boundary = nights.catalog();
+    let nights_of = crate::calibration::Nights::load(conn);
+    let boundary = nights_of.catalog();
     let mut out = Vec::new();
     for (id, target, filter, metadata) in rows {
         let Some(name) = crate::utils::extract_filename(&metadata) else {
@@ -352,7 +352,9 @@ fn light_reports(
         let mut nights: Vec<String> = selected
             .flat
             .iter()
-            .filter_map(|f| Some(nights.night_of_frame(&f.rig_uuid, &f.frame_uuid, f.captured_at?)))
+            .filter_map(|f| {
+                Some(nights_of.night_of_frame(&f.rig_uuid, &f.frame_uuid, f.captured_at?))
+            })
             .collect();
         nights.sort();
         nights.dedup();
@@ -360,8 +362,9 @@ fn light_reports(
         let mut master: Vec<String> = delivered
             .flat
             .iter()
-            .filter_map(|f| f.captured_at)
-            .map(|at| crate::calibration::night_of(at, boundary))
+            .filter_map(|f| {
+                Some(nights_of.night_of_frame(&f.rig_uuid, &f.frame_uuid, f.captured_at?))
+            })
             .collect();
         master.sort();
         master.dedup();
