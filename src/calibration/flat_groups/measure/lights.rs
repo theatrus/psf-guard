@@ -451,19 +451,25 @@ impl Book {
     }
 
     /// The families a light at `angle` has flats of at that angle, within
-    /// the rig's `tolerance`.
+    /// the rig's `tolerance`, or whose flats measure alike across a span
+    /// that holds it ([`super::model::AlikeRange`]): measured to be its
+    /// light path either way.
     pub(crate) fn at_recorded(&self, families: &[usize], angle: f64, tolerance: f64) -> Vec<usize> {
         families
             .iter()
             .copied()
             .filter(|family| {
-                self.families[*family].sessions.iter().any(|index| {
-                    self.sessions[*index]
-                        .row
-                        .rotation
-                        .filter(|r| r.is_finite())
-                        .is_some_and(|flat| wrap(angle - flat).abs() <= tolerance)
-                })
+                self.families[*family]
+                    .alike_ranges
+                    .iter()
+                    .any(|range| range.holds(angle, tolerance))
+                    || self.families[*family].sessions.iter().any(|index| {
+                        self.sessions[*index]
+                            .row
+                            .rotation
+                            .filter(|r| r.is_finite())
+                            .is_some_and(|flat| wrap(angle - flat).abs() <= tolerance)
+                    })
             })
             .collect()
     }

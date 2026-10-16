@@ -32,6 +32,9 @@ struct FamilyReport {
     rotation: Option<f64>,
     /// Its measured angle range: "100.1–104.4°", "72.6° & 82.2°".
     angles: String,
+    /// The spans its flats measure alike across: "101.9–104.2° (5 pairs,
+    /// 3 nights)".
+    alike_ranges: Vec<String>,
     groups: Vec<Vec<SessionReport>>,
     splits: Vec<String>,
 }
@@ -71,6 +74,9 @@ struct LightReport {
     family_by: Option<String>,
     /// Its flats' recorded angles.
     flat_angles: Vec<f64>,
+    /// The span its family measures alike across, when its master's flats
+    /// lie at another angle inside it.
+    alike_range: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -286,6 +292,18 @@ fn families(book: &Book) -> Vec<FamilyReport> {
                         .position(|f| f.key == family.key)
                         .unwrap_or(0),
                 ),
+                alike_ranges: family
+                    .alike_ranges
+                    .iter()
+                    .map(|range| {
+                        format!(
+                            "{} ({} pairs, {} nights)",
+                            range.label(),
+                            range.pairs,
+                            range.nights
+                        )
+                    })
+                    .collect(),
                 groups,
                 splits,
             }
@@ -389,6 +407,14 @@ fn light_reports(
             family: family.map(|family| family.label.clone()),
             family_by,
             flat_angles,
+            alike_range: family
+                .and_then(|family| family.alike_range.as_ref())
+                .map(|range| {
+                    format!(
+                        "{} at {:.1}° ({} pairs, {} nights)",
+                        range.label, range.flats_angle, range.pairs, range.nights
+                    )
+                }),
         });
     }
     Ok(out)

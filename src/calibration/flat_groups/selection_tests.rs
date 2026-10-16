@@ -1532,3 +1532,103 @@ fn the_header_alone_never_widens_the_rotation_tolerance() {
     assert!(selected.flat_family.is_none());
     assert!(selected.match_tolerances().light_rotation.is_recorded());
 }
+
+/// C925's case: Hα at 104.0° on 09-01, then new dust, then 101.9° and
+/// 104.2° flats on four nights that measure alike with each other. A light
+/// at 100.9° shot before the dust (and before the 09-01 flats, so outside
+/// the change's window) has no flats at its angle on its side.
+/// The family measures 101.9–104.2° alike, which holds both the light and
+/// the 104.0° flats from its own side: it takes them, read at 104.0°, and
+/// the panel says why. A light after the dust takes its own angle's flats.
+#[test]
+fn a_familys_alike_range_serves_a_light_from_its_own_side() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let session = |name: &'static str, captured: &'static str, rotation: f64| Session {
+        name,
+        captured,
+        filter: "Ha",
+        rotation: Some(rotation),
+        dusty: false,
+    };
+    let dust_day = chrono::NaiveDate::from_ymd_opt(2026, 9, 5)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp();
+    let conn = faked_library(
+        temp.path(),
+        &[
+            session("ha-104-before", "2026-09-01T14:00", 104.0),
+            session("ha-102-a", "2026-09-10T14:00", 101.9),
+            session("ha-104-a", "2026-09-11T14:00", 104.2),
+            session("ha-102-b", "2026-09-12T14:00", 101.9),
+            session("ha-104-b", "2026-09-13T14:00", 104.2),
+        ],
+        |a, b| {
+            let before = |row: &super::store::ResponseRow| row.captured_first.unwrap() < dust_day;
+            if before(a) != before(b) {
+                0.03
+            } else {
+                0.002
+            }
+        },
+    );
+    let book = super::load_book(&conn).unwrap();
+    assert_eq!(book.families.len(), 1, "{:?}", book.families);
+    assert_eq!(book.events.len(), 1, "{:?}", book.events);
+    let ranges: Vec<String> = book.families[0]
+        .alike_ranges
+        .iter()
+        .map(|range| range.label())
+        .collect();
+    assert_eq!(ranges, ["101.9–104.2°"]);
+
+    let before = light(temp.path(), "2026-08-31T04:00:00", 100.9);
+    let selected = select_for_light(&conn, &before).unwrap();
+    assert_eq!(names(&selected.flat), ["ha-104-before"]);
+    let family = selected.flat_family.as_ref().expect("its family");
+    assert_eq!(
+        selected.match_tolerances().light_rotation,
+        seiza_calibration::LightRotation::Measured { degrees: 104.0 }
+    );
+    let range = family
+        .alike_range
+        .as_ref()
+        .expect("the range it was served by");
+    assert_eq!(
+        (range.label.as_str(), range.flats_angle),
+        ("101.9–104.2°", 104.0)
+    );
+    let said = super::describe_family(family).unwrap();
+    assert!(
+        said.contains("Flats at 104.0°: this family measures 101.9–104.2° alike"),
+        "{said}"
+    );
+
+    // After the dust: its own angle's flats, read as recorded.
+    let after = light(temp.path(), "2026-09-14T04:00:00", 101.9);
+    let selected = select_for_light(&conn, &after).unwrap();
+    assert!(
+        names(&selected.flat)[0].starts_with("ha-102"),
+        "{:?}",
+        names(&selected.flat)
+    );
+    assert!(selected.match_tolerances().light_rotation.is_recorded());
+    assert!(!names(&selected.flat).contains(&"ha-104-before".to_string()));
+
+    // Shot while the dust arrived: its side unknown, the range hands it
+    // nothing from either side.
+    let during = light(temp.path(), "2026-09-05T04:00:00", 100.9);
+    let selected = select_for_light(&conn, &during).unwrap();
+    assert!(
+        selected
+            .flat_family
+            .as_ref()
+            .is_some_and(|family| family.alike_range.is_none()),
+        "{:?}",
+        selected.flat_family
+    );
+    assert!(!names(&selected.flat).contains(&"ha-104-before".to_string()));
+}

@@ -205,6 +205,46 @@ pub struct AngleTerm {
     pub broad: f64,
 }
 
+/// How many pairs of a family's flats at two angles must measure alike
+/// before the span they connect is trusted as one light path: two. One
+/// pair can be one twilight's accident (a gradient both sessions share, a
+/// rotator that never moved between them), and the comparison's noise
+/// allowance already passes a single borderline pair; a second pair
+/// repeats the measurement.
+pub const ALIKE_RANGE_MIN_PAIRS: usize = 2;
+
+/// How many flat nights those pairs must reach: two. Pairs from one night
+/// share its sky, its dust and its temperature; two nights show the angle
+/// does not matter on more than one occasion.
+pub const ALIKE_RANGE_MIN_NIGHTS: usize = 2;
+
+/// A span of angles over which a family's flats measure alike: the
+/// family's angle term, from its own pairs. Flats anywhere in it serve the
+/// family's lights at any angle in it, each within the rig's tolerance,
+/// from the light's side of every change.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct AlikeRange {
+    /// The span, going round from `low` to `high`.
+    pub span: AngleSpan,
+    /// Pairs at two angles in it that measured alike, none of them across
+    /// a change.
+    pub pairs: usize,
+    /// The flat nights those pairs reach.
+    pub nights: usize,
+}
+
+impl AlikeRange {
+    /// Whether `angle` lies in the range, within `tolerance`.
+    pub fn holds(&self, angle: f64, tolerance: f64) -> bool {
+        self.span.gap_to(angle) <= tolerance
+    }
+
+    /// "101.9–104.2°".
+    pub fn label(&self) -> String {
+        self.span.label()
+    }
+}
+
 /// A family of sessions: one rig, filter, sensor mode and rotation cluster.
 #[derive(Debug, Clone, Serialize)]
 pub struct Family {
@@ -226,6 +266,10 @@ pub struct Family {
     pub groups: Vec<Vec<usize>>,
     /// Indices into the book's boundaries, between consecutive groups.
     pub boundaries: Vec<usize>,
+    /// The spans its flats measure alike across ([`AlikeRange`]), none
+    /// inside another, by their low angle. Empty unless enough pairs
+    /// measured alike.
+    pub alike_ranges: Vec<AlikeRange>,
 }
 
 /// A continuous run of lights of one profile.
@@ -427,6 +471,7 @@ impl Book {
         book.find_spanning();
         book.build_events();
         book.build_angle_terms();
+        book.build_alike_ranges();
         book
     }
 
@@ -557,6 +602,7 @@ impl Book {
                     sessions: draft.sessions,
                     groups: Vec::new(),
                     boundaries: Vec::new(),
+                    alike_ranges: Vec::new(),
                 });
             }
         }
@@ -1155,6 +1201,167 @@ impl Book {
         }
     }
 
+    /// Each family's [`AlikeRange`]s: from the pairs of its flats at two
+    /// angles (further apart than the rig's tolerance) in one group, with
+    /// no change of the rig that reaches its filter between them. The
+    /// alike pairs span the range; one measured apart inside it, at the
+    /// rig's tolerance around it, rules it out, so a narrower range that
+    /// leaves the pair out stands instead. A range needs
+    /// [`ALIKE_RANGE_MIN_PAIRS`] alike pairs reaching
+    /// [`ALIKE_RANGE_MIN_NIGHTS`] nights. Only measured pairs count: a
+    /// header's angle never makes or widens one.
+    fn build_alike_ranges(&mut self) {
+        for family_index in 0..self.families.len() {
+            let ranges = self.alike_ranges_of(family_index);
+            self.families[family_index].alike_ranges = ranges;
+        }
+    }
+
+    fn alike_ranges_of(&self, family_index: usize) -> Vec<AlikeRange> {
+        let family = &self.families[family_index];
+        let Some(limits) = self.limits(&family.rig_uuid) else {
+            return Vec::new();
+        };
+        let tolerance = limits.rotation;
+        // (low angle, high angle, alike, nights) for every usable pair.
+        let mut pairs: Vec<(f64, f64, bool, [&str; 2])> = Vec::new();
+        for group in &family.groups {
+            for (i, a) in group.iter().enumerate() {
+                for b in &group[i + 1..] {
+                    let (Some(x), Some(y)) = (self.angle(*a), self.angle(*b)) else {
+                        continue;
+                    };
+                    if rotation_gap(x, y) <= tolerance || self.change_between(family, *a, *b) {
+                        continue;
+                    }
+                    let Some(distance) = self.pair_distance(*a, *b, &limits) else {
+                        continue;
+                    };
+                    pairs.push((
+                        x,
+                        y,
+                        distance <= 1.0,
+                        [
+                            self.sessions[*a].row.night.as_str(),
+                            self.sessions[*b].row.night.as_str(),
+                        ],
+                    ));
+                }
+            }
+        }
+        let ends: Vec<f64> = {
+            let mut ends: Vec<f64> = pairs
+                .iter()
+                .filter(|pair| pair.2)
+                .flat_map(|pair| [pair.0, pair.1])
+                .collect();
+            ends.sort_by(f64::total_cmp);
+            ends.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+            ends
+        };
+        const ON: f64 = 1e-6;
+        let mut found: Vec<AlikeRange> = Vec::new();
+        for low in &ends {
+            for high in &ends {
+                // A span runs the short way round: wider than a half turn,
+                // its ends are nearer the other way.
+                let width = (high - low).rem_euclid(360.0);
+                if width <= tolerance || width >= 180.0 {
+                    continue;
+                }
+                let span = AngleSpan {
+                    low: *low,
+                    high: *high,
+                };
+                let offset = |angle: f64| (angle - low).rem_euclid(360.0);
+                let inside = |angle: f64| offset(angle) <= width + ON;
+                // A pair apart near the range rules it out.
+                if pairs.iter().any(|pair| {
+                    !pair.2 && span.gap_to(pair.0) <= tolerance && span.gap_to(pair.1) <= tolerance
+                }) {
+                    continue;
+                }
+                let mut edges: Vec<(f64, f64)> = Vec::new();
+                let mut nights: BTreeSet<&str> = BTreeSet::new();
+                for pair in pairs.iter().filter(|pair| pair.2) {
+                    let (a, b) = (offset(pair.0), offset(pair.1));
+                    // The pair's own short arc must lie in the span.
+                    if inside(pair.0)
+                        && inside(pair.1)
+                        && ((a - b).abs() - rotation_gap(pair.0, pair.1)).abs() < 1e-3
+                    {
+                        edges.push((a.min(b), a.max(b)));
+                        nights.extend(pair.3);
+                    }
+                }
+                if edges.len() < ALIKE_RANGE_MIN_PAIRS || nights.len() < ALIKE_RANGE_MIN_NIGHTS {
+                    continue;
+                }
+                // The alike pairs must connect the whole span, gaps no wider
+                // than the rig's tolerance.
+                edges.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut reach = 0.0_f64;
+                for (from, to) in &edges {
+                    if *from <= reach + tolerance {
+                        reach = reach.max(*to);
+                    }
+                }
+                if edges[0].0 > ON || reach + ON < width {
+                    continue;
+                }
+                found.push(AlikeRange {
+                    span,
+                    pairs: edges.len(),
+                    nights: nights.len(),
+                });
+            }
+        }
+        // Keep the widest, then those not inside a kept one.
+        found.sort_by(|a, b| {
+            let width = |r: &AlikeRange| (r.span.high - r.span.low).rem_euclid(360.0);
+            width(b).total_cmp(&width(a)).then(b.pairs.cmp(&a.pairs))
+        });
+        let mut kept: Vec<AlikeRange> = Vec::new();
+        for range in found {
+            let within = kept.iter().any(|k| {
+                k.span.gap_to(range.span.low) == 0.0 && k.span.gap_to(range.span.high) == 0.0
+            });
+            if !within {
+                kept.push(range);
+            }
+        }
+        kept.sort_by(|a, b| a.span.low.total_cmp(&b.span.low));
+        kept
+    }
+
+    /// Whether a change of the rig that reaches the family's filter falls
+    /// between two of its sessions.
+    fn change_between(&self, family: &Family, a: usize, b: usize) -> bool {
+        let (a, b) = (&self.sessions[a], &self.sessions[b]);
+        let (earlier, later) = if a.first <= b.first { (a, b) } else { (b, a) };
+        self.events.iter().any(|event| {
+            event.rig_uuid == family.rig_uuid
+                && event.applies_to(family.filter.as_deref())
+                && event.start < later.first
+                && event.end > earlier.last
+        })
+    }
+
+    /// The range of `family` that holds both a light at `light` and a flat
+    /// at `flat`, within the rig's `tolerance`.
+    pub fn alike_range(
+        &self,
+        family: usize,
+        light: f64,
+        flat: f64,
+        tolerance: f64,
+    ) -> Option<&AlikeRange> {
+        self.families[family]
+            .alike_ranges
+            .iter()
+            .find(|range| range.holds(light, tolerance) && range.holds(flat, tolerance))
+    }
+
     /// Whether two sessions are of one rig and family key but different
     /// rotation clusters, each with its angle recorded: a pair at two
     /// angles, whether or not they measured alike.
@@ -1644,6 +1851,146 @@ mod tests {
 
     fn new_dust(x: f32) -> Spot {
         Spot { x, ..spot(x, true) }
+    }
+
+    /// Ha at 100°, 103.6° and 107.2° over five nights, one group: A 100°
+    /// on day 0, B 103.6° on day 1, C 100° on day 2, D and E 107.2° on days
+    /// 3 and 4. `comparisons` are the pairs measured; every other pair was
+    /// not compared.
+    fn three_angles(comparisons: Vec<ComparisonRow>, same_night: bool) -> Book {
+        let at = |key: &str, rotation: f64, day: i64| ResponseRow {
+            night: if same_night {
+                "2026-09-01".into()
+            } else {
+                format!("2026-09-{:02}", day + 1)
+            },
+            ..row(key, "HA", "Ha", Some(rotation), day * DAY)
+        };
+        Book::build(
+            vec![
+                at("a", 100.0, 0),
+                at("b", 103.6, 1),
+                at("c", 100.0, 2),
+                at("d", 107.2, 3),
+                at("e", 107.2, 4),
+            ],
+            comparisons,
+            vec![],
+            vec![],
+            |_| rules(),
+        )
+    }
+
+    fn alike(a: &str, b: &str) -> ComparisonRow {
+        cmp(a, b, 0.002, 0.002, vec![])
+    }
+
+    fn spans(book: &Book) -> Vec<(String, usize, usize)> {
+        book.families
+            .iter()
+            .flat_map(|family| family.alike_ranges.iter())
+            .map(|range| (range.label(), range.pairs, range.nights))
+            .collect()
+    }
+
+    #[test]
+    fn a_familys_alike_pairs_grant_the_span_they_connect() {
+        let book = three_angles(
+            vec![
+                alike("a", "b"),
+                alike("b", "c"),
+                alike("b", "d"),
+                alike("b", "e"),
+            ],
+            false,
+        );
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert_eq!(spans(&book), vec![("100.0–107.2°".to_string(), 4, 5)]);
+        // A light at 101° takes flats at 107.2°, each within the rig's 2°.
+        assert!(book.alike_range(0, 101.0, 107.2, 2.0).is_some());
+        assert!(book.alike_range(0, 98.5, 107.2, 2.0).is_some());
+        assert!(book.alike_range(0, 97.5, 107.2, 2.0).is_none());
+    }
+
+    #[test]
+    fn a_pair_apart_inside_a_span_shrinks_it() {
+        // A (100°) and E (107.2°), four days apart and not neighbours,
+        // measured apart: no span holds both, but each side's stands.
+        let book = three_angles(
+            vec![
+                alike("a", "b"),
+                alike("b", "c"),
+                alike("b", "d"),
+                alike("b", "e"),
+                cmp("a", "e", 0.03, 0.002, vec![]),
+            ],
+            false,
+        );
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert_eq!(
+            spans(&book),
+            vec![
+                ("100.0–103.6°".to_string(), 2, 3),
+                ("103.6–107.2°".to_string(), 2, 3)
+            ]
+        );
+        assert!(book.alike_range(0, 100.0, 107.2, 2.0).is_none());
+        assert!(book.alike_range(0, 100.0, 103.6, 2.0).is_some());
+    }
+
+    #[test]
+    fn too_few_alike_pairs_grant_nothing() {
+        // One pair.
+        let book = three_angles(vec![alike("a", "b")], false);
+        assert!(spans(&book).is_empty());
+        // Two pairs, but one night.
+        let book = three_angles(vec![alike("a", "b"), alike("b", "c")], true);
+        assert!(spans(&book).is_empty());
+        // Two pairs on three nights.
+        let book = three_angles(vec![alike("a", "b"), alike("b", "c")], false);
+        assert_eq!(spans(&book), vec![("100.0–103.6°".to_string(), 2, 3)]);
+    }
+
+    #[test]
+    fn alike_pairs_across_a_change_grant_nothing() {
+        // 100° on days 0 and 11, 103.6° on days 1 and 10, with new dust
+        // between days 1 and 10 at 103.6°. Before it, 100° and 103.6° are
+        // alike once; 103.6° on day 1 and 100° on day 11 also measured
+        // alike, but across the change, so it is not counted: one pair.
+        let at = |key: &str, rotation: f64, day: i64| ResponseRow {
+            night: format!("2026-09-{:02}", day + 1),
+            ..row(key, "HA", "Ha", Some(rotation), day * DAY)
+        };
+        let sessions = vec![
+            at("a", 100.0, 0),
+            at("b", 103.6, 1),
+            at("c", 103.6, 10),
+            at("d", 100.0, 11),
+        ];
+        let book = Book::build(
+            sessions.clone(),
+            vec![
+                alike("a", "b"),
+                cmp("b", "c", 0.02, 0.002, vec![new_dust(900.0)]),
+                alike("b", "d"),
+            ],
+            vec![],
+            vec![],
+            |_| rules(),
+        );
+        assert_eq!(book.families.len(), 1, "{:?}", book.families);
+        assert_eq!(book.events.len(), 1, "{:?}", book.events);
+        assert!(spans(&book).is_empty(), "{:?}", spans(&book));
+        // Without the change, the two pairs grant it.
+        let book = Book::build(
+            sessions,
+            vec![alike("a", "b"), alike("b", "c"), alike("b", "d")],
+            vec![],
+            vec![],
+            |_| rules(),
+        );
+        assert!(book.events.is_empty());
+        assert_eq!(spans(&book), vec![("100.0–103.6°".to_string(), 2, 3)]);
     }
 
     #[test]

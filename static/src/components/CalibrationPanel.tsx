@@ -452,6 +452,15 @@ function KindAccount({ kind, parts, folded, level, lightNight, hrefFor }: KindAc
                 {kind.family.label}
                 {' · '}
                 <span className="light-calibration-muted">{familyBasisLabel(kind.family)}</span>
+                {kind.family.alike_range && (
+                  <>
+                    {' · '}
+                    <span className="light-calibration-muted" data-testid="calibration-flat-alike-range">
+                      flats at {kind.family.alike_range.flats_angle.toFixed(1)}°, measured alike across{' '}
+                      {kind.family.alike_range.label} ({plural(kind.family.alike_range.pairs, 'pair')})
+                    </span>
+                  </>
+                )}
               </span>
             </p>
           )}

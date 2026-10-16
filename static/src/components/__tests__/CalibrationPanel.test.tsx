@@ -257,6 +257,23 @@ describe('CalibrationPanel', () => {
     expect(screen.getByTestId('calibration-flat-chosen-by')).toHaveTextContent('follow the flats of');
   });
 
+  it('says over which span its family measures alike when its flats lie at another angle', async () => {
+    show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
+      chosen_by: 'Flats at 104.0°: this family measures 101.9–104.2° alike (5 pairs over 3 nights), '
+        + 'so the stack reads the light at 104.0°',
+      family: {
+        key: 'OIII:s-oiii104', label: 'OIII at 101.3–104.4°', by: 'angle', at_recorded: true,
+        light_angle: 100.9, shift: 0, candidates: ['OIII at 101.3–104.4°'],
+        alike_range: { flats_angle: 104, low: 101.9, high: 104.2, label: '101.9–104.2°', pairs: 5, nights: 3 },
+      },
+    })] });
+    fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
+    expect(await screen.findByTestId('calibration-flat-alike-range'))
+      .toHaveTextContent('flats at 104.0°, measured alike across 101.9–104.2° (5 pairs)');
+    expect(screen.getByTestId('calibration-flat-chosen-by'))
+      .toHaveTextContent('this family measures 101.9–104.2° alike');
+  });
+
   it('names what confirmed a move its own pixels made', async () => {
     show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
       family: {

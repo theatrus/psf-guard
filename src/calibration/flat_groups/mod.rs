@@ -522,6 +522,36 @@ pub struct FlatFamily {
     /// gave it flats at another angle (seiza-calibration's
     /// `LightRotation`).
     pub light_rotation: LightRotation,
+    /// When those flats lie at another angle inside a span the family's
+    /// flats measure alike across: the span and its evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alike_range: Option<AlikeRangeNote>,
+}
+
+/// A family's [`model::AlikeRange`] as a light's account names it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AlikeRangeNote {
+    /// The angle of the flats the light's master is built from.
+    pub flats_angle: f64,
+    pub low: f64,
+    pub high: f64,
+    /// "101.9–104.2°".
+    pub label: String,
+    pub pairs: usize,
+    pub nights: usize,
+}
+
+impl AlikeRangeNote {
+    pub fn of(range: &model::AlikeRange, flats_angle: f64) -> Self {
+        Self {
+            flats_angle,
+            low: range.span.low,
+            high: range.span.high,
+            label: range.label(),
+            pairs: range.pairs,
+            nights: range.nights,
+        }
+    }
 }
 
 impl FlatFamily {
@@ -550,6 +580,7 @@ impl FlatFamily {
             shift: choice.shift,
             candidates: choice.candidates.iter().map(|f| label(*f)).collect(),
             light_rotation: LightRotation::Recorded,
+            alike_range: None,
         }
     }
 
@@ -594,7 +625,7 @@ pub fn describe_family(family: &FlatFamily) -> Option<String> {
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    match &family.basis {
+    let basis = match &family.basis {
         FamilyBasis::Angle => family.label.contains(" & ").then(|| {
             format!(
                 "Flats of the {} family, whose flats at those angles measure alike ({angle})",
@@ -636,7 +667,23 @@ pub fn describe_family(family: &FlatFamily) -> Option<String> {
             }
         )),
         FamilyBasis::Disputed { .. } => describe_family_flag(family),
+    };
+    let range = family.alike_range.as_ref().map(describe_alike_range);
+    match (basis, range) {
+        (Some(basis), Some(range)) => Some(format!("{basis}. {range}")),
+        (basis, range) => basis.or(range),
     }
+}
+
+/// Why a light's flats at another angle serve it through its family's
+/// measured angle term: "Flats at 104.0°: this family measures 101.9–104.2°
+/// alike (5 pairs over 3 nights), so the stack reads the light at 104.0°".
+pub fn describe_alike_range(range: &AlikeRangeNote) -> String {
+    format!(
+        "Flats at {:.1}°: this family measures {} alike ({} pairs over {} nights), so the \
+         stack reads the light at {:.1}°",
+        range.flats_angle, range.label, range.pairs, range.nights, range.flats_angle
+    )
 }
 
 /// Why a light is flagged for its flat family, or `None` when it is not:

@@ -2871,6 +2871,21 @@ export interface FlatFamilyNote {
   shift: number;
   /** The families within the angle prior, nearest first. */
   candidates: string[];
+  /** When its master's flats lie at another angle inside a span the
+   *  family's flats measure alike across: the span and its evidence. */
+  alike_range?: FlatAlikeRangeNote;
+}
+
+/** A span of angles a flat family's own flats measure alike across. */
+export interface FlatAlikeRangeNote {
+  /** The angle of the flats the light's master is built from. */
+  flats_angle: number;
+  low: number;
+  high: number;
+  /** "101.9–104.2°". */
+  label: string;
+  pairs: number;
+  nights: number;
 }
 
 /** A measured change near a light, as its account names it. Fractions. */
