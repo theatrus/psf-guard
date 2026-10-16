@@ -39,8 +39,14 @@ const calibrationChoiceLine = (result: SchedulerSyncResponse) => {
     calibration.used_anyway > 0 ? `${calibration.used_anyway} used anyway` : null,
     calibration.cleared > 0 ? `${calibration.cleared} back to their grade` : null,
   ].filter((part): part is string => part !== null);
+  const frames = parts.length > 0;
+  // A person's splits and joins of flat groups, and lights' flat sides.
+  if ((calibration.flat_groups ?? 0) > 0) parts.push(`${calibration.flat_groups} flat group split(s) or join(s)`);
+  if ((calibration.flat_lights ?? 0) > 0) parts.push(`${calibration.flat_lights} light flat choice(s)`);
   if (parts.length === 0) return null;
-  return `Calibration choices: ${parts.join(', ')}. Masters built from these frames change.`;
+  return `Calibration choices: ${parts.join(', ')}. ${frames
+    ? 'Masters built from these frames change.'
+    : 'The flats these lights take may change.'}`;
 };
 
 export default function SchedulerSyncControls({

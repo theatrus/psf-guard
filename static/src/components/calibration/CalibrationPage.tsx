@@ -23,6 +23,7 @@ import { browseGroups } from './flatGroupBrowse';
 import { indexFlatGroups } from './flatGroupIndex';
 import { findPair } from './flatGroupLabels';
 import { useFlatGroups } from './useFlatGroups';
+import { useFlatChoiceAccess, useFlatGroupOverride } from './useFlatGroupChoices';
 import { useFlatGroupUse } from '../../hooks/useFlatGroupLights';
 import { scopeRigsLabel, useProjectScope, widenText, type CalibrationScope } from './calibrationScope';
 import { useCalibrationActions } from './useCalibrationActions';
@@ -318,6 +319,17 @@ function CalibrationFrames({
 }) {
   const { filters, page, session: sessionId, frame: frameUuid, selectSession, selectFrame, ratio, openRatio } = state;
   const { selectGroup, chooseGroup } = state;
+  // Splits and joins: an editor's, on a server that allows database
+  // management; everyone sees them.
+  const canChoose = useFlatChoiceAccess();
+  const groupOverride = useFlatGroupOverride(dbId);
+  const groupEdit = canChoose
+    ? {
+        send: (request: Parameters<typeof groupOverride.mutate>[0]) => groupOverride.mutate(request),
+        busy: groupOverride.isPending,
+        error: groupOverride.error instanceof Error ? groupOverride.error.message : null,
+      }
+    : undefined;
   const listed = useMemo(() => listFilters(filters), [filters]);
   // A scoped list is asked again when its scope's revision moves on.
   const revision = filters.project !== undefined ? scopeRevision ?? null : null;
@@ -650,7 +662,7 @@ function CalibrationFrames({
                 <p className="calibration-empty">No flat groups match these filters.</p>
               )}
               <FlatGroupList families={groupBrowse.families} selected={groupEntry?.key}
-                showRig={rigsInView.length > 1} scopeName={scope?.name} onSelect={chooseGroup} />
+                showRig={rigsInView.length > 1} scopeName={scope?.name} onSelect={chooseGroup} edit={groupEdit} />
             </>
           ) : (
             <>
@@ -707,6 +719,7 @@ function CalibrationFrames({
               onShowNight={showNight}
               shownSession={frames.find((frame) => frame.frame_uuid === frameUuid)?.session ?? null}
               opening={opening}
+              edit={groupEdit}
             />
           )}
           {browse === 'sessions' && sessionId && (

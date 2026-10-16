@@ -257,6 +257,10 @@ pub struct CalibrationSelection {
     /// The response family the flats come from, when measured grouping
     /// chose one (see [`flat_groups::lights`]).
     pub flat_family: Option<flat_groups::FlatFamily>,
+    /// A person's choices for this light's flats: those in force, and
+    /// those that found nothing to apply to (see
+    /// [`flat_groups::overrides`]).
+    pub flat_choices: Vec<flat_groups::ChoiceNote>,
 }
 
 /// Which kinds of usable frame the library holds for one light's sensor,
@@ -464,11 +468,15 @@ pub struct CalibrationChoiceCounts {
     pub used_anyway: usize,
     /// Choices taken away, leaving the grade to decide.
     pub cleared: usize,
+    /// Splits and joins of flat groups set or reset.
+    pub flat_groups: usize,
+    /// Lights whose side of a flat change, or group, was set or reset.
+    pub flat_lights: usize,
 }
 
 impl CalibrationChoiceCounts {
     pub fn total(&self) -> usize {
-        self.kept_out + self.used_anyway + self.cleared
+        self.kept_out + self.used_anyway + self.cleared + self.flat_groups + self.flat_lights
     }
 }
 
@@ -1315,6 +1323,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         .context("creating PSF Guard calibration tables")?;
     conn.execute_batch(night::SITE_TABLE_SQL)
         .context("creating PSF Guard calibration tables")?;
+    conn.execute_batch(flat_groups::override_store::TABLES_SQL)
+        .context("creating PSF Guard calibration tables")?;
     // A catalog that has just had its tables created is already at the
     // current version; one that had them from an older build is stamped with
     // whatever it was, and the ladder below carries it up.
@@ -1889,7 +1899,12 @@ pub fn sync_library(
         Some(&rules),
     )?;
     let folded = twins::fold_merged(destination, &merged)?;
-    let (quality, choices) = quality::sync_quality(source, destination, &merged)?;
+    let (quality, mut choices) = quality::sync_quality(source, destination, &merged)?;
+    // A person's splits, joins and choices for lights, by their flats and
+    // lights, the newer winning.
+    let flat_choices = flat_groups::override_store::sync(source, destination, &merged)?;
+    choices.flat_groups = flat_choices.groups;
+    choices.flat_lights = flat_choices.lights;
     Ok(CalibrationSyncOutcome {
         rigs,
         rig_bindings,
@@ -2136,18 +2151,196 @@ impl LibrarySnapshot {
 
     /// [`Self::select`] by the given rules.
     pub(crate) fn select_with(&self, light: &FrameMeta, rules: Arc<Rules>) -> CalibrationSelection {
+        let choices = self.light_choices(light, &rules);
+        self.select_choosing(light, rules, choices)
+    }
+
+    /// What a person can choose for this light's flats, with measured
+    /// grouping: the changes it can be put on a side of and the groups it
+    /// can take. `selected` is its selection.
+    pub(crate) fn flat_choice_options(
+        &self,
+        light: &FrameMeta,
+        selected: &CalibrationSelection,
+    ) -> Option<flat_groups::ChoiceOptions> {
+        let rules = &selected.rules;
+        let book = &self.flat_book;
+        if rules.flat_grouping != rules::FlatGrouping::Measured || book.families.is_empty() {
+            return None;
+        }
+        let rig = rules::light_rig_uuid(light);
+        let choices = self.light_choices(light, rules);
+        // The changes its flats were chosen around.
+        let mut around: HashSet<String> = HashSet::new();
+        let mut basis = Some(&selected.flat_basis);
+        while let Some(current) = basis {
+            if let Some(event) = current.event() {
+                around.insert(event.key.clone());
+            }
+            basis = match current {
+                flat_groups::FlatBasis::Undetermined { then, .. } => then.as_deref(),
+                _ => None,
+            };
+        }
+        let changes = match light.timestamp {
+            Some(at) => book
+                .events
+                .iter()
+                .enumerate()
+                .filter(|(_, event)| {
+                    event.rig_uuid == rig && event.applies_to(light.filter.as_deref())
+                })
+                .filter_map(|(index, event)| {
+                    let chosen = choices.side_of(index);
+                    let inside = event.side_of(at).is_none();
+                    if !(inside || chosen.is_some() || around.contains(&event.key)) {
+                        return None;
+                    }
+                    let placement = book.place(event, at);
+                    let note = flat_groups::EventNote::of(event);
+                    Some(flat_groups::ChangeOption {
+                        key: event.key.clone(),
+                        start: event.start,
+                        end: event.end,
+                        what: note.what,
+                        camera_side: event.camera_side,
+                        filters: note.filters.iter().map(|f| f.to_uppercase()).collect(),
+                        side: placement.side(),
+                        by: placement.name(),
+                        chosen,
+                        inside,
+                    })
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let mut families = self.flat_family_compatible(light, rules);
+        if let Some(pick) = &choices.group
+            && !families.contains(&pick.family)
+        {
+            families.push(pick.family);
+        }
+        let current_family = selected
+            .flat_family
+            .as_ref()
+            .and_then(|family| book.families.iter().position(|f| f.key == family.key));
+        let in_use: HashSet<usize> = selected
+            .flat
+            .iter()
+            .filter_map(|frame| book.session_of_frame(&frame.frame_uuid))
+            .collect();
+        let mut groups = Vec::new();
+        for family in families {
+            for (index, sessions) in book.families[family].groups.iter().enumerate() {
+                let Some(note) = flat_groups::GroupNote::of(book, family, index) else {
+                    continue;
+                };
+                groups.push((
+                    Some(family) == current_family,
+                    flat_groups::GroupOption {
+                        response_key: book.sessions[sessions[0]].row.response_key.clone(),
+                        family: note.family,
+                        first_night: note.first_night,
+                        last_night: note.last_night,
+                        sessions: note.sessions,
+                        current: sessions.iter().any(|s| in_use.contains(s)),
+                        chosen: choices
+                            .group
+                            .as_ref()
+                            .is_some_and(|pick| pick.family == family && pick.group == index),
+                    },
+                ));
+            }
+        }
+        // The groups it takes now first, then its own family's, newest
+        // first.
+        groups.sort_by(|(a_own, a), (b_own, b)| {
+            b.current
+                .cmp(&a.current)
+                .then(b_own.cmp(a_own))
+                .then(a.family.cmp(&b.family))
+                .then(b.last_night.cmp(&a.last_night))
+        });
+        Some(flat_groups::ChoiceOptions {
+            changes,
+            groups: groups.into_iter().map(|(_, group)| group).collect(),
+        })
+    }
+
+    /// A person's choices for this light's flats, resolved against the
+    /// book. Grouping by time keeps every choice and applies none.
+    fn light_choices(
+        &self,
+        light: &FrameMeta,
+        rules: &Rules,
+    ) -> flat_groups::overrides::ResolvedChoices {
+        let book = &self.flat_book;
+        let Some(name) = light
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+        else {
+            return Default::default();
+        };
+        let mut choices = book.light_choices(
+            &name,
+            light.filter.as_deref(),
+            &rules::light_rig_uuid(light),
+            light.timestamp,
+        );
+        if rules.flat_grouping != rules::FlatGrouping::Measured {
+            let reason = "this rig groups its flats by time, so no change or group is measured";
+            let mut kept = std::mem::take(&mut choices.orphaned);
+            kept.extend(
+                choices
+                    .sides
+                    .drain(..)
+                    .map(|(_, _, row)| (row, reason.to_string())),
+            );
+            if let Some(pick) = choices.group.take() {
+                kept.push((pick.row, reason.to_string()));
+            }
+            choices.orphaned = kept;
+        }
+        choices
+    }
+
+    /// [`Self::select_with`], with a person's choices for the light.
+    fn select_choosing(
+        &self,
+        light: &FrameMeta,
+        rules: Arc<Rules>,
+        choices: flat_groups::overrides::ResolvedChoices,
+    ) -> CalibrationSelection {
         let mut selected = CalibrationSelection {
             rules: Arc::clone(&rules),
             ..Default::default()
         };
         let policy = rules.external_masters;
-        let family = self.flat_family(light, &rules);
+        // A group a person chose names the family too.
+        let family = match &choices.group {
+            Some(pick) => Some(flat_groups::lights::FamilyChoice {
+                family: pick.family,
+                basis: flat_groups::lights::FamilyBasis::Person,
+                candidates: vec![pick.family],
+                light_angle: light
+                    .rotator_position
+                    .filter(|a| a.is_finite())
+                    .or(self.flat_book.families[pick.family].rotation)
+                    .unwrap_or(0.0),
+                shift: 0.0,
+                at_recorded: false,
+            }),
+            None => self.flat_family(light, &rules),
+        };
         // The family serves the light's flats when it has flats at the
-        // angle the light recorded, or its own pixels chose it. A family
-        // its lights only pointed to is a Check, not flats.
-        let serving = family
-            .as_ref()
-            .filter(|choice| choice.at_recorded || choice.by_pixels());
+        // angle the light recorded, its own pixels chose it, or a person
+        // did. A family its lights only pointed to is a Check, not flats.
+        let serving = family.as_ref().filter(|choice| {
+            choice.at_recorded
+                || choice.by_pixels()
+                || choice.basis == flat_groups::lights::FamilyBasis::Person
+        });
         // Flats of the serving family at another angle than the light's,
         // admitted by measurement: they stay candidates only where nothing
         // at the light's own angle can serve it (below), so a light that
@@ -2187,7 +2380,7 @@ impl LibrarySnapshot {
                 }
                 CalibrationKind::DarkFlat => false,
                 CalibrationKind::Flat => {
-                    match self.family_admits(serving, light, candidate, &rules) {
+                    match self.family_admits(serving, light, candidate, &rules, &choices) {
                         Some(admitted) => {
                             if admitted && !self.at_lights_angle(light, candidate, &rules) {
                                 off_angle.insert(candidate.frame_uuid.clone());
@@ -2227,7 +2420,8 @@ impl LibrarySnapshot {
             }
         }
 
-        if !off_angle.is_empty() {
+        // A group a person chose keeps its flats at any angle of its family.
+        if !off_angle.is_empty() && choices.group.is_none() {
             // One at the light's own angle that can reach it leaves them
             // nothing to do; one across a known change from the light
             // could serve it only as its own angle's flats would, carried
@@ -2235,11 +2429,11 @@ impl LibrarySnapshot {
             let own_angle_serves = selected.flat.iter().any(|frame| {
                 !off_angle.contains(&frame.frame_uuid)
                     && self.at_lights_angle(light, frame, &rules)
-                    && self.not_across_a_known_change(light, frame)
+                    && self.not_across_a_known_change(light, frame, &choices)
             });
             let keep = |frame: &CalibrationFrame| {
                 !off_angle.contains(&frame.frame_uuid)
-                    || (!own_angle_serves && self.not_across_a_known_change(light, frame))
+                    || (!own_angle_serves && self.not_across_a_known_change(light, frame, &choices))
             };
             selected.flat.retain(|frame| keep(frame));
             selected.kept_out.retain(|frame| keep(frame));
@@ -2267,8 +2461,39 @@ impl LibrarySnapshot {
             };
             selected.flat.sort_by_key(tier);
         }
-        self.keep_unknown_angles_last(light, &rules, &mut selected.flat);
-        self.choose_flats_around_changes(light, &rules, &mut selected);
+        if let Some(pick) = &choices.group {
+            // The group a person chose, over every change: its flats only.
+            let book = &self.flat_book;
+            let sessions = &book.families[pick.family].groups[pick.group];
+            let kept: Vec<CalibrationFrame> = selected
+                .flat
+                .iter()
+                .filter(|frame| {
+                    book.session_of_frame(&frame.frame_uuid)
+                        .is_some_and(|session| sessions.contains(&session))
+                })
+                .cloned()
+                .collect();
+            if kept.is_empty() {
+                // None of its flats match this light: matched as though
+                // nobody chose, and the choice shows why it is not used.
+                let mut fallback = choices.clone();
+                fallback.group = None;
+                fallback.orphaned.push((
+                    pick.row.clone(),
+                    "none of that group's flats match this light".into(),
+                ));
+                return self.select_choosing(light, rules, fallback);
+            }
+            selected.flat = kept;
+            if let Some(group) = flat_groups::GroupNote::of(book, pick.family, pick.group) {
+                selected.flat_basis = flat_groups::FlatBasis::Group { group };
+            }
+        } else {
+            self.keep_unknown_angles_last(light, &rules, &mut selected.flat, &choices);
+            self.choose_flats_around_changes(light, &rules, &mut selected, &choices);
+        }
+        selected.flat_choices = choice_notes(&choices);
         selected.flat_family = family.map(|choice| {
             let mut family = flat_groups::FlatFamily::of(&self.flat_book, &choice);
             family.light_rotation = family_light_rotation(light, &selected.flat, &rules);
@@ -2318,6 +2543,24 @@ impl LibrarySnapshot {
         sort_candidates(&mut selected.dark_flat, light.timestamp);
         selected
     }
+}
+
+/// A light's choices as its account shows them: in force first, then those
+/// that found nothing to apply to.
+fn choice_notes(choices: &flat_groups::overrides::ResolvedChoices) -> Vec<flat_groups::ChoiceNote> {
+    choices
+        .group
+        .iter()
+        .map(|pick| &pick.row)
+        .chain(choices.sides.iter().map(|(_, _, row)| row))
+        .filter_map(|row| flat_groups::ChoiceNote::of(row, None))
+        .chain(
+            choices
+                .orphaned
+                .iter()
+                .filter_map(|(row, reason)| flat_groups::ChoiceNote::of(row, Some(reason.clone()))),
+        )
+        .collect()
 }
 
 /// How the stacker's gate reads a light whose flats came from its measured
@@ -2427,10 +2670,19 @@ impl LibrarySnapshot {
         light: &FrameMeta,
         candidate: &CalibrationFrame,
         rules: &Rules,
+        choices: &flat_groups::overrides::ResolvedChoices,
     ) -> Option<bool> {
         let family = family?;
         let book = &self.flat_book;
         match book.family_of_frame(&candidate.frame_uuid) {
+            // A person chose a group of this family: any of its flats, the
+            // group picked out after.
+            Some(of)
+                if of == family.family
+                    && family.basis == flat_groups::lights::FamilyBasis::Person =>
+            {
+                Some(true)
+            }
             Some(of) if of == family.family => {
                 let angle = self.measured_angle(candidate, rules);
                 let at_angle = angle.is_some_and(|flat| {
@@ -2447,7 +2699,7 @@ impl LibrarySnapshot {
                             )
                         })
                         .is_some()
-                        && self.on_lights_side_of_changes(light, candidate)
+                        && self.on_lights_side_of_changes(light, candidate, choices)
                 };
                 Some(
                     at_angle
@@ -2484,7 +2736,12 @@ impl LibrarySnapshot {
     /// Whether a flat lies on no known other side of a measured change from
     /// the light: on its side of every change whose side for the light is
     /// known.
-    fn not_across_a_known_change(&self, light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
+    fn not_across_a_known_change(
+        &self,
+        light: &FrameMeta,
+        candidate: &CalibrationFrame,
+        choices: &flat_groups::overrides::ResolvedChoices,
+    ) -> bool {
         let book = &self.flat_book;
         let rig = rules::light_rig_uuid(light);
         let Some(at) = light.timestamp else {
@@ -2494,7 +2751,7 @@ impl LibrarySnapshot {
             .iter()
             .filter(|event| event.rig_uuid == rig && event.applies_to(light.filter.as_deref()))
             .all(
-                |event| match flat_groups::place_light(book, event, at).side() {
+                |event| match flat_groups::place_light(book, choices, event, at).side() {
                     Some(side) => candidate
                         .captured_at
                         .is_none_or(|captured| event.side_of(captured) == Some(side)),
@@ -2507,7 +2764,12 @@ impl LibrarySnapshot {
     /// the light's rig that reaches its filter, the light's side known for
     /// each: a light shot while a change happened takes no flats through
     /// an alike range.
-    fn on_lights_side_of_changes(&self, light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
+    fn on_lights_side_of_changes(
+        &self,
+        light: &FrameMeta,
+        candidate: &CalibrationFrame,
+        choices: &flat_groups::overrides::ResolvedChoices,
+    ) -> bool {
         let book = &self.flat_book;
         let rig = rules::light_rig_uuid(light);
         let (Some(at), Some(captured)) = (light.timestamp, candidate.captured_at) else {
@@ -2517,7 +2779,7 @@ impl LibrarySnapshot {
             .iter()
             .filter(|event| event.rig_uuid == rig && event.applies_to(light.filter.as_deref()))
             .all(
-                |event| match flat_groups::place_light(book, event, at).side() {
+                |event| match flat_groups::place_light(book, choices, event, at).side() {
                     Some(side) => event.side_of(captured) == Some(side),
                     None => false,
                 },
@@ -2550,6 +2812,7 @@ impl LibrarySnapshot {
         light: &FrameMeta,
         rules: &Rules,
         flats: &mut Vec<CalibrationFrame>,
+        choices: &flat_groups::overrides::ResolvedChoices,
     ) {
         if rules.flat_grouping != rules::FlatGrouping::Measured
             || light
@@ -2568,7 +2831,12 @@ impl LibrarySnapshot {
             match light.timestamp {
                 Some(at) => book
                     .events_for(&rig, light.filter.as_deref())
-                    .filter_map(|event| Some((event, book.place(event, at).side()?)))
+                    .filter_map(|event| {
+                        Some((
+                            event,
+                            flat_groups::place_light(book, choices, event, at).side()?,
+                        ))
+                    })
                     .collect(),
                 None => Vec::new(),
             };
@@ -2602,6 +2870,7 @@ impl LibrarySnapshot {
         light: &FrameMeta,
         rules: &Rules,
         selected: &mut CalibrationSelection,
+        choices: &flat_groups::overrides::ResolvedChoices,
     ) {
         use flat_groups::{EventNote, FlatBasis};
         if rules.flat_grouping != rules::FlatGrouping::Measured {
@@ -2623,7 +2892,7 @@ impl LibrarySnapshot {
         }
         let placements: Vec<(usize, flat_groups::model::Placement)> = events
             .iter()
-            .map(|(index, event)| (*index, flat_groups::place_light(&book, event, at)))
+            .map(|(index, event)| (*index, flat_groups::place_light(&book, choices, event, at)))
             .collect();
         let side_of = |frame: &CalibrationFrame, event: &flat_groups::model::Event| {
             frame
@@ -3613,6 +3882,13 @@ pub struct KindExplanation {
     /// difference between them, fractions of the background.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alike: Option<MeasuredAlike>,
+    /// Flats only: a person's choices for this light, in force or orphaned.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<flat_groups::ChoiceNote>,
+    /// Flats only, with measured grouping: the changes a person could put
+    /// this light on a side of, and the groups it could take.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub choice_options: Option<flat_groups::ChoiceOptions>,
 }
 
 /// Nights of one master whose flats were measured against each other and
@@ -3693,6 +3969,27 @@ pub struct RefusedFrames {
     pub reason: String,
 }
 
+/// The changes a light's Calibration panel offers it a side of: those it
+/// was shot during, those its flats were chosen around, and those it has a
+/// side of already (see [`LibrarySnapshot::flat_choice_options`]).
+pub(crate) fn offered_flat_changes(
+    conn: &Connection,
+    light: &FrameMeta,
+) -> Result<HashSet<String>> {
+    let snapshot = LibrarySnapshot::load(conn)?;
+    let selected = snapshot.select(light);
+    Ok(snapshot
+        .flat_choice_options(light, &selected)
+        .map(|options| {
+            options
+                .changes
+                .into_iter()
+                .map(|change| change.key)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<CalibrationExplanation> {
     let nights = Nights::load(conn);
     let night = |frame: &CalibrationFrame| {
@@ -3701,7 +3998,8 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
             |at| nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at),
         )
     };
-    let selected = select_for_light(conn, light)?;
+    let snapshot = LibrarySnapshot::load(conn)?;
+    let selected = snapshot.select(light);
     let light_signature = light_signature(light);
     let suspect_reasons = quality::suspect_reasons(conn)?;
     let file_of = |frame: &CalibrationFrame| {
@@ -3848,6 +4146,14 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
                         .clone()
                         .filter(|family| flat_groups::describe_family(family).is_some())
                 })
+                .flatten(),
+            choices: if kind == CalibrationKind::Flat {
+                selected.flat_choices.clone()
+            } else {
+                Vec::new()
+            },
+            choice_options: (kind == CalibrationKind::Flat)
+                .then(|| snapshot.flat_choice_options(light, &selected))
                 .flatten(),
             kind: kind.as_str().to_string(),
             master: FrameSpan::of(

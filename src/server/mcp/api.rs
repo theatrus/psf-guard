@@ -387,6 +387,10 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "Recorded calibration masters: sources, statistics, projects using them",
     ),
     (
+        "/db/{db}/calibrations/flat-groups",
+        "Flat groups per rig: families, groups, splits and joins (measured or by hand, with any conflict), change events; ?project",
+    ),
+    (
         "/db/{db}/calibrations/duplicates",
         "Calibration exposures recorded more than once, and what a repair would merge",
     ),

@@ -17,11 +17,14 @@
 //! - [`lights`]: which response family a light's flats come from: the
 //!   rotator's angle epochs, the candidates within the angle prior, and
 //!   what the lights' own pixels said.
+//! - [`overrides`]: a person's splits, joins and choices for lights,
+//!   applied over what the measurements make.
 //! - [`rows`]: the numbers those take and give.
 
 pub use seiza_calibration::flat_response::{choice, evidence, metric};
 pub mod lights;
 pub mod model;
+pub mod overrides;
 pub mod rows;
 
 #[cfg(test)]
@@ -33,6 +36,7 @@ mod tests {
         for (name, source) in [
             ("lights.rs", include_str!("lights.rs")),
             ("model.rs", include_str!("model.rs")),
+            ("overrides.rs", include_str!("overrides.rs")),
             ("rows.rs", include_str!("rows.rs")),
         ] {
             // Only the code: each file's tests may borrow helpers.

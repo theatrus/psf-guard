@@ -204,7 +204,7 @@ pub fn run(
             .map(|event| EventReport {
                 start: when(event.start),
                 end: when(event.end),
-                what: flat_groups::describe_spots(&event.spots, event.dust, event.broad),
+                what: flat_groups::describe_what(event),
                 dust_pct: pct(event.dust),
                 broad_pct: pct(event.broad),
                 camera_side: event.camera_side,

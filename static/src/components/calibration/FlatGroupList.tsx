@@ -2,6 +2,8 @@ import { Fragment } from 'react';
 import type { FamilyEntry, GroupEdge, GroupEntry } from './flatGroupBrowse';
 import { groupName, splitShortReason } from './flatGroupBrowse';
 import { nightSpan, percent, plural } from './flatGroupLabels';
+import type { GroupEditing } from './FlatGroupDetail';
+import { handLabel } from './useFlatGroupChoices';
 
 interface FlatGroupListProps {
   families: FamilyEntry[];
@@ -11,20 +13,41 @@ interface FlatGroupListProps {
   /** The project in scope, for the title of a neighbour outside it. */
   scopeName?: string;
   onSelect: (key: string) => void;
+  /** Join and reset at an edge; absent for a viewer who may not. */
+  edit?: GroupEditing;
 }
 
 /** What an edge says inline: "Change · new dust 1.6%", "Split · pattern 2.6%". */
 function edgeText(edge: GroupEdge): string {
+  if (edge.split?.by_hand === 'split') return 'Split by you';
   if (edge.split) return `${edge.event ? 'Change' : 'Split'} · ${splitShortReason(edge.split)}`;
   const event = edge.event!;
   const what = event.what.split(':')[0];
   return `Change · ${/dust/.test(what) ? `${what} ${percent(event.dust_pct)}` : `pattern ${percent(event.broad_pct)}`}`;
 }
 
-function EdgeRow({ edge, title }: { edge: GroupEdge; title: string }) {
+function EdgeRow({ edge, title, edit }: { edge: GroupEdge; title: string; edit?: GroupEditing }) {
+  const split = edge.split;
+  const hand = split ? handLabel(split) : null;
+  const choice = split?.choice ?? null;
   return (
-    <li className="flat-group-edge" data-kind={edge.event ? 'event' : 'split'} data-testid="flat-group-edge" title={title}>
-      <span aria-hidden="true">↕</span> {edgeText(edge)}
+    <li className="flat-group-edge" data-kind={edge.event ? 'event' : 'split'} data-testid="flat-group-edge"
+      data-hand={hand ? 'true' : undefined} title={title}>
+      <span aria-hidden="true">↕</span> <span>{edgeText(edge)}</span>
+      {hand && split?.by_hand !== 'split' && <span className="flat-group-hand-tag">{hand}</span>}
+      {choice?.conflict && <span className="flat-group-hand-tag" data-conflict="true">conflict</span>}
+      {edit && split && (
+        <button type="button" className="calibration-link-button flat-group-edge-action"
+          data-testid={choice ? 'flat-group-list-reset' : 'flat-group-list-join'} disabled={edit.busy}
+          aria-label={choice
+            ? `Reset the ${choice.choice === 'join' ? 'join' : 'split'} at ${split.after_night}`
+            : `Join the groups either side of ${split.after_night}`}
+          onClick={() => edit.send(choice
+            ? { choice: 'reset', anchor_frame: choice.anchor_frame }
+            : { choice: 'join', after_response: split.after_response, before_response: split.before_response })}>
+          {choice ? 'Reset' : 'Join'}
+        </button>
+      )}
     </li>
   );
 }
@@ -43,6 +66,10 @@ export function GroupMarks({ entry, scopeName }: { entry: GroupEntry; scopeName?
           title={`${plural(entry.unmeasured.length, 'night')} of its flats ${waiting > 0 ? 'not measured yet' : 'too few to measure'}`}>
           Partly measured
         </span>
+      )}
+      {entry.joins.length > 0 && (
+        <span className="calibration-badge flat-group-mark" data-mark="hand"
+          title={`${plural(entry.joins.length, 'measured split')} joined by you inside it`}>Joined by you</span>
       )}
       {entry.newer?.event && (
         <span className="calibration-badge flat-group-mark" data-mark="change"
@@ -69,7 +96,7 @@ export function GroupMarks({ entry, scopeName }: { entry: GroupEntry; scopeName?
  * split or change between neighbours drawn between them, so the list reads
  * as a timeline. Each group opens its detail.
  */
-export default function FlatGroupList({ families, selected, showRig, scopeName, onSelect }: FlatGroupListProps) {
+export default function FlatGroupList({ families, selected, showRig, scopeName, onSelect, edit }: FlatGroupListProps) {
   return (
     <nav className="calibration-sessions flat-group-list" aria-label="Flat groups">
       <ul>
@@ -106,7 +133,7 @@ export default function FlatGroupList({ families, selected, showRig, scopeName, 
                     </button>
                   </li>
                   {next && skipped === 0 && entry.older && (
-                    <EdgeRow edge={entry.older} title={entry.older.split?.reason ?? ''} />
+                    <EdgeRow edge={entry.older} title={entry.older.split?.reason ?? ''} edit={edit} />
                   )}
                   {next && skipped > 0 && (
                     <li className="flat-group-edge" data-kind="gap">

@@ -128,6 +128,8 @@ filters remain available.
 | Captured image whose GUID the source has never seen, when the destination already holds a row it minted itself (import or upload) for the same target, file name, and capture time within 2 s | That row | Update it in place; it takes the source GUID and capture fields, keeps a reviewed grade |
 | Captured image whose GUID the source has never seen, when the destination catalogued the same frame from its calibrated copy (no raw frame yet) on the same target, with matching capture time, exposure and filter | That row | Update it in place; it takes the source GUID and the raw file name, keeps a reviewed grade, and its calibrated record stops being the light's own file |
 | Calibrated or registered copy record (`psf_guard_frame_derivative`) | `derivative_uuid`; its light by image GUID | Insert or update; skip a record whose light did not come across, or whose light already has its own record of that kind |
+| Flat group split or join by hand (`psf_guard_flat_group_override`) | First flat UUID of the session the edge comes before; skipped when the destination lacks that flat | Newer `chosen_at` wins, a reset included |
+| A light's flat side or group by hand (`psf_guard_flat_light_choice`) | Image GUID plus change key; skipped when the destination lacks the light | Newer `chosen_at` wins, a reset included |
 | Existing reviewed grade during merge | Image GUID | Destination wins |
 | Existing Pending grade during merge | Image GUID | Fill from source |
 | Explicit grade push | Image GUID | Source grade and reason win |

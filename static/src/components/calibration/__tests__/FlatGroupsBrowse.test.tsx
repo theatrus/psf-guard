@@ -266,7 +266,13 @@ describe('browsing flat groups', () => {
     ]);
     // The split between R's groups, inline with its reason; and the change
     // after G's newest group.
-    expect(within(list).getAllByTestId('flat-group-edge').map((row) => row.textContent?.trim())).toEqual([
+    // Its text, without the Join a person who may change groups is offered.
+    const edgeText = (row: HTMLElement) => [...row.childNodes]
+      .filter((node) => node.nodeName !== 'BUTTON')
+      .map((node) => node.textContent)
+      .join('')
+      .trim();
+    expect(within(list).getAllByTestId('flat-group-edge').map(edgeText)).toEqual([
       '↕ Change · new dust 1.6%',
       '↕ Change · new dust 1.6%',
       '↕ Change · pattern 2.6%',

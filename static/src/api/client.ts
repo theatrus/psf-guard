@@ -107,6 +107,7 @@ import type { GuidFillReport, GuidReport,
   CalibrationFramePreviewDescriptor,
   CalibrationQualityStatus,
   FlatGroupsView,
+  FlatLightChoiceOptions,
   FlatGroupUseView,
   FlatSessionPlace,
   FlatMeasureStatus,
@@ -1798,6 +1799,62 @@ export const apiClient = {
       { params: project === undefined ? {} : { project } }
     );
     if (!data.data) throw new Error(data.error || 'Failed to read the flat groups');
+    return data.data;
+  },
+
+  /** Split a family's groups at a session, join two neighbouring groups,
+   *  or reset either. Behind the database-management gate. */
+  setFlatGroupOverride: async (
+    dbId: string,
+    request: {
+      choice: 'split' | 'join' | 'reset';
+      after_response?: string;
+      before_response?: string;
+      anchor_frame?: string;
+    }
+  ): Promise<{ anchor_frame: string; choice: 'split' | 'join' | null }> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<
+      ApiResponse<{ anchor_frame: string; choice: 'split' | 'join' | null }>
+    >(dbPath(dbId, '/calibrations/flat-groups/overrides'), request);
+    if (!data.data) throw new Error(data.error || 'Failed to change the flat groups');
+    return data.data;
+  },
+
+  /** Put lights before or after a change, give them a group's flats, or
+   *  reset their choices. Behind the database-management gate. */
+  setFlatLightChoice: async (
+    dbId: string,
+    request: {
+      image_ids: number[];
+      whole_session?: boolean;
+      choice: 'before' | 'after' | 'group' | 'reset';
+      change_key?: string;
+      group_response?: string;
+    }
+  ): Promise<{ lights: number; without_guid: number; skipped: number }> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<
+      ApiResponse<{ lights: number; without_guid: number; skipped: number }>
+    >(
+      dbPath(dbId, '/calibrations/flat-choices'),
+      request
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to set the flat choice');
+    return data.data;
+  },
+
+  /** The changes a set of lights were shot during. */
+  getFlatLightChoiceOptions: async (
+    dbId: string,
+    imageIds: number[]
+  ): Promise<FlatLightChoiceOptions> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<FlatLightChoiceOptions>>(
+      dbPath(dbId, '/calibrations/flat-choices/options'),
+      { image_ids: imageIds }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read the flat changes');
     return data.data;
   },
 

@@ -180,6 +180,9 @@
   --color-flat-group-2: rgb(235 180 85);
   --color-flat-group-3: rgb(125 205 150);
   --color-flat-group-4: rgb(205 140 230);
+  /* A split, join or flat side a person chose over the measurements. */
+  --color-flat-by-hand: rgb(186 150 255);
+  --color-flat-by-hand-bg: rgb(186 150 255 / 12%);
 
   /* Night and hour marks in the gaps of the Images grid and the Sequence
      strip: a line where a night or an hour begins, its label, and a faint

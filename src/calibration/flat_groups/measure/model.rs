@@ -30,6 +30,9 @@
 
 use super::lights::{AngleEpochs, FamilyEvidence};
 use super::metric::{Spot, MEDIAN_FRAMES};
+use super::overrides::{
+    GroupChoice, GroupOverrideRow, LightChoiceEntry, OverrideState, OverrideStatus,
+};
 use super::rows::{ComparisonRow, EvidenceRow, ResponseRow, Verdict};
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
@@ -52,6 +55,8 @@ pub const IMAGING_GAP_SECONDS: i64 = 3 * 3600;
 /// the deepest spot of a noisier ratio stands that much higher for noise
 /// alone.
 pub const NOISY_DUST_SIGMAS: f64 = 2.0;
+/// Where nights split when the catalog says nothing: noon UTC.
+pub const DEFAULT_NIGHT_BOUNDARY: i64 = 12 * 3600;
 
 /// The limits one rig's sessions are held to.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -147,6 +152,20 @@ pub struct Boundary {
     /// worst pair across the boundary, by session index, and its distance.
     pub drift: Option<(usize, usize, f64)>,
     pub spots: Vec<Spot>,
+    /// The first session of the later group: where the edge's window ends.
+    pub opens: usize,
+    /// Set when a person's choice, not the measurements, put it here: a
+    /// split where the nights measure alike, or a split the measurements
+    /// make that a person joined (then it lies inside a group).
+    pub by_hand: Option<HandEdge>,
+}
+
+/// How a person's choice changed an edge between groups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandEdge {
+    Split,
+    Joined,
 }
 
 /// A rig-wide change: boundaries of one rig that overlap in time and share
@@ -176,6 +195,9 @@ pub struct Event {
     /// change landed between the flats of one twilight, or its members
     /// are two changes that met there.
     pub within_flat_run: bool,
+    /// Made only of splits a person made where the flats measure alike:
+    /// the person's word, not a measured change.
+    pub by_hand: bool,
 }
 
 impl Event {
@@ -302,6 +324,9 @@ pub struct Family {
     /// next group shares its class only when the change between them is
     /// camera-side dust ([`Book::carries_angle_term`]).
     pub carry_class: Vec<usize>,
+    /// Measured splits a person joined, inside a group now: indices into
+    /// the book's boundaries, in time order.
+    pub joined: Vec<usize>,
 }
 
 /// A continuous run of lights of one profile.
@@ -341,14 +366,28 @@ pub enum Placement {
         session: Option<(i64, i64)>,
         pixels: Option<String>,
     },
+    /// A person put it on this side, over its time, session and pixels.
+    Person { side: Side },
 }
 
 impl Placement {
+    /// What placed it, as its serialized tag names it.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Placement::Time { .. } => "time",
+            Placement::Session { .. } => "session",
+            Placement::Pixels { .. } => "pixels",
+            Placement::Undetermined { .. } => "undetermined",
+            Placement::Person { .. } => "person",
+        }
+    }
+
     pub fn side(&self) -> Option<Side> {
         match self {
             Placement::Time { side }
             | Placement::Session { side, .. }
-            | Placement::Pixels { side, .. } => Some(*side),
+            | Placement::Pixels { side, .. }
+            | Placement::Person { side } => Some(*side),
             Placement::Undetermined { .. } => None,
         }
     }
@@ -357,6 +396,9 @@ impl Placement {
 /// Everything grouping knows about one catalog.
 #[derive(Debug, Default)]
 pub struct Book {
+    /// Where each session's night splits, seconds after midnight UTC: its
+    /// first flat's, as the rig's local noon puts it.
+    pub night_boundaries: Vec<i64>,
     pub sessions: Vec<Session>,
     pub families: Vec<Family>,
     pub boundaries: Vec<Boundary>,
@@ -376,6 +418,11 @@ pub struct Book {
     pub spanning: BTreeSet<usize>,
     pub angle_terms: HashMap<String, AngleTerm>,
     pub imaging: Vec<ImagingSession>,
+    /// A person's splits and joins, as applied (see [`super::overrides`]).
+    pub overrides: Vec<OverrideState>,
+    /// A person's choices for lights, by the file name a light is read
+    /// from.
+    pub light_choices: HashMap<String, Vec<LightChoiceEntry>>,
     /// Each session's family, by index.
     pub(super) family_of: Vec<usize>,
     /// Each session's rotation cluster, by index; `usize::MAX` for one that
@@ -455,6 +502,31 @@ impl Book {
         imaging: Vec<ImagingSession>,
         limits_for: impl Fn(&str) -> Limits,
     ) -> Self {
+        Self::build_with_overrides(
+            responses,
+            comparisons,
+            evidence,
+            imaging,
+            limits_for,
+            Vec::new(),
+            |_, _| DEFAULT_NIGHT_BOUNDARY,
+        )
+    }
+
+    /// [`Self::build`], then a person's splits and joins over the groups
+    /// the measurements make. `night_boundary(rig, frame)` is where the
+    /// night of one flat splits, seconds after midnight UTC, as the rig's
+    /// local noon puts it: a split by hand falls at the start of its later
+    /// night.
+    pub fn build_with_overrides(
+        responses: Vec<ResponseRow>,
+        comparisons: Vec<ComparisonRow>,
+        evidence: Vec<EvidenceRow>,
+        imaging: Vec<ImagingSession>,
+        limits_for: impl Fn(&str) -> Limits,
+        overrides: Vec<GroupOverrideRow>,
+        night_boundary: impl Fn(&str, &str) -> i64,
+    ) -> Self {
         let mut book = Book::default();
         for row in responses {
             let (Some(first), Some(last)) = (row.captured_first, row.captured_last) else {
@@ -497,11 +569,21 @@ impl Book {
         for rig in rigs {
             book.limits.insert(rig.clone(), limits_for(&rig));
         }
+        book.night_boundaries = book
+            .sessions
+            .iter()
+            .map(|session| {
+                let first = session.row.frame_uuids.first().map_or("", String::as_str);
+                night_boundary(&session.row.rig_uuid, first)
+            })
+            .collect();
         book.build_families();
+        book.resolve_overrides(overrides);
         book.build_groups();
         book.find_outliers();
         book.find_spanning();
         book.build_events();
+        book.find_conflicts();
         book.build_angle_terms();
         book.build_alike_ranges();
         book
@@ -636,6 +718,7 @@ impl Book {
                     boundaries: Vec::new(),
                     alike_ranges: Vec::new(),
                     carry_class: Vec::new(),
+                    joined: Vec::new(),
                 });
             }
         }
@@ -850,54 +933,349 @@ impl Book {
                 let right = groups.remove(i + 1);
                 groups[i].extend(right);
             }
+            let measured = groups.clone();
+            let hand_splits = self.apply_overrides(family_index, &mut groups, &measured);
             let mut boundaries = Vec::new();
             for pair in groups.windows(2) {
-                let last = *pair[0].last().expect("groups are not empty");
-                let first = pair[1][0];
-                // The change is told by the nearest pair across it at one
-                // angle: a family's two angles differ by their light path
-                // too, so a pair at two angles says nothing of the change.
-                let (before, after) = pair[0]
-                    .iter()
-                    .flat_map(|a| pair[1].iter().map(move |b| (*a, *b)))
-                    .filter(|(a, b)| !self.at_two_angles(*a, *b))
-                    .min_by_key(|(a, b)| (self.sessions[*b].first - self.sessions[*a].last, *a, *b))
-                    .unwrap_or((last, first));
-                let neighbour = self.comparison(before, after);
-                let distance = self.pair_distance(before, after, &limits);
-                let drift = if distance.is_none_or(|d| d <= 1.0) {
-                    // The neighbours agree: say which pair across the
-                    // boundary did not.
-                    let mut worst: Option<(usize, usize, f64)> = None;
-                    for a in &pair[0] {
-                        for b in &pair[1] {
-                            if let Some(d) = self.pair_distance(*a, *b, &limits)
-                                && worst.is_none_or(|(_, _, w)| d > w)
-                            {
-                                worst = Some((*a, *b, d));
-                            }
-                        }
-                    }
-                    worst
-                } else {
-                    None
-                };
-                let index = self.boundaries.len();
-                self.boundaries.push(Boundary {
-                    family: family_index,
-                    before,
-                    after,
-                    start: self.sessions[last].last,
-                    end: self.sessions[first].first,
-                    dust: neighbour.map(|c| c.dust),
-                    broad: neighbour.map(|c| c.broad),
-                    drift,
-                    spots: neighbour.map(|c| c.spots.clone()).unwrap_or_default(),
-                });
-                boundaries.push(index);
+                let mut boundary = self.boundary_between(family_index, &pair[0], &pair[1], &limits);
+                if hand_splits.contains(&pair[1][0]) {
+                    boundary.by_hand = Some(HandEdge::Split);
+                }
+                boundaries.push(self.boundaries.len());
+                self.boundaries.push(boundary);
             }
+            // The measured splits a person joined: inside a group now, kept
+            // with their numbers so the change they saw is not lost. Each
+            // with the measured group it follows.
+            let mut joined = Vec::new();
+            let mut joined_after = Vec::new();
+            for (k, pair) in measured.windows(2).enumerate() {
+                let (before, after) = (*pair[0].last().expect("not empty"), pair[1][0]);
+                if groups
+                    .iter()
+                    .any(|group| group.contains(&before) && group.contains(&after))
+                {
+                    let mut boundary =
+                        self.boundary_between(family_index, &pair[0], &pair[1], &limits);
+                    boundary.by_hand = Some(HandEdge::Joined);
+                    joined.push(self.boundaries.len());
+                    joined_after.push(k);
+                    self.boundaries.push(boundary);
+                }
+            }
+            self.note_override_edges(
+                family_index,
+                (&groups, &boundaries),
+                (&measured, &joined, &joined_after),
+            );
             self.families[family_index].groups = groups;
             self.families[family_index].boundaries = boundaries;
+            self.families[family_index].joined = joined;
+        }
+    }
+
+    /// The start of the night of `session`: the rig's local noon before
+    /// its first flat.
+    pub fn night_start(&self, session: usize) -> i64 {
+        let boundary = self
+            .night_boundaries
+            .get(session)
+            .copied()
+            .unwrap_or(DEFAULT_NIGHT_BOUNDARY);
+        let at = self.sessions[session].first;
+        (at - boundary).div_euclid(86_400) * 86_400 + boundary
+    }
+
+    /// A session's place in time, for ordering.
+    fn time_of(&self, session: usize) -> (i64, usize) {
+        (self.sessions[session].first, session)
+    }
+
+    /// Find what each of a person's splits and joins names before the
+    /// groups are made: its sessions and family, or why it is orphaned.
+    /// Oldest first, so a later choice is applied over an earlier one.
+    fn resolve_overrides(&mut self, rows: Vec<GroupOverrideRow>) {
+        let mut rows: Vec<GroupOverrideRow> = rows
+            .into_iter()
+            .filter(|row| row.choice.is_some())
+            .collect();
+        rows.sort_by(|a, b| {
+            a.chosen_at
+                .cmp(&b.chosen_at)
+                .then(a.anchor_frame.cmp(&b.anchor_frame))
+        });
+        for row in rows {
+            let Some(choice) = row.choice else { continue };
+            let after = self.override_session(
+                &row,
+                Some(&row.anchor_frame),
+                Some(&row.session_key),
+                row.night.as_deref(),
+                row.rotation,
+            );
+            let family = after
+                .and_then(|session| self.family_of.get(session).copied())
+                .filter(|family| *family != usize::MAX);
+            let orphaned = |reason: &str| OverrideStatus::Orphaned {
+                reason: reason.to_string(),
+            };
+            let mut before = None;
+            let status = match (after, family) {
+                (Some(session), Some(family)) => match choice {
+                    GroupChoice::Split => {
+                        if self.families[family].sessions.first() == Some(&session) {
+                            orphaned(
+                                "its night is now the first of its family: nothing before it \
+                                 to split from",
+                            )
+                        } else {
+                            OverrideStatus::Applied { agrees: false }
+                        }
+                    }
+                    GroupChoice::Join => {
+                        before = self.override_session(
+                            &row,
+                            row.before_frame.as_deref(),
+                            row.before_session_key.as_deref(),
+                            row.before_night.as_deref(),
+                            row.before_rotation,
+                        );
+                        match before {
+                            None => orphaned(
+                                "the flats on the other side of the split it joined are gone",
+                            ),
+                            Some(other) if self.family_of.get(other) != Some(&family) => {
+                                orphaned("the two sides it joined are no longer one family")
+                            }
+                            Some(other) if other == session => {
+                                orphaned("the two sides it joined are now one session")
+                            }
+                            Some(_) => OverrideStatus::Applied { agrees: false },
+                        }
+                    }
+                },
+                _ => orphaned("the flats it was made at are gone"),
+            };
+            self.overrides.push(OverrideState {
+                row,
+                status,
+                family,
+                before,
+                after,
+                boundaries: Vec::new(),
+                conflict: None,
+            });
+        }
+    }
+
+    /// Apply a family's splits and joins over the groups the measurements
+    /// made: joins first, then splits, so a split always cuts. Notes on
+    /// each whether the measurements alone agree, and returns the sessions
+    /// a split starts a group at that the measurements do not.
+    fn apply_overrides(
+        &mut self,
+        family: usize,
+        groups: &mut Vec<Vec<usize>>,
+        measured: &[Vec<usize>],
+    ) -> Vec<usize> {
+        let at = |session: usize, groups: &[Vec<usize>]| {
+            groups.iter().position(|group| group.contains(&session))
+        };
+        let mine: Vec<usize> = (0..self.overrides.len())
+            .filter(|i| {
+                let state = &self.overrides[*i];
+                state.family == Some(family) && state.applied()
+            })
+            .collect();
+        let mut hand_splits = Vec::new();
+        for choice in [GroupChoice::Join, GroupChoice::Split] {
+            for index in &mine {
+                let state = &self.overrides[*index];
+                if state.row.choice != Some(choice) {
+                    continue;
+                }
+                let Some(after) = state.after else { continue };
+                let agrees = match choice {
+                    GroupChoice::Join => {
+                        let Some(before) = state.before else { continue };
+                        let (a, b) = if self.time_of(before) <= self.time_of(after) {
+                            (before, after)
+                        } else {
+                            (after, before)
+                        };
+                        let (Some(ga), Some(gb)) = (at(a, groups), at(b, groups)) else {
+                            continue;
+                        };
+                        if ga < gb {
+                            let merged: Vec<usize> = groups.drain(ga + 1..=gb).flatten().collect();
+                            groups[ga].extend(merged);
+                        }
+                        at(a, measured) == at(b, measured)
+                    }
+                    GroupChoice::Split => {
+                        let Some(g) = at(after, groups) else { continue };
+                        let position = groups[g]
+                            .iter()
+                            .position(|session| *session == after)
+                            .unwrap_or(0);
+                        if position > 0 {
+                            let tail = groups[g].split_off(position);
+                            groups.insert(g + 1, tail);
+                        }
+                        let agrees = measured.iter().any(|group| group[0] == after);
+                        if !agrees {
+                            hand_splits.push(after);
+                        }
+                        agrees
+                    }
+                };
+                self.overrides[*index].status = OverrideStatus::Applied { agrees };
+            }
+        }
+        hand_splits
+    }
+
+    /// Tell each of a family's applied splits and joins the edges it made
+    /// or joined: a split the edge before the group its session starts; a
+    /// join every measured split between the measured groups of its two
+    /// sessions.
+    fn note_override_edges(
+        &mut self,
+        family: usize,
+        (groups, boundaries): (&[Vec<usize>], &[usize]),
+        (measured, joined, joined_after): (&[Vec<usize>], &[usize], &[usize]),
+    ) {
+        let group_of = |session: usize, groups: &[Vec<usize>]| {
+            groups.iter().position(|group| group.contains(&session))
+        };
+        for index in 0..self.overrides.len() {
+            let state = &self.overrides[index];
+            if state.family != Some(family) || !state.applied() {
+                continue;
+            }
+            let Some(after) = state.after else { continue };
+            let edges: Vec<usize> = match state.row.choice {
+                Some(GroupChoice::Split) => (1..groups.len())
+                    .filter(|g| groups[*g][0] == after)
+                    .map(|g| boundaries[g - 1])
+                    .collect(),
+                Some(GroupChoice::Join) => {
+                    let Some(before) = state.before else { continue };
+                    let (Some(a), Some(b)) =
+                        (group_of(before, measured), group_of(after, measured))
+                    else {
+                        continue;
+                    };
+                    let (low, high) = (a.min(b), a.max(b));
+                    joined
+                        .iter()
+                        .zip(joined_after)
+                        .filter(|(_, k)| low <= **k && **k < high)
+                        .map(|(edge, _)| *edge)
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            self.overrides[index].boundaries = edges;
+        }
+    }
+
+    /// The edge between two neighbouring groups of a family. Its window
+    /// runs from the last flat before to the first after; the change is
+    /// told by the nearest pair across it at one angle, since a family's
+    /// two angles differ by their light path too. When those agree, the
+    /// worst pair across says why the groups stay apart.
+    fn boundary_between(
+        &self,
+        family: usize,
+        left: &[usize],
+        right: &[usize],
+        limits: &Limits,
+    ) -> Boundary {
+        let last = *left.last().expect("groups are not empty");
+        let first = right[0];
+        let (before, after) = left
+            .iter()
+            .flat_map(|a| right.iter().map(move |b| (*a, *b)))
+            .filter(|(a, b)| !self.at_two_angles(*a, *b))
+            .min_by_key(|(a, b)| (self.sessions[*b].first - self.sessions[*a].last, *a, *b))
+            .unwrap_or((last, first));
+        let neighbour = self.comparison(before, after);
+        let distance = self.pair_distance(before, after, limits);
+        let drift = if distance.is_none_or(|d| d <= 1.0) {
+            let mut worst: Option<(usize, usize, f64)> = None;
+            for a in left {
+                for b in right {
+                    if let Some(d) = self.pair_distance(*a, *b, limits)
+                        && worst.is_none_or(|(_, _, w)| d > w)
+                    {
+                        worst = Some((*a, *b, d));
+                    }
+                }
+            }
+            worst
+        } else {
+            None
+        };
+        Boundary {
+            family,
+            before,
+            after,
+            start: self.sessions[last].last,
+            end: self.sessions[first].first,
+            dust: neighbour.map(|c| c.dust),
+            broad: neighbour.map(|c| c.broad),
+            drift,
+            spots: neighbour.map(|c| c.spots.clone()).unwrap_or_default(),
+            opens: first,
+            by_hand: None,
+        }
+    }
+
+    /// The camera-side change each of a person's splits and joins stands
+    /// against. A joined split that is part of a change other families saw
+    /// too: the groups pool, and the change still decides which side its
+    /// lights take. A split whose window overlaps a camera-side change it
+    /// is not part of: both changes apply. Neither is dropped; the view
+    /// shows both.
+    fn find_conflicts(&mut self) {
+        let mut event_of: HashMap<usize, usize> = HashMap::new();
+        for (index, event) in self.events.iter().enumerate() {
+            for boundary in &event.boundaries {
+                event_of.insert(*boundary, index);
+            }
+        }
+        let mut conflicts: Vec<(usize, String)> = Vec::new();
+        for (index, state) in self.overrides.iter().enumerate() {
+            if !state.applied() {
+                continue;
+            }
+            let conflict = state.boundaries.iter().find_map(|b| {
+                let boundary = &self.boundaries[*b];
+                if boundary.by_hand == Some(HandEdge::Joined) {
+                    return event_of.get(b).map(|e| self.events[*e].key.clone());
+                }
+                let family = &self.families[boundary.family];
+                let own = event_of.get(b).copied();
+                self.events
+                    .iter()
+                    .enumerate()
+                    .find(|(e, event)| {
+                        Some(*e) != own
+                            && event.camera_side
+                            && event.rig_uuid == family.rig_uuid
+                            && event.applies_to(family.filter.as_deref())
+                            && event.start < boundary.end
+                            && event.end > boundary.start
+                    })
+                    .map(|(_, event)| event.key.clone())
+            });
+            if let Some(key) = conflict {
+                conflicts.push((index, key));
+            }
+        }
+        for (index, key) in conflicts {
+            self.overrides[index].conflict = Some(key);
         }
     }
 
@@ -970,8 +1348,9 @@ impl Book {
     /// after, which filters and angles saw the changes it shows.
     fn find_spanning(&mut self) {
         let bounded = self.bounded_groups();
+        // A person's split dates its change; a joined split is no split.
         let spanning: BTreeSet<usize> = (0..self.boundaries.len())
-            .filter(|b| !self.outliers.contains(b))
+            .filter(|b| !self.outliers.contains(b) && self.boundaries[*b].by_hand.is_none())
             .filter(|b| {
                 let split = &self.boundaries[*b];
                 let family = &self.families[split.family];
@@ -1021,7 +1400,12 @@ impl Book {
                 continue;
             };
             for g in 1..family.groups.len().saturating_sub(1) {
-                if family.groups[g].len() != 1 {
+                // A night a person split off on purpose is not an odd one.
+                let by_hand = |b: usize| self.boundaries[b].by_hand.is_some();
+                if family.groups[g].len() != 1
+                    || by_hand(family.boundaries[g - 1])
+                    || by_hand(family.boundaries[g])
+                {
                     continue;
                 }
                 let (Some(before), Some(after)) =
@@ -1117,7 +1501,31 @@ impl Book {
         roots.sort_by_key(|root| (windows[*root].0, *root));
         for root in roots {
             let boundaries = members.remove(&root).unwrap_or_default();
-            let (start, end) = windows[root];
+            // Splits a person joined count toward a change other families
+            // saw, never make one alone.
+            if boundaries
+                .iter()
+                .all(|b| self.boundaries[*b].by_hand == Some(HandEdge::Joined))
+            {
+                continue;
+            }
+            let by_hand = boundaries
+                .iter()
+                .all(|b| self.boundaries[*b].by_hand == Some(HandEdge::Split));
+            // A split by hand dates nothing the flats measured: it falls at
+            // the start of the night of the first flats after it, and a
+            // light is placed by its time alone, never by its pixels.
+            let (start, end) = if by_hand {
+                let edge = &self.boundaries[boundaries[0]];
+                let night = self.night_start(edge.opens);
+                // Two sessions of one night: the night starts before the
+                // earlier one, so the split falls at the later one's first
+                // flat instead.
+                let at = if night <= edge.start { edge.end } else { night };
+                (at, at)
+            } else {
+                windows[root]
+            };
             let first = &self.boundaries[boundaries[0]];
             let rig = self.families[first.family].rig_uuid.clone();
             let filters: BTreeSet<String> = boundaries
@@ -1162,7 +1570,8 @@ impl Book {
                 broad,
                 spots: self.boundaries[strongest].spots.clone(),
                 boundaries,
-                within_flat_run: end - start < FLAT_RUN_SECONDS,
+                within_flat_run: !by_hand && end - start < FLAT_RUN_SECONDS,
+                by_hand,
             });
         }
         // A split across two changes still saw each change it shows: its
@@ -1282,15 +1691,22 @@ impl Book {
     /// was. A broad change, a change seen in one filter alone (filter or
     /// telescope side), a split that makes no change, or a split made by
     /// hand carries nothing.
-    // TODO(#878): a boundary a person split or joined by hand carries
-    // nothing; check the choices here once they reach the book.
     pub fn carries_angle_term(&self, boundary: usize, limits: &Limits) -> bool {
-        self.events.iter().any(|event| {
-            event.boundaries.contains(&boundary)
-                && event.camera_side
-                && !event.spots.is_empty()
-                && event.broad <= limits.broad
-        })
+        // A split or join by hand is the person's word, not a measured
+        // change of dust: it carries no range, even where the
+        // measurements split there too.
+        let by_hand = self.boundaries[boundary].by_hand.is_some()
+            || self
+                .overrides
+                .iter()
+                .any(|state| state.applied() && state.boundaries.contains(&boundary));
+        !by_hand
+            && self.events.iter().any(|event| {
+                event.boundaries.contains(&boundary)
+                    && event.camera_side
+                    && !event.spots.is_empty()
+                    && event.broad <= limits.broad
+            })
     }
 
     fn alike_ranges_of(&self, family_index: usize) -> Vec<AlikeRange> {
@@ -1572,15 +1988,45 @@ impl Book {
 
     /// Whether every session in `sessions` was measured and each pair was
     /// compared and found alike: then mixing them needs no warning.
+    /// A pair a person joined into one group counts as alike: they said so.
     pub fn measured_alike(&self, sessions: &[usize]) -> bool {
         sessions.iter().enumerate().all(|(i, a)| {
             sessions.iter().skip(i + 1).all(|b| {
                 let rig = &self.sessions[*a].row.rig_uuid;
-                self.limits(rig)
-                    .and_then(|limits| self.pair_distance(*a, *b, &limits))
-                    .is_some_and(|d| d <= 1.0)
+                self.joined_by_hand(*a, *b)
+                    || self
+                        .limits(rig)
+                        .and_then(|limits| self.pair_distance(*a, *b, &limits))
+                        .is_some_and(|d| d <= 1.0)
             })
         })
+    }
+
+    /// Whether two sessions share a group only because a person joined a
+    /// split between them.
+    pub fn joined_by_hand(&self, a: usize, b: usize) -> bool {
+        let (Some(&family), Some(&other)) = (self.family_of.get(a), self.family_of.get(b)) else {
+            return false;
+        };
+        if family != other || family == usize::MAX {
+            return false;
+        }
+        let family = &self.families[family];
+        let together = family
+            .groups
+            .iter()
+            .any(|group| group.contains(&a) && group.contains(&b));
+        let (low, high) = if self.time_of(a) <= self.time_of(b) {
+            (a, b)
+        } else {
+            (b, a)
+        };
+        // A joined edge's window lies between the two sessions.
+        together
+            && family.joined.iter().any(|edge| {
+                let edge = &self.boundaries[*edge];
+                edge.start >= self.sessions[low].first && edge.end <= self.sessions[high].first
+            })
     }
 
     /// The imaging session of `rig` a light shot at `at` belongs to.
@@ -1829,7 +2275,8 @@ impl Book {
         let mut out = Vec::new();
         for (event_index, event) in self.events.iter().enumerate() {
             let measured = self.limits(&event.rig_uuid).is_some_and(|l| l.measured);
-            if !measured {
+            // A split by hand asks no light: its lights are placed by time.
+            if !measured || event.by_hand {
                 continue;
             }
             for (session_index, session) in self.imaging.iter().enumerate() {

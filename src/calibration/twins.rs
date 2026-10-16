@@ -1647,6 +1647,9 @@ fn merge_rows(conn: &Connection, merge: &Merge<'_>, remote_table: bool, now: i64
             recorded.execute(params![frame_uuid, merge.keep, now])?;
         }
     }
+    // A person's split, join or group choice named a merged row's flat:
+    // it names the kept row's now.
+    super::flat_groups::override_store::repoint_frames(conn, merge.removed, merge.keep)?;
     forget_twin(conn, merge.path)?;
     for (path, fingerprint) in merge.twins {
         record_twin(conn, path, merge.keep, fingerprint, now)?;

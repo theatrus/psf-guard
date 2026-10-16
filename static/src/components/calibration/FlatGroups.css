@@ -645,3 +645,73 @@ button.flat-group-member:hover {
   padding-left: 0.2rem;
   font-size: 0.75rem;
 }
+
+/* A person's split or join: drawn apart from the measured ones, with the
+   measurements still shown beside it. */
+.flat-group-list li.flat-group-edge[data-hand='true'],
+.flat-group-edge-detail[data-hand='true'] {
+  border-color: var(--color-flat-by-hand);
+  color: var(--color-text-primary);
+}
+
+.flat-group-edge-detail[data-hand='true'] {
+  border-style: solid;
+  background: var(--color-flat-by-hand-bg);
+}
+
+.flat-group-hand,
+.flat-group-hand-tag {
+  color: var(--color-flat-by-hand);
+  font-weight: 600;
+}
+
+.flat-group-hand-tag {
+  font-size: 0.72rem;
+}
+
+.flat-group-hand-tag[data-conflict='true'],
+.flat-group-conflict {
+  color: var(--color-calibration-check);
+}
+
+.flat-group-conflict {
+  padding-left: 0.4rem;
+  border-left: 3px solid var(--color-calibration-check);
+}
+
+.flat-group-mark[data-mark='hand'] {
+  background: var(--color-flat-by-hand-bg);
+  color: var(--color-text-primary);
+}
+
+/* Join or Reset beside an edge: a link, not one of the list's cards. */
+.calibration-sessions li.flat-group-edge button.flat-group-edge-action {
+  display: inline;
+  flex: none;
+  width: auto;
+  margin-left: auto;
+  padding: 0 0.2rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-link);
+  font-size: 0.74rem;
+  text-decoration: underline;
+}
+
+.flat-group-split-here {
+  font-size: 0.76rem;
+}
+
+.flat-group-orphaned {
+  margin-top: 0.6rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px dashed var(--color-flat-by-hand);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.flat-group-orphaned ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1rem;
+}

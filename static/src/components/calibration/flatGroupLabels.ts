@@ -76,6 +76,8 @@ export function timeLabel(seconds: number, runs?: readonly FlatClockRun[], timeZ
  * changed in between.
  */
 export function windowLabel(start: number, end: number, runs?: readonly FlatClockRun[], timeZone?: string): string {
+  // A split by hand has no window: one moment, the start of its night.
+  if (start === end) return `at ${timeLabel(start, runs, timeZone)}`;
   const [[startClock, from], [endClock, to]] = [parts(start, runs, timeZone), parts(end, runs, timeZone)];
   return from === to
     ? `${startClock} – ${endClock} ${to}`

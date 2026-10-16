@@ -1,10 +1,10 @@
 # Flat grouping
 
-Status: **Built**, with flats matched by measured response (§2.3, §4.2).
-Still open: split and join by hand, gap lights (a light whose night has no
-flats between two groups that differ), and corrected flats in WBPP
-exports (§8).
-Last updated: 2026-10-15
+Status: **Built**, with flats matched by measured response (§2.3, §4.2)
+and splits, joins and a light's side chosen by hand (§8).
+Still open: gap lights (a light whose night has no flats between two
+groups that differ), and corrected flats in WBPP exports (§9).
+Last updated: 2026-10-16
 
 User-facing behaviour is in
 [Calibration libraries › Flat groups](../CALIBRATION_LIBRARY.md#flat-groups).
@@ -198,7 +198,7 @@ family's own angle term, from pairs of its sessions compared directly.
   angle, and leaves that dependence as it was. A broad change
   (vignetting), a change seen in one filter alone (filter or telescope
   side), a split that makes no change, or a split made by hand carries
-  nothing (a seam is left for #878's choices).
+  nothing (§8.1).
 - **What it brings back**: this carrying is what serves C925's lights
   shot before the 05-20 dust their own side's 05-19 flats at 104.0°: no
   pair at two angles was shot before that change, so the ranges come
@@ -641,6 +641,8 @@ opens the rig's own value or the global one.
   `psf_guard_flat_response`, `psf_guard_flat_comparison` and
   `psf_guard_flat_light_evidence`. A catalog without them groups by time.
   They do not travel in a sync: the keys use machine-local fingerprints.
+  A person's choices (§8) are kept in two tables of their own, keyed by
+  stable identities, and do travel.
 - **Response key**: the response algorithm version, the size cap and the
   sorted `frame_uuid:source_fingerprint` of the frames combined. Planes are
   `<cache>/<db>/calibration-flat-responses/<key>.resp`, 16-bit fixed point
@@ -843,7 +845,165 @@ frames from the archive in place:
 The prototype behind these numbers, its pictures and the method are kept
 with the PR's working notes; the Rust metric reproduced them.
 
-## 8. Follow-ups
+## 8. Choices by hand
+
+The measurements group by default; a person's choice wins where one is
+set. The rows and their resolution are pure (`measure::overrides`); the
+store (`override_store.rs`) and the routes (`src/server/flat_choices.rs`)
+read and write them.
+
+### 8.1 Splits and joins
+
+`psf_guard_flat_group_override`, one row per edge, keyed by the first flat
+(`anchor_frame`) of the session the edge comes before, with that session's
+key, the family's key and rig at the time, and for a join the session on
+the earlier side (`before_frame`, `before_session_key`), and both sessions'
+nights and recorded angles (`night`, `before_night`, `rotation`,
+`before_rotation`). No row id, family index or response key
+is kept: those change with a regroup or a new measuring algorithm. A
+session is found again by its flat, else its session key, else as the one
+session of the row's rig and family settings on its night at its angle,
+within `ROTATION_CLUSTER_DEG`, a row with no angle matching only a session
+with none (`Book::override_session`): the night alone could name another
+angle's session of the family key: keeping out a session's first flat renames it,
+since its key hashes its first flat in use, and the night still finds it.
+The family is the one that session is in now, so a family that a later
+change to family formation splits or renames takes its edges with it.
+A duplicate repair that folds a row's flat into its twin moves the
+choice's `anchor_frame`, `before_frame` and a light's `group_frame` to the
+kept flat (`override_store::repoint_frames`), and a sync maps them through
+the destination's merge map, as frame grades are.
+
+`Book::build_with_overrides` applies them after the measured grouping, in
+`build_groups`, oldest first: joins, then splits, so a split always cuts.
+
+- **Split**: the group holding the session is cut there. Where the
+  measurements already split, the choice is recorded as agreeing and the
+  edge stays the measured one. Otherwise the edge is marked
+  `HandEdge::Split`; it carries the pair's measured numbers, is never an
+  outlier or a spanning split, and makes an event of its filter
+  (`Event::by_hand` when every member is one), so a light takes its side
+  of it. Such an event has no window: it falls at the start of the night
+  of its later flats: the rig's local noon before their first flat, as
+  `Nights::frame` splits that flat's night (`Book::night_start`). When
+  both sessions lie on one night (two angles of a family), the night
+  starts before the earlier one, so the split falls at the later
+  session's first flat instead. It is never `within_flat_run`. Every
+  light is placed by its time alone, the view shows the moment on the
+  rig's clock ("at 2026-09-28 13:00 UTC−7"), and the measuring job reads
+  no light for it (`sessions_in_windows` skips it). The person dated the
+  split; a light's pixels are not asked to date it again.
+- **No alike range across a split by hand.** `carries_angle_term` is false
+  for any edge a person split or joined, even where the measurements split
+  there too: the person's word is not a measured change of camera-side
+  dust, so it never lets an alike range serve flats across it.
+- **Join**: every group from the earlier session's to the later's becomes
+  one. Each measured split it removes is kept in the book's boundaries as
+  `HandEdge::Joined` (`Family::joined`), with its numbers, but not between
+  groups. `measured_alike` counts a joined pair as alike, so the master
+  that pools them raises no mixed-flats Check.
+
+**Conflict with a camera-side change.** A joined split still takes part
+in building events. An event made only of joined splits is dropped: the
+person said the family did not change. One that also holds another
+family's split stands, still camera side, still applying to the joined
+filter, and the join records it as `conflict` (`Book::find_conflicts`).
+The flats pool and the change still places the lights; neither choice is
+dropped silently, and the view shows both. A split by hand whose window
+overlaps a camera-side change it did not join records that change the same
+way: both apply.
+
+**Orphaned**: a split whose session is gone, or is now its family's first;
+a join whose sides are gone, one session, or in two families. The row is
+kept and shown under its rig (`RigView::orphaned`) with the reason, and
+nothing is applied until a person resets it.
+
+### 8.2 A light's side or group
+
+`psf_guard_flat_light_choice`, keyed by the light's GUID and the change's
+key, with the change's rig and window at the time. A group choice has the
+key `group` and names a flat and session key of the group. Setting a side
+resets the light's group choice, and a group resets its sides.
+
+`LibrarySnapshot::select_with` finds a light's rows by the file name it is
+read from (as the image routes find its file from `FileName`), its filter,
+its rig (by its profile's bindings) and its capture time, which must lie
+within 2 s of the catalog's (`LIGHT_TIME_TOLERANCE_SECONDS`). The
+catalog's time is N.I.N.A.'s `ExposureStartTime` from the light's
+metadata, which its header's DATE-OBS records too, else `acquireddate`,
+which some catalogs fill with when the frame was saved
+(`override_store::exposure_start`); the side route's window gate and the
+Images counts read the same time. Matching by the light's GUID would need
+every caller of `select_for_light` to carry it, so it is left for later. A light with no time matches none, so a light of
+another target that shares a file name never takes another's choice
+(`Book::light_choices`):
+
+- **Before or after**: the change is found by its key, else as the one
+  change of the rig whose window overlaps the window recorded (new flats
+  narrow a window, which renames it). Its placement is
+  `Placement::Person { side }`, over time, session and pixels. It comes
+  from `flat_groups::place_light(book, choices, event, at)`, the one place
+  selection asks, so `choose_flats_around_changes`,
+  `keep_unknown_angles_last`, the other-angle pruning
+  (`not_across_a_known_change`) and the alike-range gate
+  (`on_lights_side_of_changes`) all honour it: a light shot during a
+  change, put on a side by hand, can be served by its family's range from
+  that side, read at its flats' angle by the stacker's gate. Every
+  fallback (another angle, a correction) follows as for any placement.
+- **Group**: the light's family becomes the group's (`FamilyBasis::Person`,
+  serving like a family at the light's angle) and its flats are only the
+  group's that pass every other gate, whatever the changes say
+  (`FlatBasis::Group`). The group's flats at another angle are kept, not
+  pruned for flats at the light's own angle, and a stack reads the light
+  at their angle (`LightRotation::Measured`). When none pass, the light is
+  matched as though nobody chose and the choice is shown as not applied.
+- **Orphaned**: a change gone, two where one was, or no longer reaching
+  the light's filter; a group whose flats are gone. The choice is listed
+  with the reason (`CalibrationSelection::flat_choices`) and not applied.
+- Grouping by time keeps every choice and applies none.
+
+### 8.3 Keys, work and transfer
+
+- The book's digest, health's `library_digest` and the project scope's
+  revision fold in both tables, so every view and check is worked out
+  again. Stack and master keys come from the selection, so they change
+  only where a light's flats change: a side its time already gave it
+  rebuilds nothing, and a choice for one light leaves every other light's
+  candidates as #876 left them (no key churn).
+- A split or join queues the rig's light evidence through the measuring
+  job (`Scope::lights`): no flat is measured again, and only imaging
+  sessions whose change key moved are read; a split by hand asks none. Health is judged again;
+  nothing is regraded. A light choice judges health again only.
+- A side is written only for lights the change reaches: of its rig, a
+  filter it applies to, and shot inside its window; or one light alone, for
+  a change its Calibration panel offers it (`offered_flat_changes`: the
+  changes its flats were chosen around, or that it already has a side of),
+  worked out from its own file as the panel does. The rest are skipped and counted (`skipped`); none
+  reached is a 400. Images' bulk action sends each change only the lights
+  the options found shot during it (`image_ids`), and a whole imaging
+  session takes only its lights inside the window. A group is written only
+  for lights of its rig and filter.
+- Every write sits behind the database-management gate
+  (`require_database_management_allowed`); the view and a light's account
+  show the choices to everyone.
+- `sync_library` copies both tables (`override_store::sync`): a row comes
+  across when the destination holds its flat (or the flat a repair kept
+  in its place) or light, and the newer
+  `chosen_at` wins, a reset included, as keep-out choices do. Exports and
+  WBPP place lights through `select_for_light`, as stacks do.
+- The MCP server reads the view (`/db/{db}/calibrations/flat-groups` in
+  `api_routes`); writing choices through MCP is left for its coverage pass.
+
+### 8.4 Decided for now
+
+- A split by hand places lights by time, at the start of its later
+  night, and reads no pixels (above).
+- A join across a camera-side change stays as it is: the flats pool, the
+  change still decides each light's side, and the edge shows the conflict.
+- Images' bulk action sets sides and resets; it offers no group, since a
+  selection can span filters and families.
+
+## 9. Follow-ups
 
 ### Move to Seiza
 
@@ -866,7 +1026,8 @@ with the PR's working notes; the Rust metric reproduced them.
 
 ### PSF Guard
 
-- **Split and join by hand**, synced as choices.
+- **Choices through MCP**: reading and writing splits, joins and a
+  light's side as tools, behind the same gate.
 - **Gap lights**: a light whose night has no flats, between groups that
   differ, takes the nearest by time without a word.
 

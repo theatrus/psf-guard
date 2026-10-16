@@ -3,7 +3,7 @@
 //! rig's change events and its angle term; and the ratio picture of two
 //! sessions, drawn by the shared preview queue.
 
-use crate::calibration::flat_groups::{self, job, metric, model, store};
+use crate::calibration::flat_groups::{self, job, metric, model, overrides, store};
 use crate::server::api::ApiResponse;
 use crate::server::database_context::DatabaseContext;
 use crate::server::extract::DbContext;
@@ -95,6 +95,68 @@ pub struct SplitView {
     /// The change event this split belongs to.
     pub event_key: Option<String>,
     pub spots: Vec<SpotView>,
+    /// Set when a person's choice made it (`split`, where the nights
+    /// measure alike) or undid it (`joined`, a measured split inside a
+    /// group now). The numbers above are the measurements either way.
+    pub by_hand: Option<model::HandEdge>,
+    /// The person's split or join at this edge, when there is one.
+    pub choice: Option<OverrideView>,
+}
+
+/// A person's split or join, as the view shows it.
+#[derive(Debug, Serialize)]
+pub struct OverrideView {
+    /// `split` or `join`.
+    pub choice: Option<overrides::GroupChoice>,
+    /// The edge in words when it was made.
+    pub label: String,
+    pub chosen_at: i64,
+    /// The recorded edge: what a reset names.
+    pub anchor_frame: String,
+    /// In force: whether the measurements alone group the same.
+    pub agrees: Option<bool>,
+    /// Why it no longer applies, when its flats are gone or no longer one
+    /// family. It stays until a person resets it.
+    pub orphaned: Option<String>,
+    /// A camera-side change it stands against; both stay in force.
+    pub conflict: Option<ConflictView>,
+}
+
+/// A camera-side change a person's split or join stands against.
+#[derive(Debug, Serialize)]
+pub struct ConflictView {
+    pub key: String,
+    pub start: i64,
+    pub end: i64,
+    pub what: String,
+    pub filters: Vec<String>,
+}
+
+impl OverrideView {
+    fn of(book: &model::Book, state: &overrides::OverrideState) -> Self {
+        let (agrees, orphaned) = match &state.status {
+            overrides::OverrideStatus::Applied { agrees } => (Some(*agrees), None),
+            overrides::OverrideStatus::Orphaned { reason } => (None, Some(reason.clone())),
+        };
+        Self {
+            choice: state.row.choice,
+            label: state.row.label.clone(),
+            chosen_at: state.row.chosen_at,
+            anchor_frame: state.row.anchor_frame.clone(),
+            agrees,
+            orphaned,
+            conflict: state.conflict.as_ref().and_then(|key| {
+                let event = book.events.iter().find(|event| &event.key == key)?;
+                Some(ConflictView {
+                    key: key.clone(),
+                    start: event.start,
+                    end: event.end,
+                    what: flat_groups::describe_what(event),
+                    filters: event.filters.iter().map(|f| f.to_uppercase()).collect(),
+                })
+            }),
+        }
+    }
 }
 
 /// Two sessions of one group measured against each other.
@@ -151,6 +213,9 @@ pub struct FamilyView {
     /// `groups[i]`.
     pub groups: Vec<GroupView>,
     pub splits: Vec<SplitView>,
+    /// Measured splits a person joined, newest first: each lies inside a
+    /// group now, between `before_response` and `after_response`.
+    pub joins: Vec<SplitView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,6 +270,8 @@ pub struct RigView {
     pub events: Vec<EventView>,
     pub families: Vec<FamilyView>,
     pub unmeasured: Vec<UnmeasuredView>,
+    /// A person's splits and joins that find nothing to apply to now.
+    pub orphaned: Vec<OverrideView>,
 }
 
 #[derive(Debug, Serialize)]
@@ -221,6 +288,25 @@ fn split_reason(
     limits: &model::Limits,
 ) -> String {
     let night = |index: usize| book.sessions[index].row.night.clone();
+    let measured = |boundary: &model::Boundary| match (boundary.dust, boundary.broad) {
+        (Some(dust), Some(broad)) => format!(
+            "{:.2}% dust (limit {}%), {:.2}% light pattern (limit {}%)",
+            dust * 100.0,
+            pct(limits.dust),
+            broad * 100.0,
+            pct(limits.broad)
+        ),
+        _ => "the two nights were not compared".into(),
+    };
+    match boundary.by_hand {
+        Some(model::HandEdge::Split) => {
+            return format!("split by you; measured alike: {}", measured(boundary));
+        }
+        Some(model::HandEdge::Joined) => {
+            return format!("joined by you; measured apart: {}", measured(boundary));
+        }
+        None => {}
+    }
     if book.outliers.contains(&index) {
         return "one night unlike the nights either side of it, which measure alike: no \
                 change, and no light is flagged for it"
@@ -434,8 +520,16 @@ pub(crate) fn build_view_with_frames(
             events: Vec::new(),
             families: Vec::new(),
             unmeasured: Vec::new(),
+            orphaned: Vec::new(),
         }
     };
+    // Each edge's split or join, by the boundary it made or joined.
+    let mut edge_choice: HashMap<usize, usize> = HashMap::new();
+    for (index, state) in book.overrides.iter().enumerate() {
+        for boundary in &state.boundaries {
+            edge_choice.insert(*boundary, index);
+        }
+    }
     let boundary_event: HashMap<usize, String> = book
         .events
         .iter()
@@ -502,26 +596,48 @@ pub(crate) fn build_view_with_frames(
                 sessions,
             });
         }
-        let mut splits: Vec<SplitView> = family
-            .boundaries
-            .iter()
-            .map(|b| {
-                let boundary = &book.boundaries[*b];
-                SplitView {
-                    before_response: book.sessions[boundary.before].row.response_key.clone(),
-                    after_response: book.sessions[boundary.after].row.response_key.clone(),
-                    before_night: book.sessions[boundary.before].row.night.clone(),
-                    after_night: book.sessions[boundary.after].row.night.clone(),
-                    start: boundary.start,
-                    end: boundary.end,
-                    dust_pct: boundary.dust.map(pct),
-                    broad_pct: boundary.broad.map(pct),
-                    reason: split_reason(&book, *b, boundary, &limits),
-                    event_key: boundary_event.get(b).cloned(),
-                    spots: boundary.spots.iter().take(12).map(SpotView::of).collect(),
-                }
-            })
-            .collect();
+        let split_view = |b: &usize| {
+            let boundary = &book.boundaries[*b];
+            // A split a person made where the measurements split too: the
+            // edge is the measurements', the choice still shows.
+            let choice = edge_choice.get(b).copied().or_else(|| {
+                book.overrides.iter().position(|state| {
+                    state.applied()
+                        && state.row.choice == Some(overrides::GroupChoice::Split)
+                        && state.after == Some(boundary.after)
+                })
+            });
+            // A split by hand has no window: it falls where its later
+            // night starts, as its change does.
+            let window = match boundary_event.get(b) {
+                Some(key) if boundary.by_hand == Some(model::HandEdge::Split) => book
+                    .events
+                    .iter()
+                    .find(|event| &event.key == key)
+                    .map_or((boundary.start, boundary.end), |event| {
+                        (event.start, event.end)
+                    }),
+                _ => (boundary.start, boundary.end),
+            };
+            SplitView {
+                before_response: book.sessions[boundary.before].row.response_key.clone(),
+                after_response: book.sessions[boundary.after].row.response_key.clone(),
+                before_night: book.sessions[boundary.before].row.night.clone(),
+                after_night: book.sessions[boundary.after].row.night.clone(),
+                start: window.0,
+                end: window.1,
+                dust_pct: boundary.dust.map(pct),
+                broad_pct: boundary.broad.map(pct),
+                reason: split_reason(&book, *b, boundary, &limits),
+                event_key: boundary_event.get(b).cloned(),
+                spots: boundary.spots.iter().take(12).map(SpotView::of).collect(),
+                by_hand: boundary.by_hand,
+                choice: choice.map(|index| OverrideView::of(&book, &book.overrides[index])),
+            }
+        };
+        let mut splits: Vec<SplitView> = family.boundaries.iter().map(split_view).collect();
+        let mut joins: Vec<SplitView> = family.joined.iter().map(split_view).collect();
+        joins.reverse();
         groups.reverse();
         splits.reverse();
         rig.families.push(FamilyView {
@@ -532,7 +648,15 @@ pub(crate) fn build_view_with_frames(
             angle_label: book.angle_label(family_index),
             groups,
             splits,
+            joins,
         });
+    }
+    // Splits and joins that find nothing now: shown under their rig.
+    for state in book.overrides.iter().filter(|state| !state.applied()) {
+        let rig = rigs
+            .entry(state.row.rig_uuid.clone())
+            .or_insert_with(|| rig_view(&state.row.rig_uuid, &book));
+        rig.orphaned.push(OverrideView::of(&book, state));
     }
     for event in book.events.iter().rev() {
         let rig = rigs
@@ -554,7 +678,7 @@ pub(crate) fn build_view_with_frames(
             key: event.key.clone(),
             start: event.start,
             end: event.end,
-            what: flat_groups::describe_spots(&event.spots, event.dust, event.broad),
+            what: flat_groups::describe_what(event),
             dust_pct: pct(event.dust),
             broad_pct: pct(event.broad),
             camera_side: event.camera_side,

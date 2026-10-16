@@ -359,3 +359,72 @@ button.score-chip.calibration-chip:focus-visible {
   outline: 2px solid var(--state-focus-border);
   outline-offset: 1px;
 }
+
+/* A person's say over the light's flats. */
+.light-flat-choice {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.35rem 0.45rem;
+  border-left: 3px solid var(--color-flat-by-hand);
+  border-radius: 4px;
+  background: var(--color-flat-by-hand-bg);
+}
+
+.light-flat-choice-list {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.light-flat-choice-list li,
+.light-flat-side {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3rem 0.6rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.light-flat-choice-list li.is-orphaned {
+  color: var(--color-text-secondary);
+}
+
+.light-flat-side-buttons {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.light-flat-side-buttons .light-calibration-tune {
+  margin-top: 0;
+}
+
+.light-flat-side-buttons .light-calibration-tune[aria-pressed='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
+  color: var(--color-text-primary);
+}
+
+.light-flat-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  min-width: 0;
+}
+
+.light-flat-group select {
+  max-width: 100%;
+  font-size: 0.78rem;
+}
+
+.light-flat-session {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+}

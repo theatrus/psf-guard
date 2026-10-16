@@ -7,6 +7,8 @@ import { GroupMarks } from './FlatGroupList';
 import { calibrationMasterHref, lightsGridHref } from './calibrationLinks';
 import { flatGroupFilterValue } from '../../utils/flatGroupFilter';
 import { editFlatLimits } from './flatLimitsLink';
+import type { GroupOverrideRequest } from './useFlatGroupChoices';
+import { conflictText, handLabel } from './useFlatGroupChoices';
 import {
   eventSeenIn,
   eventSideLabel,
@@ -14,9 +16,17 @@ import {
   nightRange,
   percent,
   plural,
+  timeLabel,
   windowLabel,
 } from './flatGroupLabels';
 import { serverTime } from './calibrationLabels';
+
+/** A person's splits and joins, when this person may change them. */
+export interface GroupEditing {
+  send: (request: GroupOverrideRequest) => void;
+  busy: boolean;
+  error: string | null;
+}
 
 /** Masters listed before Show all: the newest, since a library rebuilds
  *  a group's master as its settings change. */
@@ -42,6 +52,8 @@ interface FlatGroupDetailProps {
   shownSession: string | null;
   /** The session being found in the list, while it is. */
   opening: string | null;
+  /** Split, join and reset; absent for a viewer who may not. */
+  edit?: GroupEditing;
 }
 
 
@@ -52,6 +64,7 @@ function lightsBreakdown(lights: FlatGroupLightCounts): string[] {
     lights.other_angle > 0 ? `${lights.other_angle} from another angle` : null,
     lights.corrected > 0 ? `${lights.corrected} carried across a change` : null,
     lights.no_same_side > 0 ? `${lights.no_same_side} from the other side of a change` : null,
+    (lights.chosen ?? 0) > 0 ? `${lights.chosen} chosen by you` : null,
   ].filter((part): part is string => part !== null);
 }
 
@@ -61,18 +74,24 @@ function EdgeDetail({
   clock,
   open,
   onCompare,
+  edit,
 }: {
   side: 'newer' | 'older';
   edge: GroupEdge;
   clock?: FlatClockRun[];
   open: FlatGroupDetailProps['open'];
   onCompare: FlatGroupDetailProps['onCompare'];
+  edit?: GroupEditing;
 }) {
   const pressed = open?.earlier === edge.earlier && open.later === edge.later;
   const { split, event } = edge;
-  const heading = event ? 'Change' : 'Split';
+  const heading = event && split?.by_hand !== 'split' ? 'Change' : 'Split';
+  const hand = split ? handLabel(split) : null;
+  const choice = split?.choice ?? null;
+  const conflict = choice ? conflictText(choice, clock) : null;
   return (
-    <li className="flat-group-edge-detail" data-testid={`flat-group-${side}-edge`}>
+    <li className="flat-group-edge-detail" data-testid={`flat-group-${side}-edge`}
+      data-hand={hand ? 'true' : undefined}>
       <div className="flat-mark-text">
         <strong>
           {side === 'newer' ? 'After it' : 'Before it'} · {heading}
@@ -88,7 +107,29 @@ function EdgeDetail({
           {split ? `${nightRange(split.before_night, split.after_night)} · ` : ''}
           {windowLabel(split?.start ?? event!.start, split?.end ?? event!.end, clock)}
         </span>
+        {hand && (
+          <span className="flat-group-hand" data-testid="flat-group-hand">
+            {hand}{choice ? ` · ${timeLabel(choice.chosen_at)}` : ''}
+          </span>
+        )}
+        {conflict && <span className="flat-group-conflict" data-testid="flat-group-conflict">{conflict}</span>}
       </div>
+      {edit && split && (
+        choice ? (
+          <button type="button" className="tool-button flat-mark-compare" data-testid="flat-group-reset"
+            disabled={edit.busy}
+            onClick={() => edit.send({ choice: 'reset', anchor_frame: choice.anchor_frame })}>
+            Reset
+          </button>
+        ) : (
+          <button type="button" className="tool-button flat-mark-compare" data-testid="flat-group-join"
+            disabled={edit.busy}
+            title="Make this group and the next one group, whatever the measurements say"
+            onClick={() => edit.send({ choice: 'join', after_response: split.after_response, before_response: split.before_response })}>
+            Join with {side === 'newer' ? 'next' : 'previous'}
+          </button>
+        )
+      )}
       <button
         type="button"
         className="tool-button flat-mark-compare"
@@ -186,6 +227,7 @@ export default function FlatGroupDetail({
   onShowNight,
   shownSession,
   opening,
+  edit,
 }: FlatGroupDetailProps) {
   const { search } = useLocation();
   const [allMasters, setAllMasters] = useState(false);
@@ -208,14 +250,25 @@ export default function FlatGroupDetail({
       <section className="flat-group-section" aria-labelledby="flat-group-members">
         <h3 id="flat-group-members">Members</h3>
         <ul className="flat-group-members" data-flat-tone={entry.tone}>
-          {members.flatMap((session) => {
+          {members.flatMap((session, position) => {
             const ids = session.sessions ?? [];
+            // A new group can start at any night but the group's first.
+            const split = edit && position > 0 && (
+              <button type="button" className="calibration-link-button flat-group-split-here"
+                data-testid="flat-group-split-here" disabled={edit.busy}
+                aria-label={`Split here: start a new group at ${session.night}`}
+                title="Start a new group at this night, whatever the measurements say"
+                onClick={() => edit.send({ choice: 'split', after_response: session.response_key })}>
+                Split here
+              </button>
+            );
             return ids.length === 0
-              ? [<li key={session.response_key} className="flat-group-member is-static"><strong>{session.night}</strong><span>{plural(session.frames, 'flat')}</span></li>]
-              : ids.map((id) => (
+              ? [<li key={session.response_key} className="flat-group-member is-static"><strong>{session.night}</strong><span>{plural(session.frames, 'flat')}</span>{split}</li>]
+              : ids.map((id, index) => (
                   <li key={id}>
                     <MemberCard session={session} id={id} shown={shownSession === id} opening={opening === id}
                       onShow={onShowNight} onOpen={onOpenSession} />
+                    {index === 0 && split}
                   </li>
                 ));
           })}
@@ -287,16 +340,79 @@ export default function FlatGroupDetail({
         )}
       </section>
 
+      {entry.joins.length > 0 && (
+        <section className="flat-group-section" aria-labelledby="flat-group-joined">
+          <h3 id="flat-group-joined">Joined by you</h3>
+          <ul className="flat-group-edges" data-testid="flat-group-joins">
+            {entry.joins.map((join) => {
+              const conflict = join.choice ? conflictText(join.choice, rig.clock) : null;
+              return (
+                <li key={`${join.before_response}:${join.after_response}`} className="flat-group-edge-detail"
+                  data-hand="true" data-testid="flat-group-join-note">
+                  <div className="flat-mark-text">
+                    <strong>{nightRange(join.before_night, join.after_night)} · joined by you</strong>
+                    <span>
+                      Measured {join.dust_pct !== null ? percent(join.dust_pct) : '—'} dust (limit {limitPercent(rig.dust_limit_pct)}),{' '}
+                      {join.broad_pct !== null ? percent(join.broad_pct) : '—'} light pattern (limit {limitPercent(rig.pattern_limit_pct)})
+                    </span>
+                    {conflict && <span className="flat-group-conflict" data-testid="flat-group-conflict">{conflict}</span>}
+                  </div>
+                  {edit && join.choice && (
+                    <button type="button" className="tool-button flat-mark-compare" data-testid="flat-group-reset"
+                      disabled={edit.busy}
+                      onClick={() => edit.send({ choice: 'reset', anchor_frame: join.choice!.anchor_frame })}>
+                      Reset
+                    </button>
+                  )}
+                  <button type="button" className="tool-button flat-mark-compare"
+                    aria-pressed={open?.earlier === join.before_response && open.later === join.after_response}
+                    aria-label={`Compare ${join.after_night} with ${join.before_night}`}
+                    onClick={(click) => onCompare(join.before_response, join.after_response, click.currentTarget)}>
+                    Compare
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
       <section className="flat-group-section" aria-labelledby="flat-group-edges">
         <h3 id="flat-group-edges">Its edges</h3>
         <ul className="flat-group-edges">
           {entry.newer
-            ? <EdgeDetail side="newer" edge={entry.newer} clock={rig.clock} open={open} onCompare={onCompare} />
+            ? <EdgeDetail side="newer" edge={entry.newer} clock={rig.clock} open={open} onCompare={onCompare} edit={edit} />
             : <li className="calibration-muted">Nothing newer: a light shot now takes these flats.</li>}
           {entry.older
-            ? <EdgeDetail side="older" edge={entry.older} clock={rig.clock} open={open} onCompare={onCompare} />
+            ? <EdgeDetail side="older" edge={entry.older} clock={rig.clock} open={open} onCompare={onCompare} edit={edit} />
             : <li className="calibration-muted">The oldest group of {entry.familyLabel}.</li>}
         </ul>
+        {edit?.error && <p className="calibration-error" role="alert">Could not change the groups: {edit.error}</p>}
+        {(rig.orphaned ?? []).length > 0 && (
+          <div className="flat-group-orphaned" data-testid="flat-group-orphaned">
+            <p className="calibration-muted">
+              Your splits and joins on {rig.name} that no longer apply: their flats are gone or no longer one family.
+              They stay until you reset them.
+            </p>
+            <ul>
+              {(rig.orphaned ?? []).map((choice) => (
+                <li key={choice.anchor_frame}>
+                  <span>{choice.choice === 'join' ? 'Joined' : 'Split'}: {choice.label}</span>
+                  <span className="calibration-muted"> · {choice.orphaned}</span>
+                  {edit && (
+                    <>
+                      {' '}
+                      <button type="button" className="calibration-link-button" disabled={edit.busy}
+                        onClick={() => edit.send({ choice: 'reset', anchor_frame: choice.anchor_frame })}>
+                        Reset
+                      </button>
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       <section className="flat-group-section" aria-labelledby="flat-group-feeds" data-testid="flat-group-feeds">

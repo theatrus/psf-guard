@@ -44,6 +44,9 @@ export interface GroupEntry {
   newer?: GroupEdge;
   /** Towards the next older group. */
   older?: GroupEdge;
+  /** Measured splits a person joined that now lie inside this group,
+   *  newest first. */
+  joins: FlatSplit[];
   /** Flat sessions of its filter and angle within its nights (or after
    *  them, for the current group) that are not measured. */
   unmeasured: FlatUnmeasuredSession[];
@@ -155,6 +158,8 @@ function familyLabels(rig: FlatGroupsRig): Map<FlatFamily, string> {
 /** The short reason a split shows inline: "new dust 1.6%", "pattern 2.6%". */
 export function splitShortReason(split: FlatSplit): string {
   const reason = split.reason;
+  if (split.by_hand === 'split') return 'by you';
+  if (split.by_hand === 'joined') return 'joined by you';
   if (reason.startsWith('drifted')) return 'drifted apart';
   if (reason.startsWith('one night unlike')) return 'one odd night';
   const dust = /^(new dust|dust gone|dust moved)/.exec(reason);
@@ -204,6 +209,9 @@ export function browseGroups(rigs: FlatGroupsRig[], options: GroupBrowseOptions 
           if (after) newer = { event: after, earlier: after.before_response, later: after.after_response };
         }
         const split = family.splits[position];
+        const members = new Set(group.sessions.map((session) => session.response_key));
+        const joins = (family.joins ?? []).filter((join) =>
+          members.has(join.before_response) && members.has(join.after_response));
         const unmeasured = (unmeasuredOf.get(family) ?? []).filter((session) =>
           (session.night >= group.first_night && session.night <= group.last_night)
           || (current && session.night > group.last_night));
@@ -219,6 +227,7 @@ export function browseGroups(rigs: FlatGroupsRig[], options: GroupBrowseOptions 
           current,
           newer,
           older: split ? edgeOf(rig, split) : undefined,
+          joins,
           unmeasured,
           context: false,
         };

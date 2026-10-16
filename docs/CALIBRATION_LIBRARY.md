@@ -808,6 +808,60 @@ cannot carry flats across a change, so such a light keeps its own
 session with the flats as shot and is named in the runner and the export
 summary; see [WBPP](WBPP.md#calibration-frames).
 
+### Choosing by hand
+
+The measurements group flats and place lights by default. Where you know
+better, your choice wins, and it shows as yours:
+
+- **Split here**, on a member night of a group in Frames › Groups, starts
+  a new group at that night even when the nights measure alike. The split
+  is a change of its filter, dated at the start of that night (the rig's
+  local noon, shown on its clock): lights take
+  flats from their own side of it by their time, and no light's pixels are
+  read for it. Flats at another angle never reach across it through an
+  alike range.
+- **Join**, on the edge between two groups in the group list, or **Join
+  with next** and **Join with previous** in a group's edges, makes the two
+  one group even when they measure apart. Their master pools both, without
+  the mixed-flats Check.
+- A light's **Calibration** panel offers **Before** and **After** for each
+  change it was shot during, or that its flats were chosen around, and
+  **Use group** for any group its flats could come from. **Every light of
+  its imaging session** applies the choice to the whole run. A side you
+  choose counts wherever the light's side matters, so a light shot during a
+  change, once on a side, can also take its family's flats at another
+  angle through an alike range from that side. A group you choose gives
+  its flats at whatever angle they lie, and a stack reads the light at
+  theirs. In Images, **Flat side…** on a selection lists the changes the
+  selected lights were shot during, with Before, After and Reset for each,
+  and says how many of the selection each one sets: a side goes only to
+  the lights shot during that change, of its rig and filter. It offers no
+  group, since a selection can span filters.
+
+Edges you split or joined are drawn apart from measured ones, *Split by
+you* or *Joined by you*, with the measured numbers beside them and
+**Reset**. A light's panel lists your choices under **Chosen by you**.
+
+When a split you joined is also a **camera-side change** seen in other
+filters, both stand: the flats pool, and the change still decides which
+side that filter's lights take. The edge says so; set a light's side to
+choose otherwise. A split you made that overlaps a camera-side change is
+shown the same way.
+
+A choice is kept by the flats and lights it names, not by row numbers, so
+it survives a regroup, a duplicate repair that merges its flat into a twin,
+and keeping out a session's first flat. When its flats or its change are gone, or no
+longer one family, it is kept and shown as **no longer applied**, with
+why, and does nothing until you reset it. Grouping by time keeps choices
+and applies none.
+
+Choices change which flats lights take, so masters and stacks rebuild
+only where a light's flats changed. A split or join asks the rig's lights
+again where a change moved; no flat is measured again and nothing is
+regraded. Changing a choice needs an editor's account on a server started
+with `--allow-database-management`, or the desktop app; everyone sees
+them.
+
 ### Flat groups in Frames
 
 Flat groups show where the flats are, in the Calibration page's
@@ -987,6 +1041,22 @@ answers `202` while the picture is queued and the PNG once it is ready;
 `POST /api/db/{db}/calibrations/generation-status` reports on it with
 `{"target": "ratio", …}`. In a light's calibration explanation the flat
 kind gains `chosen_by`, `basis` and `alike`. Each group carries its `key`.
+
+Choices by hand: each split carries `by_hand` (`split` where the
+measurements alone would not split) and `choice` (the recorded split or
+join: `agrees`, `conflict` with a camera-side change, `anchor_frame`);
+each family lists the measured splits joined into its groups as `joins`,
+and each rig the choices that no longer apply as `orphaned`.
+`PUT /api/db/{db}/calibrations/flat-groups/overrides` takes `{"choice":
+"split", "after_response"}`, `{"choice": "join", "after_response",
+"before_response"}` or `{"choice": "reset", "anchor_frame" |
+"after_response"}`. `PUT /api/db/{db}/calibrations/flat-choices` takes
+`image_ids`, `whole_session`, and `choice` `before` or `after` with
+`change_key`, `group` with `group_response`, or `reset` (one change, or
+all with no key). `POST …/flat-choices/options {"image_ids"}` lists the
+changes those lights were shot during, from the catalog alone. Both
+`PUT`s need database management; a light without a GUID cannot keep a
+choice. A light's explanation gains `choices` and `choice_options`.
 
 `GET /api/db/{db}/calibrations/flat-groups/use` returns, by group key, the
 recorded flat masters with sources in it and the lights whose flat master
@@ -1990,7 +2060,9 @@ use it anyway travels too; when both catalogs hold one, the later choice
 wins. The preview counts the choices a transfer brings, since each changes
 what the destination's masters are built from. When both machines cataloged
 the same file under different IDs, the destination's choice stays with the
-file. They do not copy generated master rows or cached FITS files because
+file. Flat groups you split or joined, and lights you put on a side of a
+change or in a group, travel the same way, by flat and light GUID, the
+later choice or reset winning. They do not copy generated master rows or cached FITS files because
 those paths belong to the source machine. The destination
 resolves a stale raw path by basename in its configured image folders, then
 builds its own master.

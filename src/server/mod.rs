@@ -19,6 +19,7 @@ pub mod export_job;
 pub mod export_settings;
 pub mod exposure_groups;
 pub mod extract;
+pub mod flat_choices;
 pub mod flat_group_use;
 pub mod flat_groups;
 pub mod flat_history;
@@ -306,6 +307,18 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/calibrations/flat-groups/place",
             get(flat_groups::get_session_place),
+        )
+        .route(
+            "/calibrations/flat-groups/overrides",
+            put(flat_choices::put_group_override),
+        )
+        .route(
+            "/calibrations/flat-choices",
+            put(flat_choices::put_light_choices),
+        )
+        .route(
+            "/calibrations/flat-choices/options",
+            post(flat_choices::post_light_choice_options),
         )
         .route(
             "/calibrations/frames",

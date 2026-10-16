@@ -983,6 +983,8 @@ pub fn library_digest(conn: &Connection) -> Result<String> {
     super::flat_groups::store::digest_rows(conn, &mut hasher)?;
     // So does which family the lights' own pixels chose.
     super::flat_groups::family_store::digest(conn, &mut hasher)?;
+    // And what a person chose: splits, joins, and a light's side or group.
+    super::flat_groups::override_store::digest(conn, &mut hasher)?;
     Ok(hex(hasher))
 }
 
