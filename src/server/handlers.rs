@@ -307,7 +307,7 @@ pub async fn get_astrometry_capabilities(
 pub async fn validate_astrometry_catalogs(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<crate::astrometry::AstrometryValidationReport>>, AppError> {
-    let guard = state.begin_interactive_job();
+    let guard = state.begin_named_interactive_job("a star catalog check");
     let astrometry = Arc::clone(&state.astrometry);
     let report = tokio::task::spawn_blocking(move || {
         let _guard = guard;
@@ -337,7 +337,7 @@ pub async fn start_astrometry_catalog_install(
     Json(request): Json<crate::server::catalog_install::CatalogInstallRequest>,
 ) -> Result<Json<ApiResponse<crate::server::catalog_install::CatalogInstallStatus>>, AppError> {
     let output_dir = state.astrometry.catalog_install_dir();
-    let guard = state.begin_interactive_job();
+    let guard = state.begin_named_interactive_job("a star catalog installation");
     let status = state
         .catalog_install
         .start(request.preset, output_dir, guard);
@@ -355,7 +355,7 @@ pub async fn get_image_astrometry(
     let (fits_path, expected_target) = resolve_astrometry_input(&ctx.0, image_id).await?;
     let cache_dir = ctx.cache_dir_path.clone();
     let astrometry = Arc::clone(&state.astrometry);
-    let guard = state.begin_interactive_job();
+    let guard = state.begin_named_interactive_job("a plate solve");
     let analysis = tokio::task::spawn_blocking(move || {
         let _guard = guard;
         astrometry
@@ -380,7 +380,7 @@ pub async fn solve_image_astrometry(
     let (fits_path, expected_target) = resolve_astrometry_input(&ctx.0, image_id).await?;
     let cache_dir = ctx.cache_dir_path.clone();
     let astrometry = Arc::clone(&state.astrometry);
-    let guard = state.begin_interactive_job();
+    let guard = state.begin_named_interactive_job("a plate solve");
     let analysis = tokio::task::spawn_blocking(move || {
         let _guard = guard;
         let fresh = astrometry.analyze_image(image_id, &fits_path, expected_target)?;
@@ -419,7 +419,7 @@ pub async fn get_image_satellites(
     let (fits_path, expected_target) = resolve_astrometry_input(&ctx.0, image_id).await?;
     let cache_dir = ctx.cache_dir_path.clone();
     let astrometry = Arc::clone(&state.astrometry);
-    let guard = state.begin_interactive_job();
+    let guard = state.begin_named_interactive_job("a satellite prediction");
     let analysis = tokio::task::spawn_blocking(move || {
         let _guard = guard;
         astrometry
@@ -454,7 +454,7 @@ pub async fn predict_image_satellites(
     let (fits_path, expected_target) = resolve_astrometry_input(&ctx.0, image_id).await?;
     let cache_dir = ctx.cache_dir_path.clone();
     let astrometry = Arc::clone(&state.astrometry);
-    let guard = state.begin_interactive_job();
+    let guard = state.begin_named_interactive_job("a satellite prediction");
     let validation_path = fits_path.clone();
     tokio::task::spawn_blocking(move || crate::satellites::validate_exposure(&validation_path))
         .await
@@ -8303,6 +8303,7 @@ async fn start_spatial_scan_with_priority(
         req.filter_name.clone(),
         work.iter().filter(|item| item.4).count(),
         skipped_cached,
+        priority == crate::concurrency::Priority::Background,
     ) {
         let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
         return Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
@@ -8330,7 +8331,7 @@ async fn start_spatial_scan_with_priority(
     // pre-generation yields cores + memory to it. Moved into the blocking task
     // and dropped when the scan returns (or panics).
     let interactive_guard = (priority == crate::concurrency::Priority::Interactive)
-        .then(|| state.begin_interactive_job());
+        .then(|| state.begin_named_interactive_job("a quality scan"));
     let scheduling_state = Arc::clone(&state);
     // A stop waits for the frames in hand and the save of what was measured.
     let held = state.shutdown.hold(format!(
@@ -8431,14 +8432,21 @@ async fn start_spatial_scan_with_priority(
                 scheduling_state.lease_workers(priority, budget.workers.min(items.len().max(1)));
             // False once the server is stopping: the frames left wait for
             // the next start, and what was measured is still saved below.
+            // While it waits, the scan's status names what it waits for, so
+            // the header lists it as waiting rather than stalled.
             let wait_for_turn = || {
-                while priority == crate::concurrency::Priority::Background
-                    && scheduling_state.interactive_job_active()
-                    && !scheduling_state.shutdown.is_stopping()
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
+                if priority != crate::concurrency::Priority::Background {
+                    return !scheduling_state.shutdown.is_stopping();
                 }
-                !scheduling_state.shutdown.is_stopping()
+                scheduling_state.wait_for_interactive_work(
+                    std::time::Duration::from_millis(250),
+                    |waiting_for| {
+                        crate::server::spatial_scan::set_waiting_for(
+                            &ctx_arc.spatial_metrics,
+                            waiting_for,
+                        )
+                    },
+                )
             };
             if !spatial_items.is_empty() {
                 tracing::info!(

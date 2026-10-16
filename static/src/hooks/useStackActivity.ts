@@ -12,16 +12,28 @@ export function useStackActivity() {
   const query = useQuery<StackActivity>({
     queryKey: STACK_ACTIVITY_QUERY_KEY,
     queryFn: () => apiClient.getStackActivity(),
-    // Fast only while a build runs. Starting one here invalidates this
-    // query, so the idle poll exists to notice jobs another client began —
-    // a few seconds' lag is fine, and the endpoint is an in-memory list.
-    refetchInterval: (query) => (query.state.data?.active.length ? 1000 : 5_000),
+    // Fast only while a build runs or automatic work waits to resume.
+    // Starting one here invalidates this query, so the idle poll exists to
+    // notice jobs another client began — a few seconds' lag is fine, and the
+    // endpoint is an in-memory list.
+    refetchInterval: (query) => (busy(query.state.data) ? 1000 : 5_000),
     refetchIntervalInBackground: false,
   });
   return {
     active: query.data?.active ?? [],
     isRunning: (query.data?.active.length ?? 0) > 0,
+    /** Automatic refreshes; those `waiting` are due and wait for the worker. */
+    scheduled: query.data?.scheduled ?? [],
+    waitingReapplies: query.data?.waiting_reapplies ?? [],
   };
+}
+
+function busy(data: StackActivity | undefined): boolean {
+  return !!data && (
+    data.active.length > 0
+    || !!data.waiting_reapplies?.length
+    || !!data.scheduled?.some((refresh) => refresh.waiting)
+  );
 }
 
 /**

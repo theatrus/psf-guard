@@ -1717,8 +1717,8 @@ pub(super) fn enqueue_color_job(
         }
         // Only a composition a person asked for outranks pre-generation and
         // quality scans; an automatic one is background work like them.
-        let guard =
-            (!state.stack_previews.is_automatic(&job_id)).then(|| state.begin_interactive_job());
+        let guard = (!state.stack_previews.is_automatic(&job_id))
+            .then(|| state.begin_named_interactive_job("a color composition"));
         let state_for_job = Arc::clone(&state);
         let job_id_for_job = job_id.clone();
         let result = tokio::task::spawn_blocking(move || {

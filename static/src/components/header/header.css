@@ -143,6 +143,12 @@
   color: var(--color-text-secondary);
 }
 
+/* `1·2`: running and waiting, where the count does not fit. */
+.activity-chip-waiting {
+  display: none;
+  color: var(--state-waiting-fg);
+}
+
 .activity-chip.is-finished {
   cursor: default;
   color: var(--color-success);
@@ -313,8 +319,27 @@ div.activity-error {
   font-size: 0.8rem;
 }
 
-.activity-row.is-queued {
+.activity-row[data-job-state='queued'] {
   opacity: 0.75;
+}
+
+/* Automatic work that stepped aside for a person's: it resumes on its own,
+   so it is marked, not dimmed. */
+.activity-row[data-job-state='waiting'] {
+  box-shadow: inset 3px 0 0 var(--state-waiting-border);
+}
+
+.activity-row[data-job-state='waiting'] .activity-row-state {
+  color: var(--state-waiting-fg);
+}
+
+/* What it waits for is the point of the row: it wraps rather than clips. */
+.activity-row[data-job-state='waiting'] .activity-row-detail {
+  white-space: normal;
+}
+
+.activity-row[data-job-state='waiting'] .activity-row-fill {
+  background: var(--state-waiting-fill);
 }
 
 .activity-row-head {
@@ -477,6 +502,10 @@ div.activity-error {
   .live-chip .utility-label,
   .activity-chip-count {
     display: none;
+  }
+
+  .activity-chip-waiting {
+    display: inline;
   }
 
   /* Phone utility buttons are 32px squares; the chip needs its percent. */

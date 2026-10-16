@@ -1845,7 +1845,7 @@ async fn compute_stretch_variant(
     // A person waiting on it outranks background work; a re-apply is
     // background work itself.
     let automatic = state.stack_previews.is_automatic_processing(&stretch_id);
-    let guard = (!automatic).then(|| state.begin_interactive_job());
+    let guard = (!automatic).then(|| state.begin_named_interactive_job("stack processing"));
     let priority = if automatic {
         crate::concurrency::Priority::Background
     } else {

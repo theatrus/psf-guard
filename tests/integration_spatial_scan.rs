@@ -277,6 +277,71 @@ async fn spatial_scan_runs_and_reports_missing_files_as_errors() {
     assert!(json["data"]["progress"]["finished_at"].is_i64());
 }
 
+/// While a person's work runs, the database-wide analysis is listed as
+/// waiting for it, by name, with the progress it had; it goes on after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn database_quality_backfill_says_it_waits_for_a_persons_work() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_test_schema(&conn);
+    seed_target_with_images(&conn, 2);
+    let tmp = tempfile::tempdir().unwrap();
+    let images = tmp.path().join("images");
+    std::fs::create_dir_all(&images).unwrap();
+    for index in 0..2 {
+        // Found, so the scan reaches its frames; not a FITS, so each fails
+        // fast once it may read them.
+        std::fs::write(images.join(format!("frame_{index:04}.fits")), b"not a fits").unwrap();
+    }
+    let (app, state) = create_test_app(conn, tmp.path());
+    {
+        let mut dbs = state.databases.write().unwrap();
+        let mut ctx = (**dbs.get("test").unwrap()).clone();
+        ctx.image_dirs = vec![images.to_string_lossy().into_owned()];
+        ctx.image_dir_paths = vec![images.clone()];
+        dbs.insert("test".to_string(), Arc::new(ctx));
+    }
+
+    let person = state.begin_named_interactive_job("a stack build");
+    let (status, json) = post_json(
+        app.clone(),
+        "/api/db/test/analysis/quality-backfill",
+        &serde_json::json!({"force": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {json}");
+    assert_eq!(json["data"]["started"], true);
+
+    let mut scan = Value::Null;
+    for _ in 0..250 {
+        let (_, json) = get_json(app.clone(), "/api/db/test/analysis/spatial-scan").await;
+        scan = json["data"]["progress"].clone();
+        if scan["waiting_for"].is_string() {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(scan["running"], true, "{scan}");
+    assert_eq!(scan["automatic"], true, "{scan}");
+    assert_eq!(scan["waiting_for"], "a stack build", "{scan}");
+    let (_, backfill) = get_json(app.clone(), "/api/db/test/analysis/quality-backfill").await;
+    assert_eq!(backfill["data"]["progress"]["running"], true);
+
+    drop(person);
+    let ctx = state.get_database("test").unwrap();
+    for _ in 0..250 {
+        if !ctx.quality_backfill.read().unwrap().progress.running {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+    let (_, json) = get_json(app.clone(), "/api/db/test/analysis/spatial-scan").await;
+    let scan = &json["data"]["progress"];
+    assert_eq!(scan["running"], false, "{scan}");
+    assert!(scan["waiting_for"].is_null(), "{scan}");
+    let (_, backfill) = get_json(app, "/api/db/test/analysis/quality-backfill").await;
+    assert_eq!(backfill["data"]["progress"]["processed_targets"], 1);
+}
+
 #[tokio::test]
 async fn database_quality_backfill_runs_as_a_separate_job() {
     let conn = Connection::open_in_memory().unwrap();

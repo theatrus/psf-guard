@@ -15,7 +15,11 @@
 //!    caches) gets a smaller budget and *yields* to interactive work: the
 //!    caller stops dispatching new background items the moment an interactive
 //!    job appears and lets in-flight ones drain (see
-//!    `AppState::interactive_job_active`).
+//!    `AppState::interactive_job_active`). Interactive jobs carry a name
+//!    (`AppState::begin_named_interactive_job`), so background work that
+//!    waits can report what it waits for: `AppState::wait_for_interactive_work`
+//!    blocks a background thread and tells the job's status, which the
+//!    header's job list then shows as waiting rather than running.
 //! 2. **Core budget** — a fraction of the logical cores per priority. The CLI
 //!    uses all cores for its foreground scan; the server leaves headroom to
 //!    keep serving the UI (`interactive_ratio`, default 0.5) and throttles

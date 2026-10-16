@@ -774,10 +774,15 @@ pub struct StackActivityEntry {
 pub struct StackActivity {
     pub schema_version: u32,
     pub active: Vec<StackActivityEntry>,
-    /// Automatic refreshes still settling, soonest first. They become
-    /// builds in `active` when they start.
+    /// Automatic refreshes, soonest first: those still settling, and those
+    /// due and `waiting` for the worker. They become builds in `active` when
+    /// they start.
     #[serde(default)]
     pub scheduled: Vec<ScheduledRefreshView>,
+    /// Processing being re-applied to refreshed stacks that waits for its
+    /// turn, out of the line until the worker is free.
+    #[serde(default)]
+    pub waiting_reapplies: Vec<WaitingReapplyView>,
 }
 
 /// A waiting automatic refresh, with the names a person reads.
@@ -795,6 +800,30 @@ pub struct ScheduledRefreshView {
     /// the first time, as people read them. A refresh that expects to do
     /// nothing is not listed.
     pub channels: Vec<String>,
+    /// Due, and waiting for the worker rather than settling.
+    #[serde(default)]
+    pub waiting: bool,
+    /// What it waits for, in words that fit "Waiting for …": a person's
+    /// work, such as `a stack build`, or the build holding the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<String>,
+    /// How far its build had got when a person's build stopped it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress: Option<automatic::LastProgress>,
+}
+
+/// Processing re-applied to a refreshed stack, waiting for its turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WaitingReapplyView {
+    pub database_id: String,
+    pub project_id: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<i32>,
+    /// The channel, such as `M44 · R`.
+    pub label: String,
+    /// What it waits for, in words that fit "Waiting for …".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<String>,
 }
 
 fn channel_label(target_name: &str, filter_name: &str) -> String {
@@ -1228,33 +1257,29 @@ impl StackPreviewManager {
     }
 
     /// Stop every automatic build so an interactive one gets the worker.
-    /// Returns the projects whose refresh should come back later; a stopped
-    /// build's checkpoint resumes when it does.
-    pub fn cancel_automatic(&self) -> Vec<(String, i32)> {
-        let mut projects = Vec::new();
-        let mut job_ids = Vec::new();
+    /// Returns the projects whose refresh should come back once the worker
+    /// is free, with where each build stood; a stopped build's checkpoint
+    /// resumes when it does.
+    pub fn cancel_automatic(&self) -> Vec<automatic::InterruptedBuild> {
+        let mut stopped: Vec<StackActivityEntry> = Vec::new();
         for job in self.jobs.lock().unwrap().values() {
             if job.automatic && matches!(job.state, StackJobState::Queued | StackJobState::Running)
             {
-                projects.push((job.database_id.clone(), job.project_id));
-                job_ids.push(job.job_id.clone());
+                stopped.push(mono_activity(job));
             }
         }
         for job in self.color_jobs.lock().unwrap().values() {
             if job.automatic && matches!(job.state, StackJobState::Queued | StackJobState::Running)
             {
-                projects.push((job.database_id.clone(), job.project_id));
-                job_ids.push(job.job_id.clone());
+                stopped.push(color_activity(job));
             }
         }
-        for job_id in job_ids {
-            self.request_cancel(&job_id);
+        for entry in &stopped {
+            self.request_cancel(&entry.job_id);
         }
         // A re-apply steps aside too, and waits for its turn again.
         self.yield_automatic_processing();
-        projects.sort();
-        projects.dedup();
-        projects
+        interrupted_builds(stopped)
     }
 
     /// Stop every re-apply queued or running so other work gets the worker.
@@ -1974,15 +1999,43 @@ pub(super) fn persist_latest_and_reapply(
     Ok(())
 }
 
+/// One refresh per project an automatic build was stopped on, keeping how
+/// far the furthest running build of it had got.
+fn interrupted_builds(stopped: Vec<StackActivityEntry>) -> Vec<automatic::InterruptedBuild> {
+    let mut builds: BTreeMap<(String, i32), Option<automatic::LastProgress>> = BTreeMap::new();
+    for entry in stopped {
+        let last = (entry.state == StackJobState::Running && entry.total_units > 0).then(|| {
+            automatic::LastProgress {
+                label: entry.label.clone(),
+                processed_units: entry.processed_units,
+                total_units: entry.total_units,
+            }
+        });
+        let slot = builds
+            .entry((entry.database_id, entry.project_id))
+            .or_default();
+        if slot.is_none() {
+            *slot = last;
+        }
+    }
+    builds
+        .into_iter()
+        .map(
+            |((database_id, project_id), last_progress)| automatic::InterruptedBuild {
+                database_id,
+                project_id,
+                last_progress,
+            },
+        )
+        .collect()
+}
+
 /// A build the user asks for takes the worker: automatic builds stop, and
-/// their projects come back for a refresh once the user's build is done.
+/// their projects wait, listed as waiting, to refresh as soon as the user's
+/// build is done.
 pub(super) fn interrupt_automatic(state: &AppState) {
-    for (database_id, project_id) in state.stack_previews.cancel_automatic() {
-        state.auto_stacks.touch_projects(
-            &database_id,
-            [project_id],
-            automatic::RefreshReason::Arrival,
-        );
+    for build in state.stack_previews.cancel_automatic() {
+        state.auto_stacks.interrupted(build);
     }
 }
 
@@ -2033,11 +2086,82 @@ pub async fn get_stack_activity(
             .await
             .unwrap_or_default()
     };
+    let waiting_reapplies = waiting_reapplies(&state, &scheduled);
+    // Read after the refreshes, so a refresh that started meanwhile is in
+    // the line by now; it is listed once, as its build.
+    let active = state.stack_previews.active();
     Json(ApiResponse::success(StackActivity {
         schema_version: 1,
-        active: state.stack_previews.active(),
-        scheduled,
+        scheduled: without_started(scheduled, &active),
+        active,
+        waiting_reapplies,
     }))
+}
+
+/// What automatic stack work waits for, in words that fit "Waiting for …":
+/// the build or run holding the worker, a person's work, or a quality
+/// analysis of its database. `None` when it is free to start at the
+/// scheduler's next look.
+fn automatic_work_waits_for(state: &AppState, database_id: &str) -> Option<String> {
+    let manager = &state.stack_previews;
+    let holder = automatic::holds_off_refreshes(manager)
+        .then(|| manager.worker_holder(""))
+        .flatten();
+    holder.or_else(|| state.interactive_job_name()).or_else(|| {
+        let ctx = state.get_database(database_id)?;
+        crate::server::quality_backfill::snapshot(&ctx.quality_backfill)
+            .running
+            .then(|| format!("the quality analysis of {}", ctx.name))
+    })
+}
+
+/// A waiting refresh whose build has just joined the line is listed as that
+/// build, not twice.
+fn without_started(
+    scheduled: Vec<ScheduledRefreshView>,
+    active: &[StackActivityEntry],
+) -> Vec<ScheduledRefreshView> {
+    scheduled
+        .into_iter()
+        .filter(|refresh| {
+            !refresh.waiting
+                || !active.iter().any(|entry| {
+                    entry.automatic
+                        && entry.kind != StackActivityKind::Processing
+                        && entry.database_id == refresh.database_id
+                        && refresh
+                            .project_id
+                            .is_none_or(|project_id| project_id == entry.project_id)
+                })
+        })
+        .collect()
+}
+
+/// Re-applies of processing out of the line, waiting for their turn.
+fn waiting_reapplies(
+    state: &AppState,
+    scheduled: &[ScheduledRefreshView],
+) -> Vec<WaitingReapplyView> {
+    let mut waiting = state.stack_previews.waiting_reapplies();
+    waiting.sort_by_key(|(since, _)| *since);
+    waiting
+        .into_iter()
+        .map(|(_, mut view)| {
+            view.waiting_for = automatic_work_waits_for(state, &view.database_id).or_else(|| {
+                // A refresh of its project may bring a newer stack first.
+                scheduled
+                    .iter()
+                    .any(|refresh| {
+                        refresh.database_id == view.database_id
+                            && refresh
+                                .project_id
+                                .is_none_or(|project_id| project_id == view.project_id)
+                    })
+                    .then(|| "its project's stacks to refresh".to_string())
+            });
+            view
+        })
+        .collect()
 }
 
 fn name_scheduled(
@@ -2076,6 +2200,10 @@ fn name_scheduled(
                 }),
                 _ => None,
             };
+            let waiting_for = refresh
+                .waiting
+                .then(|| automatic_work_waits_for(state, &refresh.database_id))
+                .flatten();
             ScheduledRefreshView {
                 database_name: ctx
                     .map(|ctx| ctx.name.clone())
@@ -2086,6 +2214,9 @@ fn name_scheduled(
                 reason: refresh.reason,
                 due_in_seconds: refresh.due_in_seconds,
                 channels,
+                waiting: refresh.waiting,
+                waiting_for,
+                last_progress: refresh.last_progress,
             }
         })
         .collect()
@@ -3376,8 +3507,8 @@ fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob, origin: journal::Jou
         }
         // Only a build a person asked for outranks pre-generation and
         // quality scans; an automatic refresh is background work like them.
-        let guard =
-            (!state.stack_previews.is_automatic(&job_id)).then(|| state.begin_interactive_job());
+        let guard = (!state.stack_previews.is_automatic(&job_id))
+            .then(|| state.begin_named_interactive_job("a stack build"));
         let state_for_job = Arc::clone(&state);
         let cancel_for_job = Arc::clone(&cancel);
         let result = tokio::task::spawn_blocking(move || {
@@ -7635,6 +7766,116 @@ mod tests {
         refresh(&state, cache, &"2".repeat(64), "rev-2");
         assert_eq!(state.stack_previews.reapply_count(), 1);
         (state, applied, person)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_activity_endpoint_lists_a_reapply_waiting_for_a_persons_work() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (state, _) = processed_card(cache.path()).await;
+        let person = state.begin_named_interactive_job("a color composition");
+        refresh(&state, cache.path(), &"2".repeat(64), "rev-2");
+
+        let Json(response) = get_stack_activity(State(Arc::clone(&state))).await;
+        let json = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            json["data"]["waiting_reapplies"],
+            serde_json::json!([{
+                "database_id": "test",
+                "project_id": 7,
+                "target_id": 42,
+                "label": "Target 42 · R",
+                "waiting_for": "a color composition",
+            }]),
+            "{json}"
+        );
+        drop(person);
+        // Once it runs, it is a processing run in the line, not waiting.
+        eventually("the re-apply runs", || {
+            state.stack_previews.waiting_reapplies().is_empty()
+        })
+        .await;
+    }
+
+    #[test]
+    fn stopped_automatic_builds_come_back_once_per_project_with_their_progress() {
+        let entry = |job_id: &str, project_id, state, processed, total| StackActivityEntry {
+            kind: StackActivityKind::Mono,
+            job_id: job_id.into(),
+            database_id: "db".into(),
+            project_id,
+            target_id: Some(42),
+            state,
+            label: format!("M44 · {job_id}"),
+            detail: String::new(),
+            processed_units: processed,
+            total_units: total,
+            created_unix_seconds: 1,
+            automatic: true,
+            queue_position: None,
+            progress_label: None,
+            processing: None,
+        };
+        let builds = interrupted_builds(vec![
+            entry("Ha", 1, StackJobState::Queued, 0, 0),
+            entry("R", 1, StackJobState::Running, 12, 40),
+            entry("G", 2, StackJobState::Queued, 0, 0),
+        ]);
+        assert_eq!(
+            builds,
+            vec![
+                automatic::InterruptedBuild {
+                    database_id: "db".into(),
+                    project_id: 1,
+                    last_progress: Some(automatic::LastProgress {
+                        label: "M44 · R".into(),
+                        processed_units: 12,
+                        total_units: 40,
+                    }),
+                },
+                automatic::InterruptedBuild {
+                    database_id: "db".into(),
+                    project_id: 2,
+                    last_progress: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_waiting_refresh_whose_build_joined_the_line_is_listed_once() {
+        let refresh = |project_id: Option<i32>, waiting: bool| ScheduledRefreshView {
+            database_id: "db".into(),
+            database_name: "Askar".into(),
+            project_id,
+            project_name: None,
+            reason: automatic::RefreshReason::Arrival,
+            due_in_seconds: 0,
+            channels: vec!["M44 · R".into()],
+            waiting,
+            waiting_for: None,
+            last_progress: None,
+        };
+        let mut build = mono_activity(&running_build("auto"));
+        build.database_id = "db".into();
+        build.project_id = 1;
+        let scheduled = vec![
+            refresh(Some(1), true),
+            refresh(Some(2), true),
+            refresh(Some(1), false),
+        ];
+        // A person's build of project 1 does not stand for the refresh.
+        let listed = without_started(scheduled.clone(), std::slice::from_ref(&build));
+        assert_eq!(listed.len(), 3);
+        build.automatic = true;
+        let listed = without_started(scheduled, std::slice::from_ref(&build));
+        assert_eq!(
+            listed
+                .iter()
+                .map(|refresh| (refresh.project_id, refresh.waiting))
+                .collect::<Vec<_>>(),
+            [(Some(2), true), (Some(1), false)]
+        );
     }
 
     /// The re-apply's start, coming back from probing the tools late.

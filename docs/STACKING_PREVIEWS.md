@@ -310,13 +310,17 @@ stretch, deconvolution and RC-Astro processing runs (see
 A running color
 composition has no **Stop**: it only checks for one before it starts, and
 finishes within minutes. An automatic refresh still settling after new
-frames, a sync or grade changes is not listed or counted: nothing runs yet. It
-appears once it starts, as a build marked `automatic`. These controls need
+frames, a sync or grade changes is not listed or counted: nothing runs yet.
+Once due, it is listed as waiting until it starts, as a build marked
+`automatic` (see [Automatic refresh](#automatic-refresh)). These controls need
 write access. `POST /api/stack-activity/{job_id}/move` with
 `{"position": n}` (0 is next) and `POST /api/stack-activity/{job_id}/cancel`
 do the same from scripts; `GET /api/stack-activity` lists builds running first,
-then the line in order, each waiting one with its `queue_position`, and the
-settling automatic refreshes under `scheduled`. A processing run is an entry
+then the line in order, each waiting one with its `queue_position`; the
+automatic refreshes under `scheduled`, each due one marked `waiting` with
+`waiting_for` and the `last_progress` of a build a person's build stopped;
+and re-applies of processing waiting for their turn under
+`waiting_reapplies`. A processing run is an entry
 of `kind` `processing` whose `job_id` is its stretch id; its `processing`
 object carries `operation`, `channel`, `stoppable`, and, while it waits,
 `waiting_for`, or, once it runs, `stage`, `fraction` and
@@ -638,9 +642,18 @@ background work that yields to anything you start. A
 first stack this way gets no first color preview; once one is composed, it
 follows its channels.
 
-A refresh still waiting to start is not in the header's queue or its job
-count: it is not work yet. It appears once it starts, as one build per
-channel marked `automatic`. A refresh that would find only cache hits does
+A refresh still settling is not in the header's queue or its job count: it
+is not work yet. Once it is due it is work. If the stacker is free it starts
+at the scheduler's next look, within 15 seconds, as one build per channel
+marked `automatic`. If a build of yours, other work you started, another
+build, or a quality analysis of its database holds it back, the header lists
+it as **Refreshing stacks**, marked **waiting**, with what it waits for, and
+counts it as waiting: `1 running · 1 waiting`. A build you start stops a
+running automatic build; that refresh is listed as waiting at once, with how
+far its build had got, and resumes from the build's checkpoint as soon as
+yours is done, without settling again. New frames that arrive while it waits
+join it rather than pushing it back. When it starts, its row becomes its
+builds; it is never listed twice. A refresh that would find only cache hits does
 not start a build, nor does one whose channels an earlier refresh of the same
 database already covers. When a refresh finds an older finished build of the
 same frames, the card points back at it instead of stacking again.
@@ -1203,7 +1216,9 @@ stack, on its own and with no page open:
   of frames does not start RC-Astro after every build. It then waits for
   the worker to be free of everything else: anything you start and every
   stack build go first. Like an automatic build, it steps aside when you
-  start work, and comes back once the worker is free. A running re-apply
+  start work, and comes back once the worker is free. Meanwhile the header
+  lists it as **Re-applying processing**, marked **waiting**, with what it
+  waits for. A running re-apply
   also steps aside for an automatic refresh that is due, since the refresh
   may bring a newer stack anyway.
 - Only the channel's newest stack is processed. A newer stack arriving while

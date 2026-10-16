@@ -285,7 +285,7 @@ impl AppState {
         tokio::spawn(async move {
             // Mark interactive-active for the whole job so background pregen
             // yields; drops even if the task is cancelled/panics.
-            let _guard = state.begin_interactive_job();
+            let _guard = state.begin_named_interactive_job("a preview");
             // Bound concurrency to the interactive budget. A closed semaphore
             // (never happens — we never close it) would just skip the permit.
             let _permit = sem.acquire_owned().await;

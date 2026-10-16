@@ -4,7 +4,13 @@ import { Link } from 'react-router-dom';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
-import { lineLengths, type ActivityControl, type ActivityItem, type ActivityQueue } from './activityItems';
+import {
+  countText,
+  lineLengths,
+  type ActivityControl,
+  type ActivityItem,
+  type ActivityQueue,
+} from './activityItems';
 import { useHeaderActivity, WBPP_ACTIVITY_QUERY_KEY, type ScanErrorNote } from './useHeaderActivity';
 import './header.css';
 
@@ -104,24 +110,30 @@ function ScanErrorRow({
   );
 }
 
+/** The row's corner: its place in a line, waiting, or its progress. */
+function stateText(item: ActivityItem): string {
+  if (item.status === 'queued') {
+    return item.position != null && item.queue ? `queued · ${item.position + 1}` : 'queued';
+  }
+  if (item.status === 'waiting') return 'waiting';
+  return item.percent != null ? `${Math.round(item.percent)}%` : 'working';
+}
+
 function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowControls }) {
   const [confirming, setConfirming] = useState(false);
   const control = item.control;
   const allowed = !!control && controls.allowed(item);
-  const waiting = item.position != null && !!item.queue;
+  const queued = item.status === 'queued';
+  const inLine = queued && item.position != null && !!item.queue;
   const last = item.queue ? controls.lengths[item.queue] - 1 : 0;
   const name = `${item.title}: ${item.scope}`;
+  // Waiting work keeps a still bar at how far it had got.
+  const bar = item.status === 'running' || (item.status === 'waiting' && item.percent != null);
   return (
-    <li className={`activity-row${item.queued ? ' is-queued' : ''}`} title={item.hint}>
+    <li className="activity-row" data-job-state={item.status} title={item.hint}>
       <div className="activity-row-head">
         <span className="activity-row-title">{item.title}</span>
-        <span className="activity-row-state">
-          {item.queued
-            ? waiting
-              ? `queued · ${item.position! + 1}`
-              : 'queued'
-            : item.percent != null ? `${Math.round(item.percent)}%` : 'working'}
-        </span>
+        <span className="activity-row-state">{stateText(item)}</span>
       </div>
       <div className="activity-row-scope">
         {item.href ? (
@@ -139,7 +151,7 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
         )}
         {item.automatic && <span className="activity-row-tag">automatic</span>}
       </div>
-      {!item.queued && (
+      {bar && (
         <div className="activity-row-bar" aria-hidden="true">
           <div
             className={`activity-row-fill${item.percent == null ? ' is-indeterminate' : ''}`}
@@ -149,9 +161,9 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
       )}
       <div className="activity-row-foot">
         <div className="activity-row-detail">{item.detail}</div>
-        {allowed && control && (item.queued || item.stoppable) && (
+        {allowed && control && (queued || (item.status === 'running' && item.stoppable)) && (
           <div className="activity-row-actions">
-            {waiting && (
+            {inLine && (
               <>
                 <button
                   type="button"
@@ -173,7 +185,7 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
                 </button>
               </>
             )}
-            {item.queued ? (
+            {queued ? (
               <button
                 type="button"
                 className="activity-row-stop"
@@ -222,8 +234,9 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
 
 /**
  * Background work in the header, kept small: the overall progress and how
- * many jobs there are. Hover, focus or click opens the queue: every catalog
- * refresh, quality scan and stack build, running or queued, on any database.
+ * many jobs run and wait. Hover, focus or click opens the queue: every
+ * catalog refresh, quality scan and stack build, running or queued, on any
+ * database, and automatic work waiting while a person's work runs.
  * Each row links to what it works on. A scan's frame errors stay, on the
  * busy chip or as "Finished with errors", until dismissed.
  */
@@ -324,13 +337,12 @@ export default function ActivityChip() {
     },
   };
 
-  const jobs = `${summary.count} job${summary.count === 1 ? '' : 's'}`;
   const percent = summary.percent == null ? null : Math.round(summary.percent);
-  const running = summary.count - summary.queued;
+  const { running, waiting } = summary;
   const label = [
-    percent != null ? `${percent}% done` : 'Working',
+    percent != null ? `${percent}% done` : running > 0 ? 'Working' : 'Waiting',
     `${running} running`,
-    summary.queued > 0 ? `${summary.queued} queued` : '',
+    waiting > 0 ? `${waiting} waiting` : '',
     scanError ? 'a quality scan had errors' : '',
   ].filter(Boolean).join(', ');
 
@@ -389,7 +401,13 @@ export default function ActivityChip() {
           <>
             <ProgressRing percent={summary.percent} idle={running === 0} />
             {percent != null && <span className="activity-chip-percent">{percent}%</span>}
-            <span className="activity-chip-count">{jobs}</span>
+            <span className="activity-chip-count">{countText(summary)}</span>
+            {/* A phone hides the count; how many wait still shows. */}
+            {waiting > 0 && (
+              <span className="activity-chip-waiting" aria-hidden="true">
+                {running}·{waiting}
+              </span>
+            )}
           </>
         )}
       </button>
@@ -400,7 +418,7 @@ export default function ActivityChip() {
             <span className="activity-popover-counts">
               {idleWithErrors
                 ? 'Nothing running'
-                : `${running} running${summary.queued > 0 ? ` · ${summary.queued} queued` : ''}`}
+                : `${running} running${waiting > 0 ? ` · ${waiting} waiting` : ''}`}
             </span>
           </div>
           {scanErrors.map((note) => (

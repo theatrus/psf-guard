@@ -5,7 +5,7 @@ import type {
   SpatialScanStatus,
   StackActivityEntry,
 } from '../../../api/types';
-import { activityItems, lineLengths, summarize } from '../activityItems';
+import { activityItems, countText, lineLengths, summarize } from '../activityItems';
 
 function scan(processed: number, total: number, stage = 'astrometry'): SpatialScanStatus {
   return {
@@ -133,7 +133,7 @@ describe('header activity items', () => {
     ]);
     expect(items.map((item) => item.scope)).toEqual(['M44 · R', 'M44 · B', 'M44 · G']);
     expect(items[0]).toMatchObject({ detail: '3/12 frames', percent: 25, automatic: true });
-    expect(items[1]).toMatchObject({ queued: true, percent: null, detail: 'Waiting for the build ahead' });
+    expect(items[1]).toMatchObject({ status: 'queued', percent: null, detail: 'Waiting for the build ahead' });
   });
 
   it('sums up as the mean of the running jobs that report progress', () => {
@@ -141,8 +141,8 @@ describe('header activity items', () => {
       [{ dbId: 'a', dbName: 'Askar', scan: scan(4, 10) }],
       [stack('R', 'running', 9, 10), stack('B', 'queued')]
     );
-    expect(summarize(items)).toEqual({ count: 3, queued: 1, percent: 65 });
-    expect(summarize([])).toEqual({ count: 0, queued: 0, percent: null });
+    expect(summarize(items)).toEqual({ count: 3, running: 2, waiting: 1, percent: 65 });
+    expect(summarize([])).toEqual({ count: 0, running: 0, waiting: 0, percent: null });
   });
 
   it('orders the stack line as the server does and carries each place', () => {
@@ -171,12 +171,12 @@ describe('header activity items', () => {
       title: 'WBPP',
       scope: 'Askar · project Bubble',
       detail: 'Running in PixInsight · Image Integration · 7 steps done',
-      queued: false,
+      status: 'running',
       percent: null,
       control: { kind: 'wbpp-running', dbId: 'a' },
     });
     expect(items[2]).toMatchObject({
-      queued: true,
+      status: 'queued',
       position: 1,
       control: { kind: 'wbpp-queued', dbId: 'a', queueId: 'q4' },
     });
@@ -227,7 +227,7 @@ describe('header activity items', () => {
       scope: 'M44 · G',
       // The title names the tool; the line under it says when it started.
       detail: `started ${startedAt}`,
-      queued: false,
+      status: 'running',
       percent: 42,
       stoppable: true,
       queue: 'stack',
@@ -238,7 +238,7 @@ describe('header activity items', () => {
     expect(items[1]).toMatchObject({
       scope: 'M44 · R',
       detail: 'Waiting for BlurXTerminator on M44 · G',
-      queued: true,
+      status: 'queued',
       percent: null,
       position: 0,
       stoppable: true,
@@ -250,11 +250,110 @@ describe('header activity items', () => {
       processing: { ...stretch.processing!, waiting_for: null, stage: 'Reading the stack' },
     }]);
     expect(deconvolving[0]).toMatchObject({
-      queued: false, percent: null, stoppable: false, detail: 'Reading the stack',
+      status: 'running', percent: null, stoppable: false, detail: 'Reading the stack',
     });
-    expect(summarize(items)).toEqual({ count: 3, queued: 2, percent: 42 });
+    expect(summarize(items)).toEqual({ count: 3, running: 1, waiting: 2, percent: 42 });
     // A re-apply the server queued after its stack refreshed is marked.
     expect(activityItems([], [{ ...blur, automatic: true }])[0]).toMatchObject({ automatic: true });
     expect(items[0].automatic).toBeFalsy();
+  });
+
+  it('lists automatic work that stepped aside as waiting, after running work', () => {
+    const person = stack('P', 'running', 3, 10);
+    const automaticBuild = stack('A', 'running', 5, 10, true);
+    const items = activityItems(
+      [{
+        dbId: 'db-a',
+        dbName: 'Askar',
+        backfill: backfill(2, 8),
+        scan: { ...scan(4, 10), progress: { ...scan(4, 10).progress, automatic: true, waiting_for: 'a stack build' } },
+      }],
+      [automaticBuild, person],
+      undefined,
+      () => undefined,
+      {
+        scheduled: [
+          {
+            database_id: 'db-a', database_name: 'Askar', project_id: 3, project_name: 'Bravo',
+            reason: 'arrival', due_in_seconds: 0, channels: ['M44 · Ha'], waiting: true,
+            waiting_for: 'a stack build',
+            last_progress: { label: 'M44 · Ha', processed_units: 12, total_units: 40 },
+          },
+          // Still settling: not work yet.
+          {
+            database_id: 'db-a', database_name: 'Askar', project_id: 4, project_name: 'Charlie',
+            reason: 'grade', due_in_seconds: 600, channels: ['M44 · R'], waiting: false,
+          },
+        ],
+        reapplies: [{ database_id: 'db-a', project_id: 3, target_id: 9, label: 'M44 · G', waiting_for: null }],
+      }
+    );
+    // A person's running work, then running background work, then waiting.
+    expect(items.map((item) => [item.title, item.status])).toEqual([
+      ['Stacking', 'running'],
+      ['Stacking', 'running'],
+      ['Analyzing database quality', 'waiting'],
+      ['Refreshing stacks', 'waiting'],
+      ['Re-applying processing', 'waiting'],
+    ]);
+    expect(items[0].scope).toBe('M44 · P');
+    expect(items[1]).toMatchObject({ scope: 'M44 · A', automatic: true, background: true });
+    expect(items[2]).toMatchObject({
+      detail: 'Waiting for a stack build · 2/8 targets · Solving 4/10 frames',
+      waitingFor: 'a stack build',
+      // How far it had got stays.
+      percent: 25,
+    });
+    expect(items[3]).toMatchObject({
+      key: 'refresh-waiting:db-a:3',
+      scope: 'Askar · Bravo',
+      detail: 'Waiting for a stack build · stopped at 12/40 frames',
+      percent: 30,
+      automatic: true,
+      href: '/stacks?db=db-a&project=3',
+      hint: 'Restacks M44 · Ha',
+    });
+    // Waiting work has no control: it resumes on its own.
+    expect(items[3].control).toBeUndefined();
+    expect(items[4]).toMatchObject({
+      scope: 'M44 · G',
+      detail: 'Waiting to start',
+      href: '/stacks?db=db-a&project=3&target=9',
+    });
+
+    const summary = summarize(items);
+    // Waiting work's last progress does not count toward the chip's.
+    expect(summary).toEqual({ count: 5, running: 2, waiting: 3, percent: 40 });
+    expect(countText(summary)).toBe('2 running · 3 waiting');
+    expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 0 });
+  });
+
+  it("lists a person's scan apart from the database analysis waiting for it", () => {
+    const items = activityItems(
+      [{
+        dbId: 'db-a',
+        dbName: 'Askar',
+        backfill: backfill(2, 8),
+        scan: { ...scan(4, 10), progress: { ...scan(4, 10).progress, automatic: false } },
+      }],
+      []
+    );
+    expect(items).toMatchObject([
+      { key: 'scan:db-a', title: 'Analyzing quality', status: 'running', detail: 'Solving 4/10 frames' },
+      {
+        key: 'backfill:db-a',
+        title: 'Analyzing database quality',
+        status: 'waiting',
+        waitingFor: 'a quality scan',
+        detail: 'Waiting for a quality scan · 2/8 targets',
+      },
+    ]);
+  });
+
+  it('counts jobs plainly until one waits', () => {
+    expect(countText({ count: 1, running: 1, waiting: 0, percent: null })).toBe('1 job');
+    expect(countText({ count: 3, running: 3, waiting: 0, percent: null })).toBe('3 jobs');
+    expect(countText({ count: 3, running: 1, waiting: 2, percent: null })).toBe('1 running · 2 waiting');
+    expect(countText({ count: 2, running: 0, waiting: 2, percent: null })).toBe('0 running · 2 waiting');
   });
 });

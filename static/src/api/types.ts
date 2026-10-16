@@ -1031,13 +1031,32 @@ export interface ScheduledRefresh {
    * to do nothing.
    */
   channels?: string[];
+  /** Due, and waiting for the stacking worker rather than settling. */
+  waiting?: boolean;
+  /** What it waits for, in words that fit "Waiting for …". */
+  waiting_for?: string | null;
+  /** How far its build had got when a person's build stopped it. */
+  last_progress?: { label: string; processed_units: number; total_units: number } | null;
+}
+
+/** Processing re-applied to a refreshed stack, waiting for its turn. */
+export interface WaitingReapply {
+  database_id: string;
+  project_id: number;
+  target_id?: number | null;
+  /** The channel, such as `M44 · R`. */
+  label: string;
+  /** What it waits for, in words that fit "Waiting for …". */
+  waiting_for?: string | null;
 }
 
 export interface StackActivity {
   schema_version: number;
   active: StackActivityEntry[];
-  /** Automatic refreshes still settling, soonest first. */
+  /** Automatic refreshes, soonest first: settling, or due and `waiting`. */
   scheduled?: ScheduledRefresh[];
+  /** Re-applies of processing waiting for their turn, out of the line. */
+  waiting_reapplies?: WaitingReapply[];
 }
 
 export type StackStretchColorStrategy = 'linked' | 'unlinked' | 'luminance-preserving';
@@ -3706,6 +3725,12 @@ export interface SpatialScanProgress {
   started_at: number | null;
   finished_at: number | null;
   last_error: string | null;
+  /** Started by background work (a database-wide analysis or new frames),
+   *  not by a person. It steps aside while interactive work runs. */
+  automatic?: boolean;
+  /** What an automatic scan waits for while it steps aside, such as
+   *  `a stack build`; null while it runs. */
+  waiting_for?: string | null;
 }
 
 export interface SpatialScanStatus {
