@@ -152,7 +152,7 @@ pub fn run(
     crate::calibration::migrate_existing(&conn)?;
     flat_groups::store::add_tables(&conn)?;
     // Where each rig is, so its nights split at its own noon.
-    let sites = crate::calibration::backfill_rig_sites(&conn, || true)?;
+    let sites = crate::calibration::backfill_rig_sites(&conn, || true, || {})?;
     if sites.pending > 0 {
         println!(
             "rig sites: {} located, {} by clock, {} unplaced, {} unreadable",
@@ -352,7 +352,7 @@ fn light_reports(
         let mut nights: Vec<String> = selected
             .flat
             .iter()
-            .filter_map(|f| Some(nights.night_of(&f.rig_uuid, f.captured_at?)))
+            .filter_map(|f| Some(nights.night_of_frame(&f.rig_uuid, &f.frame_uuid, f.captured_at?)))
             .collect();
         nights.sort();
         nights.dedup();

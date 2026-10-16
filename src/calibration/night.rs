@@ -2,44 +2,57 @@
 //!
 //! Calibration groups a rig's frames by night: an evening's darks, the
 //! flats shot at dusk and those shot at the dawn after it. A night runs from
-//! one local noon at the rig's site to the next, the way N.I.N.A.'s
+//! one local noon at the frame's site to the next, the way N.I.N.A.'s
 //! `DATEMINUS12` folders date it, so no dusk or dawn flat run straddles the
-//! split. A night is named by the date its evening began.
+//! split. A night is named by the local date its evening began.
 //!
-//! Where a rig's local noon falls, first found wins:
+//! Where a frame's local noon falls, first found wins:
 //!
 //! 1. the `night_zone` setting, rig then global ([`super::rules`]): noon at
 //!    that UTC offset;
-//! 2. the site longitude the rig's frames record (SITELONG, from the
-//!    N.I.N.A. profile): mean solar noon there, 12:00 UTC less four minutes
-//!    per degree east;
-//! 3. the rig computer's clock, DATE-LOC less DATE-OBS: noon on that clock;
-//! 4. the catalog's quiet hours, where Images splits nights
+//! 2. the site longitude the frame records (SITELONG, from the N.I.N.A.
+//!    profile): mean solar noon there, 12:00 UTC less four minutes per
+//!    degree east;
+//! 3. the site longitude of its rig, for a frame that records none;
+//! 4. the frame's own clock, DATE-LOC less DATE-OBS: noon on that clock;
+//! 5. its rig's standard clock, the smallest offset its frames record;
+//! 6. the catalog's quiet hours, where Images splits nights
 //!    ([`crate::server::sky_coverage::night_boundary`]).
 //!
-//! The server's own time zone is never used: it often runs somewhere else,
-//! or on UTC. Neither the setting nor the longitude moves with daylight
-//! saving, and the clock is read once per rig; an hour either side of noon
-//! is still the middle of the day, so no night notices.
+//! Each frame keeps its own site, so a rig taken to a star party splits
+//! those nights where it was and keeps its home nights as they were. The
+//! server's own time zone is never used: it often runs somewhere else, or
+//! on UTC. Neither the setting nor a longitude moves with daylight saving;
+//! a frame's own clock does, which is the clock it was shot by, and a rig's
+//! fallback clock is its standard one, so it does not move. An hour either
+//! side of noon is still the middle of the day, so no night notices.
 //!
-//! The site is kept per rig in `psf_guard_rig_site`. An import records it
-//! from each frame's header; [`backfill_rig_sites`] reads it, after startup,
-//! off a few of each rig's newest frames for rigs imported before.
+//! A split is carried as a shift, not a time of day: a night is the UTC
+//! date of `at − shift`, with the shift `12 h − offset` left unwrapped, so
+//! a site past +12 h (New Zealand in summer, Tonga) or close to 180° W
+//! names its night by the local date of its evening.
+//!
+//! Sites are kept per frame on `psf_guard_calibration_frame` and per rig in
+//! `psf_guard_rig_site`. An import records them from each frame's header;
+//! [`backfill_rig_sites`] reads them, after startup, for frames imported
+//! before.
 
 use super::rules::rules_for_rig;
 use crate::commands::import::headers::{parse_fits_datetime, FrameMeta};
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-const DAY: i64 = 86_400;
 const NOON: i64 = 12 * 3_600;
 
-/// Frames read per rig, newest first, looking for a site.
-const SITE_READS_PER_RIG: usize = 5;
+/// Frames whose headers are read between commits.
+const SITE_BACKFILL_CHUNK: usize = 100;
+
+/// How long a frame whose file was away waits before it is read again.
+const SITE_RETRY_SECONDS: i64 = 7 * 86_400;
 
 pub(crate) const SITE_TABLE_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS psf_guard_rig_site (
@@ -51,13 +64,36 @@ pub(crate) const SITE_TABLE_SQL: &str = r#"
     );
 "#;
 
-/// Add the site table to a catalog that predates it.
+/// The per-frame site columns of `psf_guard_calibration_frame`, a table
+/// PSF Guard owns. `site_read_at` is when the header was read, negative
+/// when its file was away then, and NULL when it has not been read.
+const FRAME_SITE_COLUMNS: [(&str, &str); 3] = [
+    ("site_longitude", "REAL"),
+    ("site_utc_offset_s", "INTEGER"),
+    ("site_read_at", "INTEGER"),
+];
+
+/// Add the site table and columns to a catalog that predates them.
 pub(crate) fn add_site_table(conn: &Connection) -> Result<bool> {
-    if table_exists(conn) || conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true) {
+    if conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true) {
         return Ok(false);
     }
-    conn.execute_batch(SITE_TABLE_SQL)?;
-    Ok(true)
+    let mut changed = false;
+    if !table_exists(conn) {
+        conn.execute_batch(SITE_TABLE_SQL)?;
+        changed = true;
+    }
+    if super::schema_exists(conn) {
+        for (column, declaration) in FRAME_SITE_COLUMNS {
+            changed |= super::add_column_if_missing(
+                conn,
+                "psf_guard_calibration_frame",
+                column,
+                declaration,
+            )?;
+        }
+    }
+    Ok(changed)
 }
 
 fn table_exists(conn: &Connection) -> bool {
@@ -72,6 +108,11 @@ fn table_exists(conn: &Connection) -> bool {
     .is_some()
 }
 
+fn frame_columns_exist(conn: &Connection) -> bool {
+    conn.prepare("SELECT site_longitude, site_utc_offset_s, site_read_at FROM psf_guard_calibration_frame LIMIT 0")
+        .is_ok()
+}
+
 /// What one frame's header says about where and when its rig is.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Site {
@@ -84,7 +125,8 @@ pub struct Site {
 impl Site {
     pub fn of(frame: &FrameMeta) -> Self {
         // N.I.N.A. writes 0°, 0° for a profile with no site set: that is
-        // the Gulf of Guinea, not an observatory.
+        // the Gulf of Guinea, not an observatory. The header reader has
+        // folded 0–360° east into ±180° already.
         let unset = frame.site_latitude.unwrap_or(0.0) == 0.0;
         let longitude = frame
             .site_longitude
@@ -114,36 +156,39 @@ impl Site {
     }
 }
 
-/// Seconds after 00:00 UTC of mean solar noon at `longitude` degrees east.
+/// The shift of a site's nights at `longitude` degrees east: 12 h less
+/// four minutes a degree, to the minute. Its time of day is mean solar
+/// noon in UTC; left unwrapped, it names nights by their local date.
 pub fn solar_noon(longitude: f64) -> i64 {
-    // Four minutes a degree, to the minute.
     let minutes = (longitude * 4.0).round() as i64;
-    (NOON - minutes * 60).rem_euclid(DAY)
+    NOON - minutes * 60
 }
 
-/// Seconds after 00:00 UTC of noon on a clock `utc_offset_s` ahead of UTC.
+/// The shift of nights on a clock `utc_offset_s` ahead of UTC, unwrapped:
+/// noon on that clock, from −2 h (UTC+14) to 24 h (UTC−12).
 pub fn local_noon(utc_offset_s: i64) -> i64 {
-    (NOON - utc_offset_s).rem_euclid(DAY)
+    NOON - utc_offset_s
 }
 
-/// Where a rig's split came from.
+/// Where a split came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NightSource {
     /// The `night_zone` setting.
     Setting,
-    /// The site longitude its frames record.
+    /// A site longitude, the frame's own or its rig's.
     Site,
-    /// The rig computer's clock in its frames.
+    /// A rig computer's clock, the frame's own or its rig's standard one.
     Clock,
     /// The catalog's quiet hours.
     Catalog,
 }
 
-/// One rig's split.
+/// One rig's split, or one frame's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct RigNight {
-    /// Seconds after 00:00 UTC.
+    /// The shift: a night is the UTC date of `at − shift`. Taken modulo a
+    /// day, the time of day in UTC the nights split at.
     pub boundary_seconds: i64,
     pub source: NightSource,
 }
@@ -174,15 +219,42 @@ pub fn resolve(setting: Option<i64>, site: Option<&Site>, catalog: i64) -> RigNi
     }
 }
 
-/// Where each rig's nights split in one catalog.
+/// A frame's split: its rig's setting wins, then a longitude (its own,
+/// then its rig's), then a clock (its own, then its rig's).
+pub fn resolve_frame(rig: RigNight, rig_site: Option<&Site>, own: Option<&Site>) -> RigNight {
+    if rig.source == NightSource::Setting {
+        return rig;
+    }
+    let longitude = own
+        .and_then(|site| site.longitude)
+        .or_else(|| rig_site.and_then(|site| site.longitude));
+    if let Some(longitude) = longitude {
+        return RigNight {
+            boundary_seconds: solar_noon(longitude),
+            source: NightSource::Site,
+        };
+    }
+    match own.and_then(|site| site.utc_offset_s) {
+        Some(offset) => RigNight {
+            boundary_seconds: local_noon(offset),
+            source: NightSource::Clock,
+        },
+        None => rig,
+    }
+}
+
+/// Where each rig's nights split in one catalog, and each frame's that
+/// records a site of its own.
 #[derive(Debug, Clone)]
 pub struct Nights {
     catalog: i64,
     rigs: Arc<HashMap<String, RigNight>>,
+    rig_sites: Arc<HashMap<String, Site>>,
+    frames: Arc<HashMap<String, Site>>,
 }
 
 impl Nights {
-    /// Every rig of the catalog, as its settings and recorded site say.
+    /// Every rig and frame of the catalog, as settings and sites say.
     pub fn load(conn: &Connection) -> Self {
         let catalog = super::catalog_night_boundary(conn);
         let sites = read_sites(conn);
@@ -198,6 +270,8 @@ impl Nights {
         Self {
             catalog,
             rigs: Arc::new(rigs),
+            rig_sites: Arc::new(sites),
+            frames: Arc::new(read_frame_sites(conn)),
         }
     }
 
@@ -206,6 +280,8 @@ impl Nights {
         Self {
             catalog,
             rigs: Arc::new(HashMap::new()),
+            rig_sites: Arc::new(HashMap::new()),
+            frames: Arc::new(HashMap::new()),
         }
     }
 
@@ -215,6 +291,8 @@ impl Nights {
         Self {
             catalog,
             rigs: Arc::new(rigs.into_iter().collect()),
+            rig_sites: Arc::new(HashMap::new()),
+            frames: Arc::new(HashMap::new()),
         }
     }
 
@@ -233,18 +311,40 @@ impl Nights {
         })
     }
 
-    /// Seconds after 00:00 UTC at which a rig's nights split.
+    /// One frame's split, by its own site where it records one.
+    pub fn frame(&self, rig_uuid: &str, frame_uuid: &str) -> RigNight {
+        resolve_frame(
+            self.rig(rig_uuid),
+            self.rig_sites.get(rig_uuid),
+            self.frames.get(frame_uuid),
+        )
+    }
+
+    /// The shift of a rig's nights, for a frame with no site of its own.
     pub fn boundary(&self, rig_uuid: &str) -> i64 {
         self.rig(rig_uuid).boundary_seconds
     }
 
-    /// The night a rig's frame shot at `at` belongs to.
+    /// The night a rig's frame with no site of its own, shot at `at`,
+    /// belongs to.
     pub fn night_of(&self, rig_uuid: &str, at: i64) -> String {
         super::night_of(at, self.boundary(rig_uuid))
     }
 
+    /// The night one frame shot at `at` belongs to.
+    pub fn night_of_frame(&self, rig_uuid: &str, frame_uuid: &str, at: i64) -> String {
+        super::night_of(at, self.frame(rig_uuid, frame_uuid).boundary_seconds)
+    }
+
+    /// The rig's standard clock, seconds ahead of UTC, for its frames that
+    /// record none.
+    pub fn clock_offset(&self, rig_uuid: &str) -> Option<i64> {
+        self.rig_sites.get(rig_uuid)?.utc_offset_s
+    }
+
     /// Every split, for a cache key: the catalog's alone while every rig
-    /// splits with it, so keys made before rigs had their own stay put.
+    /// and frame splits with it, so keys made before rigs had their own
+    /// stay put.
     pub fn digest(&self) -> String {
         let mut own: Vec<(&String, i64)> = self
             .rigs
@@ -257,8 +357,72 @@ impl Nights {
         for (rig, boundary) in own {
             digest.push_str(&format!(",{rig}={boundary}"));
         }
+        // Frames that split apart from their rig, in one hash.
+        let mut frames: Vec<String> = self
+            .frames
+            .iter()
+            .map(|(uuid, site)| format!("{uuid}:{:?}:{:?}", site.longitude, site.utc_offset_s))
+            .collect();
+        if !frames.is_empty() {
+            frames.sort();
+            use sha2::Digest;
+            let hash = sha2::Sha256::digest(frames.join(";").as_bytes());
+            digest.push_str(&format!(
+                ",frames={}",
+                hash[..8]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            ));
+        }
         digest
     }
+}
+
+/// From when a rig's clock kept an offset: the time of the first frame
+/// that recorded it, and the offset in seconds ahead of UTC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ClockRun {
+    pub from: i64,
+    pub offset_seconds: i64,
+}
+
+/// A rig's clock over time, as its frames' headers record it, oldest
+/// first, one run per change (daylight saving, a move): what its times are
+/// shown on. Its `night_zone` setting, when it has one, is the one run.
+/// Empty when neither says, and times are shown on the viewer's clock.
+pub fn clock_runs(conn: &Connection, rig_uuid: &str) -> Vec<ClockRun> {
+    if let Some(offset) = rules_for_rig(rig_uuid).night_offset_seconds {
+        return vec![ClockRun {
+            from: 0,
+            offset_seconds: offset,
+        }];
+    }
+    if !frame_columns_exist(conn) {
+        return Vec::new();
+    }
+    let frames: Vec<(i64, i64)> = conn
+        .prepare(
+            "SELECT captured_at, site_utc_offset_s FROM psf_guard_calibration_frame
+             WHERE rig_uuid = ?1 AND captured_at IS NOT NULL AND site_utc_offset_s IS NOT NULL
+             ORDER BY captured_at",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([rig_uuid], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .unwrap_or_default();
+    let mut runs: Vec<ClockRun> = Vec::new();
+    for (at, offset) in frames {
+        if runs.last().is_none_or(|run| run.offset_seconds != offset) {
+            runs.push(ClockRun {
+                from: at,
+                offset_seconds: offset,
+            });
+        }
+    }
+    runs
 }
 
 fn rig_uuids(conn: &Connection) -> Vec<String> {
@@ -301,15 +465,67 @@ fn read_sites(conn: &Connection) -> HashMap<String, Site> {
         .unwrap_or_default()
 }
 
-/// Keep what an imported frame says about its rig's site. A newer frame
-/// replaces what an older one said; an older one only fills what is
-/// missing; a frame that says nothing changes nothing.
+/// Each frame's own site, for the frames that record one.
+fn read_frame_sites(conn: &Connection) -> HashMap<String, Site> {
+    if !frame_columns_exist(conn) {
+        return HashMap::new();
+    }
+    conn.prepare(
+        "SELECT frame_uuid, site_longitude, site_utc_offset_s FROM psf_guard_calibration_frame
+         WHERE site_longitude IS NOT NULL OR site_utc_offset_s IS NOT NULL",
+    )
+    .and_then(|mut statement| {
+        statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    Site {
+                        longitude: row.get(1)?,
+                        utc_offset_s: row.get(2)?,
+                    },
+                ))
+            })?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()
+    })
+    .unwrap_or_default()
+}
+
+/// Keep what an imported frame says about its rig's site. A newer frame's
+/// longitude replaces an older one's; an older one only fills what is
+/// missing. The clock kept is the rig's standard one, the smallest offset
+/// seen, so a rig with no site does not move its split at each change of
+/// the clocks. A frame that says nothing changes nothing.
 pub(crate) fn record_site(conn: &Connection, rig_uuid: &str, frame: &FrameMeta) -> Result<()> {
     let site = Site::of(frame);
     if site.is_empty() || !table_exists(conn) {
         return Ok(());
     }
     write_site(conn, rig_uuid, &site, frame.timestamp)
+}
+
+/// Keep what an imported calibration frame's header says of its own site.
+/// A frame whose header could not be read is left for the backfill.
+pub(crate) fn record_frame_site(
+    conn: &Connection,
+    source_path: &str,
+    frame: &FrameMeta,
+) -> Result<()> {
+    if !frame.readable || !frame_columns_exist(conn) {
+        return Ok(());
+    }
+    let site = Site::of(frame);
+    conn.execute(
+        "UPDATE psf_guard_calibration_frame
+         SET site_longitude = ?2, site_utc_offset_s = ?3, site_read_at = ?4
+         WHERE source_path = ?1",
+        params![
+            source_path,
+            site.longitude,
+            site.utc_offset_s,
+            chrono::Utc::now().timestamp()
+        ],
+    )?;
+    Ok(())
 }
 
 fn write_site(
@@ -329,10 +545,9 @@ fn write_site(
                 THEN COALESCE(excluded.longitude, psf_guard_rig_site.longitude)
                 ELSE COALESCE(psf_guard_rig_site.longitude, excluded.longitude) END,
             utc_offset_s = CASE
-                WHEN COALESCE(excluded.frame_captured_at, 0)
-                     >= COALESCE(psf_guard_rig_site.frame_captured_at, 0)
-                THEN COALESCE(excluded.utc_offset_s, psf_guard_rig_site.utc_offset_s)
-                ELSE COALESCE(psf_guard_rig_site.utc_offset_s, excluded.utc_offset_s) END,
+                WHEN psf_guard_rig_site.utc_offset_s IS NULL THEN excluded.utc_offset_s
+                WHEN excluded.utc_offset_s IS NULL THEN psf_guard_rig_site.utc_offset_s
+                ELSE MIN(excluded.utc_offset_s, psf_guard_rig_site.utc_offset_s) END,
             frame_captured_at = MAX(COALESCE(excluded.frame_captured_at, 0),
                                     COALESCE(psf_guard_rig_site.frame_captured_at, 0)),
             read_at = excluded.read_at",
@@ -350,92 +565,99 @@ fn write_site(
 /// What one pass of [`backfill_rig_sites`] did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SiteBackfillOutcome {
-    /// Rigs with frames and no site row when the pass began.
+    /// Frames whose site had not been read when the pass began, or whose
+    /// file was away a week or more ago.
     pub pending: usize,
-    /// Rigs whose frames named a longitude.
+    /// Frames that named a longitude.
     pub located: usize,
-    /// Rigs whose frames named only the computer's clock.
+    /// Frames that named only the computer's clock.
     pub clocked: usize,
-    /// Rigs whose frames were read and name neither; marked, so they are
-    /// not read again until an import brings a frame that does.
+    /// Frames read that name neither.
     pub unplaced: usize,
-    /// Rigs none of whose files could be read; tried again next time.
+    /// Frames whose file was away; read again a week later, or when an
+    /// import brings them.
     pub unreadable: usize,
-    /// The rigs that found a longitude or a clock, whose nights may now
+    /// The rigs some frame of which found a site, whose nights may now
     /// split elsewhere.
     pub placed: Vec<String>,
 }
 
-/// Read the site of every rig imported before the catalog kept one, off
-/// the open path: up to five of its newest frames' headers each, stopping
-/// at the first that names a longitude.
+/// Read the site of every calibration frame imported before the catalog
+/// kept one, off the open path, a hundred headers between commits. Each
+/// frame's rig keeps what its frames said ([`record_site`]). `yield_now`
+/// is called before each chunk, so interactive work goes first.
 pub fn backfill_rig_sites(
     conn: &Connection,
     keep_going: impl Fn() -> bool,
+    yield_now: impl Fn(),
 ) -> Result<SiteBackfillOutcome> {
-    if !super::schema_exists(conn) || !table_exists(conn) {
+    if !super::schema_exists(conn) || !table_exists(conn) || !frame_columns_exist(conn) {
         return Ok(SiteBackfillOutcome::default());
     }
-    let pending: Vec<String> = conn
+    let now = chrono::Utc::now().timestamp();
+    let pending: Vec<(i64, String, String, Option<i64>)> = conn
         .prepare(
-            "SELECT DISTINCT f.rig_uuid FROM psf_guard_calibration_frame f
-             LEFT JOIN psf_guard_rig_site s ON s.rig_uuid = f.rig_uuid
-             WHERE s.rig_uuid IS NULL
-             ORDER BY f.rig_uuid",
+            "SELECT id, rig_uuid, source_path, captured_at FROM psf_guard_calibration_frame
+             WHERE site_read_at IS NULL OR (site_read_at < 0 AND -site_read_at <= ?1)
+             ORDER BY rig_uuid, captured_at DESC, id DESC",
         )?
-        .query_map([], |row| row.get(0))?
+        .query_map([now - SITE_RETRY_SECONDS], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
         .collect::<rusqlite::Result<_>>()?;
     let mut outcome = SiteBackfillOutcome {
         pending: pending.len(),
         ..Default::default()
     };
-    for rig in pending {
+    let mut placed: BTreeSet<String> = BTreeSet::new();
+    for chunk in pending.chunks(SITE_BACKFILL_CHUNK) {
         if !keep_going() {
             break;
         }
-        let paths: Vec<String> = conn
-            .prepare(
-                "SELECT source_path FROM psf_guard_calibration_frame
-                 WHERE rig_uuid = ?1
-                 ORDER BY captured_at IS NULL, captured_at DESC, id DESC
-                 LIMIT ?2",
-            )?
-            .query_map(params![rig, SITE_READS_PER_RIG as i64], |row| row.get(0))?
-            .collect::<rusqlite::Result<_>>()?;
-        let mut found = Site::default();
-        let mut captured_at = None;
-        let mut readable = false;
-        for path in paths {
-            let meta = crate::commands::import::headers::read_frame_meta(Path::new(&path));
-            if !meta.readable {
-                continue;
+        yield_now();
+        if !keep_going() {
+            break;
+        }
+        let read: Vec<(i64, &str, Option<i64>, Option<Site>)> = chunk
+            .iter()
+            .map(|(id, rig, path, captured_at)| {
+                let meta = crate::commands::import::headers::read_frame_meta(Path::new(path));
+                let site = meta.readable.then(|| Site::of(&meta));
+                (*id, rig.as_str(), *captured_at, site)
+            })
+            .collect();
+        let tx = conn.unchecked_transaction()?;
+        for (id, rig, captured_at, site) in &read {
+            match site {
+                Some(site) => {
+                    tx.execute(
+                        "UPDATE psf_guard_calibration_frame
+                         SET site_longitude = ?2, site_utc_offset_s = ?3, site_read_at = ?4
+                         WHERE id = ?1",
+                        params![id, site.longitude, site.utc_offset_s, now],
+                    )?;
+                    match (site.longitude, site.utc_offset_s) {
+                        (Some(_), _) => outcome.located += 1,
+                        (None, Some(_)) => outcome.clocked += 1,
+                        (None, None) => outcome.unplaced += 1,
+                    }
+                    if !site.is_empty() {
+                        write_site(&tx, rig, site, *captured_at)?;
+                        placed.insert(rig.to_string());
+                    }
+                }
+                None => {
+                    tx.execute(
+                        "UPDATE psf_guard_calibration_frame SET site_read_at = ?2 WHERE id = ?1",
+                        params![id, -now],
+                    )?;
+                    outcome.unreadable += 1;
+                }
             }
-            readable = true;
-            let site = Site::of(&meta);
-            if found.utc_offset_s.is_none() {
-                found.utc_offset_s = site.utc_offset_s;
-                captured_at = captured_at.or(meta.timestamp);
-            }
-            if site.longitude.is_some() {
-                found.longitude = site.longitude;
-                captured_at = meta.timestamp.or(captured_at);
-                break;
-            }
         }
-        if !readable {
-            outcome.unreadable += 1;
-            continue;
-        }
-        match (found.longitude, found.utc_offset_s) {
-            (Some(_), _) => outcome.located += 1,
-            (None, Some(_)) => outcome.clocked += 1,
-            (None, None) => outcome.unplaced += 1,
-        }
-        if !found.is_empty() {
-            outcome.placed.push(rig.clone());
-        }
-        write_site(conn, &rig, &found, captured_at)?;
+        tx.commit()?;
     }
+    outcome.placed = placed.into_iter().collect();
     Ok(outcome)
 }
 
@@ -835,7 +1057,12 @@ mod tests {
         super::super::flat_groups::register_response_dir(&path, dir.clone());
 
         // Measured before the catalog kept sites: noon UTC.
-        conn.execute("DELETE FROM psf_guard_rig_site", []).unwrap();
+        conn.execute_batch(
+            "DELETE FROM psf_guard_rig_site;
+             UPDATE psf_guard_calibration_frame
+             SET site_longitude = NULL, site_utc_offset_s = NULL, site_read_at = NULL;",
+        )
+        .unwrap();
         let everything = super::super::flat_groups::job::Scope::everything();
         assert_eq!(measure(&conn, &dir, everything).measured, 3);
         let before = responses(&conn);
@@ -848,8 +1075,8 @@ mod tests {
         );
 
         // The upgrade reads the site; the next pass plans by it.
-        let found = backfill_rig_sites(&conn, || true).unwrap();
-        assert_eq!(found.located, 1, "{found:?}");
+        let found = backfill_rig_sites(&conn, || true, || {}).unwrap();
+        assert_eq!((found.located, found.placed.len()), (12, 1), "{found:?}");
         // The server queues the rigs that found a site.
         let outcome = measure(
             &conn,
@@ -867,6 +1094,226 @@ mod tests {
         assert_eq!(after.len(), 2);
         assert_eq!((after[1].1.as_str(), after[1].2), ("2026-08-18", 8));
         assert!(before[1..].iter().all(|old| old.0 != after[1].0));
+    }
+
+    /// A night is named by its evening's local date, as DATEMINUS12 names
+    /// it. Offsets past +12 h (New Zealand in summer, Tonga, Chatham) and
+    /// longitudes within 0.125° of 180° W would fold the split across 00:00
+    /// UTC and name the night a day off, were the shift wrapped.
+    #[test]
+    fn nights_near_the_date_line_are_named_by_their_evening() {
+        // NZDT, UTC+13: 21:00 on 2026-01-10 is 08:00 UTC the same day.
+        let nzdt = resolve(Some(13 * HOUR), None, 12 * HOUR).boundary_seconds;
+        assert_eq!(
+            super::super::night_of(utc("2026-01-10T08:00:00"), nzdt),
+            "2026-01-10"
+        );
+        // 179.95° W, UTC-12: 20:00 on 2026-08-19 is 08:00 UTC on 08-20.
+        let west = solar_noon(-179.95);
+        assert_eq!(
+            super::super::night_of(utc("2026-08-20T08:00:00"), west),
+            "2026-08-19"
+        );
+        // Tonga, UTC+14: 20:00 on 2026-06-01 is 06:00 UTC the same day, and
+        // dawn at 06:30 on 06-02 is 16:30 UTC on 06-01.
+        let tonga = resolve(Some(14 * HOUR), None, 12 * HOUR).boundary_seconds;
+        assert_eq!(tonga, -2 * HOUR);
+        assert_eq!(
+            super::super::night_of(utc("2026-06-01T06:00:00"), tonga),
+            "2026-06-01"
+        );
+        assert_eq!(
+            super::super::night_of(utc("2026-06-01T16:30:00"), tonga),
+            "2026-06-01"
+        );
+    }
+
+    #[test]
+    fn nights_east_of_greenwich_are_named_by_their_evening() {
+        // Tokyo, 139.69° E: solar noon at 02:41 UTC. 19:00 JST on 03-10 is
+        // 10:00 UTC; 04:30 JST on 03-11 is 19:30 UTC on 03-10; noon JST on
+        // 03-11 begins the next night.
+        let tokyo = solar_noon(139.69);
+        assert_eq!(tokyo, 2 * HOUR + 41 * 60);
+        assert_eq!(
+            super::super::night_of(utc("2026-03-10T10:00:00"), tokyo),
+            "2026-03-10"
+        );
+        assert_eq!(
+            super::super::night_of(utc("2026-03-10T19:30:00"), tokyo),
+            "2026-03-10"
+        );
+        assert_eq!(
+            super::super::night_of(utc("2026-03-11T03:00:00"), tokyo),
+            "2026-03-11"
+        );
+        // New Zealand in summer, UTC+13, from its clock: 21:30 on 01-10 is
+        // 08:30 UTC, dawn at 05:30 on 01-11 is 16:30 UTC on 01-10.
+        let auckland = local_noon(13 * HOUR);
+        assert_eq!(
+            super::super::night_of(utc("2026-01-10T08:30:00"), auckland),
+            "2026-01-10"
+        );
+        assert_eq!(
+            super::super::night_of(utc("2026-01-10T16:30:00"), auckland),
+            "2026-01-10"
+        );
+    }
+
+    /// A rig taken to a star party splits those nights where it was and
+    /// keeps its home nights. With one site per rig, the newest frame's,
+    /// California dusk flats at 19:00 PDT (02:00 UTC) split once its newest
+    /// frame came from Australia, whose solar noon is 02:04 UTC.
+    #[test]
+    fn a_travel_rig_keeps_the_nights_of_where_each_frame_was() {
+        let _policy = super::super::tests::POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let mut frames: Vec<FrameMeta> = dawn_run(true)
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut frame)| {
+                let at = utc("2026-08-19T02:01:00") + index as i64 * 30;
+                frame.timestamp = Some(at);
+                frame.date_obs_utc = None;
+                frame.date_local = None;
+                frame
+            })
+            .collect();
+        let (conn, rig) = library(&frames);
+        let (plans, _) = sessions(&conn);
+        assert_eq!(plans, vec![("2026-08-18".to_string(), 10)], "at home");
+        // A month later, the rig shoots one flat at a star party in NSW.
+        let mut away = frames[0].clone();
+        away.path = "/nowhere/away.fits".into();
+        away.filter = Some("HA".into());
+        away.timestamp = Some(utc("2026-09-20T09:00:00"));
+        away.site_longitude = Some(149.07);
+        away.site_latitude = Some(-31.27);
+        frames.push(away);
+        let tx = conn.unchecked_transaction().unwrap();
+        super::super::import_calibration_frames(&tx, &frames[10..], Some("profile")).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(Nights::load(&conn).rig(&rig).source, NightSource::Site);
+        let (plans, _) = sessions(&conn);
+        assert!(
+            plans.contains(&("2026-08-18".to_string(), 10)),
+            "the California run split: {plans:?}"
+        );
+        // The NSW flat, 19:00 AEST on 09-20, is that evening's.
+        let nights = Nights::load(&conn);
+        let away_uuid: String = conn
+            .query_row(
+                "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE source_path LIKE '%away.fits'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            nights.night_of_frame(&rig, &away_uuid, utc("2026-09-20T09:00:00")),
+            "2026-09-20"
+        );
+    }
+
+    /// Frames whose headers name only their computer's clock, PDT in summer
+    /// and PST in winter: each splits at noon on its own clock, and the
+    /// rig, for frames that record none, at noon on its standard one.
+    #[test]
+    fn the_backfill_reads_a_clock_only_rig_and_keeps_its_standard_offset() {
+        let _policy = super::super::tests::POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let mut frames = Vec::new();
+        for (name, utc_text, local) in [
+            ("summer", "2026-08-19T12:00:00", "2026-08-19T05:00:00"),
+            ("winter", "2026-12-11T14:00:00", "2026-12-11T06:00:00"),
+        ] {
+            let path = temp.path().join(format!("{name}.fits"));
+            let card = format!("DATE-LOC= '{local}'");
+            crate::calibration::test_frames::write_frame_with(
+                &path,
+                "FLAT",
+                (32, 32),
+                utc_text,
+                &[card.as_str()],
+                |_, _| 20_000.0,
+            );
+            frames.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let (conn, rig) = library(&frames);
+        // As a catalog imported before sites were kept.
+        conn.execute_batch(
+            "DELETE FROM psf_guard_rig_site;
+             UPDATE psf_guard_calibration_frame
+             SET site_longitude = NULL, site_utc_offset_s = NULL, site_read_at = NULL;",
+        )
+        .unwrap();
+        assert_eq!(Nights::load(&conn).rig(&rig).source, NightSource::Catalog);
+        let found = backfill_rig_sites(&conn, || true, || {}).unwrap();
+        assert_eq!(
+            (found.clocked, found.placed.clone()),
+            (2, vec![rig.clone()])
+        );
+        let nights = Nights::load(&conn);
+        assert_eq!(
+            nights.rig(&rig),
+            RigNight {
+                boundary_seconds: 20 * HOUR,
+                source: NightSource::Clock
+            }
+        );
+        assert_eq!(nights.clock_offset(&rig), Some(-8 * HOUR));
+        let summer: String = conn
+            .query_row(
+                "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE source_path LIKE '%summer.fits'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(nights.frame(&rig, &summer).boundary_seconds, 19 * HOUR);
+        // Its times read on its clock, one run per change.
+        assert_eq!(
+            clock_runs(&conn, &rig),
+            vec![
+                ClockRun {
+                    from: utc("2026-08-19T12:00:00"),
+                    offset_seconds: -7 * HOUR
+                },
+                ClockRun {
+                    from: utc("2026-12-11T14:00:00"),
+                    offset_seconds: -8 * HOUR
+                },
+            ]
+        );
+        // Read once: a second pass reads nothing.
+        assert_eq!(
+            backfill_rig_sites(&conn, || true, || {}).unwrap().pending,
+            0
+        );
+    }
+
+    /// Some software writes longitude as 0–360° east: 238.84° is the
+    /// C925's 121.16° W.
+    #[test]
+    fn a_longitude_past_180_east_is_read_as_west() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("flat.fits");
+        crate::calibration::test_frames::write_frame_with(
+            &path,
+            "FLAT",
+            (32, 32),
+            "2026-08-19T12:00:00",
+            &[
+                "SITELAT =              38.6606",
+                "SITELONG=             238.8368",
+            ],
+            |_, _| 20_000.0,
+        );
+        let meta = crate::commands::import::headers::read_frame_meta(&path);
+        let longitude = Site::of(&meta).longitude.unwrap();
+        assert!((longitude + 121.1632).abs() < 1e-6, "{longitude}");
+        assert_eq!(solar_noon(longitude), 20 * HOUR + 5 * 60);
     }
 
     #[test]
@@ -899,7 +1346,7 @@ mod tests {
             [],
         )
         .unwrap();
-        let outcome = backfill_rig_sites(&conn, || true).unwrap();
+        let outcome = backfill_rig_sites(&conn, || true, || {}).unwrap();
         assert_eq!(
             outcome,
             SiteBackfillOutcome {

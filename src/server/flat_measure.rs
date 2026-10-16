@@ -1060,6 +1060,19 @@ pub fn settings_changed(state: &Arc<AppState>, before: &RuleBook, after: &RuleBo
     queue_all(state, Scope::flats(rigs));
 }
 
+/// Frames of these rigs found their sites after startup, so their nights
+/// may split elsewhere: grade the catalog again, since grading screens
+/// flats by session, and queue the rigs' measuring, which waits for grading
+/// and plans their sessions again. Reads nothing here.
+pub fn sites_found(state: &Arc<AppState>, path: &str, rigs: Vec<String>) {
+    let rigs = Rigs::of(rigs);
+    if rigs.is_empty() {
+        return;
+    }
+    crate::server::calibration_quality::request(state, path);
+    queue(state, path, Scope::flats(rigs));
+}
+
 // ---------------------------------------------------------------------------
 // Routes.
 

@@ -652,7 +652,7 @@ fn flat_sessions<'a>(measured: &'a [Measured], nights: &Nights) -> Vec<Vec<&'a M
             night: entry
                 .frame
                 .captured_at
-                .map(|at| nights.night_of(&entry.frame.rig_uuid, at))
+                .map(|at| nights.night_of_frame(&entry.frame.rig_uuid, &entry.frame.frame_uuid, at))
                 .unwrap_or_else(|| "unknown".into()),
             filter: entry
                 .frame

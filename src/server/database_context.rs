@@ -211,12 +211,14 @@ pub(crate) fn spawn_query_index_build(path: String, shutdown: &Arc<Shutdown>) {
 /// timeout, one commit per hundred frames, a progress line every chunk, and a
 /// clean stop if the capture software holds the catalog — the next start
 /// picks up where it left off. Then each rig's site, for the rigs imported
-/// before the catalog kept one ([`crate::calibration::backfill_rig_sites`]);
-/// `placed` is given the rigs that found one, whose nights may now split
+/// before the catalog kept them ([`crate::calibration::backfill_rig_sites`]),
+/// stepping aside for interactive work through `yield_now`; `placed` is
+/// given the rigs whose frames found a site, whose nights may now split
 /// elsewhere.
 pub(crate) fn spawn_calibration_header_backfill(
     path: String,
     shutdown: &Arc<Shutdown>,
+    yield_now: impl Fn() + Send + 'static,
     placed: impl FnOnce(Vec<String>) + Send + 'static,
 ) {
     // A stop ends the pass at its next commit.
@@ -264,21 +266,24 @@ pub(crate) fn spawn_calibration_header_backfill(
         if work.is_stopping() {
             return;
         }
-        // Each rig's site, so its calibration nights split at its own noon:
-        // a few headers per rig imported before the catalog kept it.
+        // Each frame's site, so calibration nights split at local noon
+        // where it was shot: the headers of frames imported before the
+        // catalog kept it.
         let sites = Connection::open_with_flags(&path, db_open_flags())
             .and_then(|conn| {
                 conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
                 Ok(conn)
             })
             .map_err(anyhow::Error::from)
-            .and_then(|conn| crate::calibration::backfill_rig_sites(&conn, || !work.is_stopping()));
+            .and_then(|conn| {
+                crate::calibration::backfill_rig_sites(&conn, || !work.is_stopping(), &yield_now)
+            });
         match sites {
             Ok(outcome) if outcome.pending == 0 => {}
             Ok(outcome) => {
                 tracing::info!(
-                    "Recorded rig sites in {path}: {} by longitude, {} by clock, {} with neither, \
-                     {} with files away, read again at the next start",
+                    "Recorded calibration frame sites in {path}: {} by longitude, {} by clock, \
+                     {} with neither, {} with files away, read again in a week or on import",
                     outcome.located,
                     outcome.clocked,
                     outcome.unplaced,
@@ -289,7 +294,7 @@ pub(crate) fn spawn_calibration_header_backfill(
                 }
             }
             Err(error) => tracing::info!(
-                "Paused recording rig sites in {path}: {error:#}. \
+                "Paused recording calibration frame sites in {path}: {error:#}. \
                  The next server start continues where this left off."
             ),
         }

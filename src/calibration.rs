@@ -1365,6 +1365,10 @@ pub fn import_calibration_frames(
             .as_ref()
             .is_some_and(|(_, previous)| previous == &fingerprint)
         {
+            // Unchanged, but read before the catalog kept each frame's site.
+            if frame_site_unread(tx, &source_path) {
+                night::record_frame_site(tx, &source_path, frame)?;
+            }
             outcome.skipped_existing += 1;
             count_kind(&mut outcome, kind);
             continue;
@@ -1492,6 +1496,7 @@ pub fn import_calibration_frames(
                 frame.processed,
             ],
         )?;
+        night::record_frame_site(tx, &source_path, frame)?;
         if existing.is_some() || moved {
             outcome.updated += 1;
         } else {
@@ -1500,6 +1505,18 @@ pub fn import_calibration_frames(
         count_kind(&mut outcome, kind);
     }
     Ok(outcome)
+}
+
+/// Whether a frame's own site has yet to be read, or was read while its
+/// file was away.
+fn frame_site_unread(conn: &Connection, source_path: &str) -> bool {
+    conn.query_row(
+        "SELECT site_read_at IS NULL OR site_read_at < 0
+         FROM psf_guard_calibration_frame WHERE source_path = ?1",
+        [source_path],
+        |row| row.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
 }
 
 pub fn library_summary(conn: &Connection) -> Result<CalibrationLibrarySummary> {
@@ -3668,7 +3685,7 @@ pub fn explain_calibration(conn: &Connection, light: &FrameMeta) -> Result<Calib
     let night = |frame: &CalibrationFrame| {
         frame.captured_at.map_or_else(
             || "unknown".to_string(),
-            |at| nights.night_of(&frame.rig_uuid, at),
+            |at| nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at),
         )
     };
     let selected = select_for_light(conn, light)?;
@@ -3979,7 +3996,7 @@ fn flat_near_miss_in(
     let night = |frame: &CalibrationFrame| {
         frame
             .captured_at
-            .map(|at| nights.night_of(&frame.rig_uuid, at))
+            .map(|at| nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at))
     };
     let session = night(best);
     let frames = near
@@ -4049,7 +4066,7 @@ pub fn project_calibration_report(
     let frame_night = |frame: &CalibrationFrame| {
         frame
             .captured_at
-            .map(|at| rig_nights.night_of(&frame.rig_uuid, at))
+            .map(|at| rig_nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at))
     };
     let mut buckets: HashMap<(String, String), Vec<(i64, String)>> = HashMap::new();
     let mut rejected_lights = 0usize;
@@ -4196,8 +4213,12 @@ pub fn project_calibration_report(
             dark_flat_frames: selected.dark_flat.len(),
             flat_frames: selected.flat.len(),
             flat_session: flat_session_at.and_then(|at| {
-                let rig = &selected.flat.first()?.rig_uuid;
-                Some(rig_nights.night_of(rig, at))
+                let frame = selected
+                    .flat
+                    .iter()
+                    .find(|frame| frame.captured_at == Some(at))
+                    .or(selected.flat.first())?;
+                Some(rig_nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at))
             }),
             flat_age_days: age_days(flat_session_at),
             nightly_flats,
@@ -8686,7 +8707,7 @@ pub fn export_destinations(
             group: dark_group(nearest),
             night: nearest
                 .captured_at
-                .map(|at| nights.night_of(&nearest.rig_uuid, at))
+                .map(|at| nights.night_of_frame(&nearest.rig_uuid, &nearest.frame_uuid, at))
                 .unwrap_or_else(|| "undated".into()),
             frame_uuids,
         }
@@ -8818,7 +8839,7 @@ pub fn flat_session_label(flats: &[CalibrationFrame], nights: &Nights) -> Option
             .iter()
             .filter_map(|frame| Some((frame.captured_at?, frame)))
             .min_by_key(|(at, _)| *at)
-            .map(|(at, frame)| nights.night_of(&frame.rig_uuid, at))
+            .map(|(at, frame)| nights.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at))
             .unwrap_or_else(|| "undated".into()),
     )
 }

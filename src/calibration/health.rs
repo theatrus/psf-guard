@@ -695,7 +695,13 @@ impl HealthLibrary {
     fn mixed_flats(&self, flats: &[CalibrationFrame], rules: &Rules) -> Option<LightFinding> {
         let nights: BTreeSet<String> = flats
             .iter()
-            .filter_map(|frame| Some(self.nights.night_of(&frame.rig_uuid, frame.captured_at?)))
+            .filter_map(|frame| {
+                Some(self.nights.night_of_frame(
+                    &frame.rig_uuid,
+                    &frame.frame_uuid,
+                    frame.captured_at?,
+                ))
+            })
             .collect();
         if nights.len() <= 1 {
             return None;

@@ -8,7 +8,6 @@ import { server } from '../../../test/msw-server';
 import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from '../../../utils/settingsIntent';
 import { AccessContext, type AccessContextValue } from '../../../auth/access';
 import CalibrationPage from '../CalibrationPage';
-import { windowLabel } from '../flatGroupLabels';
 import { FLAT_POLL_MS } from '../useFlatGroups';
 
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
@@ -34,6 +33,8 @@ const RIG: FlatGroupsRig = {
   rig_uuid: 'rig', name: 'UltraCat · ASI6200', measured: true,
   dust_limit_pct: 1, pattern_limit_pct: 2, own_limits: [],
   angle_term: { dust_pct: 0.3, broad_pct: 0.7 }, angle_pairs: 12,
+  // The rig computer keeps Central Daylight Time.
+  clock: [{ from: 0, offset_seconds: -5 * 3600 }],
   events: [{
     key: 'e1', start: at('09-16', 2), end: at('09-20'), what: 'new dust: 2 shadows near (1418, 3540)',
     dust_pct: 1.6, broad_pct: 0.2, camera_side: true, filters: ['R', 'G'], rotations: [3, 54],
@@ -231,7 +232,8 @@ describe('Flat groups in Frames', () => {
     expect(event).toHaveAccessibleName('Change in UltraCat · ASI6200: new dust: 2 shadows near (1418, 3540)');
     expect(event).toHaveTextContent('Change · All filters and angles: camera side');
     expect(event).toHaveTextContent('dust 1.6% · pattern 0.20% · seen in R, G at 3°, 54°');
-    expect(event).toHaveTextContent(windowLabel(at('09-16', 2), at('09-20')));
+    // On the rig's clock: 14:00 UTC is 09:00 there.
+    expect(event).toHaveTextContent('2026-09-16 09:02 – 2026-09-20 09:00 UTC−5');
     expect(within(event).queryByTestId('flat-change-within-run')).toBeNull();
     const split = screen.getByTestId('flat-split');
     expect(split).toHaveAccessibleName('Split in G · 3°');

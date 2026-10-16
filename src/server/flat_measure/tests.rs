@@ -702,6 +702,36 @@ fn a_pass_waits_for_the_persons_work_at_either_tier() {
     }
 }
 
+/// Rigs whose frames found their sites are graded again and measured
+/// again; none found asks for nothing.
+#[test]
+fn rigs_that_find_their_sites_are_graded_and_planned_again() {
+    let library = library();
+    let state = Arc::new(test_state());
+    let path = library.path.as_str();
+    sites_found(&state, path, Vec::new());
+    assert!(job(path).queue().pending.is_empty());
+    assert!(!crate::server::calibration_quality::progress(path).running);
+    sites_found(&state, path, vec![library.a.clone()]);
+    assert_eq!(
+        job(path).queue().pending,
+        Scope::flats(Rigs::of([library.a.clone()]))
+    );
+    // Grading ran, or is running, for the catalog.
+    let started = std::time::Instant::now();
+    while crate::server::calibration_quality::progress(path)
+        .finished_at
+        .is_none()
+    {
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "grading never ran"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    job(path).queue().pending = Scope::default();
+}
+
 /// A page's look queues a check of its rig at most every
 /// [`WATCH_RECHECK`], never one Stop paused, and none for a rig the catalog
 /// does not record.

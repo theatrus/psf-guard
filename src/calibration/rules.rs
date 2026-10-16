@@ -569,7 +569,11 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
                    computer's clock, else from when the catalog's lights are quiet. Pick the \
                    rig's standard offset when its frames record no site or a wrong one; \
                    daylight saving moves noon by an hour, which no night notices.",
-            effect: Effect::Matching,
+            // It picks no frames: grading screens flats by session, and
+            // sessions are nights, so a change grades again. Masters and
+            // stacks are keyed by the frames they take, which a new split
+            // changes only where a session's members change.
+            effect: Effect::Grades,
             kind: FieldKind::Choice {
                 options: NIGHT_ZONES
                     .iter()
@@ -1833,6 +1837,28 @@ mod tests {
             "{refused}"
         );
         assert!(stacker_accepts("thin_master_frames", &json!(-1)).is_ok());
+    }
+
+    /// Grading screens flats by session, and sessions are nights, so a
+    /// night_zone change grades again; it picks no frames itself, so it
+    /// does not re-key every master and stack of the rig.
+    #[test]
+    fn a_night_zone_grades_again_and_keys_no_master() {
+        let base = RuleBook::new(BTreeMap::new(), BTreeMap::new());
+        let rig = RigLayer {
+            name: None,
+            values: values(&[("night_zone", json!("-8"))]),
+        };
+        let zoned = RuleBook::new(BTreeMap::new(), BTreeMap::from([("c925".to_string(), rig)]));
+        assert!(
+            base.grades_differ(&zoned),
+            "a new night split regroups flat grading sessions"
+        );
+        assert_eq!(
+            zoned.for_rig("c925").matching_digest(),
+            None,
+            "night_zone alone re-keys every master and stack of the rig"
+        );
     }
 
     #[test]

@@ -107,7 +107,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "group": "matching",
     "label": "Night starts at noon in",
     "help": "Calibration splits a rig's frames into nights at local noon, so a dusk or dawn flat run stays one session. Automatic takes noon from the site longitude its frames record (the N.I.N.A. profile's), else from its computer's clock, else from when the catalog's lights are quiet. Pick the rig's standard offset when its frames record no site or a wrong one; daylight saving moves noon by an hour, which no night notices.",
-    "effect": "matching",
+    "effect": "grades",
     "kind": {
       "type": "choice",
       "options": [

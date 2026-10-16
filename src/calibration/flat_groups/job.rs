@@ -410,7 +410,11 @@ pub fn plan_sessions_with(
     let focal = focal_classes(flats.iter().copied(), focal_tolerance);
     let mut sessions: Vec<SessionPlan> = Vec::new();
     for frame in flats {
-        let night = nights.night_of(&frame.rig_uuid, frame.captured_at.unwrap_or_default());
+        let night = nights.night_of_frame(
+            &frame.rig_uuid,
+            &frame.frame_uuid,
+            frame.captured_at.unwrap_or_default(),
+        );
         let family = family_key(frame, focal.get(&frame.frame_uuid).copied().flatten());
         let joins = |session: &SessionPlan| {
             session.family_key == family

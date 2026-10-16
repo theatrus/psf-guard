@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import type { FlatGroupLightCounts, FlatGroupUseView, FlatSession } from '../../api/types';
+import type { FlatClockRun, FlatGroupLightCounts, FlatGroupUseView, FlatSession } from '../../api/types';
 import type { GroupEdge, GroupEntry } from './flatGroupBrowse';
 import { splitShortReason } from './flatGroupBrowse';
 import { GroupMarks } from './FlatGroupList';
@@ -58,11 +58,13 @@ function lightsBreakdown(lights: FlatGroupLightCounts): string[] {
 function EdgeDetail({
   side,
   edge,
+  clock,
   open,
   onCompare,
 }: {
   side: 'newer' | 'older';
   edge: GroupEdge;
+  clock?: FlatClockRun[];
   open: FlatGroupDetailProps['open'];
   onCompare: FlatGroupDetailProps['onCompare'];
 }) {
@@ -84,7 +86,7 @@ function EdgeDetail({
         )}
         <span className="calibration-muted">
           {split ? `${nightRange(split.before_night, split.after_night)} · ` : ''}
-          {windowLabel(split?.start ?? event!.start, split?.end ?? event!.end)}
+          {windowLabel(split?.start ?? event!.start, split?.end ?? event!.end, clock)}
         </span>
       </div>
       <button
@@ -289,10 +291,10 @@ export default function FlatGroupDetail({
         <h3 id="flat-group-edges">Its edges</h3>
         <ul className="flat-group-edges">
           {entry.newer
-            ? <EdgeDetail side="newer" edge={entry.newer} open={open} onCompare={onCompare} />
+            ? <EdgeDetail side="newer" edge={entry.newer} clock={rig.clock} open={open} onCompare={onCompare} />
             : <li className="calibration-muted">Nothing newer: a light shot now takes these flats.</li>}
           {entry.older
-            ? <EdgeDetail side="older" edge={entry.older} open={open} onCompare={onCompare} />
+            ? <EdgeDetail side="older" edge={entry.older} clock={rig.clock} open={open} onCompare={onCompare} />
             : <li className="calibration-muted">The oldest group of {entry.familyLabel}.</li>}
         </ul>
       </section>
@@ -324,7 +326,7 @@ export default function FlatGroupDetail({
                 {(allMasters ? fed.masters : fed.masters.slice(0, MASTERS_SHOWN)).map((master) => (
                   <li key={master.id}>
                     <Link to={calibrationMasterHref(search, dbId, master.id)} title={master.label}>
-                      Master built {timeLabel(master.created_at)}
+                      Master built {timeLabel(master.created_at, rig.clock)}
                     </Link>
                     <span className="calibration-muted">
                       {' · '}{plural(master.sources, 'flat')}

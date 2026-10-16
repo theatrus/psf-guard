@@ -311,7 +311,7 @@ fn assign_sessions(rows: Vec<CalibrationFrameSummary>, by_rig: &Nights) -> Vec<B
         .map(|frame| {
             frame
                 .captured_at
-                .map(|at| by_rig.night_of(&frame.rig_uuid, at))
+                .map(|at| by_rig.night_of_frame(&frame.rig_uuid, &frame.frame_uuid, at))
         })
         .collect();
     let bases: Vec<String> = rows
@@ -1153,8 +1153,13 @@ pub fn recorded_masters(conn: &Connection) -> Result<Vec<RecordedLibraryMaster>>
                 let sources: Vec<String> = serde_json::from_str(&sources).unwrap_or_default();
                 let known: Vec<_> = sources
                     .iter()
-                    .filter_map(|uuid| frames.get(uuid))
-                    .map(|(temp, at)| (*temp, at.map(|at| nights.night_of(&rig_uuid, at))))
+                    .filter_map(|uuid| Some((uuid, frames.get(uuid)?)))
+                    .map(|(uuid, (temp, at))| {
+                        (
+                            *temp,
+                            at.map(|at| nights.night_of_frame(&rig_uuid, uuid, at)),
+                        )
+                    })
                     .collect();
                 Some(RecordedLibraryMaster {
                     rig_name: rigs.get(&rig_uuid).cloned(),

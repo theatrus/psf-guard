@@ -587,7 +587,7 @@ fn master_sources(
 ) -> Option<crate::calibration::FrameSpan> {
     let mut statement = conn
         .prepare(
-            "SELECT frame.camera_temp, frame.captured_at, frame.rig_uuid
+            "SELECT frame.camera_temp, frame.captured_at, frame.rig_uuid, frame.frame_uuid
              FROM psf_guard_calibration_master master
              JOIN json_each(master.source_frame_uuids) source
              JOIN psf_guard_calibration_frame frame ON frame.frame_uuid = source.value
@@ -600,6 +600,7 @@ fn master_sources(
                 row.get::<_, Option<f64>>(0)?,
                 row.get::<_, Option<i64>>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })
         .ok()?
@@ -611,7 +612,7 @@ fn master_sources(
     // Each frame's night as its rig splits them.
     let nights = crate::calibration::Nights::load(conn);
     Some(crate::calibration::FrameSpan::of(frames.into_iter().map(
-        |(temp, at, rig)| (temp, at.map(|at| nights.night_of(&rig, at))),
+        |(temp, at, rig, frame)| (temp, at.map(|at| nights.night_of_frame(&rig, &frame, at))),
     )))
 }
 

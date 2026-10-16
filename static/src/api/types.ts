@@ -4130,10 +4130,22 @@ export interface FlatGroupsRig {
   own_limits?: string[];
   angle_term: FlatPairDifference | null;
   angle_pairs: number;
+  /**
+   * The rig's clock over time, oldest first, one run per change: its
+   * `night_zone` setting, else what its frames' clocks record. Its times
+   * read on it; empty, on the viewer's clock.
+   */
+  clock?: FlatClockRun[];
   /** Newest first. */
   events: FlatChangeEvent[];
   families: FlatFamily[];
   unmeasured: FlatUnmeasuredSession[];
+}
+
+export interface FlatClockRun {
+  /** Unix seconds of the first frame on this offset. */
+  from: number;
+  offset_seconds: number;
 }
 
 export interface FlatPairDifference {

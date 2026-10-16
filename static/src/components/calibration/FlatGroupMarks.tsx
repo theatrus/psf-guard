@@ -262,7 +262,7 @@ export function FlatMarkRow({ mark, nightOf, open, onCompare }: FlatMarkRowProps
           <strong>Change · {eventSideLabel(event)}</strong>
           <span>{event.what}</span>
           <span>dust {percent(event.dust_pct)} · pattern {percent(event.broad_pct)} · seen in {eventSeenIn(event)}</span>
-          <span className="calibration-muted">{windowLabel(event.start, event.end)}</span>
+          <span className="calibration-muted">{windowLabel(event.start, event.end, mark.rig.clock)}</span>
           {event.within_flat_run && (
             <span data-testid="flat-change-within-run">
               Narrower than one flat run: it landed between one twilight&apos;s flats, or two changes met there.

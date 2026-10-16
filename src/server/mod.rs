@@ -1077,22 +1077,22 @@ async fn run_server_internal(
             .unwrap_or_default();
         for path in paths {
             crate::server::database_context::spawn_query_index_build(path.clone(), &state.shutdown);
-            // A rig whose site this reads may split its nights elsewhere:
-            // flat measuring plans it again, renaming what it measured and
-            // measuring runs a new split joins.
+            // A rig whose sites this reads may split its nights elsewhere:
+            // grading screens its flats by the new sessions, and flat
+            // measuring, which waits for grading, plans it again, renaming
+            // what it measured and measuring runs a new split joins.
             let for_sites = Arc::clone(&state);
+            let for_yield = Arc::clone(&state);
             let site_path = path.clone();
             crate::server::database_context::spawn_calibration_header_backfill(
                 path.clone(),
                 &state.shutdown,
+                move || {
+                    for_yield
+                        .wait_for_interactive_work(std::time::Duration::from_millis(500), |_| {});
+                },
                 move |rigs| {
-                    crate::server::flat_measure::queue(
-                        &for_sites,
-                        &site_path,
-                        crate::calibration::flat_groups::job::Scope::flats(
-                            crate::calibration::flat_groups::job::Rigs::of(rigs),
-                        ),
-                    );
+                    crate::server::flat_measure::sites_found(&for_sites, &site_path, rigs);
                 },
             );
             crate::server::calibration_quality::request(&state, &path);

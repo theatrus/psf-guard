@@ -1,4 +1,4 @@
-import type { FlatChangeEvent, FlatFamily, FlatGroupsRig, FlatSession, FlatSplit } from '../../api/types';
+import type { FlatChangeEvent, FlatClockRun, FlatFamily, FlatGroupsRig, FlatSession, FlatSplit } from '../../api/types';
 
 /** A difference in percent: two decimals below 1%, one above. */
 export function percent(value: number): string {
@@ -16,8 +16,8 @@ export function angleLabel(rotation: number | null): string {
 }
 
 /**
- * A Unix time on the viewer's clock, `2026-09-18 08:30`, as the frames'
- * times show elsewhere in Calibration. `timeZone` is for tests.
+ * A Unix time on a clock, `2026-09-18 08:30`: `timeZone`, the viewer's
+ * when absent.
  */
 function clock(seconds: number, timeZone?: string): string {
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -34,20 +34,52 @@ function zone(seconds: number, timeZone?: string): string {
     .find((part) => part.type === 'timeZoneName')?.value ?? '';
 }
 
-/** A Unix time with its zone, `2026-10-12 08:30 PDT`. */
-export function timeLabel(seconds: number, timeZone?: string): string {
-  return `${clock(seconds, timeZone)} ${zone(seconds, timeZone)}`;
+/** `UTC−7`, `UTC+5:30`, `UTC`. */
+function offsetName(seconds: number): string {
+  if (seconds === 0) return 'UTC';
+  const minutes = Math.abs(seconds) / 60;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `UTC${seconds < 0 ? '−' : '+'}${hours}${rest ? `:${String(rest).padStart(2, '0')}` : ''}`;
+}
+
+/** The rig's clock at a time: the run it falls in, or the first. */
+function rigOffset(seconds: number, runs: readonly FlatClockRun[]): number {
+  let offset = runs[0].offset_seconds;
+  for (const run of runs) {
+    if (run.from <= seconds) offset = run.offset_seconds;
+  }
+  return offset;
+}
+
+/** A time's clock and zone: on the rig's clock when its frames record one,
+ *  else on `timeZone`, the viewer's when absent. */
+function parts(seconds: number, runs?: readonly FlatClockRun[], timeZone?: string): [string, string] {
+  if (runs && runs.length > 0) {
+    const offset = rigOffset(seconds, runs);
+    return [clock(seconds + offset, 'UTC'), offsetName(offset)];
+  }
+  return [clock(seconds, timeZone), zone(seconds, timeZone)];
 }
 
 /**
- * The window a change happened in, `2026-09-18 08:30 – 2026-09-21 12:28 PDT`;
- * each end names its zone when the clocks changed in between.
+ * A Unix time with its zone: on the rig's clock, as its flats were shot by,
+ * `2026-10-12 06:30 UTC−7`, or on the viewer's, `2026-10-12 06:30 PDT`.
  */
-export function windowLabel(start: number, end: number, timeZone?: string): string {
-  const [from, to] = [zone(start, timeZone), zone(end, timeZone)];
+export function timeLabel(seconds: number, runs?: readonly FlatClockRun[], timeZone?: string): string {
+  return parts(seconds, runs, timeZone).join(' ');
+}
+
+/**
+ * The window a change happened in, `2026-09-18 08:30 – 2026-09-21 12:28 UTC−7`,
+ * on the clock [`timeLabel`] reads; each end names its zone when the clocks
+ * changed in between.
+ */
+export function windowLabel(start: number, end: number, runs?: readonly FlatClockRun[], timeZone?: string): string {
+  const [[startClock, from], [endClock, to]] = [parts(start, runs, timeZone), parts(end, runs, timeZone)];
   return from === to
-    ? `${clock(start, timeZone)} – ${clock(end, timeZone)} ${to}`
-    : `${timeLabel(start, timeZone)} – ${timeLabel(end, timeZone)}`;
+    ? `${startClock} – ${endClock} ${to}`
+    : `${startClock} ${from} – ${endClock} ${to}`;
 }
 
 /** `2026-09-07 – 2026-09-16`, or one night. */
