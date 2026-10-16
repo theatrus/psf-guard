@@ -201,6 +201,22 @@ pub(crate) fn retain_responses(conn: &Connection, keep: &[String]) -> Result<usi
 /// A session's pedestal changed, as when a dark-flat arrived after it was
 /// measured: keep the new one, and forget its comparisons, which were made
 /// with the old one taken out, so the next pass makes them again.
+/// Rename a measured session's family and session keys. Its plane and its
+/// comparisons stand: they are keyed by the frames, not the family.
+pub(crate) fn set_family(
+    conn: &Connection,
+    response_key: &str,
+    family_key: &str,
+    session_key: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE psf_guard_flat_response SET family_key = ?2, session_key = ?3
+         WHERE response_key = ?1",
+        params![response_key, family_key, session_key],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn set_pedestal(
     conn: &Connection,
     response_key: &str,

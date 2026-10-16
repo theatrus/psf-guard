@@ -225,6 +225,7 @@ pub fn limits_of(rules: &super::Rules) -> model::Limits {
         dust: rules.flat_split_dust_pct / 100.0,
         broad: rules.flat_split_pattern_pct / 100.0,
         window: rules.flat_session_seconds as i64,
+        rotation: rules.rotation_deg,
     }
 }
 
@@ -401,6 +402,18 @@ impl FlatBasis {
                 then: Some(then), ..
             } => then.rotation_tolerance(),
             _ => None,
+        }
+    }
+
+    /// Whether an earlier change already left the light with flats from
+    /// its other side and nothing to stand in.
+    pub fn lacks_same_side(&self) -> bool {
+        match self {
+            FlatBasis::NoSameSide { .. } => true,
+            FlatBasis::Undetermined {
+                then: Some(then), ..
+            } => then.lacks_same_side(),
+            _ => false,
         }
     }
 

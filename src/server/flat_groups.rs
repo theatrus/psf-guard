@@ -132,6 +132,9 @@ pub struct EventView {
     /// A before and an after session to compare.
     pub before_response: String,
     pub after_response: String,
+    /// The window is shorter than one flat run: the change landed between
+    /// one twilight's flats, or two changes met there.
+    pub within_flat_run: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -402,6 +405,7 @@ fn build_view(conn: &rusqlite::Connection) -> anyhow::Result<FlatGroupsView> {
             spots: event.spots.iter().take(12).map(SpotView::of).collect(),
             before_response,
             after_response,
+            within_flat_run: event.within_flat_run,
         });
     }
     // Sessions the pass could not measure, or has not reached.

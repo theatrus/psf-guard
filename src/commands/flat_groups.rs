@@ -43,6 +43,7 @@ struct EventReport {
     camera_side: bool,
     filters: Vec<String>,
     rotations: Vec<Option<f64>>,
+    within_flat_run: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,6 +177,7 @@ pub fn run(
                 camera_side: event.camera_side,
                 filters: event.filters.iter().cloned().collect(),
                 rotations: event.rotations.clone(),
+                within_flat_run: event.within_flat_run,
             })
             .collect(),
         angle_terms: book
@@ -339,9 +341,14 @@ fn print_summary(report: &Report) {
     }
     for event in &report.events {
         println!(
-            "event {} – {}: {}, dust {:.2}%, broad {:.2}%, {} in {:?} at {:?}",
+            "event {} – {}{}: {}, dust {:.2}%, broad {:.2}%, {} in {:?} at {:?}",
             event.start,
             event.end,
+            if event.within_flat_run {
+                " (within one flat run)"
+            } else {
+                ""
+            },
             event.what,
             event.dust_pct,
             event.broad_pct,

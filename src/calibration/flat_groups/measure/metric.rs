@@ -296,7 +296,7 @@ pub fn build_response(binned: &[Plane], bin: usize) -> Option<FlatResponse> {
 }
 
 /// A square max filter of radius `radius` on a mask.
-fn grow(mask: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
+pub(super) fn grow(mask: &[bool], width: usize, height: usize, radius: usize) -> Vec<bool> {
     if radius == 0 {
         return mask.to_vec();
     }

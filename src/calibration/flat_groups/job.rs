@@ -26,6 +26,10 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+/// Rounds of comparisons one pass makes at most: the pairs the stored
+/// comparisons ask for, then those the families they formed ask for.
+const COMPARE_ROUNDS: usize = 3;
+
 /// What one pass did.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct PassOutcome {
@@ -113,17 +117,22 @@ fn hex(text: &str) -> String {
         .collect()
 }
 
-/// The family a flat belongs to, rotation aside: rig, filter, frame size,
-/// binning and sensor mode.
+/// The family a flat belongs to, rotation aside: rig, filter, focal length
+/// (to the millimetre: a reducer swapped in at the same gain is another
+/// light path, not new dust), frame size, binning and sensor mode.
 pub fn family_key(frame: &CalibrationFrame) -> String {
     hex(&format!(
-        "{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{}",
         frame.rig_uuid,
         frame
             .filter
             .as_deref()
             .map(canonical_filter)
             .unwrap_or_default(),
+        frame
+            .focal_length_mm
+            .filter(|mm| mm.is_finite())
+            .map(|mm| mm.round() as i64),
         frame.width,
         frame.height,
         frame.binning_x,
@@ -341,6 +350,11 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
             if moved {
                 store::set_pedestal(conn, &key, pedestal)?;
             }
+            // Measured when the family key named less, as before it took
+            // the focal length: the plane stands, the family is renamed.
+            if row.family_key != plan.family_key || row.session_key != plan.session_key {
+                store::set_family(conn, &key, &plan.family_key, &plan.session_key)?;
+            }
         }
         current.push(key);
     }
@@ -417,38 +431,52 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
     store::retain_responses(conn, &current)?;
     remove_stale_planes(pass.dir, &current);
 
-    // Comparisons.
-    let book = Book::build(
-        store::load_responses(conn)?,
-        store::load_comparisons(conn)?,
-        Vec::new(),
-        Vec::new(),
-        super::rig_limits,
-    );
-    let pairs: Vec<(usize, usize)> = book
-        .pairs_to_compare()
-        .into_iter()
-        .filter(|(a, b)| book.comparison(*a, *b).is_none())
-        .collect();
-    let total = pairs.len();
-    for (done, (a, b)) in pairs.iter().enumerate() {
-        if !(pass.keep_going)() {
-            return Ok(outcome);
+    // Comparisons. A session whose flats record no angle joins a rotation
+    // cluster only once compared with it, and then has that family's pairs
+    // to make: a second round makes them.
+    let mut tried: std::collections::HashSet<(String, String)> = Default::default();
+    for _round in 0..COMPARE_ROUNDS {
+        let book = Book::build(
+            store::load_responses(conn)?,
+            store::load_comparisons(conn)?,
+            Vec::new(),
+            Vec::new(),
+            super::rig_limits,
+        );
+        let pairs: Vec<(usize, usize)> = book
+            .pairs_to_compare()
+            .into_iter()
+            .filter(|(a, b)| book.comparison(*a, *b).is_none())
+            .filter(|(a, b)| {
+                tried.insert((
+                    book.sessions[*a].row.response_key.clone(),
+                    book.sessions[*b].row.response_key.clone(),
+                ))
+            })
+            .collect();
+        if pairs.is_empty() {
+            break;
         }
-        (pass.progress)("comparing flat sessions", done, total);
-        (pass.yield_now)();
-        let (sa, sb) = (&book.sessions[*a].row, &book.sessions[*b].row);
-        let (Some(pa), Some(pb)) = (session_plane(pass.dir, sa), session_plane(pass.dir, sb))
-        else {
-            continue;
-        };
-        let bin = sa.bin.unwrap_or(1);
-        if let Some(comparison) = pass.in_pool(|| metric::compare(&pa, &pb, bin)) {
-            store::insert_comparison(conn, &sa.response_key, &sb.response_key, &comparison)?;
-            outcome.compared += 1;
+        let total = pairs.len();
+        for (done, (a, b)) in pairs.iter().enumerate() {
+            if !(pass.keep_going)() {
+                return Ok(outcome);
+            }
+            (pass.progress)("comparing flat sessions", done, total);
+            (pass.yield_now)();
+            let (sa, sb) = (&book.sessions[*a].row, &book.sessions[*b].row);
+            let (Some(pa), Some(pb)) = (session_plane(pass.dir, sa), session_plane(pass.dir, sb))
+            else {
+                continue;
+            };
+            let bin = sa.bin.unwrap_or(1);
+            if let Some(comparison) = pass.in_pool(|| metric::compare(&pa, &pb, bin)) {
+                store::insert_comparison(conn, &sa.response_key, &sb.response_key, &comparison)?;
+                outcome.compared += 1;
+            }
         }
+        (pass.progress)("comparing flat sessions", total, total);
     }
-    (pass.progress)("comparing flat sessions", total, total);
 
     // Light evidence.
     let book = super::load_book(conn)?;
@@ -499,35 +527,16 @@ fn remove_stale_planes(dir: &Path, current: &[String]) {
     }
 }
 
-/// The change map of an event, from its member boundary in `filter` when
-/// it has one, else (for a camera-side change) its strongest member. With
-/// the before and after response keys it was measured from.
+/// The change map of an event, from the member [`Book::map_source`]
+/// chooses for `filter`. With the before and after response keys it was
+/// measured from.
 pub fn event_map(
     dir: &Path,
     book: &Book,
     event_index: usize,
     filter: Option<&str>,
 ) -> Option<(Plane, String, String)> {
-    let event = &book.events[event_index];
-    let filter = filter.map(canonical_filter);
-    let same_filter = event.boundaries.iter().copied().find(|b| {
-        let family = &book.families[book.boundaries[*b].family];
-        family.filter.as_deref().map(canonical_filter) == filter
-    });
-    let chosen = same_filter.or_else(|| {
-        event.camera_side.then(|| {
-            event
-                .boundaries
-                .iter()
-                .copied()
-                .max_by(|a, b| {
-                    let d = |i: usize| book.boundaries[i].dust.unwrap_or(0.0);
-                    d(*a).total_cmp(&d(*b))
-                })
-                .expect("events have boundaries")
-        })
-    })?;
-    let boundary = &book.boundaries[chosen];
+    let boundary = &book.boundaries[book.map_member(event_index, filter)?];
     let before = &book.sessions[boundary.before].row;
     let after = &book.sessions[boundary.after].row;
     let map = metric::change_map(&session_plane(dir, before)?, &session_plane(dir, after)?)?;
