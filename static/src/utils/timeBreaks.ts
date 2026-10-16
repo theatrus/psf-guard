@@ -131,7 +131,7 @@ export function timeMarks(
 export function timeSlotAttributes(marks: TimeMarks | null, index: number) {
   const mark = marks?.breaks.get(index);
   return {
-    className: `time-slot${marks?.altNight.has(index) ? ' time-night-alt' : ''}`,
+    className: 'time-slot',
     'data-time-break': mark?.kind,
   };
 }

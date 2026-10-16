@@ -5749,26 +5749,33 @@
 }
 
 .filter-images {
+  /* Between columns, and between rows. A night or hour label sits in the
+     row gap, so that one stays tall enough to hold it. */
   --card-gap: 1rem;
+  --card-row-gap: 1rem;
   display: grid;
-  gap: var(--card-gap);
+  gap: var(--card-row-gap) var(--card-gap);
   padding: 1.5rem;
   transition: grid-template-columns 0.3s;
   align-items: start;
 }
 
-/* Night and hour marks between cards (TimeBreakMark). Everything sits in
-   the gaps or behind the cards, positioned absolutely or drawn as a shadow,
-   so no card moves for a mark. A line runs down the gap before the first
-   card of a night or an hour, its label sits in the gap above, and every
-   other night takes a faint band that fills the gaps around its cards, so
-   a night that wraps across rows still reads as one block. */
+/* Night and hour marks between cards (TimeBreakMark). Everything is
+   positioned absolutely in the gaps or behind the card, so no card moves
+   for a mark. A line runs down the column gap before the first card of a
+   night or an hour, and its label sits inside the row gap above, clear of
+   the cards. Every other night takes a faint band that fills the gaps
+   around its cards, so a night that wraps across rows still reads as one
+   block; the card, later in the slot, paints over the band's middle. */
 .time-slot {
   position: relative;
 }
 
-.time-slot.time-night-alt {
-  box-shadow: 0 0 0 calc(var(--card-gap) / 2) var(--color-time-night-band);
+.time-night-band {
+  position: absolute;
+  inset: calc(var(--card-row-gap) / -2) calc(var(--card-gap) / -2);
+  background: var(--color-time-night-band);
+  pointer-events: none;
 }
 
 .time-slot[data-time-break]::before {
@@ -5797,11 +5804,12 @@
   z-index: 2;
   bottom: 100%;
   left: calc(var(--card-gap) / -2 - 1px);
-  margin-bottom: calc(var(--card-gap) / 2 - 0.4rem);
+  /* Inside the row gap with 2px to spare above and below. */
+  margin-bottom: 2px;
   padding: 0 0.35rem;
   border-radius: 999px;
-  font-size: 0.65rem;
-  line-height: 0.8rem;
+  font-size: 0.62rem;
+  line-height: calc(var(--card-row-gap) - 4px);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   cursor: default;
@@ -6577,9 +6585,10 @@
 /* Time-ordered image gallery */
 .sequence-strip {
   --card-gap: 0.5rem;
+  --card-row-gap: 1rem;
   display: grid;
-  gap: var(--card-gap);
-  padding: 0.75rem 1rem;
+  gap: var(--card-row-gap) var(--card-gap);
+  padding: 1rem 1rem 0.75rem;
   align-items: flex-start;
 }
 
