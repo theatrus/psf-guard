@@ -368,6 +368,21 @@ describe('CalibrationPage', () => {
 
   it('writes filters to the URL and asks the server for them', async () => {
     const seen = serve();
+    // Requests can reach MSW out of order: on a CI runner the request for
+    // Type and Grade alone landed after the one with the temperature too.
+    // Hold it back until that one has landed, so every run meets the order
+    // that failed there.
+    let temperatureLanded = () => {};
+    const landed = new Promise<void>((resolve) => { temperatureLanded = resolve; });
+    server.use(
+      http.get('/api/db/demo/calibrations/sessions', async ({ request }) => {
+        const query = new URL(request.url).searchParams;
+        if (query.has('temp_min')) temperatureLanded();
+        else if (query.get('grade') === 'poor') await landed;
+        // Nothing returned: serve()'s handler answers.
+      }),
+    );
+    const asked = vi.spyOn(apiClient, 'getCalibrationSessions');
     renderPage('/calibration?db=demo');
     await waitFor(() => expect(params().get('calSession')).toBe('s1'));
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'dark' } });
@@ -378,8 +393,14 @@ describe('CalibrationPage', () => {
     const from = screen.getByLabelText('From °C');
     fireEvent.change(from, { target: { value: '-12' } });
     fireEvent.blur(from);
-    await waitFor(() => expect(seen.sessions.at(-1)?.get('temp_min')).toBe('-12'));
-    expect(seen.sessions.at(-1)?.get('grade')).toBe('poor');
+    // The page's latest query carries every filter, read at its call site
+    // since the server may hear an older one last…
+    await waitFor(() =>
+      expect(asked.mock.calls.at(-1)?.[1]).toMatchObject({ kind: 'dark', grade: 'poor', temp_min: -12 }));
+    // …and the server was asked for all of them at once.
+    await waitFor(() => expect(seen.sessions.some((request) =>
+      request.get('kind') === 'dark' && request.get('grade') === 'poor' && request.get('temp_min') === '-12',
+    )).toBe(true));
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     await waitFor(() => expect(params().get('calKind')).toBeNull());
     expect(params().get('calGrade')).toBeNull();
