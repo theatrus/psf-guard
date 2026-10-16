@@ -174,6 +174,23 @@
   --color-flat-dust-new: rgb(255 140 90);
   --color-flat-dust-gone: rgb(110 200 255);
 
+  /* Dust drawn over a flat at its shape: a compact spot, an out-of-focus
+     disk or donut, a border-anchored vignetting shadow, and what one flat
+     holds that its session does not. Between two sessions, dust that came,
+     went or moved, and dust that moved no further than focus travel. */
+  --dust-spot: rgb(255 176 32);
+  --dust-disk: rgb(255 120 200);
+  --dust-donut: rgb(200 140 255);
+  --dust-transient: rgb(250 235 70);
+  --vignetting: rgb(130 150 255);
+  --vignetting-fill: rgb(130 150 255 / 12%);
+  --dust-new: var(--color-flat-dust-new);
+  --dust-gone: var(--color-flat-dust-gone);
+  --dust-moved: rgb(120 220 140);
+  --dust-within-tolerance: var(--color-text-muted);
+  --dust-label-bg: var(--color-halo);
+  --dust-label-fg: var(--color-text-strong);
+
   /* Flat groups in the Calibration page's session list: neighbouring
      groups of one filter and angle take neighbouring colours. */
   --color-flat-group-1: rgb(120 165 255);

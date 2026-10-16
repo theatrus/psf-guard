@@ -14,6 +14,7 @@ import {
   suspectOverruled,
 } from './calibrationLabels';
 import type { useCalibrationActions } from './useCalibrationActions';
+import { isLarge, spotsSummary } from './dustLabels';
 
 interface CalibrationFramePanelProps {
   detail: CalibrationFrameDetail | undefined;
@@ -113,13 +114,23 @@ export default function CalibrationFramePanel({
             </tr>
           </thead>
           <tbody>
-            {detail.metrics.map((metric) => (
-              <tr key={metric.key}>
-                <th scope="row">{metricLabel(metric.key)}</th>
-                <td>{formatMetric(metric.key, metric.value)}</td>
-                <td>{formatMetric(metric.key, metric.session)}</td>
-              </tr>
-            ))}
+            {detail.metrics.filter((metric) => metric.key !== 'large_dust').map((metric) => {
+              // A flat's spots and its large dust read as one: `15 spots ·
+              // 3 large disks`, the frame's and its session's.
+              const large = metric.key === 'features'
+                ? detail.metrics.find((other) => other.key === 'large_dust')
+                : undefined;
+              const shapes = (detail.measurement?.features ?? [])
+                .map((feature) => feature.shape ?? 'compact')
+                .filter(isLarge);
+              return (
+                <tr key={metric.key}>
+                  <th scope="row">{metricLabel(metric.key)}</th>
+                  <td>{large ? spotsSummary(metric.value, large.value, shapes) : formatMetric(metric.key, metric.value)}</td>
+                  <td>{large ? spotsSummary(metric.session, large.session, shapes) : formatMetric(metric.key, metric.session)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

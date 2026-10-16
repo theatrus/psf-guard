@@ -156,6 +156,7 @@ const METRICS: Record<string, { label: string; format: (value: number) => string
   clipped_fraction: { label: 'Clipped', format: (value) => `${(value * 100).toFixed(3)}%` },
   noise_fraction: { label: 'Noise', format: (value) => `${(value * 100).toFixed(2)}%` },
   features: { label: 'Spots', format: (value) => Math.round(value).toLocaleString() },
+  large_dust: { label: 'Large dust', format: (value) => Math.round(value).toLocaleString() },
 };
 
 function adu(value: number): string {

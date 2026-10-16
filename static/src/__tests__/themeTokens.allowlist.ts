@@ -21,9 +21,6 @@ export const THEME_ALLOWLIST: { colours: ThemeFindings; states: ThemeFindings; i
       "color: #ede9fe",
       "filter: drop-shadow(0 1px 1px rgb(0 0 0 / 40%))"
     ],
-    "components/calibration/CalibrationPage.css": [
-      "stroke: #ffb020"
-    ],
     "components/director/FramingView.css": [
       "background: rgba(160, 40, 40, 0.85)",
       "fill: #c4f2d4",

@@ -23,7 +23,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use seiza_calibration::{
     BiasScreening, DarkMeasureOptions, DarkMeasurement, DarkScreening, Finding, FindingCode,
     FlatMeasureOptions, FlatMeasurement, FlatScreening, FrameVerdict, Grade, LinearImageRef,
-    FRAME_QUALITY_ALGORITHM_VERSION,
+    FLAT_QUALITY_ALGORITHM_VERSION, FRAME_QUALITY_ALGORITHM_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -97,6 +97,67 @@ pub(super) fn suspect_reasons(conn: &Connection) -> Result<HashMap<String, Strin
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<HashMap<String, String>>>()?;
     Ok(rows)
+}
+
+/// The measure version a stored measurement of this kind must carry to be
+/// current. Seiza versions its flat measure apart from the bias and dark one,
+/// so a new dust measure re-measures the flats alone.
+pub(super) fn measure_version(kind: CalibrationKind) -> u32 {
+    if kind == CalibrationKind::Flat {
+        FLAT_QUALITY_ALGORITHM_VERSION
+    } else {
+        FRAME_QUALITY_ALGORITHM_VERSION
+    }
+}
+
+/// [`measure_version`] as SQL, for the frame row aliased `f`.
+pub(super) fn measure_version_sql() -> String {
+    format!(
+        "(CASE WHEN f.kind = 'flat' THEN {FLAT_QUALITY_ALGORITHM_VERSION} \
+         ELSE {FRAME_QUALITY_ALGORITHM_VERSION} END)"
+    )
+}
+
+/// Each flat's features, with its frame.
+pub type FlatFeatureLists = Vec<(String, Vec<seiza_calibration::FlatFeature>)>;
+
+/// The features each of these flats' current measurement holds, with its
+/// frame, so a session's dust is told from its flats without reading them
+/// again. A flat this build could not measure is left out; `None` while any
+/// flat waits for its measurement.
+pub fn flat_feature_lists(
+    conn: &Connection,
+    frame_uuids: &[String],
+) -> Result<Option<FlatFeatureLists>> {
+    if !table_exists(conn) {
+        return Ok(None);
+    }
+    let mut statement = conn.prepare(
+        "SELECT q.measurement_json FROM psf_guard_calibration_frame_quality q
+         JOIN psf_guard_calibration_frame f ON f.frame_uuid = q.frame_uuid
+         WHERE q.frame_uuid = ?1 AND q.algorithm_version = ?2
+           AND q.source_fingerprint IS f.source_fingerprint",
+    )?;
+    let mut lists = Vec::new();
+    for uuid in frame_uuids {
+        let stored: Option<Option<String>> = statement
+            .query_row(params![uuid, FLAT_QUALITY_ALGORITHM_VERSION], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        match stored {
+            None => return Ok(None),
+            // Refused by the measure: nothing to say about dust.
+            Some(None) => {}
+            Some(Some(json)) => match serde_json::from_str::<StoredMeasurement>(&json) {
+                Ok(StoredMeasurement::Flat(flat)) => {
+                    lists.push((uuid.clone(), flat.measurement.features))
+                }
+                _ => return Ok(None),
+            },
+        }
+    }
+    Ok(Some(lists))
 }
 
 /// Whether this catalog has the grade table. One this build could not
@@ -178,7 +239,7 @@ pub(super) fn all_judged(conn: &Connection, frames: &[CalibrationFrame]) -> Resu
             .query_row(
                 params![
                     frame.frame_uuid,
-                    FRAME_QUALITY_ALGORITHM_VERSION,
+                    measure_version(frame.kind),
                     frame.source_fingerprint
                 ],
                 |_| Ok(()),
@@ -199,7 +260,32 @@ pub enum StoredMeasurement {
     /// A bias, dark or dark-flat.
     Dark(DarkMeasurement),
     /// A flat.
-    Flat(FlatMeasurement),
+    Flat(FlatRecord),
+}
+
+/// A flat's measurement, with the light cone its header recorded so its
+/// session's dust, found later on the stack, can be placed too. Stored as
+/// the measurement's own fields plus `optics`, so records from before it
+/// read as they are.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlatRecord {
+    #[serde(flatten)]
+    pub measurement: FlatMeasurement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optics: Option<seiza_calibration::dust::Optics>,
+}
+
+impl std::ops::Deref for FlatRecord {
+    type Target = FlatMeasurement;
+    fn deref(&self) -> &FlatMeasurement {
+        &self.measurement
+    }
+}
+
+impl std::ops::DerefMut for FlatRecord {
+    fn deref_mut(&mut self) -> &mut FlatMeasurement {
+        &mut self.measurement
+    }
 }
 
 /// A raw frame waiting to be measured.
@@ -258,19 +344,20 @@ pub fn pending_measurements(conn: &Connection) -> Result<Vec<PendingFrame>> {
     if !grades_here(conn) {
         return Ok(Vec::new());
     }
-    let mut statement = conn.prepare(
+    let mut statement = conn.prepare(&format!(
         "SELECT f.frame_uuid, f.kind, f.source_path, f.source_fingerprint
          FROM psf_guard_calibration_frame f
          LEFT JOIN psf_guard_calibration_frame_quality q ON q.frame_uuid = f.frame_uuid
          WHERE f.is_master = 0
            AND (q.frame_uuid IS NULL
                 OR q.algorithm_version IS NULL
-                OR q.algorithm_version <> ?1
+                OR q.algorithm_version <> {}
                 OR q.source_fingerprint IS NOT f.source_fingerprint)
          ORDER BY f.id",
-    )?;
+        measure_version_sql()
+    ))?;
     let rows = statement
-        .query_map([FRAME_QUALITY_ALGORITHM_VERSION], |row| {
+        .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -292,6 +379,38 @@ pub fn pending_measurements(conn: &Connection) -> Result<Vec<PendingFrame>> {
         .collect())
 }
 
+/// The light cone a frame's header records: N.I.N.A.'s `FOCRATIO` and
+/// `XPIXSZ` (the pixel as binned). Only for sizing where dust sits: the
+/// header says nothing of a central obstruction, so it is not handed to
+/// the measure, which would then rule out donuts.
+pub fn frame_optics(
+    headers: &[(String, seiza_fits::HeaderValue)],
+) -> Option<seiza_calibration::dust::Optics> {
+    let number = |key: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            .and_then(|(_, value)| value.as_f64())
+    };
+    let optics = seiza_calibration::dust::Optics {
+        focal_ratio: number("FOCRATIO")? as f32,
+        pixel_size_um: number("XPIXSZ")? as f32,
+        obstruction: 0.0,
+    };
+    optics.is_usable().then_some(optics)
+}
+
+/// How far in front of the sensor each disk's and donut's dust sits, from
+/// its diameter and the optics.
+pub fn set_distances(
+    features: &mut [seiza_calibration::FlatFeature],
+    optics: &seiza_calibration::dust::Optics,
+) {
+    for feature in features.iter_mut().filter(|f| f.shape.is_round()) {
+        feature.distance_mm = Some(optics.distance_mm(2.0 * feature.radius));
+    }
+}
+
 /// Read one frame through [`crate::image_io`] and measure it. Seiza's own
 /// threads run in the pool of the calling thread.
 pub fn measure_frame(frame: &PendingFrame) -> FrameMeasurement {
@@ -307,10 +426,18 @@ pub fn measure_frame(frame: &PendingFrame) -> FrameMeasurement {
     let measured = match frame.kind {
         CalibrationKind::Flat => {
             let cfa = opened.bayer.is_some() && image.channels == 1;
+            let optics = frame_optics(&opened.headers);
             seiza_calibration::measure_flat(view, cfa, &FlatMeasureOptions::default()).map(
                 |mut measurement| {
+                    // Large features come first, so the cap keeps them all.
                     measurement.features.truncate(MAX_STORED_FEATURES);
-                    StoredMeasurement::Flat(measurement)
+                    if let Some(optics) = optics {
+                        set_distances(&mut measurement.features, &optics);
+                    }
+                    StoredMeasurement::Flat(FlatRecord {
+                        measurement,
+                        optics,
+                    })
                 },
             )
         }
@@ -427,7 +554,7 @@ fn record_measurements(
             upsert.execute(params![
                 frame.frame_uuid,
                 frame.source_fingerprint,
-                FRAME_QUALITY_ALGORITHM_VERSION,
+                measure_version(frame.kind),
                 json,
                 error,
                 now,
@@ -479,12 +606,13 @@ pub fn grade_library(conn: &Connection) -> Result<GradeOutcome> {
 fn load_measured(conn: &Connection) -> Result<Vec<Measured>> {
     let mut statement = conn.prepare(&format!(
         "{} WHERE f.is_master = 0 AND q.measurement_json IS NOT NULL
-             AND q.algorithm_version = ?1 AND q.source_fingerprint IS f.source_fingerprint
+             AND q.algorithm_version = {} AND q.source_fingerprint IS f.source_fingerprint
          ORDER BY f.captured_at, f.id",
-        frame_select(conn, &["q.measurement_json", "f.stray_light"])
+        frame_select(conn, &["q.measurement_json", "f.stray_light"]),
+        measure_version_sql()
     ))?;
     let rows = statement
-        .query_map([FRAME_QUALITY_ALGORITHM_VERSION], |row| {
+        .query_map([], |row| {
             Ok((
                 row_to_frame(row)?,
                 row.get::<_, String>(30)?,
@@ -613,7 +741,7 @@ fn judge_flats(measured: &[Measured], nights: &Nights, judged: &mut HashMap<Stri
         let measurements: Vec<FlatMeasurement> = set
             .iter()
             .filter_map(|entry| match &entry.measurement {
-                StoredMeasurement::Flat(flat) => Some(flat.clone()),
+                StoredMeasurement::Flat(flat) => Some(flat.measurement.clone()),
                 StoredMeasurement::Dark(_) => None,
             })
             .collect();
@@ -1139,17 +1267,20 @@ pub fn quality_counts(conn: &Connection) -> Result<QualityCounts> {
         });
     }
     let (measured, ok, suspect, poor, kept_out, used) = conn.query_row(
-        "SELECT
-            SUM(q.measurement_json IS NOT NULL AND q.algorithm_version = ?1
-                AND q.source_fingerprint IS f.source_fingerprint),
-            SUM(q.grade = 'ok' OR (q.grade = 'suspect' AND q.override_choice IS 'use')),
-            SUM(q.grade = 'suspect' AND q.override_choice IS NOT 'use'),
-            SUM(q.grade = 'poor'),
-            SUM(q.override_choice = 'exclude'),
-            SUM(q.override_choice = 'use' AND q.grade IN ('poor', 'suspect'))
-         FROM psf_guard_calibration_frame f
-         JOIN psf_guard_calibration_frame_quality q ON q.frame_uuid = f.frame_uuid",
-        [FRAME_QUALITY_ALGORITHM_VERSION],
+        &format!(
+            "SELECT
+                SUM(q.measurement_json IS NOT NULL AND q.algorithm_version = {}
+                    AND q.source_fingerprint IS f.source_fingerprint),
+                SUM(q.grade = 'ok' OR (q.grade = 'suspect' AND q.override_choice IS 'use')),
+                SUM(q.grade = 'suspect' AND q.override_choice IS NOT 'use'),
+                SUM(q.grade = 'poor'),
+                SUM(q.override_choice = 'exclude'),
+                SUM(q.override_choice = 'use' AND q.grade IN ('poor', 'suspect'))
+             FROM psf_guard_calibration_frame f
+             JOIN psf_guard_calibration_frame_quality q ON q.frame_uuid = f.frame_uuid",
+            measure_version_sql()
+        ),
+        [],
         |row| {
             let count = |index| {
                 row.get::<_, Option<i64>>(index)
@@ -1200,12 +1331,12 @@ pub(super) fn flat_set_verdict(
         .filter_map(|frame| {
             let json: String = statement
                 .query_row(
-                    params![frame.frame_uuid, FRAME_QUALITY_ALGORITHM_VERSION],
+                    params![frame.frame_uuid, FLAT_QUALITY_ALGORITHM_VERSION],
                     |row| row.get(0),
                 )
                 .ok()?;
             match serde_json::from_str(&json).ok()? {
-                StoredMeasurement::Flat(flat) => Some(flat),
+                StoredMeasurement::Flat(flat) => Some(flat.measurement),
                 StoredMeasurement::Dark(_) => None,
             }
         })
@@ -1666,6 +1797,41 @@ pub(super) mod tests {
         let (measured, _) = measure_and_grade(&conn).unwrap();
         assert_eq!((measured.pending, measured.unreadable), (1, 1));
         assert_eq!(pending_measurements(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_new_flat_measure_re_measures_the_flats_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut conn, _) = dark_library(temp.path());
+        let path = temp.path().join("flat.fits");
+        write_frame(&path, "FLAT", (64, 64), "2026-09-10T02:00:00", |_, _| {
+            30_000.0
+        });
+        let tx = conn.transaction().unwrap();
+        import_calibration_frames(&tx, &[read_frame_meta(&path)], Some("profile")).unwrap();
+        tx.commit().unwrap();
+        measure_and_grade(&conn).unwrap();
+        assert!(pending_measurements(&conn).unwrap().is_empty());
+        // The darks are current; the flats were measured by the flat measure
+        // before this one.
+        conn.execute(
+            "UPDATE psf_guard_calibration_frame_quality SET algorithm_version =
+                CASE WHEN frame_uuid IN (SELECT frame_uuid FROM psf_guard_calibration_frame
+                                         WHERE kind = 'flat')
+                     THEN ?1 ELSE ?2 END",
+            [
+                FLAT_QUALITY_ALGORITHM_VERSION - 1,
+                FRAME_QUALITY_ALGORITHM_VERSION,
+            ],
+        )
+        .unwrap();
+        let pending = pending_measurements(&conn).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert!(matches!(pending[0].kind, CalibrationKind::Flat));
+        assert_eq!(
+            measure_version(CalibrationKind::Dark),
+            FRAME_QUALITY_ALGORITHM_VERSION
+        );
     }
 
     fn recorded_version(conn: &Connection) -> i64 {

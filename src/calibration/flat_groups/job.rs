@@ -544,6 +544,147 @@ pub fn read_binned(path: &Path) -> Result<(Plane, usize)> {
     ))
 }
 
+/// A session's dust, from its cached response plane (the stack of its
+/// flats, pedestal out) and each flat's own stored features: no frame is
+/// read. Until every flat of the session has a current measurement, the
+/// stack's dust stands alone, without persistence, and is made again once
+/// they all have one.
+fn session_dust(
+    dir: &Path,
+    row: &ResponseRow,
+    lists: Option<crate::calibration::quality::FlatFeatureLists>,
+) -> Option<super::SessionDust> {
+    use seiza_calibration::dust::{self, DustMap, DustOptions};
+    let plane = session_plane(dir, row)?;
+    let bin = row.bin.unwrap_or(1);
+    let options = DustOptions::default();
+    let mut map = dust::find_dust(&plane, bin, &options).unwrap_or(DustMap {
+        algorithm_version: dust::DUST_ALGORITHM_VERSION,
+        bin,
+        features: Vec::new(),
+        vignetting: Vec::new(),
+        sigma: 0.0,
+        star_fraction: 0.0,
+        frames: 0,
+    });
+    map.frames = row.frames;
+    let Some(lists) = lists else {
+        return Some(super::SessionDust {
+            map,
+            frames: Vec::new(),
+            persistence: false,
+        });
+    };
+    let frames = persistence(&mut map, &lists, &options);
+    Some(super::SessionDust {
+        map,
+        frames,
+        persistence: true,
+    })
+}
+
+/// In how many of the session's flats each feature of its stack shows, by
+/// each flat's own features paired with the stack's; the features too few
+/// flats show are dropped. What a flat holds that neither the stack nor most
+/// of the other flats do is a transient.
+fn persistence(
+    map: &mut seiza_calibration::dust::DustMap,
+    lists: &[(String, Vec<seiza_calibration::dust::DustFeature>)],
+    options: &seiza_calibration::dust::DustOptions,
+) -> Vec<super::FrameDustRow> {
+    use seiza_calibration::dust::{match_features, SeenIn, MIN_PERSISTENCE_FRAMES};
+    let of = lists.len() as u32;
+    let overlap = |a: &seiza_calibration::dust::DustFeature,
+                   b: &seiza_calibration::dust::DustFeature| {
+        let t = options.move_tolerance;
+        a.left as f32 - t <= b.right as f32
+            && b.left as f32 <= a.right as f32 + t
+            && a.top as f32 - t <= b.bottom as f32
+            && b.top as f32 <= a.bottom as f32 + t
+    };
+    let mut seen_by: Vec<Vec<usize>> = Vec::new();
+    let mut transients: Vec<Vec<seiza_calibration::dust::DustFeature>> = Vec::new();
+    for (index, (_, features)) in lists.iter().enumerate() {
+        let matches = match_features(&map.features, features, options);
+        seen_by.push(
+            matches
+                .iter()
+                .filter(|m| m.later.is_some())
+                .filter_map(|m| m.earlier)
+                .collect(),
+        );
+        transients.push(
+            matches
+                .iter()
+                .filter(|m| m.earlier.is_none())
+                .filter_map(|m| m.later.map(|j| features[j]))
+                .filter(|f| {
+                    !map.features
+                        .iter()
+                        .any(|own| (own.x - f.x).hypot(own.y - f.y) < own.radius.max(f.radius))
+                })
+                // Steady in most of the other flats: dust the stack is too
+                // coarse to hold, not a passing thing.
+                .filter(|f| {
+                    let others = lists
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, (_, list))| {
+                            *other != index && list.iter().any(|g| overlap(f, g))
+                        })
+                        .count();
+                    (others as f32) < 0.6 * (lists.len().saturating_sub(1)) as f32
+                })
+                .collect(),
+        );
+    }
+    // TODO(seiza): move to dust::session_dust_from_lists, the follow-up to
+    // theatrus/seiza#289, so find_session_dust and this share one rule.
+    let reliable = of as usize >= MIN_PERSISTENCE_FRAMES;
+    let mut renumber: Vec<Option<usize>> = Vec::with_capacity(map.features.len());
+    let mut kept = Vec::new();
+    for (index, feature) in map.features.iter().enumerate() {
+        let frames = seen_by.iter().filter(|seen| seen.contains(&index)).count() as u32;
+        let keep = if !reliable {
+            feature.shape.is_large() || frames >= of
+        } else if feature.shape.is_large() {
+            frames as f32 >= 0.3 * of as f32
+        } else {
+            frames >= ((0.6 * of as f32).ceil() as u32).max(2)
+        };
+        if keep {
+            let mut feature = *feature;
+            feature.seen_in = Some(SeenIn { frames, of });
+            renumber.push(Some(kept.len()));
+            kept.push(feature);
+        } else {
+            renumber.push(None);
+        }
+    }
+    map.features = kept;
+    lists
+        .iter()
+        .zip(seen_by)
+        .zip(transients)
+        .map(
+            |(((frame_uuid, _), seen), transients)| super::FrameDustRow {
+                frame_uuid: frame_uuid.clone(),
+                seen: seen.iter().filter_map(|index| renumber[*index]).collect(),
+                transients,
+            },
+        )
+        .collect()
+}
+
+fn write_dust(dir: &Path, key: &str, dust: &super::SessionDust) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = super::dust_path(dir, key);
+    let temporary = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    std::fs::write(&temporary, serde_json::to_vec(dust)?)?;
+    std::fs::rename(&temporary, &path)?;
+    Ok(())
+}
+
 fn write_plane(dir: &Path, key: &str, plane: &Plane) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let path = super::response_path(dir, key);
@@ -629,7 +770,8 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
                 let key = plan.response_key();
                 // A dark-flat or bias that arrived since: the pedestal comes
                 // off anew, and the comparisons made without it are made
-                // again.
+                // again. The session's dust was measured with the pedestal
+                // out, so it is measured again too.
                 if let Some(row) = known.get(&key) {
                     let first = &plan.frames[0];
                     let pedestal = pedestal_for(
@@ -645,6 +787,7 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
                     };
                     if moved {
                         store::set_pedestal(conn, &key, pedestal)?;
+                        let _ = std::fs::remove_file(super::dust_path(pass.dir, &key));
                     }
                     // Measured when the family key named less, as before it
                     // took the focal length: the plane stands, the family is
@@ -677,6 +820,35 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
                 )?;
             }
             (pass.progress)(&report(STAGE_MEASURING, total, total));
+
+            // Each session's dust, from its response plane and its flats'
+            // stored features: made where missing, or where it waited for
+            // flats that are now measured.
+            for row in store::load_responses(conn)?
+                .iter()
+                .filter(|row| row.rig_uuid == rig && row.error.is_none())
+                .filter(|row| current.contains(&row.response_key))
+            {
+                let key = &row.response_key;
+                let stored = super::read_dust(pass.dir, key);
+                if stored.as_ref().is_some_and(|dust| dust.persistence) {
+                    continue;
+                }
+                // A flat the response could not read is no witness either.
+                let frames: Vec<String> = row
+                    .frame_uuids
+                    .iter()
+                    .filter(|uuid| !row.unread.iter().any(|flat| &flat.frame_uuid == *uuid))
+                    .cloned()
+                    .collect();
+                let lists = crate::calibration::quality::flat_feature_lists(conn, &frames)?;
+                if stored.is_some() && lists.is_none() {
+                    continue;
+                }
+                if let Some(dust) = pass.in_pool(|| session_dust(pass.dir, row, lists)) {
+                    write_dust(pass.dir, key, &dust)?;
+                }
+            }
 
             // Comparisons. A session whose flats record no angle joins a
             // rotation cluster only once compared with it, and then has that
@@ -1002,6 +1174,9 @@ fn measure_session(
     match response {
         Some(response) => {
             write_plane(pass.dir, key, &response.plane)?;
+            // A new plane, as when flats that were away came back: its dust
+            // is found again from it.
+            let _ = std::fs::remove_file(super::dust_path(pass.dir, key));
             row.level_adu = Some(f64::from(response.level));
             row.noise = Some(f64::from(response.noise));
             row.width = Some(response.plane.width);
@@ -1035,17 +1210,26 @@ pub fn session_plane(dir: &Path, row: &ResponseRow) -> Option<Plane> {
     Some(response.without_pedestal(row.pedestal_adu.unwrap_or(0.0) as f32))
 }
 
-/// Remove the planes of responses the catalog no longer holds.
+/// Remove the planes and dust of responses the catalog no longer holds,
+/// and dust kept under an older dust algorithm.
 fn remove_stale_planes(dir: &Path, current: &[String]) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(key) = name.strip_suffix(".resp") else {
+        // A plane, or a session's dust beside it.
+        let Some(key) = name
+            .strip_suffix(".resp")
+            .or_else(|| name.split_once(".dust-v").map(|(key, _)| key))
+        else {
             continue;
         };
-        if !current.iter().any(|k| k == key) {
+        // A session's dust of an older algorithm is measured again under
+        // the current one's name.
+        let outdated = name.contains(".dust-v")
+            && super::dust_path(dir, key).file_name() != Some(entry.file_name().as_os_str());
+        if outdated || !current.iter().any(|k| k == key) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -1063,8 +1247,58 @@ pub fn event_map(
     let boundary = &book.boundaries[book.map_member(event_index, filter)?];
     let before = &book.sessions[boundary.before].row;
     let after = &book.sessions[boundary.after].row;
-    let map = metric::change_map(&session_plane(dir, before)?, &session_plane(dir, after)?)?;
+    let mut map = metric::change_map(&session_plane(dir, before)?, &session_plane(dir, after)?)?;
+    without_vignetting(
+        &mut map,
+        &boundary.vignetting_changes,
+        before.bin.unwrap_or(1),
+    );
     Some((map, before.response_key.clone(), after.response_key.clone()))
+}
+
+/// The map a light's evidence is fitted against: its changes of dust alone.
+/// A change of vignetting is a large shadow at the border, where a light's
+/// own sky (a nebula, a gradient its background did not lose) is least like
+/// the flats; fitted shadow by shadow it decides nothing and drowns what the
+/// dust says. Each vignetting change is taken out of the map where it lies:
+/// a quarter disc in its corner, a band along its edge, half again as large
+/// as the area it covers.
+fn without_vignetting(
+    map: &mut Plane,
+    changes: &[seiza_calibration::dust::VignettingChange],
+    bin: usize,
+) {
+    use seiza_calibration::dust::Edge;
+    let (width, height) = (map.width as f32, map.height as f32);
+    let scale = bin.max(1) as f32;
+    for change in changes {
+        let area = change.vignetting.area / (scale * scale) * 1.5;
+        let corner = match change.vignetting.edge {
+            Edge::TopLeft => Some((0.0, 0.0)),
+            Edge::TopRight => Some((width, 0.0)),
+            Edge::BottomLeft => Some((0.0, height)),
+            Edge::BottomRight => Some((width, height)),
+            _ => None,
+        };
+        let radius = (4.0 * area / std::f32::consts::PI).sqrt();
+        let band = |along: f32| (area / along.max(1.0)).max(1.0);
+        for y in 0..map.height {
+            for x in 0..map.width {
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                let inside = match (corner, change.vignetting.edge) {
+                    (Some((cx, cy)), _) => (px - cx).hypot(py - cy) <= radius,
+                    (None, Edge::Top) => py <= band(width),
+                    (None, Edge::Bottom) => py >= height - band(width),
+                    (None, Edge::Left) => px <= band(height),
+                    (None, Edge::Right) => px >= width - band(height),
+                    _ => false,
+                };
+                if inside {
+                    map.data[y * map.width + x] = 1.0;
+                }
+            }
+        }
+    }
 }
 
 fn session_evidence(
@@ -1228,5 +1462,56 @@ pub fn session_side(book: &Book, event_index: usize, session_index: usize) -> Op
     match (event.side_of(session.first), event.side_of(session.last)) {
         (Some(a), Some(b)) if a == b => Some(a),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod stale_dust_tests {
+    use super::*;
+
+    /// The map a light's evidence is fitted against keeps its dust and
+    /// loses the vignetting: a bottom-left corner shadow of a 4,000 x
+    /// 3,000 px frame binned by 10.
+    #[test]
+    fn the_evidence_map_reads_the_dust_alone() {
+        use seiza_calibration::dust::{Edge, Vignetting, VignettingChange};
+        let (width, height) = (400, 300);
+        let mut map = Plane {
+            width,
+            height,
+            data: vec![0.98; width * height],
+        };
+        let corner = VignettingChange {
+            darker: true,
+            vignetting: Vignetting {
+                edge: Edge::BottomLeft,
+                x: 300.0,
+                y: 2700.0,
+                // A quarter disc 40 binned pixels in radius.
+                area: std::f32::consts::PI * 400.0 * 400.0 / 4.0,
+                depth: 0.02,
+            },
+        };
+        without_vignetting(&mut map, &[corner], 10);
+        let at = |x: usize, y: usize| map.data[y * width + x];
+        assert_eq!(at(5, height - 5), 1.0, "the corner is out");
+        assert_eq!(at(30, height - 30), 1.0, "with its margin");
+        assert_eq!(at(200, 150), 0.98, "the dust stays");
+        assert_eq!(at(width - 5, height - 5), 0.98, "another corner stays");
+    }
+
+    /// Once DUST_ALGORITHM_VERSION moves, a session's dust of the older
+    /// version goes rather than staying beside the current one.
+    #[test]
+    fn an_older_dust_version_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = "abc123";
+        std::fs::write(temp.path().join(format!("{key}.resp")), b"plane").unwrap();
+        std::fs::write(super::super::dust_path(temp.path(), key), b"{}").unwrap();
+        let older = temp.path().join(format!("{key}.dust-v0.json"));
+        std::fs::write(&older, b"{}").unwrap();
+        remove_stale_planes(temp.path(), &[key.to_string()]);
+        assert!(super::super::dust_path(temp.path(), key).is_file());
+        assert!(!older.is_file(), "a dust file of an older version stays");
     }
 }

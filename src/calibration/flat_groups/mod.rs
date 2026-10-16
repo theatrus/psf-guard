@@ -32,7 +32,7 @@ pub use seiza_calibration::LightRotation;
 use anyhow::Result;
 use model::{AngleTerm, Book, Event, Placement, Side};
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -68,6 +68,48 @@ pub fn response_dir(catalog: &Path) -> Option<PathBuf> {
 
 pub fn response_path(dir: &Path, response_key: &str) -> PathBuf {
     dir.join(format!("{response_key}.resp"))
+}
+
+/// Where a session's dust is kept: beside its response plane, named for
+/// the dust algorithm, so a new one measures again.
+pub fn dust_path(dir: &Path, response_key: &str) -> PathBuf {
+    dir.join(format!(
+        "{response_key}.dust-v{}.json",
+        seiza_calibration::dust::DUST_ALGORITHM_VERSION
+    ))
+}
+
+/// A flat session's dust, found on the stack of its flats
+/// (`seiza_calibration::dust::find_session_dust`), and each flat's view of
+/// it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDust {
+    /// The dust the stack holds, with in how many flats each feature shows.
+    pub map: seiza_calibration::dust::DustMap,
+    /// One per flat of the session that has a measurement; none while it
+    /// waits for them.
+    pub frames: Vec<FrameDustRow>,
+    /// Whether the flats' own features have said in how many of them each
+    /// feature shows. Until then the stack's dust stands alone.
+    #[serde(default)]
+    pub persistence: bool,
+}
+
+/// One flat's view of its session's dust.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameDustRow {
+    pub frame_uuid: String,
+    /// Indices into the session's features that this flat shows.
+    pub seen: Vec<usize>,
+    /// What this flat holds that the stack does not: dew drying, a passing
+    /// particle. Not dust of the light path.
+    pub transients: Vec<seiza_calibration::dust::DustFeature>,
+}
+
+/// Read a session's dust back from the cache.
+pub fn read_dust(dir: &Path, response_key: &str) -> Option<SessionDust> {
+    let text = std::fs::read_to_string(dust_path(dir, response_key)).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 /// Read a response plane back from the cache.
@@ -303,21 +345,60 @@ impl EventNote {
     }
 }
 
-/// What a change is, in a few words: its spots, or that a person split
-/// the flats there.
+/// What a change is, in a few words: that a person split the flats there,
+/// a change of vignetting where that leads, or its spots.
 pub fn describe_what(event: &Event) -> String {
     if event.by_hand {
         "split by you where the flats measure alike".into()
+    } else if vignetting_leads(
+        event.dust,
+        event.broad,
+        event.vignetting,
+        &rig_limits(&event.rig_uuid),
+    ) {
+        format!(
+            "vignetting changed at the {}",
+            event
+                .vignetting_changes
+                .first()
+                .map_or("border", |change| edge_words(change.vignetting.edge))
+        )
     } else {
         describe_spots(&event.spots, event.dust, event.broad)
+    }
+}
+
+/// Whether a change of vignetting, rather than dust or the light pattern,
+/// is what a change is named for: held to the light-pattern limit, as
+/// [`model::Limits::distance`] holds it, it is further past that than the
+/// dust is past its own, and larger than the light pattern.
+pub fn vignetting_leads(dust: f64, broad: f64, vignetting: f64, limits: &model::Limits) -> bool {
+    vignetting > broad && vignetting / limits.broad.max(1e-9) >= dust / limits.dust.max(1e-9)
+}
+
+/// An edge or corner in words.
+pub fn edge_words(edge: seiza_calibration::dust::Edge) -> &'static str {
+    use seiza_calibration::dust::Edge;
+    match edge {
+        Edge::Top => "top edge",
+        Edge::Bottom => "bottom edge",
+        Edge::Left => "left edge",
+        Edge::Right => "right edge",
+        Edge::TopLeft => "top-left corner",
+        Edge::TopRight => "top-right corner",
+        Edge::BottomLeft => "bottom-left corner",
+        Edge::BottomRight => "bottom-right corner",
+        _ => "edge",
     }
 }
 
 /// The spots of a change in a few words.
 pub fn describe_spots(spots: &[metric::Spot], dust: f64, broad: f64) -> String {
     use metric::SpotKind;
+    // Dust that moved within focus travel is drawn but not counted.
     let strong: Vec<&metric::Spot> = spots
         .iter()
+        .filter(|spot| !spot.within_tolerance)
         .filter(|spot| f64::from(spot.peak) >= dust * 0.5)
         .collect();
     if strong.is_empty() {
@@ -331,10 +412,29 @@ pub fn describe_spots(spots: &[metric::Spot], dust: f64, broad: f64) -> String {
         "new dust"
     };
     let top = strong[0];
-    let shadows = if strong.len() == 1 {
-        "1 shadow".to_string()
+    // Large shadows are named by their shape: a filter's dust casts disks,
+    // an SCT's donuts.
+    let (disks, donuts) = (
+        strong
+            .iter()
+            .filter(|s| s.shape == seiza_calibration::dust::DustShape::Disk)
+            .count(),
+        strong
+            .iter()
+            .filter(|s| s.shape == seiza_calibration::dust::DustShape::Donut)
+            .count(),
+    );
+    let noun = if donuts == strong.len() {
+        "donut"
+    } else if disks == strong.len() {
+        "disk"
     } else {
-        format!("{} shadows", strong.len())
+        "shadow"
+    };
+    let shadows = if strong.len() == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{} {noun}s", strong.len())
     };
     format!("{kind}: {shadows} near ({:.0}, {:.0})", top.x, top.y)
 }
@@ -902,8 +1002,9 @@ pub fn correction_key(
 ) -> String {
     let digest = Sha256::digest(
         format!(
-            "{}\u{1f}{before}\u{1f}{after}\u{1f}{side:?}\u{1f}{:?}\u{1f}{:?}",
+            "{}.{}\u{1f}{before}\u{1f}{after}\u{1f}{side:?}\u{1f}{:?}\u{1f}{:?}",
             metric::COMPARE_ALGORITHM_VERSION,
+            metric::CHANGE_MAP_ALGORITHM_VERSION,
             pedestals.0,
             pedestals.1
         )
@@ -1200,5 +1301,61 @@ mod memo_tests {
             "a new light can make a session"
         );
         assert!(Arc::ptr_eq(&second, &load_book(&conn).unwrap()));
+    }
+}
+
+#[cfg(test)]
+mod describe_tests {
+    use super::*;
+    use seiza_calibration::dust::DustShape;
+
+    fn spot(
+        kind: metric::SpotKind,
+        shape: DustShape,
+        peak: f32,
+        within_tolerance: bool,
+    ) -> metric::Spot {
+        metric::Spot {
+            kind,
+            darker: kind != metric::SpotKind::Gone,
+            x: 3080.0,
+            y: 2970.0,
+            radius: 295.0,
+            area: 270_000.0,
+            peak,
+            shape,
+            hole: None,
+            bounds: [0; 4],
+            within_tolerance,
+            offset: None,
+            distance_mm: None,
+        }
+    }
+
+    #[test]
+    fn large_shadows_are_named_by_shape_and_moves_within_focus_travel_are_not_counted() {
+        use metric::SpotKind::{Moved, New};
+        let disks = [
+            spot(New, DustShape::Disk, 0.0035, false),
+            spot(New, DustShape::Disk, 0.003, false),
+        ];
+        assert_eq!(
+            describe_spots(&disks, 0.0035, 0.001),
+            "new dust: 2 disks near (3080, 2970)"
+        );
+        let donut = [
+            spot(Moved, DustShape::Donut, 0.009, true),
+            spot(New, DustShape::Donut, 0.004, false),
+        ];
+        assert_eq!(
+            describe_spots(&donut, 0.004, 0.001),
+            "new dust: 1 donut near (3080, 2970)"
+        );
+        // Only a move within tolerance: nothing to count, so the pattern speaks.
+        let only = [spot(Moved, DustShape::Donut, 0.009, true)];
+        assert_eq!(
+            describe_spots(&only, 0.0, 0.004),
+            "the light pattern changed by 0.4%"
+        );
     }
 }

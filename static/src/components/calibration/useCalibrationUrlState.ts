@@ -144,6 +144,11 @@ export function useCalibrationUrlState() {
   const view: CalibrationFrameView = getParam('calView') === 'session' ? 'session' : 'frame';
   const stretch: CalibrationFrameStretch = oneOf(getParam('calStretch'), STRETCHES) ?? 'normal';
   const full = getParam('calFull') === '1';
+  // Spots over a frame start off; over two sessions' ratio, on. Large dust,
+  // nested under them, starts on.
+  const spots = getParam('calSpots') === '1';
+  const ratioSpots = getParam('calRatioSpots') !== '0';
+  const dust = getParam('calDust') !== '0';
   const master = getParam('calMaster');
   // Two flat sessions set side by side.
   const earlier = getParam('calEarlier');
@@ -203,6 +208,12 @@ export function useCalibrationUrlState() {
     [updateParams]
   );
   const setFull = useCallback((next: boolean) => updateParams({ calFull: next ? '1' : null }), [updateParams]);
+  const setSpots = useCallback((next: boolean) => updateParams({ calSpots: next ? '1' : null }), [updateParams]);
+  const setRatioSpots = useCallback(
+    (next: boolean) => updateParams({ calRatioSpots: next ? null : '0' }),
+    [updateParams]
+  );
+  const setDust = useCallback((next: boolean) => updateParams({ calDust: next ? null : '0' }), [updateParams]);
   const openMaster = useCallback((id: string | null) => updateParams({ calMaster: id }), [updateParams]);
   /** Open an old Flat groups link as Frames on flats, in place. */
   const openOldGroupsLink = useCallback(
@@ -311,6 +322,9 @@ export function useCalibrationUrlState() {
     view,
     stretch,
     full,
+    spots,
+    ratioSpots,
+    dust,
     master,
     ratio,
     browse,
@@ -326,6 +340,9 @@ export function useCalibrationUrlState() {
     setView,
     setStretch,
     setFull,
+    setSpots,
+    setRatioSpots,
+    setDust,
     openMaster,
     openRatio,
     setBrowse,

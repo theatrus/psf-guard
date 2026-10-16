@@ -4965,9 +4965,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.33.0"
+version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e1f6b897bd0f1b306cecd8c6e398d40341b173886ffdcac66a9df1e50840f66"
+checksum = "eac56a219c15fbe4a251a830e6e3fe381e4327cb66945737875be082557d1065"
 dependencies = [
  "directories",
  "image",
@@ -5000,9 +5000,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0aac3bdf11359a88256d2fb884a2ac2d793c6cbc6ed146eb7da1e2f15bb2c285"
+checksum = "4a0f3dd15c0fd3db1653e72931e39d90c952eca14ce359ac0abb80cd16edd2b3"
 dependencies = [
  "nalgebra",
  "rayon",
@@ -5107,9 +5107,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.36.0"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8688fc5e324aa6e450b13980768f4b0736575adfa13952905996c98b4dbc2dce"
+checksum = "2374d05b8e59d0d1080ee38013108670811c56d9c7aaa80a5d928dee3305fca2"
 dependencies = [
  "multiversion",
  "postcard",

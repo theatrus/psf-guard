@@ -33,7 +33,7 @@ use super::{
 use crate::commands::import::headers::FrameMeta;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use seiza_calibration::{FlatMeasurement, Grade, FRAME_QUALITY_ALGORITHM_VERSION};
+use seiza_calibration::{FlatMeasurement, Grade, FLAT_QUALITY_ALGORITHM_VERSION};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -371,7 +371,7 @@ impl HealthLibrary {
                  FROM psf_guard_calibration_frame_quality q
                  JOIN psf_guard_calibration_frame f ON f.frame_uuid = q.frame_uuid",
             )?;
-            let mut rows = statement.query([FRAME_QUALITY_ALGORITHM_VERSION])?;
+            let mut rows = statement.query([FLAT_QUALITY_ALGORITHM_VERSION])?;
             while let Some(row) = rows.next()? {
                 let uuid: String = row.get(0)?;
                 let choice = row.get::<_, Option<String>>(2)?;
@@ -387,7 +387,7 @@ impl HealthLibrary {
                 if let Some(json) = row.get::<_, Option<String>>(3)?
                     && let Ok(StoredMeasurement::Flat(flat)) = serde_json::from_str(&json)
                 {
-                    flat_measurements.insert(uuid, flat);
+                    flat_measurements.insert(uuid, flat.measurement);
                 }
             }
         }

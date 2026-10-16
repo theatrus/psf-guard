@@ -729,6 +729,8 @@ mod tests {
             spots: Vec::new(),
             broad_x: 0.5,
             broad_y: 0.5,
+            vignetting: 0.0,
+            vignetting_changes: Vec::new(),
         }
     }
 

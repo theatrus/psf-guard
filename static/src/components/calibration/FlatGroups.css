@@ -208,16 +208,31 @@
   border-radius: 50%;
 }
 
-.flat-ratio-legend .flat-ratio-swatch.is-gone {
+.flat-ratio-legend .flat-ratio-swatch:not(:first-child) {
   margin-left: 0.5rem;
 }
 
 .flat-ratio-swatch.is-new {
-  color: var(--color-flat-dust-new);
+  color: var(--dust-new);
 }
 
 .flat-ratio-swatch.is-gone {
-  color: var(--color-flat-dust-gone);
+  color: var(--dust-gone);
+}
+
+.flat-ratio-swatch.is-moved {
+  color: var(--dust-moved);
+}
+
+.flat-ratio-swatch.is-tolerance {
+  color: var(--dust-within-tolerance);
+  border-style: dashed;
+}
+
+.flat-ratio-swatch.is-vignetting {
+  color: var(--vignetting);
+  border-style: dashed;
+  border-radius: 0 0 0 100%;
 }
 
 .flat-ratio-canvas {
@@ -250,22 +265,8 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  overflow: visible;
-  pointer-events: none;
 }
 
-.flat-ratio-spot {
-  fill: none;
-  stroke-width: 2;
-}
-
-.flat-ratio-spot.is-new {
-  stroke: var(--color-flat-dust-new);
-}
-
-.flat-ratio-spot.is-gone {
-  stroke: var(--color-flat-dust-gone);
-}
 
 .flat-ratio-head h3:focus-visible {
   outline: 2px solid var(--state-focus-border);

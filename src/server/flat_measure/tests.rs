@@ -1000,3 +1000,176 @@ async fn a_keep_out_choice_through_the_route_queues_its_rig() {
     assert_eq!(queued.rigs, std::slice::from_ref(&library.a), "{queued:?}");
     cancel(&path);
 }
+
+/// A session's dust is measured with the pedestal taken out: a bias that
+/// arrives later moves the pedestal, and the dust is measured again.
+#[test]
+fn a_new_pedestal_measures_the_session_dust_again() {
+    let _settings = settings_lock();
+    let mut library = library();
+    let state = test_state();
+    let job = Job::default();
+    library.pass(&state, &job, Scope::everything());
+    let keys: Vec<String> = store::load_responses(&library.conn)
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.rig_uuid == library.a)
+        .map(|row| row.response_key)
+        .collect();
+    assert!(!keys.is_empty());
+    let dust = |key: &str| {
+        std::fs::read(crate::calibration::flat_groups::dust_path(
+            &library.dir,
+            key,
+        ))
+        .unwrap()
+    };
+    let before: Vec<Vec<u8>> = keys.iter().map(|key| dust(key)).collect();
+
+    // A bias for rig A at 3,000 ADU, measured.
+    let path = library.root.join("bias-a.fits");
+    write_frame_with(&path, "BIAS", SIZE, "2026-09-12T14:00:00", &[], |_, _| {
+        3000.0
+    });
+    let mut meta = read_frame_meta(&path);
+    meta.camera = Some("CamA".into());
+    import(&mut library.conn, &[meta]);
+    let bias: String = library
+        .conn
+        .query_row(
+            "SELECT frame_uuid FROM psf_guard_calibration_frame WHERE kind = 'bias'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    library
+        .conn
+        .execute(
+            "INSERT OR REPLACE INTO psf_guard_calibration_frame_quality
+                (frame_uuid, algorithm_version, measurement_json, measured_at, updated_at)
+             VALUES (?1, 1, '{\"level\": 3000.0}', 0, 0)",
+            [&bias],
+        )
+        .unwrap();
+    library.pass(&state, &Job::default(), Scope::everything());
+    let rows = store::load_responses(&library.conn).unwrap();
+    let kept: Vec<Vec<u8>> = keys.iter().map(|key| dust(key)).collect();
+    // What a pass measures with the new pedestal, from scratch.
+    for key in &keys {
+        let row = rows.iter().find(|row| &row.response_key == key).unwrap();
+        assert_eq!(row.pedestal_adu, Some(3000.0), "the bias sets the pedestal");
+        std::fs::remove_file(crate::calibration::flat_groups::dust_path(
+            &library.dir,
+            key,
+        ))
+        .unwrap();
+    }
+    library.pass(&state, &Job::default(), Scope::everything());
+    for ((key, before), kept) in keys.iter().zip(&before).zip(&kept) {
+        let fresh = dust(key);
+        assert_ne!(&fresh, before, "the new pedestal changes the dust of {key}");
+        assert_eq!(kept, &fresh, "the dust of {key} kept the old pedestal");
+    }
+}
+
+/// A session whose flats combine but whose dust cannot be found (here, a
+/// plane under Seiza's 32-px floor) still gets a dust record, so no pass
+/// reads its flats again.
+#[test]
+fn a_session_without_dust_is_not_read_every_pass() {
+    let _settings = settings_lock();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().to_path_buf();
+    let path = root.join("catalog.sqlite");
+    let mut conn = Connection::open(&path).unwrap();
+    let frames: Vec<FrameMeta> = (0..3)
+        .map(|index| {
+            let file = root.join(format!("small-{index}.fits"));
+            write_frame_with(
+                &file,
+                "FLAT",
+                (24, 16),
+                &format!("2026-09-10T14:00:0{index}"),
+                &["ROTATANG= 0.0"],
+                |x, y| 30_000.0 + (x + y + index) as f64,
+            );
+            let mut meta = read_frame_meta(&file);
+            meta.filter = Some("Ha".into());
+            meta.rotator_position = Some(0.0);
+            meta.camera = Some("Small".into());
+            meta
+        })
+        .collect();
+    import(&mut conn, &frames);
+    store::add_tables(&conn).unwrap();
+    let dir = root.join("responses");
+    let state = test_state();
+    let catalog = path.to_string_lossy().into_owned();
+    let pass = || {
+        run_with(
+            &state,
+            &catalog,
+            &Job::default(),
+            &Scope::everything(),
+            &dir,
+            &|_| None,
+        )
+        .unwrap()
+    };
+    let first = pass();
+    assert_eq!(first.measured, 1, "the session combines: {first:?}");
+    let second = pass();
+    assert_eq!(second.frames_read, 0, "read again: {second:?}");
+}
+
+/// Upgrading a catalog whose responses predate session dust reads no flat
+/// again: the dust comes from each session's response plane, and in how
+/// many flats it shows from the flats' own stored measurements.
+#[test]
+fn session_dust_reads_no_flat_once_the_flats_are_measured() {
+    let _settings = settings_lock();
+    let library = library();
+    let state = test_state();
+    let first = library.pass(&state, &Job::default(), Scope::everything());
+    assert!(first.frames_read > 0, "the responses are built: {first:?}");
+    let keys: Vec<String> = store::load_responses(&library.conn)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.response_key)
+        .collect();
+    let dust = |key: &str| crate::calibration::flat_groups::read_dust(&library.dir, key).unwrap();
+    // Before the flats are graded, the stack's dust stands alone.
+    assert!(keys.iter().all(|key| !dust(key).persistence));
+
+    crate::calibration::measure_and_grade(&library.conn).unwrap();
+    // As after an upgrade: responses on disk, no dust beside them.
+    for key in &keys {
+        std::fs::remove_file(crate::calibration::flat_groups::dust_path(
+            &library.dir,
+            key,
+        ))
+        .unwrap();
+    }
+    let upgrade = library.pass(&state, &Job::default(), Scope::everything());
+    assert_eq!(upgrade.frames_read, 0, "{upgrade:?}");
+    for key in &keys {
+        let dust = dust(key);
+        assert!(dust.persistence, "{key}");
+        assert_eq!(dust.frames.len(), 3, "{key}");
+        for feature in &dust.map.features {
+            assert_eq!(feature.seen_in.map(|seen| seen.of), Some(3), "{feature:?}");
+        }
+    }
+    // The dusty morning's shadow shows in each of its flats.
+    let dusty = keys
+        .iter()
+        .map(|key| dust(key))
+        .find(|dust| !dust.map.features.is_empty())
+        .expect("the dusty morning holds dust");
+    assert!(
+        dusty.frames.iter().all(|frame| frame.seen.contains(&0)),
+        "{dusty:?}"
+    );
+    let again = library.pass(&state, &Job::default(), Scope::everything());
+    assert_eq!(again.frames_read, 0, "{again:?}");
+}

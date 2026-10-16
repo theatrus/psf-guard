@@ -292,10 +292,33 @@ pub async fn get_frame(
     }
     .ok_or(AppError::NotFound)?;
     let roots = ReadableRoots::of(&ctx);
+    // A flat's session dust, when the flat grouping pass has measured its
+    // session: read from that pass's cache with a read-only connection.
+    let dust_source = (detail.frame.frame.kind == crate::calibration::CalibrationKind::Flat)
+        .then(|| {
+            ctx.cache()
+                .ensure_category_dir(crate::calibration::flat_groups::CACHE_CATEGORY)
+                .ok()
+                .map(|dir| (dir, ctx.database_path.clone()))
+        })
+        .flatten();
     let detail = tokio::task::spawn_blocking(move || {
         let mut detail = detail;
         detail.frame.frame.source_exists =
             roots.holds(std::path::Path::new(&detail.frame.frame.source_path));
+        if let Some((dir, path)) = dust_source
+            && let Ok(conn) = rusqlite::Connection::open_with_flags(
+                &path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+        {
+            detail.session_dust = browse::frame_session_dust(
+                &conn,
+                &dir,
+                &detail.frame.frame.frame_uuid,
+                detail.measurement.as_ref(),
+            );
+        }
         detail
     })
     .await

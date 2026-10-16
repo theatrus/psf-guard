@@ -19,6 +19,7 @@ pub use super::measure::rows::{
 };
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
+use seiza_calibration::dust::VignettingChange;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const TABLES_SQL: &str = r#"
@@ -442,6 +443,11 @@ struct Detail {
     broad_x: f32,
     broad_y: f32,
     star_fraction: f32,
+    /// The deepest change of vignetting, and the changes.
+    #[serde(default)]
+    vignetting: f32,
+    #[serde(default)]
+    vignetting_changes: Vec<VignettingChange>,
 }
 
 pub(crate) fn insert_comparison(
@@ -455,6 +461,8 @@ pub(crate) fn insert_comparison(
         broad_x: comparison.broad_x,
         broad_y: comparison.broad_y,
         star_fraction: comparison.star_fraction,
+        vignetting: comparison.vignetting,
+        vignetting_changes: comparison.vignetting_changes.clone(),
     };
     conn.execute(
         "INSERT OR REPLACE INTO psf_guard_flat_comparison
@@ -496,6 +504,11 @@ pub(crate) fn load_comparisons(conn: &Connection) -> Result<Vec<ComparisonRow>> 
                 spots: detail.as_ref().map(|d| d.spots.clone()).unwrap_or_default(),
                 broad_x: detail.as_ref().map_or(0.5, |d| f64::from(d.broad_x)),
                 broad_y: detail.as_ref().map_or(0.5, |d| f64::from(d.broad_y)),
+                vignetting: detail.as_ref().map_or(0.0, |d| f64::from(d.vignetting)),
+                vignetting_changes: detail
+                    .as_ref()
+                    .map(|d| d.vignetting_changes.clone())
+                    .unwrap_or_default(),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

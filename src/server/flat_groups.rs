@@ -57,14 +57,27 @@ pub struct SessionView {
     pub sessions: Vec<String>,
 }
 
+/// One change of dust between two sessions, in sensor pixels: enough to
+/// draw it at its shape and size.
 #[derive(Debug, Serialize)]
 pub struct SpotView {
     pub kind: metric::SpotKind,
     pub darker: bool,
     pub x: f32,
     pub y: f32,
+    /// A disk's or donut's rim; a spot's or patch's, of a disc of its area.
     pub radius: f32,
     pub peak_pct: f64,
+    /// `compact`, `irregular`, `disk`, `donut` or `patch`.
+    pub shape: seiza_calibration::dust::DustShape,
+    /// A donut's hole, as a fraction of `radius`.
+    pub hole: Option<f32>,
+    /// Left, top, right, bottom.
+    pub bounds: [u32; 4],
+    /// Dust both sessions hold that moved no further than focus travel
+    /// explains: drawn, not counted.
+    pub within_tolerance: bool,
+    pub offset_px: Option<f32>,
 }
 
 impl SpotView {
@@ -76,9 +89,41 @@ impl SpotView {
             y: spot.y,
             radius: spot.radius,
             peak_pct: pct(f64::from(spot.peak)),
+            shape: spot.shape,
+            hole: spot.hole,
+            bounds: spot.bounds,
+            within_tolerance: spot.within_tolerance,
+            offset_px: spot.offset,
         }
     }
 }
+
+/// A change of vignetting between two sessions: where, and how deep.
+#[derive(Debug, Serialize)]
+pub struct VignettingView {
+    pub edge: seiza_calibration::dust::Edge,
+    pub darker: bool,
+    pub x: f32,
+    pub y: f32,
+    pub area: f32,
+    pub depth_pct: f64,
+}
+
+impl VignettingView {
+    fn of(change: &seiza_calibration::dust::VignettingChange) -> Self {
+        let v = &change.vignetting;
+        Self {
+            edge: v.edge,
+            darker: change.darker,
+            x: v.x,
+            y: v.y,
+            area: v.area,
+            depth_pct: pct(f64::from(v.depth)),
+        }
+    }
+}
+
+use flat_groups::{edge_words, vignetting_leads};
 
 #[derive(Debug, Serialize)]
 pub struct SplitView {
@@ -90,6 +135,10 @@ pub struct SplitView {
     pub end: i64,
     pub dust_pct: Option<f64>,
     pub broad_pct: Option<f64>,
+    /// The deepest change of vignetting, when the pair was compared, and
+    /// the changes.
+    pub vignetting_pct: Option<f64>,
+    pub vignetting: Vec<VignettingView>,
     /// Why, in words, with the values and the limits.
     pub reason: String,
     /// The change event this split belongs to.
@@ -226,6 +275,8 @@ pub struct EventView {
     pub what: String,
     pub dust_pct: f64,
     pub broad_pct: f64,
+    pub vignetting_pct: f64,
+    pub vignetting: Vec<VignettingView>,
     pub camera_side: bool,
     pub filters: Vec<String>,
     pub rotations: Vec<Option<f64>>,
@@ -323,6 +374,20 @@ fn split_reason(
     }
     let dust = boundary.dust.unwrap_or(0.0);
     let broad = boundary.broad.unwrap_or(0.0);
+    let vignetting = boundary.vignetting.unwrap_or(0.0);
+    if vignetting_leads(dust, broad, vignetting, limits) {
+        // A shadow from the border moved or deepened: the flats differ, but
+        // no dust arrived.
+        return format!(
+            "vignetting changed at the {} by {:.1}% of the background (limit {}%): not dust",
+            boundary
+                .vignetting_changes
+                .first()
+                .map_or("border", |change| edge_words(change.vignetting.edge)),
+            vignetting * 100.0,
+            pct(limits.broad)
+        );
+    }
     if dust / limits.dust.max(1e-9) >= broad / limits.broad.max(1e-9) {
         format!(
             "{}, {:.1}% of the background (limit {}%)",
@@ -628,6 +693,12 @@ pub(crate) fn build_view_with_frames(
                 end: window.1,
                 dust_pct: boundary.dust.map(pct),
                 broad_pct: boundary.broad.map(pct),
+                vignetting_pct: boundary.vignetting.map(pct),
+                vignetting: boundary
+                    .vignetting_changes
+                    .iter()
+                    .map(VignettingView::of)
+                    .collect(),
                 reason: split_reason(&book, *b, boundary, &limits),
                 event_key: boundary_event.get(b).cloned(),
                 spots: boundary.spots.iter().take(12).map(SpotView::of).collect(),
@@ -681,6 +752,12 @@ pub(crate) fn build_view_with_frames(
             what: flat_groups::describe_what(event),
             dust_pct: pct(event.dust),
             broad_pct: pct(event.broad),
+            vignetting_pct: pct(event.vignetting),
+            vignetting: event
+                .vignetting_changes
+                .iter()
+                .map(VignettingView::of)
+                .collect(),
             camera_side: event.camera_side,
             filters: event.filters.iter().map(|f| f.to_uppercase()).collect(),
             rotations: event.rotations.clone(),

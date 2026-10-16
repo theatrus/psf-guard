@@ -221,6 +221,88 @@ pub struct FrameDetail {
     pub compare: bool,
     /// Recorded masters built from this frame.
     pub masters: usize,
+    /// A flat's session dust, found on the stack of the session's flats,
+    /// when the flat grouping pass has measured the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_dust: Option<FrameSessionDust>,
+}
+
+/// A flat's session dust and the flat's own view of it, in sensor pixels.
+#[derive(Debug, Clone, Serialize)]
+pub struct FrameSessionDust {
+    /// Sensor pixels per pixel of the stack the dust was found on.
+    pub bin: usize,
+    /// Flats the stack combines.
+    pub frames: usize,
+    /// Each with `seen_in`: in how many of the flats it shows.
+    pub features: Vec<seiza_calibration::dust::DustFeature>,
+    pub vignetting: Vec<seiza_calibration::dust::Vignetting>,
+    /// Indices into `features` this flat shows.
+    pub seen: Vec<usize>,
+    /// What this flat holds that the stack does not: not dust.
+    pub transients: Vec<seiza_calibration::dust::DustFeature>,
+}
+
+/// The session dust a flat belongs to, read from the flat grouping cache
+/// `dir`. Disks and donuts take their distance from the frame's own
+/// measurement, whose header gave the optics.
+pub fn frame_session_dust(
+    conn: &Connection,
+    dir: &std::path::Path,
+    frame_uuid: &str,
+    measurement: Option<&serde_json::Value>,
+) -> Option<FrameSessionDust> {
+    if !crate::calibration::flat_groups::store::tables_exist(conn) {
+        return None;
+    }
+    let pattern = format!("%\"{frame_uuid}\"%");
+    let key: String = conn
+        .query_row(
+            "SELECT response_key FROM psf_guard_flat_response
+             WHERE frame_uuids LIKE ?1 AND error IS NULL
+             ORDER BY measured_at DESC LIMIT 1",
+            [pattern],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()??;
+    let dust = crate::calibration::flat_groups::read_dust(dir, &key)?;
+    let own = dust.frames.iter().find(|f| f.frame_uuid == frame_uuid);
+    // Millimetres per pixel of shadow diameter: from the light cone the
+    // frame's header recorded, or, for a measurement stored before it was
+    // kept, from the frame's own disks.
+    let optics = measurement
+        .and_then(|m| m.get("optics"))
+        .and_then(|o| serde_json::from_value::<seiza_calibration::dust::Optics>(o.clone()).ok())
+        .filter(|optics| optics.is_usable());
+    let per_pixel = optics
+        .map(|optics| f64::from(optics.distance_mm(1.0)))
+        .or_else(|| {
+            measurement
+                .and_then(|m| m.get("features"))
+                .and_then(|f| f.as_array())
+                .and_then(|features| {
+                    features.iter().find_map(|f| {
+                        let distance = f.get("distance_mm")?.as_f64()?;
+                        let radius = f.get("radius")?.as_f64()?;
+                        (radius > 0.0).then(|| distance / (2.0 * radius))
+                    })
+                })
+        });
+    let mut features = dust.map.features.clone();
+    if let Some(per_pixel) = per_pixel {
+        for feature in features.iter_mut().filter(|f| f.shape.is_round()) {
+            feature.distance_mm = Some((per_pixel * 2.0 * f64::from(feature.radius)) as f32);
+        }
+    }
+    Some(FrameSessionDust {
+        bin: dust.map.bin,
+        frames: dust.map.frames,
+        features,
+        vignetting: dust.map.vignetting.clone(),
+        seen: own.map(|f| f.seen.clone()).unwrap_or_default(),
+        transients: own.map(|f| f.transients.clone()).unwrap_or_default(),
+    })
 }
 
 /// Every frame of the library, with its night and session, oldest catalog
@@ -955,11 +1037,20 @@ fn measured_numbers(measurement: &StoredMeasurement) -> Vec<(&'static str, f64)>
         ],
         StoredMeasurement::Flat(flat) => {
             let full_scale = f64::from(flat.full_scale).max(f64::MIN_POSITIVE);
+            // Out-of-focus disks and donuts apart from the compact spots: a
+            // filter's dust is not a droplet, and the spot limits are for
+            // these.
+            let large = flat
+                .features
+                .iter()
+                .filter(|feature| feature.shape.is_large())
+                .count();
             vec![
                 ("level_fraction", f64::from(flat.level) / full_scale),
                 ("clipped_fraction", flat.clipped_fraction),
                 ("noise_fraction", f64::from(flat.noise)),
-                ("features", flat.feature_count as f64),
+                ("features", flat.feature_count.saturating_sub(large) as f64),
+                ("large_dust", large as f64),
             ]
         }
     }
@@ -1062,6 +1153,7 @@ pub fn frame_detail(conn: &Connection, frame_uuid: &str) -> Result<Option<FrameD
         compare,
         masters,
         frame,
+        session_dust: None,
     }))
 }
 
@@ -1553,5 +1645,86 @@ mod tests {
         assert_eq!(page_bounds(5, 9, Some(2)), (2, 5, 5));
         assert_eq!(page_bounds(5, 0, Some(0)), (1, 0, 1));
         assert_eq!(page_bounds(5, 0, Some(10_000)), (MAX_PAGE_SIZE, 0, 5));
+    }
+}
+
+#[cfg(test)]
+mod session_dust_tests {
+    use super::*;
+    use crate::calibration::flat_groups::{self, store, FrameDustRow, SessionDust};
+    use seiza_calibration::dust::{DustFeature, DustMap, DustShape, SeenIn};
+
+    fn disk(x: f32, radius: f32) -> DustFeature {
+        // Seiza's features are non-exhaustive: set the fields a test needs.
+        let mut feature = DustFeature::default();
+        feature.x = x;
+        feature.y = 2000.0;
+        feature.pixels = 1000;
+        feature.depth = 0.003;
+        feature.shape = DustShape::Disk;
+        feature.radius = radius;
+        feature.seen_in = Some(SeenIn { frames: 10, of: 10 });
+        feature
+    }
+
+    #[test]
+    fn a_flat_reads_its_sessions_dust_with_distances_from_its_own_optics() {
+        let temp = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(store::TABLES_SQL).unwrap();
+        conn.execute(
+            "INSERT INTO psf_guard_flat_response (response_key, session_key, rig_uuid, family_key,
+                night, frame_uuids, frames, algorithm_version, measured_at)
+             VALUES ('r1', 's1', 'rig', 'fam', '2026-09-15', '[\"f1\",\"f2\"]', 2, 1, 1)",
+            [],
+        )
+        .unwrap();
+        let dust = SessionDust {
+            map: DustMap {
+                algorithm_version: 1,
+                bin: 7,
+                features: vec![disk(3000.0, 295.0), disk(4000.0, 300.0)],
+                vignetting: Vec::new(),
+                sigma: 0.0002,
+                star_fraction: 0.0,
+                frames: 2,
+            },
+            frames: vec![
+                FrameDustRow {
+                    frame_uuid: "f1".into(),
+                    seen: vec![0, 1],
+                    transients: Vec::new(),
+                },
+                FrameDustRow {
+                    frame_uuid: "f2".into(),
+                    seen: vec![0],
+                    transients: vec![disk(100.0, 5.0)],
+                },
+            ],
+            persistence: true,
+        };
+        std::fs::write(
+            flat_groups::dust_path(temp.path(), "r1"),
+            serde_json::to_vec(&dust).unwrap(),
+        )
+        .unwrap();
+        // The flat's own measurement sized a 590-px disk at 10.9 mm.
+        let measurement = serde_json::json!({
+            "features": [{ "radius": 295.0, "distance_mm": 10.9 }]
+        });
+        let read = frame_session_dust(&conn, temp.path(), "f2", Some(&measurement)).unwrap();
+        assert_eq!((read.bin, read.frames, read.seen.clone()), (7, 2, vec![0]));
+        assert_eq!(read.transients.len(), 1);
+        let distances: Vec<f32> = read
+            .features
+            .iter()
+            .map(|f| f.distance_mm.unwrap())
+            .collect();
+        assert!(
+            (distances[0] - 10.9).abs() < 0.01 && (distances[1] - 11.08).abs() < 0.01,
+            "{distances:?}"
+        );
+        // A frame no session holds reads none.
+        assert!(frame_session_dust(&conn, temp.path(), "f9", None).is_none());
     }
 }

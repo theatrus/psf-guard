@@ -2702,7 +2702,11 @@ export interface CalibrationFinding {
   text: string;
 }
 
-/** One compact dip in a flat, in image pixels. */
+/** What a dust shadow looks like. */
+export type DustShape = 'compact' | 'irregular' | 'disk' | 'donut' | 'patch';
+
+/** One dust feature of a flat, in sensor pixels: a compact or irregular dip,
+ *  an out-of-focus disk or donut, or a patch of overlapping ones. */
 export interface CalibrationFlatFeature {
   x: number;
   y: number;
@@ -2711,7 +2715,45 @@ export interface CalibrationFlatFeature {
   right: number;
   bottom: number;
   pixels: number;
+  /** As a fraction of the light around it. */
   depth: number;
+  /** Measurements made before shapes were reported have none: compact. */
+  shape?: DustShape;
+  /** A disk's or donut's rim; a dip's or patch's, of a disc of its area. */
+  radius?: number;
+  /** A donut's hole, as a fraction of `radius`. */
+  hole?: number;
+  /** How far in front of the sensor the dust sits, in millimetres. */
+  distance_mm?: number;
+  /** In how many of its session's flats it shows. */
+  seen_in?: { frames: number; of: number };
+}
+
+/** Which part of the border a vignetting shadow hangs from. */
+export type VignettingEdge =
+  | 'top' | 'bottom' | 'left' | 'right'
+  | 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
+
+/** A large, smooth shadow hanging from the border: not dust. */
+export interface CalibrationVignetting {
+  edge: VignettingEdge;
+  x: number;
+  y: number;
+  area: number;
+  depth: number;
+}
+
+/** A flat's session dust, found on the stack of the session's flats. */
+export interface CalibrationSessionDust {
+  /** Sensor pixels per pixel of the stack. */
+  bin: number;
+  frames: number;
+  features: CalibrationFlatFeature[];
+  vignetting: CalibrationVignetting[];
+  /** Indices into `features` this flat shows. */
+  seen: number[];
+  /** What this flat holds that the stack does not: not dust. */
+  transients: CalibrationFlatFeature[];
 }
 
 export interface CalibrationFrameDetail extends BrowsedCalibrationFrame {
@@ -2721,6 +2763,7 @@ export interface CalibrationFrameDetail extends BrowsedCalibrationFrame {
     height: number;
     features?: CalibrationFlatFeature[];
     feature_count?: number;
+    vignetting?: CalibrationVignetting[];
   } | null;
   measure_error: string | null;
   findings: CalibrationFinding[];
@@ -2731,6 +2774,8 @@ export interface CalibrationFrameDetail extends BrowsedCalibrationFrame {
   compare: boolean;
   /** Recorded masters built from this frame. */
   masters: number;
+  /** A flat's session dust, once the flat grouping pass measured it. */
+  session_dust?: CalibrationSessionDust;
 }
 
 /** How well the library calibrates a project: lights that cannot be
@@ -4325,6 +4370,8 @@ export interface FlatChangeEvent {
   camera_side: boolean;
   filters: string[];
   rotations: (number | null)[];
+  vignetting_pct?: number;
+  vignetting?: FlatVignettingChange[];
   spots: FlatSpot[];
   /** The pair whose ratio picture shows it. */
   before_response: string;
@@ -4341,6 +4388,24 @@ export interface FlatSpot {
   y: number;
   radius: number;
   peak_pct: number;
+  shape?: DustShape;
+  /** A donut's hole, as a fraction of `radius`. */
+  hole?: number | null;
+  /** Left, top, right, bottom. */
+  bounds?: [number, number, number, number];
+  /** Dust that moved no further than focus travel: drawn, not counted. */
+  within_tolerance?: boolean;
+  offset_px?: number | null;
+}
+
+/** A change of vignetting between two flat sessions. */
+export interface FlatVignettingChange {
+  edge: VignettingEdge;
+  darker: boolean;
+  x: number;
+  y: number;
+  area: number;
+  depth_pct: number;
 }
 
 /** One filter's response family on one rig: the angles whose flats
@@ -4474,6 +4539,8 @@ export interface FlatSplit {
   end: number;
   dust_pct: number | null;
   broad_pct: number | null;
+  vignetting_pct?: number | null;
+  vignetting?: FlatVignettingChange[];
   reason: string;
   event_key: string | null;
   spots: FlatSpot[];

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { apiClient } from '../../api/client';
-import type { CalibrationFrameStretch, FlatSession, FlatSpot } from '../../api/types';
+import type { CalibrationFrameStretch, FlatSession, FlatSpot, FlatVignettingChange } from '../../api/types';
 import { useAsyncImage } from '../../hooks/useAsyncImage';
+import DustOverlay from './DustOverlay';
+import { isLarge, spotMark, spotWords, vignettingChangeMark } from './dustLabels';
 import { percent } from './flatGroupLabels';
 
 const STRETCHES: { value: CalibrationFrameStretch; label: string; title: string }[] = [
@@ -10,14 +12,8 @@ const STRETCHES: { value: CalibrationFrameStretch; label: string; title: string 
   { value: 'tight', label: 'Tight', title: '±0.5%' },
 ];
 
-/** A circle stays big enough to find on a whole sensor. */
+/** A spot's mark stays big enough to find on a whole sensor. */
 const MIN_RADIUS_FRACTION = 0.012;
-
-const SPOT_KINDS: Record<FlatSpot['kind'], string> = {
-  new: 'New',
-  gone: 'Gone',
-  moved: 'Moved',
-};
 
 interface FlatRatioViewerProps {
   dbId: string;
@@ -29,6 +25,13 @@ interface FlatRatioViewerProps {
   /** What the pair shows, in words. */
   title: string;
   spots: FlatSpot[];
+  /** Changes of vignetting between the two: not dust. */
+  vignetting?: FlatVignettingChange[];
+  /** Spots drawn, and nested under it, large dust and vignetting too. */
+  showSpots: boolean;
+  showDust: boolean;
+  onShowSpots: (show: boolean) => void;
+  onShowDust: (show: boolean) => void;
   stretch: CalibrationFrameStretch;
   onStretch: (stretch: CalibrationFrameStretch) => void;
   onClose: () => void;
@@ -47,14 +50,33 @@ export default function FlatRatioViewer({
   laterSession,
   title,
   spots,
+  vignetting = [],
+  showSpots,
+  showDust,
+  onShowSpots,
+  onShowDust,
   stretch,
   onStretch,
   onClose,
 }: FlatRatioViewerProps) {
   const url = apiClient.getFlatRatioUrl(dbId, { earlier, later, stretch });
   const image = useAsyncImage(dbId, url, { kind: 'flat_ratio', earlier, later, stretch });
-  const [showSpots, setShowSpots] = useState(true);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [canvasWidth, setCanvasWidth] = useState(0);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
+
+  // The picture's drawn width sizes the marks' labels.
+  useEffect(() => {
+    const element = canvasRef.current;
+    if (!element) return;
+    const measure = () => setCanvasWidth(element.getBoundingClientRect().width);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   // Opened from a button elsewhere: bring it into sight and move focus to
@@ -75,6 +97,24 @@ export default function FlatRatioViewer({
   const minRadius = grid ? Math.max(grid.sensorWidth, grid.sensorHeight) * MIN_RADIUS_FRACTION : 0;
   const nights = earlierSession && laterSession ? `${laterSession.night} ÷ ${earlierSession.night}` : 'Later ÷ earlier';
   const ready = image.state === 'ready';
+  const hasLarge = spots.some((spot) => isLarge(spot.shape)) || vignetting.length > 0;
+  const hasAny = spots.length > 0 || vignetting.length > 0;
+  // A compact spot's mark is widened so it can be found on a whole sensor;
+  // disks and donuts are drawn at their size.
+  const marks = showSpots
+    ? spots
+        .filter((spot) => showDust || !isLarge(spot.shape))
+        .map((spot, index) => {
+          const mark = spotMark(spot, `spot-${index}`);
+          if (isLarge(spot.shape)) return mark;
+          const reach = Math.max(spot.radius * 1.5, minRadius);
+          return { ...mark, bounds: [spot.x - reach, spot.y - reach, spot.x + reach, spot.y + reach] as [number, number, number, number] };
+        })
+    : [];
+  const shadows = showSpots && showDust
+    ? vignetting.map((change, index) => vignettingChangeMark(change, `vignetting-${index}`))
+    : [];
+  const pickedMark = [...marks, ...shadows].find((mark) => mark.key === picked);
 
   return (
     <section ref={sectionRef} className="flat-ratio-viewer" aria-label="Flat comparison" data-testid="flat-ratio-viewer">
@@ -99,19 +139,44 @@ export default function FlatRatioViewer({
             </button>
           ))}
         </div>
-        {spots.length > 0 && grid && (
-          <button type="button" className="tool-button" aria-pressed={showSpots} onClick={() => setShowSpots((value) => !value)}>
-            Spots
-          </button>
+        {hasAny && grid && (
+          <div className="calibration-spots-toggle" role="group" aria-label="Spots">
+            <button type="button" className="tool-button" aria-pressed={showSpots} onClick={() => {
+              setPicked(null);
+              onShowSpots(!showSpots);
+            }}>
+              Spots
+            </button>
+            {showSpots && hasLarge && (
+              <button
+                type="button"
+                className="tool-button calibration-subtoggle"
+                aria-pressed={showDust}
+                title="Out-of-focus disks and donuts, and vignetting, at their shape and size"
+                onClick={() => {
+                  setPicked(null);
+                  onShowDust(!showDust);
+                }}
+              >
+                Large dust
+              </button>
+            )}
+          </div>
         )}
-        {spots.length > 0 && grid && showSpots && (
+        {hasAny && grid && showSpots && (
           <span className="flat-ratio-legend">
-            <span className="flat-ratio-swatch is-new" aria-hidden="true" /> darker: new dust
-            <span className="flat-ratio-swatch is-gone" aria-hidden="true" /> brighter: dust gone
+            <span className="flat-ratio-swatch is-new" aria-hidden="true" /> new
+            <span className="flat-ratio-swatch is-gone" aria-hidden="true" /> gone
+            <span className="flat-ratio-swatch is-moved" aria-hidden="true" /> moved
+            <span className="flat-ratio-swatch is-tolerance" aria-hidden="true" /> within focus travel
+            {showDust && vignetting.length > 0 && (
+              <><span className="flat-ratio-swatch is-vignetting" aria-hidden="true" /> vignetting</>
+            )}
           </span>
         )}
       </div>
       <div
+        ref={canvasRef}
         className={`flat-ratio-canvas${grid ? '' : ' is-unsized'}`}
         style={grid
           ? ({ aspectRatio: `${grid.width} / ${grid.height}`, '--flat-ratio-aspect': grid.width / grid.height } as CSSProperties)
@@ -126,25 +191,18 @@ export default function FlatRatioViewer({
           onLoad={image.onLoad}
           onError={image.onError}
         />
-        {ready && grid && showSpots && spots.length > 0 && (
-          <svg
+        {ready && grid && marks.length + shadows.length > 0 && (
+          <DustOverlay
             className="flat-ratio-spots"
-            viewBox={`0 0 ${grid.sensorWidth} ${grid.sensorHeight}`}
-            preserveAspectRatio="none"
-            aria-hidden="true"
-            data-testid="flat-ratio-spots"
-          >
-            {spots.map((spot, index) => (
-              <circle
-                key={index}
-                className={`flat-ratio-spot ${spot.darker ? 'is-new' : 'is-gone'}`}
-                cx={spot.x}
-                cy={spot.y}
-                r={Math.max(spot.radius * 1.5, minRadius)}
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-          </svg>
+            width={grid.sensorWidth}
+            height={grid.sensorHeight}
+            marks={marks}
+            vignetting={shadows}
+            pixelScale={canvasWidth > 0 ? canvasWidth / grid.sensorWidth : 0.15}
+            picked={picked}
+            onPick={setPicked}
+            testId="flat-ratio-spots"
+          />
         )}
         {image.state === 'error' ? (
           <div className="calibration-canvas-note" role="alert">{image.error || 'The picture could not be drawn.'}</div>
@@ -155,12 +213,21 @@ export default function FlatRatioViewer({
           </div>
         ) : null}
       </div>
-      {spots.length > 0 && (
+      {pickedMark && (
+        <p className="calibration-dust-pick" role="status" data-testid="flat-ratio-dust-pick">{pickedMark.detail}</p>
+      )}
+      {hasAny && (
         <ul className="flat-ratio-spot-list" aria-label="Spots that changed">
           {spots.map((spot, index) => (
             <li key={index}>
-              <span className={`flat-ratio-swatch ${spot.darker ? 'is-new' : 'is-gone'}`} aria-hidden="true" />
-              {`${SPOT_KINDS[spot.kind]}: ${spot.darker ? 'darker' : 'brighter'} by ${percent(spot.peak_pct)} near (${Math.round(spot.x)}, ${Math.round(spot.y)})`}
+              <span className={`flat-ratio-swatch ${spot.within_tolerance ? 'is-tolerance' : `is-${spot.kind}`}`} aria-hidden="true" />
+              {`${spotWords(spot)}: ${spot.darker ? 'darker' : 'brighter'} by ${percent(spot.peak_pct)} near (${Math.round(spot.x)}, ${Math.round(spot.y)})`}
+            </li>
+          ))}
+          {vignetting.map((change, index) => (
+            <li key={`v${index}`}>
+              <span className="flat-ratio-swatch is-vignetting" aria-hidden="true" />
+              {vignettingChangeMark(change, '').detail}
             </li>
           ))}
         </ul>

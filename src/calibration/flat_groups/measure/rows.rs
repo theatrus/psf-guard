@@ -86,6 +86,12 @@ pub struct ComparisonRow {
     pub spots: Vec<Spot>,
     pub broad_x: f64,
     pub broad_y: f64,
+    /// The deepest change of vignetting, a fraction of the background: a
+    /// shadow from the border that moved or deepened, such as a guider's
+    /// prism turned with the camera. The flats differ, so it parts groups
+    /// as dust does, but it is not dust.
+    pub vignetting: f64,
+    pub vignetting_changes: Vec<seiza_calibration::dust::VignettingChange>,
 }
 
 /// What an imaging session's own lights say about one change.
