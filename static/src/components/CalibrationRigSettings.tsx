@@ -23,6 +23,7 @@ import { invalidateCalibrationViews } from '../utils/calibrationQueries';
 import CalibrationRuleControl from './CalibrationRuleControl';
 import { invalidateNightSplitViews } from '../hooks/useNightSplit';
 import UnsavedMark from './UnsavedMark';
+import { openSettings } from '../utils/settingsIntent';
 
 /** A rig to open on arrival, as a light's Calibration panel names it. */
 export interface CalibrationRigFocus {
@@ -90,8 +91,12 @@ export default function CalibrationRigSettings({ focusRig = null, focusField = n
     <div className="calibration-rig-settings">
       <h3>Rigs</h3>
       <p className="review-preferences-note">
-        A rig's own value beats the global one; everything it leaves alone inherits. A rig is a
-        telescope, camera, frame size and binning, as the calibration library records it.
+        A rig's own value beats the global one; the rest inherit. A rig here is a telescope, camera,
+        frame size and binning; each catalog's{' '}
+        <button type="button" className="link-button" onClick={() => openSettings('rigs')}>
+          Rigs
+        </button>{' '}
+        entry links to the ones it records.
       </p>
       {rigs.length === 0 ? (
         <p className="calibration-group-note">

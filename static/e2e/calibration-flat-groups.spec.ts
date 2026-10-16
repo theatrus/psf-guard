@@ -216,7 +216,7 @@ test('splits two nights of flats at new dust and compares them', async ({ page, 
 
   // Edit limits lands on the dust limit in Settings › Calibration.
   await page.getByRole('button', { name: /^Edit limits for / }).click();
-  const dust = page.locator('.calibration-matching-settings').getByLabel('Dust that splits flats');
+  const dust = page.locator('.calibration-matching-settings').getByLabel('Dust split');
   await expect(dust).toBeFocused();
   await expect(dust).toBeInViewport();
 });

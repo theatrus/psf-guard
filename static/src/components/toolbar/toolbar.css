@@ -801,7 +801,7 @@
   background: var(--state-set-bg);
 }
 
-/* A View panel choice that overrides a setting, as Nights split at does. */
+/* A View panel choice that overrides a setting, as Nights end does. */
 .toolbar-field select.is-set {
   border-color: var(--state-set-border);
   background: var(--state-set-bg);

@@ -4,6 +4,12 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Settings looks the same on every tab. Each panel sits in a card of
+  one width, related fields share a box named in the accent, and each
+  control sits beside its label. Fields, buttons and disabled buttons
+  have clearer contrast. Calibration's labels and help are shorter. Each
+  catalog in Settings › Rigs links to its rigs' calibration settings, and
+  Calibration's rig list links back to Rigs.
 - Settings asks before **Done**, **×** or a click outside closes it over
   edits a form has not saved: a rig's setup, a site, calibration, scoring
   defaults, storage folders, PixInsight, the desktop server port or the
@@ -33,9 +39,10 @@
   light finds its rig through its Target Scheduler profile, so lights a
   western rig shoots after midnight UTC stay on the night they began. The night and hour marks
   can be set to nights and hours, nights only, or off, from **Marks** in
-  the View panel or Settings › Review. **Lights' nights split at** in
-  Settings › Calibration puts lights back on the catalog's quiet hours,
-  for every rig or one, and **Nights split at** in the View panel shows
+  the View panel or Settings › Review. **Nights end** in
+  Settings › Calibration puts lights back on one split for the whole
+  catalog with **Same time for all rigs**, for every rig or one, and
+  **Nights end** in the View panel shows
   the other split in one view, through its link.
 - Images and Sequence mark where frames cross into another night or hour.
   A line and the night's date sit in the gap before a night's first frame,
@@ -80,7 +87,7 @@
   UTC, cutting dawn runs west of Greenwich in two. A rig taken to a star
   party keeps its home nights; a frame with no site of its own splits where
   its rig usually is. A rig with no site in its frames can take a
-  UTC offset under **Night starts at noon in** in its calibration settings.
+  UTC offset under **Rig's time zone** in its calibration settings.
   After the upgrade a **Reading frame sites** row in the job line reads
   each frame's site in the background, with Stop, and tries again while
   the server runs if the NAS is not mounted; the rigs it places are graded

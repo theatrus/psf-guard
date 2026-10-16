@@ -96,15 +96,35 @@
   /* Form fields, from the base styles in index.css: text, number, search
      and date inputs, selects and textareas. A field that is invalid says so
      with aria-invalid. Checkboxes, radios and sliders take the accent. */
-  --color-input-bg: var(--color-bg-input);
-  --color-input-border: var(--color-border-secondary);
-  --color-input-text: var(--color-text-primary);
-  --color-input-placeholder: var(--color-text-secondary);
+  /* A field is a dark well with a visible edge, so it reads apart from the
+     card it sits on rather than as another shade of its grey. */
+  --color-input-bg: #15171b;
+  --color-input-border: #545a64;
+  --color-input-border-hover: #707884;
+  --color-input-text: #eef0f3;
+  --color-input-placeholder: #7f858e;
   --color-input-invalid-border: var(--color-error);
   --color-input-disabled-bg: var(--color-bg-tertiary);
   --color-input-disabled-border: var(--color-border-primary);
   --color-input-disabled-text: var(--color-text-disabled);
   --color-input-accent: var(--color-primary);
+
+  /* Settings: a card per panel, a box per group of fields inside it, and
+     rows divided by a hairline. Group names take the accent. */
+  --color-card-bg: var(--color-bg-secondary);
+  --color-card-border: var(--color-border-secondary);
+  --color-group-bg: rgb(255 255 255 / 2.5%);
+  --color-group-border: rgb(255 255 255 / 9%);
+  --color-group-legend: var(--color-primary);
+  --color-row-divider: rgb(255 255 255 / 6%);
+  --color-field-label: var(--color-text-primary);
+  --color-field-help: #a6a6a6;
+  /* A neutral button, its hover, and any button that cannot act yet:
+     dimmer than an active one but still readable. */
+  --color-button-neutral-bg: var(--color-bg-button);
+  --color-button-neutral-hover: #757575;
+  --color-button-disabled-bg: #34373c;
+  --color-button-disabled-text: #8d929a;
 
   /* Shadows: a popover or menu, a card lifted on hover, a panel resting
      on the page, and a dialog. */

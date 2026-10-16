@@ -420,7 +420,7 @@ fn grade(
 
 /// The `night_zone` choices: automatic, then each UTC offset a zone keeps.
 const NIGHT_ZONES: &[(&str, &str)] = &[
-    ("auto", "From its frames' site"),
+    ("auto", "Automatic (from frames)"),
     ("-12", "UTC−12"),
     ("-11", "UTC−11"),
     ("-10", "UTC−10"),
@@ -473,8 +473,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
     let mut thin_bias = check(
         Check::ThinBias,
         "Thin bias master",
-        "Its bias master would use fewer frames than the thin limit: poor when no dark \
-         serves the light, check when one does.",
+        "Its bias master is under the thin master limit: poor without a dark, check with \
+         one.",
         true,
     );
     thin_bias.kind = FieldKind::Check {
@@ -483,9 +483,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
     let mut flat_spots = check(
         Check::FlatSpots,
         "Changing spots in flats",
-        "Spots that come and go across its flats, such as drying dew, sit in most of them \
-         and so in their master. The flat-grade limits for spots carried into the master \
-         decide check or poor.",
+        "Spots that come and go across its flats, such as drying dew, end up in the \
+         master. The carried flat spots grade decides check or poor.",
         true,
     );
     flat_spots.kind = FieldKind::Check {
@@ -497,10 +496,9 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             "rotation_tolerance_deg",
             Group::Matching,
             Effect::Matching,
-            "Flat rotation tolerance",
-            "How far a flat's rotator angle may sit from the light it corrects. Wider \
-             accepts a rotator that re-homes loosely; one master still takes flats within \
-             2° of each other.",
+            "Flat rotation",
+            "Most a flat's rotator angle may differ from the light's. A master's own flats \
+             stay within 2°.",
             (0.0, 180.0, 0.1),
             "°",
             None,
@@ -510,10 +508,9 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             "focal_length_tolerance_mm",
             Group::Matching,
             Effect::Matching,
-            "Flat focal length tolerance",
-            "How far a flat's recorded focal length may sit from the light's, as when a \
-             profile's focal length was refined. One master still takes flats within 1 mm \
-             of each other.",
+            "Flat focal length",
+            "Most a flat's focal length may differ from the light's. A master's own flats \
+             stay within 1 mm.",
             (0.0, 100.0, 0.1),
             "mm",
             None,
@@ -523,11 +520,9 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             "dark_temperature_tolerance_c",
             Group::Matching,
             Effect::Matching,
-            "Dark temperature tolerance",
-            "How far a dark's sensor temperature may sit from the light's, and a dark \
-             flat's from its flat's. Wider lets a rig that cannot hold its set point use \
-             darks shot a little warmer or cooler; one master still takes darks within 1 °C \
-             of each other.",
+            "Dark temperature",
+            "Most a dark's sensor temperature may differ from the light's, or a dark \
+             flat's from its flat's. A master's own darks stay within 1 °C.",
             (0.0, MAX_DARK_TEMPERATURE_C, 0.1),
             "°C",
             None,
@@ -538,9 +533,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             Group::Matching,
             Effect::Matching,
             "Flat session",
-            "How far apart the flats one master takes may have been shot. Longer pools \
-             sky flats shot on several evenings; with flats grouped by measurement, only \
-             nights that measure alike pool.",
+            "Longest span of flats one master takes. With measured grouping, only nights \
+             that measure alike pool.",
             (1.0, 720.0, 1.0),
             "h",
             None,
@@ -550,8 +544,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             key: "use_darks",
             group: Group::Matching,
             label: "Use darks",
-            help: "Off for a rig that cannot shoot matching darks: its lights take bias \
-                   and flats only, and are not flagged for lacking a dark.",
+            help: "Off for a rig without matching darks: its lights take bias and flats, \
+                   with no missing-dark flag.",
             effect: Effect::Matching,
             kind: FieldKind::Toggle,
             default: json!(true),
@@ -559,19 +553,18 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         FieldSpec {
             key: "external_masters",
             group: Group::Matching,
-            label: "Masters from other software",
-            help: "A master from PixInsight, Siril or another tool is matched on what its \
-                   header kept and used as it is.",
+            label: "External masters",
+            help: "Masters from PixInsight, Siril and other tools, matched by their headers.",
             effect: Effect::Matching,
             kind: FieldKind::Choice {
                 options: vec![
                     ChoiceOption {
                         value: "prefer",
-                        label: "Use them whenever one matches",
+                        label: "Whenever one matches",
                     },
                     ChoiceOption {
                         value: "fallback",
-                        label: "Only when raw frames cannot build one",
+                        label: "Only if raw frames can't build one",
                     },
                     ChoiceOption {
                         value: "ignore",
@@ -584,13 +577,10 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         FieldSpec {
             key: "night_zone",
             group: Group::Matching,
-            label: "Night starts at noon in",
-            help: "Calibration splits a rig's frames into nights at local noon, so a dusk or \
-                   dawn flat run stays one session. Automatic takes noon from the site \
-                   longitude its frames record (the N.I.N.A. profile's), else from its \
-                   computer's clock, else from when the catalog's lights are quiet. Pick the \
-                   rig's standard offset when its frames record no site or a wrong one; \
-                   daylight saving moves noon by an hour, which no night notices.",
+            label: "Rig's time zone",
+            help: "Sets the rig's local noon, where its nights end, so a dawn flat run \
+                   stays one session. Automatic reads the site longitude, then the clock, in \
+                   its frames; pick an offset when they carry no site or a wrong one.",
             // It picks no frames: grading screens flats by session, and
             // sessions are nights, so a change grades again. Masters and
             // stacks are keyed by the frames they take, which a new split
@@ -607,12 +597,10 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         FieldSpec {
             key: "light_nights",
             group: Group::Matching,
-            label: "Lights' nights split at",
-            help: "Where Images, Sequence and the calibration reports split a rig's lights \
-                   into nights. Its local noon follows the setting above, as its calibration \
-                   frames do; the catalog's quiet hours are one split for every rig, the \
-                   middle of the longest stretch of the day the catalog never captured in. \
-                   A view can show the other from its View panel.",
+            label: "Nights end",
+            help: "Where a light's night ends: at its rig's local noon, or at one time for \
+                   the whole catalog, in the daytime gap when nothing is shot. A view can \
+                   switch it from its View panel.",
             // It moves no calibration frame: only how lights are named and
             // grouped by night. The light checks run again on their kept
             // headers, which is all a report reads.
@@ -621,11 +609,11 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
                 options: vec![
                     ChoiceOption {
                         value: "rig",
-                        label: "The rig's local noon",
+                        label: "At each rig's noon",
                     },
                     ChoiceOption {
                         value: "catalog",
-                        label: "The catalog's quiet hours",
+                        label: "Same time for all rigs",
                     },
                 ],
             },
@@ -637,8 +625,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             Group::Darks,
             Effect::Matching,
             "Dark reach",
-            "Darks shot further than this from the light do not match. A dark marked to \
-             serve lights before or after it follows its mark instead.",
+            "Darks further than this from the light don't match, unless marked to serve \
+             it.",
             (1.0, 3650.0, 1.0),
             "days",
             None,
@@ -648,8 +636,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             key: "complete_dark_frames",
             group: Group::Darks,
             label: "Complete night",
-            help: "When the nearest night alone has this many matching darks, the master \
-                   uses that night only; with fewer, the nights within reach pool.",
+            help: "With this many matching darks, the nearest night makes the master alone; \
+                   with fewer, nights within reach pool.",
             effect: Effect::Matching,
             kind: FieldKind::Count {
                 min: 2,
@@ -662,8 +650,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             key: "dark_choice",
             group: Group::Darks,
             label: "Dark choice",
-            help: "Complete set first: a complete set beats a nearer, shorter one. Bias \
-                   masters and WBPP exports follow it too.",
+            help: "Whether a complete set beats a nearer, smaller one. Bias masters and WBPP \
+                   exports follow it.",
             effect: Effect::Matching,
             kind: FieldKind::Choice {
                 options: vec![
@@ -684,9 +672,9 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             key: "flat_grouping",
             group: Group::FlatGroups,
             label: "Group flats",
-            help: "Measured: nights mix in one master only when their flats measure alike, \
-                   and a light takes flats from its own side of every measured change, such \
-                   as new dust. By time: one master takes the flats within the flat session.",
+            help: "By measurement, nights share a master only when their flats match, and a \
+                   light takes flats from its side of a change such as new dust. By time, \
+                   one master per flat session.",
             effect: Effect::Matching,
             kind: FieldKind::Choice {
                 options: vec![
@@ -706,10 +694,9 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             "flat_split_dust_pct",
             Group::FlatGroups,
             Effect::Matching,
-            "Dust that splits flats",
-            "The largest dust difference two nights' flats may have and still share a \
-             master: what moved, new or vanished dust would leave in a light calibrated \
-             with the other night's flats, in percent of the sky background.",
+            "Dust split",
+            "Two nights' flats share a master while their dust differs by less than this, \
+             in percent of the sky background.",
             (0.1, 10.0, 0.1),
             "%",
             None,
@@ -719,10 +706,9 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             "flat_split_pattern_pct",
             Group::FlatGroups,
             Effect::Matching,
-            "Light pattern that splits flats",
-            "The largest broad difference two nights' flats may have, such as a changed \
-             vignette, after a straight gradient is removed, in percent of the sky \
-             background.",
+            "Light pattern split",
+            "The same for broad differences, such as a changed vignette, after removing a \
+             linear gradient.",
             (0.2, 20.0, 0.1),
             "%",
             None,
@@ -734,7 +720,7 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             Group::Checks,
             Effect::Flags,
             "Flat age limit",
-            "Lights whose flats were shot further away than this can't be calibrated.",
+            "Lights with flats further than this from them can't be calibrated.",
             (0.0, 3650.0, 1.0),
             "days",
             Some("no limit"),
@@ -744,9 +730,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
             "flat_check_age_days",
             Group::Checks,
             Effect::Flags,
-            "Flats worth a look after",
-            "Lights whose flats were shot further away than this, but within the age \
-             limit, are worth a look.",
+            "Flat age warning",
+            "Lights with flats further than this, but within the limit, get a check.",
             (0.0, 3650.0, 1.0),
             "days",
             Some("off"),
@@ -755,9 +740,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         FieldSpec {
             key: "thin_master_frames",
             group: Group::Checks,
-            label: "Thin master below",
-            help: "A bias or dark master built from fewer frames puts its own read noise \
-                   into every light.",
+            label: "Thin master",
+            help: "Bias or dark masters with fewer frames add their own read noise.",
             effect: Effect::Flags,
             kind: FieldKind::Count {
                 min: 2,
@@ -769,33 +753,31 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         check(
             Check::NoLibrary,
             "No frames for its camera",
-            "Nothing in the library matches the light's camera and settings, though the \
-             library holds frames for other cameras.",
+            "No library frames match the light's camera and settings.",
             true,
         ),
         check(
             Check::NoFlat,
             "No matching flat",
-            "No flat matches the light, though the library holds flats for its camera.",
+            "No flat matches, though there are flats for its camera.",
             true,
         ),
         check(
             Check::NoBiasOrDark,
             "No matching bias or dark",
-            "Neither a bias nor a dark matches the light, though the library holds one.",
+            "Neither a bias nor a dark matches, though the library has some.",
             true,
         ),
         check(
             Check::StaleFlats,
             "Flats past the age limit",
-            "The flats that match were shot further from the light than the flat age \
-             limit.",
+            "Its matching flats are past the flat age limit.",
             true,
         ),
         check(
             Check::ThinDark,
             "Thin dark master",
-            "Its dark master would use fewer frames than the thin limit.",
+            "Its dark master is under the thin master limit.",
             true,
         ),
         thin_bias,
@@ -803,33 +785,33 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         check(
             Check::OldFlats,
             "Old flats",
-            "Its flats were shot further away than the 'worth a look' age.",
+            "Its flats are past the flat age warning.",
             false,
         ),
         check(
             Check::MixedFlats,
             "Flats from several nights",
-            "Its flat master takes flats from nights not measured against each other. \
-             Nights whose flats measure alike mix without a word.",
+            "Its master mixes nights not measured against each other. Nights that measure \
+             alike mix silently.",
             false,
         ),
         check(
             Check::FlatsDiffer,
             "Flats from across a change",
-            "A measured change, such as new dust, lies between the light and its flats, \
-             or the light was shot while it happened and nothing tells which side it is on.",
+            "A measured change, such as new dust, lies between the light and its flats, or \
+             happened while it was shot.",
             false,
         ),
         check(
             Check::SuspectFrames,
             "Suspect frames in its masters",
-            "Its masters use frames graded suspect.",
+            "Its masters include frames graded suspect.",
             false,
         ),
         check(
             Check::ShortAfterKeepOut,
             "Short after keeping frames out",
-            "Frames kept out by hand leave its bias, darks or flats under the thin limit.",
+            "Frames kept out by hand leave its masters under the thin limit.",
             false,
         ),
         // Frame grades.
@@ -860,8 +842,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         grade(
             GradeCheck::DarkLevel,
             "Dark stray light",
-            "How far a dark's level sits above the quietest dark that could stand in for \
-             it, in that dark's spread. Light reaching the sensor raises it.",
+            "A dark's level above the quietest dark that could replace it, in that dark's \
+             spread. Light leaks raise it.",
             (1000.0, 0.1),
             "σ",
             false,
@@ -917,8 +899,8 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         grade(
             GradeCheck::FlatIllumination,
             "Flat light pattern",
-            "How far a flat's light pattern falls off its session's. Sky flats shot as \
-             the sky changes differ more.",
+            "How far a flat's light pattern departs from its session's. Sky flats vary \
+             more.",
             (1.0, 0.001),
             "%",
             true,
@@ -941,9 +923,9 @@ static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
         ),
         grade(
             GradeCheck::FlatCarriedSpots,
-            "Spots carried into a flat master",
+            "Carried flat spots",
             "Changing spots in most of a set's flats, which its master keeps. Decides the \
-             'changing spots in flats' light check.",
+             changing spots in flats check.",
             (100_000.0, 1.0),
             "spots",
             false,
@@ -1882,15 +1864,9 @@ mod tests {
         assert!(stacker_accepts("dark_temperature_tolerance_c", &json!(10)).is_ok());
         assert!(stacker_accepts("flat_session_hours", &json!(72)).is_ok());
         let refused = stacker_accepts("rotation_tolerance_deg", &json!(181)).unwrap_err();
-        assert!(
-            refused.starts_with("Flat rotation tolerance: "),
-            "{refused}"
-        );
+        assert!(refused.starts_with("Flat rotation: "), "{refused}");
         let refused = stacker_accepts("focal_length_tolerance_mm", &json!(-1)).unwrap_err();
-        assert!(
-            refused.starts_with("Flat focal length tolerance: "),
-            "{refused}"
-        );
+        assert!(refused.starts_with("Flat focal length: "), "{refused}");
         assert!(stacker_accepts("thin_master_frames", &json!(-1)).is_ok());
     }
 

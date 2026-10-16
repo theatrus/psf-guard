@@ -1156,10 +1156,10 @@ describe('SequenceView: selection rules', () => {
     const user = userEvent.setup();
     const params = renderWithLocation();
     await cards();
-    const choice = screen.getByLabelText('Nights split at');
+    const choice = screen.getByLabelText('Nights end');
     expect(choice).toHaveValue('rig');
     expect([...choice.querySelectorAll('option')].map((option) => option.textContent))
-      .toEqual(["The rig's local noon (setting)", "The catalog's quiet hours"]);
+      .toEqual(["At each rig's noon (setting)", 'Same time for all rigs']);
     expect(asked.every((value) => value === null)).toBe(true);
 
     await user.selectOptions(choice, 'catalog');
@@ -1168,7 +1168,7 @@ describe('SequenceView: selection rules', () => {
     await waitFor(() => expect(params().get('nights')).toBe('catalog'));
     await waitFor(() => expect(asked).toContain('catalog'));
     expect(choice).toHaveClass('is-set');
-    expect(screen.getByRole('button', { name: /View \(catalog nights\)/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /View \(nights: same for all rigs\)/ })).toBeInTheDocument();
 
     // The setting's own choice clears the link.
     await user.selectOptions(choice, 'rig');

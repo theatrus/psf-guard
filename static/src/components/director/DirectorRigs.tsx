@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { BookOpen, ChevronDown, ChevronRight, Telescope } from 'lucide-react';
 import { apiClient } from '../../api/client';
+import type { CalibrationRigSettings } from '../../api/types';
 import { useAllDatabases } from '../../hooks/useDatabases';
 import { openSettings } from '../../utils/settingsIntent';
 import { formatDegrees } from './framingModel';
@@ -29,6 +30,9 @@ export default function DirectorRigs() {
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 30_000 });
   // Only needed to name a peer; most servers have none.
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false, enabled: profiles.data?.some(entry => entry.profile?.peer_id) ?? false });
+  // The calibration library's rigs (a camera and its frame size) each
+  // catalog records: its row links to their calibration settings.
+  const calibration = useQuery({ queryKey: ['calibration-settings'], queryFn: apiClient.getCalibrationSettings, retry: false, refetchOnWindowFocus: false });
   return <><section aria-label="Rig databases" className="director-records director-rigs">
     <div className="director-toolbar"><h2>Rigs</h2></div>
     <p className="director-muted">Each registered database is one rig, and its projects are plans. Setup holds the rig's optics, site and limits. Target Scheduler and PSF Guard Sync run the rig; the N.I.N.A. Director plugin can also pair and report its status. <EarlyBeta /></p>
@@ -49,6 +53,7 @@ export default function DirectorRigs() {
               : 'A rig, no optics yet'}</span>
             {profile?.profile?.peer_id && <span className="director-muted">Plans push to {peers.data?.find(peer => peer.id === profile.profile?.peer_id)?.name ?? profile.profile.peer_id}</span>}
             {status?.status && <span className="director-muted">Director plugin: {describeStatus(status.status.payload, status.status.reported_at_ms)}</span>}
+            <CalibrationRigLinks rigs={calibration.data?.rigs?.filter(rig => rig.database_ids?.includes(db.id)) ?? []} />
           </div>
           <Link to={`/?${new URLSearchParams({ db: db.id, dbfilter: db.id })}`}><BookOpen size={16} aria-hidden="true" />Library</Link>
           <button type="button" aria-expanded={expanded} aria-controls={setupId} aria-label={`Setup ${db.name}`} title={`Setup ${db.name}`} onClick={() => { setOpenSetup(expanded ? null : db.id); setOpened(current => current.has(db.id) ? current : new Set(current).add(db.id)); }}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Setup</button>
@@ -58,4 +63,21 @@ export default function DirectorRigs() {
     })}</ul>
   </section>
   <DirectorSites /></>;
+}
+
+/** A catalog's calibration rigs, each a link into its calibration settings
+ *  under Settings › Calibration, with how many values it sets itself. */
+function CalibrationRigLinks({ rigs }: { rigs: CalibrationRigSettings[] }) {
+  if (rigs.length === 0) return null;
+  return <span className="director-rig-calibration">
+    <span className="director-muted">Calibration:</span>
+    {rigs.map(rig => {
+      const own = Object.keys(rig.rules).length;
+      return <button key={rig.rig_uuid} type="button" className="director-link-button"
+        title={`Calibration settings for ${rig.name}${rig.detail ? ` (${rig.detail})` : ''}`}
+        onClick={() => openSettings('calibration', { rig: { uuid: rig.rig_uuid, name: rig.name } })}>
+        {rig.name}{rig.detail ? ` · ${rig.detail}` : ''}{own > 0 ? ` · ${own} own value${own === 1 ? '' : 's'}` : ''}
+      </button>;
+    })}
+  </span>;
 }

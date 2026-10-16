@@ -15,8 +15,8 @@ export type NightSplit = 'rig' | 'catalog';
 export const NIGHT_SPLIT_PARAM = 'nights';
 
 export const NIGHT_SPLIT_LABELS: Record<NightSplit, string> = {
-  rig: "The rig's local noon",
-  catalog: "The catalog's quiet hours",
+  rig: "At each rig's noon",
+  catalog: "Same time for all rigs",
 };
 
 export function parseNightSplit(raw: unknown): NightSplit | null {
@@ -71,7 +71,7 @@ export function invalidateNightSplitViews(queryClient: QueryClient): void {
 /** What the View button says while a view overrides the setting. */
 export function nightSplitNote(override: NightSplit | null, setting: NightSplit | null): string | undefined {
   if (!override || override === setting) return undefined;
-  return override === 'catalog' ? 'catalog nights' : 'rig nights';
+  return override === 'catalog' ? 'nights: same for all rigs' : "nights: each rig's noon";
 }
 
 /**

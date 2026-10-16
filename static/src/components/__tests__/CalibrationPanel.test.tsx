@@ -445,7 +445,7 @@ describe('CalibrationPanel', () => {
           rig_name: 'Askar 120 · Cam',
           rig_has_settings: true,
           notes: [
-            { key: 'thin_master_frames', label: 'Thin master below', value: 4, text: '4 frames', source: 'global' },
+            { key: 'thin_master_frames', label: 'Thin master', value: 4, text: '4 frames', source: 'global' },
             { key: 'check_mixed_flats', label: 'Flats from several nights', value: 'off', text: 'off', source: 'rig' },
           ],
         },
@@ -456,7 +456,7 @@ describe('CalibrationPanel', () => {
       expect(within(rules).getByText("Checked by Askar 120 · Cam's own settings")).toBeInTheDocument();
       const notes = within(rules).getByRole('list', { name: 'Settings that differ from the defaults' });
       expect(within(notes).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
-        'Thin master below4 framesglobal',
+        'Thin master4 framesglobal',
         'Flats from several nightsoffthis rig',
       ]);
       fireEvent.click(within(rules).getByRole('button', { name: 'Tune checks for Askar 120 · Cam' }));

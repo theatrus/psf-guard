@@ -55,7 +55,7 @@ nights and export folders all use these nights.
 
 Where a frame's noon falls, first found wins:
 
-1. Its rig's **Night starts at noon in** setting, then the global one: a
+1. Its rig's own **Rig's time zone**, then the global one: a
    UTC offset (`night_zone`, below). Automatic by default.
 2. The site longitude the frame records (`SITELONG`, the N.I.N.A. profile's
    site): mean solar noon there, 12:00 UTC plus four minutes for each
@@ -108,7 +108,7 @@ site are graded again and queued for flat measuring, which waits for
 grading and plans their sessions again: at most every 45 seconds while the
 pass reads, so grading does not run once a hundred frames, and once more
 when it ends, early or not.
-Changing **Night starts at noon in** grades again and queues its rigs too.
+Changing **Rig's time zone** grades again and queues its rigs too.
 It picks no frames itself, so it re-keys no master or stack. After an upgrade:
 
 - A session whose frames stay together keeps its id when its date does
@@ -131,7 +131,7 @@ On the Calibration page, when something was shot reads on its rig's
 clock, as its frames record it, with its offset: frames in the strip, the
 frame panel and the duplicates list, and flat groups' change windows, such
 as `2026-08-11 06:23 – 2026-08-12 06:06 UTC−7`, and `UTC−8` once the clocks
-went back. A rig with a **Night starts at noon in** setting reads on that
+went back. A rig with a **Rig's time zone** setting reads on that
 offset; one whose frames record no clock reads on the viewer's clock, with
 its zone (`PDT`). When the server built a master is no rig's time: it reads
 on the viewer's clock with its zone, in Masters, flat groups and the
@@ -361,7 +361,7 @@ Guard, so stale snapshots cannot revive invalid coverage. The plugin keeps its
 origin identity outside the scheduler database; moving the database or replacing
 that identity starts a new source and does not apply old-source decisions.
 
-## Masters from other software
+## External masters
 
 A master dark, bias, or flat integrated by PixInsight's WBPP, Siril, or
 another tool imports like any calibration frame; its `IMAGETYP` (`Master
@@ -385,7 +385,7 @@ Blank or undefined optional header values, such as `FILTER` in a PixInsight
 master bias XISF, are preserved in the cached FITS master. They do not prevent
 calibration, and the source file needs no header edits.
 
-**Settings › Calibration › Matching › Masters from other software** decides
+**Settings › Calibration › Matching › External masters** decides
 how they take part: use one whenever it matches (the default), only when raw
 frames cannot build a master, or never. A rig can choose for itself.
 
@@ -1051,7 +1051,7 @@ as the session list does.
 
 Three settings sit under **Settings › Calibration › Flat groups**, global
 or per rig (**Edit limits** in Frames leads there): **Group flats** (by measurement, or by time only as before),
-**Dust that splits flats** and **Light pattern that splits flats**. They
+**Dust split** and **Light pattern split**. They
 are matching settings: a change rebuilds the masters and stacks whose
 flats it changes.
 
@@ -1512,7 +1512,7 @@ one dark master would use: its frames, the nights they span and the nearest
 night's distance; hover for every matching dark within reach. A night with
 no flat shows the nearest flat refused only for its rotator angle, how far
 off it is and the limit, which is the usual cause when a rotator moved.
-Masters from other software for the lights' camera, sensor size and (for
+External masters for the lights' camera, sensor size and (for
 flats) filter are listed under the night: used, matching but not used under
 the external-master setting, or not used with the readings that disagree,
 such as `rotation light=92.6deg master=94.7deg`. One representative light
@@ -1742,23 +1742,23 @@ ASI2600MM)`. An editor can open the rig's settings from there.
 
 | Key | Setting | Default | Range | Changes |
 |---|---|---|---|---|
-| `rotation_tolerance_deg` | Flat rotation tolerance | 2° | 0–180 | matching |
-| `focal_length_tolerance_mm` | Flat focal length tolerance | 1 mm | 0–100 | matching |
-| `dark_temperature_tolerance_c` | Dark temperature tolerance (darks and dark flats) | 3 °C | 0–20 | matching |
+| `rotation_tolerance_deg` | Flat rotation | 2° | 0–180 | matching |
+| `focal_length_tolerance_mm` | Flat focal length | 1 mm | 0–100 | matching |
+| `dark_temperature_tolerance_c` | Dark temperature (darks and dark flats) | 3 °C | 0–20 | matching |
 | `flat_session_hours` | Flat session: how far apart one master's flats may be | 24 h | 1–720 | matching |
 | `use_darks` | Use darks | on | on, off | matching |
-| `external_masters` | Masters from other software | use whenever one matches | prefer, fallback, ignore | matching |
-| `night_zone` | Night starts at noon in: where a rig's nights split ([Nights](#nights)) | automatic | `auto`, or a UTC offset in hours from `-12` to `14` (`-9.5`, `5.75` and the other half and quarter hours zones keep) | frame grades and flat measuring |
-| `light_nights` | Lights' nights split at: where Images, Sequence and the calibration reports split a rig's lights ([Dates are nights](SCREENING.md#dates-are-nights)) | `rig` | `rig` (its local noon, as above) or `catalog` (the catalog's quiet hours); a view can show the other from its View panel | the light checks, on their kept headers |
+| `external_masters` | External masters | use whenever one matches | prefer, fallback, ignore | matching |
+| `night_zone` | Rig's time zone: where a rig's nights split ([Nights](#nights)) | automatic | `auto`, or a UTC offset in hours from `-12` to `14` (`-9.5`, `5.75` and the other half and quarter hours zones keep) | frame grades and flat measuring |
+| `light_nights` | Nights end: where Images, Sequence and the calibration reports split a rig's lights ([Dates are nights](SCREENING.md#dates-are-nights)) | `rig` | `rig` (At each rig's noon, as above) or `catalog` (Same time for all rigs: the catalog's daytime gap when nothing is shot); a view can show the other from its View panel | the light checks, on their kept headers |
 | `dark_reach_days` | Dark reach | 183 days | 1–3650 | matching |
 | `complete_dark_frames` | Complete night | 10 darks | 2–64 | matching |
 | `dark_choice` | Dark choice | complete set first | complete, nearest | matching |
 | `flat_grouping` | Group flats | by measurement | measured, time | matching |
-| `flat_split_dust_pct` | Dust that splits flats | 1% | 0.1–10% | matching |
-| `flat_split_pattern_pct` | Light pattern that splits flats | 2% | 0.2–20% | matching |
+| `flat_split_dust_pct` | Dust split | 1% | 0.1–10% | matching |
+| `flat_split_pattern_pct` | Light pattern split | 2% | 0.2–20% | matching |
 | `flat_max_age_days` | Flat age limit | 60 days | 0 (no limit)–3650 | light checks |
-| `flat_check_age_days` | Flats worth a look after | 30 days | 0 (off)–3650 | light checks |
-| `thin_master_frames` | Thin master below | 5 frames | 2–64 | light checks |
+| `flat_check_age_days` | Flat age warning | 30 days | 0 (off)–3650 | light checks |
+| `thin_master_frames` | Thin master | 5 frames | 2–64 | light checks |
 | `check_no_library` | No frames for its camera | flag (Poor) | flag, advisory, off | light checks |
 | `check_no_flat` | No matching flat | flag (Poor) | flag, advisory, off | light checks |
 | `check_no_bias_or_dark` | No matching bias or dark | flag (Poor) | flag, advisory, off | light checks |
@@ -1784,7 +1784,7 @@ ASI2600MM)`. An editor can open the rig's settings from there.
 | `grade_flat_illumination` | Flat light pattern | 2%, 5% | 0–100% | frame grades |
 | `grade_flat_spots` | Flat spots | 100, 500 | 0–100000 | frame grades |
 | `grade_flat_changing_spots` | Flat changing spots | 3, 20 | 0–100000 | frame grades |
-| `grade_flat_carried_spots` | Spots carried into a flat master | 1, 10 | 0–100000 | frame grades and the changing-spots check |
+| `grade_flat_carried_spots` | Carried flat spots | 1, 10 | 0–100000 | frame grades and the changing-spots check |
 
 A grade limit left empty is never reached. **Mask stars in flats** and
 **Leave out lights that can't be calibrated** stay server-wide.

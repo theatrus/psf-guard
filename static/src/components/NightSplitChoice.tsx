@@ -12,7 +12,7 @@ export default function NightSplitChoice({ id }: { id: string }) {
   const { split, setting, override, setSplit } = useNightSplit();
   return (
     <div className="toolbar-field">
-      <label className="toolbar-caption" htmlFor={id}>Nights split at</label>
+      <label className="toolbar-caption" htmlFor={id}>Nights end</label>
       <select
         id={id}
         className={override && override !== setting ? 'is-set' : undefined}
