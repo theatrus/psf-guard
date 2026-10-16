@@ -291,38 +291,6 @@ fn revision(conn: &Connection, ctx: &DatabaseContext) -> anyhow::Result<String> 
         .collect())
 }
 
-/// Each group's own key, and each of its sessions and response keys, to
-/// the group's key: how a key a link carries finds its group after a
-/// regroup, as the Calibration page finds it.
-fn aliases_of(view: &crate::server::flat_groups::FlatGroupsView) -> HashMap<String, String> {
-    let mut aliases = HashMap::new();
-    for rig in &view.rigs {
-        for family in &rig.families {
-            for group in &family.groups {
-                for session in &group.sessions {
-                    aliases
-                        .entry(session.response_key.clone())
-                        .or_insert_with(|| group.key.clone());
-                    for id in &session.sessions {
-                        aliases
-                            .entry(id.clone())
-                            .or_insert_with(|| group.key.clone());
-                    }
-                }
-            }
-        }
-    }
-    // A group's own key wins over a session that happens to share it.
-    for rig in &view.rigs {
-        for family in &rig.families {
-            for group in &family.groups {
-                aliases.insert(group.key.clone(), group.key.clone());
-            }
-        }
-    }
-    aliases
-}
-
 /// Work the answer out. Blocking; for the background refresh only.
 fn work_out(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<FlatGroupUseView> {
     let conn = read_only(&ctx.database_path)?;
@@ -333,7 +301,7 @@ fn work_out(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<FlatGroup
             ..FlatGroupUseView::default()
         });
     }
-    let aliases = aliases_of(&view);
+    let aliases = crate::server::flat_groups::aliases_of(&view);
     let snapshot = LibrarySnapshot::load(&conn)?;
     let masters = browse::recorded_masters(&conn)?;
     let names = crate::server::calibration_browser::project_names(&conn);
@@ -570,7 +538,9 @@ fn keep_ids_of(view: &mut FlatGroupUseView, group: Option<&str>) {
                 .then(|| key.to_string())
         })
     });
-    if group.is_some() && view.computed {
+    // While a newer answer is worked out, a key the last one does not know
+    // may be a group a regroup has just made: nothing is said of it yet.
+    if group.is_some() && view.computed && (found.is_some() || !view.refreshing) {
         view.group_found = Some(found.is_some());
         view.group_key = found.clone();
     }
@@ -978,6 +948,17 @@ mod tests {
             .groups
             .iter()
             .all(|group| group.projects[0].image_ids.is_empty()));
+
+        // While a newer answer is worked out, the key may be a group a
+        // regroup has just made: nothing is said of it until then.
+        let mut newer = view();
+        newer.refreshing = true;
+        keep_ids_of(&mut newer, Some("s-old"));
+        assert_eq!(newer.group_found, None);
+        let mut known = view();
+        known.refreshing = true;
+        keep_ids_of(&mut known, Some("s-new"));
+        assert_eq!(known.group_found, Some(true));
 
         // The key of a session the group holds now: its ids, under its key.
         let mut merged = view();

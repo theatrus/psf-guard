@@ -637,6 +637,64 @@ pub struct FlatGroupsQuery {
     pub project: Option<i32>,
 }
 
+/// Each group's own key, and each of its sessions and response keys, to
+/// the group's key: how a key a link carries finds its group after a
+/// regroup, as the Calibration page finds it.
+pub(crate) fn aliases_of(view: &FlatGroupsView) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    for rig in &view.rigs {
+        for family in &rig.families {
+            for group in &family.groups {
+                for session in &group.sessions {
+                    aliases
+                        .entry(session.response_key.clone())
+                        .or_insert_with(|| group.key.clone());
+                    for id in &session.sessions {
+                        aliases
+                            .entry(id.clone())
+                            .or_insert_with(|| group.key.clone());
+                    }
+                }
+            }
+        }
+    }
+    // A group's own key wins over a session that happens to share it.
+    for rig in &view.rigs {
+        for family in &rig.families {
+            for group in &family.groups {
+                aliases.insert(group.key.clone(), group.key.clone());
+            }
+        }
+    }
+    aliases
+}
+
+/// The browser's sessions of the group `key` names, by its key or one of
+/// its sessions or response keys, as [`aliases_of`] finds it; none when no
+/// group answers to it.
+pub(crate) fn group_sessions(
+    conn: &rusqlite::Connection,
+    key: &str,
+) -> anyhow::Result<Option<BTreeSet<String>>> {
+    let view = build_view(conn)?;
+    let Some(group) = aliases_of(&view).get(key).cloned() else {
+        return Ok(None);
+    };
+    Ok(view
+        .rigs
+        .iter()
+        .flat_map(|rig| &rig.families)
+        .flat_map(|family| &family.groups)
+        .find(|candidate| candidate.key == group)
+        .map(|found| {
+            found
+                .sessions
+                .iter()
+                .flat_map(|session| session.sessions.iter().cloned())
+                .collect()
+        }))
+}
+
 /// Where one of the Calibration page's flat sessions would sit among the
 /// flat groups, measured or not (its flats all kept out, say): the family
 /// it would join, by the settings part of the family's key, and its night
@@ -666,6 +724,15 @@ pub(crate) fn place_of(conn: &rusqlite::Connection, session: &str) -> anyhow::Re
         return Ok(SessionPlace::default());
     }
     let library = crate::calibration::LibrarySnapshot::load(conn)?;
+    // A flat with no capture time is planned at its session's first, so
+    // it is placed too; a session with none at all is placed in its
+    // family, at no night.
+    let first = library
+        .frames()
+        .iter()
+        .filter(|frame| wanted.contains(frame.frame_uuid.as_str()))
+        .filter_map(|frame| frame.captured_at)
+        .min();
     let frames: Vec<crate::calibration::CalibrationFrame> = library
         .frames()
         .iter()
@@ -673,6 +740,7 @@ pub(crate) fn place_of(conn: &rusqlite::Connection, session: &str) -> anyhow::Re
         .map(|mut frame| {
             if wanted.contains(frame.frame_uuid.as_str()) {
                 frame.kept_out = None;
+                frame.captured_at = frame.captured_at.or(first).or(Some(0));
             }
             frame
         })
@@ -688,7 +756,7 @@ pub(crate) fn place_of(conn: &rusqlite::Connection, session: &str) -> anyhow::Re
         .map(|plan| SessionPlace {
             rig_uuid: Some(plan.rig_uuid),
             family_key: Some(plan.family_key),
-            night: Some(plan.night),
+            night: first.map(|_| plan.night),
             rotation: plan.rotation,
         })
         .unwrap_or_default())
@@ -1140,6 +1208,65 @@ pub(crate) mod tests {
             place_of(&conn, "no such session").unwrap(),
             SessionPlace::default()
         );
+
+        // A flat with no capture time is a session of its own, with no
+        // night: it is still placed in its family.
+        conn.execute(
+            "UPDATE psf_guard_calibration_frame SET captured_at = NULL
+             WHERE frame_uuid = (SELECT frame_uuid FROM psf_guard_calibration_frame
+                                 WHERE captured_at > 1789100000 ORDER BY captured_at LIMIT 1)",
+            [],
+        )
+        .unwrap();
+        let undated = crate::calibration::browse::library_frames(&conn)
+            .unwrap()
+            .frames
+            .into_iter()
+            .find(|row| row.night.is_none())
+            .map(|row| row.session)
+            .expect("an undated session");
+        let place = place_of(&conn, &undated).unwrap();
+        assert_eq!(place.night, None);
+        assert!(family
+            .key
+            .starts_with(&format!("{}:", place.family_key.expect("a family"))));
+    }
+
+    #[test]
+    fn a_groups_sessions_are_found_by_its_key_or_any_of_its_sessions() {
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let conn = catalog_of(
+            temp.path(),
+            &["2026-09-10T14:0", "2026-09-12T14:0", "2026-09-16T14:0"],
+            |a, b| {
+                if (a.night == "2026-09-16") != (b.night == "2026-09-16") {
+                    0.02
+                } else {
+                    0.002
+                }
+            },
+        );
+        let view = build_view(&conn).unwrap();
+        let older = &view.rigs[0].families[0].groups[1];
+        let members: BTreeSet<String> = older
+            .sessions
+            .iter()
+            .flat_map(|session| session.sessions.iter().cloned())
+            .collect();
+        assert_eq!(members.len(), 2);
+        assert_eq!(
+            group_sessions(&conn, &older.key).unwrap(),
+            Some(members.clone())
+        );
+        let newest_member = members.iter().max().unwrap();
+        assert_eq!(
+            group_sessions(&conn, newest_member).unwrap(),
+            Some(members.clone())
+        );
+        let response = &older.sessions[0].response_key;
+        assert_eq!(group_sessions(&conn, response).unwrap(), Some(members));
+        assert_eq!(group_sessions(&conn, "gone").unwrap(), None);
     }
 
     #[test]

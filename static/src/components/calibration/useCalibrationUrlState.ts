@@ -196,12 +196,30 @@ export function useCalibrationUrlState() {
     () => updateParams({ calTab: null, calKind: 'flat' }),
     [updateParams]
   );
-  /** List sessions or flat groups. A comparison open in one stays open. */
+  // The frame each list had chosen while the other is shown: a session's
+  // frame is not a group's, so switching hands each back its own.
+  const sessionFrame = getParam('calSessionFrame');
+
+  const groupFrame = getParam('calGroupFrame');
+  /** List sessions or flat groups, each with the frame it last showed. A
+   *  comparison open in one stays open. */
   const setBrowse = useCallback(
-    (next: CalibrationBrowse) => updateParams({ calBrowse: next === 'groups' ? 'groups' : null }),
+    (next: CalibrationBrowse) => {
+      if (next === browse) return;
+      updateParams(next === 'groups'
+        ? { calBrowse: 'groups', calSessionFrame: frame, calFrame: groupFrame, calGroupFrame: null }
+        : { calBrowse: null, calGroupFrame: frame, calFrame: sessionFrame, calSessionFrame: null });
+    },
+    [browse, frame, groupFrame, sessionFrame, updateParams]
+  );
+  /** Name the shown group by its key, as when a key now names a regrouped
+   *  group by one of its sessions: the frame stays. */
+  const selectGroup = useCallback((key: string | null) => updateParams({ calGroup: key }), [updateParams]);
+  /** Choose another group: its first flat is shown, not the last group's. */
+  const chooseGroup = useCallback(
+    (key: string | null) => updateParams({ calGroup: key, calFrame: null }),
     [updateParams]
   );
-  const selectGroup = useCallback((key: string | null) => updateParams({ calGroup: key }), [updateParams]);
   /** Leave the Groups list for one of a group's sessions, on the page of
    *  the session list that holds it. The group stays in the address, so
    *  Groups opens on it again. */
@@ -211,6 +229,8 @@ export function useCalibrationUrlState() {
         calBrowse: null,
         calSession: id,
         calFrame: null,
+        calGroupFrame: frame,
+        calSessionFrame: null,
         calView: null,
         calPage: sessionPage > 0 ? String(sessionPage) : null,
         calEarlier: null,
@@ -221,7 +241,7 @@ export function useCalibrationUrlState() {
       }
       updateParams(updates);
     },
-    [updateParams]
+    [frame, updateParams]
   );
   /** Open the ratio picture of two flat sessions, or close it. */
   const openRatio = useCallback(
@@ -244,6 +264,8 @@ export function useCalibrationUrlState() {
         calEarlier: null,
         calLater: null,
         calGroup: null,
+        calSessionFrame: null,
+        calGroupFrame: null,
         ...Object.fromEntries(Object.values(FILTER_KEYS).map((key) => [key, null])),
         calProject: project === undefined ? null : String(project),
       }),
@@ -289,6 +311,8 @@ export function useCalibrationUrlState() {
     openRatio,
     setBrowse,
     selectGroup,
+    chooseGroup,
+
     openGroupSession,
     openOldGroupsLink,
     resetForDatabase,

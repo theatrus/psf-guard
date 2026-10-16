@@ -36,6 +36,8 @@ import './CalibrationPage.css';
 const SESSIONS_PER_PAGE = 50;
 /** Frames of one session shown in the strip, at most. */
 const STRIP_FRAMES = 500;
+/** Flats of one group shown in the strip, at most: the server's bound. */
+const GROUP_STRIP_FRAMES = 5_000;
 
 const TABS: { value: CalibrationTab; label: string }[] = [
   { value: 'frames', label: 'Frames' },
@@ -327,7 +329,7 @@ function CalibrationFrames({
   scopeRevision?: string;
 }) {
   const { filters, page, session: sessionId, frame: frameUuid, selectSession, selectFrame, ratio, openRatio } = state;
-  const { selectGroup } = state;
+  const { selectGroup, chooseGroup } = state;
   const listed = useMemo(() => listFilters(filters), [filters]);
   // A scoped list is asked again when its scope's revision moves on.
   const revision = filters.project !== undefined ? scopeRevision ?? null : null;
@@ -475,31 +477,31 @@ function CalibrationFrames({
       query?.queryKey[5] === sessionId ? previous : undefined,
   });
   const sessionFrames = useMemo(() => strip.data?.frames ?? [], [strip.data]);
-  // A flat group's frames: every flat of its nights, night by night. The
-  // page's filters narrow them as they narrow a session's; a project scope
-  // does not, since the group is the same whoever uses it.
-  const groupSessions = useMemo(
-    () => [...new Set(groupEntry?.group.sessions.flatMap((member) => member.sessions ?? []) ?? [])].sort().join(','),
-    [groupEntry],
-  );
+  // A flat group's frames: every flat of its nights, night by night, the
+  // group found on the server by its key. The page's filters narrow them
+  // as they narrow a session's; a project scope does not, since the group
+  // is the same whoever uses it.
+  const groupKey = groupEntry?.key ?? null;
   const unscoped = useMemo(() => {
     const rest = { ...listed };
     delete rest.project;
     return rest;
   }, [listed]);
   const groupStrip = useQuery({
-    queryKey: ['db', dbId, 'calibrations', 'frames', unscoped, 'group', groupSessions],
+    queryKey: ['db', dbId, 'calibrations', 'frames', unscoped, 'group', groupKey],
     queryFn: () => apiClient.getCalibrationFrames(dbId, {
       ...unscoped,
-      sessions: groupSessions,
-      sort: 'oldest',
-      per_page: STRIP_FRAMES,
+      group: groupKey!,
+      sort: 'night',
+      per_page: GROUP_STRIP_FRAMES,
     }),
-    enabled: browse === 'groups' && groupSessions !== '',
+    enabled: browse === 'groups' && groupKey !== null,
     placeholderData: (previous, query) =>
-      // The last strip stays while the same group reloads, not another's.
-      query?.queryKey[6] === groupSessions ? previous : undefined,
+      // The last strip stays while the same group reloads, as after a
+      // regroup or a Forget, not another group's.
+      query?.queryKey[6] === groupKey ? previous : undefined,
   });
+  const groupTotal = groupStrip.data?.total ?? 0;
   const groupFrames = useMemo(() => groupStrip.data?.frames ?? [], [groupStrip.data]);
   const frames = browse === 'groups' ? groupFrames : sessionFrames;
   const framesReady = browse === 'groups'
@@ -553,13 +555,13 @@ function CalibrationFrames({
     const items = groupBrowse.navigable;
     const index = items.findIndex((entry) => entry.key === groupEntry?.key);
     if (index < 0) {
-      if (items[0]) selectGroup(items[0].key);
+      if (items[0]) chooseGroup(items[0].key);
       return;
     }
     const next = findGridNavigationIndex(items, index, direction, (entry) =>
       listRef.current?.querySelector(`[data-group-key="${entry.key}"]`)?.getBoundingClientRect() ?? null);
-    if (next !== index) selectGroup(items[next].key);
-  }, [groupBrowse.navigable, groupEntry?.key, selectGroup]);
+    if (next !== index) chooseGroup(items[next].key);
+  }, [chooseGroup, groupBrowse.navigable, groupEntry?.key]);
   const groupHotkeys = { enabled: !state.master && browse === 'groups', preventDefault: true };
   useHotkeys('up', () => moveGroup('prev'), groupHotkeys, [moveGroup]);
   useHotkeys('down', () => moveGroup('next'), groupHotkeys, [moveGroup]);
@@ -611,6 +613,11 @@ function CalibrationFrames({
       actions={actions}
       keysEnabled={!state.master}
       upDown={browse === 'groups' ? 'groups' : 'sessions'}
+      note={browse === 'groups' && groupTotal > groupFrames.length
+        ? <p className="calibration-muted" data-testid="flat-group-strip-truncated">
+          Showing the first {groupFrames.length.toLocaleString()} of {plural(groupTotal, 'flat')}.
+        </p>
+        : undefined}
       empty={<p className="calibration-empty">
         {browse === 'groups' ? 'No flats of this group match the filters.' : 'No frames of this session match the filters.'}
       </p>}
@@ -653,7 +660,7 @@ function CalibrationFrames({
                 <p className="calibration-empty">No flat groups match these filters.</p>
               )}
               <FlatGroupList families={groupBrowse.families} selected={groupEntry?.key}
-                showRig={rigsInView.length > 1} scopeName={scope?.name} onSelect={selectGroup} />
+                showRig={rigsInView.length > 1} scopeName={scope?.name} onSelect={chooseGroup} />
             </>
           ) : (
             <>

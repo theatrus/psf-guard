@@ -84,6 +84,10 @@ pub enum FrameSort {
     File,
     /// Poor first, then suspect, ok and ungraded; newest first within each.
     Grade,
+    /// Session by session, oldest night first, as shot within each: a
+    /// flat group's nights. A frame with no capture time stays with its
+    /// session, after the rest of it.
+    Night,
 }
 
 /// One frame of a list, with the night and session it belongs to.
@@ -94,6 +98,10 @@ pub struct BrowsedFrame {
     /// `YYYY-MM-DD`; absent when the frame has no capture time.
     pub night: Option<String>,
     pub session: String,
+    /// Whether the frame can be shown against its session, as its detail
+    /// says ([`FrameDetail::compare`]); set in a page of frames, so a
+    /// browser stepping into another session knows before its detail.
+    pub compare: bool,
 }
 
 /// One page of frames.
@@ -347,15 +355,28 @@ fn assign_sessions(rows: Vec<CalibrationFrameSummary>, boundary: i64) -> Vec<Bro
             }
         }
     }
-    rows.into_iter()
+    let mut browsed: Vec<BrowsedFrame> = rows
+        .into_iter()
         .zip(nights)
         .enumerate()
         .map(|(index, (frame, night))| BrowsedFrame {
             session: digest(&format!("{}|{}", bases[index], tags[index])),
             night,
             frame,
+            compare: false,
         })
-        .collect()
+        .collect();
+    // As a frame's detail decides it: a raw flat in a session of enough.
+    let mut members: HashMap<String, usize> = HashMap::new();
+    for row in &browsed {
+        *members.entry(row.session.clone()).or_default() += 1;
+    }
+    for row in &mut browsed {
+        row.compare = row.frame.kind == CalibrationKind::Flat
+            && !row.frame.is_master
+            && members.get(&row.session).copied().unwrap_or(0) >= MIN_COMPARE_FLATS;
+    }
+    browsed
 }
 
 fn filter_key(filter: Option<&str>) -> Option<String> {
@@ -485,13 +506,47 @@ fn sort_frames(frames: &mut [BrowsedFrame], sort: FrameSort) {
                 .cmp(&grade_rank(&right.frame))
                 .then_with(|| newest(left, right))
         }),
+        FrameSort::Night => {
+            // Each session at its earliest night and capture; one with no
+            // time at all goes last.
+            let mut start: HashMap<String, (Option<String>, Option<i64>)> = HashMap::new();
+            for row in frames.iter() {
+                let entry = start.entry(row.session.clone()).or_default();
+                if row.night.is_some() && (entry.0.is_none() || row.night < entry.0) {
+                    entry.0 = row.night.clone();
+                }
+                if let Some(at) = row.frame.captured_at {
+                    entry.1 = Some(entry.1.map_or(at, |first: i64| first.min(at)));
+                }
+            }
+            let key = |row: &BrowsedFrame| {
+                let (night, first) = start.get(&row.session).cloned().unwrap_or_default();
+                (
+                    night.is_none(),
+                    night,
+                    first,
+                    row.session.clone(),
+                    row.frame.captured_at.is_none(),
+                    row.frame.captured_at,
+                    row.frame.source_path.clone(),
+                )
+            };
+            frames.sort_by_cached_key(key);
+        }
     }
 }
 
 fn page_bounds(total: usize, page: usize, per_page: Option<usize>) -> (usize, usize, usize) {
-    let per_page = per_page
-        .unwrap_or(DEFAULT_PAGE_SIZE)
-        .clamp(1, MAX_PAGE_SIZE);
+    page_bounds_up_to(total, page, per_page, MAX_PAGE_SIZE)
+}
+
+fn page_bounds_up_to(
+    total: usize,
+    page: usize,
+    per_page: Option<usize>,
+    most: usize,
+) -> (usize, usize, usize) {
+    let per_page = per_page.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, most.max(1));
     let start = page.saturating_mul(per_page).min(total);
     (per_page, start, (start + per_page).min(total))
 }
@@ -534,6 +589,20 @@ impl LibraryFrames {
         page: usize,
         per_page: Option<usize>,
     ) -> FramePage {
+        self.frames_page_up_to(filter, also, sort, page, per_page, MAX_PAGE_SIZE)
+    }
+
+    /// [`Self::frames_page`], with pages of up to `most` frames: a flat
+    /// group's flats come in one.
+    pub fn frames_page_up_to(
+        self,
+        filter: &FrameFilter,
+        also: impl Fn(&BrowsedFrame) -> bool,
+        sort: FrameSort,
+        page: usize,
+        per_page: Option<usize>,
+        most: usize,
+    ) -> FramePage {
         let mut kept: Vec<BrowsedFrame> = self
             .frames
             .into_iter()
@@ -541,7 +610,7 @@ impl LibraryFrames {
             .collect();
         sort_frames(&mut kept, sort);
         let total = kept.len();
-        let (per_page, start, end) = page_bounds(total, page, per_page);
+        let (per_page, start, end) = page_bounds_up_to(total, page, per_page, most);
         FramePage {
             frames: kept.drain(start..end).collect(),
             total,
@@ -1346,6 +1415,75 @@ mod tests {
             (page.page, page.located, page.sessions.len()),
             (0, Some(false), 2)
         );
+    }
+
+    #[test]
+    fn a_groups_flats_come_night_by_night_in_one_page_each_saying_whether_it_compares() {
+        // Two nights of three flats, a lone flat on a third, and one more
+        // flat with no capture time.
+        let at = |uuid: &str, days: i64, minute: i64| {
+            let mut frame = summary(CalibrationKind::Flat);
+            frame.frame_uuid = uuid.into();
+            frame.source_path = format!("/frames/{uuid}.fits");
+            frame.captured_at = frame.captured_at.map(|at| at + days * 86_400 + minute * 60);
+            frame
+        };
+        let mut undated = at("u", 0, 0);
+        undated.captured_at = None;
+        let rows = vec![
+            at("b2", 2, 1),
+            at("a1", 0, 0),
+            undated,
+            at("b1", 2, 0),
+            at("a3", 0, 2),
+            at("c1", 5, 0),
+            at("a2", 0, 1),
+            at("b3", 2, 2),
+        ];
+        let library = LibraryFrames {
+            frames: assign_sessions(rows, 12 * 3600),
+            rigs: HashMap::new(),
+            night_boundary_seconds: 12 * 3600,
+        };
+        let compares: HashMap<String, bool> = library
+            .frames
+            .iter()
+            .map(|row| (row.frame.frame_uuid.clone(), row.compare))
+            .collect();
+        assert!(
+            compares["a1"] && compares["b3"],
+            "three flats in a session compare"
+        );
+        assert!(!compares["c1"] && !compares["u"], "one alone does not");
+
+        let page = library.frames_page_up_to(
+            &FrameFilter::default(),
+            |_| true,
+            FrameSort::Night,
+            0,
+            Some(10_000),
+            5_000,
+        );
+        let order: Vec<&str> = page
+            .frames
+            .iter()
+            .map(|row| row.frame.frame_uuid.as_str())
+            .collect();
+        assert_eq!(order, ["a1", "a2", "a3", "b1", "b2", "b3", "c1", "u"]);
+        assert_eq!(page.per_page, 5_000);
+    }
+
+    #[test]
+    fn a_groups_page_holds_more_than_a_usual_page() {
+        assert_eq!(
+            page_bounds_up_to(600, 0, Some(5_000), 5_000),
+            (5_000, 0, 600)
+        );
+        assert_eq!(
+            page_bounds_up_to(6_000, 0, Some(10_000), 5_000),
+            (5_000, 0, 5_000)
+        );
+        assert_eq!(page_bounds(600, 0, Some(5_000)), (MAX_PAGE_SIZE, 0, 500));
     }
 
     #[test]

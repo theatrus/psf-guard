@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { parseFlatGroupFilter } from '../utils/flatGroupFilter';
@@ -23,6 +23,9 @@ function backoff(failures: number): number {
  * growing wait. The server never works one out inside the request.
  */
 export function useFlatGroupUse(dbId: string | null, enabled: boolean, group?: string) {
+  // Failures in a row since the last answer: the wait grows with them and
+  // starts again after one succeeds.
+  const failures = useRef({ count: 0, seen: 0 });
   return useQuery({
     queryKey: flatGroupUseKey(dbId ?? '', group),
     queryFn: () => apiClient.getFlatGroupUse(dbId!, group),
@@ -32,7 +35,15 @@ export function useFlatGroupUse(dbId: string | null, enabled: boolean, group?: s
     retryDelay: (attempt) => backoff(attempt),
     refetchInterval: (query) => {
       const data = query.state.data;
-      if (query.state.status === 'error') return backoff(query.state.errorUpdateCount);
+      const run = failures.current;
+      if (query.state.status === 'error') {
+        if (query.state.errorUpdatedAt !== run.seen) {
+          run.seen = query.state.errorUpdatedAt;
+          run.count += 1;
+        }
+        return backoff(run.count);
+      }
+      run.count = 0;
       if (data?.error) return FLAT_GROUP_USE_MAX_POLL_MS / 4;
       return data && (data.refreshing || !data.computed) ? FLAT_GROUP_USE_POLL_MS : false;
     },
@@ -72,11 +83,15 @@ export function useFlatGroupLights(dbId: string | null, value: string | null | u
     return kept;
   }, [data, key, filter?.flagged]);
   const failure = use.error ?? use.failureReason;
+  // A key the answer does not know while a newer one is worked out may be a
+  // group a regroup has just made: still being found, not gone.
+  const known = !!data?.computed;
   const state: FlatGroupLightsState = !active ? 'inactive'
-    : data?.computed && data.group_found === false ? 'missing'
-      : data?.computed ? 'ready'
-        : failure || data?.error ? 'failed'
-          : 'finding';
+    : known && data!.group_found === true ? 'ready'
+      : known && !data!.refreshing ? (data!.group_found === false ? 'missing' : 'ready')
+        : known ? 'finding'
+          : failure || data?.error ? 'failed'
+            : 'finding';
   return {
     active,
     flagged: filter?.flagged ?? false,

@@ -2549,6 +2549,8 @@ export interface BrowsedCalibrationFrame extends CalibrationFrameSummary {
   /** `YYYY-MM-DD`; absent without a capture time. */
   night?: string | null;
   session: string;
+  /** Whether it can be shown against its session, as its detail says. */
+  compare?: boolean;
 }
 
 export interface CalibrationFramePage {
@@ -2615,7 +2617,7 @@ export interface CalibrationSessionPage {
 }
 
 export type CalibrationGradeFilter = CalibrationGrade | 'ungraded';
-export type CalibrationFrameSort = 'newest' | 'oldest' | 'file' | 'grade';
+export type CalibrationFrameSort = 'newest' | 'oldest' | 'file' | 'grade' | 'night';
 
 /** What the frame and session lists keep. */
 export interface CalibrationListFilters {
@@ -2640,8 +2642,9 @@ export interface CalibrationListFilters {
   per_page?: number;
   /** Sessions only: the page holding this session, in place of `page`. */
   locate?: string;
-  /** Keep only these sessions, comma-separated: a flat group's nights. */
-  sessions?: string;
+  /** Frames only: a flat group's flats, by the group's key or one of its
+   *  sessions; night by night, in one page of up to 5,000. */
+  group?: string;
 }
 
 /** A calibration rig in a project's scope. */
