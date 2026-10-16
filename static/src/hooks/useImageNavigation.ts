@@ -115,7 +115,9 @@ export function useImageNavigation(currentImageId?: number) {
         return false;
       }
 
-      if (flatGroup.ready && !flatGroup.ids.has(image.id)) {
+      // One flat group's lights: none until they are known, so next and
+      // previous never step outside the group.
+      if (flatGroup.active && (!flatGroup.ready || !flatGroup.ids.has(image.id))) {
         return false;
       }
       
@@ -130,6 +132,7 @@ export function useImageNavigation(currentImageId?: number) {
     calibration.isLoading,
     calibration.error,
     calibration.marks,
+    flatGroup.active,
     flatGroup.ready,
     flatGroup.ids,
   ]);

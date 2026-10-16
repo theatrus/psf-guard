@@ -101,6 +101,7 @@ import type { GuidFillReport, GuidReport,
   CalibrationQualityStatus,
   FlatGroupsView,
   FlatGroupUseView,
+  FlatSessionPlace,
   FlatRatioPreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
@@ -1732,6 +1733,17 @@ export const apiClient = {
       { params: project === undefined ? {} : { project } }
     );
     if (!data.data) throw new Error(data.error || 'Failed to read the flat groups');
+    return data.data;
+  },
+
+  /** Where a flat session would sit among the flat groups, measured or not. */
+  getFlatSessionPlace: async (dbId: string, session: string): Promise<FlatSessionPlace> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<FlatSessionPlace>>(
+      dbPath(dbId, '/calibrations/flat-groups/place'),
+      { params: { session } }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to place the flat session');
     return data.data;
   },
 

@@ -276,10 +276,19 @@ export default function FlatGroupDetail({
         <h3 id="flat-group-feeds">What it feeds</h3>
         {useError ? (
           <p className="calibration-error">Could not work out what it feeds: {useError.message}</p>
+        ) : !known && use?.error ? (
+          <p className="calibration-error" data-testid="flat-group-use-error">
+            Could not work out what it feeds: {use.error}. Trying again in a while.
+          </p>
         ) : !use || !known ? (
           <p className="calibration-muted" role="status">Working out which masters and lights use it…</p>
         ) : (
           <>
+            {use.error && (
+              <p className="calibration-error" data-testid="flat-group-use-error">
+                These counts may be out of date: working out newer ones failed ({use.error}). Trying again in a while.
+              </p>
+            )}
             {updating && (
               <p className="calibration-muted" role="status" data-testid="flat-group-updating">
                 Updating… these are the last counts while newer ones are worked out.

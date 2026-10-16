@@ -128,18 +128,23 @@ fn remove_gone_headers(cache_dir: &FsPath, keys: &BTreeMap<i32, String>) {
     }
 }
 
-fn write_headers(
+pub(crate) fn write_headers(
     cache_dir: &FsPath,
     project: i32,
     lights: BTreeMap<i32, KeptHeader>,
 ) -> anyhow::Result<()> {
-    write_json(
-        &headers_path(cache_dir, project),
-        &KeptHeaders {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            lights,
-        },
-    )
+    let path = headers_path(cache_dir, project);
+    let bytes = serde_json::to_vec(&KeptHeaders {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        lights,
+    })?;
+    // Judging a project again, as after the library is graded again, reads
+    // back the same headers. Left as they are, they keep their stamp, which
+    // the project scope and what the flat groups feed are worked out from.
+    if std::fs::read(&path).is_ok_and(|kept| kept == bytes) {
+        return Ok(());
+    }
+    write_bytes(&path, &bytes)
 }
 
 /// The kept results, or none when the file is missing, unreadable, or from
@@ -162,6 +167,11 @@ fn write_cache(cache_dir: &FsPath, cache: &HealthCache) -> anyhow::Result<()> {
 /// Write a file whole under a temporary name, then rename it into place, so
 /// a reader never sees half of it.
 fn write_json(path: &FsPath, value: &impl Serialize) -> anyhow::Result<()> {
+    write_bytes(path, &serde_json::to_vec(value)?)
+}
+
+/// Write `bytes` to a temporary file beside `path` and rename it over.
+fn write_bytes(path: &FsPath, bytes: &[u8]) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -170,7 +180,7 @@ fn write_json(path: &FsPath, value: &impl Serialize) -> anyhow::Result<()> {
         std::process::id(),
         WRITES.fetch_add(1, Ordering::Relaxed)
     ));
-    std::fs::write(&temporary, serde_json::to_vec(value)?)?;
+    std::fs::write(&temporary, bytes)?;
     if let Err(error) = std::fs::rename(&temporary, path) {
         let _ = std::fs::remove_file(&temporary);
         return Err(error.into());
@@ -771,6 +781,30 @@ mod tests {
         let stopped = judge_project(&pool, &library, &lights, &none, &stopping, &|| false);
         assert!(stopped.is_err());
         assert!(asked.load(Ordering::SeqCst) < 20, "{asked:?}");
+    }
+
+    /// Background grading moves every project's health key, so the pass
+    /// judges each project again and writes back the headers it read. The
+    /// same headers keep their stamp, which the project scope and what the
+    /// flat groups feed are worked out from; new ones move it.
+    #[test]
+    fn rewriting_unchanged_headers_keeps_their_stamp() {
+        let temp = tempfile::tempdir().unwrap();
+        write_headers(temp.path(), 1, BTreeMap::new()).unwrap();
+        let before = headers_stamp(temp.path(), 1);
+        std::thread::sleep(Duration::from_millis(20));
+        write_headers(temp.path(), 1, BTreeMap::new()).unwrap();
+        assert_eq!(headers_stamp(temp.path(), 1), before);
+
+        let light = KeptHeader {
+            path: PathBuf::from("light.fits"),
+            size: 1,
+            modified_ns: 2,
+            meta: crate::commands::import::headers::FrameMeta::default(),
+        };
+        std::thread::sleep(Duration::from_millis(20));
+        write_headers(temp.path(), 1, BTreeMap::from([(7, light)])).unwrap();
+        assert_ne!(headers_stamp(temp.path(), 1), before);
     }
 
     #[test]

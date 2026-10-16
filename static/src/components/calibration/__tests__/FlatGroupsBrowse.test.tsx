@@ -160,6 +160,13 @@ function serve(): Seen {
       seen.groups.push(new URL(request.url).searchParams);
       return ok({ available: true, rigs: [RIG] });
     }),
+    http.get('/api/db/demo/calibrations/flat-groups/place', ({ request }) => {
+      const session = new URL(request.url).searchParams.get('session');
+      const listed = SESSIONS.find((entry) => entry.id === session);
+      return ok(listed
+        ? { rig_uuid: listed.rig_uuid, family_key: listed.filter, night: listed.night, rotation: listed.rotation }
+        : { rig_uuid: null, family_key: null, night: null, rotation: null });
+    }),
     http.get('/api/db/demo/calibrations/flat-groups/use', () => {
       seen.use += 1;
       return ok(USE);
@@ -461,7 +468,7 @@ describe('browsing flat groups', () => {
         project_id: 7, lights: 12, unread: 0, sessions: ['s-r0907', 's-g0913'], frames: 20, masters: [],
         rigs: [{ rig_uuid: 'rig', name: 'UltraCat' }], pending: 0, revision: 'r7', refreshing: false,
       })),
-      http.get('/api/db/demo/calibrations/flat-groups/use', () => ok({ ...USE, pending: 0 })),
+      http.get('/api/db/demo/calibrations/flat-groups/use', () => ok({ ...USE, pending: 0, unread: 0 })),
     );
     renderPage('/calibration?db=demo&project=7&calProject=7&calBrowse=groups');
     await groupList();
@@ -469,5 +476,34 @@ describe('browsing flat groups', () => {
       .toEqual(['neighbour', 'own', 'map', 'neighbour']));
     expect(entries()[2]).toHaveTextContent('Correction map');
     await waitFor(() => expect(params().get('calGroup')).toBe('s-r0907'));
+  });
+
+  it('calls no group a correction map while some lights are unread', async () => {
+    serve();
+    server.use(
+      http.get('/api/db/demo/calibrations/project-scope', () => ok({
+        project_id: 7, lights: 12, unread: 0, sessions: ['s-r0907', 's-g0913'], frames: 20, masters: [],
+        rigs: [{ rig_uuid: 'rig', name: 'UltraCat' }], pending: 0, revision: 'r7', refreshing: false,
+      })),
+      http.get('/api/db/demo/calibrations/flat-groups/use', () => ok({ ...USE, pending: 0, unread: 3 })),
+    );
+    renderPage('/calibration?db=demo&project=7&calProject=7&calBrowse=groups');
+    await groupList();
+    await waitFor(() => expect(entries().map((entry) => entry.closest('li')?.getAttribute('data-context') ?? 'own'))
+      .toEqual(['neighbour', 'own', 'own', 'neighbour']));
+    expect(screen.queryByText('Correction map')).toBeNull();
+  });
+
+  it('says it could not work out what a group feeds, and tries again later', async () => {
+    serve();
+    server.use(http.get('/api/db/demo/calibrations/flat-groups/use', () => ok({
+      computed: false, groups: [], lights: 0, pending: 0, unread: 0, refreshing: false,
+      error: 'the catalog could not be read',
+    })));
+    renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0907');
+    const feeds = await screen.findByTestId('flat-group-feeds');
+    await waitFor(() => expect(within(feeds).getByTestId('flat-group-use-error'))
+      .toHaveTextContent('Could not work out what it feeds: the catalog could not be read'));
+    expect(feeds).not.toHaveTextContent('Working out');
   });
 });

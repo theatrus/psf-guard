@@ -3,6 +3,7 @@ import type {
   FlatFamily,
   FlatGroup,
   FlatGroupsRig,
+  FlatSessionPlace,
   FlatSplit,
   FlatUnmeasuredSession,
 } from '../../api/types';
@@ -69,11 +70,11 @@ export interface GroupBrowse {
   navigable: GroupEntry[];
   /** The group a key names, or the one now holding the session it names. */
   find: (key: string | null | undefined) => GroupEntry | undefined;
-  /** The group of a flat session's rig, filter and angle around its
+  /** The group of a flat session's family (rig and settings, by the
+   *  family key the server places it in) at its nearest angle, around its
    *  night: the one spanning it, else the nearest. For a session no group
    *  holds, such as one whose flats were all kept out. */
-  near: (session: { rig_uuid: string; filter: string | null; rotation: number | null; night: string | null }) =>
-    GroupEntry | undefined;
+  near: (place: FlatSessionPlace) => GroupEntry | undefined;
 }
 
 export interface GroupBrowseOptions {
@@ -229,19 +230,23 @@ export function browseGroups(rigs: FlatGroupsRig[], options: GroupBrowseOptions 
       ?? all.find((entry) => entry.group.sessions.some((session) =>
         session.response_key === key || (session.sessions ?? []).includes(key)));
   };
-  const near: GroupBrowse['near'] = (session) => {
-    if (!session.night) return undefined;
-    const night = session.night;
+  const near: GroupBrowse['near'] = (place) => {
+    if (!place.night || !place.family_key) return undefined;
+    const night = place.night;
     const days = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
+    // Its family: the same rig and settings (filter, gain, binning, frame
+    // size, focal class) by the family key, at the nearest angle.
+    const angleOf = (family: FlatFamily) => (family.rotation === null || place.rotation === null
+      ? (family.rotation === place.rotation ? 0 : ANGLE_TOLERANCE)
+      : angleGap(family.rotation, place.rotation));
+    const candidates = all.filter((entry) =>
+      entry.rig.rig_uuid === place.rig_uuid && entry.family.key.startsWith(`${place.family_key}:`));
+    const nearest = Math.min(...candidates.map((entry) => angleOf(entry.family)));
     let best: GroupEntry | undefined;
     let bestDistance = Number.POSITIVE_INFINITY;
-    for (const entry of all) {
-      const { family, group } = entry;
-      if (entry.rig.rig_uuid !== session.rig_uuid || !sameFilter(family.filter, session.filter)) continue;
-      const angle = family.rotation === null || session.rotation === null
-        ? (family.rotation === session.rotation ? 0 : Number.POSITIVE_INFINITY)
-        : angleGap(family.rotation, session.rotation);
-      if (angle > ANGLE_TOLERANCE) continue;
+    for (const entry of candidates) {
+      if (angleOf(entry.family) > nearest) continue;
+      const { group } = entry;
       const distance = night >= group.first_night && night <= group.last_night
         ? 0
         : Math.min(days(night, group.first_night), days(night, group.last_night));

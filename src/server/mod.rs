@@ -268,6 +268,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(flat_group_use::get_flat_group_use),
         )
         .route(
+            "/calibrations/flat-groups/place",
+            get(flat_groups::get_session_place),
+        )
+        .route(
             "/calibrations/frames",
             get(calibration_browser::list_frames).delete(handlers::forget_calibration_frames),
         )

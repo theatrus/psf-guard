@@ -4176,6 +4176,21 @@ export interface FlatGroupUseView {
   unread: number;
   /** A newer answer is being worked out; this is the last one kept. */
   refreshing: boolean;
+  /** Why the last attempt at the current answer failed; tried again later. */
+  error?: string | null;
+  /** Asked for one group: whether its key names a group now. */
+  group_found?: boolean | null;
+  /** The key of the group asked for, when found by one of its sessions. */
+  group_key?: string | null;
+}
+
+/** Where a flat session would sit among the flat groups. */
+export interface FlatSessionPlace {
+  rig_uuid: string | null;
+  /** A family's key begins with it and `:`. */
+  family_key: string | null;
+  night: string | null;
+  rotation: number | null;
 }
 
 export interface FlatSession {

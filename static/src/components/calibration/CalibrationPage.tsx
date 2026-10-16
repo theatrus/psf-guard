@@ -366,7 +366,7 @@ function CalibrationFrames({
   // for a correction's map is not one; known once every light is read.
   const useData = groupUse.data;
   const projectGroups = useMemo(() => {
-    if (!scope || !useData?.computed || useData.pending > 0) return undefined;
+    if (!scope || !useData?.computed || useData.pending > 0 || useData.unread > 0) return undefined;
     return new Set(useData.groups
       .filter((group) => group.projects.some((project) => project.project_id === scope.projectId))
       .map((group) => group.key));
@@ -377,13 +377,14 @@ function CalibrationFrames({
   );
   const groupEntry = browse === 'groups' ? groupBrowse.find(state.group) : undefined;
   // A key no group answers to, as when its oldest night was kept out: the
-  // session it names finds the group of its filter and angle around its night.
+  // session it names finds the group of its family around its night.
   const lost = browse === 'groups' && !groupsLoading && !!flat.groups.data && !!state.group && !groupEntry;
   const lostSession = useQuery({
-    queryKey: ['db', dbId, 'calibrations', 'sessions', 'one', state.group],
-    queryFn: () => apiClient.getCalibrationSessions(dbId, { session: state.group!, per_page: 1 }),
+    queryKey: ['db', dbId, 'calibrations', 'flat-groups', 'place', state.group],
+    queryFn: () => apiClient.getFlatSessionPlace(dbId, state.group!),
     enabled: lost,
     staleTime: Infinity,
+    retry: false,
   });
   // The first group is chosen until a person chooses; a key that now
   // names a regrouped group by one of its sessions is put in its own name.
@@ -392,8 +393,7 @@ function CalibrationFrames({
     let chosen = groupBrowse.find(state.group);
     if (!chosen && state.group) {
       if (lostSession.isLoading) return;
-      const session = lostSession.data?.sessions[0];
-      chosen = session ? groupBrowse.near(session) : undefined;
+      chosen = lostSession.data ? groupBrowse.near(lostSession.data) : undefined;
     }
     const next = chosen?.key ?? (groupBrowse.navigable[0] ?? groupBrowse.entries[0])?.key;
     if (next && next !== state.group) selectGroup(next);

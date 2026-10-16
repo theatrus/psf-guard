@@ -661,8 +661,9 @@ opens that group: a link still lands after nights join or split. When one
 session holds flats of two families, as a night shot at two gains may,
 each group's key also carries a digest of its family's key. A key that
 names no group's session any more, as when every flat of that night was
-kept out, opens the group of that session's rig, filter and angle around
-its night. A Groups link holds the sidebar at **Loading groups…** until
+kept out, opens the group of the family that session's flats would join
+(the same rig, filter, gain, frame size, binning and focal length class)
+at the nearest angle, around its night. A Groups link holds the sidebar at **Loading groups…** until
 the groups (and a project's scope) are in, rather than showing the
 session list for a moment.
 
@@ -670,11 +671,16 @@ session list for a moment.
 opens Images with `flatGroup=<db>:<key>` (or `…:flagged` for the flagged
 link) beside the database and project. The grid then keeps exactly the
 lights the group counts, by id: not other rigs' lights, other angles' or
-other filters' lights shot the same nights. The summary line says
-**Lights of one flat group**, the filter counts as one of the Images
-filters, and **Clear** removes it. A value made in another database does
-nothing. Until the lights are known the grid hides none and says
-*(updating)*.
+other filters' lights shot the same nights. A **Lights of a flat group ✕**
+chip heads the toolbar, the summary line says **Lights of one flat group**,
+and the filter counts as one of the Images filters; the chip's ✕ or
+**Clear** removes it. A value made in another database does nothing and
+is not counted. Until the lights are known the grid shows none, so that
+Select all, Accept and Reject reach nothing outside the group, and says
+*Finding the group's lights…*. A key that names no group any more, as
+after its nights joined an older group, says **This flat group no longer
+exists** with **Show every light**; when the lights cannot be found the
+grid says so and asks again after a growing wait.
 
 In a project scope, Groups lists the groups holding the project's
 sessions, each with its neighbour on either side, dimmed and marked
@@ -682,7 +688,8 @@ sessions, each with its neighbour on either side, dimmed and marked
 the group across an edge is what Compare sets it against. A group the
 scope holds only because a correction's map is measured from it, and
 whose flats none of the project's lights take, is dimmed too and marked
-**Correction map**, once every light of the catalog has been read. Groups further
+**Correction map**, once every light of the catalog has been read and none
+is unreadable. Groups further
 off are left out, and a gap row counts them. ↑ and ↓ keep to the
 project's own groups. **✕** on the chip widens to the rig's whole
 library, still in Groups.
@@ -723,7 +730,12 @@ could not be read (`unread`). `group=<key>` adds that group's lights by
 id (`image_ids`, `flagged_ids`) for the Images filter. No request works
 the answer out: one that finds none, or an older one, starts a single
 background refresh and gets what is kept, marked `refreshing`, with
-`computed` false until the first answer exists. The refresh matches
+`computed` false until the first answer exists. A refresh that fails is
+logged, and its `error` is sent with the answer; the same revision is
+tried again only after a wait that doubles from 10 seconds to 10
+minutes. With `group`, `group_found` says whether the key names a group
+now, by its own key or one of its sessions or response keys, and
+`group_key` gives that group's key. The refresh matches
 lights from the headers the calibration check keeps, on a read-only
 connection of its own and a pool sized at background priority that waits
 while interactive work runs. The answer is kept until something matching
@@ -731,7 +743,10 @@ depends on changes: a frame, its validity mark or whether it is kept out,
 the recorded masters, flat grouping's measurements, the settings, any
 project's lights or name, or a project's kept headers. Grading the
 library again in the background changes none of these unless it keeps a
-frame out or lets one back in. Each group in `flat-groups` also carries
+frame out or lets one back in: the health pass that follows writes a
+project's headers again only when they differ, so their stamp stays.
+`GET …/calibrations/flat-groups/place?session=` gives the family, night
+and angle a flat session's flats would take, measured or not. Each group in `flat-groups` also carries
 `widest`: the most any two of its sessions measured apart, and over how
 many pairs; `pairs` holds each session against the next and the widest.
 `calibrations/sessions?locate=<session>` lists the page holding that

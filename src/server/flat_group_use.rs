@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How often a refresh looks again while interactive work runs.
 const YIELD_POLL: Duration = Duration::from_millis(250);
@@ -70,17 +70,6 @@ impl LightCounts {
             FlatBasis::Undetermined { .. } => self.undetermined += 1,
             FlatBasis::NoSameSide { .. } => self.no_same_side += 1,
         }
-    }
-}
-
-/// Whether a light is flagged for its flats.
-fn flagged(basis: &FlatBasis) -> bool {
-    match basis {
-        FlatBasis::Undetermined { .. } | FlatBasis::NoSameSide { .. } => true,
-        FlatBasis::Nearest
-        | FlatBasis::SameSide { .. }
-        | FlatBasis::OtherAngle { .. }
-        | FlatBasis::Corrected { .. } => false,
     }
 }
 
@@ -134,6 +123,22 @@ pub struct FlatGroupUseView {
     pub unread: usize,
     /// A newer answer is being worked out; this one is the last kept.
     pub refreshing: bool,
+    /// Why the last attempt at the current answer failed. Another is made
+    /// after a growing wait, not on every request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Asked for one group: whether the key names a group the flat groups
+    /// hold now, by its own key or one of its sessions. Absent when no
+    /// group was asked for, or nothing is known yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_found: Option<bool>,
+    /// The key of the group `group` names, when it is found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_key: Option<String>,
+    /// Every group's key, and each of its sessions and response keys, to
+    /// the group's key.
+    #[serde(skip)]
+    pub(crate) aliases: HashMap<String, String>,
 }
 
 /// One light, matched against the library.
@@ -229,7 +234,7 @@ pub(crate) fn tally(
                 });
             project.lights.add(&light.basis);
             project.image_ids.push(light.image_id);
-            if flagged(&light.basis) {
+            if light.basis.flags() {
                 project.flagged_ids.push(light.image_id);
             }
         }
@@ -286,6 +291,38 @@ fn revision(conn: &Connection, ctx: &DatabaseContext) -> anyhow::Result<String> 
         .collect())
 }
 
+/// Each group's own key, and each of its sessions and response keys, to
+/// the group's key: how a key a link carries finds its group after a
+/// regroup, as the Calibration page finds it.
+fn aliases_of(view: &crate::server::flat_groups::FlatGroupsView) -> HashMap<String, String> {
+    let mut aliases = HashMap::new();
+    for rig in &view.rigs {
+        for family in &rig.families {
+            for group in &family.groups {
+                for session in &group.sessions {
+                    aliases
+                        .entry(session.response_key.clone())
+                        .or_insert_with(|| group.key.clone());
+                    for id in &session.sessions {
+                        aliases
+                            .entry(id.clone())
+                            .or_insert_with(|| group.key.clone());
+                    }
+                }
+            }
+        }
+    }
+    // A group's own key wins over a session that happens to share it.
+    for rig in &view.rigs {
+        for family in &rig.families {
+            for group in &family.groups {
+                aliases.insert(group.key.clone(), group.key.clone());
+            }
+        }
+    }
+    aliases
+}
+
 /// Work the answer out. Blocking; for the background refresh only.
 fn work_out(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<FlatGroupUseView> {
     let conn = read_only(&ctx.database_path)?;
@@ -296,6 +333,7 @@ fn work_out(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<FlatGroup
             ..FlatGroupUseView::default()
         });
     }
+    let aliases = aliases_of(&view);
     let snapshot = LibrarySnapshot::load(&conn)?;
     let masters = browse::recorded_masters(&conn)?;
     let names = crate::server::calibration_browser::project_names(&conn);
@@ -342,17 +380,48 @@ fn work_out(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<FlatGroup
         lights,
         pending,
         unread,
-        refreshing: false,
+        aliases,
+        ..FlatGroupUseView::default()
     })
 }
 
+/// How an answer is worked out: [`work_out`], or a stand-in in tests.
+type Work =
+    Arc<dyn Fn(&AppState, &DatabaseContext) -> anyhow::Result<FlatGroupUseView> + Send + Sync>;
+
 /// A kept answer, with the revision it was worked out at.
 type Kept = (String, Arc<FlatGroupUseView>);
+
+/// The last failure to work out an answer at one revision.
+#[derive(Debug, Clone)]
+struct Failure {
+    revision: String,
+    error: String,
+    at: Instant,
+    /// Failures in a row at this revision.
+    attempts: u32,
+}
+
+impl Failure {
+    /// How long to wait before trying this revision again: doubling from
+    /// [`RETRY_FIRST`] up to [`RETRY_MOST`].
+    fn wait(&self) -> Duration {
+        RETRY_FIRST
+            .saturating_mul(1 << self.attempts.saturating_sub(1).min(8))
+            .min(RETRY_MOST)
+    }
+}
+
+/// The first wait after a failed refresh, and the longest.
+const RETRY_FIRST: Duration = Duration::from_secs(10);
+const RETRY_MOST: Duration = Duration::from_secs(10 * 60);
 
 /// Answers by catalog path.
 static KEPT: LazyLock<Mutex<HashMap<String, Kept>>> = LazyLock::new(Mutex::default);
 /// Catalogs being refreshed in the background.
 static REFRESHING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+/// The last failure by catalog path, until an answer is worked out.
+static FAILED: LazyLock<Mutex<HashMap<String, Failure>>> = LazyLock::new(Mutex::default);
 
 fn kept(path: &str) -> Option<Kept> {
     KEPT.lock()
@@ -361,19 +430,70 @@ fn kept(path: &str) -> Option<Kept> {
         .cloned()
 }
 
-/// Work out the next answer in the background, unless a refresh runs.
-fn start_refresh(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>) {
+fn failure(path: &str) -> Option<Failure> {
+    FAILED
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(path)
+        .cloned()
+}
+
+/// Keep what one refresh came to: its answer, or its failure at `revision`.
+fn settle(path: &str, revision: String, outcome: anyhow::Result<FlatGroupUseView>) {
+    match outcome {
+        Ok(view) => {
+            KEPT.lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(path.to_string(), (revision, Arc::new(view)));
+            FAILED
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(path);
+        }
+        Err(error) => {
+            let error = format!("{error:#}");
+            let mut failed = FAILED.lock().unwrap_or_else(|p| p.into_inner());
+            let attempts = failed
+                .get(path)
+                .filter(|last| last.revision == revision)
+                .map_or(1, |last| last.attempts + 1);
+            tracing::warn!(
+                "Could not work out what the flat groups feed in {path} (attempt {attempts}): {error}"
+            );
+            failed.insert(
+                path.to_string(),
+                Failure {
+                    revision,
+                    error,
+                    at: Instant::now(),
+                    attempts,
+                },
+            );
+        }
+    }
+}
+
+/// Work out the answer at `revision` in the background, unless a refresh
+/// runs or the server is stopping. Whether one runs now.
+fn start_refresh(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    revision: String,
+    work: Work,
+) -> bool {
     let path = ctx.database_path.clone();
-    if state.shutdown.is_stopping()
-        || !REFRESHING
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .insert(path.clone())
+    if state.shutdown.is_stopping() {
+        return false;
+    }
+    if !REFRESHING
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(path.clone())
     {
-        return;
+        return true;
     }
     let (state, ctx) = (Arc::clone(state), Arc::clone(ctx));
-    let work = state
+    let guard = state
         .shutdown
         .hold(format!("flat group use ({})", ctx.database_path));
     let spawned = std::thread::Builder::new()
@@ -381,48 +501,55 @@ fn start_refresh(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>) {
         .spawn({
             let path = path.clone();
             move || {
-                let _work = work;
-                let outcome = read_only(&ctx.database_path)
-                    .and_then(|conn| revision(&conn, &ctx))
-                    .and_then(|revision| Ok((revision, work_out(&state, &ctx)?)));
-                match outcome {
-                    Ok((revision, view)) => {
-                        KEPT.lock()
-                            .unwrap_or_else(|p| p.into_inner())
-                            .insert(path.clone(), (revision, Arc::new(view)));
-                    }
-                    Err(error) => {
-                        tracing::info!("Could not work out what the flat groups feed: {error:#}");
-                    }
-                }
+                let _guard = guard;
+                settle(&path, revision, work(&state, &ctx));
                 REFRESHING
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .remove(&path);
             }
         });
-    if spawned.is_err() {
+    if let Err(error) = spawned {
+        tracing::warn!("Could not start working out what the flat groups feed: {error}");
         REFRESHING
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&path);
+        return false;
     }
+    true
 }
 
-/// The kept answer when current; otherwise the last one, or a pending
-/// one, marked `refreshing` while a refresh works out the next. Blocking,
-/// but never long: it reads only what the revision needs.
-fn use_of(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>) -> anyhow::Result<FlatGroupUseView> {
+/// The kept answer when current. Otherwise the last one, or a pending one,
+/// marked `refreshing` while one background refresh works out the next;
+/// after a failure at this revision, with its error, and no new attempt
+/// until a growing wait has passed. Blocking, but never long: it reads
+/// only what the revision needs.
+fn use_of_with(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    work: Work,
+) -> anyhow::Result<FlatGroupUseView> {
     let revision = revision(&read_only(&ctx.database_path)?, ctx)?;
-    match kept(&ctx.database_path) {
-        Some((kept_revision, view)) if kept_revision == revision => Ok((*view).clone()),
-        kept => {
-            start_refresh(state, ctx);
-            let mut stale = kept.map(|(_, view)| (*view).clone()).unwrap_or_default();
-            stale.refreshing = true;
-            Ok(stale)
-        }
+    let kept = kept(&ctx.database_path);
+    if let Some((kept_revision, view)) = &kept
+        && *kept_revision == revision
+    {
+        return Ok((**view).clone());
     }
+    let failed = failure(&ctx.database_path).filter(|failed| failed.revision == revision);
+    let waiting = failed
+        .as_ref()
+        .is_some_and(|failed| failed.at.elapsed() < failed.wait());
+    let refreshing = !waiting && start_refresh(state, ctx, revision, work);
+    let mut view = kept.map(|(_, view)| (*view).clone()).unwrap_or_default();
+    view.refreshing = refreshing;
+    view.error = failed.map(|failed| failed.error);
+    Ok(view)
+}
+
+fn use_of(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>) -> anyhow::Result<FlatGroupUseView> {
+    use_of_with(state, ctx, Arc::new(work_out))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -431,10 +558,24 @@ pub struct UseQuery {
     pub group: Option<String>,
 }
 
-/// Leave the lights' ids only on `group`'s projects.
+/// Leave the lights' ids only on the group `group` names, found as the
+/// Calibration page finds it: by its own key or one of its sessions. Say
+/// whether it was found, once anything is known.
 fn keep_ids_of(view: &mut FlatGroupUseView, group: Option<&str>) {
+    let found = group.and_then(|key| {
+        view.aliases.get(key).cloned().or_else(|| {
+            view.groups
+                .iter()
+                .any(|entry| entry.key == key)
+                .then(|| key.to_string())
+        })
+    });
+    if group.is_some() && view.computed {
+        view.group_found = Some(found.is_some());
+        view.group_key = found.clone();
+    }
     for entry in &mut view.groups {
-        if Some(entry.key.as_str()) == group {
+        if found.as_deref() == Some(entry.key.as_str()) {
             continue;
         }
         for project in &mut entry.projects {
@@ -724,5 +865,295 @@ mod tests {
         // A grade that keeps flats out does move it.
         quality("poor", 3);
         assert_ne!(revision(&conn, &ctx).unwrap(), before);
+    }
+
+    /// A regrade that keeps out nothing new moves every project's health key
+    /// (a suspect grade is a finding of its own), so the health pass judges
+    /// each project again and writes back the headers it read. The answer
+    /// stays current: the headers keep their stamp.
+    #[test]
+    fn a_regrade_the_health_pass_judges_again_leaves_the_answer_current() {
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let conn = crate::server::flat_groups::tests::catalog_of(
+            temp.path(),
+            &["2026-09-10T14:0", "2026-09-14T14:0"],
+            |a, b| if a.night == b.night { 0.0 } else { 0.02 },
+        );
+        conn.execute_batch(MINIMAL_TS).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project (Id, profileId, name, guid) VALUES (1, 'p', 'M42', 'pg');
+             INSERT INTO target (Id, name, active, epochcode, projectId, guid)
+                 VALUES (1, 'M42', 1, 0, 1, 'tg');
+             INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+                 gradingStatus, metadata, profileId)
+                 VALUES (1, 1, 1, 1789000000, 'Ha', 0, '{\"FileName\":\"l.fits\"}', 'p');",
+        )
+        .unwrap();
+        let quality = |grade: &str, at: i64| {
+            conn.execute(
+                "INSERT OR REPLACE INTO psf_guard_calibration_frame_quality
+                     (frame_uuid, grade, findings_json, measured_at, graded_at, updated_at)
+                 SELECT frame_uuid, ?1, ?2, ?3, ?3, ?3 FROM psf_guard_calibration_frame",
+                rusqlite::params![grade, format!("[{at}]"), at],
+            )
+            .unwrap();
+        };
+        quality("ok", 1);
+        let mut ctx = DatabaseContext::new_for_test(Connection::open_in_memory().unwrap());
+        ctx.cache_dir_path = temp.path().join("cache");
+        // The health pass keeps the light's header.
+        let header = |path: &str| crate::calibration::KeptHeader {
+            path: path.into(),
+            size: 1,
+            modified_ns: 2,
+            meta: FrameMeta::default(),
+        };
+        let pass = |headers: BTreeMap<i32, crate::calibration::KeptHeader>| {
+            crate::server::calibration_health::write_headers(&ctx.cache_dir_path, 1, headers)
+                .unwrap();
+        };
+        pass(BTreeMap::from([(1, header("l.fits"))]));
+        let keys = crate::calibration::health_keys(&conn).unwrap();
+        let before = revision(&conn, &ctx).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        quality("suspect", 2);
+        assert_ne!(
+            crate::calibration::health_keys(&conn).unwrap(),
+            keys,
+            "the health pass judges the project again"
+        );
+        pass(BTreeMap::from([(1, header("l.fits"))]));
+        assert_eq!(revision(&conn, &ctx).unwrap(), before);
+        // A light it reads anew does move it.
+        pass(BTreeMap::from([
+            (1, header("l.fits")),
+            (2, header("m.fits")),
+        ]));
+        assert_ne!(revision(&conn, &ctx).unwrap(), before);
+    }
+
+    /// A `group` key the answer does not hold, as after a regroup merged
+    /// its group into an older one, is said to be unknown rather than sent
+    /// as a group that feeds nothing; one of a group's sessions finds it.
+    #[test]
+    fn an_unknown_group_key_is_told_apart_from_a_group_with_no_lights() {
+        let project = ProjectLights {
+            project_id: 1,
+            name: None,
+            lights: LightCounts::default(),
+            image_ids: vec![7, 8],
+            flagged_ids: vec![8],
+        };
+        let view = || FlatGroupUseView {
+            computed: true,
+            groups: vec![
+                GroupUse {
+                    key: "s-new".into(),
+                    masters: Vec::new(),
+                    lights: LightCounts::default(),
+                    projects: vec![project.clone()],
+                },
+                GroupUse {
+                    key: "s-other".into(),
+                    masters: Vec::new(),
+                    lights: LightCounts::default(),
+                    projects: vec![project.clone()],
+                },
+            ],
+            aliases: HashMap::from([
+                ("s-new".to_string(), "s-new".to_string()),
+                ("s-merged".to_string(), "s-new".to_string()),
+                ("r-merged".to_string(), "s-new".to_string()),
+                ("s-other".to_string(), "s-other".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        let mut unknown = view();
+        keep_ids_of(&mut unknown, Some("s-old"));
+        let json = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(json["group_found"], serde_json::json!(false), "{json}");
+        assert!(unknown
+            .groups
+            .iter()
+            .all(|group| group.projects[0].image_ids.is_empty()));
+
+        // The key of a session the group holds now: its ids, under its key.
+        let mut merged = view();
+        keep_ids_of(&mut merged, Some("s-merged"));
+        assert_eq!(merged.group_found, Some(true));
+        assert_eq!(merged.group_key.as_deref(), Some("s-new"));
+        assert_eq!(merged.groups[0].projects[0].image_ids, vec![7, 8]);
+        assert!(merged.groups[1].projects[0].image_ids.is_empty());
+
+        // No group asked for: every id goes, and nothing is said.
+        let mut none = view();
+        keep_ids_of(&mut none, None);
+        assert_eq!(none.group_found, None);
+        assert!(none
+            .groups
+            .iter()
+            .all(|g| g.projects[0].flagged_ids.is_empty()));
+
+        // Nothing known yet: whether it is found is not said either.
+        let mut pending = FlatGroupUseView::default();
+        keep_ids_of(&mut pending, Some("s-new"));
+        assert_eq!(pending.group_found, None);
+    }
+
+    /// A catalog on disk, with a server state and a context reading it.
+    fn on_disk(temp: &std::path::Path) -> (Arc<AppState>, Arc<DatabaseContext>) {
+        let conn = crate::server::flat_groups::tests::catalog_of(
+            temp,
+            &["2026-09-10T14:0", "2026-09-14T14:0"],
+            |a, b| if a.night == b.night { 0.0 } else { 0.02 },
+        );
+        let path = temp.join("catalog.sqlite");
+        conn.execute("VACUUM INTO ?1", [path.to_string_lossy()])
+            .unwrap();
+        let mut ctx = DatabaseContext::new_for_test(Connection::open_in_memory().unwrap());
+        ctx.database_path = path.to_string_lossy().into_owned();
+        ctx.cache_dir_path = temp.join("cache");
+        let state = Arc::new(AppState::new_for_test(
+            Connection::open_in_memory().unwrap(),
+        ));
+        (state, Arc::new(ctx))
+    }
+
+    fn wait_until(what: &str, done: impl Fn() -> bool) {
+        for _ in 0..1_000 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("timed out waiting until {what}");
+    }
+
+    /// A stand-in for working the answer out: counts its calls, and waits
+    /// for `release` before answering `outcome`.
+    fn stand_in(
+        calls: &Arc<std::sync::atomic::AtomicUsize>,
+        release: &Arc<std::sync::atomic::AtomicBool>,
+        fail: bool,
+    ) -> Work {
+        let (calls, release) = (Arc::clone(calls), Arc::clone(release));
+        Arc::new(move |_, _| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            while !release.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            anyhow::ensure!(!fail, "the catalog could not be read");
+            Ok(FlatGroupUseView {
+                computed: true,
+                lights: 3,
+                ..Default::default()
+            })
+        })
+    }
+
+    #[test]
+    fn the_first_answer_is_worked_out_once_in_the_background_and_kept() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let (state, ctx) = on_disk(temp.path());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(false));
+        let work = stand_in(&calls, &release, false);
+
+        // Nothing kept: answered at once, pending, with one refresh started.
+        let first = use_of_with(&state, &ctx, Arc::clone(&work)).unwrap();
+        assert!(!first.computed && first.refreshing && first.error.is_none());
+        wait_until("the refresh starts", || calls.load(Ordering::SeqCst) == 1);
+        // Asked again while it runs: no second refresh.
+        let again = use_of_with(&state, &ctx, Arc::clone(&work)).unwrap();
+        assert!(!again.computed && again.refreshing);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one refresh at a time");
+
+        release.store(true, Ordering::SeqCst);
+        wait_until("the answer is kept", || kept(&ctx.database_path).is_some());
+        wait_until("the refresh ends", || {
+            !REFRESHING.lock().unwrap().contains(&ctx.database_path)
+        });
+        let answer = use_of_with(&state, &ctx, Arc::clone(&work)).unwrap();
+        assert!(answer.computed && !answer.refreshing);
+        assert_eq!(answer.lights, 3);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the kept answer is current"
+        );
+    }
+
+    #[test]
+    fn a_stopping_server_starts_no_refresh() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let (state, ctx) = on_disk(temp.path());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(true));
+        state.shutdown.begin();
+        let answer = use_of_with(&state, &ctx, stand_in(&calls, &release, false)).unwrap();
+        assert!(!answer.computed && !answer.refreshing);
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_failed_refresh_is_said_and_tried_again_only_after_a_growing_wait() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let (state, ctx) = on_disk(temp.path());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let release = Arc::new(AtomicBool::new(true));
+        let work = stand_in(&calls, &release, true);
+        let path = ctx.database_path.clone();
+
+        assert!(
+            use_of_with(&state, &ctx, Arc::clone(&work))
+                .unwrap()
+                .refreshing
+        );
+        wait_until("the failure is kept", || failure(&path).is_some());
+        wait_until("the refresh ends", || {
+            !REFRESHING.lock().unwrap().contains(&path)
+        });
+        // Polled again at once: the error, and no new attempt.
+        let answer = use_of_with(&state, &ctx, Arc::clone(&work)).unwrap();
+        assert!(!answer.refreshing);
+        assert_eq!(
+            answer.error.as_deref(),
+            Some("the catalog could not be read")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Once the wait has passed it tries again, and waits longer after.
+        FAILED.lock().unwrap().get_mut(&path).unwrap().at =
+            Instant::now() - Duration::from_secs(3600);
+        assert!(
+            use_of_with(&state, &ctx, Arc::clone(&work))
+                .unwrap()
+                .refreshing
+        );
+        wait_until("the second failure", || {
+            failure(&path).is_some_and(|failed| failed.attempts == 2)
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let failed = failure(&path).unwrap();
+        assert_eq!(failed.wait(), RETRY_FIRST * 2);
+        assert_eq!(
+            Failure {
+                attempts: 20,
+                ..failed
+            }
+            .wait(),
+            RETRY_MOST,
+            "the wait stops growing"
+        );
     }
 }

@@ -637,6 +637,85 @@ pub struct FlatGroupsQuery {
     pub project: Option<i32>,
 }
 
+/// Where one of the Calibration page's flat sessions would sit among the
+/// flat groups, measured or not (its flats all kept out, say): the family
+/// it would join, by the settings part of the family's key, and its night
+/// and angle.
+#[derive(Debug, Default, PartialEq, Serialize)]
+pub struct SessionPlace {
+    pub rig_uuid: Option<String>,
+    /// The family's settings: a [`FamilyView::key`] begins with it and `:`.
+    pub family_key: Option<String>,
+    pub night: Option<String>,
+    pub rotation: Option<f64>,
+}
+
+/// [`SessionPlace`] of the browser's session `session`: its flats planned
+/// as the background pass plans sessions, as though none were kept out.
+pub(crate) fn place_of(conn: &rusqlite::Connection, session: &str) -> anyhow::Result<SessionPlace> {
+    let browsed = crate::calibration::browse::library_frames(conn)?;
+    let wanted: HashSet<&str> = browsed
+        .frames
+        .iter()
+        .filter(|row| {
+            row.session == session && row.frame.kind == crate::calibration::CalibrationKind::Flat
+        })
+        .map(|row| row.frame.frame_uuid.as_str())
+        .collect();
+    if wanted.is_empty() {
+        return Ok(SessionPlace::default());
+    }
+    let library = crate::calibration::LibrarySnapshot::load(conn)?;
+    let frames: Vec<crate::calibration::CalibrationFrame> = library
+        .frames()
+        .iter()
+        .cloned()
+        .map(|mut frame| {
+            if wanted.contains(frame.frame_uuid.as_str()) {
+                frame.kept_out = None;
+            }
+            frame
+        })
+        .collect();
+    let boundary = crate::calibration::catalog_night_boundary(conn);
+    Ok(job::plan_sessions(&frames, boundary)
+        .into_iter()
+        .find(|plan| {
+            plan.frames
+                .iter()
+                .any(|frame| wanted.contains(frame.frame_uuid.as_str()))
+        })
+        .map(|plan| SessionPlace {
+            rig_uuid: Some(plan.rig_uuid),
+            family_key: Some(plan.family_key),
+            night: Some(plan.night),
+            rotation: plan.rotation,
+        })
+        .unwrap_or_default())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlaceQuery {
+    pub session: String,
+}
+
+/// `GET /api/db/{db}/calibrations/flat-groups/place?session=` — the family,
+/// night and angle a flat session would take among the groups, so a link
+/// to a group by a session no group holds now still finds one.
+pub async fn get_session_place(
+    ctx: DbContext,
+    Query(query): Query<PlaceQuery>,
+) -> Result<Json<ApiResponse<SessionPlace>>, AppError> {
+    let path = ctx.database_path.clone();
+    let place = tokio::task::spawn_blocking(move || {
+        let conn = read_only(&path)?;
+        place_of(&conn, &query.session).map_err(AppError::db)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("placing a flat session: {error}")))??;
+    Ok(Json(ApiResponse::success(place)))
+}
+
 /// `GET /api/db/{db}/calibrations/flat-groups` — every rig's flat groups,
 /// splits, change events and angle term, from what the background pass
 /// measured. Reads no pixels.
@@ -1008,6 +1087,59 @@ pub(crate) mod tests {
         }
         assert!(nights.contains(&("2026-09-10", "2026-09-12")), "the widest");
         assert!(group.pairs.len() <= 5 && group.pairs.len() < widest.compared.max(6));
+    }
+
+    #[test]
+    fn a_session_whose_flats_are_all_kept_out_is_placed_in_its_family() {
+        let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let conn = catalog_of(
+            temp.path(),
+            &["2026-09-10T14:0", "2026-09-12T14:0", "2026-09-14T14:0"],
+            |_, _| 0.002,
+        );
+        let library = crate::calibration::browse::library_frames(&conn).unwrap();
+        let oldest = library
+            .frames
+            .iter()
+            .find(|row| row.night.as_deref() == Some("2026-09-10"))
+            .map(|row| row.session.clone())
+            .unwrap();
+        // Every flat of the oldest night kept out, and the groups worked
+        // out again: no group holds that session any more.
+        conn.execute(
+            "INSERT OR REPLACE INTO psf_guard_calibration_frame_quality
+                 (frame_uuid, override_choice, override_at, updated_at)
+             SELECT frame_uuid, 'exclude', 1, 1 FROM psf_guard_calibration_frame
+             WHERE frame_uuid IN (SELECT frame_uuid FROM psf_guard_calibration_frame
+                                  WHERE captured_at < 1789100000)",
+            [],
+        )
+        .unwrap();
+        let keep: Vec<String> = store::load_responses(&conn)
+            .unwrap()
+            .into_iter()
+            .filter(|row| row.night != "2026-09-10")
+            .map(|row| row.response_key)
+            .collect();
+        store::retain_responses(&conn, &keep).unwrap();
+        flat_groups::testing::measure_as(&conn, |_, _| 0.002);
+        let view = build_view(&conn).unwrap();
+        let family = &view.rigs[0].families[0];
+        assert!(family
+            .groups
+            .iter()
+            .flat_map(|group| &group.sessions)
+            .all(|session| !session.sessions.contains(&oldest)));
+
+        let place = place_of(&conn, &oldest).unwrap();
+        assert_eq!(place.night.as_deref(), Some("2026-09-10"));
+        let prefix = format!("{}:", place.family_key.expect("a family"));
+        assert!(family.key.starts_with(&prefix), "{} / {prefix}", family.key);
+        assert_eq!(
+            place_of(&conn, "no such session").unwrap(),
+            SessionPlace::default()
+        );
     }
 
     #[test]
