@@ -542,7 +542,9 @@ describe('CalibrationPage', () => {
     // Suspect stays in masters but is flagged: a badge here, Check in the strip.
     expect(within(panel).getByText('Suspect · noise')).toBeInTheDocument();
     expect(within(thumb).getByText('Check')).toBeInTheDocument();
-    const use = within(panel).getByRole('button', { name: 'Use anyway' });
+    const findings = within(panel).getByRole('list', { name: 'Findings' });
+    expect(within(findings).getByText('Suspect')).toBeInTheDocument();
+    const use =within(panel).getByRole('button', { name: 'Use anyway' });
     expect(use).toHaveAttribute('title', 'Use anyway: this frame is fine; ignore the suspect grade');
     fireEvent.click(use);
     await waitFor(() => expect(seen.choices).toEqual([{ frame_uuids: ['f3'], choice: 'use' }]));
@@ -551,6 +553,11 @@ describe('CalibrationPage', () => {
     await within(panel).findByText('Used anyway');
     expect(within(panel).queryByText('Suspect · noise')).toBeNull();
     expect(within(panel).getByText('Suspect grade overruled: noise 1.3 times that of its session')).toBeInTheDocument();
+    // Its findings stay as plain numbers: no grade word, no grade colour.
+    const neutral = within(panel).getByRole('list', { name: 'Findings' });
+    expect(within(neutral).queryByText('Suspect')).toBeNull();
+    expect(neutral.querySelector('[class*="calibration-finding-"]')).toBeNull();
+    expect(within(neutral).getByText(/noise 1\.3 times that of its session · limit/)).toHaveClass('calibration-muted');
     await waitFor(() => expect(within(screen.getByRole('button', { name: 'Frame 3: f3.fits' })).queryByText('Check')).toBeNull());
     expect(within(panel).queryByRole('button', { name: 'Use anyway' })).toBeNull();
     fireEvent.click(within(panel).getByRole('button', { name: 'Clear' }));

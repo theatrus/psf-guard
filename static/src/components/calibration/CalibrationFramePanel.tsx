@@ -126,10 +126,18 @@ export default function CalibrationFramePanel({
       {detail.findings.length > 0 && (
         <ul className="calibration-findings" aria-label="Findings">
           {detail.findings.map((finding, index) => (
-            <li key={`${finding.code}:${index}`} className={`calibration-finding-${finding.grade}`}>
-              <strong>{finding.grade === 'poor' ? 'Poor' : 'Suspect'}</strong> {finding.text}
-              <span className="calibration-muted"> · limit {formatLimit(finding)}</span>
-            </li>
+            // Overruled, the numbers stay as plain evidence, with no grade
+            // word or colour to read as a flag.
+            overruled ? (
+              <li key={`${finding.code}:${index}`} className="calibration-muted">
+                {finding.text} · limit {formatLimit(finding)}
+              </li>
+            ) : (
+              <li key={`${finding.code}:${index}`} className={`calibration-finding-${finding.grade}`}>
+                <strong>{finding.grade === 'poor' ? 'Poor' : 'Suspect'}</strong> {finding.text}
+                <span className="calibration-muted"> · limit {formatLimit(finding)}</span>
+              </li>
+            )
           ))}
         </ul>
       )}
