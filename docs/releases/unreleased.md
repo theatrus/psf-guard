@@ -11,6 +11,14 @@
   only, unless background extraction is on. The color editor's **Use each
   channel's processing** copies the deconvolution and RC-Astro steps each
   channel card shows into the color inputs.
+- In Sequence, each filter's **All sessions** tab stands out: it starts
+  its filter's row, with a bar, tint and bold label in its own colour and a
+  date-range icon.
+- In Sequence, a **Select** rule stays on after you reject its frames, with
+  nothing selected. A rule no longer picks frames already rejected, so its
+  counts show what is left to reject.
+- A click anywhere on a toolbar pill with a list, such as **Select**, **Type**
+  or **Rig**, now opens its list, including on its name or chevron.
 - Stacks of frames rotated slightly between nights no longer show
   cross-hatched bands across a faint sky. The SNR a stack reports on a
   faint sky is lower than before, often by about a tenth, because it now

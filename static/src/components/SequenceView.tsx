@@ -613,15 +613,20 @@ export default function SequenceView() {
   // The rule and the person share the selection (see followRule): a click
   // by hand neither turns the rule off nor gets undone when the rule
   // selects again. Choosing "By hand" or Stop rule turns the rule off and
-  // keeps the frames; Clear, and rejecting the selection, turn it off and
-  // empty the selection.
+  // keeps the frames; Clear turns it off and empties the selection.
+  // Rejecting the selection empties it and leaves the rule on: a rule never
+  // picks a rejected frame, so it waits for the next frames to match.
   // Marks from before a reject, an import or a library change may no
   // longer hold, and a reject from Poor calibration writes the catalog: that
   // rule selects nothing until the pass that replaces them.
   const calibrationStale = projectId != null && calibration.staleProjects.has(projectId);
+  const rejectedIds = useMemo(
+    () => new Set(images.filter(image => image.grading_status === GradingStatus.Rejected).map(image => image.id)),
+    [images],
+  );
   const ruleInputs = useMemo(
-    () => ({ pastCutoff: pastCutoffIds, calibration: calibration.marks, calibrationStale }),
-    [calibration.marks, calibrationStale, pastCutoffIds],
+    () => ({ pastCutoff: pastCutoffIds, calibration: calibration.marks, calibrationStale, rejected: rejectedIds }),
+    [calibration.marks, calibrationStale, pastCutoffIds, rejectedIds],
   );
   const ruleCounts = useMemo(() => new Map(SELECTION_RULES.map(rule => [
     rule.id,
@@ -722,10 +727,13 @@ export default function SequenceView() {
     for (const [reason, ids] of byReason) {
       await grading.gradeBatch(ids, 'rejected', reason);
     }
-    // The rule's work is done once its frames are rejected.
-    clearSelection();
+    // The rejected frames leave the selection; the rule stays on for the
+    // frames that match it next, and passes these by.
+    selectionAnchorIdRef.current = null;
+    selectionBaseIdsRef.current = new Set();
+    setSelectedImages(new Set());
     setShowRejectReview(false);
-  }, [clearSelection, grading, selectedForReview]);
+  }, [grading, selectedForReview, setSelectedImages]);
 
   // Toggle individual image selection
   const toggleImage = useCallback((imageId: number) => {

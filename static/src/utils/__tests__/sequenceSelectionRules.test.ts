@@ -41,6 +41,13 @@ describe('selection rules', () => {
     expect([...ruleSelection('poor-calibration', images, inputs)]).toEqual([3]);
   });
 
+  it('passes by frames already rejected', () => {
+    const images = [frame(2, 0.4, { category: 'likely_clouds' }), frame(4, 0.3, { regrade_reason: 'Clouds' })];
+    const inputs = { pastCutoff: new Set([2, 4]), calibration: new Map(), rejected: new Set([4]) };
+    expect([...ruleSelection('below-cutoff', images, inputs)]).toEqual([2]);
+    expect([...ruleSelection('recommended', images, inputs)]).toEqual([]);
+  });
+
   it('follows a new answer and keeps what was changed by hand', () => {
     const before = new Set([3, 5, 7, 10]);
     // 5 removed by hand, 1 added by hand.

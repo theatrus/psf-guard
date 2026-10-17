@@ -340,7 +340,9 @@ selects again without choosing the rule a second time. Frames clicked by hand
 stay as you left them when the rule selects again. **×** beside the pill
 turns the rule off and keeps the frames; **Clear** empties the selection and
 turns the rule off. Rejecting a selection always opens a per-image review
-before anything is written.
+before anything is written. After the reject the rule stays on with nothing
+selected: a rule never picks a frame already rejected, so its counts show
+what is left to reject.
 
 ### Dates are nights
 

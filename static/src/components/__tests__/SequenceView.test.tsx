@@ -1039,6 +1039,53 @@ describe('SequenceView: selection rules', () => {
     expect(screen.getByText('0 selected')).toBeInTheDocument();
   });
 
+  it('keeps the rule on after a reject, and does not pick the rejected frames again', async () => {
+    setupDefaultHandlers();
+    const rejected = new Set<number>();
+    server.use(
+      http.get('/api/db/:dbId/images', () => HttpResponse.json({
+        success: true,
+        data: mockImages.map(image => rejected.has(image.id) ? { ...image, grading_status: 2 } : image),
+        error: null,
+        status: 'ready',
+      })),
+      http.post('/api/db/:dbId/images/grade', async ({ request }) => {
+        const body = await request.json() as { updates: Array<{ image_id: number }> };
+        body.updates.forEach(update => rejected.add(update.image_id));
+        return HttpResponse.json({
+          success: true,
+          data: {
+            updated: body.updates.length,
+            previous: body.updates.map(update => ({ image_id: update.image_id, status: 'pending', reason: null })),
+          },
+          error: null,
+          status: 'ready',
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    const params = renderWithLocation();
+    await cards();
+
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '80' } });
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+
+    await user.click(screen.getByText('Review rejection'));
+    await user.click(screen.getByText(/Reject selected \(4\)/));
+    await waitFor(() => expect(rejected.size).toBe(4));
+
+    // The rule stays on with nothing selected, and counts what is left.
+    await waitFor(() => expect(screen.getByText('0 selected')).toBeInTheDocument());
+    expect(params().get('selectRule')).toBe('below-cutoff');
+    expect(screen.getByLabelText('Select frames')).toHaveValue('below-cutoff');
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Below the cutoff (0)' })).toBeInTheDocument());
+
+    // A higher cutoff picks the next frames, not the rejected ones.
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '85' } });
+    await waitFor(() => expect(screen.getByText('2 selected')).toBeInTheDocument());
+  });
+
   it('opens with the rule the URL holds, and keeps a selection it carries', async () => {
     setupDefaultHandlers();
     renderWithLocation('/sequence?db=test&project=1&target=1&cutoff=0.80&selectRule=below-cutoff');

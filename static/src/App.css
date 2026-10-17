@@ -6254,7 +6254,7 @@
   max-width: 20rem;
 }
 
-.view-toolbar .toolbar-pill.sequence-select-rule select {
+.view-toolbar .toolbar-pill.sequence-select-rule .toolbar-pill-value {
   max-width: 15rem;
 }
 
@@ -6277,7 +6277,7 @@
     display: none;
   }
 
-  .view-toolbar .toolbar-pill.sequence-select-rule select {
+  .view-toolbar .toolbar-pill.sequence-select-rule .toolbar-pill-value {
     flex: 1;
     min-width: 0;
     max-width: none;
