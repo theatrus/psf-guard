@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { lockedCrateVersion } from './fixtures/astrometry';
 
 test('partial data directory reports usable and missing Seiza resources', async ({
   request,
@@ -9,8 +10,8 @@ test('partial data directory reports usable and missing Seiza resources', async 
   const body = await response.json();
   expect(body.success).toBe(true);
   expect(body.data).toMatchObject({
-    seiza_version: '0.33.0',
-    seiza_fits_version: '0.3.0',
+    seiza_version: lockedCrateVersion('seiza'),
+    seiza_fits_version: lockedCrateVersion('seiza-fits'),
     features: {
       object_association: true,
       object_name_search: false,

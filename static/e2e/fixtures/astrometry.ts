@@ -43,3 +43,11 @@ export function installAstrometryFixture(tmpBase: string): string {
   );
   return objectsPath;
 }
+
+/** The version `Cargo.lock` pins for a crate, as `build.rs` reports it. */
+export function lockedCrateVersion(name: string): string {
+  const lock = fs.readFileSync(path.join(__dirname, '../../../Cargo.lock'), 'utf8');
+  const match = lock.match(new RegExp(`\\[\\[package\\]\\]\\r?\\nname = "${name}"\\r?\\nversion = "([^"]+)"`));
+  if (!match) throw new Error(`${name} is not in Cargo.lock`);
+  return match[1];
+}

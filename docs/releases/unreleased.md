@@ -13,6 +13,9 @@
   many wait for its next pass. Automatic work waiting for yours is no
   longer drawn in yellow; the warning colour now marks only a row that
   needs you, such as a transfer to review.
+- In Images, Enter or Space on a focused button, such as **View**, now
+  presses just that button. Before, Enter also opened the selected image,
+  and Space toggled its selection instead of pressing the button.
 - Calibration › Frames keeps its sidebar in view: the session or group
   list stays beside the frame as the page scrolls, fits the window, and
   scrolls on its own, so its last groups and its pager stay in reach.
