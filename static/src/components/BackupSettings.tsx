@@ -292,10 +292,6 @@ function BackupNow({ overview, job }: { overview: BackupsOverview; job: BackupJo
   return (
     <section className="backup-card" aria-labelledby="backup-now-heading">
       <h3 id="backup-now-heading">Back up now</h3>
-      <p className="review-preferences-note">
-        One zip archive with a manifest of every file, its checksum and where it goes back. Previews,
-        stacks and masters are left out: PSF Guard makes them again.
-      </p>
       <ScopeChoice overview={overview} value={scope} onChange={setScope} name="backup-now-scope" />
       <SecretsToggle
         overview={overview}
