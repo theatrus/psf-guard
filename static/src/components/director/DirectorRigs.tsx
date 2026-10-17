@@ -35,7 +35,7 @@ export default function DirectorRigs() {
   const calibration = useQuery({ queryKey: ['calibration-settings'], queryFn: apiClient.getCalibrationSettings, retry: false, refetchOnWindowFocus: false });
   return <><section aria-label="Rig databases" className="director-records director-rigs">
     <div className="director-toolbar"><h2>Rigs</h2></div>
-    <p className="director-muted">Each registered database is one rig, and its projects are plans. Setup holds the rig's optics, site and limits. Target Scheduler and PSF Guard Sync run the rig; the N.I.N.A. Director plugin can also pair and report its status. <EarlyBeta /></p>
+    <p className="director-muted">Each registered database is one rig, and its projects are plans. Open Setup to change the rig's optics, site and limits. Target Scheduler and PSF Guard Sync run the rig; the N.I.N.A. Director plugin can also pair and report its status. <EarlyBeta /></p>
     {databases.isPending && <p role="status">Loading rig databases...</p>}
     {databases.isError && <div role="alert"><p>{databases.error.message}</p><button type="button" onClick={() => void databases.refetch()}>Retry</button></div>}
     {databases.data?.length === 0 && <button type="button" onClick={() => openSettings('add')}>Add database</button>}

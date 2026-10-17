@@ -138,14 +138,12 @@ export default function StackAutomationSettings() {
             onChange={(event) => persist({ automatic_previews: event.target.checked })}
           />
           <span>
-            Rebuild stack previews on their own
+            Automatically refresh stack previews
             <small>
-              A project whose previews were built once keeps them current:
-              frames that arrive by import, upload, or sync, and grades that
-              change, queue a rebuild of the same channels with the same
-              settings. A build you start takes precedence; a rebuild steps
-              aside and comes back afterwards. Applies to every database on
-              this server.
+              Refresh existing stack previews when frames arrive by import, upload or sync,
+              or when grades change. PSF Guard rebuilds the same channels with the same settings.
+              Automatic rebuilds pause while jobs you start run, then resume.
+              This applies to every database on this server.
             </small>
           </span>
         </label>
@@ -153,8 +151,8 @@ export default function StackAutomationSettings() {
           <span>
             Wait after new frames (minutes)
             <small>
-              A night&apos;s stream of frames settles this long before a rebuild,
-              so it runs in batches rather than after every frame. Default{' '}
+              Wait this long after the last new frame before rebuilding. Each new frame
+              restarts the timer, so PSF Guard processes frames in batches. Default{' '}
               {current.default_arrival_delay_minutes}.
             </small>
           </span>
@@ -176,8 +174,8 @@ export default function StackAutomationSettings() {
           <span>
             Wait after grade changes (minutes)
             <small>
-              Grading is interactive, so a change waits longer, and each
-              further change pushes the rebuild out again. Default{' '}
+              Wait this long after the last grade change before rebuilding.
+              Each further change restarts the timer. Default{' '}
               {current.default_grade_delay_minutes}.
             </small>
           </span>
@@ -213,10 +211,10 @@ export default function StackAutomationSettings() {
         </label>
         <label className="review-preference">
           <span>
-            A new channel needs a frame from the last (days)
+            Recent-frame requirement (days)
             <small>
-              Days back from today. Older channels are left alone, so turning
-              stacking on does not stack a whole catalog. Default{' '}
+              Build a new channel only if it has a frame captured within this many days.
+              Older channels are excluded. Default{' '}
               {current.default_new_channel_window_days}.
             </small>
           </span>
@@ -226,7 +224,7 @@ export default function StackAutomationSettings() {
             max={3650}
             step={1}
             value={windowDraft}
-            aria-label="Days back a new channel's frames may reach"
+            aria-label="Recent-frame requirement (days)"
             aria-invalid={!anyAge && windowDays === null}
             disabled={!current.automatic_previews || !current.build_new_channels || anyAge}
             onChange={(event) => setWindowDraft(event.target.value)}
@@ -248,10 +246,9 @@ export default function StackAutomationSettings() {
           <span>
             Also stack old channels, of any age
             <small>
-              No cutoff: each database's next refresh stacks every channel
-              there that has none yet, which on a large catalog keeps the
-              stacker busy for a long while. Background work yields to
-              anything you start.
+              At the next refresh, build all eligible channels without a stack, regardless
+              of frame age. This may take a long time for a large catalog.
+              Background jobs pause while jobs you start run.
             </small>
           </span>
         </label>
@@ -275,12 +272,10 @@ export default function StackAutomationSettings() {
           <span>
             Re-apply processing when a stack refreshes
             <small>
-              When a stack is rebuilt, by an automatic refresh or by you, the
-              processing its card showed (stretch, deconvolution and RC-Astro
-              tools) runs again on the new stack once the refresh settles,
-              behind anything you start. The card shows the previous result
-              until the new one is ready. Turning this off drops re-applies
-              that have not started.
+              After a stack rebuild, PSF Guard reapplies its stretch, deconvolution and
+              RC-Astro settings in the background. Jobs you start take priority.
+              The card shows the previous result until the new one is ready.
+              Turning this off cancels processing jobs that have not started.
             </small>
           </span>
         </label>

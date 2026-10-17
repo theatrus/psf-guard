@@ -22,7 +22,7 @@ export function rangeProblem(parameter: ExternalToolParameter, value: RcAstroPar
   const { kind } = parameter;
   if (kind.type === 'bool' || typeof value !== 'number') return null;
   if (!Number.isFinite(value)) return `Enter a value for ${parameter.label}`;
-  if (kind.type === 'int' && !Number.isInteger(value)) return `${parameter.label} takes a whole number`;
+  if (kind.type === 'int' && !Number.isInteger(value)) return `${parameter.label} requires a whole number`;
   if (value < kind.min || value > kind.max) {
     return `${parameter.label} must be between ${kind.min} and ${kind.max}`;
   }

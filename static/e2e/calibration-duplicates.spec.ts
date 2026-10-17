@@ -119,7 +119,7 @@ test('finds exposures recorded twice, previews the repair and applies it', async
   await expect(page.getByRole('checkbox', { name: 'Duplicates' })).toBeChecked();
   const flat = section.getByRole('listitem', { name: flats[0] });
   await expect(flat.getByText('Keep')).toBeVisible();
-  await expect(flat.getByText('Missing')).toBeVisible();
+  await expect(flat.getByText('Missing', { exact: true })).toBeVisible();
   await shot(page, testInfo, 'duplicates-1440');
 
   // The type filter narrows the groups; the URL keeps both.
@@ -137,7 +137,7 @@ test('finds exposures recorded twice, previews the repair and applies it', async
   const dialog = page.getByRole('dialog', { name: 'Repair duplicates' });
   const preview = dialog.getByRole('region', { name: 'Repair preview' });
   await expect(preview.getByText('5 exposures recorded more than once')).toBeVisible();
-  await expect(preview.getByText(/5 rows merged into the row kept: 3 whose file is gone, 2 second copies on disk/)).toBeVisible();
+  await expect(preview.getByText(/5 rows merged into retained records: 3 with missing files, 2 with duplicate files on disk/)).toBeVisible();
   await shot(page, testInfo, 'repair-preview-1440');
   await page.setViewportSize({ width: 390, height: 844 });
   await shot(page, testInfo, 'repair-preview-390');

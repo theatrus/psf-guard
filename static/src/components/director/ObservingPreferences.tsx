@@ -127,7 +127,7 @@ function PriorityEditor({ initial, globalOrder, globalScheduling, projects, curr
     {initial.scope === 'rig' ? <p className="director-muted">This rig's Target Scheduler limits are in its Setup, under Limits and delivery.</p>
     : <fieldset disabled={!canWrite || save.isPending || reload.isPending} className="scheduling-defaults">
       <legend>Scheduling defaults{initial.scope === 'global' ? ' for every plan' : ' for this site'}</legend>
-      <p className="director-muted">{initial.scope === 'global' ? 'Each plan can change these on its Rigs tab' : 'Empty fields follow the scope above'}</p>
+      <p className="director-muted">{initial.scope === 'global' ? 'Each plan can change these on its Rigs tab' : 'Leave fields blank to use the parent defaults'}</p>
       <SchedulingFields label={`${initial.scope} scheduling defaults`} overrides={draft.scheduling ?? {}} onChange={next => change({ scheduling: compactOverrides(next) })}
         inherited={parentLimits.values} inheritedFrom={limit => parentLimits.from[limit]} disabled={!canWrite} />
     </fieldset>}

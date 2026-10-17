@@ -67,7 +67,7 @@ export default function PlanPage() {
           : resolved.kind === 'plan'
           ? <ProjectWorkspace key={`${status.data.instance_id}:${resolved.row.project.id}`} instanceId={status.data.instance_id!} projectId={resolved.row.project.id} />
           : resolved.kind === 'ambiguous'
-          ? <div role="alert"><p>Several plans carry this Target Scheduler GUID; pick one.</p>
+          ? <div role="alert"><p>Several plans have this Target Scheduler GUID. Choose a plan.</p>
               <ul>{resolved.rows.map(row => <li key={row.project.id}><Link to={planHref(row.project.id, params)}>{row.project.name}</Link> <span className="director-muted">{row.links.map(link => link.catalog_name).join(', ')}</span></li>)}</ul></div>
           : resolved.kind === 'source'
           ? <DirectorProjectContext key={`${status.data.instance_id}:${resolved.slug}:${resolved.projectId}`} instanceId={status.data.instance_id!} slug={resolved.slug} projectId={resolved.projectId} />
@@ -75,7 +75,7 @@ export default function PlanPage() {
           ? <p role="status">Finding the plan...</p>
           : plans.error
           ? <div role="alert"><p>{message(plans.query.error)}</p><button type="button" onClick={() => void plans.query.refetch()}>Retry</button></div>
-          : <p role="alert">No plan goes by that name here. {library}</p>}
+          : <p role="alert">No plan found with that name. {library}</p>}
       </>}
     </main>
   );

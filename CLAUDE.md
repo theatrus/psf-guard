@@ -6,12 +6,109 @@ sync.
 
 ## Writing
 
-- Use plain, direct English.
-- Cut words that do not add meaning.
-- Prefer active voice.
-- Keep technical terms when they improve accuracy.
-- Update the nearest focused document instead of adding another root-level
-  plan.
+### Write for the reader's task
+
+Start with what the reader can do or needs to know. Give instructions in the
+order the reader will follow them: where to go, what to choose, and what happens
+next. State prerequisites before the step that needs them.
+
+- Use direct actions: “Open Settings,” “Choose a rig,” “Click Save.”
+- Use the reader as the subject of instructions. Use PSF Guard, the server,
+  or the relevant tool as the subject when explaining automatic behavior.
+- State the result: “Click Save. PSF Guard applies the settings to the next
+  stack.” Avoid vague promises such as “Save handles the changes.”
+- Use headings that help readers find a task or answer: “Add calibration
+  frames,” “Check coverage,” or “How matching works.”
+- Explain technical details when they affect a choice, a result, or recovery
+  from an error. Keep implementation detail out of routine instructions.
+
+An explanation need not be an instruction. “The server checks for new frames
+at startup” is clear. Do not turn automatic behavior into a step the reader
+must perform.
+
+### Prefer natural, precise language
+
+Use Orwell's rules as a test of clarity, not a demand for the shortest words:
+
+1. Avoid stock metaphors and figures of speech.
+2. Prefer a short, familiar word when it preserves the meaning.
+3. Cut words that add nothing.
+4. Prefer active voice when the actor matters.
+5. Keep technical terms when they are more precise than an everyday substitute.
+6. Break these rules before writing something awkward or misleading.
+
+Short words can still make a sentence hard to read. Do not replace a clear
+term such as “queue,” “settings,” “position,” or “progress” with a strained
+phrase. Use “disabled” for a control that cannot be used, “off” for a setting
+that is off, and “collapsed” for a section whose contents are hidden.
+
+Give each sentence a clear subject and verb. Split sentences that combine
+several actions, conditions, or exceptions. Repeat a noun when “it,” “one,”
+“those,” or “the same” could refer to more than one thing.
+
+### Say what the interface does
+
+Do not make a page, row, label, or button sound like a person. Avoid using
+“names,” “says,” “asks,” “takes,” or “holds” as substitutes for a precise verb.
+These words are not banned: “Enter a name” and “The dialog asks you to confirm”
+are natural. Choose the verb that describes the behavior:
+
+- A page **shows** information or **lists** items.
+- A message **explains** a problem or **identifies** the affected file.
+- A button **opens**, **starts**, **saves**, or **stops** something.
+- A control **is disabled** until its prerequisite is met.
+- The server **stores**, **checks**, **matches**, or **writes** data.
+
+| Avoid | Prefer |
+|---|---|
+| The row names what waits. | The row lists the queued jobs. |
+| The error names the folder. | The error message shows which folder could not be opened. |
+| The rigs hold the plan. | Each rig's settings match the saved plan. |
+| The preview lands. | The preview is ready. |
+| The button waits for it. | Activate stays disabled until the preview is ready. |
+| The bar asks while the plan needs activating. | A banner explains why the plan needs activation. |
+| Settings closes over unsaved edits. | Settings asks before discarding unsaved changes. |
+| The address keeps the pick. | The URL stores the selected filter. |
+| A run takes the frames its rig wants. | The run uses calibration frames that match the rig's settings. |
+| The panel gives how far it has got. | The panel shows the job's progress. |
+
+Rewrite the sentence, not just the verb. “The row identifies what waits” still
+leaves the reader to work out what is waiting and why. Do not replace every
+“names” with “shows” or every “holds” with “stores.” Check the meaning first.
+
+### Preserve technical meaning
+
+- In documentation, copy UI labels exactly, including capitalization. When
+  changing a UI label, update its accessible name, tests, and current guides
+  together. Keep API keys and stored values unchanged.
+- Keep commands, option names, API fields, units, limits and algorithm names
+  exact. A prose edit must not change code or product behavior.
+- Preserve distinctions such as queued versus waiting, planned versus
+  measured, and warnings versus rejection. Do not imply that missing evidence
+  proves a failure.
+- State conditions explicitly. “When X, do Y” is clearer than a chain of
+  “else,” “one,” and “it.” Use a list for several branches.
+- Link with the destination's subject, such as “Flat group settings,” rather
+  than “above,” “below,” or “here.” Sections may move to another page.
+
+### Review UI text in context
+
+These rules apply to labels, tooltips, help text, empty states, errors,
+confirmation dialogs, accessibility text, documentation, commits and PRs.
+Check server-supplied text as well as frontend components.
+
+Read each passage as someone who has not seen the implementation. Make clear
+who acts, what changes, when it happens, and what the user can do next. Name
+what a limit measures, what a blank field means, and which settings override
+which defaults. Use “delete” or “remove” when that is the action; do not hide
+file deletion behind “go” or “clear.” Preserve exceptions and recovery steps.
+
+Read awkward sentences aloud. Add words when they remove ambiguity. Do not
+use a banned-word list or replace verbs in bulk: check each sentence's meaning.
+Keep technical terms, such as queue, threshold and calibration, when they
+make the result clearer.
+
+Update the nearest focused document instead of adding another root-level plan.
 
 ## Product
 

@@ -378,11 +378,11 @@ export default function FlatGroupDetail({
       )}
 
       <section className="flat-group-section" aria-labelledby="flat-group-edges">
-        <h3 id="flat-group-edges">Its edges</h3>
+        <h3 id="flat-group-edges">Adjacent groups</h3>
         <ul className="flat-group-edges">
           {entry.newer
             ? <EdgeDetail side="newer" edge={entry.newer} clock={rig.clock} open={open} onCompare={onCompare} edit={edit} />
-            : <li className="calibration-muted">Nothing newer: a light shot now takes these flats.</li>}
+            : <li className="calibration-muted">This is the latest group. New lights use these flats for calibration.</li>}
           {entry.older
             ? <EdgeDetail side="older" edge={entry.older} clock={rig.clock} open={open} onCompare={onCompare} edit={edit} />
             : <li className="calibration-muted">The oldest group of {entry.familyLabel}.</li>}
@@ -465,7 +465,7 @@ export default function FlatGroupDetail({
             {fed && fed.lights.total > 0 ? (
               <>
                 <p data-testid="flat-group-lights">
-                  {plural(fed.lights.total, 'light')} take its flats
+                  {plural(fed.lights.total, 'light')} {fed.lights.total === 1 ? 'uses' : 'use'} this flat group
                   {breakdown.length > 0 ? `: ${fed.lights.own} on their own side, ${breakdown.join(', ')}` : ''}.
                 </p>
                 <ul className="flat-group-projects">
@@ -498,7 +498,7 @@ export default function FlatGroupDetail({
                 </ul>
               </>
             ) : !updating && (
-              <p className="calibration-muted">No light takes its flats{use.pending > 0 ? ' yet' : ''}.</p>
+              <p className="calibration-muted">No lights use this flat group{use.pending > 0 ? ' yet' : ''}.</p>
             )}
             {use.pending > 0 && (
               <p className="calibration-muted">

@@ -243,12 +243,12 @@ Edit → Scan rules**:
   inside a folder matching one, are read. `LIGHT` keeps every file in
   N.I.N.A.'s `LIGHT` folders; `*.xisf` keeps XISF files wherever they are.
   The walk still enters every folder that is not excluded.
-- **Lights must say LIGHT**: a frame with no `IMAGETYP` (or `FRAME`) is left
-  out, instead of being taken for a light as it is by default.
+- **Require LIGHT in the image-type header**: exclude frames without
+  `IMAGETYP` or `FRAME`. By default, PSF Guard treats them as lights.
 - **Lights need a target name**: a light with no `OBJECT` is left out,
   instead of being filed under a new "Unknown Target" project. Autofocus
   and test frames usually have no `OBJECT`.
-- **Shortest light (s)**: lights shorter than this, or with no exposure
+- **Minimum light exposure (s)**: lights shorter than this, or with no exposure
   time, are left out.
 - **Match targets by position** (on by default): a light whose `OBJECT`
   matches no target name attaches to the nearest target within 0.5 degrees,

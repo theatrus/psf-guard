@@ -57,10 +57,10 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await page.goto('/');
       await openSettings(page);
       await page.getByRole('tab', { name: 'Calibration', exact: true }).click();
-      const reach = page.getByLabel('Dark reach', { exact: true });
+      const reach = page.getByLabel('Maximum time difference for darks', { exact: true });
       await expect(reach).toBeVisible();
       await expectThemed(page, reach);
-      await expectThemed(page, page.getByLabel('Dark choice'));
+      await expectThemed(page, page.getByLabel('Dark selection preference'));
 
       // An out-of-range value marks the field invalid, in the theme's colour.
       await reach.fill('0');
@@ -79,5 +79,36 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await limit.focus();
       expect((await colours(limit)).border).toBe(await token(page, '--state-focus-border'));
     });
+  });
+}
+
+for (const width of [1280, 390]) {
+  test(`settings labels and help fit at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await openSettings(page);
+    const panel = page.getByRole('tabpanel');
+    const sections = [
+      { tab: 'Calibration', label: 'Minimum darks for a single-night master' },
+      { tab: 'Storage', label: /^(Cache v|V)olume usage limit, in percent$/ },
+      { tab: 'Performance', label: 'Interactive work share of cores' },
+      { tab: 'Stacking', label: 'Recent-frame requirement (days)' },
+    ];
+    for (const section of sections) {
+      await page.getByRole('tab', { name: section.tab, exact: true }).click();
+      const control = panel.getByLabel(section.label, { exact: true });
+      await expect(control).toBeVisible();
+      await control.scrollIntoViewIfNeeded();
+      const bounds = await control.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+      expect(await panel.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+      await page.screenshot({ path: testInfo.outputPath(`${section.tab.toLowerCase()}-${width}.png`) });
+    }
+    await page.getByRole('tab', { name: 'Backups', exact: true }).click();
+    await expect(panel.getByText('PSF Guard deletes older scheduled backups when the count exceeds this limit.')).toBeVisible();
+    expect(await panel.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: testInfo.outputPath(`backups-${width}.png`) });
   });
 }

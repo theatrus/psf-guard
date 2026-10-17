@@ -39,7 +39,7 @@ export default function ExportDefaultsSettings() {
     <div className="export-defaults-settings">
       <h3>Export</h3>
       <p className="review-preferences-note">
-        What every export starts from. Each export still offers all of these.
+        Default settings for new exports. You can change them for each export.
       </p>
       <fieldset
         className="calibration-settings-group calibration-matching-group"

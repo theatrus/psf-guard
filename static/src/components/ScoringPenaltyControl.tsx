@@ -173,39 +173,39 @@ export default function ScoringPenaltyControl() {
 
   return (
     <details className={`scoring-penalty-control${differs ? ' is-set' : ''}`}>
-      <summary title="How evidence and limits affect the quality score and reject recommendations. Penalties: 100% is the calibrated default, 0% ignores that evidence, 200% doubles the hit. Reject limits are fixed cut-offs like N.I.N.A. subframe selection. Changes here apply to this view until you save them as your default.">
+      <summary title="How evidence and limits affect the quality score and reject recommendations. Penalties: 100% is the calibrated default, 0% ignores that evidence, 200% doubles the penalty. Reject limits are fixed cut-offs like N.I.N.A. subframe selection. Changes here apply to this view until you save them as your default.">
         Scoring{differs ? ' (changed)' : ''}
       </summary>
       <div className="scoring-penalty-panel">
         <span className="penalty-section">Penalties</span>
         {slider(
           'satellite',
-          'Score hit for a pixel-confirmed satellite trail crossing the frame. Off (0%) means trails neither lower the score nor drive reject recommendations - useful when trails are removed during stacking.'
+          'Score penalty for a pixel-confirmed satellite trail crossing the frame. Off (0%) means trails neither lower the score nor drive reject recommendations - useful when trails are removed during stacking.'
         )}
         {slider(
           'pointing',
-          'Score hit for off-target, pointing-jump, pointing-drift, and corroborated solve-failure evidence. At 0% pointing evidence also stops driving reject recommendations.'
+          'Score penalty for off-target, pointing-jump, pointing-drift, and corroborated solve-failure evidence. At 0% pointing evidence also stops driving reject recommendations.'
         )}
         {slider(
           'temporal',
-          'Score hit when a frame suddenly deviates from its neighbours.'
+          'Score penalty when a frame suddenly deviates from its neighbours.'
         )}
         {slider(
           'hfrRise',
-          'How hard a frame is marked down for an HFR above the sequence\'s sharpest frames. At 100% the hit starts 5% over and reaches the full drop at 30% over; 200% halves both, 50% doubles them, at 0% standing behind costs nothing. A sudden jump from one frame to the next is a temporal anomaly.'
+          'Penalty for HFR above the sequence\'s sharpest frames. At 100%, the penalty starts at a 5% increase and reaches its maximum at 30%. At 200%, both thresholds are halved; at 50%, both are doubled. At 0%, this penalty is disabled. A sudden jump from one frame to the next is a temporal anomaly.'
         )}
         {slider(
           'starLoss',
-          'How hard a frame is marked down for fewer stars than the sequence\'s best frames. At 100% the hit starts 10% under and reaches the full drop at 40% under; 200% halves both, 50% doubles them, at 0% standing behind costs nothing. A sudden drop from one frame to the next is a temporal anomaly.'
+          'Penalty for fewer stars than the sequence\'s best frames. At 100%, the penalty starts at a 10% decrease and reaches its maximum at 40%. At 200%, both thresholds are halved; at 50%, both are doubled. At 0%, this penalty is disabled. A sudden drop from one frame to the next is a temporal anomaly.'
         )}
         <span className="penalty-section">Reject limits</span>
         {limitInput(
           'hfrRejectAbove',
-          'Recommend rejecting any frame whose measured HFR (pixels) is over this value, however the rest of the sequence looks. Empty turns the limit off.'
+          'Recommend rejecting any frame whose measured HFR (pixels) is over this value, however the rest of the sequence looks. Leave blank to disable this limit.'
         )}
         {limitInput(
           'starCountRejectBelow',
-          'Recommend rejecting any frame with fewer detected stars than this, however the rest of the sequence looks. Empty turns the limit off.'
+          'Recommend rejecting any frame with fewer detected stars than this, however the rest of the sequence looks. Leave blank to disable this limit.'
         )}
         <p className="penalty-defaults-note">
           {differs ? 'Changed for this view.' : 'Your defaults.'}

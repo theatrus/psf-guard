@@ -286,8 +286,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
         <>
           <p className="wbpp-run-intro">
             PixInsight runs WBPP on the server against the frames where they are, with each
-            night&apos;s flats matched to its lights. Rejected lights never go in. Results land
-            in a run folder under the cache and are listed here when WBPP finishes.
+            night&apos;s flats matched to its lights. Rejected lights are excluded. WBPP saves results in a run folder under the cache. Results appear here when the run finishes.
             {willQueue && ' PixInsight is busy, so this run waits its turn.'}
           </p>
           <label className="export-dialog-option">
@@ -324,15 +323,15 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             <span>
               Run folder
               <small>
-                Where this run&apos;s script and WBPP&apos;s output go; a run writes gigabytes.
-                Empty uses{' '}
+                Folder for this run&apos;s script and WBPP output. A run can write gigabytes of data.
+                When blank, uses{' '}
                 {pixinsight.data?.runs_dir
                   ? `the runs folder in Settings (${pixinsight.data.runs_dir}${
                       pixinsight.data.runs_dir_free_bytes != null
                         ? `, ${formatFree(pixinsight.data.runs_dir_free_bytes)} free`
                         : ''
                     })`
-                  : "the database's export directory, else its stack folder"}
+                  : "the database's export directory, or its stack folder if no export directory is set"}
                 .
               </small>
             </span>
@@ -411,7 +410,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             <p className="wbpp-run-muted" data-testid="wbpp-run-flat-changes">
               Flats chosen around measured changes: {progress.flat_changes?.join('; ')}.
               {(progress.flat_warnings ?? 0) > 0 &&
-                ` ${plural(progress.flat_warnings ?? 0, 'light takes', 'lights take')} flats from across a change, which WBPP may not calibrate as a PSF Guard stack would; the runner's notes list them.`}
+                ` ${plural(progress.flat_warnings ?? 0, 'light uses', 'lights use')} flats from across a change, which WBPP may not calibrate as a PSF Guard stack would; the runner's notes list them.`}
             </p>
           )}
           {(progress.calibration_settings?.length ?? 0) > 0 && (

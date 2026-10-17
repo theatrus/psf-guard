@@ -125,9 +125,9 @@ export default function AstroBinFilterMapDialog({ dbId, dbName, canManage, onClo
           equipment database
         </a>
         . Find the exact filter there and paste its address, or the number, into the id column;
-        the link beside a saved id opens that page to check it. This map says which filter each
-        name in this catalog stands for. Give an entry a first or last night when the rig&apos;s
-        filter changed; the entry that starts latest wins on a night more than one covers. A name
+        the link beside a saved id opens that page to check it. This map links filter names in this catalog
+        to AstroBin filters. Set a first or last night if the rig used different filters over time.
+        If date ranges overlap, PSF Guard uses the entry with the latest start date. A name
         with no entry here falls back to the server-wide defaults under Setups.
       </p>
       {map.isError && <p className="astrobin-error">{(map.error as Error).message}</p>}

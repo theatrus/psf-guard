@@ -1781,10 +1781,10 @@ describe('Mosaic panels', () => {
     fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
     fireEvent.keyDown(stage, { key: 'Delete' });
     const notice = screen.getByTestId('framing-mosaic-notice');
-    const first = within(notice).getByText('r1c1 is the only panel: a framing keeps one.');
+    const first = within(notice).getByText('r1c1 is the only panel: a framing requires at least one panel.');
     // The same words said again are a new announcement.
     fireEvent.keyDown(stage, { key: 'Delete' });
-    expect(within(notice).getByText('r1c1 is the only panel: a framing keeps one.')).not.toBe(first);
+    expect(within(notice).getByText('r1c1 is the only panel: a framing requires at least one panel.')).not.toBe(first);
     // With the panel let go, adding beside it is not offered as chosen.
     fireEvent.click(screen.getByRole('button', { name: 'Beside r1c1' }));
     expect(screen.getByRole('button', { name: 'Beside r1c1' })).toHaveAttribute('aria-pressed', 'true');

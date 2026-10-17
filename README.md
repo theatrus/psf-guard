@@ -5,391 +5,323 @@
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-64748b.svg)](https://github.com/theatrus/psf-guard/releases/latest)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**An astrophotography image catalog, grader, and quality workbench.**
+**Catalog, review, calibrate, and stack your astrophotography images.**
 
-Create a catalog from folders of FITS files, or open an existing
-[N.I.N.A.](https://nighttime-imaging.eu/) Target Scheduler database. PSF Guard
-groups frames by target, session, and filter; lets you inspect and grade them;
-finds quality problems; builds stack previews; and exports clean data for
-processing. Your image files stay where they are.
+Import folders of FITS or XISF files, review image quality, plan captures,
+and build calibrated stacks. Use the desktop app on Windows, macOS, or
+Linux, or run PSF Guard on a server or NAS and open it in a browser.
 
-> **Like Lightroom Classic, but for astrophotography data:** PSF Guard catalogs
-> files in place instead of moving them into a managed library. It reads FITS
-> metadata and stores its image map, plans, and grades in a catalog based on the
-> Target Scheduler database structure. Target Scheduler integration is
-> optional.
+PSF Guard catalogs images in place. You can use files from any capture
+software; N.I.N.A. and Target Scheduler are optional. If you use N.I.N.A.,
+the **PSF Guard Sync** plugin can upload captures and exchange Target
+Scheduler plans and reviewed grades.
 
-**[⬇️ Download](https://github.com/theatrus/psf-guard/releases/latest)**
-· **[📖 Documentation](https://github.com/theatrus/psf-guard/blob/main/docs/README.md)**
-· **[🐛 Report an issue](https://github.com/theatrus/psf-guard/issues)**
+**[Download](https://github.com/theatrus/psf-guard/releases/latest)**
+· **[Getting started](https://psf-guard.com/docs/)**
+· **[Repository guides](docs/README.md)**
+· **[Report an issue](https://github.com/theatrus/psf-guard/issues)**
+
+> This README follows the current source. Some features are planned for the
+> next release. Check the [unreleased changes](docs/releases/unreleased.md)
+> and the [release notes](https://github.com/theatrus/psf-guard/releases) for
+> the version you install.
 
 ## 🧭 Choose a workflow
 
-| | Start here when… | What to do |
-|:--:|---|---|
-| 📥 | **You have FITS folders** | Build a catalog from the folders. Header import runs first; quality analysis can run later. |
-| 🗃️ | **You have a Target Scheduler database** | Open the existing catalog in the desktop app and start reviewing. |
-| 🌐 | **You need a CLI or NAS setup** | Serve the UI, screen folders, export files, or automate jobs. |
-| 🔄 | **You keep two database files** | Pull from the telescope copy, then push plans and grades back. Skip sync when PSF Guard opens the telescope database directly. |
-
-> **Opening a Target Scheduler database?** Back it up before the first write.
-> Grading updates it; import and sync preview wider changes before applying
-> them.
+| Where you work | Start here |
+|---|---|
+| **On your computer** | [Install the desktop app](#desktop-app-windows--macos--linux), then import your image folders. |
+| **On a server or NAS** | [Run PSF Guard with Docker](#docker-linux-servers--nas) beside your image storage and review it from a browser. |
+| **With N.I.N.A.** | [Connect the Sync plugin](#connect-nina) to upload captures and exchange plans and grades with Target Scheduler. |
+| **With an existing Target Scheduler database** | [Open the database](#existing-database) and add its image folders. |
+| **From scripts or a terminal** | Use the [CLI](#cli-reference) or [REST API](#rest-api). |
 
 ## ✨ What PSF Guard does
 
-- **Organize every frame** in a catalog built from FITS folders or inherited
-  from Target Scheduler. Browse by target, session, filter, date, and grade
-  while the source files stay in place.
-- **Review frames quickly** in the desktop app or browser with stretched
-  previews, zoom and pan, comparison, batch grading, keyboard controls, and
-  undo. Image details show the resolved or recorded file path; the desktop app
-  can reveal a resolved file in Finder, Explorer, or the Linux file manager.
-- **Screen image quality** with spatial metrics, cross-frame photometry, and
-  fresh pixel-derived plate solutions. The evidence can expose clouds,
-  occlusion, stray light, off-target frames, and lost tracking.
-- **Inspect the sky** with catalog context, on-demand Seiza plate solving,
-  object overlays, target offsets, and satellite-track checks that keep orbital
-  predictions separate from trails found in the pixels.
-- **Build stack previews** per target and channel, inspect admission decisions,
-  apply matching bias, dark, and flat masters when the catalog has them,
-  combine RGB, LRGB, or narrowband palettes, adjust the processing stack, and
-  download the cached linear or processed FITS result. Draw around a visible
-  stack artifact to rank the source-frame crops that differ in that area.
-- **See everything on one sky.** The Sky view draws every target from every
-  database as its field on an all-sky chart, flat or as a globe you turn by
-  dragging, with each target's latest stack preview in place when you zoom
-  in, and a night-by-night timeline that replays how the catalog grew.
-  See the [sky coverage guide](docs/SKY_COVERAGE.md).
-- **Run RC-Astro tools on a stack** when the server has the standalone
-  `rc-astro` CLI installed and licensed: BlurXTerminator, NoiseXTerminator,
-  and StarXTerminator on the linear data, with controls built from each
-  tool's own schema. Star removal keeps both halves — the starless stack and
-  the stars — each with its own stretch and FITS download, so nebulosity can
-  be stretched hard and the stars screened back later.
-- **Inspect sensor tilt and aberrations** with a 3×3 mosaic of 1:1 corner
-  crops, per-region star measurements, and ASTAP-style tilt and field
-  curvature figures, computed server-side so every view agrees.
-- **Review plans and imports** with project settings, target coordinates,
-  shared exposure templates, and exposure plans derived from FITS headers.
-- **Take data out safely** by exporting non-rejected lights for stacking or by
-  exporting them with matched calibration frames — grouped by target, or in
-  PixInsight WBPP's layout with ready-to-run scripts, chosen per export — or
-  by moving rejected files and sidecars into a recorded, reversible archive.
-- **Sync separate copies** by pulling telescope projects and captures, then
-  pushing edited plans and reviewed grades back in the direction you choose.
-- **Run analysis tools** for N.I.N.A. Fast and HocusFocus star detection,
-  Gaussian or Moffat PSF fitting, annotations, and batch reports.
+- **Review images.** Browse by project, target, observing night, filter, or
+  grade. Compare frames with synchronized zoom, grade selections, and undo
+  grading changes.
+- **Find quality problems.** Inspect star measurements, cloud and obstruction
+  evidence, pointing errors, tracking loss, and pixel-aligned satellite trails.
+  Review recommendations before changing grades.
+- **Check calibration.** Browse bias, dark, dark-flat, and flat frames; review
+  their grades; and see which lights lack suitable calibration. Compare flat
+  groups across nights, dust changes, and rotator angles.
+- **Build and process stacks.** Apply matching calibration masters, stack
+  channels, and combine RGB, LRGB, or narrowband previews. Inspect rejected
+  inputs and trace an artifact back to its source frames. Download linear or
+  processed FITS results.
+- **Plan captures.** Frame targets and mosaics, set exposure goals for each
+  rig, and preview changes before writing Target Scheduler projects.
+- **View sky coverage.** Explore every catalog on one sky map, inspect solved
+  image overlays, and replay coverage by observing night.
+- **Export and sync.** Export lights with matching calibration frames, run
+  PixInsight WBPP, create AstroBin acquisition CSVs, and exchange plans and
+  grades with N.I.N.A.
+- **Manage the catalog.** Schedule backups, review imports, and remove rejected
+  frames with a preview and a recovery period.
 
-PSF Guard runs as a desktop app on Windows, macOS, and Linux, as a self-hosted
-web server for Docker or a NAS, and as a standalone CLI.
+The N.I.N.A. Director plugin and collaboration are in early beta. Target
+Scheduler with PSF Guard Sync is the supported capture workflow described
+here. See [Director and collaboration](docs/DIRECTOR.md) for their current
+scope.
 
 ## 🚀 Start your catalog
 
-1. Install the desktop app from the
-   [latest release](https://github.com/theatrus/psf-guard/releases/latest).
-2. In Settings, choose **New Database from Images** to build a catalog from FITS
-   folders, or **Add Database** to open an existing Target Scheduler catalog.
-3. Add the folders that hold the FITS files.
-4. Choose a project on Library, then open Images or Sequence.
+### Import your images
 
-PSF Guard reads images in place; it does not copy the FITS library. Image
-folders can stay read-only. The database must be writable to save grades or
-plan changes. See [Import and plans](docs/IMPORTING.md) for a new
-catalog, or the [documentation index](https://github.com/theatrus/psf-guard/blob/main/docs/README.md) for
-both paths.
+1. [Install the desktop app](#desktop-app-windows--macos--linux), or
+   [set up a server](#docker-linux-servers--nas).
+2. Open **Settings → Databases → New Database from Images**.
+3. Add your image folders and choose **Create & Import**. In a browser, use
+   paths on the server.
+4. Choose a project in the **Library**, then open **Images** or **Sequence**.
+
+The first import reads headers. Leave **Queue background quality analysis**
+off for a quick import, then run quality analysis when you need it. Enable
+**Automatic import** to check for new frames on a schedule; review unknown
+targets before importing them. See [Importing images](docs/IMPORTING.md).
+
+Image folders can remain read-only for review and grading. The catalog must
+be writable to save grades and plans. Uploads, exports, and file-removal
+operations need writable destination folders.
+
+<a id="connect-nina"></a>
+### Connect N.I.N.A. with PSF Guard Sync
+
+For N.I.N.A. and Target Scheduler, use **PSF Guard Sync** to exchange data
+with PSF Guard. Target Scheduler runs the imaging session; Sync transfers
+capture records, plans, and reviewed grades. Direct uploads of lights and
+calibration frames also work without Target Scheduler.
+
+1. In N.I.N.A., open **Options → General → Plugin Repositories** and add
+   `https://nina-plugins.psf-guard.com/`. Install **PSF Guard Sync** from
+   **Plugins → Available**, then restart N.I.N.A.
+2. In PSF Guard, choose a destination under **Settings → Databases**. You can
+   create a catalog from an empty image folder for the plugin to populate.
+3. Edit the catalog and choose **Generate pairing code**. In the N.I.N.A.
+   plugin, enter the server URL and code, then click **Pair** and
+   **Test connection**.
+4. Choose what to sync. To transfer image files, also enable
+   **Accept remote image uploads** and set a **Receive directory** in
+   PSF Guard.
+
+Use HTTPS for a remote server; HTTP works for loopback connections. Pairing
+codes work once and expire after an hour. Pairing enables catalog sync, but
+image uploads and capture automation require their own settings.
+
+Follow the [N.I.N.A. Sync setup guide](https://psf-guard.com/docs/sync-plugin.html)
+for prerequisites, pairing, and sequencer instructions. The Director beta is
+not required for this workflow.
+
+<a id="existing-database"></a>
+### Open an existing Target Scheduler database
+
+Back up the database before PSF Guard first writes to it. Open
+**Settings → Databases → Add Database**, select the SQLite file, and add its
+image folders. On Windows, the default file is
+`%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite`.
+
+Grading writes to that database. If PSF Guard opens the telescope database
+directly, no database sync is needed. Use [database transfer](#syncing-between-machines)
+when you maintain separate copies.
+
+### Plan captures across rigs
+
+Open a project's **Planning** workspace from the Library to set framing and
+exposure goals. Add, move, and rotate mosaic panels while checking overlap.
+Captured panels remain locked until you unlock them. Review activation
+before applying changes to each rig's Target Scheduler database.
+
+See [planning and activation](docs/DIRECTOR.md#activation) for database
+changes and the distinction between Sync and the Director beta.
 
 ## 📷 See it in practice
 
-The images below come from real FITS acquisitions. They show quick-look data:
-PSF Guard finds problems, records grading decisions, and checks an integration
-before a full calibration and processing run.
+These examples use real acquisitions. PSF Guard helps you review frames,
+check calibration, and inspect a stack before further processing.
 
 ### Review and grade a night quickly
 
-| Library | Image Grid | Side-by-Side Comparison |
+| Library | Images | Comparison |
 |:--:|:--:|:--:|
-| ![Library with recent projects and real narrowband frames](docs/overview.png) | ![Flaming Star H-alpha frames in the cleaned image grid](docs/grid-flaming-star-narrowband.png) | ![Compare](docs/compare.jpg) |
-| Project statistics and progress tracking | Grid view with filtering and batch operations | Synchronized zoom and detailed comparison |
+| ![Library with recent projects and narrowband frames](docs/overview.png) | ![Flaming Star H-alpha frames in the image grid](docs/grid-flaming-star-narrowband.png) | ![Two frames with synchronized zoom](docs/compare.jpg) |
+| Project progress and grades | Filters and batch grading | Detailed comparison |
 
-The compact grid header keeps project, target, filters, grouping, image size,
-undo/redo, and comparison controls in stable rows. Preview generation, stack
-status, and database refreshes preserve the first visible image instead of
-moving the review position. Arrow keys move the image cursor; `Space` toggles
-its selection in both Grid and Sequence views. Shift+Click selects a range and
-Ctrl/Cmd+Click toggles one frame. **View › Sort** shows the newest frames
-first, and a small dot marks frames captured since your last visit from the
-Library ([details](docs/SCREENING.md#order-and-new-frames)).
+Use arrow keys to move between frames and `Space` to select them. Preview
+loads and refreshes preserve your position. **View → Sort** controls the
+order; a dot marks frames captured since your last visit from the Library.
+See [image order and new frames](docs/SCREENING.md#order-and-new-frames).
 
 <details>
 <summary>Responsive grid layout</summary>
 
-<img src="docs/grid-flaming-star-responsive.png" width="480" alt="Flaming Star H-alpha grid with the controls wrapped for a narrow window">
+<img src="docs/grid-flaming-star-responsive.png" width="480" alt="Flaming Star image grid with controls arranged for a narrow window">
 
 </details>
 
-Each Library project has a **Planning** button that opens its plan's workspace,
-which shows the project settings and every target's
-catalog coordinates and exposure plans under **Databases**. The
-inherited Target Scheduler mapping stores RA as decimal hours and Dec as
-degrees. New plans reuse an exact matching profile template or create one with
-Target Scheduler-compatible defaults. The plan table keeps the schema's `-1`
-exposure value, which means “use the template default.” Both the desktop app
-and the web server can edit these fields: they change rows inside a database
-you already configured, so they need no extra flag.
-
 ### Build an image catalog from image folders
 
-Use this path when no catalog exists or when frames are missing from one you
-already use.
+![New Database from Images with optional background quality analysis](docs/import-from-images.png)
 
-![New Database from Images with separate background quality analysis](docs/import-from-images.png)
+PSF Guard reads `.fits`, `.fit`, `.fts`, and `.xisf` files. It groups lights
+into projects and targets and derives exposure plans from their headers.
+Calibration frames go into a separate library in the same catalog.
 
-Open **Settings → New Database from Images** to build a catalog from plain
-image folders. A scan picks up `.fits`, `.fit`, `.fts`, and `.xisf`, so
-PixInsight-written frames come in beside camera-written ones. PSF Guard uses
-the Target Scheduler database structure, but does not require Target
-Scheduler. The first pass reads headers only. It creates one project per
-target by default, joins only strong same-rig mosaic panel matches,
-derives target coordinates, and builds shared exposure templates and plans from
-filter, gain, offset, binning, readout mode, and exposure time. Pixel work stays
-off by default, so a large import does not wait for star detection or plate
-solving. Bias, dark, dark-flat, and flat frames do not enter the scheduler
-image table. PSF Guard catalogs them in its own tables in the same database.
-
-| Narrowband template view | Target coordinates and exposure plans |
+| Exposure templates | Target coordinates and exposure plans |
 |:--:|:--:|
-| ![Shared B, G, HA, L, OIII, R, and SII exposure templates](docs/project-plan-narrowband.png) | ![Golf of Mexico target coordinates and seven exposure plans](docs/target-plan-narrowband.png) |
+| ![Shared templates for B, G, HA, L, OIII, R, and SII](docs/project-plan-narrowband.png) | ![Gulf of Mexico target coordinates and seven exposure plans](docs/target-plan-narrowband.png) |
 
-Settings shows import progress even after the page is closed or reloaded. Once
-the catalog is ready, **Analyze Missing Quality** fills uncached star,
-photometric, spatial, and pointing evidence in a low-priority job;
-**Rescan All Quality** forces a fresh pass. Importing more folders starts with
-a dry preview, skips basenames already present, and attaches new frames to an
-existing target by name or nearby coordinates before it creates new structure.
-
-Remote acquisition clients can send one light frame at a time without sharing
-the image folder or running Target Scheduler. Edit a database in Settings,
-generate its per-database **Remote API key**, enable **Accept remote image
-uploads**, and select its receive directory. The authenticated
-`/api/db/{db_id}/images/upload` endpoint
-verifies the database identity and file digest, saves without overwriting, and
-runs the same name/coordinate target resolution used by folder import. See
-[the remote image ingest contract](docs/design/data-transfer.md#remote-image-ingest).
-
-The same key authenticates `/api/sync/v1/*` for remote Target Scheduler
-export, preview, and apply, but only after you tick **Accept remote scheduler
-sync** on that database. The two grants are separate: a key may carry either,
-both, or neither, and a key configured before this protocol existed reaches
-nothing until you opt in. Either way the key is scoped to exactly one
-configured database. Every remote action, refusals included, is appended to
-`remote-sync-audit.jsonl` in the cache directory, so you can tell afterwards
-what a key-holder did and when.
-
-PSF Guard also speaks the other half of that protocol, so one instance can
-sync with another over the network — no shared filesystem, and no copying a
-live SQLite file out from under the process writing it:
-
-```bash
-psf-guard sync remote --direction pull \
-  --local review --peer https://telescope.example:3000 --token-file key.txt
-```
-
-`--direction` takes `pull`, `push-planning`, or `push-grades`. Every direction
-previews first: a push is reviewed by the peer, which writes nothing until the
-preview it issued is applied by name. Add `--dry-run` to stop after the
-preview. The key comes from `--token-file`, `PSF_GUARD_SYNC_TOKEN`, or
-`--token` in that order — an argument is visible to every process on the
-machine, so it is the last resort.
-
-Settings has the same thing under **Remote PSF Guard**: add a peer once with
-its URL and key, test the connection, then preview and apply. The key is
-stored on the server and never sent back to the page.
-
-A server run from the command line has no Settings panel, so it takes both
-grants from its `--config` file instead:
-
-```toml
-[[remote_sync]]
-database = "telescope"                       # registry slug
-token_file = "/run/secrets/psf-guard-key"    # or token = "..."
-
-[[remote_upload]]
-database = "telescope"
-image_dir = "/data/incoming"
-placement = "target_tree"                       # optional; default is "flat"
-token_file = "/run/secrets/psf-guard-key"
-```
-
-These apply at startup and are never written back to the registry, so the
-config file stays the whole account of what a deployment allows and rotating a
-key is a restart. A database has one key, whichever grants it holds. Naming a
-database that is not registered stops the server rather than leaving you to
-guess why every request comes back 403. Neither block needs
-`--allow-database-management`: accepting a sync must not require the grant
-that lets a network caller name server filesystem paths.
-
-The workspace's **Databases** section lets you correct imported
-names, coordinates, limits, and desired counts. See the
-**[import and planning guide](docs/IMPORTING.md)** for database paths, grouping
-rules, backfill behavior, and CLI commands.
-
-**Sync is for two database files.** Settings can pull new projects from a
-telescope copy or push edited planning fields back without changing its
-captures or grades. Skip this step when PSF Guard opens the telescope database
-directly.
+Import progress remains available after you close Settings or reload the page.
+Use **Analyze Missing Quality** to fill missing measurements, or **Rescan All
+Quality** to repeat the analysis. See [importing and planning](docs/IMPORTING.md)
+for grouping rules, scan settings, and database edits.
 
 ### See the evidence behind a quality decision
 
-| Sequence Analysis & Astrometry Quality | Star Detection | PSF Fitting |
+| Sequence analysis | Star detection | PSF fitting |
 |:--:|:--:|:--:|
-| ![Sequence Analysis](docs/sequence-quality-astrometry.png) | ![Annotated Stars](docs/annotated-stars.jpg) | ![PSF Visualization](docs/psf-visualization.jpg) |
-| Per-frame scores, cloud/occlusion screening, solved-center scatter, and off-target/tracking flags | HocusFocus-inspired detection with annotated output (`annotate-stars`) | Observed / fitted / residual grids with Moffat & Gaussian models (`visualize-psf-multi`) |
+| ![Sequence scores and astrometry findings](docs/sequence-quality-astrometry.png) | ![Detected stars with annotations](docs/annotated-stars.jpg) | ![Observed, fitted, and residual star images](docs/psf-visualization.jpg) |
+| Scores and reasons for each frame | Star measurements | Gaussian and Moffat fits |
 
-The sequence analyzer brings global image statistics, spatial and photometric
-screening, pixel-derived plate solves, and cached satellite evidence into a
-per-frame score. Recommendations remain reviewable before PSF Guard writes a
-grade to the active catalog.
+Sequence combines image statistics, spatial and photometric measurements,
+fresh plate solves, and cached satellite evidence. Review the findings before
+applying a grade. Missing optional evidence does not count as a failure.
 
 ### Preview a stack without leaving the grader
 
-| Stack Preview | Full-size Inspection | Stack Admission Decisions |
+| Stack preview | Full-size inspection | Input decisions |
 |:--:|:--:|:--:|
-| ![A three-frame B-channel project stack preview](docs/stack-preview.png) | ![Native-resolution stack inspection](docs/stack-preview-inspection.png) | ![Per-frame Seiza registration and admission details](docs/stack-preview-decisions.png) |
-| On-demand integration grouped by exact target and channel, with matched calibration when available | Familiar zoom, pan, fit, and one-pixel-per-pixel controls | Quality exclusions, reference choice, matches, registration RMS, and rejection reasons |
+| ![Three-frame B-channel stack of M44](docs/stack-preview.png) | ![Stack inspection at native resolution](docs/stack-preview-inspection.png) | ![Registration and admission details](docs/stack-preview-decisions.png) |
+| Calibrated integration by target and channel | Zoom, pan, and inspect | Exclusions and registration results |
 
-This real M44 example was built from three B-channel acquisitions. Each input's
-quality exclusion, registration match count, residual, and admission decision
-is retained with the cached linear FITS result.
+This M44 example uses three B-channel frames. PSF Guard saves quality
+exclusions, registration matches, and residuals with the cached stack result.
 
 ### Combine real narrowband channel stacks
 
-![Real Gulf of Mexico Foraxx SHO preview built from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
+![Gulf of Mexico Foraxx SHO preview from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
 
-This real Gulf of Mexico (NGC 7000) quick-look preview uses six accepted Ultracat
-acquisitions: two each in H-alpha, OIII, and SII. The same three linear channel
-stacks can be recombined as standard SHO, Foraxx SHO, or any other compatible
-narrowband palette without rebuilding the integrations.
+This Gulf of Mexico (NGC 7000) preview uses six accepted Ultracat frames:
+two each in H-alpha, OIII, and SII. Recombine the same linear channel stacks
+as SHO, Foraxx SHO, or another compatible palette without repeating the
+integrations.
 
-<img src="docs/stack-background-real.jpg" width="720" alt="Background extraction controls and per-channel fit diagnostics from the real Gulf of Mexico narrowband preview">
+<img src="docs/stack-background-real.jpg" width="720" alt="Background extraction controls and per-channel fit diagnostics">
 
-Color previews fit and subtract each input channel's background before
-cross-filter registration. The UI exposes the resolved fit evidence, editable
-background model, per-input and output stretch stacks, complete phase progress,
-full-size inspection, and a downloadable processed RGB FITS file. This real
-narrowband run accepted 73 of 96 H-alpha samples, 78 of 96 OIII samples, and 95
-of 96 SII samples while rejecting noisy or source-contaminated fit locations.
-See the **[stack preview guide](docs/STACKING_PREVIEWS.md)** for the full
-workflow and cache behavior.
+Inspect background fits, adjust each channel's processing, and download a
+processed RGB FITS file. See [stack previews](docs/STACKING_PREVIEWS.md) for
+processing controls and saved results.
 
 ## 📦 Installation
 
 ### Desktop app (Windows / macOS / Linux)
 
-Grab the installer for your platform from the
-**[latest release](https://github.com/theatrus/psf-guard/releases/latest)**:
+Download the installer for your platform from the
+[latest release](https://github.com/theatrus/psf-guard/releases/latest).
 
 | Platform | Asset |
-|----------|-------|
-| Windows x64 | `PSF.Guard_<version>_x64_en-US.msi` |
+|---|---|
+| Windows x64 | `PSF.Guard_<version>_x64_en-US.msi` or the `-setup.exe` installer |
 | macOS (Apple Silicon) | `PSF.Guard_<version>_aarch64.dmg` |
 | Linux x64 | `PSF.Guard_<version>_amd64.deb` or `.AppImage` |
 
-Install and launch the app, then build a catalog from FITS folders or open an
-existing Target Scheduler database. Releases after v0.3.0 also include a
-Windows NSIS installer (`-setup.exe`) that installs a console
-`psf-guard-cli.exe` and adds it to your user `PATH`, so the full CLI works
-from any terminal.
+Install and launch the app, then import your images or open an existing
+catalog. The Windows NSIS installer (`-setup.exe`) also installs
+`psf-guard-cli.exe` and adds it to your user `PATH`.
 
-The desktop app writes a log, one file per day, and keeps the last seven
-days. **Settings › Open logs** opens the folder:
+**Settings → Open logs** opens the daily log folder. Logs include stack
+exclusions and their reasons; the app keeps seven days.
 
 | Platform | Log folder |
-|----------|------------|
+|---|---|
 | Windows | `%LOCALAPPDATA%\com.theatrus.psf-guard\logs` |
 | macOS | `~/Library/Logs/com.theatrus.psf-guard` |
 | Linux | `~/.local/share/com.theatrus.psf-guard/logs` |
 
-It holds what the server would print to a console, including each frame a
-stack leaves out or rejects and why. `RUST_LOG` sets the level; the default
-is info.
-
-**Settings › Server** can give the desktop app a fixed localhost port
-(1024–65535). Choose **Fixed port**, enter the number, save it, then restart
-the server from that panel. Browser access, the API, and MCP all use this
-address. **Automatic**, the default, chooses a free port on each start.
-If a fixed port is occupied, the app shows the conflict and the same Server
-controls so you can change it; it never silently switches ports. The
-preference is saved in `desktop.json` beside the database registry. It applies
-only to the desktop app; `psf-guard server` still takes `--port` or
-`[server].port` in its TOML configuration.
-
-The remaining install options serve the UI on another machine or provide
-command-line tools. Desktop review does not require them.
+Use **Settings → Server → Fixed port** if a browser, API client, or MCP
+client needs a stable localhost address. Save the port and restart the
+server from that panel. **Automatic**, the default, chooses a free port at
+startup. A fixed-port conflict opens the Server controls so you can choose
+another port. Standalone servers use `--port` or `[server].port` instead.
 
 ### Docker (Linux servers / NAS)
 
+Create a persistent data volume and the first editor account before starting
+a server with database management enabled:
+
 ```bash
-docker run -d -p 3000:3000 \
+docker volume create psf-guard-data
+docker run --rm -it \
   -v psf-guard-data:/data \
-  -v /path/to/catalog.sqlite:/data/database.sqlite \
+  ghcr.io/theatrus/psf-guard:latest \
+  users add admin --role read-write
+
+docker run -d --name psf-guard -p 3000:3000 \
+  -v psf-guard-data:/data \
   -v /path/to/images:/images:ro \
-  ghcr.io/theatrus/psf-guard:latest
-docker exec -it <container> psf-guard users add admin --role read-write
+  ghcr.io/theatrus/psf-guard:latest \
+  server --allow-database-management
 ```
 
-Or use [`docker-compose.yml`](docker-compose.yml), which does the same.
-`latest` is the newest release; a version tag such as `0.10.2` pins one, and
-`edge` follows the main branch with unreleased work. Then open
-http://localhost:3000/ and sign in: the server listens on every interface, so
-it asks for a login once a user exists, and answers 401 until one does.
+Open `http://localhost:3000/` on the host, or the server's address from
+another computer, and sign in. Create a catalog under **Settings →
+Databases**, using `/images` as the image folder. The management option
+allows signed-in editors to configure paths and catalogs on the server.
 
-Keep `/data` on a volume. The image keeps everything it writes there: the
-database registry, browser users and Director store under `/data/config`; the
-cache of previews, plate solves, quality scans, stacks and calibration masters
-under `/data/cache`; and Seiza catalogs downloaded in Settings under
-`/data/seiza`. A redeploy or an image update then keeps all of it. A host
-folder works too if user 1000 can write it. The database mount must be
-**writable** because grading updates it. Mount a TOML config and add
-`--config <path>` to the server command to tune the port, preview format, or
-pre-generation (see [Configuration](#configuration)).
+The `/data` volume stores settings, accounts, catalogs created in the UI,
+previews, stacks, calibration masters, and downloaded Seiza catalogs. Keep
+it when replacing the container. A host folder also works if user 1000 can
+write it. Mount image folders writable only when you need uploads or file
+moves. For remote N.I.N.A. pairing, provide an HTTPS address through your
+reverse proxy.
+
+To open an existing database instead, mount its file writable and pass its
+container path to `server`. The supplied
+[`docker-compose.yml`](docker-compose.yml) shows that setup; it starts
+without database management enabled.
+
+The `latest` tag follows releases; `edge` follows unreleased work on `main`.
+Use a version tag to pin a release. For configuration files, authentication,
+and API access, see [Configuration](#configuration) and
+[server authentication](docs/AUTHENTICATION.md).
 
 ### Standalone CLI binaries
 
-These version-independent links point at the latest release:
+These links download the latest release:
 
-| Platform | Download | Notes |
-|----------|----------|-------|
-| Linux x64 | [`psf-guard-linux-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-linux-x64) | Self-contained binary |
-| macOS (Apple Silicon) | [`psf-guard-macos-arm64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-arm64) | Self-contained binary |
-| Windows x64 | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) | Static binary, no dependencies |
+| Platform | Download |
+|---|---|
+| Linux x64 | [`psf-guard-linux-x64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-linux-x64) |
+| macOS (Apple Silicon) | [`psf-guard-macos-arm64`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-macos-arm64) |
+| Windows x64 | [`psf-guard-windows-x64.exe`](https://github.com/theatrus/psf-guard/releases/latest/download/psf-guard-windows-x64.exe) |
 
-PSF Guard checks for newer releases without sending catalog or image data. The
-server caches release notices for 24 hours and shares them with every browser.
-Desktop builds can also verify and install a signed Tauri update. The public
-feed format and release process are documented in
-[App and server updates](docs/UPDATES.md).
+For a local browser session, start with an empty registry or the catalogs
+already registered on that machine:
 
 ```bash
-# Linux / macOS
-chmod +x psf-guard-*
-./psf-guard-linux-x64 server catalog.sqlite /path/to/images/
+# Linux; use the macOS binary name on macOS.
+chmod +x psf-guard-linux-x64
+./psf-guard-linux-x64 server --host 127.0.0.1 --allow-database-management
 ```
 
 ```bat
-:: Windows — back up the DB first, then serve it
-copy "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite" schedulerdb-backup.sqlite
-psf-guard-windows-x64.exe server "%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite" C:\path\to\images
+:: Windows
+psf-guard-windows-x64.exe server --host 127.0.0.1 --allow-database-management
 ```
 
-Then open http://localhost:3000/.
+Open `http://localhost:3000/` and add a catalog in Settings. To serve other
+computers, create an account with `psf-guard users add admin --role read-write`
+before starting on a network address. See [server authentication](docs/AUTHENTICATION.md).
+
+PSF Guard checks release notices without sending catalog or image data.
+Desktop builds can install signed updates. See [app and server updates](docs/UPDATES.md).
 
 ### Fedora RPM
 
-Releases after v0.3.0 attach a prebuilt Fedora 44 RPM to the
-[releases page](https://github.com/theatrus/psf-guard/releases/latest). For
-other Fedora releases, build one with
-[`packaging/rpm/build-in-podman.sh`](packaging/rpm/README.md):
+Download the Fedora RPM from the
+[releases page](https://github.com/theatrus/psf-guard/releases/latest). Install
+the package built for your Fedora version; for example:
 
 ```bash
 sudo dnf install ./psf-guard-*.fc44.x86_64.rpm
@@ -405,7 +337,7 @@ network access after the sources have been prepared:
 sudo dnf install -y rpm-build rpmdevtools cargo rust nodejs npm git
 rpmdev-setuptree
 ./scripts/make-rpm-sources.sh                  # builds frontend + vendors crates
-rpmbuild -ba packaging/rpm/psf-guard.spec      # RPMs land in ~/rpmbuild/RPMS/
+rpmbuild -ba packaging/rpm/psf-guard.spec      # writes RPMs to ~/rpmbuild/RPMS/
 ```
 
 See [`packaging/rpm/README.md`](packaging/rpm/README.md) for mock builds and
@@ -417,465 +349,405 @@ release steps.
 git clone https://github.com/theatrus/psf-guard.git
 cd psf-guard
 cargo build --release
-./target/release/psf-guard server catalog.sqlite /path/to/images/
+./target/release/psf-guard server --host 127.0.0.1 --allow-database-management
 ```
 
-The build needs Rust 1.90 or newer and Node.js 24.15+ with npm; repository
-checkouts use the pinned Rust toolchain. It embeds the React frontend. Image
-processing uses the pure-Rust
+Install the Rust toolchain pinned in `rust-toolchain.toml` and Node.js
+24.15 or later in the 24 series (or Node.js 26+) with npm. The build embeds
+the React frontend. Image processing uses the pure-Rust
 [`seiza-imgproc`](https://github.com/theatrus/seiza) crate, so no native
 computer-vision libraries are required.
 
 ## 🖼️ The grader UI
 
-The desktop app embeds the grader, so it needs no separate server or browser.
-`psf-guard server` serves the same UI for a NAS or remote setup. The overview
-shows projects, targets, completion, and grading status; the other views add
-the image grid and comparison tools:
+The desktop app and web server provide the same review tools. Start in the
+**Library**, choose a project, and open **Images**, **Sequence**, or **Stacks**.
 
-- **Grid**: filter by project/target/status/date, multi-select with
-  Shift/Ctrl/Cmd+Click or `Space`, move through cards with the arrow keys,
-  accept/reject/unmark with instant feedback, and see HFR and star-count
-  metadata on every card. Time-based Session grouping keeps large projects
-  in the same image-first layout.
-- **Stable position**: preview generation, status changes, and database refresh
-  updates keep the visible image anchored instead of moving the page.
-- **Comparison**: side-by-side with synchronized (or independent) zoom and
-  pan — grade both frames at once.
-- **Smart loading**: fast previews first, full resolution on zoom; previews
-  generate on demand in the background, so a fresh install is browsable
-  immediately.
-- **File location**: image details show the resolved path when the source file
-  is present and fall back to the path recorded in the catalog. Copy any shown
-  path, or use **Show in folder** in the desktop app.
-- **Stack previews**: in a project's **Stacks** view, build a registered
-  preview from every frame in scope, or from a selection sent from Images
-  with **Stack selected**. WBPP's master lights show there too, ready for
-  PSF Guard's color composition. Matching cataloged
-  bias, dark, and flat masters apply before registration.
-  PSF Guard excludes rejected and regrade-recommended frames before Seiza
-  performs registration and admission, and retains a downloadable linear FITS
-  beside the display PNG. Completed R/G/B, L/R/G/B, or Ha/OIII/SII stacks can
-  then be registered across filters and combined into RGB, LRGB, or a selected
-  narrowband palette without altering the source integrations. The full-size
-  inspector can map a selected artifact back through the saved registrations,
-  rank suspect source crops, and flag dust-shadow, ring, trail-like, or compact
-  shapes without changing their grades. See
-  **[docs/STACKING_PREVIEWS.md](docs/STACKING_PREVIEWS.md)**.
-- **Sky context and plate solving**: coordinate-only catalog matches appear
-  immediately. Choose **Solve field** (or press `O`) to run Seiza against the
-  image pixels; PSF Guard tries the FITS/mount hint first, falls back to the
-  blind index when installed, persists the WCS per database, and enables the
-  shared object overlay.
-- **Undo/redo** for every grading action.
+- **Images:** filter and group frames, compare selections, and accept, reject,
+  or unmark them. Shift+Click selects a range; Ctrl/Cmd+Click toggles one frame.
+- **Sequence:** review scores and evidence across an observing session. Select
+  frames by score, HFR, star count, or a quality finding before grading them.
+- **Stacks:** build a calibrated preview for a target and channel, or send a
+  selection from Images with **Stack selected**. Inspect exclusions and
+  registration results, then combine channels in color. WBPP master lights
+  also appear here.
+- **Image details:** inspect measurements and the file path. Copy the path or
+  choose **Show in folder** in the desktop app. Inspect sensor tilt and field
+  curvature with 1:1 corner crops and star measurements across a 3×3 grid.
+
+On phones, the header hides as you scroll down and returns when you scroll
+up. Image details have a bottom bar for grading and navigation. Open the
+Images or Sequence toolbar menu for Undo and Redo, or **Options** in Stacks
+for build settings. Side-by-side comparison is hidden from the phone toolbar.
+
+Previews load in the background and preserve your scroll position. Grading
+supports undo and redo. These shortcuts apply where the corresponding tool
+is available:
 
 | Key | Action | Key | Action |
-|-----|--------|-----|--------|
+|---|---|---|---|
 | K / → | Next image | A | Accept |
 | J / ← | Previous image | X | Reject |
 | ↑ / ↓ | Nearest grid row | Space | Toggle selection |
-| Enter | Open image | C | Compare |
+| Enter | Open image | C | Compare in Images |
 | Esc | Clear selection / close | U | Unmark |
 | S | Stars overlay | O | Solve / sky overlay |
 | T | Predict / satellite tracks | P | PSF view |
 | + / − | Zoom | Ctrl+Z | Undo |
 | Ctrl+Y | Redo | | |
 
-Grades are written to the active catalog. If that catalog is an existing
-Target Scheduler database—or you sync grades to one—the scheduler can keep its
-acquired-image counts accurate and replace rejected frames.
+Grades update the active catalog. When that catalog belongs to Target
+Scheduler, or you sync grades back to it, the scheduler can update accepted
+counts and replace rejected exposures. See [quality screening](docs/SCREENING.md)
+and [stack previews](docs/STACKING_PREVIEWS.md).
 
 ## 🗺️ Sky coverage map
 
-Open the **Sky** tab to see every target from every registered database on
-one map of the whole sky. Each field is drawn at its real size, from a plate
-solve when one exists or from the frame header otherwise, coloured by its
-filter mix and brighter with more hours. Hover a field for its hours per
-filter, nights, and span; click it to open the target in Images. Drag to turn
-the sky from inside, or switch to the globe and turn it from outside; scroll
-to zoom, and past three times each field shows its latest stack preview placed
-by its plate solve. The timeline under the map shows one lane per rig with the
-Moon's phase, and a two-thumb slider replays the nights that built the
-catalog. The stat band totals hours, frames, targets, nights, the sky covered
-with overlaps counted once, and the pixels the sky resolves into at the finest
-scale that reached each patch.
+Open **Sky** to see targets from all registered catalogs on a flat sky map
+or a globe. Fields use plate solves when available and image headers
+otherwise. Color shows the filter mix; brightness shows exposure time.
+
+Hover over a field for hours, filters, and nights, or click it to open the
+target in Images. Zoom in to see stack previews. Use the timeline to filter
+observing nights and replay how your coverage grew.
 
 ![The Sky view](docs/sky-coverage.jpg)
 
-See the **[sky coverage guide](docs/SKY_COVERAGE.md)** for the field sources,
-the night rule, and the request behind the numbers.
+See [sky coverage](docs/SKY_COVERAGE.md) for field placement, observing-night
+rules, and the totals shown on the map.
 
+<a id="sky-context-plate-solving-and-overlays"></a>
 ## 🌌 Sky context, plate solving, and overlays
 
-Open an image and the **Sky context** panel immediately reads its FITS headers
-and catalog target coordinates. With `objects.bin` installed, PSF Guard can
-list catalog objects expected near those coordinates without decoding pixels
-or running a solver. Treat that initial list as pointing context, not proof
-that each object is visible in the image.
+The **Sky context** panel shows the image's header coordinates and catalog
+target. With `objects.bin` installed, it lists objects expected nearby.
+Those coordinates do not prove what the pixels contain.
 
-![A Seiza-solved Cocoon Nebula frame with coordinate grid, catalog labels and outlines](docs/sky-context.jpg)
+![Cocoon Nebula frame with solved coordinates, labels, and outlines](docs/sky-context.jpg)
 
-When the FITS file already contains a supported TAN WCS, the exact overlay is
-available immediately. Otherwise choose **Solve field** or press `O`. PSF Guard
-detects stars in the image, tries a fast hinted solve from the FITS/mount
-coordinates and pixel scale, then falls back to the blind index when one is
-installed. A successful solve turns the overlay on and reports the solved
-center, scale, solve mode, and target offset. Once a solution exists, `O`
-toggles the overlay instead of solving again.
+A supported TAN WCS in the file enables an overlay immediately. To solve the
+pixels, choose **Solve field** or press `O`. PSF Guard tries the pointing
+hint and pixel scale first, then a blind solve if the required index is
+installed. A successful solve reports the center, scale, and target offset.
+Press `O` again to toggle the overlay.
 
 ### Install the Seiza catalogs
 
-PSF Guard embeds Seiza 0.33.0's solver but does not bundle its multi-gigabyte
-catalog data. The desktop app can install and update these files from
-**Settings → Seiza Catalogs**. The same controls appear in a browser when the
-server starts with `--allow-database-management`. The **Catalogs** tab in
-Settings shows which features are ready, keeps download progress across page
-reloads, and can validate every installed file. Catalog packages are additive;
-**Blind solving** is the recommended default.
+PSF Guard includes the Seiza solver, but its star catalogs require a separate
+download. Open **Settings → Catalogs** to install, update, or validate them.
+Choose **Blind solving** for the usual setup. Browser access to these
+controls requires an editor and `--allow-database-management`.
 
-![The Catalogs tab showing Seiza catalog readiness, package installation, and validation](docs/settings-seiza-catalogs.png)
+![Catalog readiness, package installation, and validation](docs/settings-seiza-catalogs.png)
 
-For a manual or headless install, get the `seiza` CLI from the
-[Seiza releases](https://github.com/theatrus/seiza/releases) or with
-`cargo install seiza-cli --version 0.24.0`, then download a bundle once:
+For a headless installation, use the Seiza CLI from the
+[Seiza releases](https://github.com/theatrus/seiza/releases):
 
 ```bash
-# Recommended: choose a bundle interactively and install it in Seiza's
-# platform-standard catalog directory.
+# Choose a bundle and install it in Seiza's standard catalog directory.
 seiza setup
 
-# Or download the complete prebuilt bundle to a directory you control.
+# Or choose the destination explicitly.
 seiza download-data prebuilt --output /path/to/seiza-data
 ```
 
-Catalog downloads are versioned and SHA-256 verified. PSF Guard uses Seiza's
-standard discovery, so data installed by `seiza setup` is found automatically.
-You can instead set `SEIZA_CATALOG_DIR` to the downloaded directory, or merge
-this top-level fragment into PSF Guard's JSON registry:
+PSF Guard finds Seiza's standard catalog directory automatically. To use
+another location, set `SEIZA_CATALOG_DIR` or the `astrometry.data_dir` field
+in the [database registry](#databases-the-registry), then restart PSF Guard.
+Downloads are versioned and verified with SHA-256.
 
-```json
-"astrometry": {
-  "data_dir": "/path/to/seiza-data"
-}
-```
-
-The registry is `%APPDATA%\psf-guard\config.json` on Windows,
-`~/Library/Application Support/psf-guard/config.json` on macOS, and
-`~/.config/psf-guard/config.json` on Linux. Keep the existing `databases`
-entries and restart PSF Guard after changing the catalog location.
-
-For Docker, mount the same directory read-only and point Seiza at the mount:
+In Docker, Settings installs catalogs under `/data/seiza` on the persistent
+data volume. To use an existing download, add these options to `docker run`:
 
 ```bash
-docker run -d -p 3000:3000 \
-  -e SEIZA_CATALOG_DIR=/catalogs \
-  -v /path/to/seiza-data:/catalogs:ro \
-  -v psf-guard-data:/data \
-  -v /path/to/catalog.sqlite:/data/database.sqlite \
-  -v /path/to/images:/images:ro \
-  ghcr.io/theatrus/psf-guard:latest
+-e SEIZA_CATALOG_DIR=/catalogs \
+-v /path/to/seiza-data:/catalogs:ro
 ```
 
-Without the mount, catalogs installed from Settings land in `/data/seiza` on
-the data volume and survive updates.
+| File | Purpose |
+|---|---|
+| `objects.bin` | Object matches from coordinates, plus solved labels and outlines |
+| `stars-lite-tycho2.bin`, `stars-gaia.bin`, or `stars-deep-gaia17.bin` | Hinted solving; Seiza uses the deepest installed catalog |
+| `blind-gaia16.idx` | Blind solving when pointing hints are missing or wrong |
 
-The prebuilt bundle includes everything. If you install individual files,
-their roles are distinct:
+The blind index normally sits beside the star catalog. Override its path
+with `astrometry.blind_index` or `SEIZA_BLIND_INDEX` when needed.
 
-| File | Enables |
-|------|---------|
-| `objects.bin` | Coordinate-only object association plus solved labels and catalog outlines |
-| `stars-lite-tycho2.bin`, `stars-gaia.bin`, or `stars-deep-gaia17.bin` | Hinted plate solving; Seiza selects the deepest installed catalog |
-| `blind-gaia16.idx` | Blind fallback when the pointing hint is absent or stale. PSF Guard uses the index beside the star catalog first, unless the `astrometry.blind_index` setting or `SEIZA_BLIND_INDEX` points to one |
-
-Check what the running process discovered before troubleshooting an image:
+Check catalog discovery and validate installed files through the API:
 
 ```bash
 curl http://localhost:3000/api/astrometry/capabilities
 curl -X POST http://localhost:3000/api/astrometry/catalogs/validate
 ```
 
-The validation call intentionally reads every configured catalog and can take
-time. Hinted/blind solutions are cached per database under
-`<cache>/<db-slug>/astrometry/`; PSF Guard invalidates them when the source
-FITS file, relevant catalog, or Seiza version changes.
+For a server with accounts, include an API token as described under
+[REST API](#rest-api). Validation reads each catalog file and can take time.
+Solves are cached per database and invalidated when the source image,
+relevant catalogs, or solver version changes. See
+[astrometry quality](docs/ASTROMETRY_QUALITY.md).
 
 ### Satellite track identifiers and bright-trail risk
 
-Open an image's **Satellite tracks** panel and choose **Identify satellite
-tracks**, or press `T`. PSF Guard ensures the frame has a pixel WCS, loads the
-appropriate satellite elements through the resolver in `seiza-satellites`,
-and projects every crossing during the shutter-open interval. Recent exposures
-use CelesTrak's active catalog. Historical exposures use a nearby durable cache
-entry, the Seiza rolling mirror, or the public IAU SatChecker fallback. PSF
-Guard does not reproduce that provider policy. It then searches a narrow
-corridor around each prediction for a matching linear trail in the FITS
-pixels. The overlay keeps risk-colored orbital paths dashed and draws detected
-pixel paths in solid green. Labels retain the candidate name and NORAD
-identity; selecting a named result opens its external satellite information
-page.
+Open **Satellite tracks** and choose **Identify satellite tracks**, or press
+`T`. PSF Guard solves the image if needed, predicts crossings during the
+exposure, and checks the pixels for trails near those paths.
 
-The FITS header must contain either explicit UTC exposure bounds, a UTC
-midpoint (`DATE-AVG`) plus duration, or a UTC start plus duration, and an
-observing site (`SITELAT`/`SITELONG`, `OBSGEO-B`/`OBSGEO-L`, or their
-documented aliases). Both on-demand prediction and the user-triggered server
-quality scan may refresh CelesTrak data or resolve historical data from the
-Seiza mirror/IAU fallback. Merely viewing Sequence Analysis and running
-`screen-fits --regrade-db` never download orbital data. The latter reuses a
-suitable cached snapshot when one exists and otherwise abstains. Per-image
-predictions persist under `<cache>/<db-slug>/satellites/`. Current and
-historical snapshots share the same 5 GiB default cache bound, and each result
-records the provider and exact orbital-payload fingerprint. Historical results
-also record the requested catalog epoch separately from download time.
+Dashed paths show orbital predictions; solid green paths show detected
+trails. A satellite name is a candidate identification. A prediction alone
+does not lower a score or recommend rejection. A pixel-aligned trail can
+trigger a warning or rejection recommendation for review.
 
-Bright-trail risk is a conservative geometry/illumination heuristic based on
-sunlight, range, elevation, and path length. It is not an apparent magnitude.
-Prediction alone does not warn or change the score. A pixel-aligned trail adds
-a quality warning and can cap the score at 0.75. A high-risk candidate with a
-pixel-aligned trail can cap the score at 0.35 and propose an `[Auto]` rejection
-through the same per-image confirmation workflow as other quality findings.
-The orbital identity remains a candidate association. See
-**[docs/SATELLITES.md](docs/SATELLITES.md)** for provenance, caching, and
-failure semantics.
+Prediction needs an exposure time and observing site in the header.
+User-triggered predictions and quality scans can fetch satellite elements.
+Opening Sequence or running `screen-fits --regrade-db` uses cached elements
+and does not download them. Bright-trail risk describes geometry and
+illumination, not apparent magnitude.
 
-| Solved track overlay | Sequence grading recommendation |
+| Solved track overlay | Sequence recommendation |
 |:--:|:--:|
-| ![California Nebula exposure with dashed orbital candidates and solid green pixel-aligned satellite trails](docs/satellite-california-overlay.png) | ![The same frame marked for a pixel-aligned bright satellite trail in Sequence Analysis](docs/satellite-california-sequence.png) |
+| ![California Nebula exposure with dashed predictions and solid green detected trails](docs/satellite-california-overlay.png) | ![Pixel-aligned bright trail flagged in Sequence](docs/satellite-california-sequence.png) |
 
-These real October 2025 frames validate both sides of the evidence boundary:
-visible paths align tens of sensor pixels away from their orbital projections,
-while other in-frame predictions correctly remain prediction-only. Treat the
-name as a candidate association; rejection is based on the pixel-aligned
-bright trail, not catalog presence alone.
+See [satellite prediction](docs/SATELLITES.md) for header requirements, data
+sources, score limits, and cache behavior.
 
 ## 🔍 Quality screening
 
-PSF Guard screens for occlusion, clouds, veils, stray light, off-target
-pointing, and tracking loss. These faults can pass star-count and HFR grading.
+PSF Guard checks for clouds, obstruction, stray light, pointing errors, and
+tracking loss. Star count and HFR alone can miss these faults.
 
-**In the app:** choose a target, then select **Analyze Quality** from Images or
-Sequence. The fixed header keeps scan and database-backfill progress visible
-across views. Use the Sequence selectors to focus Clouded, Off Target,
-Unsolved, or all Recommended frames.
+Choose a target and run **Analyze Quality** from Images or Sequence. Review
+scores and the evidence for each finding, then select frames to grade. The
+rejection review shows proposed changes before applying them.
 
-The scan runs spatial, photometric, and astrometric analysis on the server. It
-shows solved-center scatter, field-relative offsets, and the evidence behind each issue.
-Session scores find changes within a capture run; the target/filter stack view
-also finds weak frames across nights while keeping capture settings comparable.
-A stack comparison needs at least three matching frames across two sessions;
-the UI reports frames that lack enough matches instead of scoring them as 1.0.
-A low relative score alone does not diagnose damage or recommend rejection.
-**Select Recommended** opens a per-image review before any rejection is
-written. Stable multi-frame framing offsets stay advisory.
+Session scores compare frames within a capture run. Stack comparisons also
+compare matching frames across nights and require at least three frames
+across two sessions. The UI identifies frames without enough matches. A low
+relative score alone does not diagnose damage or recommend rejection, and
+stable framing offsets remain advisory.
 
-| Occlusion arriving | Thin cloud veil (same field, clean vs veiled) |
+| Obstruction arriving | Clear and veiled views of the same field |
 |:--:|:--:|
-| ![Occlusion onset](docs/screening-onset.jpg) | ![Veiled field](docs/screening-veil.jpg) |
+| ![Obstruction entering an exposure](docs/screening-onset.jpg) | ![A field affected by thin cloud](docs/screening-veil.jpg) |
 
-Database settings also offer **Analyze Missing Quality** and **Rescan All
-Quality**. These low-priority jobs cover the whole database, keep their
-progress while the Settings page is closed, and refresh star counts, HFR,
-spatial and photometric metrics, and pointing evidence. FITS import stays
-header-only by default. Star count and HFR use the N.I.N.A. Fast detector, so
-rescanned values remain comparable with Target Scheduler. The full-resolution
-measurements also provide calibrated flux for photometry.
+Use **Analyze Missing Quality** or **Rescan All Quality** in database
+settings for a background scan of the whole catalog. These jobs fill star,
+spatial, photometric, and pointing measurements and report progress after
+you close Settings. Star count and HFR use the N.I.N.A. Fast detector to
+stay comparable with Target Scheduler measurements.
 
-| Astrometry quality results | Guarded rejection review |
+| Astrometry results | Rejection review |
 |:--:|:--:|
-| ![Quality scan across a varied eleven-frame sequence](docs/sequence-quality-astrometry.png) | ![Review proposed astrometry rejection](docs/sequence-quality-review.png) |
+| ![Quality findings across eleven frames](docs/sequence-quality-astrometry.png) | ![Review of proposed astrometry rejections](docs/sequence-quality-review.png) |
 
-**From the CLI:** screen folders in a batch without a database. Add
-`--regrade-db` to load the intended target, run fresh Seiza solves, and preview
-supported grade changes.
+From the CLI, screen folders without a database or add `--regrade-db` to
+check against catalog targets and preview grade changes:
 
 ```bash
-# Screen a night, get per-frame verdicts (OK / WARN / REJECT)
-psf-guard screen-fits "/path/to/2026-06-30/LIGHT"
-
-# Render annotated diagnostics showing WHY each frame was flagged
+psf-guard screen-fits "/path/to/LIGHT"
 psf-guard screen-fits "/path/to/LIGHT" --annotate /tmp/diagnostics
-
-# Write supported [Auto] rejections into the catalog, then archive the files
 psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db --dry-run
+# After reviewing the preview, apply supported [Auto] rejections:
 psf-guard screen-fits "/path/to/LIGHT" --regrade-db my-db
-psf-guard move-rejects --db my-db
 ```
 
-When orbital elements are already cached, `--regrade-db` also adds satellite
-crossing risk before the shared sequence grader.
-
-Astrometry grading details, target-source precedence, failure semantics,
-score caps, cache safety, and CLI behavior:
-**[docs/ASTROMETRY_QUALITY.md](docs/ASTROMETRY_QUALITY.md)**.
-
-Full documentation — the detection stack, annotated diagnostic examples,
-tuning, and safety properties: **[docs/SCREENING.md](docs/SCREENING.md)**.
+See [quality screening](docs/SCREENING.md) for measurements and tuning, and
+[astrometry grading](docs/ASTROMETRY_QUALITY.md) for the evidence required
+to recommend rejection.
 
 ## 📤 Export accepted frames for stacking
 
-After grading, expand a project on **Library** and choose **⬇ Export**. The
-desktop app writes a WBPP-style target/filter tree to a folder you choose. A
-browser downloads the same tree as a ZIP. Rejected frames never enter the
-export. When the calibration library contains a safe match, the export also
-includes raw `BIAS`, `DARK`, `DARKFLAT`, and target/filter `FLAT` folders.
+Choose **Export** on a Library project or target to export lights with
+matched calibration frames. Use **Include ungraded lights** to control
+whether pending frames are included. Rejected frames are excluded.
 
-![Library project card with the Export action](docs/export-overview.png)
+![Library project with the Export action](docs/export-overview.png)
 
-A remote server can export onto its own drive instead of streaming a ZIP.
-Set a **server export directory** for the database (Settings, or `export_dir`
-in the registry JSON). The Export action then runs as a background job with
-progress: it places the same tree — lights, matching calibration frames, and
-the WBPP runner scripts — into a per-scope folder below that directory,
-cloning files (reflink) where the filesystem supports it and copying where it
-does not. Because the operator chose the directory up front, the action needs
-no database-management grant.
+The desktop app can write to a chosen folder; a browser can download a ZIP.
+Set a database's **Server export directory** to write exports on the server
+as a background job. PSF Guard clones files when the filesystem supports it
+and copies them otherwise.
 
-You can export a whole project or one target. The action appears when PSF Guard
-has found at least one accepted source file. The CLI offers the same filters
-and a dry run:
+Exports can group frames by target or use PixInsight WBPP's folder layout
+with runner scripts. Matched calibration inputs include bias, dark,
+dark-flat, and flat frames when suitable matches exist.
 
 ```bash
 psf-guard export my-db --dest ./stacking --dry-run
 psf-guard export my-db --dest ./stacking
 ```
 
+See [calibration libraries](docs/CALIBRATION_LIBRARY.md) for matching rules
+and [WBPP](docs/WBPP.md) for runner options.
+
 ## ☆ Acquisition list for AstroBin
 
-AstroBin's upload page imports a CSV of imaging sessions. The **AstroBin**
-action on a project card or target row writes it: one row per night, filter
-and exposure length, with the frame count. **Essentials** gives the four
-columns every upload needs. **Full** adds binning, gain, sensor and ambient
-temperature, the f-number, and the darks, flats and bias the calibration
-library would match to each night. The dialog previews the rows, asks for
-the AstroBin id of any filter it does not know yet, and offers the file as a
-download or on the clipboard. Each catalog keeps its own filter map, with
-night ranges for a rig whose filters changed, since a catalog's "G" says
-nothing about which G. The CLI writes the same file:
+Choose **AstroBin** on a project or target to export a CSV with one row per
+night, filter, and exposure length. **Essentials** includes the four required
+columns. **Full** adds capture settings, temperatures, and matched calibration
+frame counts.
+
+Preview the rows, assign any missing AstroBin filter IDs, then download or
+copy the CSV. Each catalog saves its filter map. Use date ranges when a rig
+used different physical filters under the same filter name.
 
 ```bash
 psf-guard astrobin-csv my-db --target-id 12 --detail full -o ngc7023.csv
 ```
 
-See **[AstroBin acquisition export](docs/ASTROBIN_EXPORT.md)** for the row
-rules and the filter id map.
+See [AstroBin acquisition export](docs/ASTROBIN_EXPORT.md) for row grouping
+and filter mapping.
 
 ## ⚗ Stack in WBPP from the Library
 
-**Stack in WBPP** on a project card runs PixInsight's WeightedBatchPreprocessing
-on the server, against the frames where they are, with each night's flats
-matched to its lights. It runs headless, through `xvfb-run` on a server with
-no display, and the dialog follows WBPP's own log until the masters are ready
-to download. WBPP's settings are yours to pick: quality preset, Fast
-Integration (off by default, since WBPP would otherwise switch large groups
-to it unseen), drizzle, autocrop, and light rejection. The same settings ride
-in the runner scripts of a WBPP export. Tell PSF Guard where PixInsight is
-under **Settings → Setups → PixInsight**, and give a database a process
-directory to save a run's masters beside your finished work. See
-**[Stacking with PixInsight's WBPP](docs/WBPP.md)**.
+Set the PixInsight path under **Settings → Setups → PixInsight**, then
+choose **Stack in WBPP** on a Library project. PSF Guard runs
+WeightedBatchPreprocessing on the server using the source files and matched
+calibration frames. On a server without a display, it uses `xvfb-run`.
 
-See **[Calibration libraries](docs/CALIBRATION_LIBRARY.md)** for import,
-matching, stack-master, export, cache, and database-sync rules. Each database
-in Settings also has a library manager for finding missing files, reviewing
-match settings, forgetting bad records, and clearing generated masters.
+Choose a quality preset, Fast Integration, drizzle, autocrop, and light
+rejection settings. Fast Integration is off by default; WBPP otherwise uses
+it automatically for groups of 150 or more frames. WBPP exports include
+runner scripts with the same options.
+
+The run dialog shows the log and progress. Download completed masters or
+use the master lights in a PSF Guard color composition. See
+[WBPP runs](docs/WBPP.md) and [calibration libraries](docs/CALIBRATION_LIBRARY.md).
+
+With a licensed standalone `rc-astro` CLI on the server, you can also apply
+BlurXTerminator, NoiseXTerminator, and StarXTerminator to stacks. Star removal
+saves separate starless and stars results, each with its own stretch and FITS
+download. See [stack processing](docs/STACKING_PREVIEWS.md#reversible-view-processing).
 
 ## 🗂️ Managing rejected files
 
-This is a CLI workflow. Preview the move with `--dry-run`; PSF Guard records
-the source path so the files can be restored later.
+To remove rejected frames from a catalog, open **Settings → Databases →
+Purge Rejects**. Preview the selection before applying it. PSF Guard moves
+files to `.psf-guard-trash` and saves the records needed to restore them.
+**Restore** recovers a removal batch while its files remain in the trash;
+**Empty trash** deletes files after their retention period.
 
-Once frames are rejected by hand or by screening, move them out of the
-directory tree used by the stacking tool:
-
-```bash
-# Move rejects to <image_dir>/<Project>/REJECT/... with their sidecars.
-# Idempotent; every move is recorded for restore.
-psf-guard move-rejects --db my-db [--dry-run]
-
-# Changed your mind? Un-reject frames in the UI, then:
-psf-guard restore-rejects --db my-db          # restores only un-rejected files
-psf-guard restore-rejects --db my-db --all    # restores everything
-```
-
-`restore-rejects` never overwrites an existing file, and archived frames stay
-visible in the web UI. The legacy `filter-rejected` command remains available
-for its statistical regrading flags but has been replaced by `move-rejects`.
-
-Frames that are truly bad can go further. `remove-rejects` takes rejected
-frames out of the catalog: their files, archived or not, move to a
-`.psf-guard-trash` folder in the image directory, and a tombstone keeps what
-restore needs. Only frames rejected at least `--days` days ago qualify (7 by
-default), and frames in a collaboration report stay. Sync pulls, imports
-and uploads do not bring a removed frame back.
+The CLI offers the same removal workflow:
 
 ```bash
-psf-guard remove-rejects --db my-db --cache-dir ./cache            # preview only
-psf-guard remove-rejects --db my-db --cache-dir ./cache --apply    # remove them
+psf-guard remove-rejects --db my-db --cache-dir ./cache            # preview
+psf-guard remove-rejects --db my-db --cache-dir ./cache --apply    # remove
 psf-guard list-removed --db my-db
 psf-guard restore-removed --db my-db --batch <batch-id>
-psf-guard empty-reject-trash --db my-db   # delete files past their 14 days
-psf-guard purge-removed --db my-db        # then forget their saved rows
+psf-guard empty-reject-trash --db my-db
+psf-guard purge-removed --db my-db
 ```
 
-`--cache-dir` is the server's cache root; the removed frames' cache files go
-with them. The files stay in the trash until `empty-reject-trash` runs after
-their retention (`--retention-days`, 14 by default); until then
-`restore-removed` puts files and rows back. See
-[reject removal](docs/design/reject-removal.md).
+Use the server's cache root for `--cache-dir`. By default, removal requires
+a rejection at least seven days old, and trash retention is 14 days.
+Frames in a collaboration report remain in the catalog. Imports, sync, and
+uploads do not restore removed frames. See
+[reject removal](docs/design/reject-removal.md) for retention and recovery.
 
-## 🔄 Syncing between machines
-
-This workflow needs two database files. Keep the directions shown below: pull
-from the telescope, then push planning settings and reviewed grades back.
-Preview the first run with `--dry-run` and back up both files.
-
-Use sync when one machine grades while another keeps capturing. The commands
-copy selected state between two scheduler databases, given as registry slugs
-or `.sqlite` paths. Rows match by their stable GUID and require Target
-Scheduler schema v22 or later.
+To move rejected files out of a stacking folder while keeping their catalog
+records, use the separate archive commands:
 
 ```bash
-# Mirror projects, targets and captured images FROM the telescope INTO your DB.
-# Your local grading is preserved; new images arrive with the telescope's grade.
+psf-guard move-rejects --db my-db --dry-run
+psf-guard move-rejects --db my-db
+# After changing a frame's grade, restore it from the archive:
+psf-guard restore-rejects --db my-db
+# Or restore every archived frame:
+psf-guard restore-rejects --db my-db --all
+```
+
+Archive moves include sidecars and record each source path. Restore never
+overwrites an existing file. See [reject archives](docs/design/reject-archive.md).
+
+<a id="syncing-between-machines"></a>
+## 🔄 Syncing between machines
+
+For a N.I.N.A. rig, start with [PSF Guard Sync](#connect-nina). Use the
+workflows below when transferring between database files or PSF Guard
+servers. No sync is needed when both tools open the same database.
+
+### Transfer between database files
+
+Open **Settings → Sync**, choose the source and destination, then preview a
+merge, planning update, or grade transfer before **Apply**. The preview
+survives a page reload and refuses to apply if the destination changed.
+Pending grades are excluded from the UI grade push by default.
+
+![Data Transfer with source and destination catalogs](docs/data-transfer.png)
+
+The CLI accepts registered database slugs or SQLite paths. Back up both
+catalogs before the first transfer:
+
+```bash
+# Pull projects and captures from the telescope; preserve local grading.
 psf-guard sync pull --from telescope.sqlite --to my-db --dry-run
 
-# Push new or edited planning settings back TO the telescope. This updates
-# projects, targets, templates, plans, and rule weights. Telescope capture
-# counts, images, and grades stay unchanged.
+# Push planning fields without changing telescope captures or grades.
 psf-guard sync planning --from my-db --to telescope.sqlite --dry-run
 
-# Push your grading decisions back TO the telescope (one-way, source wins).
+# Push grades; the source grade wins.
 psf-guard sync grades --from my-db --to telescope.sqlite --dry-run
 ```
 
-Pull complete new projects and captures, edit plans or grade locally, then
-push planning settings and grades back. All three commands support
-`--project` filters and `--dry-run` (`grades` also supports `--target` and
-`--status`), open the source read-only, and run in one transaction. The
-Settings has one Data Transfer workspace with explicit source and destination
-catalogs. It offers merge, planning, and reviewed-grade actions with a
-server-owned preview before Apply. The preview keeps a frozen source snapshot
-and returns after a page reload. Apply rejects destination changes before it
-writes. Pending grades are excluded from the UI grade push by default.
+Remove `--dry-run` to apply. Records match by GUID and need Target Scheduler
+schema 22 or later. Each command opens the source read-only and applies
+changes in one transaction. Use `--project` to limit scope; grade transfers
+also support `--target` and `--status`.
 
-![Data Transfer workspace with a source and a destination catalog](docs/data-transfer.png)
+### Transfer between PSF Guard servers
 
-Native one-off file handles, versioned remote bundles, the remote protocol,
-and the future N.I.N.A. plugin boundary are tracked in
-[data-transfer design](docs/design/data-transfer.md).
+Under **Settings → Sync → Remote PSF Guard**, add the peer URL and its
+manual API key, test the connection, then preview and apply a transfer.
+In the receiving catalog's editor, generate a **Remote API key** and enable
+**Accept remote scheduler sync**. Enable
+**Accept remote image uploads** separately if the client will send files.
 
+```bash
+psf-guard sync remote --direction pull \
+  --local review --peer https://telescope.example:3000 --token-file key.txt
+```
+
+Directions are `pull`, `push-planning`, and `push-grades`. All preview before
+applying; add `--dry-run` to stop at the preview. Supply the key through
+`--token-file` or `PSF_GUARD_SYNC_TOKEN`. The `--token` argument is also
+supported, but command arguments may be visible to other processes.
+
+For a deployment configured from the command line, set the grants in TOML:
+
+```toml
+[[remote_sync]]
+database = "telescope"
+token_file = "/run/secrets/psf-guard-key"
+
+[[remote_upload]]
+database = "telescope"
+image_dir = "/data/incoming"
+placement = "target_tree"  # optional; default is "flat"
+token_file = "/run/secrets/psf-guard-key"
+```
+
+These grants apply at startup to an already registered catalog. They do not
+require `--allow-database-management`. Each catalog has one manual key;
+paired N.I.N.A. clients have separate credentials. The server records remote
+sync actions in `remote-sync-audit.jsonl` under the cache directory.
+
+See the [data-transfer protocol](docs/design/data-transfer.md) for snapshots,
+previews, uploads, and identity checks, and the
+[N.I.N.A. Sync guide](https://psf-guard.com/docs/sync-plugin.html) for plugin setup.
+
+<a id="cli-reference"></a>
 ## ⌨️ CLI reference
 
-Desktop users who open one existing database do not need this section. Run
-`psf-guard --help` for the full command list and use `<command> --help` for
-command options.
+Run `psf-guard --help` for the command list and `psf-guard <command> --help`
+for options. Square brackets below indicate optional arguments; replace
+angle-bracketed placeholders before running a command.
 
 Common commands:
 
 ```bash
 # Serve the grader UI (registers the DB in the shared registry on first run)
 psf-guard server <database> <image-dirs...> [--port 3000]
-psf-guard server --config psf-guard.toml            # TOML for server knobs
-psf-guard server --registry /tmp/scratch.json <db> <dirs...>  # throwaway session
+psf-guard server --config psf-guard.toml            # server configuration
+psf-guard server --registry /tmp/scratch.json <db> <dirs...>  # separate registry
 psf-guard server --host 127.0.0.1 <db> <dirs...>    # localhost only (default binds 0.0.0.0)
 
 # Quality screening; --regrade-db also enables astrometry quality analysis
@@ -883,15 +755,15 @@ psf-guard screen-fits ./lights --annotate ./diagnostics
 psf-guard screen-fits ./lights --regrade-db my-db --dry-run
 psf-guard screen-fits ./lights --format json         # or table, csv
 
-# Create and register a compatible image catalog from folders of FITS lights
+# Create and register a catalog from FITS or XISF image folders
 psf-guard create-db new.sqlite ./lights1 ./lights2 [--name "My Rig"] [--dry-run]
-# Top up later: attaches to EXISTING targets (name/coordinate match); only
-# unmatched frames create new projects. Preview with --dry-run first.
+# Add frames to matching targets by name or coordinates. Only unmatched
+# frames create projects. Preview with --dry-run first.
 psf-guard import <slug-or-path> ./more-lights [--dry-run] [--no-attach]
 psf-guard remove-imported <slug-or-path> [--dry-run]  # undo an import's projects
 
-# Export non-rejected lights and safely matched calibration frames
-# in a WBPP-style layout; rejects are never exported
+# Export accepted lights and matched calibration frames.
+# Add --layout wbpp for WBPP folders and runner scripts.
 psf-guard export <slug-or-path> --dest ./stacking [--include-pending]
 psf-guard export my-db --dest ./stacking --target "M 31" --link  # hardlinks
 
@@ -935,6 +807,7 @@ Batch commands also support statistical outlier detection
 analysis plus sequence-based cloud detection. Details in
 [docs/STATISTICAL_GRADING.md](docs/STATISTICAL_GRADING.md).
 
+<a id="configuration"></a>
 ## ⚙️ Configuration
 
 Most desktop users can manage databases in Settings and do not need to edit
@@ -942,9 +815,9 @@ the registry or server TOML. The settings below are for server and API setups.
 
 ### Databases: the registry
 
-The server manages any number of image catalogs. Each catalog uses the
-inherited Target Scheduler database mapping, and the list lives in a
-JSON registry at the platform config location — not in the TOML:
+PSF Guard stores its list of image catalogs in a JSON registry. Each
+catalog uses the Target Scheduler database structure. The registry is
+separate from the server TOML:
 
 | Platform | Registry path |
 |----------|---------------|
@@ -953,9 +826,10 @@ JSON registry at the platform config location — not in the TOML:
 | Linux | `~/.config/psf-guard/config.json` |
 
 `psf-guard server <db> <dirs...>` **registers** that database on first run and
-reuses it afterwards; you can also manage the list from the desktop app's
-Settings panel or the `/api/databases` HTTP endpoints. For a one-off session
-that shouldn't touch your real config, pass `--registry /tmp/scratch.json`.
+reuses it afterwards. Manage the list in **Settings → Databases** or through
+`/api/databases`; a standalone server needs `--allow-database-management`
+for those controls. Pass `--registry /tmp/scratch.json` to use a separate
+registry for testing.
 
 The default N.I.N.A. scheduler database on Windows lives at
 `%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite`.
@@ -980,9 +854,10 @@ registry:
 enables hinted solving; the blind pattern index adds fallback solving when the
 pointing hint is absent or stale. Successful pixel-derived solutions live at
 `<cache>/<db-slug>/astrometry/<image-id>.json` and are invalidated when the
-source FITS file or relevant catalog changes.
+source image or relevant catalog changes.
 
-### Server knobs: the TOML
+<a id="server-knobs-the-toml"></a>
+### Server settings: the TOML
 
 ```bash
 cp psf-guard.toml.example psf-guard.toml
@@ -993,7 +868,7 @@ psf-guard server --config psf-guard.toml
 [server]
 port = 3000
 host = "0.0.0.0"
-# Optional: fraction of CPU cores for parallel work (both default sensibly).
+# Optional: fraction of CPU cores available to each class of work.
 # Interactive jobs (occlusion scans, on-demand previews, stack builds you
 # start) get scan_worker_ratio; background work (pre-generation, automatic
 # stack refreshes) gets background_worker_ratio, and pre-generation pauses
@@ -1018,13 +893,13 @@ link_text = "Learn about PSF Guard"
 link_url = "https://psf-guard.com/"
 
 [cache]
-directory = "./cache"  # fixes the cache; omit it to choose one in Settings
+directory = "./cache"  # overrides the cache directory selected in Settings
 # stack_directory = "/mnt/nas/psf-guard/stacks"            # default: the cache
 # calibration_directory = "/mnt/nas/psf-guard/masters"     # default: the cache
 file_ttl = "5m"        # 30s, 5m, 1h, 2h30m, 1d ...
 directory_ttl = "5m"
 
-[pregeneration]        # optional background preview warming
+[pregeneration]        # optional background preview generation
 enabled = true
 screen = true          # 1200px previews
 large = false          # 2000px previews
@@ -1042,36 +917,40 @@ psf-guard users add editor --role read-write --email editor@example.com
 psf-guard users list
 ```
 
-Any user in `auth.json` turns on the login page and HttpOnly session cookies.
-Viewer accounts can browse images and cached results, but cannot change
-grades, plans, files, or server settings. Set
-`allow_read_only_compute = true` only when viewers should also start stacks,
-plate solves, and satellite predictions. Editor accounts keep normal write
-and compute access. With no users, a loopback server stays open as before; a
-server bound to any other address answers 401 until you add one, unless you
-pass `--allow-anonymous-access` to keep it open to everyone. Remote sync and
-image upload keep working either way on their own bearer keys. Tauri always
-stays unauthenticated on its localhost-only server. See
-[Server authentication](docs/AUTHENTICATION.md).
+Adding an account enables browser sign-in. Viewers can browse images and
+cached results; editors can also change grades and plans and start analysis.
+Set `allow_read_only_compute = true` to let viewers start stacks, solves,
+and satellite predictions.
+
+Without accounts, a loopback server allows local access. A network server
+returns 401 until an account exists; with database management enabled, it
+refuses to start without one. `--allow-anonymous-access` grants access
+without sign-in. Remote sync and uploads use their own catalog-scoped
+credentials. The desktop app uses a local server without browser sign-in.
+See [server authentication](docs/AUTHENTICATION.md).
 
 Signed-in editors can manage every account from the separate **Users** tab in
 Settings. Each account can include an optional email address. Changes made
 there take effect at once.
 
-Scripts and MCP clients use personal API tokens instead of a login. Mint one
+Scripts and MCP clients use personal API tokens. Create one
 under **Settings → Users → API tokens** or with
 `psf-guard users token create <user> --label "..."`, and send it as
 `Authorization: Bearer psfg_…`. The server is an MCP server at `/api/mcp`;
 see [MCP server for agents](docs/MCP.md).
 
-Command-line arguments override the config file. (A legacy
-`[database]`/`[images]` section is still parsed but ignored in server mode —
-databases come from the registry.)
+Command-line arguments override the TOML file. The server ignores legacy
+`[database]` and `[images]` sections; use the registry for catalogs and paths.
 
+<a id="rest-api"></a>
 ## 🔌 REST API
 
-Per-database endpoints are nested under `/api/db/{db_id}/`; `GET
-/api/databases` lists the configured databases and their ids.
+Use `GET /api/databases` to list catalog IDs. Per-database endpoints use
+`/api/db/{db_id}/`. On a server with accounts, add
+`-H "Authorization: Bearer $PSF_GUARD_API_TOKEN"` to each request, with a
+personal API token stored in that environment variable. Mutating requests
+need an editor token. The examples below use a local server and catalog
+ID `my-db`.
 
 ```bash
 # List images with filters
@@ -1116,97 +995,105 @@ curl -X POST \
 
 ## One-shot-color frames
 
-A raw OSC file with a recognized `BAYERPAT` header is debayered, and what
-happens next depends on whether you are looking or measuring.
+PSF Guard debayers raw OSC images with a recognized `BAYERPAT` header.
+Color display is on by default. Use the **Color** control, or `C` in the
+image viewer, to switch to luminance. The choice is shared across views.
+OSC stacks integrate all three channels and produce RGB previews and FITS
+files.
 
-**Looking.** Colour is on by default, in the grid, the overview, and the image
-viewer alike. Press `C` or use the **Color** button for the luminance
-rendition instead; the choice is shared across every view and remembered, so a
-frame does not change appearance on the way into the detail view. Stacks of OSC
-frames are colour throughout: the stacker debayers on ingest and integrates all
-three channels, so the preview and the exported FITS are RGB.
+Grading always measures luminance from the debayered image. Changing the
+display to color does not change quality scores. PSF Guard measures the
+stretch on luminance and applies it equally to red, green, and blue to
+preserve their ratios.
 
-**Measuring.** Grading and quality metrics use luminance, always. Star metrics
-on a bare colour filter array are distorted by the per-channel sampling, and
-N.I.N.A. measures the debayered frame, so this keeps our numbers comparable to
-the ones Target Scheduler recorded. Switching the viewer to colour changes what
-you see and nothing that is scored.
-
-The colour stretch is measured once on luminance and applied identically to
-red, green, and blue. That keeps the ratios between channels, and with them the
-colour balance — stretching each channel against its own statistics would pull
-all three toward a common median and wash the frame out.
-
-A frame with no `BAYERPAT` — a mono camera behind a filter wheel — has no
-colour to recover and renders greyscale either way.
+Mono frames without a Bayer pattern display in grayscale.
 
 ## Preview cache format
 
-Generated previews and annotated images are PNG by default — exact, and the
-same pixels the stretch produced. A server short of disk can trade that for
-size:
+Previews and annotated images use lossless PNG by default. To save disk
+space, configure JPEG in the server TOML:
 
 ```toml
 [server]
 preview_format = "jpeg"      # "png" (default) or "jpeg"
 preview_jpeg_quality = 88    # 50–100, ignored for PNG
-preview_color = true         # colour by default for OSC frames
-keep_failed_uploads = false  # keep a rejected remote upload's staged file
+preview_color = true        # color by default for OSC frames
+keep_failed_uploads = false # retain rejected upload files for debugging
 ```
 
-On a realistic stretched sub, JPEG at the default quality is roughly a third
-the size of PNG. It is lossy in exactly the places this tool asks you to look:
-it smooths the faint, high-frequency detail that noise, hot pixels, and
-marginal stars live in, so a frame can look cleaner in the viewer than it is on
-disk. Grading measurements are taken from the FITS and never from a preview, so
-nothing scored changes — what changes is what your eye is given to check the
-score against.
+JPEG uses less space but can smooth noise, hot pixels, and faint stars.
+It can also add halos around annotation lines. Quality measurements always
+use the source image, so preview compression does not change grades.
 
-The two formats use different file extensions, so both can sit in the cache at
-once. Changing the setting leaves existing artifacts alone and regenerates on
-demand; changing it back finds the originals still valid. An artifact is always
-served as whatever it was written as, not as whatever the setting says now.
-Nothing removes the old set — the server reports how much of the cache is in
-the other format at startup, and deleting it is yours to decide.
+Changing formats creates new previews on demand and leaves the old cache
+files in place. Switching back can reuse those files. The server reports
+space used by the other format at startup; it does not delete that set
+automatically.
 
-`keep_failed_uploads` is a debugging aid for remote image intake. A frame
-arrives as an extension-less staging file in the receive directory and is
-moved into place only after its checksum, header, and destination check out;
-a rejected upload normally leaves nothing behind. With the key on, the staged
-file stays, and the log gives its path, so you can see what the client
-sent. Published frames take the receive directory's usual permissions
-(umask or default ACL) rather than a temporary file's `0600`.
+`preview_color` controls the default display and the previews generated in
+the background. Other display choices generate on demand.
 
-`preview_color` also decides which rendition background pre-generation warms.
-A viewer that disagrees with it still gets what it asked for, generated on
-demand; on a site whose observers prefer luminance, setting it false keeps the
-warmed cache and the default view pointing at the same artifact.
+`keep_failed_uploads` retains a rejected upload's staging file and logs its
+path for diagnosis. Accepted uploads move into place only after checksum,
+header, and destination checks. They use the receive directory's normal
+permissions.
 
-Star-annotated images follow the same setting. Their markers are line art,
-where JPEG rings hardest, so that is the first place to look if a marker seems
-to have a halo.
+## Back up catalogs and settings
+
+Use **Settings → Backups** for a manual or scheduled archive of settings and
+catalogs. SQLite's online backup supports catalogs that N.I.N.A. is still
+writing. The desktop app suggests `~/Documents/psf-guard/backups` and includes
+secrets by default for manual backups and new schedules. Existing schedules
+keep their saved choice. Browser and CLI backups exclude secrets by default;
+archives with secrets cannot be downloaded. Restoration is manual; follow
+the archive's instructions. The last backup result remains visible after a
+restart.
+
+Image files and generated previews, stacks, and masters are not included.
+Back up original FITS and XISF files separately. See [Backups](docs/BACKUPS.md)
+for permissions, schedules, archive contents, and restoration.
 
 ## ⚠️ Known limitations
 
-- **Path assumptions.** Directory layouts matching
-  `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/...` (with or without the
-  leading date) are detected reliably. Other patterns may need support; open
-  an issue with an example.
-- **Make backups.** Back up any catalog before broad edits, and back up FITS
-  files before using file-moving commands. `move-rejects` records reversible
-  moves, but a backup remains the last line of recovery.
+- **Folder layouts:** PSF Guard recognizes common N.I.N.A. layouts such as
+  `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/...`. If a layout is not
+  recognized, report it with an example path.
+- **Optional evidence:** plate solving needs Seiza catalogs; satellite checks
+  need exposure and site metadata. Missing inputs limit the checks available.
+- **Beta integrations:** Director pairing and collaboration remain early beta.
+  Use Target Scheduler with PSF Guard Sync for the capture workflow above.
 
 ## 🛠️ Development
 
+Read the [contributor and writing guide](CLAUDE.md) before changing code or
+prose. Use the pinned Rust toolchain and Node.js 24.15 or later in the 24
+series (or Node.js 26+).
+
 ```bash
-cargo fmt && cargo clippy && cargo test
-RUST_LOG=debug cargo run -- server db.sqlite images/
-cd static && npm run dev                   # frontend dev server
-cd static && npm run test:e2e              # Playwright end-to-end suite
+# From the repository root:
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+
+# Frontend checks:
+(cd static && npm ci && npm run lint && npx vitest run && npm run build)
+
+# Browser tests, after building the server and installing Playwright browsers:
+scripts/e2e-local.mjs e2e/navigation.spec.ts
 ```
 
-Contributor rules live in [CLAUDE.md](CLAUDE.md). Detailed user and engineering
-guides start at [docs/README.md](docs/README.md).
+Run local browser tests through the guard script, one run at a time. See
+[frontend development](static/README.md) for setup and
+[running e2e locally](static/README.md#running-e2e-locally) for the test workflow.
+Use a temporary registry for ad-hoc server work:
+
+```bash
+RUST_LOG=debug cargo run -- server --registry /tmp/psf-guard-test.json \
+  --host 127.0.0.1 db.sqlite images/
+```
+
+The [documentation index](docs/README.md) links current user guides and
+engineering records.
 
 ## 📄 License
 

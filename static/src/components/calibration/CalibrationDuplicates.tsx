@@ -37,7 +37,7 @@ function groupNote(group: CalibrationTwinGroup): string {
   const missing = group.members.filter((member) => !member.exists).length;
   const copies = group.members.filter((member) => member.exists).length;
   const parts = [];
-  if (missing > 0) parts.push(`${plural(missing, 'row')} whose file is gone`);
+  if (missing > 0) parts.push(`${plural(missing, 'row')} with a missing file`);
   if (copies > 1) parts.push(`${copies} copies on disk`);
   return parts.join(' · ');
 }
@@ -47,11 +47,11 @@ function planLines(report: CalibrationDuplicateReport): string[] {
   const doubled = report.masters.filter((master) => master.doubled).length;
   return [
     `${plural(report.groups.length, 'exposure')} recorded more than once`,
-    `${plural(report.rows_removed, 'row')} merged into the row kept: ${report.missing_rows} whose file is gone, ${report.physical_rows} ${report.physical_rows === 1 ? 'second copy' : 'second copies'} on disk`,
-    ...(report.repointed > 0 ? [`${plural(report.repointed, 'kept row')} ${report.repointed === 1 ? 'moves' : 'move'} to a live copy, its own file being gone`] : []),
+    `${plural(report.rows_removed, 'row')} merged into retained records: ${report.missing_rows} with missing files, ${report.physical_rows} with duplicate files on disk`,
+    ...(report.repointed > 0 ? [`${plural(report.repointed, 'retained record')} updated to reference an existing copy because the original file is missing`] : []),
     report.masters.length > 0
-      ? `${plural(report.masters.length, 'master')} built again${doubled > 0 ? `, ${doubled} of them averaged an exposure twice` : ''}`
-      : 'No master needs building again',
+      ? `${plural(report.masters.length, 'master')} to rebuild${doubled > 0 ? `; ${doubled} included an exposure twice` : ''}`
+      : 'No masters need rebuilding',
   ];
 }
 
@@ -64,10 +64,10 @@ function names(list: string[], total: number): string {
 /** What changed between the preview and Apply, in words. */
 function changeLines(change: CalibrationPlanChange): string[] {
   const lines = [];
-  if (change.added_count > 0) lines.push(`${plural(change.added_count, 'exposure')} newly recorded twice: ${names(change.added, change.added_count)}`);
-  if (change.dropped_count > 0) lines.push(`${plural(change.dropped_count, 'exposure')} no longer to repair: ${names(change.dropped, change.dropped_count)}`);
+  if (change.added_count > 0) lines.push(`${plural(change.added_count, 'exposure')} with new duplicates: ${names(change.added, change.added_count)}`);
+  if (change.dropped_count > 0) lines.push(`${plural(change.dropped_count, 'exposure')} no longer needing repair: ${names(change.dropped, change.dropped_count)}`);
   if (change.altered_count > 0) lines.push(`${plural(change.altered_count, 'exposure')} whose rows or files changed: ${names(change.altered, change.altered_count)}`);
-  if (lines.length === 0) lines.push('The rows the preview read changed, though the exposures to repair are the same.');
+  if (lines.length === 0) lines.push('Catalog records changed, but the same exposures still need repair.');
   return lines;
 }
 
@@ -305,7 +305,7 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
               </ul>
               {group.repointed && (
                 <p className="calibration-muted calibration-twin-move">
-                  The kept row moves to <code>{group.path}</code>
+                  The retained record will reference <code>{group.path}</code>
                 </p>
               )}
             </li>
@@ -344,7 +344,7 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
                 <p className="calibration-muted">
                   {dialog.phase === 'repair'
                     ? 'The plan is checked against the files once more, then the exposures merge in one transaction. Stop rolls the whole repair back.'
-                    : 'Looking at each file the duplicate rows record, and comparing copies that could hold one exposure. Close this and the check goes on; the job line shows it.'}
+                    : 'Checking files linked to duplicate records and comparing possible copies of the same exposure. You can close this dialog; the check continues in the background jobs list.'}
                 </p>
               </>
             ) : dialogStatus?.state === 'stopped' ? (
@@ -376,17 +376,16 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
                   {planLines(dialogStatus.report).map((line) => <li key={line}>{line}</li>)}
                 </ul>
                 <p className="calibration-muted">
-                  The oldest row of each exposure stays, with its grade and marks; the others are merged into it.
-                  No file is moved or deleted. A second copy on disk is remembered, so later scans skip it.
+                  PSF Guard keeps the oldest record for each exposure, including its grade and marks, and merges the duplicates into it.
+                  No files are moved or deleted. Later scans skip known duplicate files.
                 </p>
                 <p className="calibration-muted">
-                  The repair covers every rig and type in this library, not only the groups shown. A catalog this
-                  one pulls from keeps its own duplicates until it is repaired there; a pull leaves these rows
-                  merged here.
+                  The repair covers all rigs and frame types in this library, including groups outside the current filters.
+                  Repair source catalogs separately. Syncing from a source catalog does not restore duplicates repaired here.
                 </p>
                 {dialogStatus.report.masters.length > 0 && (
                   <details>
-                    <summary>Masters built again</summary>
+                    <summary>Masters to rebuild</summary>
                     <ul className="calibration-repair-masters">
                       {dialogStatus.report.masters.map((master) => (
                         <li key={master.master_uuid}>

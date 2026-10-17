@@ -39,14 +39,14 @@ const WEIGHTING: Choice<'weighting'>[] = [
       'Each frame counts by the inverse of its noise variance, so frames shot through ' +
       'haze or moonlight count for less. Weights stay between 0.05 and 20.',
   },
-  { value: 'equal', label: 'Equal', help: 'Every admitted frame counts the same.' },
+  { value: 'equal', label: 'Equal', help: 'Every included frame has equal weight.' },
 ];
 
 const REGISTRATION: Choice<'registration'>[] = [
   {
     value: 'quadratic',
     label: 'Quadratic',
-    help: "Follows a wide field's lens distortion, which turns against the sky after a meridian flip.",
+    help: "Models lens distortion in wide fields, including its rotation relative to the sky after a meridian flip.",
   },
   { value: 'affine', label: 'Affine', help: 'Adds shear and unequal scale to shift, rotation and scale.' },
   { value: 'similarity', label: 'Similarity', help: 'Shift, rotation and uniform scale only.' },
@@ -66,9 +66,9 @@ const REFERENCE: Choice<'reference'>[] = [
     value: 'auto',
     label: 'Chosen by Seiza',
     help:
-      "Seiza scores every frame by its own stars and sky noise, then takes the flattest " +
-      'sky among frames close to the best. Reads each frame once more before stacking; ' +
-      'the scores are kept, so a rebuild reads only new frames.',
+      "Seiza scores each frame's stars and sky noise, then selects the most even " +
+      'background among the highest-scoring frames. This requires an extra read before stacking. ' +
+      'Saved scores are reused, so rebuilds only score new frames.',
   },
   {
     value: 'best_graded',
@@ -221,8 +221,7 @@ export default function StackMethodSettings() {
               Bayer drizzle
               <small>
                 Integrates each frame&apos;s photosites in their own color instead of
-                demosaicing, so nothing is interpolated. Pays only when frames are dithered by
-                several pixels; with little movement it lowers signal-to-noise. A drizzled
+                demosaicing, so nothing is interpolated. Works best when frames are dithered by several pixels; with little movement it lowers signal-to-noise. A drizzled
                 stack skips the final pass for now.
               </small>
             </span>

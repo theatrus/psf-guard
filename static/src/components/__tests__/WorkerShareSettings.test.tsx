@@ -50,6 +50,7 @@ describe('WorkerShareSettings', () => {
     renderSettings();
     const background = await screen.findByRole('slider', { name: 'Background work share of cores' });
     expect(screen.getByText('25% · 4 of 16 cores')).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Interactive work share of cores' })).toHaveValue('50');
     fireEvent.change(background, { target: { value: '10' } });
     fireEvent.pointerUp(background);
     await waitFor(() => expect(saved).toEqual([{ interactive_ratio: null, background_ratio: 0.1 }]));

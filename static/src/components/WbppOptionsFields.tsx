@@ -54,8 +54,8 @@ export default function WbppOptionsFields({ value, onChange, idPrefix = 'wbpp', 
         <span>
           Fast Integration
           <small>
-            In-memory stacking with less weighting. WBPP switches any group of 150 or more
-            frames to it on its own unless told off.
+            In-memory stacking with less weighting. WBPP uses Fast Integration automatically for
+            groups of 150 or more frames unless disabled.
           </small>
         </span>
         <select

@@ -1380,7 +1380,7 @@ export default function StackPreviewPanel({
                         <div><strong>{progressGroup.rejected_frames}</strong><span>stack rejects</span></div>
                         <div><strong>{progressGroup.quality_excluded}</strong><span>quality excluded</span></div>
                         {(progressGroup.calibration_excluded ?? 0) > 0 && (
-                          <div title="No matching flat, bias or dark, or flats past the age limit; each frame says why">
+                          <div title="No matching flat, bias or dark, or flats past the age limit. Open a frame to see its calibration issues.">
                             <strong>{progressGroup.calibration_excluded}</strong><span>can't calibrate</span>
                           </div>
                         )}

@@ -111,8 +111,8 @@ function SecretsToggle({
           {heldOff
             ? heldOff
             : held.length > 0
-              ? `PSF Guard holds ${held.join(', ')}. Left out, you enter them again after a restore. Included, anyone with the archive can use them.`
-              : 'PSF Guard holds no peer keys or tokens now. Account passwords are kept as hashes either way.'}
+              ? `PSF Guard stores these credentials: ${held.join(', ')}. If you exclude them, you must enter them again after restoring. If you include them, anyone with the archive can use them.`
+              : 'PSF Guard has no stored peer keys or tokens. Backups always include account password hashes.'}
         </small>
       </span>
     </label>
@@ -177,7 +177,7 @@ function ScopeChoice({
       </label>
       {value === 'full' && overview.unreachable_catalogs.length > 0 && (
         <p className="backup-note is-caution">
-          Not reachable now, so left out: {overview.unreachable_catalogs.join(', ')}.
+          Unavailable catalogs excluded from the backup: {overview.unreachable_catalogs.join(', ')}.
         </p>
       )}
     </fieldset>
@@ -309,7 +309,7 @@ function BackupNow({ overview, job }: { overview: BackupsOverview; job: BackupJo
           <small className="muted">
             {desktop
               ? 'A folder on another disk keeps the backup safe if this one fails.'
-              : 'Empty: download the archive in this browser.'}
+              : 'Leave blank to download the archive in this browser.'}
           </small>
         </span>
         <PathField
@@ -539,8 +539,8 @@ function BackupSchedule({ overview }: { overview: BackupsOverview }) {
           </span>
           <small className="backup-field-hint" id="backup-keep-hint">
             {draft.retention.kind === 'count'
-              ? 'Older scheduled backups go once there are more.'
-              : 'Older scheduled backups go; the newest always stays.'}
+              ? 'PSF Guard deletes older scheduled backups when the count exceeds this limit.'
+              : 'PSF Guard deletes scheduled backups older than this limit, but always keeps the newest.'}
           </small>
         </div>
       </fieldset>
@@ -624,15 +624,14 @@ function BackupList({ overview }: { overview: BackupsOverview }) {
                 </a>
               )}
               {!desktop && listing.secrets === 'included' && (
-                <span className="backup-row-note">Holds secrets: stays on the server&apos;s disk.</span>
+                <span className="backup-row-note">Download unavailable: this backup contains credentials. Access the archive on the server.</span>
               )}
             </li>
           ))}
         </ul>
       )}
       <p className="review-preferences-note">
-        To restore, stop PSF Guard and copy the files back by hand; the archive&apos;s README.txt and
-        manifest say where each goes.
+        To restore, stop PSF Guard and copy the files back by hand; follow the restore paths in the archive&apos;s README.txt and manifest.
       </p>
     </section>
   );

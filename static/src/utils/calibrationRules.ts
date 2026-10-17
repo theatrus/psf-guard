@@ -175,11 +175,11 @@ export function parseDraft(field: CalibrationRuleField, draft: RuleDraft): Parse
       if (suspect === undefined || poor === undefined) {
         return {
           ok: false,
-          error: `Enter ${kind.min * scale} to ${kind.max * scale}${kind.percent ? '%' : ''}, or leave a limit empty for never.`,
+          error: `Enter ${kind.min * scale} to ${kind.max * scale}${kind.percent ? '%' : ''}, or leave a threshold blank to disable it.`,
         };
       }
       if (suspect !== null && poor !== null && (kind.lower_is_worse ? suspect < poor : suspect > poor)) {
-        return { ok: false, error: 'A frame must turn suspect before it turns poor.' };
+        return { ok: false, error: 'Set thresholds so a frame reaches Suspect before Poor.' };
       }
       return { ok: true, value: { suspect, poor } };
     }

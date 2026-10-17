@@ -727,7 +727,7 @@ describe('CalibrationPage', () => {
     renderPage('/calibration?db=demo&calTab=masters');
     const masters = await screen.findByRole('region', { name: 'Masters' });
     expect(await within(masters).findByText('Used by Heart')).toBeInTheDocument();
-    expect(within(masters).getByText('Thin')).toBeInTheDocument();
+    expect(within(masters).getByText('Too few frames')).toBeInTheDocument();
     expect(within(masters).getByText('Poor · spots')).toBeInTheDocument();
     expect(within(masters).getByText('31 changing, 25 carried, 4 steady spots')).toBeInTheDocument();
     // Built by the server: on the viewer's clock, with its zone.
@@ -890,8 +890,8 @@ describe('CalibrationPage', () => {
       const preview = within(dialog).getByRole('region', { name: 'Repair preview' });
       expect(await within(preview).findByText('2 exposures recorded more than once', {}, POLL)).toBeInTheDocument();
       expect(seen.checks).toBe(2);
-      expect(within(preview).getByText(/1 master built again, 1 of them averaged an exposure twice/)).toBeInTheDocument();
-      expect(within(preview).getByText(/covers every rig and type in this library/)).toBeInTheDocument();
+      expect(within(preview).getByText(/1 master to rebuild; 1 included an exposure twice/)).toBeInTheDocument();
+      expect(within(preview).getByText(/covers all rigs and frame types in this library/)).toBeInTheDocument();
 
       job.hold = true;
       fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));

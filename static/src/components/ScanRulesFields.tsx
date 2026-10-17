@@ -36,7 +36,7 @@ export default function ScanRulesFields({ value, onChange }: ScanRulesFieldsProp
         rows={2}
         spellCheck={false}
         placeholder="LIGHT"
-        title="One pattern per line. When set, only files that match one, or sit in a folder that does, are read."
+        title="One pattern per line. Import only matching files and files within matching folders."
         value={value.include.join('\n')}
         onChange={(event) => set({ include: lines(event.target.value) })}
       />
@@ -46,7 +46,7 @@ export default function ScanRulesFields({ value, onChange }: ScanRulesFieldsProp
           checked={value.lights_must_say_light}
           onChange={(event) => set({ lights_must_say_light: event.target.checked })}
         />{' '}
-        Lights must say LIGHT
+        Require LIGHT in the image-type header
       </label>
       <label className="checkbox-label">
         <input
@@ -67,7 +67,7 @@ export default function ScanRulesFields({ value, onChange }: ScanRulesFieldsProp
         />{' '}
         Match targets by position
       </label>
-      <label htmlFor="scan-rules-min-exposure">Shortest light (s):</label>
+      <label htmlFor="scan-rules-min-exposure">Minimum light exposure (s):</label>
       <input
         id="scan-rules-min-exposure"
         className="file-path-input scan-rules-exposure"

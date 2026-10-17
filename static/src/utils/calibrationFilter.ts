@@ -14,8 +14,8 @@ export const CALIBRATION_LEVELS: ReadonlyArray<{ value: CalibrationHealthLevel; 
 const CODE_LABELS: Record<CalibrationHealthCode, string> = {
   no_library: 'No library match',
   cannot_calibrate: "Can't be calibrated",
-  thin_dark: 'Thin dark master',
-  thin_bias: 'Thin bias master',
+  thin_dark: 'Dark master has too few frames',
+  thin_bias: 'Bias master has too few frames',
   flat_spots: 'Spots in flats',
   old_flats: 'Old flats',
   mixed_flats: 'Flats from several nights',

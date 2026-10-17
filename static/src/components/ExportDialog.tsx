@@ -63,7 +63,7 @@ const SERVER_PLACEMENTS: PlacementOption[] = [
   {
     value: 'reference',
     label: 'Reference in place',
-    help: 'Copies nothing. A run-wbpp.js PixInsight script points to every frame where it already is and tells WBPP which night\u2019s flats each light takes. Needs the WBPP layout.',
+    help: 'Copies nothing. A run-wbpp.js PixInsight script points to every frame where it already is and tells WBPP which flats to use for each light. Needs the WBPP layout.',
   },
 ];
 
@@ -258,7 +258,7 @@ export default function ExportDialog({
               <label className="export-dialog-remote-root">
                 <span>
                   PixInsight path
-                  <small>That folder on the PixInsight machine. Empty means the same path.</small>
+                  <small>Path to the same folder on the PixInsight machine. Leave blank to use the server path.</small>
                 </span>
                 <input
                   type="text"

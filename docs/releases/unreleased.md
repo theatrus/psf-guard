@@ -4,6 +4,9 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- UI labels, settings help, and confirmation messages now state actions,
+  limits, defaults, and deletion rules more clearly. Calibration explanations
+  distinguish pixel evidence from angle-based matching and explain duplicate repairs.
 - Purge Rejects' Preview, Remove, Restore and Empty trash run as a job. The
   dialog and the background jobs list say what it is doing and how far, as
   `Moving to the trash 37 of 203`, and **Stop** ends it after the frame in
@@ -154,12 +157,13 @@
   the archive in a browser or save it to a folder in the desktop app, or
   turn on scheduled backups: daily or weekly at a time you choose, to a
   folder you choose, keeping the newest few or those younger than some
-  days. Scheduled backups
-  run in the background, step aside for your own work, show in the job line
-  with Stop, and remove only their own older archives. Peer keys and tokens
-  are left out unless you ask for them. `psf-guard backup` does the same
-  from the command line, with `--dry-run`. Restoring is by hand; see
-  [Backups](../BACKUPS.md).
+  days. Scheduled backups wait for work you start and show progress in the
+  job list, where you can stop them. They remove only their own older
+  archives. Peer keys and tokens
+  are included by default in manual desktop backups and new desktop
+  schedules, and excluded by default in a browser. `psf-guard backup` supports
+  both scopes, `--dry-run`, and `--include-secrets`. CLI backups exclude
+  secrets by default. Restore archives manually; see [Backups](../BACKUPS.md).
 
 - Flat groups can be split and joined by hand in Calibration › Frames ›
   Groups (**Split here**, **Join**), and a light can be put before or

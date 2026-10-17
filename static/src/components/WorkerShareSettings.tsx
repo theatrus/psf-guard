@@ -10,13 +10,13 @@ type Share = 'interactive_ratio' | 'background_ratio';
 const SHARES: Array<{ key: Share; label: string; help: string }> = [
   {
     key: 'interactive_ratio',
-    label: 'Work you wait on',
-    help: 'Stack builds, color and stretches you start, quality scans you start, and previews being looked at.',
+    label: 'Interactive work',
+    help: 'Stack builds, color processing, stretches and quality scans you start, plus previews you are viewing.',
   },
   {
     key: 'background_ratio',
     label: 'Background work',
-    help: 'Automatic stack refreshes, quality backfill and new-frame analysis in every database, and preview pre-generation. It pauses while you wait on work.',
+    help: 'Automatic stack refreshes, quality analysis and preview generation across all databases. Background jobs pause while jobs you start run.',
   },
 ];
 
@@ -53,7 +53,7 @@ export default function WorkerShareSettings() {
     return (
       <div className="stack-method-settings">
         <h3>Processor use</h3>
-        <p className="muted" role="alert">Could not load the processor shares.</p>
+        <p className="muted" role="alert">Could not load processor limits.</p>
       </div>
     );
   }
@@ -70,9 +70,9 @@ export default function WorkerShareSettings() {
     <div className="stack-method-settings worker-share-settings">
       <h3>Processor use</h3>
       <p className="muted">
-        How many of this computer&apos;s {current.logical_cores} cores each kind of work may use,
-        all of it together: jobs running at the same time split the share. A change applies to
-        work that starts after it. Memory can lower the count further.
+        Set how many of this computer&apos;s {current.logical_cores} cores each type of work can use.
+        Concurrent jobs share that limit. Changes apply to new jobs. Available memory may
+        reduce the number of cores a job can use.
       </p>
       <fieldset className="calibration-settings-group" disabled={save.isPending}>
         {SHARES.map((share) => {

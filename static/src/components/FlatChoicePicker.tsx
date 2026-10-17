@@ -8,16 +8,16 @@ import { useRigClocks } from './calibration/useRigClocks';
 const UNSETTLED = new Set(['no_same_side', 'undetermined']);
 
 const PLACED_BY: Record<string, string> = {
-  time: 'by its time',
-  session: 'by its imaging session',
-  pixels: 'by its own pixels',
+  time: 'based on capture time',
+  session: 'based on imaging session',
+  pixels: 'based on pixel measurements',
   undetermined: 'undetermined',
   person: 'chosen by you',
 };
 
 /** A choice in a few words. */
 function choiceText(choice: FlatChoiceNote): string {
-  return choice.choice === 'group' ? `Takes ${choice.label}` : `Put ${choice.label}`;
+  return choice.choice === 'group' ? `Uses ${choice.label}` : `Assigned ${choice.label}`;
 }
 
 interface FlatChoicePickerProps {
@@ -107,7 +107,7 @@ function LightFlatChoices({ dbId, imageId, kind, rig }: FlatChoicePickerProps) {
       )}
       {picker && (
         <>
-          <span className="light-calibration-part-label">Choose its flats</span>
+          <span className="light-calibration-part-label">Choose flats for this light</span>
           {changes.map((change) => (
             <div key={change.key} className="light-flat-side" data-testid="calibration-flat-side">
               <span>
@@ -115,9 +115,9 @@ function LightFlatChoices({ dbId, imageId, kind, rig }: FlatChoicePickerProps) {
                 <span className="light-calibration-muted">
                   {' · '}
                   {change.chosen
-                    ? `you put it ${change.chosen}`
+                    ? `you assigned this light ${change.chosen} the change`
                     : change.side
-                      ? `${change.side} it ${PLACED_BY[change.by] ?? change.by}`
+                      ? `${change.side} the change, ${PLACED_BY[change.by] ?? change.by}`
                       : 'side undetermined'}
                 </span>
               </span>
@@ -137,7 +137,7 @@ function LightFlatChoices({ dbId, imageId, kind, rig }: FlatChoicePickerProps) {
           {groups.length > 0 && (
             <div className="light-flat-side">
               <label className="light-flat-group">
-                <span>Or take one group's flats</span>
+                <span>Or use flats from one group</span>
                 <select value={group || chosenGroup} onChange={(event) => setGroup(event.target.value)}
                   data-testid="calibration-flat-group">
                   <option value="">Choose a group…</option>

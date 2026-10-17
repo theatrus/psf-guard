@@ -91,7 +91,7 @@ export default function CalibrationRigSettings({ focusRig = null, focusField = n
     <div className="calibration-rig-settings">
       <h3>Rigs</h3>
       <p className="review-preferences-note">
-        A rig's own value beats the global one; the rest inherit. A rig here is a telescope, camera,
+        Rig overrides replace the global settings. All other fields use the global values. A rig here is a telescope, camera,
         frame size and binning; each catalog's{' '}
         <button type="button" className="link-button" onClick={() => openSettings('rigs')}>
           Rigs
@@ -124,7 +124,7 @@ export default function CalibrationRigSettings({ focusRig = null, focusField = n
                   <span className="calibration-rig-name">{rig.name}</span>
                   {meta && <span className="calibration-rig-meta">{meta}</span>}
                   <span className={`calibration-rig-count${own > 0 ? ' has-own-values' : ''}`}>
-                    {own > 0 ? plural(own, 'own value') : 'Inherits all'}
+                    {own > 0 ? plural(own, 'override') : 'Uses global settings'}
                   </span>
                 </button>
                 {expanded && (
@@ -203,7 +203,7 @@ function RigEditor({ rig, fields, globalRules }: RigEditorProps) {
             const result = parseDraft(field, own[field.key]);
             // An own number left empty has no value to stand on.
             if (result.ok && result.value === null && field.kind.type !== 'limits') {
-              return [field.key, { ok: false as const, error: 'Enter a value, or let it inherit.' }];
+              return [field.key, { ok: false as const, error: 'Enter a value, or use the global setting.' }];
             }
             return [field.key, result];
           }),
@@ -312,11 +312,11 @@ function RigEditor({ rig, fields, globalRules }: RigEditorProps) {
                         type="button"
                         className="calibration-rule-own"
                         aria-pressed={isOwn}
-                        aria-label={`${field.label}: own value`}
-                        title={isOwn ? 'Inherit again' : 'Set a value for this rig'}
+                        aria-label={`${field.label}: override global setting`}
+                        title={isOwn ? 'Use global setting' : 'Set a value for this rig'}
                         onClick={() => toggle(field)}
                       >
-                        Own value
+                        Override global setting
                       </button>
                       {error && <p className="error-text">{error}</p>}
                     </div>
@@ -347,7 +347,7 @@ function RigEditor({ rig, fields, globalRules }: RigEditorProps) {
           disabled={busy || Object.keys(rig.rules).length === 0}
           onClick={() => reset.mutate()}
         >
-          Inherit everything
+          Use global settings for all fields
         </button>
       </div>
     </div>

@@ -10,7 +10,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "rotation_tolerance_deg",
     "group": "matching",
     "label": "Flat rotation",
-    "help": "How far a flat's rotator angle may sit from the light it corrects. Wider accepts a rotator that re-homes loosely; one master still takes flats within 2° of each other.",
+    "help": "Maximum difference between the flat and light rotator angles. Flats within one master must still be within 2° of each other.",
     "effect": "matching",
     "kind": {
       "type": "number",
@@ -25,7 +25,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "focal_length_tolerance_mm",
     "group": "matching",
     "label": "Flat focal length",
-    "help": "How far a flat's recorded focal length may sit from the light's, as when a profile's focal length was refined. One master still takes flats within 1 mm of each other.",
+    "help": "Maximum difference between the flat and light focal lengths. Flats within one master must still be within 1 mm of each other.",
     "effect": "matching",
     "kind": {
       "type": "number",
@@ -40,7 +40,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "dark_temperature_tolerance_c",
     "group": "matching",
     "label": "Dark temperature",
-    "help": "How far a dark's sensor temperature may sit from the light's, and a dark flat's from its flat's. Wider lets a rig that cannot hold its set point use darks shot a little warmer or cooler; one master still takes darks within 1 °C of each other.",
+    "help": "Maximum sensor temperature difference between a dark and light, or between a dark flat and flat. Darks within one master must still be within 1 °C of each other.",
     "effect": "matching",
     "kind": {
       "type": "number",
@@ -55,7 +55,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "flat_session_hours",
     "group": "matching",
     "label": "Flat session",
-    "help": "How far apart the flats one master takes may have been shot. Longer pools sky flats shot on several evenings.",
+    "help": "Maximum time span of flats combined into one master. With measured grouping, PSF Guard combines nights only when their flat measurements match.",
     "effect": "matching",
     "kind": {
       "type": "number",
@@ -70,7 +70,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "use_darks",
     "group": "matching",
     "label": "Use darks",
-    "help": "Off for a rig that cannot shoot matching darks: its lights take bias and flats only, and are not flagged for lacking a dark.",
+    "help": "Turn off to calibrate lights with bias and flats only, without flagging missing darks.",
     "effect": "matching",
     "kind": {
       "type": "toggle"
@@ -106,7 +106,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "night_zone",
     "group": "matching",
     "label": "Rig's time zone",
-    "help": "Calibration splits a rig's frames into nights at local noon, so a dusk or dawn flat run stays one session. Automatic takes noon from the site longitude its frames record (the N.I.N.A. profile's), else from its computer's clock, else from when the catalog's lights are quiet. Pick the rig's standard offset when its frames record no site or a wrong one; daylight saving moves noon by an hour, which no night notices.",
+    "help": "Calibration nights end at local noon so dawn flats remain in one session. Automatic uses the site longitude recorded in frame headers, then the clock if no longitude is available. Choose an offset if that information is missing or incorrect.",
     "effect": "grades",
     "kind": {
       "type": "choice",
@@ -274,8 +274,8 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "dark_reach_days",
     "group": "darks",
-    "label": "Dark reach",
-    "help": "Darks shot further than this from the light do not match. A dark marked to serve lights before or after it follows its mark instead.",
+    "label": "Maximum time difference for darks",
+    "help": "Maximum time between a dark and the light it calibrates. Darks outside this range are excluded unless explicitly assigned to the light.",
     "effect": "matching",
     "kind": {
       "type": "number",
@@ -289,8 +289,8 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "complete_dark_frames",
     "group": "darks",
-    "label": "Complete night",
-    "help": "When the nearest night alone has this many matching darks, the master uses that night only; with fewer, the nights within reach pool.",
+    "label": "Minimum darks for a single-night master",
+    "help": "If the nearest night has this many matching darks, build the master from that night alone. Otherwise, combine nights within the allowed time range.",
     "effect": "matching",
     "kind": {
       "type": "count",
@@ -303,8 +303,8 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "dark_choice",
     "group": "darks",
-    "label": "Dark choice",
-    "help": "Complete set first: a complete set beats a nearer, shorter one. Bias masters and WBPP exports follow it too.",
+    "label": "Dark selection preference",
+    "help": "Choose whether to prefer a complete set of darks over a nearer set with fewer frames. This preference also applies to bias masters and WBPP exports.",
     "effect": "matching",
     "kind": {
       "type": "choice",
@@ -325,7 +325,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "flat_grouping",
     "group": "flat_groups",
     "label": "Group flats",
-    "help": "Measured: nights mix in one master only when their flats measure alike, and a light takes flats from its own side of every measured change, such as new dust. By time: one master takes the flats within the flat session.",
+    "help": "By measurement: combine nights only when their flats match, and use flats from the same side of a measured change as the light. By time only: build one master per flat session.",
     "effect": "matching",
     "kind": {
       "type": "choice",
@@ -346,7 +346,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "flat_split_dust_pct",
     "group": "flat_groups",
     "label": "Dust split",
-    "help": "The largest dust difference two nights' flats may have and still share a master: what moved, new or vanished dust would leave in a light calibrated with the other night's flats, in percent of the sky background.",
+    "help": "Maximum dust difference between nights that share a flat master, as a percentage of the sky background.",
     "effect": "matching",
     "kind": {
       "type": "number",
@@ -361,7 +361,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "flat_split_pattern_pct",
     "group": "flat_groups",
     "label": "Light pattern split",
-    "help": "The largest broad difference two nights' flats may have, such as a changed vignette, after a straight gradient is removed, in percent of the sky background.",
+    "help": "Maximum broad pattern difference between nights that share a flat master, after removing a linear gradient. This includes changes in vignetting.",
     "effect": "matching",
     "kind": {
       "type": "number",
@@ -376,7 +376,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "flat_max_age_days",
     "group": "checks",
     "label": "Flat age limit",
-    "help": "Lights whose flats were shot further away than this can't be calibrated.",
+    "help": "Flag lights as uncalibratable when the time between the light and its matching flats exceeds this limit.",
     "effect": "flags",
     "kind": {
       "type": "number",
@@ -392,7 +392,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "flat_check_age_days",
     "group": "checks",
     "label": "Flat age warning",
-    "help": "Lights whose flats were shot further away than this, but within the age limit, are worth a look.",
+    "help": "Flag lights for review when the time to their matching flats exceeds this warning threshold but remains within the age limit.",
     "effect": "flags",
     "kind": {
       "type": "number",
@@ -407,8 +407,8 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "thin_master_frames",
     "group": "checks",
-    "label": "Thin master",
-    "help": "A bias or dark master built from fewer frames puts its own read noise into every light.",
+    "label": "Minimum frames in bias and dark masters",
+    "help": "Flag bias or dark masters with fewer source frames than this threshold because they can add read noise.",
     "effect": "flags",
     "kind": {
       "type": "count",
@@ -477,8 +477,8 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "check_thin_dark",
     "group": "checks",
-    "label": "Thin dark master",
-    "help": "Its dark master would use fewer frames than the thin limit.",
+    "label": "Dark master has too few frames",
+    "help": "The dark master has fewer than the minimum number of frames.",
     "effect": "flags",
     "kind": {
       "type": "check",
@@ -491,8 +491,8 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "check_thin_bias",
     "group": "checks",
-    "label": "Thin bias master",
-    "help": "Its bias master would use fewer frames than the thin limit: poor when no dark serves the light, check when one does.",
+    "label": "Bias master has too few frames",
+    "help": "The bias master has fewer than the minimum number of frames. Flag the light as Poor if it has no dark master, or Check if it has one.",
     "effect": "flags",
     "kind": {
       "type": "check",
@@ -536,7 +536,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "check_mixed_flats",
     "group": "checks",
     "label": "Flats from several nights",
-    "help": "Its flat master takes flats from nights not measured against each other. Nights whose flats measure alike mix without a word.",
+    "help": "The master combines nights whose flats have not been compared. Nights with matching flat measurements do not trigger this check.",
     "effect": "flags",
     "kind": {
       "type": "check",
@@ -563,8 +563,8 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "check_suspect_frames",
     "group": "checks",
-    "label": "Suspect frames in its masters",
-    "help": "Its masters use frames graded suspect.",
+    "label": "Suspect frames in calibration masters",
+    "help": "The light's calibration masters include frames graded Suspect.",
     "effect": "flags",
     "kind": {
       "type": "check",
@@ -577,8 +577,8 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
   {
     "key": "check_short_after_keep_out",
     "group": "checks",
-    "label": "Short after keeping frames out",
-    "help": "Frames kept out by hand leave its bias, darks or flats under the thin limit.",
+    "label": "Too few frames after manual exclusions",
+    "help": "Manual exclusions leave the light's masters with fewer than the minimum number of frames.",
     "effect": "flags",
     "kind": {
       "type": "check",
@@ -592,7 +592,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "grade_bias_level",
     "group": "grades",
     "label": "Bias level",
-    "help": "Distance of a bias's level from its set's, in the set's noise.",
+    "help": "Difference between a bias frame's level and the level of its comparison set, measured in units of the set's noise.",
     "effect": "grades",
     "kind": {
       "type": "limits",
@@ -652,7 +652,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "grade_dark_level",
     "group": "grades",
     "label": "Dark stray light",
-    "help": "How far a dark's level sits above the quietest dark that could stand in for it, in that dark's spread. Light reaching the sensor raises it.",
+    "help": "How much the dark frame's level exceeds the quietest matching dark, measured in units of that dark's spread. Light leaks raise this value.",
     "effect": "grades",
     "kind": {
       "type": "limits",
@@ -852,7 +852,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "grade_flat_carried_spots",
     "group": "grades",
     "label": "Carried flat spots",
-    "help": "Changing spots in most of a set's flats, which its master keeps. Decides the 'changing spots in flats' light check.",
+    "help": "Changing spots present in most flats in a set can remain in the master. These thresholds determine the grade for the Changing spots in flats check.",
     "effect": "grades",
     "kind": {
       "type": "limits",

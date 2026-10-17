@@ -57,13 +57,13 @@ describe('CalibrationMatchingSettings', () => {
     const rotation = await screen.findByLabelText('Flat rotation');
     expect(rotation).toHaveValue(null);
     expect(rotation).toHaveAttribute('placeholder', '2');
-    expect(screen.getByLabelText('Dark reach')).toHaveAttribute('placeholder', '183');
-    expect(screen.getByLabelText('Dark choice')).toHaveValue('complete');
+    expect(screen.getByLabelText('Maximum time difference for darks')).toHaveAttribute('placeholder', '183');
+    expect(screen.getByLabelText('Dark selection preference')).toHaveValue('complete');
     expect(screen.getByLabelText('No matching flat')).toHaveValue('flag');
     for (const legend of ['Matching', 'Dark masters', 'Flat masters', 'Light checks', 'Stacks and exports']) {
       expect(screen.getByRole('group', { name: legend })).toBeInTheDocument();
     }
-    expect(screen.getByText(/Nothing is rebuilt/)).toBeInTheDocument();
+    expect(screen.getByText(/These checks do not rebuild masters/)).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Mask stars in flats' })).not.toBeChecked();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
@@ -78,19 +78,19 @@ describe('CalibrationMatchingSettings', () => {
       }),
     );
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const reach = await screen.findByLabelText('Dark reach');
+    const reach = await screen.findByLabelText('Maximum time difference for darks');
     fireEvent.change(reach, { target: { value: '5000' } });
     expect(screen.getByText('Enter 1 to 3650 days.')).toBeInTheDocument();
     expect(reach).toHaveAttribute('aria-invalid', 'true');
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     fireEvent.change(reach, { target: { value: '90' } });
     // The default, typed out, is still the default.
-    fireEvent.change(screen.getByLabelText('Complete night'), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText('Minimum darks for a single-night master'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     // Only what changed: the default typed out changes nothing.
     await waitFor(() => expect(saved).toEqual({ rules: { dark_reach_days: 90 } }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled());
-    expect(screen.getByLabelText('Dark reach')).toHaveValue(90);
+    expect(screen.getByLabelText('Maximum time difference for darks')).toHaveValue(90);
   });
 
   it('makes a check advisory or turns it off', async () => {
@@ -134,7 +134,7 @@ describe('CalibrationMatchingSettings', () => {
     expect(suspect).toHaveValue(2);
     expect(poor).toHaveValue(5);
     fireEvent.change(suspect, { target: { value: '12' } });
-    expect(screen.getByText('A frame must turn suspect before it turns poor.')).toBeInTheDocument();
+    expect(screen.getByText('Set thresholds so a frame reaches Suspect before Poor.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     fireEvent.change(suspect, { target: { value: '5' } });
     fireEvent.change(poor, { target: { value: '' } });
@@ -186,7 +186,7 @@ describe('CalibrationMatchingSettings', () => {
     const exclude = await screen.findByRole('checkbox', { name: /Leave out lights that can't be calibrated/ });
     expect(exclude).not.toBeChecked();
     // One setting for stacks and every export alike.
-    expect(screen.getByText(/Stacks, WBPP runs and exports skip them/)).toBeInTheDocument();
+    expect(screen.getByText(/Stacks, WBPP runs and exports skip these lights/)).toBeInTheDocument();
     fireEvent.click(exclude);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(saved).toMatchObject({ exclude_uncalibrated: true }));
@@ -250,7 +250,7 @@ describe('CalibrationMatchingSettings', () => {
   });
 
   it('sends only what was edited, so another tab\'s save stands', async () => {
-    // Tab A saved Dark reach after this tab read the settings.
+    // Tab A saved Maximum time difference for darks after this tab read the settings.
     let stored: Record<string, unknown> = {};
     let saved: Record<string, unknown> | null = null;
     server.use(
@@ -262,14 +262,14 @@ describe('CalibrationMatchingSettings', () => {
       }),
     );
     render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
-    const thin = await screen.findByLabelText('Thin master');
+    const thin = await screen.findByLabelText('Minimum frames in bias and dark masters');
     stored = { dark_reach_days: 30 };
     fireEvent.change(thin, { target: { value: '4' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(saved).toEqual({ rules: { thin_master_frames: 4 } }));
     expect(stored).toEqual({ dark_reach_days: 30, thin_master_frames: 4 });
     // The answer brings tab A's value into the field nobody edited here.
-    await waitFor(() => expect(screen.getByLabelText('Dark reach')).toHaveValue(30));
+    await waitFor(() => expect(screen.getByLabelText('Maximum time difference for darks')).toHaveValue(30));
   });
 
   it('never clears a value this build cannot read', async () => {
@@ -298,13 +298,13 @@ describe('CalibrationMatchingSettings', () => {
         <CalibrationMatchingSettings />
       </QueryClientProvider>,
     );
-    const reach = await screen.findByLabelText('Dark reach');
+    const reach = await screen.findByLabelText('Maximum time difference for darks');
     fireEvent.change(reach, { target: { value: '45' } });
     // A rig's save hands back the settings with a rig changed.
     const answer = current({ thin_master_frames: 3 }).data;
     queryClient.setQueryData(['calibration-settings'], answer);
-    await waitFor(() => expect(screen.getByLabelText('Thin master')).toHaveValue(3));
-    expect(screen.getByLabelText('Dark reach')).toHaveValue(45);
+    await waitFor(() => expect(screen.getByLabelText('Minimum frames in bias and dark masters')).toHaveValue(3));
+    expect(screen.getByLabelText('Maximum time difference for darks')).toHaveValue(45);
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

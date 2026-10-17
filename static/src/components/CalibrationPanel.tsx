@@ -51,16 +51,16 @@ function familyBasisLabel(family: FlatFamilyNote): string {
       return 'chosen by you';
     case 'pixels':
       return family.moved
-        ? `moved by its own pixels, confirmed by ${family.corroborated ?? 'other evidence'}`
-        : 'chosen by its own pixels';
+        ? `reassigned based on pixel analysis, confirmed by ${family.corroborated ?? 'other evidence'}`
+        : 'selected based on pixel analysis';
     case 'nearest':
       return family.undecided
-        ? 'at its recorded angle: its lights could not tell'
-        : 'at its recorded angle: its lights not read yet';
+        ? 'uses the recorded angle: pixel analysis was inconclusive'
+        : 'uses the recorded angle: pixel analysis has not run yet';
     case 'disputed':
-      return `check: its lights point to ${family.pointed ?? 'another family'}, unconfirmed`;
+      return `check: pixel analysis suggests ${family.pointed ?? 'another family'}, unconfirmed`;
     default:
-      return 'its angles measure alike';
+      return 'flats at these angles have matching measured responses';
   }
 }
 
@@ -251,7 +251,7 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
               </button>
             </div>
           ) : (
-            <p className="light-calibration-panel-message">Choose a finding to pick out the frames behind it.</p>
+            <p className="light-calibration-panel-message">Choose a finding to show the affected frames.</p>
           )}
         </>
       ) : (
@@ -261,7 +261,7 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
       {explanation && <LightRules explanation={explanation} />}
 
       {explanation && kinds.length === 0 && (
-        <p className="light-calibration-panel-message">The library holds no calibration frames.</p>
+        <p className="light-calibration-panel-message">The library contains no calibration frames.</p>
       )}
       {explanation && kinds.map((kind) => {
         const parts = focusParts(chosen, kind);
@@ -416,7 +416,7 @@ function KindAccount({ kind, parts, folded, level, lightNight, hrefFor, extra }:
           )}
           {kind.suspect.length > 0 && (
             <div className={`light-calibration-part${focused('suspect')}`}>
-              <span className="light-calibration-part-label">Suspect frames it takes</span>
+              <span className="light-calibration-part-label">Included frames graded Suspect</span>
               <ul>
                 {kind.suspect.map((frame) => (
                   <li key={`${frame.night}:${frame.file}`} className="light-calibration-frame">

@@ -25,7 +25,7 @@ export default function AutoImportFields({ value, onChange }: AutoImportFieldsPr
           checked={value.enabled}
           onChange={(event) => set({ enabled: event.target.checked })}
         />{' '}
-        Import new frames from the image directories on their own
+        Automatically import new frames
       </label>
       {value.enabled && (
         <>
@@ -96,7 +96,7 @@ export default function AutoImportFields({ value, onChange }: AutoImportFieldsPr
           </label>
           {!value.on_open && value.interval_minutes === 0 && (
             <small className="autoimport-warning">
-              Choose a run on open, a schedule, or both.
+              Choose whether to import when the database opens, on a schedule, or both.
             </small>
           )}
           <small className="muted">

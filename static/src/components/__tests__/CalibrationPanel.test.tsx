@@ -241,8 +241,8 @@ describe('CalibrationPanel', () => {
 
   it('names the flat family its own pixels chose', async () => {
     show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
-      chosen_by: 'Chosen by its own pixels: its imaging session\'s lights (8 of M 27) follow the flats of '
-        + 'the OIII at 72.6° & 82.2° family rather than OIII at 100.1–104.4° (77.0° recorded)',
+      chosen_by: 'Selected based on pixel analysis: lights from this imaging session (8 of M 27) match '
+        + 'the OIII at 72.6° & 82.2° flat family at the recorded angle, rather than OIII at 100.1–104.4° (77.0° recorded)',
       family: {
         key: 'OIII:s-oiii72', label: 'OIII at 72.6° & 82.2°', by: 'pixels', lights: 8, targets: ['M 27'],
         moved: false, at_recorded: true,
@@ -253,14 +253,14 @@ describe('CalibrationPanel', () => {
     const family = await screen.findByTestId('calibration-flat-family');
     expect(family).toHaveTextContent('Flat family');
     expect(family).toHaveTextContent('OIII at 72.6° & 82.2°');
-    expect(family).toHaveTextContent('chosen by its own pixels');
-    expect(screen.getByTestId('calibration-flat-chosen-by')).toHaveTextContent('follow the flats of');
+    expect(family).toHaveTextContent('selected based on pixel analysis');
+    expect(screen.getByTestId('calibration-flat-chosen-by')).toHaveTextContent('lights from this imaging session (8 of M 27) match');
   });
 
   it('says over which span its family measures alike when its flats lie at another angle', async () => {
     show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
-      chosen_by: 'Flats at 104.0°: this family\'s flats at 101.5–102.2° and 104.2–104.4° measure alike '
-        + '(10 pairs over 9 nights), so the stack reads the light at 104.0°',
+      chosen_by: 'Using flats at 104.0°: measured responses match across 101.5–102.2° and 104.2–104.4° '
+        + '(10 pairs over 9 nights). Stack calibration uses 104.0° as the matching angle for this light',
       family: {
         key: 'OIII:s-oiii104', label: 'OIII at 101.3–104.4°', by: 'angle', at_recorded: true,
         light_angle: 100.9, shift: 0, candidates: ['OIII at 101.3–104.4°'],
@@ -274,7 +274,7 @@ describe('CalibrationPanel', () => {
     expect(await screen.findByTestId('calibration-flat-alike-range'))
       .toHaveTextContent('flats at 104.0°, measured alike at 101.5–102.2° and 104.2–104.4° (10 pairs)');
     expect(screen.getByTestId('calibration-flat-chosen-by'))
-      .toHaveTextContent('101.5–102.2° and 104.2–104.4° measure alike');
+      .toHaveTextContent('measured responses match across 101.5–102.2° and 104.2–104.4°');
   });
 
   it('names what confirmed a move its own pixels made', async () => {
@@ -287,7 +287,7 @@ describe('CalibrationPanel', () => {
     })] });
     fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
     expect(await screen.findByTestId('calibration-flat-family'))
-      .toHaveTextContent('moved by its own pixels, confirmed by its OIII lights');
+      .toHaveTextContent('reassigned based on pixel analysis, confirmed by its OIII lights');
   });
 
   it('says when no flat family stood clear and the recorded angle was kept', async () => {
@@ -299,12 +299,12 @@ describe('CalibrationPanel', () => {
     })] });
     fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
     expect(await screen.findByTestId('calibration-flat-family'))
-      .toHaveTextContent('at its recorded angle: its lights could not tell');
+      .toHaveTextContent('uses the recorded angle: pixel analysis was inconclusive');
   });
 
   it('marks a move its own pixels made that nothing confirmed as a check', async () => {
     show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
-      chosen_by: 'Its imaging session\'s lights (5 of M 27) follow the flats of the Ha at 8.0° family',
+      chosen_by: 'Its imaging session\'s lights (5 of M 27) match the flats of the Ha at 8.0° family',
       family: {
         key: 'Ha:s-ha0', label: 'Ha at 0.0°', by: 'disputed', lights: 5, targets: ['M 27'],
         pointed: 'Ha at 8.0°', at_recorded: true,
@@ -313,7 +313,7 @@ describe('CalibrationPanel', () => {
     })] });
     fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
     expect(await screen.findByTestId('calibration-flat-family'))
-      .toHaveTextContent('check: its lights point to Ha at 8.0°, unconfirmed');
+      .toHaveTextContent('check: pixel analysis suggests Ha at 8.0°, unconfirmed');
     expect(screen.getByTestId('calibration-flat-chosen-by')).toHaveClass('is-check');
   });
 
@@ -339,7 +339,7 @@ describe('CalibrationPanel', () => {
       kinds: explanation.kinds.map((entry) => (entry.kind === 'flat' ? { ...entry, suspect: [suspectFlat] } : entry)),
     };
     show('/detail/8?db=c925&project=1', flagged, [{ image_id: 8, level: 'check', codes: ['suspect_frames'] }]);
-    expect(await screen.findByText('Suspect frames it takes')).toBeInTheDocument();
+    expect(await screen.findByText('Included frames graded Suspect')).toBeInTheDocument();
     expect(screen.getByTestId('calibration-panel')).toHaveTextContent('Check');
     cleanup();
 
@@ -349,7 +349,7 @@ describe('CalibrationPanel', () => {
     await waitFor(() => expect(heading()).toHaveAccessibleName('Calibration no findings'));
     fireEvent.click(heading());
     expect(await screen.findByText(/calibrates this light with no findings/)).toBeInTheDocument();
-    expect(screen.queryByText('Suspect frames it takes')).toBeNull();
+    expect(screen.queryByText('Included frames graded Suspect')).toBeNull();
     expect(screen.getByTestId('calibration-panel')).not.toHaveTextContent('Check');
   });
 
@@ -370,7 +370,7 @@ describe('CalibrationPanel', () => {
     setDetailSection('calibration', 'closed');
     show('/detail/8?db=c925&project=1', explanation, [thinDark]);
     await waitFor(() =>
-      expect(heading()).toHaveAccessibleName('Calibration Thin dark master · Flats from several nights'));
+      expect(heading()).toHaveAccessibleName('Calibration Dark master has too few frames · Flats from several nights'));
     expect(screen.getByTestId('calibration-panel')).toHaveTextContent('Poor');
     expect(asked).toEqual([]);
   });
@@ -395,7 +395,7 @@ describe('CalibrationPanel', () => {
     fireEvent.click(heading());
     expect(heading()).toHaveAttribute('aria-expanded', 'false');
     view.showImage(10);
-    await waitFor(() => expect(heading()).toHaveAccessibleName(/^Calibration Thin dark master/));
+    await waitFor(() => expect(heading()).toHaveAccessibleName(/^Calibration Dark master has too few frames/));
     expect(heading()).toHaveAttribute('aria-expanded', 'false');
 
     // Opened on a light with no finding, it stays open on the next one.
@@ -445,7 +445,7 @@ describe('CalibrationPanel', () => {
           rig_name: 'Askar 120 · Cam',
           rig_has_settings: true,
           notes: [
-            { key: 'thin_master_frames', label: 'Thin master', value: 4, text: '4 frames', source: 'global' },
+            { key: 'thin_master_frames', label: 'Minimum frames in bias and dark masters', value: 4, text: '4 frames', source: 'global' },
             { key: 'check_mixed_flats', label: 'Flats from several nights', value: 'off', text: 'off', source: 'rig' },
           ],
         },
@@ -456,7 +456,7 @@ describe('CalibrationPanel', () => {
       expect(within(rules).getByText("Checked by Askar 120 · Cam's own settings")).toBeInTheDocument();
       const notes = within(rules).getByRole('list', { name: 'Settings that differ from the defaults' });
       expect(within(notes).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
-        'Thin master4 framesglobal',
+        'Minimum frames in bias and dark masters4 framesglobal',
         'Flats from several nightsoffthis rig',
       ]);
       fireEvent.click(within(rules).getByRole('button', { name: 'Tune checks for Askar 120 · Cam' }));

@@ -359,7 +359,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
       : <p className="director-muted">Activated</p>)}
     {!last.data && last.isSuccess && !notReady && <p className="director-muted">{matches ? 'Activated' : notSynced}</p>}
     {canWrite && unsavedPlan && <div className="activation-unsaved" role="note" aria-label="Unsaved changes">
-      <p>Unsaved changes in {unsavedLabels.join(', ')}. Activation writes the saved plan, so save first; the preview follows.</p>
+      <p>Unsaved changes in {unsavedLabels.join(', ')}. Save your changes before activating. PSF Guard then updates the preview.</p>
       <div className="director-actions">
         <button type="button" disabled={writing} onClick={() => run(() => save.mutate())}><Save size={16} />{save.isPending ? 'Saving…' : 'Save and activate…'}</button>
       </div>

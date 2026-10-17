@@ -350,7 +350,7 @@ describe('browsing flat groups', () => {
     expect(await within(feeds).findByRole('link', { name: `Master built ${timeLabel(0)}` })).toHaveAttribute(
       'href', expect.stringContaining('calMaster=m1'));
     expect(within(feeds).getByTestId('flat-group-lights')).toHaveTextContent(
-      '14 lights take its flats: 10 on their own side, 3 undetermined, 1 from another angle.');
+      '14 lights use this flat group: 10 on their own side, 3 undetermined, 1 from another angle.');
     const links = within(feeds).getAllByTestId('flat-group-lights-link');
     expect(links.map((link) => link.textContent)).toEqual(['M 44: 12 lights', 'Heart: 2 lights']);
     const href = new URL(links[0].getAttribute('href')!, 'http://x');
@@ -432,7 +432,7 @@ describe('browsing flat groups', () => {
     renderPage('/calibration?db=demo&calBrowse=groups&calGroup=s-r0920');
     const feeds = await screen.findByTestId('flat-group-feeds');
     await waitFor(() => expect(feeds).not.toHaveTextContent('Working out'));
-    expect(feeds).not.toHaveTextContent('No light takes its flats.');
+    expect(feeds).not.toHaveTextContent('No lights use this flat group.');
     expect(feeds).toHaveTextContent(/refresh|updating|newer/i);
   });
 
@@ -445,7 +445,7 @@ describe('browsing flat groups', () => {
     const feeds = await screen.findByTestId('flat-group-feeds');
     expect(feeds).toHaveTextContent('Working out which masters and lights use it');
     expect(feeds).not.toHaveTextContent('No flat master');
-    expect(feeds).not.toHaveTextContent('No light takes its flats');
+    expect(feeds).not.toHaveTextContent('No lights use this flat group');
   });
 
   it('holds a Groups link until the groups are in, without the session list or a session', async () => {
