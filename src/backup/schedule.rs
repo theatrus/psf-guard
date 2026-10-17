@@ -233,7 +233,8 @@ mod tests {
         BackupSettings {
             enabled: true,
             time: time.into(),
-            destination: Some("/backups".into()),
+            // `/backups` has no drive letter, so Windows does not count it absolute.
+            destination: Some(std::env::temp_dir().join("backups").display().to_string()),
             ..Default::default()
         }
     }
