@@ -1,21 +1,40 @@
 //! The HTTP side of reject removal (docs/design/reject-removal.md): preview
 //! and apply a removal, list removals, restore them, and empty the trash.
+//!
+//! Preview, Remove, Restore and Empty trash read the image folders and move
+//! or delete files, which on a network share takes minutes, so they are a
+//! tracked job (see `docs/design/background-jobs.md`): one runner per
+//! catalog, at [`Priority::Interactive`], since a person starts each. A
+//! route queues the run and answers `202` with the status; `GET
+//! …/rejects/removal` says where it stands, and `POST …/rejects/removal/stop`
+//! stops it between frames. Listing removals and purging their saved rows
+//! touch only the database, and answer directly.
+//!
 //! Every route that changes anything needs an editor. Files move only
 //! between an image folder and its own trash, so the database-management
 //! gate, which guards client-named paths, does not apply.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock, Mutex, RwLock,
+    },
+};
 
 use axum::{
     extract::{Query, State},
+    http::StatusCode,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::commands::reject_removal::{
     self, ApplyReport, PlanOptions, PurgeReport, RemovalPlan, RemovedBatch, RemovedEntry,
-    RemovedFrame, RestoreReport, RestoreSelection, Scope, StaleRemovalPlan, TrashReport,
+    RemovedFrame, RestoreReport, RestoreSelection, Scope, Stage, StaleRemovalPlan, Stopped,
+    TrashReport, Work,
 };
+use crate::concurrency::Priority;
 use crate::server::{
     api::ApiResponse,
     database_context::{open_scheduler_connection, DatabaseContext},
@@ -24,7 +43,7 @@ use crate::server::{
     state::AppState,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreviewRequest {
     #[serde(default)]
@@ -35,7 +54,7 @@ pub struct PreviewRequest {
     pub min_age_days: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApplyRequest {
     #[serde(default)]
@@ -73,6 +92,144 @@ fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+/// What a run of the removal job does.
+#[derive(Debug, Clone)]
+enum Action {
+    Preview(PreviewRequest),
+    Remove(ApplyRequest),
+    Restore(RestoreSelection),
+    EmptyTrash,
+}
+
+impl Action {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Preview(_) => "preview",
+            Self::Remove(_) => "remove",
+            Self::Restore(_) => "restore",
+            Self::EmptyTrash => "empty_trash",
+        }
+    }
+
+    /// What background work waits for while this runs.
+    fn waited_for(&self) -> &'static str {
+        match self {
+            Self::Preview(_) => "a reject removal preview",
+            Self::Remove(_) => "a reject removal",
+            Self::Restore(_) => "restoring removed rejects",
+            Self::EmptyTrash => "emptying the reject trash",
+        }
+    }
+}
+
+/// What the last Remove, Restore or Empty trash did, and its run.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RemovalOutcome {
+    pub run: u64,
+    pub finished_at: i64,
+    /// `remove`, `restore` or `empty_trash`.
+    pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed: Option<ApplyReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restored: Option<RestoreReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emptied: Option<TrashReport>,
+}
+
+/// Where a catalog's reject removal job stands.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RemovalJobStatus {
+    /// `idle` before the first run, `running`, then `done`, `stopped` or
+    /// `failed`.
+    pub state: String,
+    /// `preview`, `remove`, `restore` or `empty_trash`: what runs, or ran
+    /// last.
+    pub action: Option<String>,
+    /// `indexing`, `checking`, `moving`, `restoring` or `deleting`, while it
+    /// runs.
+    pub stage: Option<String>,
+    pub done: usize,
+    pub total: usize,
+    /// Counts up with each run, so a page knows which result is its own.
+    pub run: u64,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    /// The latest preview. A removal that applied leaves none.
+    pub plan: Option<RemovalPlan>,
+    /// A removal found the rejects changed since its preview, applied
+    /// nothing, and left the new preview in `plan`.
+    pub changed: bool,
+    /// What the last Remove, Restore or Empty trash did.
+    pub outcome: Option<RemovalOutcome>,
+    pub error: Option<String>,
+    /// `interactive` while it runs: a person starts every run.
+    pub priority: Option<String>,
+}
+
+#[derive(Default)]
+struct Job {
+    status: RwLock<RemovalJobStatus>,
+    stop: AtomicBool,
+    /// Whether the catalog's one runner is at work.
+    busy: Mutex<bool>,
+}
+
+impl Job {
+    fn status(&self) -> RemovalJobStatus {
+        self.status
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn update(&self, change: impl FnOnce(&mut RemovalJobStatus)) {
+        change(
+            &mut self
+                .status
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+    }
+
+    fn progress(&self, stage: Stage, done: usize, total: usize) {
+        self.update(|status| {
+            status.stage = Some(stage.name().into());
+            status.done = done;
+            status.total = total;
+        });
+    }
+}
+
+static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
+
+fn job(path: &str) -> Arc<Job> {
+    let mut jobs = JOBS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    Arc::clone(jobs.entry(path.to_string()).or_default())
+}
+
+/// Where the reject removal job stands for the catalog at `path`.
+pub fn status(path: &str) -> RemovalJobStatus {
+    let mut status = job(path).status();
+    if status.state.is_empty() {
+        status.state = "idle".into();
+    }
+    status
+}
+
+/// Stop the run between frames: the frames done stay done.
+pub fn stop(path: &str) -> RemovalJobStatus {
+    let job = job(path);
+    if *job
+        .busy
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    {
+        job.stop.store(true, Ordering::SeqCst);
+    }
+    status(path)
+}
+
 /// Frames a collaboration report names: none without Director.
 async fn protected(state: &AppState) -> Result<BTreeSet<String>, AppError> {
     match state.director.clone() {
@@ -83,87 +240,278 @@ async fn protected(state: &AppState) -> Result<BTreeSet<String>, AppError> {
     }
 }
 
-fn blocking_error(error: tokio::task::JoinError) -> AppError {
-    AppError::InternalError(format!("reject removal: {error}"))
+/// Frees the runner if a run ends by a panic, or never starts.
+struct RunnerClaim(Option<Arc<Job>>);
+
+impl RunnerClaim {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for RunnerClaim {
+    fn drop(&mut self) {
+        if let Some(job) = self.0.take() {
+            *job.busy
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = false;
+            job.update(|status| {
+                if status.state == "running" {
+                    status.state = "failed".into();
+                    status.stage = None;
+                    status.error = Some("the run ended unexpectedly".into());
+                }
+            });
+        }
+    }
+}
+
+/// Start a run on the catalog's runner, or refuse while one runs.
+fn start(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    action: Action,
+    protected: BTreeSet<String>,
+) -> Result<RemovalJobStatus, AppError> {
+    let job = job(&ctx.database_path);
+    {
+        let mut busy = job
+            .busy
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *busy {
+            return Err(AppError::Conflict(
+                "Reject removal is already running on this catalog. Wait for it, or stop it."
+                    .into(),
+            ));
+        }
+        // Cleared under the runner's lock, so a Stop that comes as the run
+        // starts is never lost.
+        job.stop.store(false, Ordering::SeqCst);
+        *busy = true;
+        job.update(|status| {
+            status.run += 1;
+            status.state = "running".into();
+            status.action = Some(action.name().into());
+            status.stage = None;
+            status.done = 0;
+            status.total = 0;
+            status.started_at = Some(now());
+            status.finished_at = None;
+            status.changed = false;
+            status.error = None;
+            status.priority = Some(Priority::Interactive.label().into());
+        });
+    }
+    let claim = RunnerClaim(Some(Arc::clone(&job)));
+    let (state, ctx, job_for_run) = (Arc::clone(state), Arc::clone(ctx), Arc::clone(&job));
+    // The refreshes a change starts run on the server's runtime.
+    let runtime = tokio::runtime::Handle::current();
+    let spawned = std::thread::Builder::new()
+        .name("reject-removal".into())
+        .spawn(move || {
+            let claim = claim;
+            let _runtime = runtime.enter();
+            run(&state, &ctx, &job_for_run, &action, &protected);
+            claim.disarm();
+        });
+    if let Err(error) = spawned {
+        tracing::warn!("could not start reject removal: {error}");
+    }
+    Ok(job.status())
+}
+
+/// How a run ended short of its result.
+enum Ended {
+    Stopped,
+    Failed(String),
+}
+
+fn failed(error: impl std::fmt::Display) -> Ended {
+    Ended::Failed(error.to_string())
+}
+
+/// A core error: a stop, or a failure in words.
+fn ended(error: anyhow::Error) -> Ended {
+    if error.downcast_ref::<Stopped>().is_some() {
+        Ended::Stopped
+    } else {
+        Ended::Failed(format!("{error:#}"))
+    }
+}
+
+fn run(
+    state: &Arc<AppState>,
+    ctx: &DatabaseContext,
+    job: &Job,
+    action: &Action,
+    protected: &BTreeSet<String>,
+) {
+    let began = std::time::Instant::now();
+    let result = {
+        // A person started this: background work steps aside, and says what
+        // for. A server stop waits for the frame in hand, then the run ends.
+        let _person = state.begin_named_interactive_job(action.waited_for());
+        let _hold = state.shutdown.hold(action.waited_for());
+        let progress = |stage: Stage, done: usize, total: usize| job.progress(stage, done, total);
+        let stop = || job.stop.load(Ordering::SeqCst) || state.shutdown.is_stopping();
+        let work = Work {
+            progress: &progress,
+            stop: &stop,
+        };
+        match action {
+            Action::Preview(request) => preview_run(ctx, job, request, protected, &work),
+            Action::Remove(request) => remove_run(state, ctx, job, request, protected, &work),
+            Action::Restore(selection) => restore_run(state, ctx, job, selection, &work),
+            Action::EmptyTrash => empty_run(ctx, job, &work),
+        }
+    };
+    // The runner is free as the status says the run ended: a page that sees
+    // the end may start the next run at once.
+    let mut busy = job
+        .busy
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *busy = false;
+    job.update(|status| {
+        status.finished_at = Some(now());
+        status.stage = None;
+        status.priority = None;
+        match &result {
+            Ok(true) => status.state = "done".into(),
+            Ok(false) | Err(Ended::Stopped) => status.state = "stopped".into(),
+            Err(Ended::Failed(error)) => {
+                status.state = "failed".into();
+                status.error = Some(error.clone());
+            }
+        }
+    });
+    let status = job.status();
+    drop(busy);
+    tracing::info!(
+        db = %ctx.id,
+        "reject removal: {} {} in {:.2}s{}",
+        action.name(),
+        status.state,
+        began.elapsed().as_secs_f64(),
+        status
+            .error
+            .as_deref()
+            .map(|error| format!(": {error}"))
+            .unwrap_or_default()
+    );
+}
+
+fn plan_options<'a>(
+    project_id: Option<i64>,
+    target_id: Option<i64>,
+    min_age_days: u32,
+    protected: &'a BTreeSet<String>,
+) -> PlanOptions<'a> {
+    PlanOptions {
+        scope: Scope {
+            project_id,
+            target_id,
+        },
+        min_age_days,
+        now: now(),
+        protected_guids: protected,
+    }
 }
 
 /// What a removal of this scope would take, and why each reject stays.
-pub async fn preview(
-    State(state): State<Arc<AppState>>,
-    ctx: DbContext,
-    Json(request): Json<PreviewRequest>,
-) -> Result<Json<ApiResponse<RemovalPlan>>, AppError> {
-    let protected = protected(&state).await?;
-    let context = ctx.0.clone();
-    let plan = tokio::task::spawn_blocking(move || {
-        let conn = open_scheduler_connection(&context.database_path).map_err(AppError::db)?;
-        reject_removal::plan(
-            &conn,
-            &context.image_dirs,
-            &PlanOptions {
-                scope: Scope {
-                    project_id: request.project_id,
-                    target_id: request.target_id,
-                },
-                min_age_days: request.min_age_days,
-                now: now(),
-                protected_guids: &protected,
-            },
-        )
-        .map_err(|error| AppError::BadRequest(format!("{error:#}")))
-    })
-    .await
-    .map_err(blocking_error)??;
-    Ok(Json(ApiResponse::success(plan)))
+/// Returns whether it finished.
+fn preview_run(
+    ctx: &DatabaseContext,
+    job: &Job,
+    request: &PreviewRequest,
+    protected: &BTreeSet<String>,
+    work: &Work<'_>,
+) -> Result<bool, Ended> {
+    let conn = open_scheduler_connection(&ctx.database_path).map_err(failed)?;
+    let plan = reject_removal::plan_with(
+        &conn,
+        &ctx.image_dirs,
+        &plan_options(
+            request.project_id,
+            request.target_id,
+            request.min_age_days,
+            protected,
+        ),
+        work,
+    )
+    .map_err(ended)?;
+    job.update(|status| status.plan = Some(plan));
+    Ok(true)
 }
 
-/// Remove what the preview showed, or refuse with 409 when it changed.
-pub async fn apply(
-    State(state): State<Arc<AppState>>,
-    ctx: DbContext,
-    Json(request): Json<ApplyRequest>,
-) -> Result<Json<ApiResponse<ApplyReport>>, AppError> {
-    let protected = protected(&state).await?;
-    let context = ctx.0.clone();
-    let report = tokio::task::spawn_blocking(move || {
-        let _guard = context.organization_mutex.lock().map_err(AppError::db)?;
-        let conn = open_scheduler_connection(&context.database_path).map_err(AppError::db)?;
-        let report = reject_removal::apply(
+/// Remove what the preview showed. When the rejects changed since, remove
+/// nothing and leave the new preview, saying so.
+fn remove_run(
+    state: &Arc<AppState>,
+    ctx: &DatabaseContext,
+    job: &Job,
+    request: &ApplyRequest,
+    protected: &BTreeSet<String>,
+    work: &Work<'_>,
+) -> Result<bool, Ended> {
+    let options = plan_options(
+        request.project_id,
+        request.target_id,
+        request.min_age_days,
+        protected,
+    );
+    let applied = {
+        let _guard = ctx.organization_mutex.lock().map_err(failed)?;
+        let conn = open_scheduler_connection(&ctx.database_path).map_err(failed)?;
+        let applied = reject_removal::apply_with(
             &conn,
-            &context.image_dirs,
-            &PlanOptions {
-                scope: Scope {
-                    project_id: request.project_id,
-                    target_id: request.target_id,
-                },
-                min_age_days: request.min_age_days,
-                now: now(),
-                protected_guids: &protected,
-            },
+            &ctx.image_dirs,
+            &options,
             &request.digest,
             request.retention_days,
-        )
-        .map_err(|error| {
-            if error.downcast_ref::<StaleRemovalPlan>().is_some() {
-                AppError::Conflict(error.to_string())
-            } else {
-                AppError::InternalError(format!("{error:#}"))
-            }
-        })?;
-        after_change(&context, &conn, &report.removed);
-        tracing::info!(db = %context.id, batch = %report.batch_id, removed = report.removed.len(),
-            failed = report.failed.len(), "Removed rejects");
-        Ok::<_, AppError>(report)
-    })
-    .await
-    .map_err(blocking_error)??;
+            work,
+        );
+        if let Ok(report) = &applied {
+            after_change(ctx, &conn, &report.removed);
+        }
+        applied
+    };
+    let report = match applied {
+        Ok(report) => report,
+        Err(error) if error.downcast_ref::<StaleRemovalPlan>().is_some() => {
+            let conn = open_scheduler_connection(&ctx.database_path).map_err(failed)?;
+            let fresh =
+                reject_removal::plan_with(&conn, &ctx.image_dirs, &options, work).map_err(ended)?;
+            job.update(|status| {
+                status.plan = Some(fresh);
+                status.changed = true;
+            });
+            return Ok(true);
+        }
+        Err(error) => return Err(ended(error)),
+    };
+    tracing::info!(db = %ctx.id, batch = %report.batch_id, removed = report.removed.len(),
+        failed = report.failed.len(), stopped = report.stopped, "Removed rejects");
     if !report.removed.is_empty() {
         state.auto_stacks.touch_database(
             &ctx.id,
             crate::server::stack_preview::automatic::RefreshReason::Sync,
         );
     }
-    Ok(Json(ApiResponse::success(report)))
+    let finished = !report.stopped;
+    let run = job.status().run;
+    job.update(|status| {
+        status.plan = None;
+        status.outcome = Some(RemovalOutcome {
+            run,
+            finished_at: now(),
+            action: "remove".into(),
+            removed: Some(report),
+            ..Default::default()
+        });
+    });
+    Ok(finished)
 }
 
 /// What the server holds about frames that left or came back: their cache
@@ -189,6 +537,112 @@ fn after_change(context: &DatabaseContext, conn: &rusqlite::Connection, frames: 
     }
 }
 
+/// Put removed frames back while their files are still in the trash.
+fn restore_run(
+    state: &Arc<AppState>,
+    ctx: &DatabaseContext,
+    job: &Job,
+    selection: &RestoreSelection,
+    work: &Work<'_>,
+) -> Result<bool, Ended> {
+    let report = {
+        let _guard = ctx.organization_mutex.lock().map_err(failed)?;
+        let conn = open_scheduler_connection(&ctx.database_path).map_err(failed)?;
+        let report = reject_removal::restore_with(&conn, selection, work).map_err(ended)?;
+        // A restored frame can come back under a new row Id; whatever the
+        // cache holds under that Id belongs to no one.
+        let restored: Vec<RemovedFrame> = report
+            .restored
+            .iter()
+            .map(|frame| RemovedFrame {
+                image_id: frame.image_id,
+                guid: frame.guid.clone(),
+                project_id: frame.project_id,
+                target_id: frame.target_id,
+            })
+            .collect();
+        after_change(ctx, &conn, &restored);
+        report
+    };
+    if !report.restored.is_empty() {
+        state.auto_stacks.touch_database(
+            &ctx.id,
+            crate::server::stack_preview::automatic::RefreshReason::Sync,
+        );
+    }
+    let finished = !report.stopped;
+    let run = job.status().run;
+    job.update(|status| {
+        status.outcome = Some(RemovalOutcome {
+            run,
+            finished_at: now(),
+            action: "restore".into(),
+            restored: Some(report),
+            ..Default::default()
+        });
+    });
+    Ok(finished)
+}
+
+/// Delete the files of removals past their retention.
+fn empty_run(ctx: &DatabaseContext, job: &Job, work: &Work<'_>) -> Result<bool, Ended> {
+    let conn = open_scheduler_connection(&ctx.database_path).map_err(failed)?;
+    let report = reject_removal::empty_trash_with(&conn, now(), work).map_err(ended)?;
+    let finished = !report.stopped;
+    let run = job.status().run;
+    job.update(|status| {
+        status.outcome = Some(RemovalOutcome {
+            run,
+            finished_at: now(),
+            action: "empty_trash".into(),
+            emptied: Some(report),
+            ..Default::default()
+        });
+    });
+    Ok(finished)
+}
+
+type Started = Result<(StatusCode, Json<ApiResponse<RemovalJobStatus>>), AppError>;
+
+fn accepted(status: RemovalJobStatus) -> Started {
+    Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(status))))
+}
+
+/// `GET /api/db/{db}/rejects/removal` — where the catalog's reject removal
+/// job stands, with the latest preview and outcome. Never does the work.
+pub async fn get_status(ctx: DbContext) -> Json<ApiResponse<RemovalJobStatus>> {
+    Json(ApiResponse::success(status(&ctx.database_path)))
+}
+
+/// `POST /api/db/{db}/rejects/removal/preview` — work out what a removal of
+/// this scope would take: `202` and the status, which the page polls. It
+/// changes nothing but the rejects' recorded dates.
+pub async fn preview(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<PreviewRequest>,
+) -> Started {
+    let protected = protected(&state).await?;
+    accepted(start(&state, &ctx.0, Action::Preview(request), protected)?)
+}
+
+/// `POST /api/db/{db}/rejects/removal/apply` — remove what the preview
+/// showed: `202` and the status. When the rejects changed since, the run
+/// removes nothing, sets `changed` and leaves the new preview.
+pub async fn apply(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Json(request): Json<ApplyRequest>,
+) -> Started {
+    let protected = protected(&state).await?;
+    accepted(start(&state, &ctx.0, Action::Remove(request), protected)?)
+}
+
+/// `POST /api/db/{db}/rejects/removal/stop` — stop the run between frames.
+pub async fn stop_removal(ctx: DbContext) -> Json<ApiResponse<RemovalJobStatus>> {
+    Json(ApiResponse::success(stop(&ctx.database_path)))
+}
+
 /// Every removal batch, and the frames of one when asked.
 pub async fn removed(
     ctx: DbContext,
@@ -205,64 +659,34 @@ pub async fn removed(
         Ok::<_, AppError>(RemovedView { batches, frames })
     })
     .await
-    .map_err(blocking_error)??;
+    .map_err(|error| AppError::InternalError(format!("reject removal: {error}")))??;
     Ok(Json(ApiResponse::success(view)))
 }
 
-/// Put removed frames back while their files are still in the trash.
+/// `POST /api/db/{db}/rejects/removed/restore` — put removed frames back
+/// while their files are still in the trash: `202` and the status.
 pub async fn restore(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(selection): Json<RestoreSelection>,
-) -> Result<Json<ApiResponse<RestoreReport>>, AppError> {
+) -> Started {
     if selection.batch_id.is_none() && selection.guids.is_empty() {
         return Err(AppError::BadRequest(
             "Choose a batch or frames to restore.".into(),
         ));
     }
-    let context = ctx.0.clone();
-    let report = tokio::task::spawn_blocking(move || {
-        let _guard = context.organization_mutex.lock().map_err(AppError::db)?;
-        let conn = open_scheduler_connection(&context.database_path).map_err(AppError::db)?;
-        let report = reject_removal::restore(&conn, &selection)
-            .map_err(|error| AppError::InternalError(format!("{error:#}")))?;
-        // A restored frame can come back under a new row Id; whatever the
-        // cache holds under that Id belongs to no one.
-        let restored: Vec<RemovedFrame> = report
-            .restored
-            .iter()
-            .map(|frame| RemovedFrame {
-                image_id: frame.image_id,
-                guid: frame.guid.clone(),
-                project_id: frame.project_id,
-                target_id: frame.target_id,
-            })
-            .collect();
-        after_change(&context, &conn, &restored);
-        Ok::<_, AppError>(report)
-    })
-    .await
-    .map_err(blocking_error)??;
-    if !report.restored.is_empty() {
-        state.auto_stacks.touch_database(
-            &ctx.id,
-            crate::server::stack_preview::automatic::RefreshReason::Sync,
-        );
-    }
-    Ok(Json(ApiResponse::success(report)))
+    accepted(start(
+        &state,
+        &ctx.0,
+        Action::Restore(selection),
+        BTreeSet::new(),
+    )?)
 }
 
-/// Delete the files of removals past their retention.
-pub async fn empty_trash(ctx: DbContext) -> Result<Json<ApiResponse<TrashReport>>, AppError> {
-    let path = ctx.database_path.clone();
-    let report = tokio::task::spawn_blocking(move || {
-        let conn = open_scheduler_connection(&path).map_err(AppError::db)?;
-        reject_removal::empty_trash(&conn, now())
-            .map_err(|error| AppError::InternalError(format!("{error:#}")))
-    })
-    .await
-    .map_err(blocking_error)??;
-    Ok(Json(ApiResponse::success(report)))
+/// `POST /api/db/{db}/rejects/trash/empty` — delete the files of removals
+/// past their retention: `202` and the status.
+pub async fn empty_trash(State(state): State<Arc<AppState>>, ctx: DbContext) -> Started {
+    accepted(start(&state, &ctx.0, Action::EmptyTrash, BTreeSet::new())?)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -273,6 +697,7 @@ pub struct PurgeRequest {
 }
 
 /// Forget the saved rows of removals whose files are gone; markers stay.
+/// Only database rows change, so it answers directly.
 pub async fn purge(
     ctx: DbContext,
     request: Option<Json<PurgeRequest>>,
@@ -285,6 +710,6 @@ pub async fn purge(
             .map_err(|error| AppError::InternalError(format!("{error:#}")))
     })
     .await
-    .map_err(blocking_error)??;
+    .map_err(|error| AppError::InternalError(format!("reject removal: {error}")))??;
     Ok(Json(ApiResponse::success(report)))
 }

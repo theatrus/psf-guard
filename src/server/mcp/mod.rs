@@ -1167,7 +1167,7 @@ impl PsfGuardMcp {
     // ---------- Jobs ----------
 
     #[tool(
-        description = "Progress of every background job of a database: import, quality backfill, quality scan, WBPP run, calibration grading, flat measuring (rig, stage, stopped rigs, retry), reading frame sites, and the calibration duplicate check or repair (its plan counted; get_calibration_duplicates lists it). A job's `waiting_for` names the person's work it steps aside for, as the job line shows it waiting. Poll this after starting one."
+        description = "Progress of every background job of a database: import, quality backfill, quality scan, WBPP run, calibration grading, flat measuring (rig, stage, stopped rigs, retry), reading frame sites, the calibration duplicate check or repair (its plan counted; get_calibration_duplicates lists it), and reject removal (preview, remove, restore or empty trash; get_reject_removal has its preview and outcome). A job's `waiting_for` names the person's work it steps aside for, as the job line shows it waiting. Poll this after starting one."
     )]
     async fn get_jobs(
         &self,
@@ -1197,6 +1197,7 @@ impl PsfGuardMcp {
             "flat_measure": self.optional(&ctx, &format!("{base}/calibrations/flat-measure")).await,
             "frame_sites": self.optional(&ctx, &format!("{base}/calibrations/frame-sites")).await,
             "calibration_duplicates": duplicates,
+            "reject_removal": self.optional(&ctx, &format!("{base}/rejects/removal")).await,
         })))
     }
 
@@ -1785,7 +1786,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Preview removing rejects: the frames rejected at least min_age_days ago that would leave the catalog (their files to a trash folder, restorable), the ones that stay and why, and a `digest`. Writes nothing. Needs write access, as in the app."
+        description = "Start a preview of removing rejects: the frames rejected at least min_age_days ago that would leave the catalog (their files to a trash folder, restorable), the ones that stay and why, and a `digest`. It is a job, since it reads every image folder: this returns its status, and get_reject_removal has the preview once `state` is `done`. Writes nothing. Needs write access, as in the app."
     )]
     async fn preview_reject_removal(
         &self,
@@ -1803,7 +1804,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Remove the rejects preview_reject_removal listed: out of the catalog, files into the trash folder, restorable until the trash is emptied. Needs the preview's `digest`; refuses if the rejects changed since. Needs write access."
+        description = "Start removing the rejects preview_reject_removal listed: out of the catalog, files into the trash folder, restorable until the trash is emptied. Needs the preview's `digest`. It is a job: this returns its status, and get_reject_removal has the outcome once `state` is `done`. When the rejects changed since the preview it removes nothing, sets `changed`, and leaves the new preview. Needs write access."
     )]
     async fn apply_reject_removal(
         &self,
@@ -1825,7 +1826,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Bring a batch of removed rejects back into the catalog, with their files, while the trash still holds them."
+        description = "Start bringing a batch of removed rejects back into the catalog, with their files, while the trash still holds them. It is a job: this returns its status, and get_reject_removal has the outcome once `state` is `done`."
     )]
     async fn restore_removed_rejects(
         &self,
@@ -1841,6 +1842,19 @@ impl PsfGuardMcp {
             Some(json!({ "batch_id": args.batch_id })),
         )
         .await
+    }
+
+    #[tool(
+        description = "Where a database's reject removal job stands: `state` (idle, running, done, stopped, failed), what it does (`action`: preview, remove, restore, empty_trash) and how far (`stage`, `done` of `total`), the latest preview (`plan`, with its `digest`), whether a removal found the rejects changed (`changed`), and what the last remove, restore or empty trash did (`outcome`)."
+    )]
+    async fn get_reject_removal(
+        &self,
+        Parameters(args): Parameters<DatabaseArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let path = format!("/db/{}/rejects/removal", api::encode(&db.id));
+        self.answer(&ctx, Method::GET, &path, None).await
     }
 
     #[tool(

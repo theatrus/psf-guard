@@ -240,14 +240,28 @@ async fn an_agent_edits_the_scheduler_and_previews_reject_removal() {
 
     // Rejects move only within an image folder: an editor's, with
     // database management off, as in the app.
-    let preview = tool(
+    // The preview is a job: it starts, and get_reject_removal has the
+    // preview once it is done.
+    let started = tool(
         &app,
         "preview_reject_removal",
         json!({ "database": db, "min_age_days": 7 }),
     )
     .await
     .unwrap();
-    assert_eq!(preview["frames"], json!([]), "{preview}");
+    assert_eq!(started["action"], "preview", "{started}");
+    let mut preview = started;
+    for _ in 0..400 {
+        if preview["state"] != "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        preview = tool(&app, "get_reject_removal", json!({ "database": db }))
+            .await
+            .unwrap();
+    }
+    assert_eq!(preview["state"], "done", "{preview}");
+    assert_eq!(preview["plan"]["frames"], json!([]), "{preview}");
 }
 
 /// A viewer and an editor, each with an API token: (viewer's, editor's).

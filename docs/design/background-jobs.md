@@ -191,6 +191,11 @@ Then:
     job line with Stop.
   - A run that ends frees the runner in the same step that records its end,
     so a page that sees the end can start the next run at once.
+- Reject removal (`reject_removal.rs`) follows it: one runner per catalog
+  for Preview, Remove, Restore and Empty trash, each a person's and so
+  `Interactive`, holding the guard. It reads on a connection of its own,
+  shows in the job line with Stop, and stops between frames, keeping the
+  frames done.
 - Backups (`backup_job.rs`) run one at a time server-wide rather than one per
   catalog. A scheduled run is `Background` and yields between files and
   SQLite steps; a run a person starts does not wait. Stop ends the run

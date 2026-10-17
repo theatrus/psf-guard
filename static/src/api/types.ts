@@ -4261,6 +4261,8 @@ export interface RejectRemovalReport {
   files_moved: number;
   bytes: number;
   trash_until: number;
+  /** Stopped before every frame went: `removed` lists those that did. */
+  stopped?: boolean;
 }
 export interface RemovedRejectBatch {
   batch_id: string;
@@ -4280,12 +4282,46 @@ export interface RejectRestoreReport {
   restored: Array<{ guid: string; image_id: number }>;
   failed: RejectRemovalSkip[];
   renamed: string[];
+  /** Stopped before every frame came back. */
+  stopped?: boolean;
 }
 export interface RejectTrashReport {
   frames: number;
   files_deleted: number;
   bytes: number;
   problems: string[];
+  /** Stopped before every removal past its retention was emptied. */
+  stopped?: boolean;
+}
+/** What the last Remove, Restore or Empty trash did, and its run. */
+export interface RejectRemovalOutcome {
+  run: number;
+  finished_at: number;
+  action: 'remove' | 'restore' | 'empty_trash';
+  removed?: RejectRemovalReport;
+  restored?: RejectRestoreReport;
+  emptied?: RejectTrashReport;
+}
+/** A catalog's reject removal job: Preview, Remove, Restore and Empty trash
+ *  read the image folders and move files, so each runs as a job. */
+export interface RejectRemovalStatus {
+  state: 'idle' | 'running' | 'done' | 'stopped' | 'failed';
+  action: 'preview' | 'remove' | 'restore' | 'empty_trash' | null;
+  stage: 'indexing' | 'checking' | 'moving' | 'restoring' | 'deleting' | null;
+  done: number;
+  total: number;
+  /** Counts up with each run, so a page knows which result is its own. */
+  run: number;
+  started_at: number | null;
+  finished_at: number | null;
+  /** The latest preview; a removal that applied leaves none. */
+  plan: RejectRemovalPlan | null;
+  /** A removal found the rejects changed, removed nothing, and left the
+   *  new preview in `plan`. */
+  changed: boolean;
+  outcome: RejectRemovalOutcome | null;
+  error: string | null;
+  priority: string | null;
 }
 export interface RejectPurgeReport {
   frames: number;
