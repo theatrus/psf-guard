@@ -552,15 +552,44 @@ pub fn read_binned(path: &Path) -> Result<(Plane, usize)> {
 /// read. Until every flat of the session has a current measurement, the
 /// stack's dust stands alone, without persistence, and is made again once
 /// they all have one.
+///
+/// In how many flats each feature shows, which features are kept, and each
+/// flat's transients come from `seiza_calibration::dust::session_dust_from_lists`,
+/// so this and `find_session_dust` share one retention rule. With fewer
+/// than two measured flats persistence cannot be told, and the stack's dust
+/// stands alone for good.
 fn session_dust(
     dir: &Path,
     row: &ResponseRow,
     lists: Option<crate::calibration::quality::FlatFeatureLists>,
 ) -> Option<super::SessionDust> {
-    use seiza_calibration::dust::{self, DustMap, DustOptions};
+    use seiza_calibration::dust::{self, DustFeature, DustMap, DustOptions};
     let plane = session_plane(dir, row)?;
     let bin = row.bin.unwrap_or(1);
     let options = DustOptions::default();
+    if let Some(lists) = &lists {
+        let features: Vec<&[DustFeature]> = lists.iter().map(|(_, list)| list.as_slice()).collect();
+        if let Some((mut map, views)) =
+            dust::session_dust_from_lists(&plane, bin, &features, &options)
+        {
+            // The flats stacked, not only those measured.
+            map.frames = row.frames;
+            let frames = lists
+                .iter()
+                .zip(views)
+                .map(|((frame_uuid, _), view)| super::FrameDustRow {
+                    frame_uuid: frame_uuid.clone(),
+                    seen: view.seen,
+                    transients: view.transients,
+                })
+                .collect();
+            return Some(super::SessionDust {
+                map,
+                frames,
+                persistence: true,
+            });
+        }
+    }
     let mut map = dust::find_dust(&plane, bin, &options).unwrap_or(DustMap {
         algorithm_version: dust::DUST_ALGORITHM_VERSION,
         bin,
@@ -571,112 +600,11 @@ fn session_dust(
         frames: 0,
     });
     map.frames = row.frames;
-    let Some(lists) = lists else {
-        return Some(super::SessionDust {
-            map,
-            frames: Vec::new(),
-            persistence: false,
-        });
-    };
-    let frames = persistence(&mut map, &lists, &options);
     Some(super::SessionDust {
         map,
-        frames,
-        persistence: true,
+        frames: Vec::new(),
+        persistence: lists.is_some(),
     })
-}
-
-/// In how many of the session's flats each feature of its stack shows, by
-/// each flat's own features paired with the stack's; the features too few
-/// flats show are dropped. What a flat holds that neither the stack nor most
-/// of the other flats do is a transient.
-fn persistence(
-    map: &mut seiza_calibration::dust::DustMap,
-    lists: &[(String, Vec<seiza_calibration::dust::DustFeature>)],
-    options: &seiza_calibration::dust::DustOptions,
-) -> Vec<super::FrameDustRow> {
-    use seiza_calibration::dust::{match_features, SeenIn, MIN_PERSISTENCE_FRAMES};
-    let of = lists.len() as u32;
-    let overlap = |a: &seiza_calibration::dust::DustFeature,
-                   b: &seiza_calibration::dust::DustFeature| {
-        let t = options.move_tolerance;
-        a.left as f32 - t <= b.right as f32
-            && b.left as f32 <= a.right as f32 + t
-            && a.top as f32 - t <= b.bottom as f32
-            && b.top as f32 <= a.bottom as f32 + t
-    };
-    let mut seen_by: Vec<Vec<usize>> = Vec::new();
-    let mut transients: Vec<Vec<seiza_calibration::dust::DustFeature>> = Vec::new();
-    for (index, (_, features)) in lists.iter().enumerate() {
-        let matches = match_features(&map.features, features, options);
-        seen_by.push(
-            matches
-                .iter()
-                .filter(|m| m.later.is_some())
-                .filter_map(|m| m.earlier)
-                .collect(),
-        );
-        transients.push(
-            matches
-                .iter()
-                .filter(|m| m.earlier.is_none())
-                .filter_map(|m| m.later.map(|j| features[j]))
-                .filter(|f| {
-                    !map.features
-                        .iter()
-                        .any(|own| (own.x - f.x).hypot(own.y - f.y) < own.radius.max(f.radius))
-                })
-                // Steady in most of the other flats: dust the stack is too
-                // coarse to hold, not a passing thing.
-                .filter(|f| {
-                    let others = lists
-                        .iter()
-                        .enumerate()
-                        .filter(|(other, (_, list))| {
-                            *other != index && list.iter().any(|g| overlap(f, g))
-                        })
-                        .count();
-                    (others as f32) < 0.6 * (lists.len().saturating_sub(1)) as f32
-                })
-                .collect(),
-        );
-    }
-    // TODO(seiza): move to dust::session_dust_from_lists, the follow-up to
-    // theatrus/seiza#289, so find_session_dust and this share one rule.
-    let reliable = of as usize >= MIN_PERSISTENCE_FRAMES;
-    let mut renumber: Vec<Option<usize>> = Vec::with_capacity(map.features.len());
-    let mut kept = Vec::new();
-    for (index, feature) in map.features.iter().enumerate() {
-        let frames = seen_by.iter().filter(|seen| seen.contains(&index)).count() as u32;
-        let keep = if !reliable {
-            feature.shape.is_large() || frames >= of
-        } else if feature.shape.is_large() {
-            frames as f32 >= 0.3 * of as f32
-        } else {
-            frames >= ((0.6 * of as f32).ceil() as u32).max(2)
-        };
-        if keep {
-            let mut feature = *feature;
-            feature.seen_in = Some(SeenIn { frames, of });
-            renumber.push(Some(kept.len()));
-            kept.push(feature);
-        } else {
-            renumber.push(None);
-        }
-    }
-    map.features = kept;
-    lists
-        .iter()
-        .zip(seen_by)
-        .zip(transients)
-        .map(
-            |(((frame_uuid, _), seen), transients)| super::FrameDustRow {
-                frame_uuid: frame_uuid.clone(),
-                seen: seen.iter().filter_map(|index| renumber[*index]).collect(),
-                transients,
-            },
-        )
-        .collect()
 }
 
 fn write_dust(dir: &Path, key: &str, dust: &super::SessionDust) -> Result<()> {
@@ -1518,5 +1446,145 @@ mod stale_dust_tests {
         remove_stale_planes(temp.path(), &[key.to_string()]);
         assert!(super::super::dust_path(temp.path(), key).is_file());
         assert!(!older.is_file(), "a dust file of an older version stays");
+    }
+}
+
+#[cfg(test)]
+mod session_dust_tests {
+    use super::*;
+    use seiza_calibration::dust::{DustFeature, SeenIn};
+
+    const BIN: usize = 7;
+
+    /// A session of `frames` flats whose stack holds one wide disk, 0.3%
+    /// deep, on a little noise; its plane is written where the pass keeps
+    /// it.
+    fn session(dir: &Path, frames: usize) -> ResponseRow {
+        let (width, height) = (512, 384);
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let data = (0..width * height)
+            .map(|index| {
+                let (x, y) = ((index % width) as f32, (index / width) as f32);
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                let noise = ((seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5) * 0.001;
+                let disk = if (x - 200.0).hypot(y - 150.0) <= 40.0 {
+                    0.997
+                } else {
+                    1.0
+                };
+                disk + noise
+            })
+            .collect();
+        let row = ResponseRow {
+            response_key: "session".to_string(),
+            session_key: "session".to_string(),
+            rig_uuid: "rig".to_string(),
+            family_key: "family".to_string(),
+            night: "2026-10-01".to_string(),
+            filter: None,
+            rotation: None,
+            frame_uuids: (0..frames).map(|i| format!("f{i}")).collect(),
+            frames,
+            captured_first: None,
+            captured_last: None,
+            level_adu: Some(30_000.0),
+            pedestal_adu: None,
+            noise: Some(0.0004),
+            width: Some(width),
+            height: Some(height),
+            bin: Some(BIN),
+            algorithm_version: metric::RESPONSE_ALGORITHM_VERSION,
+            error: None,
+            unread: Vec::new(),
+        };
+        let plane = Plane {
+            width,
+            height,
+            data,
+        };
+        write_plane(dir, &row.response_key, &plane).unwrap();
+        row
+    }
+
+    /// Each named flat holding `features`, as its stored measurement does.
+    fn lists(
+        names: &[&str],
+        features: &[DustFeature],
+    ) -> crate::calibration::quality::FlatFeatureLists {
+        names
+            .iter()
+            .map(|name| (name.to_string(), features.to_vec()))
+            .collect()
+    }
+
+    /// The flats' own features say in how many of them each feature of
+    /// the stack shows, by Seiza's rule, and each flat keeps its view in
+    /// the order given.
+    #[test]
+    fn the_flats_lists_give_persistence_and_each_flats_view() {
+        let temp = tempfile::tempdir().unwrap();
+        let row = session(temp.path(), 6);
+        let alone = session_dust(temp.path(), &row, None).unwrap();
+        assert!(!alone.persistence, "no flat is measured yet");
+        assert!(alone.frames.is_empty());
+        assert!(!alone.map.features.is_empty(), "the stack holds the disk");
+        let disk = alone.map.features.clone();
+
+        // A passing speck on the last flat alone, far from the disk.
+        let mut speck = disk[0];
+        speck.shape = seiza_calibration::dust::DustShape::Compact;
+        speck.radius = 4.0;
+        speck.x = 3000.0;
+        speck.y = 2200.0;
+        speck.left = 2996;
+        speck.right = 3004;
+        speck.top = 2196;
+        speck.bottom = 2204;
+        let mut flats = lists(&["a", "b", "c"], &disk);
+        flats[2].1.push(speck);
+        let dust = session_dust(temp.path(), &row, Some(flats)).unwrap();
+        assert!(dust.persistence);
+        assert_eq!(dust.map.frames, 6, "the flats stacked, not those listed");
+        assert_eq!(
+            dust.map.features.len(),
+            disk.len(),
+            "{:?}",
+            dust.map.features
+        );
+        assert!(
+            dust.map
+                .features
+                .iter()
+                .all(|f| f.seen_in == Some(SeenIn { frames: 3, of: 3 })),
+            "{:?}",
+            dust.map.features
+        );
+        let uuids: Vec<&str> = dust.frames.iter().map(|f| f.frame_uuid.as_str()).collect();
+        assert_eq!(uuids, ["a", "b", "c"]);
+        let every: Vec<usize> = (0..disk.len()).collect();
+        assert!(
+            dust.frames.iter().all(|f| f.seen == every),
+            "{:?}",
+            dust.frames
+        );
+        assert!(dust.frames[..2].iter().all(|f| f.transients.is_empty()));
+        assert_eq!(dust.frames[2].transients.len(), 1, "{:?}", dust.frames[2]);
+    }
+
+    /// One measured flat cannot tell persistence: the stack's dust stands
+    /// alone, and is not made again on every pass.
+    #[test]
+    fn one_measured_flat_leaves_the_stack_alone_for_good() {
+        let temp = tempfile::tempdir().unwrap();
+        let row = session(temp.path(), 6);
+        let alone = session_dust(temp.path(), &row, None).unwrap();
+        let dust =
+            session_dust(temp.path(), &row, Some(lists(&["a"], &alone.map.features))).unwrap();
+        assert!(dust.persistence);
+        assert!(dust.frames.is_empty());
+        assert_eq!(dust.map.frames, 6);
+        assert_eq!(dust.map.features, alone.map.features);
     }
 }
