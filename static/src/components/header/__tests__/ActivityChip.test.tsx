@@ -561,12 +561,19 @@ describe('ActivityChip', () => {
     );
   }, 10_000);
 
-  it('offers no Stop on a running color composition', async () => {
-    mockServer({ stacks: () => [{ ...stack('C', 'running', 1, 4), kind: 'color' }] });
+  it('says what a running color composition is doing, and offers Stop', async () => {
+    mockServer({
+      stacks: () => [{
+        ...stack('C', 'running', 125, 400),
+        kind: 'color',
+        progress_label: 'H-alpha: BlurXTerminator (42%)',
+      }],
+    });
     renderChip();
     await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(list).toHaveTextContent('Composing color');
-    expect(within(list).queryByRole('button', { name: /^Stop / })).toBeNull();
+    expect(list).toHaveTextContent('H-alpha: BlurXTerminator (42%)');
+    expect(within(list).getByRole('button', { name: /^Stop / })).toBeInTheDocument();
   });
 });

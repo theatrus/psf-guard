@@ -4,6 +4,13 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- A color composition running RC-Astro tools can be stopped from the
+  background jobs list, and its row says which channel and tool it is on,
+  as `H-alpha: BlurXTerminator (42%)`, with a percent that moves while the
+  tool runs. New frames in one channel now rerun the tools on that channel
+  only, unless background extraction is on. The color editor's **Use each
+  channel's processing** copies the deconvolution and RC-Astro steps each
+  channel card shows into the color inputs.
 - Stacks of frames rotated slightly between nights no longer show
   cross-hatched bands across a faint sky. The SNR a stack reports on a
   faint sky is lower than before, often by about a tenth, because it now

@@ -211,15 +211,27 @@ describe('header activity items', () => {
 
   it('shows the final pass in words', () => {
     const running = { ...stack('R', 'running', 21, 34), progress_label: 'Rejecting transients · pass 2/3 · frame 3/8' };
-    const color = { ...stack('C', 'running', 1, 4), kind: 'color' as const };
+    // The server counts a color job in hundredths of a step, so an RC-Astro
+    // tool's own progress moves the percent.
+    const color = {
+      ...stack('C', 'running', 1250, 4000),
+      kind: 'color' as const,
+      progress_label: 'H-alpha: BlurXTerminator (42%)',
+    };
     const items = activityItems([], [running, color]);
     expect(items[0]).toMatchObject({
       detail: 'Rejecting transients · pass 2/3 · frame 3/8',
       percent: (21 / 34) * 100,
       stoppable: true,
     });
-    // A running color composition finishes once it starts.
-    expect(items[1]).toMatchObject({ title: 'Composing color', stoppable: false });
+    // A running color composition says what it is doing, and stops at its
+    // next channel or step.
+    expect(items[1]).toMatchObject({
+      title: 'Composing color',
+      detail: 'H-alpha: BlurXTerminator (42%)',
+      percent: 31.25,
+      stoppable: true,
+    });
     expect(items).toHaveLength(2);
   });
 

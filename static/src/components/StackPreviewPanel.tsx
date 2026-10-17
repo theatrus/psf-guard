@@ -25,6 +25,7 @@ import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
 import ScoringChangedNote from './ScoringChangedNote';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
+import { appliedProcessingQueryKey as channelProcessingQueryKey } from './channelProcessing';
 import { colorSourceKey } from './stackColorSources';
 import { defaultColorProcessing } from './stackColorProcessing';
 import StackStretchControls from './StackStretchControls';
@@ -235,7 +236,9 @@ function artifactStretchKey(artifact: StackArtifact) {
 }
 
 function appliedProcessingQueryKey(dbId: string, projectId: number, artifact: StackArtifact) {
-  return ['db', dbId, 'project', projectId, 'stack-processing', artifactStretchKey(artifact)] as const;
+  return channelProcessingQueryKey(
+    dbId, projectId, artifact.jobId, artifact.group.index, artifact.artifactRevision
+  );
 }
 
 const formatExposure = formatIntegration;

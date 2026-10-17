@@ -349,6 +349,10 @@ pub struct StackColorPhaseProgress {
 pub struct StackColorProgress {
     pub completed_units: usize,
     pub total_units: usize,
+    /// How far the units in hand have got, in units, when the work can say:
+    /// an RC-Astro tool's own progress. Zero between units.
+    #[serde(default)]
+    pub partial_units: f64,
     pub active_phase: Option<StackColorProgressPhase>,
     pub current_role: Option<StackColorRole>,
     pub current_stage: Option<usize>,
@@ -567,8 +571,16 @@ fn color_progress(
     let deconvolution_units = processing
         .map(|processing| processing.input_deconvolutions.len())
         .unwrap_or(0);
+    // One unit per RC-Astro step: a tool runs for minutes where most units
+    // take seconds, so a channel's chain counts as its length.
     let rc_astro_units = processing
-        .map(|processing| processing.input_rc_astro.len())
+        .map(|processing| {
+            processing
+                .input_rc_astro
+                .values()
+                .map(|config| config.steps.len())
+                .sum::<usize>()
+        })
         .unwrap_or(0);
     let background_units = if processing
         .and_then(|processing| processing.background_extraction.as_ref())
@@ -732,6 +744,7 @@ impl ColorProgressTracker<'_> {
 
     fn advance(&self, phase: StackColorProgressPhase, units: usize) {
         self.state.stack_previews.update_color(self.job_id, |job| {
+            job.progress.partial_units = 0.0;
             if let Some(entry) = job
                 .progress
                 .phases
@@ -748,6 +761,7 @@ impl ColorProgressTracker<'_> {
 
     fn finish(&self, phase: StackColorProgressPhase) {
         self.state.stack_previews.update_color(self.job_id, |job| {
+            job.progress.partial_units = 0.0;
             if let Some(entry) = job
                 .progress
                 .phases
@@ -765,6 +779,7 @@ impl ColorProgressTracker<'_> {
     fn skip(&self, phase: StackColorProgressPhase, label: impl Into<String>) {
         let label = label.into();
         self.state.stack_previews.update_color(self.job_id, |job| {
+            job.progress.partial_units = 0.0;
             if let Some(entry) = job
                 .progress
                 .phases
@@ -783,6 +798,7 @@ impl ColorProgressTracker<'_> {
     fn reuse(&self, phase: StackColorProgressPhase, label: impl Into<String>) {
         let label = label.into();
         self.state.stack_previews.update_color(self.job_id, |job| {
+            job.progress.partial_units = 0.0;
             if let Some(entry) = job
                 .progress
                 .phases
@@ -795,6 +811,15 @@ impl ColorProgressTracker<'_> {
                 entry.state = StackColorProgressState::Reused;
                 job.progress.completed_units += remaining;
             }
+        });
+    }
+
+    /// The share of the next `units` units already done, for work that
+    /// reports its own progress.
+    fn partial(&self, units: usize, fraction: f32) {
+        let done = f64::from(fraction.clamp(0.0, 1.0)) * units as f64;
+        self.state.stack_previews.update_color(self.job_id, |job| {
+            job.progress.partial_units = done;
         });
     }
 
@@ -1226,12 +1251,22 @@ pub(super) fn prepare_color_job(
             )
         })
         .transpose()?;
-    // The upstream identity excludes RC-Astro and display stretches, so
-    // changing a later tool or a stretch reuses the matching chain prefix.
+    // Each channel's chain keys on that channel's own inputs, never on
+    // RC-Astro or display stretches: changing a later tool or a stretch
+    // reuses the matching chain prefix, and another channel's new frames
+    // reuse it whole.
     let mut rc_astro_chains = BTreeMap::new();
     if let (Some(processing), Some(upstream_id)) = (&request.processing, &linear_input_id) {
-        rc_astro_chains =
-            color_rc_astro_chains(&ctx.id, upstream_id, processing, &rc_astro_schemas)?;
+        rc_astro_chains = color_rc_astro_chains(
+            &ctx.id,
+            project_id,
+            request.target_id,
+            request.kind,
+            processing,
+            &sources,
+            &background_protection_summary,
+            &rc_astro_schemas,
+        )?;
         if !rc_astro_chains.is_empty() {
             linear_input_id = Some(rc_astro_input_cache_id(upstream_id, &rc_astro_chains)?);
         }
@@ -1435,10 +1470,87 @@ fn source_family_key(sources: &[StackColorSource]) -> String {
     key
 }
 
+/// The channel every other channel registers onto.
+fn reference_role(kind: StackColorKind) -> StackColorRole {
+    match kind {
+        StackColorKind::Rgb => StackColorRole::Red,
+        StackColorKind::Lrgb => StackColorRole::Luminance,
+        StackColorKind::Narrowband => StackColorRole::Ha,
+    }
+}
+
+/// What one channel's registered, deconvolved pixels depend on, and nothing
+/// else: its own stack, the reference stack it registers onto, and its own
+/// deconvolution. Background extraction picks one model for every channel,
+/// so with it on, every channel's stack and protection count too.
+///
+/// RC-Astro chains cache under this, so a new frame in one channel reruns
+/// the tools on that channel alone.
+#[allow(clippy::too_many_arguments)]
+fn color_role_input_id(
+    database_id: &str,
+    project_id: i32,
+    target_id: i32,
+    role: StackColorRole,
+    reference_role: StackColorRole,
+    processing: &StackColorProcessing,
+    sources: &[StackColorSource],
+    resolved_background_protection: &BTreeMap<StackColorRole, StackBackgroundProtection>,
+) -> Result<String, AppError> {
+    fn encode(value: &impl Serialize) -> Result<Vec<u8>, AppError> {
+        serde_json::to_vec(value).map_err(|error| {
+            AppError::InternalError(format!("Failed to encode color input processing: {error}"))
+        })
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"color-role-input");
+    hasher.update(database_id.as_bytes());
+    hasher.update(project_id.to_le_bytes());
+    hasher.update(target_id.to_le_bytes());
+    hasher.update(COLOR_INPUT_CACHE_VERSION.to_le_bytes());
+    hasher.update(SEIZA_STACKING_VERSION.as_bytes());
+    hasher.update([role as u8, reference_role as u8]);
+    let hash_source = |hasher: &mut Sha256, source: &StackColorSource| {
+        hasher.update([source.role as u8]);
+        hasher.update(source.filter_name.as_bytes());
+        hasher.update(source.job_id.as_bytes());
+        hasher.update(source.group_index.to_le_bytes());
+        hasher.update(source.artifact_revision.as_bytes());
+    };
+    if let Some(extraction) = &processing.background_extraction {
+        hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
+        hasher.update(encode(&(extraction, resolved_background_protection))?);
+        for source in sources {
+            hash_source(&mut hasher, source);
+        }
+    } else {
+        for source in sources
+            .iter()
+            .filter(|source| source.role == role || source.role == reference_role)
+        {
+            hash_source(&mut hasher, source);
+        }
+    }
+    if let Some(deconvolution) = processing.input_deconvolutions.get(&role) {
+        hasher.update(seiza_deconvolution::ALGORITHM_VERSION.to_le_bytes());
+        hasher.update(encode(deconvolution)?);
+    }
+    let mut id = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(id)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn color_rc_astro_chains(
     database_id: &str,
-    upstream_id: &str,
+    project_id: i32,
+    target_id: i32,
+    kind: StackColorKind,
     processing: &StackColorProcessing,
+    sources: &[StackColorSource],
+    resolved_background_protection: &BTreeMap<StackColorRole, StackBackgroundProtection>,
     schemas: &BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
 ) -> Result<BTreeMap<StackColorRole, Vec<String>>, AppError> {
     processing
@@ -1448,10 +1560,20 @@ fn color_rc_astro_chains(
             let schemas = schemas.get(role).ok_or_else(|| {
                 AppError::InternalError("RC-Astro input schemas are missing".into())
             })?;
+            let input_id = color_role_input_id(
+                database_id,
+                project_id,
+                target_id,
+                *role,
+                reference_role(kind),
+                processing,
+                sources,
+                resolved_background_protection,
+            )?;
             let chain = super::rc_astro::rc_astro_chain_ids(
                 database_id,
-                &format!("color-input:{upstream_id}:{}", role.label()),
-                upstream_id,
+                &format!("color-input:{input_id}:{}", role.label()),
+                &input_id,
                 config,
                 schemas,
                 None,
@@ -1689,12 +1811,14 @@ pub(super) fn enqueue_color_job(
     origin: super::journal::JournaledStackJob,
 ) {
     let job_id = prepared.public.job_id.clone();
-    // A composition can be stopped while it waits for the worker; once it
-    // runs it finishes, which is minutes at most.
+    // A composition stops while it waits for the worker, and while it runs
+    // at its next channel or step; a running RC-Astro tool is killed.
     let cancel = state.stack_previews.track_cancel(&job_id);
     state.stack_previews.remember_origin(&job_id, origin);
     state.stack_previews.join_line(&job_id);
-    // A stop waits for a composition already under way to finish.
+    // A server stop waits for a running composition to reach its next stop
+    // point; the journal brings it back, and its finished RC-Astro steps
+    // stay cached.
     let work = state.shutdown.hold(format!(
         "color composition for project {} (db={})",
         prepared.public.project_id, prepared.public.database_id
@@ -1720,11 +1844,10 @@ pub(super) fn enqueue_color_job(
         let guard = (!state.stack_previews.is_automatic(&job_id))
             .then(|| state.begin_named_interactive_job("a color composition"));
         let state_for_job = Arc::clone(&state);
-        let job_id_for_job = job_id.clone();
+        let cancel_for_job = Arc::clone(&cancel);
         let result = tokio::task::spawn_blocking(move || {
             let _guard = guard;
-            let _ = job_id_for_job;
-            run_color_job(&state_for_job, prepared)
+            run_color_job(&state_for_job, prepared, cancel_for_job)
         })
         .await;
         if let Err(error) = result {
@@ -1738,7 +1861,40 @@ pub(super) fn enqueue_color_job(
     });
 }
 
-fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
+/// The error a composition ends with when it is stopped, read back so the
+/// card says it stopped rather than that it failed.
+const COLOR_STOPPED: &str = "Stopped";
+
+/// Where a running composition may stop: between channels and steps.
+struct ColorStop {
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ColorStop {
+    fn stopped(&self) -> bool {
+        self.cancel.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn check(&self) -> Result<(), String> {
+        if self.stopped() {
+            Err(COLOR_STOPPED.into())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Kills a running RC-Astro tool when the composition is stopped.
+    fn signal(&self) -> seiza_stacking::CancelSignal {
+        seiza_stacking::CancelSignal::from(Arc::clone(&self.cancel))
+    }
+}
+
+fn run_color_job(
+    state: &Arc<AppState>,
+    prepared: PreparedColorJob,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+) {
+    let stop = ColorStop { cancel };
     let job_id = prepared.public.job_id.clone();
     state.stack_previews.update_color(&job_id, |job| {
         job.state = StackJobState::Running;
@@ -1760,6 +1916,7 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
             &prepared.stack_root,
             &prepared.rc_astro_schemas,
             &prepared.rc_astro_chains,
+            &stop,
         )
     }));
     let progress = ColorProgressTracker {
@@ -1802,6 +1959,21 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob) {
                     }
                 }
             }
+        }
+        // A stop kills a running tool, whose own complaint is not the
+        // reason: the stop is.
+        Ok(Err(_)) if stop.stopped() => {
+            let phase = if state.shutdown.is_stopping() {
+                "Stopped for the server stop; it resumes after the restart"
+            } else {
+                "Stopped"
+            };
+            state.stack_previews.update_color(&job_id, |job| {
+                job.state = StackJobState::Cancelled;
+                job.phase = phase.into();
+                job.progress.active_phase = None;
+                job.progress.partial_units = 0.0;
+            });
         }
         Ok(Err(error)) => {
             progress.fail_active();
@@ -1935,16 +2107,13 @@ fn compose_color(
     stack_root: &FsPath,
     rc_astro_schemas: &BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
     rc_astro_chains: &BTreeMap<StackColorRole, Vec<String>>,
+    stop: &ColorStop,
 ) -> Result<(), String> {
     let progress = ColorProgressTracker {
         state,
         job_id: &job.job_id,
     };
-    let reference_role = match job.kind {
-        StackColorKind::Rgb => StackColorRole::Red,
-        StackColorKind::Lrgb => StackColorRole::Luminance,
-        StackColorKind::Narrowband => StackColorRole::Ha,
-    };
+    let reference_role = reference_role(job.kind);
     let reference_source = job
         .sources
         .iter()
@@ -2078,6 +2247,7 @@ fn compose_color(
             validate_mono(&frame.image, source.role)?;
             frame
         } else {
+            stop.check()?;
             progress.begin(
                 StackColorProgressPhase::LoadingSources,
                 format!("Loading {} stack", source.role.label()),
@@ -2119,6 +2289,7 @@ fn compose_color(
                         .get(&source.role)
                         .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?
                 };
+                stop.check()?;
                 progress.begin(
                     StackColorProgressPhase::BackgroundPreparation,
                     format!("Fitting {} background", source.role.label()),
@@ -2264,6 +2435,7 @@ fn compose_color(
                 .iter()
                 .filter(|source| source.role != reference_role)
             {
+                stop.check()?;
                 progress.begin(
                     StackColorProgressPhase::RegisteringSources,
                     format!("Registering {}", source.role.label()),
@@ -2355,6 +2527,7 @@ fn compose_color(
                         else {
                             continue;
                         };
+                        stop.check()?;
                         progress.begin(
                             StackColorProgressPhase::DeconvolvingInputs,
                             format!("Deconvolving {}", source.role.label()),
@@ -2405,6 +2578,7 @@ fn compose_color(
                             &source_headers[&source.role],
                             &source.filter_name,
                         );
+                        let steps = config.steps.len();
                         let outcome = super::rc_astro::apply_rc_astro(
                             stack_root,
                             chain,
@@ -2420,11 +2594,12 @@ fn compose_color(
                                     Some(source.role),
                                     None,
                                 );
+                                progress.partial(steps, fraction);
                             },
-                            // A running composition finishes; a server stop
-                            // waits for it, as for the rest of the job.
-                            None,
-                            &mut || Ok(()),
+                            // A stop kills the tool in hand; the steps it
+                            // finished stay cached for the next composition.
+                            Some(&stop.signal()),
+                            &mut || stop.check(),
                         )?;
                         let id = chain
                             .last()
@@ -2447,7 +2622,7 @@ fn compose_color(
                         state.stack_previews.update_color(&job.job_id, |current| {
                             current.resolved_input_rc_astro.insert(source.role, result);
                         });
-                        progress.advance(StackColorProgressPhase::RcAstroInputs, 1);
+                        progress.advance(StackColorProgressPhase::RcAstroInputs, steps);
                     }
                     progress.finish(StackColorProgressPhase::RcAstroInputs);
                 }
@@ -2587,6 +2762,7 @@ fn compose_color(
             }
         };
 
+        stop.check()?;
         progress.begin(
             StackColorProgressPhase::ComposingColor,
             format!("Composing {}", job.label),
@@ -3649,6 +3825,110 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_channel_rc_astro_input_keys_on_what_changes_its_pixels() {
+        let narrowband = |oiii: &str| {
+            vec![
+                channel(StackColorRole::Ha, "Ha", "ha-1", false),
+                channel(StackColorRole::Oiii, "OIII", oiii, false),
+                channel(StackColorRole::Sii, "SII", "sii-1", false),
+            ]
+        };
+        let plain = StackColorProcessing::default();
+        let id = |role, processing: &StackColorProcessing, sources: &[StackColorSource]| {
+            color_role_input_id(
+                "db",
+                1,
+                7,
+                role,
+                StackColorRole::Ha,
+                processing,
+                sources,
+                &BTreeMap::new(),
+            )
+            .unwrap()
+        };
+        let before = narrowband("oiii-1");
+        let after = narrowband("oiii-2");
+        // New OIII frames: SII registers onto the same H-alpha from the same
+        // stack, so its RC-Astro chain is reused; OIII's reruns.
+        assert_eq!(
+            id(StackColorRole::Sii, &plain, &before),
+            id(StackColorRole::Sii, &plain, &after)
+        );
+        assert_eq!(
+            id(StackColorRole::Ha, &plain, &before),
+            id(StackColorRole::Ha, &plain, &after)
+        );
+        assert_ne!(
+            id(StackColorRole::Oiii, &plain, &before),
+            id(StackColorRole::Oiii, &plain, &after)
+        );
+        // A new reference moves every channel's registered pixels.
+        let mut new_reference = narrowband("oiii-1");
+        new_reference[0] = channel(StackColorRole::Ha, "Ha", "ha-2", false);
+        assert_ne!(
+            id(StackColorRole::Sii, &plain, &before),
+            id(StackColorRole::Sii, &plain, &new_reference)
+        );
+        // Another channel's deconvolution leaves this one alone; its own
+        // does not.
+        let mut deconvolved = StackColorProcessing::default();
+        deconvolved.input_deconvolutions.insert(
+            StackColorRole::Oiii,
+            seiza_deconvolution::DeconvolutionConfig::conservative(2.5),
+        );
+        assert_eq!(
+            id(StackColorRole::Sii, &plain, &before),
+            id(StackColorRole::Sii, &deconvolved, &before)
+        );
+        assert_ne!(
+            id(StackColorRole::Oiii, &plain, &before),
+            id(StackColorRole::Oiii, &deconvolved, &before)
+        );
+        // Background extraction fits one model for every channel, so any
+        // channel's new frames move all of them.
+        let extracted: StackColorProcessing = serde_json::from_value(serde_json::json!({
+            "background_extraction": {"config": {}, "protect_catalog_emission": false},
+            "input_stretches": {},
+            "output_stretches": []
+        }))
+        .unwrap();
+        assert_ne!(
+            id(StackColorRole::Sii, &extracted, &before),
+            id(StackColorRole::Sii, &extracted, &after)
+        );
+    }
+
+    #[test]
+    fn the_job_line_hears_what_a_running_color_job_does_and_how_far_its_tool_got() {
+        let mut job = running_color_job(&"c".repeat(64), StackJobState::Running);
+        job.phase = "H-alpha: BlurXTerminator (42%)".into();
+        job.progress.completed_units = 5;
+        job.progress.total_units = 20;
+        job.progress.partial_units = 0.84;
+        let entry = super::super::color_activity(&job);
+        assert_eq!(
+            entry.progress_label.as_deref(),
+            Some("H-alpha: BlurXTerminator (42%)")
+        );
+        assert_eq!((entry.processed_units, entry.total_units), (584, 2000));
+        // Queued, it says nothing of its own; the line says it waits.
+        job.state = StackJobState::Queued;
+        assert_eq!(super::super::color_activity(&job).progress_label, None);
+    }
+
+    #[test]
+    fn a_stopped_color_composition_stops_at_its_next_check() {
+        let stop = ColorStop {
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        assert!(stop.check().is_ok());
+        stop.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(stop.check(), Err(COLOR_STOPPED.to_string()));
+    }
+
     fn stack_orientation(
         output_width: usize,
         output_height: usize,
@@ -4050,8 +4330,9 @@ mod tests {
         assert_eq!(entry.project_id, 7);
         assert_eq!(entry.label, "Color target · SHO");
         assert_eq!(entry.detail, "Registering source channels");
-        assert_eq!(entry.processed_units, 4);
-        assert_eq!(entry.total_units, color_progress(3, None).total_units);
+        // In hundredths of a unit, so a tool's own progress can move it.
+        assert_eq!(entry.processed_units, 400);
+        assert_eq!(entry.total_units, color_progress(3, None).total_units * 100);
     }
 
     #[test]
