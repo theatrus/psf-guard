@@ -86,6 +86,25 @@ fn stop_pauses_until_resume_or_a_change() {
     assert!(!queue.stopped);
 }
 
+/// Frames that come while a pass runs are another pass, and the status
+/// says so.
+#[test]
+fn the_status_says_when_another_pass_waits() {
+    let path = "/next-pass/frame-sites.sqlite";
+    let job = job(path);
+    job.queue().running = true;
+    assert!(!status(path).next_pass);
+    job.queue().add(Instant::now());
+    let running = status(path);
+    assert_eq!(running.state, "running");
+    assert!(running.next_pass);
+    job.queue().running = false;
+    let queued = status(path);
+    assert_eq!(queued.state, "queued");
+    assert!(!queued.next_pass, "only behind a pass under way");
+    job.queue().pending = false;
+}
+
 /// A catalog of `count` flats with a PDT clock, their sites not yet read.
 fn library(dir: &std::path::Path, count: usize) -> (String, Vec<std::path::PathBuf>) {
     let mut frames = Vec::new();

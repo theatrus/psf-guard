@@ -69,10 +69,16 @@
   --state-cursor-ring: 0 0 0 3px var(--color-primary-alpha-50);
 
   /* Waiting: automatic work that stepped aside for a person's, and resumes
-     on its own, in the header's job list. */
-  --state-waiting-fg: var(--color-warning-light);
-  --state-waiting-border: var(--color-warning);
-  --state-waiting-fill: var(--color-warning-alpha-40);
+     on its own, in the header's job list. It is normal and constant, so it
+     is muted, not a warning: its hourglass and a quiet edge set it apart
+     from running work. */
+  --state-waiting-fg: var(--color-text-muted);
+  --state-waiting-border: var(--color-border-quaternary);
+  --state-waiting-fill: var(--color-border-quaternary);
+  /* Attention: work that failed or needs a person, such as a transfer to
+     review, in the header's job list. */
+  --state-attention-fg: var(--color-warning-light);
+  --state-attention-border: var(--color-warning);
 
   /* New: a frame captured since the last visit from the Library, in the
      Library's own accent for its new frames. */

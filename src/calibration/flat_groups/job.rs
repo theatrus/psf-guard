@@ -71,6 +71,8 @@ pub struct Progress<'a> {
     pub stage: &'a str,
     pub done: usize,
     pub total: usize,
+    /// Rigs this pass works on after this one.
+    pub rigs_after: usize,
 }
 
 /// Some rigs of a catalog, or all of them.
@@ -734,12 +736,14 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
     let mut tried: std::collections::HashSet<(String, String)> = Default::default();
     let mut family_keep: Vec<family_store::Kept> = Vec::new();
     let mut family_rigs: BTreeSet<String> = BTreeSet::new();
-    'rigs: for rig in rigs {
+    let rig_count = rigs.len();
+    'rigs: for (index, rig) in rigs.into_iter().enumerate() {
         let report = |stage: &'static str, done: usize, total: usize| Progress {
             rig,
             stage,
             done,
             total,
+            rigs_after: rig_count - index - 1,
         };
         let left_before = (outcome.unreadable, outcome.lights_missing);
         if pass.scope.measures(rig) {

@@ -1946,6 +1946,8 @@ impl DatabaseContext {
         {
             let mut file_cache = self.file_check_cache.write().unwrap();
             file_cache.clear();
+            // Asked for: the job line lists it as a person's work.
+            file_cache.refresh_requested = true;
             tracing::info!(
                 "🗑️  File cache cleared for db={}, forcing complete refresh",
                 self.id
@@ -2648,6 +2650,26 @@ mod tests {
         assert!(ctx.complete_delayed_file_probe(500, &source));
         assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::NotPending);
         assert!(ctx.requires_delayed_file_identity(500));
+    }
+
+    #[test]
+    fn a_refresh_a_person_asked_for_is_not_automatic() {
+        let mut cache = FileCheckCache::new();
+        // The cache expired: automatic.
+        cache.mark_refresh_started();
+        assert!(!cache.refresh_progress.requested);
+        cache.mark_refresh_completed();
+
+        // Refresh, as `force_directory_tree_refresh` asks for it.
+        cache.clear();
+        cache.refresh_requested = true;
+        cache.mark_refresh_started();
+        assert!(cache.refresh_progress.requested);
+        // The ask is spent: the next expiry is automatic again.
+        assert!(!cache.refresh_requested);
+        cache.mark_refresh_completed();
+        cache.mark_refresh_started();
+        assert!(!cache.refresh_progress.requested);
     }
 
     #[test]

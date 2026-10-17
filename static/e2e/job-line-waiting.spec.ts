@@ -102,9 +102,23 @@ test('lists automatic work as waiting while a person builds, then running once',
   const list = page.getByRole('region', { name: 'Background jobs' });
   const rows = list.getByRole('listitem');
   await expect(rows).toHaveCount(4);
-  // The person's build first, then everything that stepped aside for it.
+  // The person's build first, then everything that stepped aside for it,
+  // under a heading of its own.
   await expect(rows.nth(0)).toHaveAttribute('data-job-state', 'running');
   await expect(rows.nth(0)).toContainText('Alpha M44 · B');
+  await expect(list.getByRole('region', { name: 'Started by you' }).getByRole('listitem')).toHaveCount(1);
+  await expect(list.getByRole('region', { name: 'Automatic' }).getByRole('listitem')).toHaveCount(3);
+  // Waiting is normal: muted, not drawn in the warning colour.
+  const { edge, warning } = await rows.nth(1).evaluate((row) => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--color-warning)';
+    document.body.append(probe);
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return { edge: getComputedStyle(row).boxShadow, warning: colour };
+  });
+  expect(edge).toMatch(/inset/);
+  expect(edge).not.toContain(warning);
   for (const index of [1, 2, 3]) {
     await expect(rows.nth(index)).toHaveAttribute('data-job-state', 'waiting');
     await expect(rows.nth(index).locator('.activity-row-state')).toHaveText('waiting');

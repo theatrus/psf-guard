@@ -3774,6 +3774,9 @@ export interface CacheRefreshProgress {
   targets_processed: number;
   files_found: number;
   files_missing: number;
+  /** Started on its own (the cache expired, or the server started), not
+   *  by Refresh. */
+  automatic?: boolean;
 }
 
 // Sequence analysis types
@@ -4631,6 +4634,9 @@ export interface FrameSitesStatus {
   active: boolean;
   done: number;
   total: number;
+  /** While a pass runs, frames came since it began: another pass reads
+   *  them after this one. */
+  next_pass?: boolean;
   waiting_for: string | null;
   retry_at: number | null;
   started_at: number | null;
@@ -4656,6 +4662,11 @@ export interface FlatMeasureStatus {
   total: number;
   /** Rigs whose work waits or runs; `*` for every rig. */
   rigs: string[];
+  /** Rigs the running pass measures after this one. */
+  rigs_after?: number;
+  /** While a pass runs, the rigs asked for since it began, or due a
+   *  retry, which the next pass takes; `*` for every rig. */
+  next_pass?: string[];
   /** Rigs Stop paused; `*` for every rig. */
   stopped: string[];
   /** When the next retry of unfinished work is due, Unix seconds. */

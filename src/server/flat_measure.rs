@@ -103,6 +103,11 @@ pub struct FlatMeasureStatus {
     pub total: usize,
     /// Rigs whose work waits or runs; `*` for every rig.
     pub rigs: Vec<String>,
+    /// Rigs the running pass measures after this one.
+    pub rigs_after: usize,
+    /// While a pass runs, the rigs asked for since it began, or due a
+    /// retry, which the next pass takes; `*` for every rig.
+    pub next_pass: Vec<String>,
     /// Rigs Stop paused.
     pub stopped: Vec<String>,
     /// When the next retry is due, Unix seconds.
@@ -333,6 +338,11 @@ pub fn status(path: &str) -> FlatMeasureStatus {
     for key in queue.due.keys() {
         waiting.merge(scope_of(key));
     }
+    status.next_pass = if queue.running.is_some() {
+        rig_list(&waiting)
+    } else {
+        Vec::new()
+    };
     if let Some(running) = &queue.running {
         waiting.merge(running.clone());
     }
@@ -544,6 +554,7 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope) {
         status.active = false;
         status.rig_uuid = None;
         status.rig_name = None;
+        status.rigs_after = 0;
         status.stage = None;
         status.priority = None;
         status.waiting_for = None;
@@ -674,6 +685,7 @@ fn run_with(
             status.stage = Some(at.stage.to_string());
             status.done = at.done;
             status.total = at.total;
+            status.rigs_after = at.rigs_after;
             // Work found: the job line shows it from here on.
             status.active |= at.total > 0 && at.done < at.total;
         });

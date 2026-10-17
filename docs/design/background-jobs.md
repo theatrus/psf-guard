@@ -2,7 +2,7 @@
 
 Status: **Current contract** for new long or compute-heavy work. Older jobs
 follow most of it; the gaps are listed at the end.
-Last updated: 2026-10-15
+Last updated: 2026-10-16
 
 A task that reads many frames, measures pixels or runs for more than a
 moment is a **job**. A job:
@@ -60,6 +60,45 @@ or grades. A rig the catalog does not record is ignored.
 | Holding a stop until a write commits | `state.shutdown.hold(what)` |
 | The job line | `static/src/components/header/activityItems.ts`, polled by `useHeaderActivity.ts` |
 
+## The job line
+
+The header's background jobs chip is the job line, kept small: a progress
+ring, the overall percent and three icon counts, **running** (▷),
+**queued** (a numbered list: in a line a person can reorder) and
+**waiting** (an hourglass: automatic work stepped aside for a person's).
+Each count names itself for a screen reader and in its tooltip.
+
+Its list groups the rows by tier, each heading with its own counts:
+
+- **Started by you**: `Interactive` work. Stack builds and processing runs,
+  scans and duplicate checks a person asked for, WBPP runs, a refresh asked
+  for with Refresh, and backups and transfers started by hand.
+- **Automatic**: `Viewed` and `Background` work. Quality backfill and the
+  analysis of new frames, automatic scans, flat measuring and frame sites,
+  scheduled catalog refreshes, automatic stack refreshes and re-applies,
+  scheduled backups and transfers a connection's policy queued.
+
+Within each, running work comes first, then the lines in the order they
+will run (stack line, then WBPP line), then waiting work. A row's tier
+comes from what its status route reports: `automatic` on a scan, a stack
+entry, a catalog refresh (`cache-progress`) or a transfer; `priority` on
+a duplicate check; `trigger` on a backup. Quality backfill, flat measuring
+and frame sites are always automatic.
+
+A row says how much is left where the server knows it, after its detail:
+`12 targets left`, `26 frames left`, `1 more rig · 2 rigs queued`,
+`200 frames left · another pass queued`, `3 channels to stack`. A job that
+merges requests while it runs reports what waits for its next pass:
+`next_pass` on flat measuring (rigs) and frame sites (a flag), and flat
+measuring's `rigs_after` counts the rigs the running pass has after the
+current one. A number the server cannot stand behind is left out.
+
+Waiting is normal: automatic work steps aside whenever a person's runs.
+It is drawn muted, with `--state-waiting-*` (an hourglass and a quiet
+edge), never in the warning colour. `--state-attention-*`, the warning
+colour, marks the rows that need a person: a transfer that failed or needs
+review. Scan errors keep their own note above the list.
+
 ## A minimal job
 
 Modelled on `src/server/flat_measure.rs`.
@@ -110,8 +149,11 @@ Then:
 - a query in `useHeaderActivity.ts` that polls the status (fast while it
   runs, slower while it only waits, a slow heartbeat at rest when the server
   starts the job on its own), shared with any page that shows it, and an
-  item in `activityItems.ts` with a title, scope, progress, `automatic` and
-  a `control` when it can be stopped;
+  item in `activityItems.ts` with a title, scope, progress, `automatic`,
+  `background` for its tier, `remaining` when the status says what is left,
+  and a `control` when it can be stopped;
+- a status that says whether a person started the run, and what waits
+  behind the step under way (see [The job line](#the-job-line));
 - a status that turns visible only once the job has found work, so a pass
   with nothing to do never flashes in the job line.
 

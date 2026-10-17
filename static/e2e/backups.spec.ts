@@ -129,7 +129,9 @@ test('lists a scheduled backup in the job line and stops it from there', async (
   const list = page.getByRole('region', { name: 'Background jobs' });
   const row = list.getByRole('listitem').filter({ hasText: 'Scheduled backup' });
   await expect(row).toContainText('Settings and catalogs');
-  await expect(row).toContainText('automatic');
+  // Listed with automatic work, not the work a person started.
+  await expect(list.getByRole('region', { name: 'Automatic' }).getByRole('listitem')
+    .filter({ hasText: 'Scheduled backup' })).toHaveCount(1);
   await expect(row).toContainText('Copying catalog imaging-rig-e2e · 2/6 files');
   await row.getByRole('button', { name: 'Stop Scheduled backup: Settings and catalogs' }).click();
   await row.getByRole('button', { name: 'Stop it' }).click();

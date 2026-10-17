@@ -4260,6 +4260,7 @@ pub async fn get_cache_refresh_progress(
                 targets_processed: progress.targets_processed,
                 files_found: progress.files_found,
                 files_missing: progress.files_missing,
+                automatic: !progress.requested,
             }
         }
         None => {
@@ -4280,6 +4281,7 @@ pub async fn get_cache_refresh_progress(
                 targets_processed: 0,
                 files_found: 0,
                 files_missing: 0,
+                automatic: false,
             }
         }
     };

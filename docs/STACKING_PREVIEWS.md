@@ -288,9 +288,16 @@ day.
 A build belongs to the server, not to the page that started it. The header's
 background jobs chip counts it for as long as any mono or color build, or
 processing run, is queued or running, in every view and in every database. The chip shows only
-the overall progress and the number of jobs. Hover, focus or click it to open
-the queue: each build shows its target and channel and how far it has got, and
-waiting builds say `queued` with their place in line. Catalog refreshes,
+the overall progress and three counts, each an icon: running, queued (in a
+line you can reorder) and waiting (automatic work stepped aside for yours).
+Hover, focus or click it to open the queue. It lists the work you started
+under **Started by you** and the rest under **Automatic**, each heading with
+its counts, and in each running work first, then the lines in order, then
+waiting work. Each build shows its target and channel, how far it has got and
+how many frames are left, and waiting builds say `queued` with their place in
+line. Waiting automatic work is drawn muted, since it is normal; only a row
+that needs you, such as a transfer to review, takes the warning colour.
+Catalog refreshes,
 quality scans and WBPP runs share the same chip. Click what a row works on to
 go there: a build or WBPP run opens its target's stacks, a quality scan the
 target's sequence, and a catalog refresh the database's images.

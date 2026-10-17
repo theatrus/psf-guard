@@ -111,8 +111,9 @@ describe('ActivityChip', () => {
     });
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
-    // A build a person queued is queued, not waiting: no icon, but said.
-    await waitFor(() => expect(counts(chip)).toEqual(['2 running']));
+    // A build a person queued is queued, not waiting, and counted as such.
+    await waitFor(() => expect(counts(chip)).toEqual(['2 running', '1 queued']));
+    expect(chip.querySelector('.activity-count[data-job-state="queued"] svg')).toHaveAttribute('aria-hidden', 'true');
     // The scan is 40% and the running build 80%; the queued one waits.
     expect(chip).toHaveTextContent('60%');
     expect(chip).toHaveAccessibleName('Background jobs: 60% done, 2 running, 1 queued');
@@ -127,9 +128,15 @@ describe('ActivityChip', () => {
       expect.stringContaining('Alpha M44 · R'),
       expect.stringContaining('Alpha M44 · B'),
     ]);
-    expect(rows[0]).toHaveTextContent('Solving 4/10 frames');
+    expect(rows[0]).toHaveTextContent('Solving 4/10 frames · 6 frames left');
     expect(rows[0]).toHaveTextContent('Askar');
+    expect(rows[1]).toHaveTextContent('8/10 frames · 2 frames left');
     expect(rows[2]).toHaveTextContent('queued');
+    // All of it a person started: one heading, with its counts.
+    const groups = within(list).getAllByRole('region');
+    expect(groups.map((group) => group.getAttribute('aria-labelledby') && within(group).getByRole('heading').textContent))
+      .toEqual(['Started by you']);
+    expect(counts(groups[0].querySelector('.activity-group-head')!)).toEqual(['2 running', '1 queued']);
 
     await userEvent.unhover(chip);
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Background jobs' })).toBeNull());
@@ -186,7 +193,12 @@ describe('ActivityChip', () => {
     expect(rows[2]).toHaveTextContent(
       'Waiting for the stack build of Alpha M44 · R · stopped at 12/40 frames'
     );
-    expect(rows[2]).toHaveTextContent('automatic');
+    // Under the automatic heading, apart from the person's build.
+    const person = within(list).getByRole('region', { name: 'Started by you' });
+    const automatic = within(list).getByRole('region', { name: 'Automatic' });
+    expect(within(person).getAllByRole('listitem')).toEqual([rows[0]]);
+    expect(within(automatic).getAllByRole('listitem')).toEqual(rows.slice(1));
+    expect(counts(automatic.querySelector('.activity-group-head')!)).toEqual(['3 waiting']);
     expect(within(rows[2]).getByText('waiting')).toHaveClass('activity-row-state');
     // It cannot be stopped from here, and has no place in a line.
     expect(within(rows[2]).queryByRole('button')).toBeNull();

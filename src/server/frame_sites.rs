@@ -69,6 +69,9 @@ pub struct FrameSitesStatus {
     pub active: bool,
     pub done: usize,
     pub total: usize,
+    /// While a pass runs, frames came since it began: another pass reads
+    /// them after this one.
+    pub next_pass: bool,
     /// What a person started that the pass waits for, while it does.
     pub waiting_for: Option<String>,
     /// When the next retry is due, Unix seconds.
@@ -212,6 +215,7 @@ pub fn status(path: &str) -> FrameSitesStatus {
     let queue = job.queue();
     let mut status = job.status.read().unwrap_or_else(|p| p.into_inner()).clone();
     status.retry_at = queue.due.map(unix_at);
+    status.next_pass = queue.running && queue.pending;
     status.state = if queue.running {
         "running"
     } else if queue.pending || queue.due.is_some() {

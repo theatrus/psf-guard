@@ -1,16 +1,18 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Hourglass, Play } from 'lucide-react';
+import { Hourglass, ListOrdered, Play } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
 import { duplicatesKey } from '../calibration/duplicateJob';
 import {
+  groupActivity,
   lineLengths,
   type ActivityControl,
   type ActivityItem,
   type ActivityQueue,
+  type ActivityStatus,
 } from './activityItems';
 import { useHeaderActivity, WBPP_ACTIVITY_QUERY_KEY, type ScanErrorNote } from './useHeaderActivity';
 import './header.css';
@@ -138,11 +140,13 @@ function stateText(item: ActivityItem): ReactNode {
   return item.percent != null ? `${Math.round(item.percent)}%` : 'working';
 }
 
+const COUNT_ICONS = { running: Play, queued: ListOrdered, waiting: Hourglass } as const;
+
 /** One icon and its count, named in words for a screen reader and a
  *  tooltip. Nothing when the count is zero. */
-function JobCount({ count, state }: { count: number; state: 'running' | 'waiting' }) {
+function JobCount({ count, state }: { count: number; state: ActivityStatus }) {
   if (count === 0) return null;
-  const Icon = state === 'running' ? Play : Hourglass;
+  const Icon = COUNT_ICONS[state];
   const name = `${count} ${state}`;
   return (
     <span className="activity-count" data-job-state={state} title={name}>
@@ -153,12 +157,13 @@ function JobCount({ count, state }: { count: number; state: 'running' | 'waiting
   );
 }
 
-/** How many jobs run and wait, as icons with counts, so the chip stays
- *  small. */
-function JobCounts({ running, waiting }: { running: number; waiting: number }) {
+/** How many jobs run, wait in a line and wait for their turn, as icons
+ *  with counts, so the chip stays small. */
+function JobCounts({ running, queued, waiting }: { running: number; queued: number; waiting: number }) {
   return (
     <span className="activity-counts">
       <JobCount count={running} state="running" />
+      <JobCount count={queued} state="queued" />
       <JobCount count={waiting} state="waiting" />
     </span>
   );
@@ -175,7 +180,12 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
   // Waiting work keeps a still bar at how far it had got.
   const bar = item.status === 'running' || (item.status === 'waiting' && item.percent != null);
   return (
-    <li className="activity-row" data-job-state={item.status} title={item.hint}>
+    <li
+      className="activity-row"
+      data-job-state={item.status}
+      data-attention={item.attention ? 'true' : undefined}
+      title={item.hint}
+    >
       <div className="activity-row-head">
         <span className="activity-row-title">{item.title}</span>
         <span className="activity-row-state">{stateText(item)}</span>
@@ -194,7 +204,6 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
         ) : (
           item.scope
         )}
-        {item.automatic && <span className="activity-row-tag">automatic</span>}
       </div>
       {bar && (
         <div className="activity-row-bar" aria-hidden="true">
@@ -205,7 +214,10 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
         </div>
       )}
       <div className="activity-row-foot">
-        <div className="activity-row-detail">{item.detail}</div>
+        <div className="activity-row-detail">
+          {item.detail}
+          {item.remaining && <span className="activity-row-remaining"> · {item.remaining}</span>}
+        </div>
         {item.transfer && controls.allowed(item) && <TransferControls job={item.transfer} busy={controls.busy}
           run={action => controls.run({ type: 'transfer', job: item.transfer!, action })} />}
         {allowed && control && (queued || (item.status === 'running' && item.stoppable)) && (
@@ -281,10 +293,11 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
 
 /**
  * Background work in the header, kept small: the overall progress and how
- * many jobs run and wait. Hover, focus or click opens the queue: every
- * catalog refresh, quality scan and stack build, running or queued, on any
- * database, and automatic work waiting while a person's work runs.
- * Each row links to what it works on. A scan's frame errors stay, on the
+ * many jobs run, wait in a line and wait their turn. Hover, focus or click
+ * opens the queue: every catalog refresh, quality scan and stack build,
+ * running or queued, on any database, and automatic work waiting while a
+ * person's work runs, under two headings: the work a person started, and
+ * automatic work. Each row links to what it works on. A scan's frame errors stay, on the
  * busy chip or as "Finished with errors", until dismissed.
  */
 export default function ActivityChip() {
@@ -391,11 +404,12 @@ export default function ActivityChip() {
 
   const percent = summary.percent == null ? null : Math.round(summary.percent);
   const { running, waiting, queued } = summary;
+  const groups = groupActivity(items);
   const label = [
     percent != null ? `${percent}% done` : running > 0 ? 'Working' : '',
     running > 0 ? `${running} running` : '',
-    waiting > 0 ? `${waiting} waiting` : '',
     queued > 0 ? `${queued} queued` : '',
+    waiting > 0 ? `${waiting} waiting` : '',
     scanError ? 'a quality scan had errors' : '',
   ].filter(Boolean).join(', ');
 
@@ -454,7 +468,7 @@ export default function ActivityChip() {
           <>
             <ProgressRing percent={summary.percent} idle={running === 0} />
             {percent != null && <span className="activity-chip-percent">{percent}%</span>}
-            <JobCounts running={running} waiting={waiting} />
+            <JobCounts running={running} queued={queued} waiting={waiting} />
           </>
         )}
       </button>
@@ -463,7 +477,7 @@ export default function ActivityChip() {
           <div className="activity-popover-head">
             <span>Background jobs</span>
             <span className="activity-popover-counts">
-              {idleWithErrors ? 'Nothing running' : <JobCounts running={running} waiting={waiting} />}
+              {idleWithErrors ? 'Nothing running' : <JobCounts running={running} queued={queued} waiting={waiting} />}
             </span>
           </div>
           {scanErrors.map((note) => (
@@ -477,11 +491,26 @@ export default function ActivityChip() {
           {action.isError && (
             <p className="activity-error" role="alert">{(action.error as Error).message}</p>
           )}
-          {items.length > 0 && (
-            <ul className="activity-list">
-              {items.map((item) => <ActivityRow key={item.key} item={item} controls={controls} />)}
-            </ul>
-          )}
+          {groups.map((group) => (
+            <section
+              key={group.tier}
+              className="activity-group"
+              data-tier={group.tier}
+              aria-labelledby={`${listId}-${group.tier}`}
+            >
+              <div className="activity-group-head">
+                <h3 id={`${listId}-${group.tier}`} className="activity-group-title">{group.title}</h3>
+                <JobCounts
+                  running={group.summary.running}
+                  queued={group.summary.queued}
+                  waiting={group.summary.waiting}
+                />
+              </div>
+              <ul className="activity-list">
+                {group.items.map((item) => <ActivityRow key={item.key} item={item} controls={controls} />)}
+              </ul>
+            </section>
+          ))}
         </div>
       )}
     </div>
