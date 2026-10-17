@@ -770,9 +770,11 @@ describe('CalibrationPage', () => {
     /**
      * The duplicates job as the server runs it: a POST starts a run, which
      * the next status read finishes unless `hold` keeps it going. `changed`
-     * makes the first repair find the plan moved on.
+     * makes the first repair find the plan moved on. `lateRead` holds back
+     * each read of the finished repair, so it can answer after the next run
+     * started.
      */
-    function serveDuplicates({ manage = true, changed = false, stale = false }: { manage?: boolean; changed?: boolean; stale?: boolean } = {}) {
+    function serveDuplicates({ manage = true, changed = false, stale = false, lateRead = false }: { manage?: boolean; changed?: boolean; stale?: boolean; lateRead?: boolean } = {}) {
       serve({ manage });
       const seen = { checks: 0, repairs: [] as unknown[], stops: 0, automatic: [] as boolean[] };
       const job = { hold: false };
@@ -795,13 +797,16 @@ describe('CalibrationPage', () => {
         finish = then;
       };
       server.use(
-        http.get('/api/db/demo/calibrations/duplicates', () => {
+        http.get('/api/db/demo/calibrations/duplicates', async () => {
           if (finish && !job.hold) {
             const then = finish;
             finish = null;
             then();
+            return ok(status);
           }
-          return ok(status);
+          const read = status;
+          if (lateRead && read.action === 'repair' && read.state === 'done') await delay(300);
+          return ok(read);
         }),
         http.post('/api/db/demo/calibrations/duplicates/check', ({ request }) => {
           seen.checks += 1;
@@ -899,6 +904,20 @@ describe('CalibrationPage', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
       // The plan is spent, so the view checks again and finds nothing.
       expect(await screen.findByText('No exposure is recorded more than once.', {}, POLL)).toBeInTheDocument();
+    });
+
+    // CI: the repair refreshes the calibration queries, and that read of
+    // the finished repair landed after the check that follows it started,
+    // which stopped the polling on "Checking the library…".
+    it('follows the check after a repair when an older status read lands late', async () => {
+      const { seen } = serveDuplicates({ lateRead: true });
+      renderPage('/calibration?db=demo&calDupes=true');
+      fireEvent.click(await screen.findByRole('button', { name: 'Repair duplicates…' }, POLL));
+      const dialog = await screen.findByRole('dialog', { name: 'Repair duplicates' });
+      fireEvent.click(await within(dialog).findByRole('button', { name: 'Apply' }, POLL));
+      expect(await screen.findByText(/Repaired 2 exposures/, {}, POLL)).toBeInTheDocument();
+      expect(await screen.findByText('No exposure is recorded more than once.', {}, POLL)).toBeInTheDocument();
+      expect(seen.checks).toBe(3);
     });
 
     it('says what changed when the plan moved on, and applies the new plan', async () => {

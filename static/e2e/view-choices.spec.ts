@@ -63,14 +63,21 @@ const gridIds = (page: Page) => page.locator('.image-card-wrapper').evaluateAll(
 );
 const headings = (page: Page) => page.locator('.filter-header h3').allTextContents();
 
-/** Until no card waits for its preview and every preview has faded in.
- *  On a slow runner WebKit draws almost no frames while a page of previews
- *  decodes and fades in, and a click then waits for a steady frame that
- *  does not come in its five seconds. Polled on a timer, not per frame. */
+/** Until no card waits for its preview and every preview on screen has
+ *  faded in. On a slow runner WebKit draws almost no frames while a page of
+ *  previews decodes and fades in, and a click then waits for a steady frame
+ *  that does not come in its five seconds. Only previews on screen count:
+ *  WebKit holds back the fade of one scrolled out of view, which then never
+ *  ends while the page stays put. Polled on a timer, not per frame. */
 async function previewsSettled(page: Page) {
   await expect(page.locator('.image-card-wrapper .preview-status-box:not(.preview-status-error)')).toHaveCount(0, { timeout: 60_000 });
   await page.waitForFunction(
-    () => document.getAnimations().every((animation) => !((animation.effect as KeyframeEffect | null)?.target instanceof HTMLImageElement)),
+    () => document.getAnimations().every((animation) => {
+      const target = (animation.effect as KeyframeEffect | null)?.target;
+      if (!(target instanceof HTMLImageElement)) return true;
+      const box = target.getBoundingClientRect();
+      return box.bottom <= 0 || box.top >= window.innerHeight;
+    }),
     null,
     { polling: 250, timeout: 60_000 },
   );

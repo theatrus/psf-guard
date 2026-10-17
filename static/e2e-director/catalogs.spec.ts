@@ -88,7 +88,7 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(settings.locator('.director-rig.is-open')).toHaveCount(1);
     await expect(settings.locator('.director-rig.is-open').getByRole('heading', { name: 'Redcat data', exact: true })).toBeVisible();
     await expect(settings.getByRole('button', { name: 'Setup C925 data' })).toHaveAttribute('aria-expanded', 'false');
-    await settings.getByRole('button', { name: '×' }).click();
+    await settings.getByRole('button', { name: 'Close settings' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
 
     // The outer pill opens the workspace: one block per rig, each with its
