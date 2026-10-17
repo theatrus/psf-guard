@@ -1093,7 +1093,17 @@ export type StackStretchModel =
       black: number;
       white: number;
     }
-  | { type: 'auto-mtf'; target_median: number; shadows_clip: number };
+  | { type: 'auto-mtf'; target_median: number; shadows_clip: number }
+  | {
+      type: 'median-anchor';
+      target_median: number;
+      /** Robust sigmas below the median; null puts the black point at the minimum. */
+      black_point_sigma: number | null;
+      curves_boost: number;
+      hdr_amount: number;
+      hdr_knee: number;
+      normalize: boolean;
+    };
 
 export interface StackStretchRequest {
   model: StackStretchModel;

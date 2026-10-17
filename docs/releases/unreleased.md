@@ -4,6 +4,10 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Stacks offer a **Median anchor** stretch beside Auto MTF: it places the
+  background median exactly on a target from a robust black point, with
+  optional curves boost, highlight compression and normalization. Auto MTF
+  stays the default.
 - Dropdown arrows now sit inside the border with space between the arrow
   and the selected text.
 - UI labels, settings help, and confirmation messages now state actions,

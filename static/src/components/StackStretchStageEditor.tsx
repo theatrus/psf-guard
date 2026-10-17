@@ -38,6 +38,29 @@ function NumberField({
   );
 }
 
+function CheckField({
+  controlLabel, label, checked, onChange, disabled,
+}: {
+  controlLabel: string;
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="stack-stretch-field stack-stretch-check">
+      <span>{label}</span>
+      <input
+        type="checkbox"
+        aria-label={`${controlLabel} ${label}`}
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
+  );
+}
+
 export default function StackStretchStageEditor({
   label, channels, request, disabled = false, onChange,
 }: {
@@ -139,6 +162,32 @@ export default function StackStretchStageEditor({
           onChange={(black) => updateModel({ black })} />
         <NumberField controlLabel={label} label="White" value={model.white} disabled={disabled}
           onChange={(white) => updateModel({ white })} />
+      </>}
+      {model.type === 'median-anchor' && <>
+        <NumberField controlLabel={label} label="Target median" value={model.target_median}
+          min={0.001} max={0.999} step={0.01} disabled={disabled}
+          onChange={(target_median) => updateModel({ target_median })} />
+        <CheckField controlLabel={label} label="Clip black" checked={model.black_point_sigma !== null}
+          disabled={disabled}
+          onChange={(clip) => updateModel({ black_point_sigma: clip ? 2.7 : null })} />
+        {model.black_point_sigma !== null && (
+          <NumberField controlLabel={label} label="Black point σ" value={model.black_point_sigma}
+            min={0} step={0.1} disabled={disabled}
+            onChange={(black_point_sigma) => updateModel({ black_point_sigma })} />
+        )}
+        <NumberField controlLabel={label} label="Curves boost" value={model.curves_boost}
+          min={0} max={0.9} step={0.05} disabled={disabled}
+          onChange={(curves_boost) => updateModel({ curves_boost })} />
+        <NumberField controlLabel={label} label="Highlight compression" value={model.hdr_amount}
+          min={0} max={1} step={0.05} disabled={disabled}
+          onChange={(hdr_amount) => updateModel({ hdr_amount })} />
+        {model.hdr_amount > 0 && (
+          <NumberField controlLabel={label} label="Knee" value={model.hdr_knee}
+            min={0.01} max={0.99} step={0.01} disabled={disabled}
+            onChange={(hdr_knee) => updateModel({ hdr_knee })} />
+        )}
+        <CheckField controlLabel={label} label="Normalize" checked={model.normalize}
+          disabled={disabled} onChange={(normalize) => updateModel({ normalize })} />
       </>}
       {model.type === 'auto-mtf' && <>
         <NumberField controlLabel={label} label="Target median" value={model.target_median}

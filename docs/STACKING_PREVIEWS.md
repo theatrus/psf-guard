@@ -1161,9 +1161,18 @@ swept after two weeks. A selected view or current color preview keeps the
 RC-Astro artifacts it still needs.
 
 The controls expose Seiza's identity, explicit linear, asinh,
-percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
-models. Auto-MTF with PSF Guard's established target median and shadow clipping
-is the default for linear mono-stack artifacts.
+percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), Auto-MTF, and
+median anchor models. Auto-MTF with PSF Guard's established target median and
+shadow clipping is the default for linear mono-stack artifacts.
+
+**Median anchor** places the background median exactly on **Target median**
+(0.25 by default) with one closed-form curve. Its black point sits
+**Black point σ** robust sigmas below the median, with the noise measured from
+the darker half of the image so stars do not move it; turn **Clip black** off to
+use the image minimum instead. **Curves boost** (0–0.9) lifts the tones above
+the target, **Highlight compression** (0–1) softly lowers the tones above its
+**Knee** to keep star cores and bright structure from saturating, and
+**Normalize** brings the brightest sample to white.
 Explicit black, white, shadow, and highlight points use normalized zero–one
 display units. PSF Guard maps a robust 0.1%–99.9% range from linear FITS into
 that domain before invoking Seiza. After an application, the card shows the raw
@@ -1417,7 +1426,8 @@ normalizes the result and applies that role's ordered stretch stages before
 composition. Deconvolution is independently opt-in for L/R/G/B or
 H-alpha/OIII/SII and is off for every role by default. Expand those input lanes
 or RGB output to add, edit, remove, and reorder Seiza
-identity, linear, asinh, percentile-asinh, MTF, GHS, and Auto-MTF stages.
+identity, linear, asinh, percentile-asinh, MTF, GHS, Auto-MTF, and median
+anchor stages.
 **Apply processing stack** starts a new cached color job; **Revert edits**
 returns to the last rendered pipeline and **Reset defaults** restores additive
 background extraction, deconvolution and RC-Astro off, one Auto-MTF stage per

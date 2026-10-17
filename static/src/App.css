@@ -4515,6 +4515,14 @@
   font-size: 0.68rem;
 }
 
+.stack-stretch-field.stack-stretch-check input {
+  width: auto;
+  min-height: 0;
+  justify-self: start;
+  margin: 0.35rem 0 0;
+  accent-color: var(--color-primary);
+}
+
 .stack-stretch-model,
 .stack-stretch-strategy {
   grid-column: span 1;

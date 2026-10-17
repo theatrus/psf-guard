@@ -2610,6 +2610,42 @@ mod tests {
         preview
     }
 
+    /// The median anchor stretch from Seiza arrives as the browser sends it
+    /// and lands the background median on its target.
+    #[test]
+    fn a_median_anchor_request_from_the_browser_stretches_the_median_to_its_target() {
+        let request: StackViewProcessingRequest = serde_json::from_value(serde_json::json!({
+            "model": {
+                "type": "median-anchor",
+                "target_median": 0.3,
+                "black_point_sigma": 2.7,
+                "curves_boost": 0,
+                "hdr_amount": 0,
+                "hdr_knee": 0.75,
+                "normalize": false
+            },
+            "color_strategy": "linked"
+        }))
+        .unwrap();
+        let data: Vec<f32> = (0..4_001)
+            .map(|index| 0.05 + (index % 97) as f32 * 0.0003)
+            .collect();
+        let config = request.stretch.config();
+        let plan = config.resolve_for(&data, 1).unwrap();
+        let median = StretchAnalysis::analyze(&data, 1, data.len())
+            .unwrap()
+            .linked_statistics()
+            .median as f32;
+        assert!((plan.curves()[0].map(median) - 0.3).abs() < 1.0e-4);
+        // Without black clipping the black point is the minimum.
+        let unclipped: StackViewProcessingRequest = serde_json::from_value(serde_json::json!({
+            "model": {"type": "median-anchor", "target_median": 0.25, "black_point_sigma": null}
+        }))
+        .unwrap();
+        let plan = unclipped.stretch.config().resolve_for(&data, 1).unwrap();
+        assert_eq!(plan.curves()[0].map(0.05), 0.0);
+    }
+
     #[test]
     fn selected_processing_restores_request_and_versions_but_not_another_revision() {
         let cache = tempfile::tempdir().unwrap();

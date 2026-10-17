@@ -160,3 +160,10 @@ panic = "unwind"
 [build-dependencies]
 tauri-build = { version = "2.7.3", features = [] }
 toml_edit = "0.25"
+
+# Unreleased Seiza work, pinned to a commit on Seiza's main until the next
+# Seiza release collects it: seiza-stretch's median anchor model (#300).
+# Every Seiza crate here resolves to this copy, since main still versions it
+# 0.2.2. Drop this once the release is out and bump the version above.
+[patch.crates-io]
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "de7049d0715f8acfb46e7a92c49b478242583854" }
