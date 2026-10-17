@@ -16,6 +16,7 @@ import type {
 import StackPreviewInspector from './StackPreviewInspector';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackColorProcessingControls from './StackColorProcessingControls';
+import { appliedProcessingQueryKey, channelProcessingFrom } from './channelProcessing';
 import {
   processingForColorBuild,
 } from './stackColorProcessing';
@@ -66,7 +67,9 @@ interface CardStartError {
   processing: boolean;
 }
 
-const terminalStates = new Set(['completed', 'failed']);
+// A stopped composition is over too: its card frees its buttons and stops
+// asking after it.
+const terminalStates = new Set(['completed', 'failed', 'cancelled']);
 const paletteOrder: StackNarrowbandPalette[] = [
   'sho', 'soh', 'hso', 'hos', 'osh', 'ohs', 'hoo', 'foraxx-sho', 'foraxx-hoo',
 ];
@@ -137,6 +140,8 @@ function requiredRoles(
 
 function ColorCard({
   dbId,
+  projectId,
+  channelSources,
   target,
   kind,
   palette,
@@ -162,6 +167,9 @@ function ColorCard({
   unavailableReason,
 }: {
   dbId: string;
+  projectId: number;
+  /** The channel stacks the next build composes. */
+  channelSources: StackColorSource[];
   target: StackColorTargetAvailability;
   kind: StackColorKind;
   palette?: StackNarrowbandPalette;
@@ -189,6 +197,22 @@ function ColorCard({
 }) {
   const current = activeJob ?? artifact;
   const state = activeJob?.state ?? (artifact ? 'completed' : 'not-built');
+  // What each channel card shows, read from the queries the stacks panel
+  // already keeps.
+  const channelPreviews = useQueries({
+    queries: channelSources.map((source) => ({
+      queryKey: appliedProcessingQueryKey(
+        dbId, projectId, source.job_id, source.group_index, source.artifact_revision
+      ),
+      queryFn: ({ signal }: { signal: AbortSignal }) => apiClient.getAppliedStackStretch(
+        dbId, source.job_id, source.group_index, source.artifact_revision, signal
+      ),
+      retry: false,
+    })),
+  });
+  const channelProcessing = channelProcessingFrom(
+    channelSources, channelPreviews.map((query) => query.data)
+  );
   const baseLabel = kind === 'rgb'
     ? 'RGB'
     : kind === 'lrgb'
@@ -211,7 +235,8 @@ function ColorCard({
     state === 'queued' ? 'Waiting for color processor' :
       state === 'running' ? activeJob?.phase ?? 'Building color preview' :
         state === 'completed' ? current?.phase ?? 'Color preview ready' :
-          state === 'failed' ? 'Color preview failed' : 'Not built';
+          state === 'failed' ? 'Color preview failed' :
+            state === 'cancelled' ? activeJob?.phase || 'Stopped' : 'Not built';
 
   return (
     <article
@@ -393,6 +418,7 @@ function ColorCard({
         fallbacks={artifact?.background_protection_fallbacks ?? {}}
         deconvolutions={artifact?.resolved_input_deconvolutions ?? {}}
         rcAstro={artifact?.resolved_input_rc_astro ?? {}}
+        channelProcessing={channelProcessing}
         disabled={!canCompute || busy || unavailable}
         applyError={startError?.processing ? startError.message : null}
         onApply={onProcessingApply}
@@ -738,6 +764,8 @@ export default function StackColorPreviewPanel({
       <ColorCard
         key={key}
         dbId={dbId}
+        projectId={projectId}
+        channelSources={sources.sources}
         target={target}
         kind={kind}
         palette={palette}

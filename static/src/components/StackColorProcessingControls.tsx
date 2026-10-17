@@ -23,6 +23,7 @@ import {
 } from './stackColorProcessing';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import { builtinColorSetups, colorSetupForRoles } from './processingSetups';
+import { withChannelProcessing, type ChannelProcessing } from './channelProcessing';
 
 const roleLabels: Record<StackColorRole, string> = {
   luminance: 'L', red: 'R', green: 'G', blue: 'B', ha: 'Hα', oiii: 'OIII', sii: 'SII',
@@ -477,9 +478,27 @@ function StageLane({
   );
 }
 
+/** What each channel card shows that a color input can take, in words:
+ *  `Hα: BlurXTerminator, NoiseXTerminator · OIII: deconvolution`. */
+function channelProcessingSummary(
+  channels: ChannelProcessing,
+  roles: StackColorRole[],
+  toolName: (tool: string) => string
+): string {
+  return roles.flatMap((role) => {
+    const channel = channels[role];
+    if (!channel) return [];
+    const parts = [
+      ...(channel.deconvolution ? ['deconvolution'] : []),
+      ...(channel.rc_astro?.steps.map((step) => toolName(step.tool)) ?? []),
+    ];
+    return [`${roleLabels[role]}: ${parts.join(', ')}`];
+  }).join(' · ');
+}
+
 export default function StackColorProcessingControls({
-  label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, rcAstro = {}, disabled,
-  applyError, onApply,
+  label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, rcAstro = {},
+  channelProcessing = {}, disabled, applyError, onApply,
 }: {
   label: string;
   roles: StackColorRole[];
@@ -489,6 +508,9 @@ export default function StackColorProcessingControls({
   fallbacks: Partial<Record<StackColorRole, string>>;
   deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
   rcAstro?: StackColorJob['resolved_input_rc_astro'];
+  /** The deconvolution and RC-Astro steps each channel card shows, which
+   *  "Use each channel's processing" copies into the inputs. */
+  channelProcessing?: ChannelProcessing;
   disabled: boolean;
   /** Why the server refused the last Apply, shown beside the button. */
   applyError?: string | null;
@@ -503,6 +525,10 @@ export default function StackColorProcessingControls({
   const [draft, setDraft] = useState<StackColorProcessing>(() => cloneProcessing(baseline));
   const [error, setError] = useState<string | null>(null);
   const changed = JSON.stringify(draft) !== JSON.stringify(baseline);
+  const channelSummary = channelProcessingSummary(
+    channelProcessing, roles,
+    (tool) => rcAstroTools?.find((schema) => schema.key === tool)?.name ?? tool
+  );
 
   const updateInput = (role: StackColorRole, stages: StackStretchRequest[]) => setDraft((current) => ({
     ...current,
@@ -582,6 +608,26 @@ export default function StackColorProcessingControls({
             setError(null);
           }}
         />
+        <div className="processing-channel-bar" role="group" aria-label="Channel processing">
+          <div className="processing-setups-row">
+            <span className="processing-setups-label">Channel cards</span>
+            <button
+              type="button"
+              disabled={disabled || !channelSummary}
+              onClick={() => {
+                setDraft((current) => withChannelProcessing(current, channelProcessing, roles));
+                setError(null);
+              }}
+            >
+              Use each channel's processing
+            </button>
+          </div>
+          <span className="processing-setups-hint">
+            {channelSummary
+              ? `Sets each input's deconvolution and RC-Astro steps to what its channel card shows: ${channelSummary}.`
+              : 'No channel card shows deconvolution or RC-Astro steps.'}
+          </span>
+        </div>
         <BackgroundControls
           extraction={draft.background_extraction}
           backgrounds={backgrounds}

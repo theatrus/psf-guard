@@ -187,6 +187,15 @@ describe('automatic color exposure cards', () => {
     expect(within(screen.getByRole('dialog')).getByText('red (300 s), green (300 s), blue (300 s)')).toBeVisible();
   });
 
+  it('frees a card whose composition was stopped, so it can build again', async () => {
+    const { submissions } = mount({ response: () => ({ state: 'cancelled', phase: 'Stopped' }) });
+    await userEvent.click(await screen.findByRole('button', { name: 'Build RGB 300 s color preview' }));
+    await waitFor(() => expect(submissions).toHaveLength(1));
+    const long = cardFor(screen.getByRole('button', { name: 'Build RGB 300 s color preview' }));
+    await waitFor(() => expect(within(long).getByRole('status')).toHaveTextContent('Stopped'));
+    expect(within(long).getByRole('button', { name: 'Build RGB 300 s color preview' })).toBeEnabled();
+  });
+
   it('scopes a failed queued build to its exposure card', async () => {
     const { submissions } = mount({ response: () => ({ state: 'failed', phase: 'Failed', error: 'Long channel registration failed' }) });
     await userEvent.click(await screen.findByRole('button', { name: 'Build RGB 300 s color preview' }));

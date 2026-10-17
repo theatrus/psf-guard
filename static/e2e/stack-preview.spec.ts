@@ -277,6 +277,69 @@ test('refuses RC-Astro values past the tool range beside Apply, where the server
   await processing.screenshot({ path: testInfo.outputPath('rc-astro-server-refusal.png') });
 });
 
+test("copies a channel card's deconvolution into its color input", async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  seedSyntheticColorStacks(dbId, 2);
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
+
+  // The R card shows a deconvolution. The synthetic stacks have no stars to
+  // measure a PSF from, so its saved processing comes from a route.
+  const redJob = (2).toString(16).padStart(64, '0');
+  const deconvolution = {
+    psf_fwhm_pixels: 3.1, iterations: 1, amount: 0.35, noise_fraction: 0.001, max_correction: 2,
+  };
+  await page.route(new RegExp(`/stack-previews/${redJob}/0/stretch\\?`), (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const model = { type: 'auto-mtf', target_median: 0.2, shadows_clip: -2.8 };
+    const stretchId = 'f'.repeat(64);
+    return route.fulfill({ json: { success: true, error: null, data: {
+      schema_version: 2, stretch_id: stretchId, stretch_version: '0.1.0',
+      deconvolution_version: null, deconvolution_id: null,
+      config: { model, color_strategy: 'linked', max_analysis_samples: 1 },
+      request: { model, color_strategy: 'linked', deconvolution, rc_astro: null },
+      resolved_plan: {}, source_transfer: 'linear', input_range: null,
+      linked_statistics: { min: 0, max: 1, median: 0.2, mad: 0.1, count: 4 },
+      channel_statistics: [], luminance_statistics: null, deconvolution: null,
+      preview_url: `/api/db/${dbId}/stack-previews/stretch/${stretchId}/preview`,
+      original_preview_url: `/api/db/${dbId}/stack-previews/stretch/${stretchId}/preview?size=original`,
+      fits_url: null,
+    } } });
+  });
+
+  const card = page.locator('.stack-color-card[data-color-kind="rgb"]');
+  await card.getByRole('button', { name: 'Build RGB color preview' }).click();
+  await expect(card.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  const processing = card.locator('.stack-color-processing');
+  await processing.locator('summary').click();
+  const channels = processing.getByRole('group', { name: 'Channel processing' });
+  await expect(channels).toContainText(
+    "Sets each input's deconvolution and RC-Astro steps to what its channel card shows: R: deconvolution."
+  );
+  const redLane = processing.getByRole('region', { name: 'R input stretch stack' });
+  const redDeconvolution = redLane.getByRole('region', { name: 'R input deconvolution' });
+  await expect(redDeconvolution.getByRole('checkbox', { name: 'Deconvolution' })).not.toBeChecked();
+  await processing.getByRole('button', { name: "Use each channel's processing" }).click();
+  await expect(redDeconvolution.getByRole('checkbox', { name: 'Deconvolution' })).toBeChecked();
+  await expect(redDeconvolution.getByRole('spinbutton', { name: 'Deconvolution Iterations' }))
+    .toHaveValue('1');
+  // Only R's card deconvolves, so G and B are left as they were.
+  await expect(processing.getByRole('region', { name: 'G input deconvolution' })
+    .getByRole('checkbox', { name: 'Deconvolution' })).not.toBeChecked();
+  await processing.screenshot({ path: testInfo.outputPath('color-channel-processing.png') });
+  await processing.getByRole('button', { name: 'Apply processing stack' }).click();
+  // The new composition deconvolves R, which the first one skipped.
+  const phaseDetails = card.locator('.stack-color-phase-details');
+  await phaseDetails.locator('summary').click();
+  await expect(phaseDetails.locator('li[data-phase="deconvolving_inputs"]'))
+    .toHaveAttribute('data-phase-state', 'completed', { timeout: 90_000 });
+  await expect(card.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+});
+
 test('retains RC-Astro color steps in saved setups on desktop and mobile', async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   seedSyntheticColorStacks(dbId, 2);

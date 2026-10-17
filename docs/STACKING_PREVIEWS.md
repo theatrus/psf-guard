@@ -319,9 +319,11 @@ waiting build, **×** takes it out of the line, and **Stop** ends the running
 build after asking once. Mono and color builds share the line, and so do
 stretch, deconvolution and RC-Astro processing runs (see
 [Processing runs wait in the build line](#processing-runs-wait-in-the-build-line)).
-A running color
-composition has no **Stop**: it only checks for one before it starts, and
-finishes within minutes. An automatic refresh still settling after new
+**Stop** on a running
+color composition ends it at its next channel or step, and kills a running
+RC-Astro tool at once; the tool steps it finished stay cached. Its row says
+what it is doing, such as `H-alpha: BlurXTerminator (42%)`, and its percent
+moves while a tool runs. An automatic refresh still settling after new
 frames, a sync or grade changes is not listed or counted: nothing runs yet.
 Once due, it is listed as waiting until it starts, as a build marked
 `automatic` (see [Automatic refresh](#automatic-refresh)). These controls need
@@ -1428,6 +1430,20 @@ retains each tool's CLI/model version and the requested parameters. Processed
 input FITS downloads remain available; star removal preserves a separate
 stars FITS as well as the starless channel used for composition. Named color
 setups include these tool steps.
+
+A channel's tools cache by what that channel's registered pixels depend on:
+its own stack, the reference stack it registers onto (red for RGB, L for LRGB,
+H-alpha for narrowband), and its own deconvolution. New frames in OIII rerun
+the tools on OIII alone; H-alpha and SII reuse theirs. A new reference stack
+reruns every channel. With background extraction on, every channel's tools
+rerun, since one background model is fitted across all of them.
+
+**Use each channel's processing** sets each input's deconvolution and
+RC-Astro steps to what that channel's card shows, so the composition gets what
+you tuned on the cards: a card showing only deconvolution clears the input's
+RC-Astro steps, and the reverse. A channel whose card shows neither keeps its
+input as it was. The copy is the settings, not the pixels: the color input runs
+them on the registered channel, as the card ran them on the stack.
 
 ![RC-Astro tools configured on a linear red input before its display stretch](stack-rc-astro-color-desktop.png)
 

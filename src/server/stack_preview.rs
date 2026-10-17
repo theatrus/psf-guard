@@ -941,11 +941,18 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
 }
 
 fn color_activity(job: &color::StackColorJob) -> StackActivityEntry {
+    // Hundredths of a unit, so an RC-Astro tool's own progress moves the
+    // line's percent between units.
     let (processed_units, total_units) = if job.progress.total_units > 0 {
-        (job.progress.completed_units, job.progress.total_units)
+        let partial = (job.progress.partial_units * 100.0).round().max(0.0) as usize;
+        (
+            (job.progress.completed_units * 100 + partial).min(job.progress.total_units * 100),
+            job.progress.total_units * 100,
+        )
     } else {
         (job.processed_channels, job.total_channels)
     };
+    let running = job.state == StackJobState::Running;
     StackActivityEntry {
         kind: StackActivityKind::Color,
         job_id: job.job_id.clone(),
@@ -964,7 +971,15 @@ fn color_activity(job: &color::StackColorJob) -> StackActivityEntry {
         created_unix_seconds: job.created_unix_seconds,
         automatic: job.automatic,
         queue_position: None,
-        progress_label: None,
+        // What it is doing, as `H-alpha: BlurXTerminator (42%)`: step counts
+        // say nothing while one tool runs for minutes.
+        progress_label: running.then(|| {
+            if job.phase.is_empty() {
+                "Composing color".to_string()
+            } else {
+                job.phase.clone()
+            }
+        }),
         processing: None,
     }
 }
@@ -2038,13 +2053,16 @@ pub(super) fn persist_latest_and_reapply(
 fn interrupted_builds(stopped: Vec<StackActivityEntry>) -> Vec<automatic::InterruptedBuild> {
     let mut builds: BTreeMap<(String, i32), Option<automatic::LastProgress>> = BTreeMap::new();
     for entry in stopped {
-        let last = (entry.state == StackJobState::Running && entry.total_units > 0).then(|| {
-            automatic::LastProgress {
+        // The line says where a build stopped in frames, which only a mono
+        // build counts; a color job counts steps, in hundredths.
+        let last = (entry.kind == StackActivityKind::Mono
+            && entry.state == StackJobState::Running
+            && entry.total_units > 0)
+            .then(|| automatic::LastProgress {
                 label: entry.label.clone(),
                 processed_units: entry.processed_units,
                 total_units: entry.total_units,
-            }
-        });
+            });
         let slot = builds
             .entry((entry.database_id, entry.project_id))
             .or_default();
@@ -2372,21 +2390,8 @@ pub async fn cancel_stack_activity_job(
     Path(job_id): Path<String>,
 ) -> Result<Json<ApiResponse<StackActivity>>, AppError> {
     validate_job_id(&job_id)?;
-    // A color composition only checks for a stop before it starts; once it
-    // runs it finishes, which is minutes at most. Saying it stopped would be
-    // a lie.
-    let composing = state
-        .stack_previews
-        .color_jobs
-        .lock()
-        .unwrap()
-        .get(&job_id)
-        .is_some_and(|job| job.state == StackJobState::Running);
-    if composing {
-        return Err(AppError::BadRequest(
-            "A running color composition cannot be stopped; it finishes in a few minutes".into(),
-        ));
-    }
+    // A running color composition stops at its next channel or step, and a
+    // running RC-Astro tool in it is killed.
     // A running stretch or deconvolution has no point to stop at; it
     // finishes in moments. An RC-Astro run stops its tool at once.
     if state.stack_previews.processing_unstoppable(&job_id) {
@@ -7959,6 +7964,38 @@ mod tests {
                     last_progress: None,
                 },
             ]
+        );
+    }
+
+    /// A running automatic color job comes back with its project, but says
+    /// nothing of where it stopped: the line reports frames, and a color job
+    /// counts steps, in hundredths.
+    #[test]
+    fn a_stopped_automatic_color_job_comes_back_without_frame_progress() {
+        let color = StackActivityEntry {
+            kind: StackActivityKind::Color,
+            job_id: "c".repeat(64),
+            database_id: "db".into(),
+            project_id: 3,
+            target_id: Some(42),
+            state: StackJobState::Running,
+            label: "M44 · SHO".into(),
+            detail: String::new(),
+            processed_units: 1250,
+            total_units: 4000,
+            created_unix_seconds: 1,
+            automatic: true,
+            queue_position: None,
+            progress_label: Some("H-alpha: BlurXTerminator (42%)".into()),
+            processing: None,
+        };
+        assert_eq!(
+            interrupted_builds(vec![color]),
+            vec![automatic::InterruptedBuild {
+                database_id: "db".into(),
+                project_id: 3,
+                last_progress: None,
+            }]
         );
     }
 

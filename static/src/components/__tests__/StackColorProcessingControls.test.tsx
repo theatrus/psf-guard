@@ -7,6 +7,7 @@ import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import StackColorProcessingControls from '../StackColorProcessingControls';
 import { defaultColorProcessing } from '../stackColorProcessing';
+import { defaultDeconvolutionConfig } from '../stackDeconvolution';
 
 // The setups bar inside the editor reads the global setups list.
 function renderWithQueries(element: ReactElement) {
@@ -19,6 +20,49 @@ function renderWithQueries(element: ReactElement) {
 }
 
 describe('StackColorProcessingControls', () => {
+  it("copies each channel card's deconvolution and RC-Astro steps into its input", async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    server.use(
+      http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+        available: true, tools: [{ key: 'bxt', name: 'BlurXTerminator', licensed: true,
+          cli_version: '2.6.6', ml_version: 3, schema_version: 6, parameters: [] }],
+      }, error: null }))
+    );
+    const roles = ['ha', 'oiii'] as const;
+    const deconvolution = defaultDeconvolutionConfig();
+    const applied = defaultColorProcessing([...roles]);
+    // OIII already deconvolves in the color input; its card shows nothing,
+    // so the copy leaves it alone.
+    applied.input_deconvolutions = { oiii: deconvolution };
+    renderWithQueries(<StackColorProcessingControls label="HOO" roles={[...roles]}
+      applied={applied}
+      backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
+      channelProcessing={{ ha: { rc_astro: { steps: [{ tool: 'bxt', parameters: {} }] } } }}
+      disabled={false} onApply={onApply} />);
+    await user.click(screen.getByText('Processing stack'));
+    expect(await screen.findByText(
+      "Sets each input's deconvolution and RC-Astro steps to what its channel card shows: Hα: BlurXTerminator."
+    )).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: "Use each channel's processing" }));
+    await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
+      input_rc_astro: { ha: { steps: [{ tool: 'bxt', parameters: {} }] } },
+      input_deconvolutions: { oiii: deconvolution },
+    }));
+  });
+
+  it('offers no copy when no channel card shows pixel processing', async () => {
+    const user = userEvent.setup();
+    renderWithQueries(<StackColorProcessingControls label="RGB" roles={['red', 'green', 'blue']}
+      applied={defaultColorProcessing(['red', 'green', 'blue'])}
+      backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
+      disabled={false} onApply={vi.fn()} />);
+    await user.click(screen.getByText('Processing stack'));
+    expect(screen.getByRole('button', { name: "Use each channel's processing" })).toBeDisabled();
+    expect(screen.getByText('No channel card shows deconvolution or RC-Astro steps.')).toBeInTheDocument();
+  });
+
   it('edits and saves RC-Astro steps for the selected input channel', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();

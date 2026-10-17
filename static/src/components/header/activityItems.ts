@@ -79,7 +79,8 @@ export interface ActivityItem {
   /** Place among the waiting jobs of its line, 0 next. */
   position?: number;
   control?: ActivityControl;
-  /** Whether Stop can end it while it runs. A color composition cannot. */
+  /** Whether Stop can end it while it runs. A stretch or deconvolution
+   *  run cannot: it finishes in moments. */
   stoppable?: boolean;
   /** The view showing what the job works on, scoped by URL. */
   href?: string;
@@ -427,7 +428,8 @@ function stackItem(entry: StackActivityEntry): ActivityItem {
     control: { kind: 'stack', jobId: entry.job_id },
     key: `stack:${entry.job_id}`,
     kind: 'stack',
-    stoppable: queued || entry.kind === 'mono',
+    // A color composition stops at its next channel or step.
+    stoppable: queued || entry.kind === 'mono' || entry.kind === 'color',
     title: entry.kind === 'mono' ? 'Stacking' : 'Composing color',
     scope: entry.label,
     detail: queued

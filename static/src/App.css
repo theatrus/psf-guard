@@ -4512,6 +4512,15 @@
   border-bottom: 1px solid var(--color-bg-tertiary);
 }
 
+/* The color editor's copy of each channel card's processing: laid out as the
+   setups bar above it. */
+.processing-channel-bar {
+  display: grid;
+  gap: 0.35rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-bg-tertiary);
+}
+
 .processing-setups-row {
   display: flex;
   flex-wrap: wrap;
