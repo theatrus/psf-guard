@@ -858,7 +858,9 @@ export default function TauriSettings({
   };
 
   const handleRemove = async (entry: DbEntry) => {
-    if (!confirm(`Remove "${entry.name}" from the configured databases?`)) return;
+    if (!confirm(
+      `Remove "${entry.name}" from PSF Guard? Its catalog file and images stay on disk, and you can add it again.`
+    )) return;
     setIsApplying(true);
     try {
       const ok = await apiClient.removeDatabase(entry.id);
@@ -1858,8 +1860,8 @@ export default function TauriSettings({
                                 className="db-action-button is-icon is-danger"
                                 onClick={() => handleRemove(entry)}
                                 disabled={isApplying}
-                                aria-label="Remove"
-                                title="Remove this database"
+                                aria-label={`Remove ${entry.name}`}
+                                title="Remove this database from PSF Guard; its files stay on disk"
                               >
                                 <Trash2 size={15} aria-hidden="true" />
                               </button>
@@ -1877,7 +1879,7 @@ export default function TauriSettings({
                         <div>
                           <dt>{entry.image_dirs.length === 1 ? 'Images' : 'Image folders'}</dt>
                           <dd>
-                            {entry.image_dirs.map((dir) => <span key={dir}>{dir}</span>)}
+                            {entry.image_dirs.map((dir, index) => <span key={index}>{dir}</span>)}
                           </dd>
                         </div>
                       )}

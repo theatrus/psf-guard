@@ -104,12 +104,12 @@ describe('Remove rejects', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
     const wrap = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
     const { unmount } = render(<PurgeRejectsButton dbId="rig" dbName="C925" canManage={false} />, { wrapper: wrap });
-    expect(screen.queryByRole('button', { name: 'Purge Rejects' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Purge rejects in C925' })).toBeNull();
     unmount();
 
     render(<PurgeRejectsButton dbId="rig" dbName="C925" canManage />, { wrapper: wrap });
     expect(screen.queryByRole('dialog')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Purge Rejects' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Purge rejects in C925' }));
     const dialog = await screen.findByRole('dialog', { name: 'Purge rejects — C925' });
     expect(within(dialog).getByRole('group', { name: 'Remove rejects' })).toBeInTheDocument();
     expect(within(dialog).getByLabelText('Days rejected')).toHaveValue(7);

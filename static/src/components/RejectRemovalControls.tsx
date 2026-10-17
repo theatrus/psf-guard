@@ -25,7 +25,7 @@ export function PurgeRejectsButton({ dbId, dbName, canManage, disabled }: { dbId
   if (!canManage) return null;
   return <>
     <button type="button" className="db-action-button is-icon" disabled={disabled} onClick={() => setOpen(true)}
-      aria-label="Purge Rejects"
+      aria-label={`Purge rejects in ${dbName}`}
       title="Purge rejects: take frames rejected a while ago out of the catalog, files to a trash folder">
       <Eraser size={15} aria-hidden="true" />
     </button>

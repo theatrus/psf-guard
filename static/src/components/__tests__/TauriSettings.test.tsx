@@ -664,7 +664,7 @@ describe('TauriSettings import state', () => {
     ).toBeInTheDocument();
 
     const confirmRemove = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    fireEvent.click(within(ultraCat).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(ultraCat).getByRole('button', { name: 'Remove Ultra Cat' }));
     confirmRemove.mockRestore();
 
     expect(await screen.findByRole('button', { name: 'Add Database' })).toBeEnabled();
