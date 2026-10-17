@@ -67,7 +67,9 @@ interface CardStartError {
   processing: boolean;
 }
 
-const terminalStates = new Set(['completed', 'failed']);
+// A stopped composition is over too: its card frees its buttons and stops
+// asking after it.
+const terminalStates = new Set(['completed', 'failed', 'cancelled']);
 const paletteOrder: StackNarrowbandPalette[] = [
   'sho', 'soh', 'hso', 'hos', 'osh', 'ohs', 'hoo', 'foraxx-sho', 'foraxx-hoo',
 ];

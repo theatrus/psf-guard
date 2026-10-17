@@ -624,7 +624,7 @@ export default function StackColorProcessingControls({
           </div>
           <span className="processing-setups-hint">
             {channelSummary
-              ? `Copies the deconvolution and RC-Astro steps each channel shows: ${channelSummary}.`
+              ? `Sets each input's deconvolution and RC-Astro steps to what its channel card shows: ${channelSummary}.`
               : 'No channel card shows deconvolution or RC-Astro steps.'}
           </span>
         </div>

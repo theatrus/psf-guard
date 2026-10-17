@@ -1438,9 +1438,10 @@ the tools on OIII alone; H-alpha and SII reuse theirs. A new reference stack
 reruns every channel. With background extraction on, every channel's tools
 rerun, since one background model is fitted across all of them.
 
-**Use each channel's processing** copies the deconvolution and RC-Astro steps
-each channel card shows into that channel's input, so the composition gets
-what you tuned on the cards. A channel whose card shows neither keeps its
+**Use each channel's processing** sets each input's deconvolution and
+RC-Astro steps to what that channel's card shows, so the composition gets what
+you tuned on the cards: a card showing only deconvolution clears the input's
+RC-Astro steps, and the reverse. A channel whose card shows neither keeps its
 input as it was. The copy is the settings, not the pixels: the color input runs
 them on the registered channel, as the card ran them on the stack.
 

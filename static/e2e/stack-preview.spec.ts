@@ -316,7 +316,7 @@ test("copies a channel card's deconvolution into its color input", async ({ page
   await processing.locator('summary').click();
   const channels = processing.getByRole('group', { name: 'Channel processing' });
   await expect(channels).toContainText(
-    'Copies the deconvolution and RC-Astro steps each channel shows: R: deconvolution.'
+    "Sets each input's deconvolution and RC-Astro steps to what its channel card shows: R: deconvolution."
   );
   const redLane = processing.getByRole('region', { name: 'R input stretch stack' });
   const redDeconvolution = redLane.getByRole('region', { name: 'R input deconvolution' });

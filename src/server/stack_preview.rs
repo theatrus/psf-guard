@@ -952,7 +952,7 @@ fn color_activity(job: &color::StackColorJob) -> StackActivityEntry {
     } else {
         (job.processed_channels, job.total_channels)
     };
-    let running = job.state == StackJobState::Running && !job.phase.is_empty();
+    let running = job.state == StackJobState::Running;
     StackActivityEntry {
         kind: StackActivityKind::Color,
         job_id: job.job_id.clone(),
@@ -973,7 +973,13 @@ fn color_activity(job: &color::StackColorJob) -> StackActivityEntry {
         queue_position: None,
         // What it is doing, as `H-alpha: BlurXTerminator (42%)`: step counts
         // say nothing while one tool runs for minutes.
-        progress_label: running.then(|| job.phase.clone()),
+        progress_label: running.then(|| {
+            if job.phase.is_empty() {
+                "Composing color".to_string()
+            } else {
+                job.phase.clone()
+            }
+        }),
         processing: None,
     }
 }
@@ -2047,13 +2053,16 @@ pub(super) fn persist_latest_and_reapply(
 fn interrupted_builds(stopped: Vec<StackActivityEntry>) -> Vec<automatic::InterruptedBuild> {
     let mut builds: BTreeMap<(String, i32), Option<automatic::LastProgress>> = BTreeMap::new();
     for entry in stopped {
-        let last = (entry.state == StackJobState::Running && entry.total_units > 0).then(|| {
-            automatic::LastProgress {
+        // The line says where a build stopped in frames, which only a mono
+        // build counts; a color job counts steps, in hundredths.
+        let last = (entry.kind == StackActivityKind::Mono
+            && entry.state == StackJobState::Running
+            && entry.total_units > 0)
+            .then(|| automatic::LastProgress {
                 label: entry.label.clone(),
                 processed_units: entry.processed_units,
                 total_units: entry.total_units,
-            }
-        });
+            });
         let slot = builds
             .entry((entry.database_id, entry.project_id))
             .or_default();
@@ -7955,6 +7964,38 @@ mod tests {
                     last_progress: None,
                 },
             ]
+        );
+    }
+
+    /// A running automatic color job comes back with its project, but says
+    /// nothing of where it stopped: the line reports frames, and a color job
+    /// counts steps, in hundredths.
+    #[test]
+    fn a_stopped_automatic_color_job_comes_back_without_frame_progress() {
+        let color = StackActivityEntry {
+            kind: StackActivityKind::Color,
+            job_id: "c".repeat(64),
+            database_id: "db".into(),
+            project_id: 3,
+            target_id: Some(42),
+            state: StackJobState::Running,
+            label: "M44 · SHO".into(),
+            detail: String::new(),
+            processed_units: 1250,
+            total_units: 4000,
+            created_unix_seconds: 1,
+            automatic: true,
+            queue_position: None,
+            progress_label: Some("H-alpha: BlurXTerminator (42%)".into()),
+            processing: None,
+        };
+        assert_eq!(
+            interrupted_builds(vec![color]),
+            vec![automatic::InterruptedBuild {
+                database_id: "db".into(),
+                project_id: 3,
+                last_progress: None,
+            }]
         );
     }
 

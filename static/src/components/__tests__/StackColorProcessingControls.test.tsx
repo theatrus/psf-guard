@@ -42,7 +42,7 @@ describe('StackColorProcessingControls', () => {
       disabled={false} onApply={onApply} />);
     await user.click(screen.getByText('Processing stack'));
     expect(await screen.findByText(
-      'Copies the deconvolution and RC-Astro steps each channel shows: Hα: BlurXTerminator.'
+      "Sets each input's deconvolution and RC-Astro steps to what its channel card shows: Hα: BlurXTerminator."
     )).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: "Use each channel's processing" }));
     await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));

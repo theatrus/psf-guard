@@ -3913,6 +3913,12 @@ mod tests {
             Some("H-alpha: BlurXTerminator (42%)")
         );
         assert_eq!((entry.processed_units, entry.total_units), (584, 2000));
+        // Between phases it still says what it is, never a bare count.
+        job.phase.clear();
+        assert_eq!(
+            super::super::color_activity(&job).progress_label.as_deref(),
+            Some("Composing color")
+        );
         // Queued, it says nothing of its own; the line says it waits.
         job.state = StackJobState::Queued;
         assert_eq!(super::super::color_activity(&job).progress_label, None);
