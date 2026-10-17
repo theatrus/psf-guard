@@ -4,6 +4,15 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- The background jobs chip counts queued work and work that needs you,
+  beside running and waiting, as a small icon each. Its list splits into
+  **Started by you** and **Automatic**, each with its counts: what needs
+  you first, then running work, queued builds and waiting work. A queued
+  build says how many are ahead of it in the whole line, as `queued · 4 ·
+  3 ahead`. Flat measuring says how many rigs it has left to check and how
+  many wait for its next pass. Automatic work waiting for yours is no
+  longer drawn in yellow; the warning colour now marks only a row that
+  needs you, such as a transfer to review.
 - Calibration › Frames keeps its sidebar in view: the session or group
   list stays beside the frame as the page scrolls, fits the window, and
   scrolls on its own, so its last groups and its pager stay in reach.

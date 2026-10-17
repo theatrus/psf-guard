@@ -15,6 +15,8 @@ export interface TransferJob {
   total_bytes: number; completed_bytes: number; current_file: string; sent_bytes: number;
   error: string | null; next_attempt_ms: number; warnings: string[] | null;
   manifest: unknown;
+  /** Queued by the connection's transfer policy rather than by a person. */
+  automatic?: boolean;
 }
 export type TransferAction = 'approve' | 'pause' | 'resume' | 'retry' | 'cancel';
 export interface TransferActivity { jobs: TransferJob[]; policies?: { connection_id: string; automatic: boolean; mode: string }[] }

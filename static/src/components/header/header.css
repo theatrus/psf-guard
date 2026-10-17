@@ -139,8 +139,8 @@
   color: var(--color-text-primary);
 }
 
-/* How many jobs run and wait: an icon and a count each, the words for a
-   screen reader and the tooltip. */
+/* How many jobs run, wait in a line and wait their turn: an icon and a
+   count each, the words for a screen reader and the tooltip. */
 .activity-counts {
   display: inline-flex;
   align-items: center;
@@ -157,6 +157,10 @@
 
 .activity-count[data-job-state='waiting'] {
   color: var(--state-waiting-fg);
+}
+
+.activity-count[data-job-state='attention'] {
+  color: var(--state-attention-fg);
 }
 
 .activity-count-icon {
@@ -319,10 +323,40 @@ div.activity-error {
   color: var(--color-text-hint);
 }
 
+.activity-popover-title {
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
 .activity-popover-counts {
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
+}
+
+/* The work a person started, then automatic work, each under a heading
+   with its counts. */
+.activity-group + .activity-group {
+  margin-top: 0.6rem;
+}
+
+.activity-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0 0.3rem;
+  font-size: 0.74rem;
+  color: var(--color-text-secondary);
+}
+
+.activity-group-title {
+  margin: 0;
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--color-text-lighter);
 }
 
 .activity-list {
@@ -347,7 +381,7 @@ div.activity-error {
 }
 
 /* Automatic work that stepped aside for a person's: it resumes on its own,
-   so it is marked, not dimmed. */
+   so it is marked with a quiet edge, not dimmed or coloured as a problem. */
 .activity-row[data-job-state='waiting'] {
   box-shadow: inset 3px 0 0 var(--state-waiting-border);
 }
@@ -363,6 +397,20 @@ div.activity-error {
 
 .activity-row[data-job-state='waiting'] .activity-row-fill {
   background: var(--state-waiting-fill);
+}
+
+/* Work stopped until a person acts: the one row the warning colour is
+   for. What it needs wraps rather than clips. */
+.activity-row[data-job-state='attention'] {
+  box-shadow: inset 3px 0 0 var(--state-attention-border);
+}
+
+.activity-row[data-job-state='attention'] .activity-row-state {
+  color: var(--state-attention-fg);
+}
+
+.activity-row[data-job-state='attention'] .activity-row-detail {
+  white-space: normal;
 }
 
 .activity-row-head {
@@ -407,7 +455,20 @@ div.activity-error {
   gap: 0.25rem;
 }
 
+/* A transfer's controls come in a group of their own; the row lays them
+   out on one line beside the detail. */
+.activity-row-actions .director-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+  margin: 0;
+}
+
 .activity-row-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
   min-width: 1.6rem;
   padding: 0.1rem 0.4rem;
   border: 1px solid var(--color-border-secondary);
@@ -440,12 +501,9 @@ div.activity-error {
   color: var(--color-text-muted);
 }
 
-.activity-row-tag {
-  margin-left: 0.4rem;
-  padding: 0 0.35rem;
-  border-radius: 999px;
-  background: var(--color-bg-quaternary);
-  font-size: 0.68rem;
+/* What else waits behind the step under way. */
+.activity-row-remaining {
+  color: var(--color-text-secondary);
 }
 
 .activity-row-bar {

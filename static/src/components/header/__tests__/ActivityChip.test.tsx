@@ -111,8 +111,9 @@ describe('ActivityChip', () => {
     });
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
-    // A build a person queued is queued, not waiting: no icon, but said.
-    await waitFor(() => expect(counts(chip)).toEqual(['2 running']));
+    // A build a person queued is queued, not waiting, and counted as such.
+    await waitFor(() => expect(counts(chip)).toEqual(['2 running', '1 queued']));
+    expect(chip.querySelector('.activity-count[data-job-state="queued"] svg')).toHaveAttribute('aria-hidden', 'true');
     // The scan is 40% and the running build 80%; the queued one waits.
     expect(chip).toHaveTextContent('60%');
     expect(chip).toHaveAccessibleName('Background jobs: 60% done, 2 running, 1 queued');
@@ -129,7 +130,16 @@ describe('ActivityChip', () => {
     ]);
     expect(rows[0]).toHaveTextContent('Solving 4/10 frames');
     expect(rows[0]).toHaveTextContent('Askar');
+    expect(rows[1]).toHaveTextContent('8/10 frames');
     expect(rows[2]).toHaveTextContent('queued');
+    // All of it a person started: one group, named by its heading, with its
+    // counts. The list's heading comes first, then the group's, a level down.
+    const groups = within(list).getAllByRole('group');
+    expect(groups.map((group) => within(group).getByRole('heading', { level: 3 }).textContent))
+      .toEqual(['Started by you']);
+    expect(groups[0]).toHaveAccessibleName('Started by you');
+    expect(within(list).getByRole('heading', { level: 2 })).toHaveTextContent('Background jobs');
+    expect(counts(groups[0].querySelector('.activity-group-head')!)).toEqual(['2 running', '1 queued']);
 
     await userEvent.unhover(chip);
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Background jobs' })).toBeNull());
@@ -186,7 +196,12 @@ describe('ActivityChip', () => {
     expect(rows[2]).toHaveTextContent(
       'Waiting for the stack build of Alpha M44 · R · stopped at 12/40 frames'
     );
-    expect(rows[2]).toHaveTextContent('automatic');
+    // Under the automatic heading, apart from the person's build.
+    const person = within(list).getByRole('group', { name: 'Started by you' });
+    const automatic = within(list).getByRole('group', { name: 'Automatic' });
+    expect(within(person).getAllByRole('listitem')).toEqual([rows[0]]);
+    expect(within(automatic).getAllByRole('listitem')).toEqual(rows.slice(1));
+    expect(counts(automatic.querySelector('.activity-group-head')!)).toEqual(['3 waiting']);
     expect(within(rows[2]).getByText('waiting')).toHaveClass('activity-row-state');
     // It cannot be stopped from here, and has no place in a line.
     expect(within(rows[2]).queryByRole('button')).toBeNull();
@@ -401,6 +416,61 @@ describe('ActivityChip', () => {
     await waitFor(() => expect(calls).toContain('cancel R'));
   });
 
+  it("moves a person's build past an automatic one queued ahead of it, across the headings", async () => {
+    const calls: string[] = [];
+    mockServer({
+      stacks: () => [
+        stack('R', 'running', 1, 4),
+        { ...stack('Ha', 'queued', 0, 0, 0), automatic: true },
+        stack('B', 'queued', 0, 0, 1),
+      ],
+    });
+    server.use(
+      http.post('/api/stack-activity/:jobId/move', async ({ params, request }) => {
+        calls.push(`move ${params.jobId} ${JSON.stringify(await request.json())}`);
+        return ok({ schema_version: 1, active: [] });
+      })
+    );
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    const person = within(list).getByRole('group', { name: 'Started by you' });
+    const automatic = within(list).getByRole('group', { name: 'Automatic' });
+    // First of its heading's queued rows, yet one build runs before it.
+    const mine = within(person).getAllByRole('listitem')[1];
+    expect(mine).toHaveTextContent('Alpha M44 · B');
+    expect(mine).toHaveTextContent('queued · 2 · 1 ahead');
+    expect(within(automatic).getByRole('listitem')).toHaveTextContent('queued · 1 · next');
+    // Up goes past the automatic build; it is last in the line, so down is off.
+    expect(within(mine).getByRole('button', { name: 'Run Stacking: Alpha M44 · B later' })).toBeDisabled();
+    await userEvent.click(within(mine).getByRole('button', { name: 'Run Stacking: Alpha M44 · B earlier' }));
+    await waitFor(() => expect(calls).toEqual(['move B {"position":0}']));
+  });
+
+  it('counts a transfer held for review apart from waiting work, first under its heading', async () => {
+    mockServer({ stacks: () => [stack('R', 'running', 1, 4)] });
+    const transfer = (id: string, state: string, automatic: boolean) => ({
+      id, connection_id: 'c', revision: 1, state, catalog: 'Askar', label: `M44 ${id}`, total_files: 4,
+      completed_files: 1, total_bytes: 4, completed_bytes: 1, current_file: '', sent_bytes: 0,
+      error: state === 'review' ? 'Incomplete calibration' : null, next_attempt_ms: 0, warnings: null,
+      manifest: null, automatic,
+    });
+    server.use(http.get('/api/director/v1/transfers', () => ok({
+      jobs: [transfer('paused', 'paused', true), transfer('held', 'review', true)],
+    })));
+    renderChip();
+    const chip = await screen.findByRole('button', { name: /Background jobs/ });
+    await waitFor(() => expect(counts(chip)).toEqual(['1 running', '1 waiting', '1 needs attention']));
+    expect(chip).toHaveAccessibleName('Background jobs: 25% done, 1 running, 1 waiting, 1 needs attention');
+    await userEvent.click(chip);
+    const automatic = within(await screen.findByRole('region', { name: 'Background jobs' }))
+      .getByRole('group', { name: 'Automatic' });
+    expect(counts(automatic.querySelector('.activity-group-head')!)).toEqual(['1 waiting', '1 needs attention']);
+    const rows = within(automatic).getAllByRole('listitem');
+    expect(rows.map((row) => row.getAttribute('data-job-state'))).toEqual(['attention', 'waiting']);
+    expect(rows[0]).toHaveTextContent('Review required');
+  });
+
   it('shows WBPP runs, and gives their controls to an editor without database management', async () => {
     mockServer({});
     server.use(
@@ -472,7 +542,7 @@ describe('ActivityChip', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent('Stacking');
     expect(rows[1]).toHaveTextContent('BlurXTerminator');
-    expect(rows[1]).toHaveTextContent('queued · 1');
+    expect(rows[1]).toHaveTextContent('queued · 1 · next');
     expect(rows[1]).toHaveTextContent('Alpha M44 · R');
     expect(rows[1]).toHaveTextContent('Waiting for the stack build of Alpha M44 · Ha');
     // It waits in the builds' line, so it leaves it the same way.

@@ -1952,7 +1952,27 @@ impl DatabaseContext {
             );
         }
 
-        self.ensure_cache_available()
+        self.request_cache_refresh()
+    }
+
+    /// [`Self::ensure_cache_available`] for a person who asked for a
+    /// refresh: the refresh it starts, or one already under way that the
+    /// person now waits on, is listed as their work, not as automatic.
+    pub fn request_cache_refresh(&self) -> RefreshStatus {
+        {
+            let mut cache = self.file_check_cache.write().unwrap();
+            if cache.refresh_in_progress {
+                cache.refresh_progress.requested = true;
+            } else {
+                cache.refresh_requested = true;
+            }
+        }
+        let status = self.ensure_cache_available();
+        if matches!(status, RefreshStatus::NotNeeded) {
+            // Nothing started: a later expiry is not this person's.
+            self.file_check_cache.write().unwrap().refresh_requested = false;
+        }
+        status
     }
 
     /// Rebuild membership-dependent navigation from the catalog and the tree
@@ -2648,6 +2668,33 @@ mod tests {
         assert!(ctx.complete_delayed_file_probe(500, &source));
         assert_eq!(ctx.delayed_file_probe(500), DelayedFileProbe::NotPending);
         assert!(ctx.requires_delayed_file_identity(500));
+    }
+
+    /// The refresh's task is spawned on this single-threaded runtime and
+    /// does not run before the test yields, so each start can be read.
+    #[tokio::test]
+    async fn a_refresh_a_person_asked_for_is_not_automatic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_file_refresh_db(&db_path);
+
+        // Started because the cache had nothing yet: automatic.
+        let expired = build_ctx(&tmp.path().join("expired"), &db_path);
+        expired.ensure_cache_available();
+        let progress = expired.get_cache_refresh_progress().unwrap();
+        assert!(!progress.requested);
+
+        // Refresh, as the route and the reject archive ask for it.
+        let forced = build_ctx(&tmp.path().join("forced"), &db_path);
+        forced.force_directory_tree_refresh();
+        assert!(forced.get_cache_refresh_progress().unwrap().requested);
+        // The ask is spent on that refresh, not kept for the next expiry.
+        assert!(!forced.file_check_cache.read().unwrap().refresh_requested);
+
+        // A person who asks while an automatic refresh runs waits on it:
+        // it is theirs from then on.
+        expired.request_cache_refresh();
+        assert!(expired.get_cache_refresh_progress().unwrap().requested);
     }
 
     #[test]

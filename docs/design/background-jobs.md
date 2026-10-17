@@ -2,7 +2,7 @@
 
 Status: **Current contract** for new long or compute-heavy work. Older jobs
 follow most of it; the gaps are listed at the end.
-Last updated: 2026-10-15
+Last updated: 2026-10-16
 
 A task that reads many frames, measures pixels or runs for more than a
 moment is a **job**. A job:
@@ -60,6 +60,60 @@ or grades. A rig the catalog does not record is ignored.
 | Holding a stop until a write commits | `state.shutdown.hold(what)` |
 | The job line | `static/src/components/header/activityItems.ts`, polled by `useHeaderActivity.ts` |
 
+## The job line
+
+The header's background jobs chip is the job line, kept small: a progress
+ring, the overall percent and up to four icon counts, **running** (▷),
+**queued** (a numbered list: in a line a person can reorder), **waiting**
+(an hourglass: work stepped aside for other work) and **needs attention**
+(a warning triangle: work stopped until a person acts). Each count names
+itself for a screen reader and in its tooltip, and shows only above zero.
+
+Its list groups the rows by tier, each heading with its own counts:
+
+- **Started by you**: `Interactive` work. Stack builds and processing runs,
+  scans and duplicate checks a person asked for, WBPP runs, a catalog
+  refresh asked for with Refresh, and backups and transfers started by
+  hand.
+- **Automatic**: `Viewed` and `Background` work. Quality backfill and the
+  analysis of new frames, automatic scans, flat measuring and frame sites,
+  catalog refreshes the cache's expiry or the server's start began,
+  automatic stack refreshes and re-applies, scheduled backups and
+  transfers a connection's policy queued.
+
+Within each, rows that need attention come first, then running work, then
+queued rows, then waiting work. A row's tier comes from what its status
+route reports: `automatic` on a scan, a stack entry, a catalog refresh
+(`cache-progress`) or a transfer; `priority` on a duplicate check;
+`trigger` on a backup. Quality backfill, flat measuring and frame sites
+are always automatic.
+
+The stack line and the WBPP line are each one line, shared by both tiers:
+an automatic refresh's build can wait ahead of a person's. So a queued row
+says its place in the whole line and how many wait before it, such as
+`queued · 4 · 3 ahead` or `queued · 1 · next`, whichever heading it sits
+under. ↑ and ↓ move it within the whole line, past rows under the other
+heading.
+
+A row adds what waits behind the step under way when the server knows it
+and the detail does not already say it: `1 more rig to check · 2 rigs
+queued` on flat measuring, `another pass queued` on frame sites, `3
+channels to stack` on a waiting stack refresh. Flat measuring reports
+`rigs_after`, the rigs the running pass checks after the current one (each
+may turn out to have nothing to measure), and `next_pass`, the rigs asked
+for since the pass began or whose retry is due, which the next pass takes;
+a retry not yet due is left out. Frame sites reports `next_pass` as a
+flag. A number the server cannot stand behind, such as frames left in a
+build whose units also count calibration, registration and rejection, is
+left out.
+
+Waiting is normal: automatic work steps aside whenever a person's runs.
+It is drawn muted, with `--state-waiting-*` (an hourglass and a quiet
+edge), never in the warning colour. `--state-attention-*`, the warning
+colour, marks the rows that need a person: a transfer held for review,
+before upload or after it failed. A transfer waiting for its retry, or
+paused, waits. Scan errors keep their own note above the list.
+
 ## A minimal job
 
 Modelled on `src/server/flat_measure.rs`.
@@ -110,8 +164,11 @@ Then:
 - a query in `useHeaderActivity.ts` that polls the status (fast while it
   runs, slower while it only waits, a slow heartbeat at rest when the server
   starts the job on its own), shared with any page that shows it, and an
-  item in `activityItems.ts` with a title, scope, progress, `automatic` and
-  a `control` when it can be stopped;
+  item in `activityItems.ts` with a title, scope, progress, `automatic`,
+  `background` for its tier, `remaining` when the status says what is left,
+  and a `control` when it can be stopped;
+- a status that says whether a person started the run, and what waits
+  behind the step under way (see [The job line](#the-job-line));
 - a status that turns visible only once the job has found work, so a pass
   with nothing to do never flashes in the job line.
 

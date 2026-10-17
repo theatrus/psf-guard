@@ -102,9 +102,23 @@ test('lists automatic work as waiting while a person builds, then running once',
   const list = page.getByRole('region', { name: 'Background jobs' });
   const rows = list.getByRole('listitem');
   await expect(rows).toHaveCount(4);
-  // The person's build first, then everything that stepped aside for it.
+  // The person's build first, then everything that stepped aside for it,
+  // under a heading of its own.
   await expect(rows.nth(0)).toHaveAttribute('data-job-state', 'running');
   await expect(rows.nth(0)).toContainText('Alpha M44 · B');
+  await expect(list.getByRole('group', { name: 'Started by you' }).getByRole('listitem')).toHaveCount(1);
+  await expect(list.getByRole('group', { name: 'Automatic' }).getByRole('listitem')).toHaveCount(3);
+  // Waiting is normal: muted, not drawn in the warning colour.
+  const { edge, warning } = await rows.nth(1).evaluate((row) => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--color-warning)';
+    document.body.append(probe);
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return { edge: getComputedStyle(row).boxShadow, warning: colour };
+  });
+  expect(edge).toMatch(/inset/);
+  expect(edge).not.toContain(warning);
   for (const index of [1, 2, 3]) {
     await expect(rows.nth(index)).toHaveAttribute('data-job-state', 'waiting');
     await expect(rows.nth(index).locator('.activity-row-state')).toHaveText('waiting');
@@ -149,3 +163,48 @@ test('keeps the waiting count on a phone without widening the page', async ({ pa
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(390);
 });
+
+/** A transfer held for review: its row needs attention, and its controls
+ *  sit on one line beside a long error, on a desktop and on a phone. */
+async function stubHeldTransfers(page: Page) {
+  const transfer = (id: string, state: string, error: string | null) => ({
+    id, connection_id: 'c1', revision: 1, state, catalog: 'Imaging Rig e2e',
+    label: `Alpha M44 · ${id}`, total_files: 24, completed_files: 6, total_bytes: 24_000_000,
+    completed_bytes: 6_000_000, current_file: '', sent_bytes: 0, error, next_attempt_ms: 0,
+    warnings: null, manifest: null, automatic: true,
+  });
+  await page.route('**/director/v1/transfers', (route) => fulfil(route, {
+    jobs: [
+      transfer('review', 'review',
+        'Incomplete calibration: no flats for OIII on the nights of 2026-10-12 and 2026-10-14, and no darks at this gain'),
+      transfer('failed', 'needs_review', 'The collaboration server refused the upload: the panel was closed for new frames'),
+    ],
+    policies: [],
+  }));
+}
+
+for (const width of [1440, 390]) {
+  test(`keeps a held transfer's controls on one line at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await stubActivity(page);
+    await stubHeldTransfers(page);
+    await page.goto('/');
+    const chip = page.getByRole('button', { name: /^Background jobs/ });
+    await expect(chip).toHaveAccessibleName(/2 need attention/);
+    await chip.click();
+    const list = page.getByRole('region', { name: 'Background jobs' });
+    const held = list.getByRole('group', { name: 'Automatic' }).locator('li[data-job-state="attention"]');
+    await expect(held).toHaveCount(2);
+    for (const index of [0, 1]) {
+      const row = held.nth(index);
+      const buttons = row.locator('.activity-row-actions button');
+      await expect(buttons).toHaveCount(2);
+      const [first, second] = [await buttons.nth(0).boundingBox(), await buttons.nth(1).boundingBox()];
+      // Side by side: the same top, the second to the right of the first.
+      expect(Math.abs(first!.y - second!.y)).toBeLessThan(1);
+      expect(second!.x).toBeGreaterThan(first!.x + first!.width - 1);
+      const rowBox = (await row.boundingBox())!;
+      expect(second!.x + second!.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 0.5);
+    }
+  });
+}

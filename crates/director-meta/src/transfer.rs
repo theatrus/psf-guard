@@ -157,7 +157,9 @@ impl MetaStore {
     }
 
     pub fn transfer_activity(&self) -> Result<Vec<Value>, Error> {
-        let mut stmt=self.connection.prepare("SELECT s.payload FROM collaboration_transfer_summary s JOIN collaboration_transfer t ON t.id=s.id WHERE json_extract(t.payload,'$.state') NOT IN ('complete','cancelled') OR t.rowid IN (SELECT rowid FROM collaboration_transfer ORDER BY rowid DESC LIMIT 50) ORDER BY t.rowid")?;
+        // Whether a policy queued it, from the request, so a summary written
+        // before the job line asked says it too.
+        let mut stmt=self.connection.prepare("SELECT json_set(s.payload,'$.automatic',json(CASE WHEN json_extract(d.request,'$.automatic') THEN 'true' ELSE 'false' END)) FROM collaboration_transfer_summary s JOIN collaboration_transfer t ON t.id=s.id LEFT JOIN collaboration_transfer_definition d ON d.id=s.id WHERE json_extract(t.payload,'$.state') NOT IN ('complete','cancelled') OR t.rowid IN (SELECT rowid FROM collaboration_transfer ORDER BY rowid DESC LIMIT 50) ORDER BY t.rowid")?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -533,6 +535,11 @@ fn write_definition(conn: &Connection, job: &Job) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+/// Whether a policy queued the transfer rather than a person: the header's
+/// job line lists it with automatic work.
+pub fn automatic(job: &Job) -> bool {
+    job.request["automatic"].as_bool().unwrap_or(false)
 }
 fn write_summary(conn: &Connection, job: &Job) -> Result<(), Error> {
     let artifacts = job.package.as_ref().and_then(|p| p["artifacts"].as_array());

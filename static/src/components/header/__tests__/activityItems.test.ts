@@ -8,8 +8,19 @@ import type {
   SpatialScanStatus,
   StackActivityEntry,
 } from '../../../api/types';
-import { activityItems, frameSitesLabel, lineLengths, summarize } from '../activityItems';
+import {
+  activityItems,
+  flatRigsLeft,
+  frameSitesLabel,
+  groupActivity,
+  lineLengths,
+  queueText,
+  summarize,
+  tierOf,
+  transferItem,
+} from '../activityItems';
 import type { BackupJob } from '../../../api/backupTypes';
+import type { TransferJob } from '../../../api/transferTypes';
 
 function scan(processed: number, total: number, stage = 'astrometry'): SpatialScanStatus {
   return {
@@ -132,12 +143,23 @@ describe('header activity items', () => {
   it('lists running builds before queued ones, and a queued build has no progress', () => {
     const items = activityItems([], [
       stack('B', 'queued'),
-      stack('R', 'running', 3, 12, true),
+      stack('R', 'running', 3, 12),
       stack('G', 'queued'),
     ]);
     expect(items.map((item) => item.scope)).toEqual(['M44 · R', 'M44 · B', 'M44 · G']);
-    expect(items[0]).toMatchObject({ detail: '3/12 frames', percent: 25, automatic: true });
+    expect(items[0]).toMatchObject({ detail: '3/12 frames', percent: 25 });
     expect(items[1]).toMatchObject({ status: 'queued', percent: null, detail: 'Waiting for the build ahead' });
+  });
+
+  it("lists a person's work before automatic work, even an automatic build running", () => {
+    const items = activityItems([], [
+      stack('B', 'queued'),
+      stack('R', 'running', 3, 12, true),
+      stack('G', 'queued'),
+    ]);
+    expect(items.map((item) => item.scope)).toEqual(['M44 · B', 'M44 · G', 'M44 · R']);
+    expect(items.map(tierOf)).toEqual(['person', 'person', 'automatic']);
+    expect(items[2]).toMatchObject({ status: 'running', automatic: true });
   });
 
   it('sums up as the mean of the running jobs that report progress', () => {
@@ -145,8 +167,8 @@ describe('header activity items', () => {
       [{ dbId: 'a', dbName: 'Askar', scan: scan(4, 10) }],
       [stack('R', 'running', 9, 10), stack('B', 'queued')]
     );
-    expect(summarize(items)).toEqual({ count: 3, running: 2, waiting: 0, queued: 1, percent: 65 });
-    expect(summarize([])).toEqual({ count: 0, running: 0, waiting: 0, queued: 0, percent: null });
+    expect(summarize(items)).toEqual({ count: 3, attention: 0, running: 2, waiting: 0, queued: 1, percent: 65 });
+    expect(summarize([])).toEqual({ count: 0, attention: 0, running: 0, waiting: 0, queued: 0, percent: null });
   });
 
   it('orders the stack line as the server does and carries each place', () => {
@@ -256,7 +278,7 @@ describe('header activity items', () => {
     expect(deconvolving[0]).toMatchObject({
       status: 'running', percent: null, stoppable: false, detail: 'Reading the stack',
     });
-    expect(summarize(items)).toEqual({ count: 3, running: 1, waiting: 0, queued: 2, percent: 42 });
+    expect(summarize(items)).toEqual({ count: 3, attention: 0, running: 1, waiting: 0, queued: 2, percent: 42 });
     // A re-apply the server queued after its stack refreshed is marked.
     expect(activityItems([], [{ ...blur, automatic: true }])[0]).toMatchObject({ automatic: true });
     expect(items[0].automatic).toBeFalsy();
@@ -327,7 +349,7 @@ describe('header activity items', () => {
 
     const summary = summarize(items);
     // Waiting work's last progress does not count toward the chip's.
-    expect(summary).toEqual({ count: 5, running: 2, waiting: 3, queued: 0, percent: 40 });
+    expect(summary).toEqual({ count: 5, attention: 0, running: 2, waiting: 3, queued: 0, percent: 40 });
     expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 0 });
   });
 
@@ -382,7 +404,7 @@ describe('flat measuring in the job line', () => {
       control: { kind: 'flats', dbId: 'astro' },
       href: '/calibration?db=astro&calKind=flat&calRig=c925',
     });
-    expect(summarize([item])).toEqual({ count: 1, running: 1, waiting: 0, queued: 0, percent: 30 });
+    expect(summarize([item])).toEqual({ count: 1, attention: 0, running: 1, waiting: 0, queued: 0, percent: 30 });
   });
 
   it('leaves out a pass that is settling, waiting for grading or has nothing to read', () => {
@@ -534,5 +556,174 @@ describe('backups in the job line', () => {
       background: true,
     });
     expect(activityItems([], [], undefined, undefined, {}, [], null)).toEqual([]);
+  });
+});
+
+describe('the job line by tier', () => {
+  const wbppQueued = (id: string, position: number) => ({
+    id, db_id: 'a', db_name: 'Askar', scope: `project ${id}`, project_id: 1, target_id: null, position,
+    queued_at: position,
+  });
+  const transfer = (overrides: Partial<TransferJob>): TransferJob => ({
+    id: 't', connection_id: 'c', revision: 1, state: 'queued', catalog: 'Askar', label: 'M44',
+    total_files: 10, completed_files: 4, total_bytes: 100, completed_bytes: 40, current_file: '',
+    sent_bytes: 0, error: null, next_attempt_ms: 0, warnings: null, manifest: null, ...overrides,
+  });
+
+  it("puts a person's work, then automatic work, each needing attention, running, queued in line order, then waiting", () => {
+    const items = activityItems(
+      [{
+        dbId: 'a',
+        dbName: 'Askar',
+        refresh: refresh({ stage: 'processing_targets', targets_total: 15, targets_processed: 3, automatic: true }),
+        backfill: backfill(2, 8),
+        scan: { ...scan(4, 10), progress: { ...scan(4, 10).progress, automatic: true, waiting_for: 'a stack build' } },
+      }],
+      [
+        stack('second', 'queued', 0, 0, false, 1),
+        stack('auto', 'queued', 0, 0, true, 2),
+        stack('run', 'running', 3, 12),
+        stack('first', 'queued', 0, 0, false, 0),
+      ],
+      // The server lists the WBPP line next first.
+      { running: [], queued: [wbppQueued('next', 1), wbppQueued('late', 2)] },
+      () => undefined,
+      {},
+      [
+        transfer({ id: 'paused', state: 'paused', label: 'M13' }),
+        transfer({ id: 'held', state: 'needs_review' }),
+        transfer({ id: 'policy', state: 'queued', automatic: true }),
+      ]
+    );
+    const groups = groupActivity(items);
+    expect(groups.map((group) => group.title)).toEqual(['Started by you', 'Automatic']);
+    expect(groups[0].items.map((item) => [item.title, item.scope, item.status])).toEqual([
+      ['Transfers', 'Askar · M44', 'attention'],
+      ['Stacking', 'M44 · run', 'running'],
+      ['Stacking', 'M44 · first', 'queued'],
+      ['Stacking', 'M44 · second', 'queued'],
+      ['WBPP', 'Askar · project next', 'queued'],
+      ['WBPP', 'Askar · project late', 'queued'],
+      ['Transfers', 'Askar · M13', 'waiting'],
+    ]);
+    expect(groups[0].summary).toMatchObject({ attention: 1, running: 1, queued: 4, waiting: 1 });
+    expect(groups[1].items.map((item) => [item.title, item.status])).toEqual([
+      ['Refreshing catalog', 'running'],
+      ['Stacking', 'queued'],
+      ['Transfers', 'queued'],
+      ['Analyzing database quality', 'waiting'],
+    ]);
+    expect(groups[1].summary).toMatchObject({ attention: 0, running: 1, queued: 2, waiting: 1 });
+    // The flat list is the groups in turn, and the chip counts them all.
+    expect(items).toEqual([...groups[0].items, ...groups[1].items]);
+    expect(summarize(items)).toMatchObject({ attention: 1, running: 2, queued: 6, waiting: 2 });
+  });
+
+  it("says a queued build's place in the whole line, under whichever heading it sits", () => {
+    // An automatic refresh's build is queued ahead of a person's.
+    const items = activityItems([], [
+      stack('run', 'running', 3, 12),
+      stack('refresh', 'queued', 0, 0, true, 0),
+      stack('mine', 'queued', 0, 0, false, 1),
+    ]);
+    const [person, automatic] = groupActivity(items);
+    const mine = person.items.find((item) => item.scope === 'M44 · mine')!;
+    const refreshBuild = automatic.items.find((item) => item.scope === 'M44 · refresh')!;
+    // The person's build is first under its heading, yet one build is ahead.
+    expect(person.items.map((item) => item.status)).toEqual(['running', 'queued']);
+    expect(queueText(mine)).toBe('queued · 2 · 1 ahead');
+    expect(queueText(refreshBuild)).toBe('queued · 1 · next');
+    // The move buttons work on the whole line: up takes the person's build
+    // past the refresh, down is the end.
+    const lengths = lineLengths(items);
+    expect(lengths.stack).toBe(2);
+    expect(mine.position! - 1).toBe(0);
+    expect(mine.position).toBe(lengths.stack - 1);
+    expect(queueText({ ...mine, queue: undefined })).toBe('queued');
+  });
+
+  it('lists every queued build and WBPP run, not only the next', () => {
+    const queued = Array.from({ length: 5 }, (_, index) => stack(`q${index}`, 'queued', 0, 0, false, index));
+    const runs = Array.from({ length: 4 }, (_, index) => wbppQueued(`w${index}`, index + 1));
+    const items = activityItems([], queued, { running: [], queued: runs });
+    expect(items.filter((item) => item.queue === 'stack').map((item) => item.position)).toEqual([0, 1, 2, 3, 4]);
+    expect(items.filter((item) => item.queue === 'wbpp').map((item) => item.position)).toEqual([0, 1, 2, 3]);
+    expect(lineLengths(items)).toEqual({ stack: 5, wbpp: 4 });
+  });
+
+  it('leaves out a heading with nothing under it', () => {
+    const groups = groupActivity(activityItems([], [stack('run', 'running', 1, 2)]));
+    expect(groups.map((group) => group.tier)).toEqual(['person']);
+    expect(groupActivity([])).toEqual([]);
+  });
+
+  it('files a catalog refresh by who asked for it', () => {
+    const asked = activityItems([{ dbId: 'a', dbName: 'Askar', refresh: refresh({ automatic: false }) }], []);
+    const expired = activityItems([{ dbId: 'a', dbName: 'Askar', refresh: refresh({ automatic: true }) }], []);
+    expect(tierOf(asked[0])).toBe('person');
+    expect(tierOf(expired[0])).toBe('automatic');
+  });
+
+  it('files a transfer by who queued it, and only one held for review needs attention', () => {
+    expect(tierOf(transferItem(transfer({ automatic: true })))).toBe('automatic');
+    expect(tierOf(transferItem(transfer({})))).toBe('person');
+    // Stopped until a person reviews it: before upload, or after it failed.
+    expect(transferItem(transfer({ state: 'review', automatic: true })).status).toBe('attention');
+    expect(transferItem(transfer({ state: 'needs_review' })).status).toBe('attention');
+    // A retry resolves on its own; a paused one waits for whoever paused it.
+    expect(transferItem(transfer({ state: 'retry', error: 'Connection reset' })).status).toBe('waiting');
+    expect(transferItem(transfer({ state: 'paused' })).status).toBe('waiting');
+  });
+});
+
+describe('the work left behind each row', () => {
+  it('adds nothing the detail already says', () => {
+    const rows = activityItems(
+      [{
+        dbId: 'a',
+        dbName: 'Askar',
+        refresh: refresh({ stage: 'processing_targets', targets_total: 15, targets_processed: 3 }),
+        backfill: backfill(2, 8),
+        scan: scan(4, 10),
+      }],
+      [stack('R', 'running', 12, 40), { ...stack('RGB', 'running', 1, 4), kind: 'color' }],
+      undefined,
+      () => undefined,
+      {},
+      [],
+      {
+        trigger: 'manual', scope: 'meta', include_secrets: false, destination: '/b', location: 'destination',
+        stage: 'copying', current: null, files_done: 2, files_total: 6, bytes_done: 1, bytes_total: 4,
+        waiting_for: null, started_at: 1, stopping: false,
+      }
+    );
+    expect(rows.length).toBeGreaterThan(4);
+    for (const row of rows) expect(row.remaining, row.title).toBeUndefined();
+  });
+
+  it('says how many rigs flat measuring has left to check, and what waits for its next pass', () => {
+    expect(flatRigsLeft({ rigs_after: 2, next_pass: [] })).toBe('2 more rigs to check');
+    expect(flatRigsLeft({ rigs_after: 1, next_pass: ['x', 'y', 'z'] })).toBe('1 more rig to check · 3 rigs queued');
+    expect(flatRigsLeft({ rigs_after: 0, next_pass: ['*'] })).toBe('every rig queued');
+    // A server without the fields says nothing.
+    expect(flatRigsLeft({})).toBeUndefined();
+  });
+
+  it('says when another frame-sites pass waits, and how many channels a waiting refresh stacks', () => {
+    const [sites] = activityItems([{
+      dbId: 'a', dbName: 'Askar',
+      sites: {
+        state: 'running', active: true, done: 800, total: 1000, next_pass: true, waiting_for: null,
+        retry_at: null, started_at: 1, finished_at: null, last: null, last_error: null,
+      },
+    }], []);
+    expect(sites.remaining).toBe('another pass queued');
+    const [refreshRow] = activityItems([], [], undefined, () => undefined, {
+      scheduled: [{
+        database_id: 'a', database_name: 'Askar', project_id: 3, project_name: 'Bravo', reason: 'arrival',
+        due_in_seconds: 0, channels: ['M44 · R', 'M44 · G'], waiting: true, waiting_for: 'a stack build',
+      }],
+    });
+    expect(refreshRow.remaining).toBe('2 channels to stack');
   });
 });

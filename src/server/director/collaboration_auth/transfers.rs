@@ -127,7 +127,8 @@ fn view(job: &Job, progress: &Progress) -> Value {
         "total_files":package.as_ref().map_or(0,|p|p.artifacts.len()),"completed_files":job.completed.len(),
         "total_bytes":total,"completed_bytes":done,"current_file":if active {progress.file.as_str()} else {""},
         "sent_bytes":if active {progress.bytes} else {0},"error":job.error,"next_attempt_ms":job.next_attempt_ms,
-        "warnings":package.as_ref().map(|p|&p.warnings),"manifest":null})
+        "warnings":package.as_ref().map(|p|&p.warnings),"manifest":null,
+        "automatic":psf_guard_director_meta::transfer::automatic(job)})
 }
 
 pub(super) async fn start(

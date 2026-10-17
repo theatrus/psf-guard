@@ -4132,8 +4132,8 @@ pub async fn refresh_file_cache(
 ) -> Result<Json<ApiResponse<FileCheckResponse>>, AppError> {
     tracing::info!("🔄 Manual cache refresh requested");
 
-    // Check current refresh status
-    let refresh_status = ctx.ensure_cache_available();
+    // Check current refresh status; the refresh is this person's.
+    let refresh_status = ctx.request_cache_refresh();
 
     match refresh_status {
         crate::server::state::RefreshStatus::InProgressWait
@@ -4173,8 +4173,8 @@ pub async fn refresh_file_cache(
                 cache.clear();
             }
 
-            // Now start refresh
-            let refresh_status = ctx.ensure_cache_available();
+            // Now start refresh, as this person's
+            let refresh_status = ctx.request_cache_refresh();
             if matches!(
                 refresh_status,
                 crate::server::state::RefreshStatus::InProgressWait
@@ -4260,6 +4260,7 @@ pub async fn get_cache_refresh_progress(
                 targets_processed: progress.targets_processed,
                 files_found: progress.files_found,
                 files_missing: progress.files_missing,
+                automatic: !progress.requested,
             }
         }
         None => {
@@ -4280,6 +4281,7 @@ pub async fn get_cache_refresh_progress(
                 targets_processed: 0,
                 files_found: 0,
                 files_missing: 0,
+                automatic: false,
             }
         }
     };

@@ -456,3 +456,24 @@ fn completed_history_does_not_hide_new_queued_work() {
     assert_eq!(store.next_transfer(20).unwrap().unwrap().id, next.id);
     assert_eq!(store.transfer_activity().unwrap().len(), 50);
 }
+
+#[test]
+fn activity_says_which_transfers_a_policy_queued() {
+    let (_dir, mut store, id) = setup();
+    let automatic = store
+        .create_transfer(id, json!({"automatic":true}), 10)
+        .unwrap();
+    let by_hand = store
+        .create_transfer(id, json!({"selection":{"catalog":"rig"}}), 11)
+        .unwrap();
+    let activity = store.transfer_activity().unwrap();
+    let flag = |job: Uuid| {
+        activity
+            .iter()
+            .find(|entry| entry["id"] == job.to_string())
+            .unwrap()["automatic"]
+            .clone()
+    };
+    assert_eq!(flag(automatic.id), json!(true));
+    assert_eq!(flag(by_hand.id), json!(false));
+}

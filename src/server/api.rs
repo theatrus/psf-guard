@@ -1144,6 +1144,9 @@ pub struct CacheRefreshProgressResponse {
     pub targets_processed: usize,
     pub files_found: usize,
     pub files_missing: usize,
+    /// Started on its own (the cache expired, or the server started), not
+    /// by a person's Refresh. False while idle.
+    pub automatic: bool,
 }
 
 #[derive(Debug, Serialize)]

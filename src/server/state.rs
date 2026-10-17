@@ -197,6 +197,9 @@ pub struct FileCheckCache {
     pub has_initial_data: bool,
     pub refresh_progress: RefreshProgress,
     pub organization_revision: u64,
+    /// The next refresh is one a person asked for, as Refresh does: the job
+    /// line lists it under their work rather than as automatic.
+    pub refresh_requested: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +217,9 @@ pub struct RefreshProgress {
     pub targets_processed: usize,
     pub files_found: usize,
     pub files_missing: usize,
+    /// A person asked for this refresh. Otherwise it is automatic: the
+    /// cache expired, or the server started.
+    pub requested: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -243,6 +249,7 @@ impl Default for RefreshProgress {
             targets_processed: 0,
             files_found: 0,
             files_missing: 0,
+            requested: false,
         }
     }
 }
@@ -369,6 +376,7 @@ impl FileCheckCache {
             has_initial_data: false,
             refresh_progress: RefreshProgress::default(),
             organization_revision: 0,
+            refresh_requested: false,
         }
     }
 
@@ -384,11 +392,13 @@ impl FileCheckCache {
         self.refresh_in_progress = false;
         self.has_initial_data = false;
         self.refresh_progress = RefreshProgress::default();
+        self.refresh_requested = false;
     }
 
     pub fn mark_refresh_started(&mut self) {
         self.refresh_in_progress = true;
         self.refresh_progress.start_refresh();
+        self.refresh_progress.requested = std::mem::take(&mut self.refresh_requested);
     }
 
     pub fn mark_refresh_completed(&mut self) {

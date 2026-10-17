@@ -30,11 +30,21 @@ export type ActivityControl =
 export type ActivityQueue = 'stack' | 'wbpp';
 
 /**
- * Where a job stands. `running`: at work now. `queued`: in a line a person
- * can reorder. `waiting`: automatic work that has stepped aside for other
- * work, such as a build a person started, or a transfer awaiting retry or review.
+ * Where a job stands. `attention`: stopped until a person acts, such as a
+ * transfer to review. `running`: at work now. `queued`: in a line a person
+ * can reorder. `waiting`: work that has stepped aside for other work, such
+ * as automatic work behind a build a person started, or a transfer paused
+ * or awaiting its retry.
  */
-export type ActivityStatus = 'running' | 'queued' | 'waiting';
+export type ActivityStatus = 'attention' | 'running' | 'queued' | 'waiting';
+
+/**
+ * Who the work is for, as the server's priority tiers have it. `person`:
+ * work a person started, which runs first (`Interactive`). `automatic`:
+ * work the server started, or database-wide work, which steps aside for a
+ * person's (`Viewed` and `Background`).
+ */
+export type ActivityTier = 'person' | 'automatic';
 
 /** One piece of background work the header reports. */
 export interface ActivityItem {
@@ -56,8 +66,12 @@ export interface ActivityItem {
   percent: number | null;
   automatic?: boolean;
   /** Background work, automatic or database-wide, which runs after
-   *  anything a person started. */
+   *  anything a person started: the `automatic` tier. */
   background?: boolean;
+  /** What else waits behind the step under way, when the server knows it
+   *  and the detail does not say it: "1 more rig to check", "another pass
+   *  queued", "3 channels to stack". */
+  remaining?: string;
   /** The full current path or file, for a tooltip. */
   hint?: string;
   /** The line this job runs in, when it has one. */
@@ -132,6 +146,11 @@ function fraction(done: number, total: number): number | null {
   return total > 0 ? Math.min((done / total) * 100, 100) : null;
 }
 
+function joined(...parts: (string | undefined)[]): string | undefined {
+  const text = parts.filter(Boolean).join(' · ');
+  return text || undefined;
+}
+
 function lastPart(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -167,6 +186,10 @@ function refreshItem(db: DatabaseActivity, refresh: CacheRefreshProgress): Activ
     scope: db.dbName,
     detail,
     status: 'running',
+    // A refresh the cache's expiry or the server's start began; one asked for with Refresh is
+    // a person's.
+    automatic: !!refresh.automatic,
+    background: !!refresh.automatic,
     percent: refresh.progress_percentage > 0 ? Math.min(refresh.progress_percentage, 100) : null,
     hint: refresh.current_directory_name ?? refresh.current_project_name ?? undefined,
     href: viewPath('grid', { db: db.dbId }),
@@ -202,6 +225,7 @@ function qualityItems(db: DatabaseActivity, projectOf: ProjectOf): ActivityItem[
         status: scanWaitsFor ? 'waiting' : 'running',
         waitingFor: scanWaitsFor,
         percent: fraction(scan.processed, scan.total),
+        automatic: !!scan.automatic,
         background: !!scan.automatic,
         hint: scan.current_file ?? undefined,
         href,
@@ -251,6 +275,21 @@ function qualityItems(db: DatabaseActivity, projectOf: ProjectOf): ActivityItem[
 
 /** Flat measuring, once a pass has found work. Always automatic: a page that
  *  shows the rig puts it first, but no person started it. */
+/** `1 more rig to check · 2 rigs queued`: the rigs this pass looks at
+ *  after the one it measures (each may turn out to have nothing to do), and
+ *  those the next pass takes. */
+export function flatRigsLeft(flats: Pick<FlatMeasureStatus, 'rigs_after' | 'next_pass'>): string | undefined {
+  const after = flats.rigs_after ?? 0;
+  const next = flats.next_pass ?? [];
+  const rigs = (count: number) => (count === 1 ? 'rig' : 'rigs');
+  return joined(
+    after > 0 ? `${after} more ${rigs(after)} to check` : undefined,
+    next.includes('*')
+      ? 'every rig queued'
+      : next.length > 0 ? `${next.length} ${rigs(next.length)} queued` : undefined
+  );
+}
+
 function flatsItem(db: DatabaseActivity, flats: FlatMeasureStatus): ActivityItem {
   const search = new URLSearchParams({ db: db.dbId, calKind: 'flat' });
   if (flats.rig_uuid) search.set('calRig', flats.rig_uuid);
@@ -267,6 +306,7 @@ function flatsItem(db: DatabaseActivity, flats: FlatMeasureStatus): ActivityItem
     status: flats.waiting_for ? 'waiting' : 'running',
     waitingFor: flats.waiting_for ?? undefined,
     percent: fraction(flats.done, flats.total),
+    remaining: flatRigsLeft(flats),
     automatic: true,
     background: true,
     stoppable: true,
@@ -297,6 +337,7 @@ function sitesItem(db: DatabaseActivity, sites: FrameSitesStatus): ActivityItem 
     status: sites.waiting_for ? 'waiting' : 'running',
     waitingFor: sites.waiting_for ?? undefined,
     percent: fraction(sites.done, sites.total),
+    remaining: sites.next_pass ? 'another pass queued' : undefined,
     automatic: true,
     background: true,
     stoppable: true,
@@ -475,6 +516,9 @@ function waitingRefreshItem(refresh: ScheduledRefresh): ActivityItem {
     status: 'waiting',
     waitingFor,
     percent: last ? fraction(last.processed_units, last.total_units) : null,
+    remaining: refresh.channels?.length
+      ? `${refresh.channels.length} ${refresh.channels.length === 1 ? 'channel' : 'channels'} to stack`
+      : undefined,
     automatic: true,
     background: true,
     hint: refresh.channels?.length ? `Restacks ${refresh.channels.join(', ')}` : undefined,
@@ -505,17 +549,34 @@ function waitingReapplyItem(reapply: WaitingReapply): ActivityItem {
   };
 }
 
-/** A person's running work first, then running background work, then
- *  everything waiting: lines in the order they will run, then automatic
- *  work that stepped aside. */
-function rank(item: ActivityItem): number {
-  if (item.status !== 'running') return 2;
-  return item.background ? 1 : 0;
+/** The tier a row belongs to, from what the server reports. */
+export function tierOf(item: ActivityItem): ActivityTier {
+  return item.background ? 'automatic' : 'person';
 }
 
-/** Every job the header reports: running work, then waiting work. Automatic
- *  work that steps aside for a person's is listed as waiting. An automatic
- *  refresh still settling is not work yet; it shows once it is due. */
+const STATUS_ORDER: Record<ActivityStatus, number> = { attention: 0, running: 1, queued: 2, waiting: 3 };
+const LINE_ORDER: Record<ActivityQueue, number> = { stack: 0, wbpp: 1 };
+
+/** A person's work first, then automatic work. Within each, what needs a
+ *  person, running work, then each line's queued rows in its order, then
+ *  work that waits. One line can hold rows of both tiers: a queued row
+ *  says its place in the whole line (`queueText`). */
+function compare(left: ActivityItem, right: ActivityItem): number {
+  const tier = Number(tierOf(left) === 'automatic') - Number(tierOf(right) === 'automatic');
+  if (tier !== 0) return tier;
+  const status = STATUS_ORDER[left.status] - STATUS_ORDER[right.status];
+  if (status !== 0 || left.status !== 'queued') return status;
+  // A line's order is its positions; a held transfer has none, and keeps
+  // the order it came in.
+  const place = (item: ActivityItem) =>
+    (item.queue ? LINE_ORDER[item.queue] : 2) * 1_000_000 + (item.position ?? 999_999);
+  return place(left) - place(right);
+}
+
+/** Every job the header reports, a person's work first: running, then
+ *  queued, then waiting. Automatic work that steps aside for a person's is
+ *  listed as waiting. An automatic refresh still settling is not work yet;
+ *  it shows once it is due. */
 export function activityItems(
   databases: DatabaseActivity[],
   stacks: StackActivityEntry[],
@@ -544,8 +605,32 @@ export function activityItems(
   items.push(...(waiting.scheduled ?? []).filter((refresh) => refresh.waiting).map(waitingRefreshItem));
   items.push(...(waiting.reapplies ?? []).map(waitingReapplyItem));
   if (backup) items.push(backupItem(backup));
-  // Stable: each rank keeps the order above.
-  return items.sort((left, right) => rank(left) - rank(right));
+  // Stable: rows that compare equal keep the order above.
+  return items.sort(compare);
+}
+
+export interface ActivityGroup {
+  tier: ActivityTier;
+  /** The heading, in words. */
+  title: string;
+  items: ActivityItem[];
+  summary: ActivitySummary;
+}
+
+export const TIER_TITLES: Record<ActivityTier, string> = {
+  person: 'Started by you',
+  automatic: 'Automatic',
+};
+
+/** The rows under their two headings, each with its counts; a heading
+ *  with no rows is left out. Takes the order `activityItems` gives. */
+export function groupActivity(items: ActivityItem[]): ActivityGroup[] {
+  return (['person', 'automatic'] as const)
+    .map((tier) => {
+      const rows = items.filter((item) => tierOf(item) === tier);
+      return { tier, title: TIER_TITLES[tier], items: rows, summary: summarize(rows) };
+    })
+    .filter((group) => group.items.length > 0);
 }
 
 /** A backup: a person's from Settings, or the schedule's, which steps aside
@@ -571,12 +656,19 @@ export function backupItem(job: BackupJob): ActivityItem {
   };
 }
 
+/** A collaboration transfer: a person's, or one the connection's policy
+ *  queued. One held for a person's review, before upload or after it
+ *  failed, needs attention; one paused or awaiting its retry waits. */
 export function transferItem(job: TransferJob): ActivityItem {
   const active = job.state === 'uploading' || job.state === 'preparing';
   const labels = { preparing: 'Checking files', review: 'Review required', queued: 'Pending', uploading: 'Uploading', paused: 'Paused', retry: 'Retry scheduled', needs_review: 'Needs attention', complete: 'Uploaded', cancelled: 'Cancelled' };
   return { key: `transfer:${job.id}`, kind: 'transfer', title: 'Transfers', scope: `${job.catalog} · ${job.label}`,
     detail: job.error ?? `${job.completed_files}/${job.total_files} files · ${((job.completed_bytes + job.sent_bytes) / 1024 / 1024).toFixed(1)} MiB`,
-    status: active ? 'running' : job.state === 'queued' ? 'queued' : 'waiting', stateLabel: labels[job.state], transfer: job, background: true,
+    status: active ? 'running'
+      : job.state === 'review' || job.state === 'needs_review' ? 'attention'
+        : job.state === 'queued' ? 'queued' : 'waiting',
+    stateLabel: labels[job.state], transfer: job,
+    automatic: !!job.automatic, background: !!job.automatic,
     percent: active && job.total_bytes > 0 ? Math.min(100, 100 * (job.completed_bytes + job.sent_bytes) / job.total_bytes) : null,
     hint: job.current_file || undefined };
 }
@@ -590,10 +682,20 @@ export function lineLengths(items: ActivityItem[]): Record<ActivityQueue, number
   return lengths;
 }
 
+/** A queued row's place in its whole line, whichever heading its rows sit
+ *  under: `queued · 4 · 3 ahead`, `queued · 1 · next`. */
+export function queueText(item: ActivityItem): string {
+  if (item.position == null || !item.queue) return 'queued';
+  const place = `queued · ${item.position + 1}`;
+  return item.position === 0 ? `${place} · next` : `${place} · ${item.position} ahead`;
+}
+
 export interface ActivitySummary {
   count: number;
+  /** Work stopped until a person acts. */
+  attention: number;
   running: number;
-  /** Automatic work that stepped aside, and held transfers. */
+  /** Automatic work that stepped aside, and paused or retrying transfers. */
   waiting: number;
   /** Jobs in a line a person can reorder, such as builds they asked for. */
   queued: number;
@@ -606,6 +708,7 @@ export function summarize(items: ActivityItem[]): ActivitySummary {
   const measured = running.filter((item) => item.percent != null);
   return {
     count: items.length,
+    attention: items.filter((item) => item.status === 'attention').length,
     running: running.length,
     waiting: items.filter((item) => item.status === 'waiting').length,
     queued: items.filter((item) => item.status === 'queued').length,

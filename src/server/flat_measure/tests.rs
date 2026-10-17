@@ -961,6 +961,70 @@ fn the_rig_a_page_shows_goes_first() {
     assert_eq!(order.len(), 2);
 }
 
+/// A pass says how many rigs it has left after the one it works on.
+#[test]
+fn a_pass_counts_the_rigs_after_this_one() {
+    let _settings = settings_lock();
+    let library = library();
+    let mut after: Vec<(String, usize)> = Vec::new();
+    flat_groups::job::run(flat_groups::job::Pass {
+        conn: &library.conn,
+        dir: &library.dir,
+        scope: Scope::everything(),
+        keep_going: &|| true,
+        yield_now: &|| {},
+        progress: &mut |at| {
+            if after.last().map(|(rig, _)| rig.as_str()) != Some(at.rig) {
+                after.push((at.rig.to_string(), at.rigs_after));
+            }
+        },
+        goes_first: &|_| false,
+        find_light: &|_| None,
+        pool: None,
+    })
+    .unwrap();
+    let counts: Vec<usize> = after.iter().map(|(_, count)| *count).collect();
+    assert_eq!(counts, [1, 0], "{after:?}");
+}
+
+/// While a pass runs, what was asked for since is listed for the next pass,
+/// apart from the pass itself.
+#[test]
+fn the_status_lists_what_waits_for_the_next_pass() {
+    let path = "/next-pass/catalog.sqlite";
+    let job = job(path);
+    {
+        let mut queue = job.queue();
+        queue.add(
+            Scope::flats(Rigs::of(["b"])),
+            Instant::now(),
+            Trigger::Change,
+        );
+    }
+    // Nothing runs: the waiting rig is simply queued.
+    let waiting = status(path);
+    assert_eq!(waiting.state, "queued");
+    assert!(waiting.next_pass.is_empty());
+    job.queue().running = Some(Scope::flats(Rigs::of(["a"])));
+    let running = status(path);
+    assert_eq!(running.rigs, ["a", "b"]);
+    assert_eq!(running.next_pass, ["b"]);
+    // A retry due by now joins the next pass; one due later does not.
+    {
+        let mut queue = job.queue();
+        let now = Instant::now();
+        queue.due.insert("c".into(), now - Duration::from_secs(1));
+        queue.due.insert("d".into(), now + Duration::from_secs(600));
+    }
+    let retrying = status(path);
+    assert_eq!(retrying.next_pass, ["b", "c"]);
+    assert_eq!(retrying.rigs, ["a", "b", "c", "d"]);
+    let mut queue = job.queue();
+    queue.running = None;
+    queue.pending = Scope::default();
+    queue.due.clear();
+}
+
 /// A use/exclude choice through its route queues the frames' rig alone.
 #[tokio::test]
 async fn a_keep_out_choice_through_the_route_queues_its_rig() {
