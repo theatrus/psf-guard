@@ -155,8 +155,8 @@ function ScopeChoice({
         <span>
           Settings and catalogs
           <small>
-            Everything below, plus {overview.catalogs === 1 ? 'the catalog' : `all ${overview.catalogs} catalogs`},
-            copied safely while N.I.N.A. keeps writing. About {fullSize} before compression.
+            Everything below, plus {overview.catalogs === 1 ? 'the catalog' : `all ${overview.catalogs} catalogs`}.
+            About {fullSize} before compression.
           </small>
         </span>
       </label>
