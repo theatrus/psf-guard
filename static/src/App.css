@@ -6550,9 +6550,13 @@
   background: var(--color-bg-quaternary);
 }
 
-/* A filter's All sessions tab leads its row and keeps its bar when pressed. */
-.sequence-tab-all-sessions {
+/* Each filter's tabs start a row; its All sessions tab leads it and keeps
+   its bar when pressed. */
+.sequence-tab-filter-start {
   grid-column-start: 1;
+}
+
+.sequence-tab-all-sessions {
   border-left: 3px solid var(--color-sequence-all-sessions);
   font-weight: 600;
 }

@@ -39,5 +39,7 @@ describe('PillSelect', () => {
     expect(container.querySelector('.toolbar-pill-value')).toHaveTextContent('Beta');
     fireEvent.change(screen.getByLabelText('Rig'), { target: { value: 'a' } });
     expect(onChange).toHaveBeenCalledTimes(1);
+    // The parent kept "b": the pill still says so.
+    expect(container.querySelector('.toolbar-pill-value')).toHaveTextContent('Beta');
   });
 });

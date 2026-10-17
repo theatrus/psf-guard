@@ -16,7 +16,8 @@
   date-range icon.
 - In Sequence, a **Select** rule stays on after you reject its frames, with
   nothing selected. A rule no longer picks frames already rejected, so its
-  counts show what is left to reject.
+  counts show what is left to reject; an undo puts them back in the counts,
+  not in the selection.
 - In Sequence, the suspect pills (cloud events, focus drift, tracking
   issues, off target, unsolved) each open a list of their frames. A click
   on one goes to that frame in the strip, without changing the selection.

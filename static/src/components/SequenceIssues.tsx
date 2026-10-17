@@ -21,6 +21,7 @@ export function SequenceIssuePills({ issues, open, onToggle }: {
           className={`issue-badge ${issue.tone}`}
           aria-expanded={open === issue.key}
           aria-controls={open === issue.key ? SEQUENCE_ISSUE_LIST_ID : undefined}
+          data-issue={issue.key}
           title={`List the ${plural(issue.frames.length, 'frame', 'frames')} and go to one`}
           onClick={() => onToggle(issue.key)}
         >
@@ -55,7 +56,16 @@ export function SequenceIssueList({ issue, imageMap, currentImageId, onGo, onClo
         <span>
           <strong>{issue.title}</strong> · {plural(issue.frames.length, 'frame', 'frames')}
         </span>
-        <button type="button" className="tool-button tool-button-quiet" aria-label="Close the list" onClick={onClose}>
+        <button
+          type="button"
+          className="tool-button tool-button-quiet"
+          aria-label="Close the list"
+          onClick={() => {
+            onClose();
+            // Focus goes back to the pill that opened the list.
+            document.querySelector<HTMLElement>(`.summary-issues [data-issue="${issue.key}"]`)?.focus();
+          }}
+        >
           <X size={14} aria-hidden="true" />
         </button>
       </header>
@@ -63,6 +73,8 @@ export function SequenceIssueList({ issue, imageMap, currentImageId, onGo, onClo
         {issue.frames.map(frame => {
           const image = imageMap.get(frame.image_id);
           const name = image?.metadata?.FileName;
+          const time = frameTime(image);
+          const score = Math.round(frame.quality_score * 100);
           return (
             <li key={frame.image_id}>
               <button
@@ -70,9 +82,10 @@ export function SequenceIssueList({ issue, imageMap, currentImageId, onGo, onClo
                 className="sequence-issue-frame"
                 aria-current={frame.image_id === currentImageId ? 'true' : undefined}
                 title={typeof name === 'string' ? name : undefined}
+                aria-label={`${time}, score ${score}`}
                 onClick={() => onGo(frame.image_id)}
               >
-                {frameTime(image)} · {Math.round(frame.quality_score * 100)}
+                {time} · {score}
               </button>
             </li>
           );

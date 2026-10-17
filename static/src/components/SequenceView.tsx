@@ -91,6 +91,7 @@ import {
   type SelectionRuleId,
 } from '../utils/sequenceSelectionRules';
 import { keepAcrossNightSplit, nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
+import { pressesFocusedControl } from '../utils/focusedControl';
 
 interface SequenceChoice {
   key: string;
@@ -213,7 +214,7 @@ export default function SequenceView() {
   // Fetch images for the target (for preview URLs)
   // Nights as the view splits them, the server's setting or the link's.
   const nightSplit = useNightSplit();
-  const { data: images = [] } = useQuery({
+  const { data: images = [], isFetched: imagesFetched } = useQuery({
     queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.queryKey],
     queryFn: () =>
       apiClient.getImages(dbId!, {
@@ -638,19 +639,31 @@ export default function SequenceView() {
     () => new Set(images.filter(image => image.grading_status === GradingStatus.Rejected).map(image => image.id)),
     [images],
   );
+  // What a rule matches, grades aside, is what it follows (ruleBaseRef):
+  // a reject, or an undo of one, changes no match, so neither makes the rule
+  // select again. Rejected frames come off only what it selects and counts.
+  const ruleMatchInputs = useMemo(
+    () => ({ pastCutoff: pastCutoffIds, calibration: calibration.marks, calibrationStale }),
+    [calibration.marks, calibrationStale, pastCutoffIds],
+  );
   const ruleInputs = useMemo(
-    () => ({ pastCutoff: pastCutoffIds, calibration: calibration.marks, calibrationStale, rejected: rejectedIds }),
-    [calibration.marks, calibrationStale, pastCutoffIds, rejectedIds],
+    () => ({ ...ruleMatchInputs, rejected: rejectedIds }),
+    [ruleMatchInputs, rejectedIds],
+  );
+  const notRejected = useCallback(
+    (ids: ReadonlySet<number>) => new Set([...ids].filter(id => !rejectedIds.has(id))),
+    [rejectedIds],
   );
   const ruleCounts = useMemo(() => new Map(SELECTION_RULES.map(rule => [
     rule.id,
     activeSequence ? ruleSelection(rule.id, activeSequence.images, ruleInputs).size : 0,
   ])), [activeSequence, ruleInputs]);
+  // Not before the grades load, so a rule never picks a rejected frame.
   const rulePicks = useMemo(
-    () => selectionRule && activeSequence && !isAnalyzing
-      ? ruleSelection(selectionRule, activeSequence.images, ruleInputs)
+    () => selectionRule && activeSequence && !isAnalyzing && imagesFetched
+      ? ruleSelection(selectionRule, activeSequence.images, ruleMatchInputs)
       : null,
-    [activeSequence, isAnalyzing, ruleInputs, selectionRule],
+    [activeSequence, imagesFetched, isAnalyzing, ruleMatchInputs, selectionRule],
   );
   const currentRulePicksKey = selectionRule && rulePicks ? rulePicksKey(selectionRule, rulePicks) : null;
 
@@ -672,13 +685,13 @@ export default function SequenceView() {
     if (base?.key === currentRulePicksKey) return;
     ruleBaseRef.current = { key: currentRulePicksKey, picks: rulePicks };
     applyRuleSelection(previous => {
-      if (base) return followRule(previous, base.picks, rulePicks);
+      if (base) return notRejected(followRule(previous, base.picks, rulePicks));
       // Opened with a rule in the URL. With nothing selected the rule
       // selects afresh; a selection the URL carries stays as it was left,
       // so a reload or a trip to Detail keeps the clicks made by hand.
-      return previous.size === 0 ? new Set(rulePicks) : previous;
+      return previous.size === 0 ? notRejected(rulePicks) : previous;
     });
-  }, [applyRuleSelection, currentRulePicksKey, rulePicks, selectionRule]);
+  }, [applyRuleSelection, currentRulePicksKey, notRejected, rulePicks, selectionRule]);
 
   const chooseRule = useCallback((rule: SelectionRuleId | null) => {
     if (rule === null) {
@@ -686,8 +699,8 @@ export default function SequenceView() {
       setSelectionRule(null);
       return;
     }
-    if (!activeSequence) {
-      // Chosen while the scores load: the rule selects once they arrive.
+    if (!activeSequence || !imagesFetched) {
+      // Chosen while the scores or grades load: the rule selects once they arrive.
       ruleBaseRef.current = null;
       selectionAnchorIdRef.current = null;
       selectionBaseIdsRef.current = new Set();
@@ -695,11 +708,12 @@ export default function SequenceView() {
       return;
     }
     // A rule chosen replaces the selection with what it picks.
-    const picks = ruleSelection(rule, activeSequence.images, ruleInputs);
-    ruleBaseRef.current = { key: rulePicksKey(rule, picks), picks };
+    const matches = ruleSelection(rule, activeSequence.images, ruleMatchInputs);
+    ruleBaseRef.current = { key: rulePicksKey(rule, matches), picks: matches };
+    const picks = notRejected(matches);
     anchorSelection(picks);
     setSelectionRule(rule, picks);
-  }, [activeSequence, anchorSelection, ruleInputs, setSelectionRule]);
+  }, [activeSequence, anchorSelection, imagesFetched, notRejected, ruleMatchInputs, setSelectionRule]);
 
   const clearSelection = useCallback(() => {
     ruleBaseRef.current = null;
@@ -832,6 +846,12 @@ export default function SequenceView() {
     enabled: !!activeSequence && !isAnalyzing && !showRejectReview,
     preventDefault: true,
   }), [activeSequence, isAnalyzing, showRejectReview]);
+  // Space presses a focused button, such as a session tab or a suspect
+  // pill, rather than toggling the frame under the cursor.
+  const sequenceSpaceOptions = useMemo(
+    () => ({ ...sequenceHotkeyOptions, ignoreEventWhen: pressesFocusedControl }),
+    [sequenceHotkeyOptions],
+  );
 
   useHotkeys('left', () => moveImageCursor('prev'), sequenceHotkeyOptions, [moveImageCursor]);
   useHotkeys('right', () => moveImageCursor('next'), sequenceHotkeyOptions, [moveImageCursor]);
@@ -840,7 +860,7 @@ export default function SequenceView() {
   useHotkeys('space', () => {
     const currentImageId = activeImageIdRef.current;
     if (currentImageId !== null) toggleImage(currentImageId);
-  }, sequenceHotkeyOptions, [toggleImage]);
+  }, sequenceSpaceOptions, [toggleImage]);
 
   const openImage = useCallback((imageId: number, calibrationFocus?: string) => {
     const scroller = document.querySelector<HTMLElement>('.app-main');
@@ -888,7 +908,7 @@ export default function SequenceView() {
     navigate(`/sequence?${params.toString()}`);
   }, [latestParams, navigate]);
 
-  const ruleHandChanges = rulePicks ? handChanges(selectedImages, rulePicks) : 0;
+  const ruleHandChanges = rulePicks ? handChanges(selectedImages, notRejected(rulePicks)) : 0;
 
   if (!projectId) {
     return (
@@ -1122,15 +1142,23 @@ export default function SequenceView() {
           {/* Sequence tabs (if multiple) */}
           {sequenceChoices.length > 1 && (
             <div className="sequence-tabs">
-              {sequenceChoices.map(choice => {
+              {sequenceChoices.map((choice, index) => {
                 const seq = choice.sequence;
+                // Each filter's tabs start a row of their own.
+                const startsFilter = index === 0
+                  || sequenceChoices[index - 1].sequence.filter_name !== seq.filter_name;
+                const tabClass = [
+                  'sequence-tab',
+                  choice.scoreScope === 'target_filter' ? 'sequence-tab-all-sessions' : '',
+                  startsFilter ? 'sequence-tab-filter-start' : '',
+                ].filter(Boolean).join(' ');
                 const selectedCount = seq.images.filter(image =>
                   selectedImages.has(image.image_id)
                 ).length;
                 return (
                   <button
                     key={choice.key}
-                    className={choice.scoreScope === 'target_filter' ? 'sequence-tab sequence-tab-all-sessions' : 'sequence-tab'}
+                    className={tabClass}
                     aria-pressed={choice.key === activeChoice?.key}
                     onClick={() => selectSequence(choice)}
                   >

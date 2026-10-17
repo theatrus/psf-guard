@@ -348,7 +348,8 @@ turns the rule off and keeps the frames; **Clear** empties the selection and
 turns the rule off. Rejecting a selection always opens a per-image review
 before anything is written. After the reject the rule stays on with nothing
 selected: a rule never picks a frame already rejected, so its counts show
-what is left to reject.
+what is left to reject. Undoing the reject puts the frames back in the
+counts, not in the selection.
 
 ### Dates are nights
 

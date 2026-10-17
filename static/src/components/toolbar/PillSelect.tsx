@@ -49,7 +49,9 @@ export default function PillSelect({
         aria-label={label}
         {...select}
         onChange={(event) => {
-          setShown(event.currentTarget.selectedOptions[0]?.text ?? '');
+          // A controlled pill shows the value it is given back, not the
+          // choice: a parent may refuse it.
+          if (value === undefined) setShown(event.currentTarget.selectedOptions[0]?.text ?? '');
           onChange?.(event);
         }}
       />
