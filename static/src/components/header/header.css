@@ -531,56 +531,105 @@ div.activity-error {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .app-header {
+    transition: none;
+  }
+
   .activity-ring.is-indeterminate,
   .activity-row-fill.is-indeterminate {
     animation: none;
   }
 }
 
+/* A phone: two rows that give the page the screen. The logo, which opens
+   the Library, the project, the Sky and the utilities; then the rig and
+   target and the views of it, by their icons alone. The nav and the scope
+   group dissolve so their parts can take those places. */
 @media (max-width: 760px) {
-  .header-view-tabs.header-nav {
+  .app-header,
+  .app-header.compact {
+    display: flex;
     flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
   }
 
-  .header-nav > .header-button {
-    flex: 1 1 0;
-    min-width: 0;
+  .app-header .header-nav,
+  .app-header .header-scope {
+    display: contents;
+  }
+
+  /* Scrolling down slides the header away, scrolling up brings it back
+     (useTuckAway). The page under it grows into the room. */
+  .app-header {
+    transition: margin-top 0.2s ease-out;
+  }
+
+  .app-header.is-tucked {
+    margin-top: calc(-1 * var(--app-header-height, 0px));
+  }
+
+  .app-header .header-brand {
     order: 0;
   }
 
-  .header-nav > .header-group {
-    flex: 1 1 100%;
+  /* The name stays for screen readers; the logo says it on screen. */
+  .app-header .brand-button > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .app-header .header-group .project-target-selector.compact {
     order: 1;
-    padding-left: 0.3rem;
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
   }
 
-  .header-group .header-button {
-    flex: 0 0 auto;
+  .app-header .view-tab[data-view='sky'] {
+    order: 2;
   }
 
-  /* The scope wraps into its two halves: the project and its workspace,
-     then the rig and the views of it. */
-  .header-scope {
-    flex-wrap: wrap;
-    row-gap: 4px;
+  .app-header .header-utilities {
+    order: 3;
   }
 
-  .header-scope-divider {
-    flex-basis: 100%;
+  /* The line between the two rows. */
+  .app-header .header-scope-divider {
+    order: 4;
+    flex: 0 0 100%;
+    width: auto;
     height: 0;
     margin: 0;
   }
 
-  .header-group .project-target-selector.compact {
-    flex: 1 1 10rem;
-    min-width: 9rem;
+  .app-header .rig-target-select,
+  .app-header .rig-target-fixed {
+    order: 5;
+    flex: 1 1 0;
+    min-width: 0;
     max-width: none;
   }
 
-  .rig-target-select,
-  .rig-target-fixed {
-    flex: 1 1 8rem;
-    max-width: none;
+  .app-header .header-scope > .view-tab {
+    order: 6;
+  }
+
+  /* The logo opens the Library, and Planning shows once a plan is open. */
+  .app-header .view-tab[data-view='library'],
+  .app-header .view-tab[data-view='planning']:disabled {
+    display: none;
+  }
+
+  .app-header .view-tab {
+    justify-content: center;
+    min-width: 34px;
+    height: 32px;
   }
 
   /* The percent says how running work goes; only how many wait shows. */
@@ -711,5 +760,16 @@ div.activity-error {
 @media (prefers-reduced-motion: reduce) {
   .view-tab-name {
     transition: none;
+  }
+}
+
+/* A phone, or any screen worked by touch alone: icons only, the current
+   view's too, which its highlight names. A tap leaves hover behind, so a
+   name that slid out would push the other icons out from under the next
+   tap; the name stays the button's label for screen readers. */
+@media (max-width: 760px), (hover: none) and (pointer: coarse) {
+  .view-tab .view-tab-name,
+  .view-tab[aria-current='page'] .view-tab-name {
+    display: none;
   }
 }

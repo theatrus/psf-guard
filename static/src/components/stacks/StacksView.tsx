@@ -171,21 +171,24 @@ export default function StacksView() {
     <div className="stacks-view" ref={viewRef}>
       {/* Whether exposure lengths stack apart is a choice about stacks first. */}
       <div className="stacks-toolbar">
-        <ThumbnailSizeControl
-          id="stacks-card-size"
-          label="Card size"
-          value={cardSize ?? fittedSize}
-          valueText={cardSize === null ? 'Fit' : undefined}
-          min={CARD_SIZE_MIN}
-          max={CARD_SIZE_MAX}
-          step={CARD_SIZE_STEP}
-          onChange={chooseCardSize}
-        />
-        {cardSize !== null && (
-          <button type="button" className="link-button" title="Fill the row: one card, or two on a wide screen" onClick={() => chooseCardSize(null)}>
-            Fit
-          </button>
-        )}
+        {/* A phone fits one card to the row whatever the size. */}
+        <span className="stacks-card-size">
+          <ThumbnailSizeControl
+            id="stacks-card-size"
+            label="Card size"
+            value={cardSize ?? fittedSize}
+            valueText={cardSize === null ? 'Fit' : undefined}
+            min={CARD_SIZE_MIN}
+            max={CARD_SIZE_MAX}
+            step={CARD_SIZE_STEP}
+            onChange={chooseCardSize}
+          />
+          {cardSize !== null && (
+            <button type="button" className="link-button" title="Fill the row: one card, or two on a wide screen" onClick={() => chooseCardSize(null)}>
+              Fit
+            </button>
+          )}
+        </span>
         <ProjectExposureGrouping
           key={`${dbId}:${projectId}`}
           dbId={dbId}

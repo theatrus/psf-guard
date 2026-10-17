@@ -1588,3 +1588,31 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     await rgbCard.screenshot({ path: path.join(docs, 'stack-color-processing.png') });
   }
 });
+
+test('a phone folds the build options behind Options and gives the color cards the width', async ({ page }) => {
+  seedSyntheticColorStacks(dbId, 2);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
+  const panel = page.locator('.stack-preview-panel');
+  const options = panel.getByRole('button', { name: /^Options/ });
+  await expect(options).toHaveAttribute('aria-expanded', 'false');
+  const calibration = panel.locator('.stack-preview-calibration-mode select');
+  await expect(calibration).toBeHidden();
+  await expect(panel.getByRole('checkbox', { name: 'Accepted only' })).toBeHidden();
+  await options.click();
+  await expect(calibration).toBeVisible();
+  // Open, the options stay inside the panel.
+  const optionsBox = await panel.locator('.stack-preview-options').boundingBox();
+  const panelBox = await panel.boundingBox();
+  expect(optionsBox!.x + optionsBox!.width).toBeLessThanOrEqual(panelBox!.x + panelBox!.width);
+  await calibration.selectOption('off');
+  // A choice off its default is named on the button, folded or not.
+  await expect(options).toContainText('No calibration');
+  await expect(options).toHaveClass(/is-set/);
+  await options.click();
+  await expect(calibration).toBeHidden();
+  // The card size slider has nothing to do on a phone's one column.
+  await expect(page.getByLabel('Card size')).toBeHidden();
+  const card = await page.locator('.stack-color-card').first().boundingBox();
+  expect(card!.width).toBeGreaterThan(340);
+});

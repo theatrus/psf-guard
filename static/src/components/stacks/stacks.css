@@ -107,9 +107,17 @@
   color: var(--color-primary);
 }
 
+.stacks-card-size {
+  display: contents;
+}
+
 @media (max-width: 760px) {
   .stacks-view {
-    padding: 0.5rem;
+    padding: 0.5rem 0;
+  }
+
+  .stacks-card-size {
+    display: none;
   }
 }
 

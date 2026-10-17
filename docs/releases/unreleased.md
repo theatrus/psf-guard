@@ -756,3 +756,14 @@
   missing. In the desktop app they include secrets unless you untick
   **Include secrets**. Settings › Backups still shows how the last backup
   went after PSF Guard restarts.
+- On a phone, the header takes two rows instead of four and slides away
+  while you scroll down a page, coming back when you scroll up. The logo
+  opens the Library, and the views show as icons only, with the current one
+  highlighted; a tap no longer slides a view's name open on any touch
+  screen. An image's detail has a bar along the bottom with Previous,
+  Accept, Reject, Unmark and Next, so grading no longer means scrolling past
+  every panel. The Images and Sequence toolbars keep to one row: Undo and
+  Redo move under ⋯, and Compare, which needs a key held to pick two
+  images, is left out. On Stacks, the build options fold behind an Options
+  button that names any choice off its default, and the colour previews
+  use the screen's width.

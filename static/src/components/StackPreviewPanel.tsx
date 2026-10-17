@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { SlidersHorizontal } from 'lucide-react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
@@ -381,6 +382,9 @@ export default function StackPreviewPanel({
   });
   const currentMethod = stackMethod.data?.method;
   const [calibrationMode, setCalibrationMode] = useState<CalibrationMode>(readCalibrationMode);
+  // A phone folds the build options behind one button; wider, they sit in the row.
+  const optionsId = useId();
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const chooseCalibrationMode = (mode: CalibrationMode) => {
     setCalibrationMode(mode);
     try {
@@ -687,6 +691,12 @@ export default function StackPreviewPanel({
   const running = startPending || unfinishedJobs.length > 0;
   const queuedBuilds = unfinishedJobs.length;
   const buildLabel = latest.data?.groups.length ? 'Build current set' : 'Build stacks';
+  // What the folded options hold off their defaults, named on the button.
+  const optionsChanged = [
+    acceptedOnly ? 'Accepted only' : null,
+    calibrationMode === 'on' ? 'Calibration forced' : calibrationMode === 'off' ? 'No calibration' : null,
+    frameOrder === 'quality' ? 'Quality order' : null,
+  ].filter((note): note is string => note !== null);
   const error = startError ?? stopError ?? statusError ?? latest.error;
   const sourceText =
     selectionSource === 'selected' ? 'selected' : selectionSource === 'scope' ? '' : 'visible';
@@ -858,68 +868,81 @@ export default function StackPreviewPanel({
             {/* A build records the scoring it picked frames with, and the
                 automatic refresh reuses it: never use a view's own silently. */}
             <ScoringChangedNote build />
-            <label className="stack-preview-checkbox">
-              <input
-                type="checkbox"
-                checked={acceptedOnly}
-                disabled={running}
-                onChange={(event) => setAcceptedOnly(event.target.checked)}
-              />
-              Accepted only
-            </label>
-            <span className="stack-preview-method">
-              Method:{' '}
-              <button
-                type="button"
-                className="link-button"
-                title="Change how stacks integrate their frames in Settings, Stacking"
-                onClick={() => openSettings('stacking')}
-              >
-                {currentMethod ? methodName(currentMethod, stackMethod.data) : '…'}
-              </button>
-            </span>
-            <label
-              className="stack-preview-calibration-mode"
-              title={
-                'How the next build calibrates its lights. Auto applies the safe masters and ' +
-                'holds back combinations that damage the result, such as a flat with no bias ' +
-                'or dark master. Force on applies every master that can be built anyway. ' +
-                'Off stacks the raw frames.'
-              }
+            <button
+              type="button"
+              className={`stack-preview-options-toggle${optionsChanged.length ? ' is-set' : ''}`}
+              aria-expanded={optionsOpen}
+              aria-controls={optionsId}
+              onClick={() => setOptionsOpen((open) => !open)}
             >
-              Calibration
-              <select
-                value={calibrationMode}
-                disabled={running}
-                onChange={(event) => chooseCalibrationMode(event.target.value as CalibrationMode)}
+              <SlidersHorizontal size={14} aria-hidden="true" />
+              Options
+              {optionsChanged.length > 0 && <small>{optionsChanged.join(' · ')}</small>}
+            </button>
+            <div id={optionsId} className="stack-preview-options">
+              <label className="stack-preview-checkbox">
+                <input
+                  type="checkbox"
+                  checked={acceptedOnly}
+                  disabled={running}
+                  onChange={(event) => setAcceptedOnly(event.target.checked)}
+                />
+                Accepted only
+              </label>
+              <span className="stack-preview-method">
+                Method:{' '}
+                <button
+                  type="button"
+                  className="link-button"
+                  title="Change how stacks integrate their frames in Settings, Stacking"
+                  onClick={() => openSettings('stacking')}
+                >
+                  {currentMethod ? methodName(currentMethod, stackMethod.data) : '…'}
+                </button>
+              </span>
+              <label
+                className="stack-preview-calibration-mode"
+                title={
+                  'How the next build calibrates its lights. Auto applies the safe masters and ' +
+                  'holds back combinations that damage the result, such as a flat with no bias ' +
+                  'or dark master. Force on applies every master that can be built anyway. ' +
+                  'Off stacks the raw frames.'
+                }
               >
-                <option value="auto">Auto</option>
-                <option value="on">Force on</option>
-                <option value="off">Off</option>
-              </select>
-            </label>
-            <label
-              className="stack-preview-frame-order"
-              title={
-                'The order the next build integrates its frames in, which decides what its ' +
-                'signal-to-noise curve answers. Capture sequence starts with the best ' +
-                'registration reference, then follows the remaining eligible frames ' +
-                'chronologically. Quality order puts the best-graded frames first and asks ' +
-                'which frames are worth keeping: the depth where the curve leaves the ideal ' +
-                'is where the weaker frames stop paying for themselves. ' +
-                'Quality order integrates every frame again, so it cannot resume.'
-              }
-            >
-              Order
-              <select
-                value={frameOrder}
-                disabled={running}
-                onChange={(event) => setFrameOrder(event.target.value as StackFrameOrder)}
+                Calibration
+                <select
+                  value={calibrationMode}
+                  disabled={running}
+                  onChange={(event) => chooseCalibrationMode(event.target.value as CalibrationMode)}
+                >
+                  <option value="auto">Auto</option>
+                  <option value="on">Force on</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
+              <label
+                className="stack-preview-frame-order"
+                title={
+                  'The order the next build integrates its frames in, which decides what its ' +
+                  'signal-to-noise curve answers. Capture sequence starts with the best ' +
+                  'registration reference, then follows the remaining eligible frames ' +
+                  'chronologically. Quality order puts the best-graded frames first and asks ' +
+                  'which frames are worth keeping: the depth where the curve leaves the ideal ' +
+                  'is where the weaker frames stop paying for themselves. ' +
+                  'Quality order integrates every frame again, so it cannot resume.'
+                }
               >
-                <option value="capture">Capture sequence</option>
-                <option value="quality">Quality</option>
-              </select>
-            </label>
+                Order
+                <select
+                  value={frameOrder}
+                  disabled={running}
+                  onChange={(event) => setFrameOrder(event.target.value as StackFrameOrder)}
+                >
+                  <option value="capture">Capture sequence</option>
+                  <option value="quality">Quality</option>
+                </select>
+              </label>
+            </div>
             <button
               className="stack-preview-build"
               type="button"

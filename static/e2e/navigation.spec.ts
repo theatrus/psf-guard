@@ -1259,7 +1259,9 @@ test('small header wraps without horizontal overflow', async ({ page }) => {
 
   const header = page.locator('.app-header');
   const brand = page.locator('.header-brand');
-  const tabs = page.locator('.header-view-tabs');
+  // On a phone the strip dissolves into the header's two rows; the views
+  // of the scope sit on the second.
+  const tabs = header.getByRole('button', { name: 'Images', exact: true });
   await expect(header).toBeVisible();
 
   const [brandBox, tabsBox, headerWidth] = await Promise.all([

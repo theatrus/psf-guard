@@ -980,6 +980,23 @@
     display: inline;
   }
 
+  .toolbar-menu-item.toolbar-phone-only {
+    display: flex;
+  }
+
+  /* One row: Undo and Redo move under ⋯, and Compare, which needs two
+     images picked with a key held, leaves. */
+  .view-toolbar-tools .undo-redo-toolbar,
+  .view-toolbar-tools .compare-button {
+    display: none;
+  }
+
+  /* An empty selection, with no actions to offer, says nothing worth a
+     line on a phone. */
+  .view-toolbar .selection-action-bar:not(:has(.selection-actions)) {
+    display: none;
+  }
+
   .view-toolbar.is-open .view-toolbar-filters {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
