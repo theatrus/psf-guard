@@ -79,7 +79,7 @@ export const FINDING_HINTS: Record<LightCalibrationFinding['code'], string> = {
   flat_spots: 'Spots that change between flats, such as drying dew, end up in the master.',
   old_flats: 'Dust moves between nights; flats shot long before or after may not match it.',
   mixed_flats: 'One master averages flats from nights not measured against each other, each with its own dust.',
-  suspect_frames: 'The master takes frames whose grade says they are worth a look.',
+  suspect_frames: 'The master includes frames graded Suspect. Review these frames before using the master.',
   short_after_keep_out: 'Frames kept out by hand leave too few for a clean master.',
   flats_differ: 'A measured change, such as new dust, lies between this light and its flats.',
 };

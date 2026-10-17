@@ -49,17 +49,17 @@ export default function FlatSideDialog({ dbId, imageIds, onClose }: FlatSideDial
         <>
           <button type="button" className="header-button" disabled={busy || !data || data.with_choices === 0}
             data-testid="flat-side-reset-all" onClick={() => send('reset')}>
-            Reset their choices
+            Reset flat choices
           </button>
           <button type="button" className="action-button" disabled={busy} onClick={onClose}>Done</button>
         </>
       }
     >
       <p className="flat-side-note">
-        {plural(imageIds.length, 'light')} selected. A side goes only to the selected lights shot
-        during that change, and wins over their time, imaging session and pixels.
+        {plural(imageIds.length, 'light')} selected. Your choice applies only to selected lights captured during the change.
+        It overrides assignments based on capture time, imaging session and pixel measurements.
       </p>
-      {options.isPending && <p className="flat-side-note" role="status">Finding the changes they were shot during…</p>}
+      {options.isPending && <p className="flat-side-note" role="status">Finding changes during the selected exposures…</p>}
       {options.error instanceof Error && (
         <p className="flat-side-error" role="alert">Could not read the changes: {options.error.message}</p>
       )}

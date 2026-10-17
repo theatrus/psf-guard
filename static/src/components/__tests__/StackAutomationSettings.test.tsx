@@ -36,7 +36,7 @@ describe('StackAutomationSettings', () => {
     server.use(http.get('/api/settings/stacking', () => HttpResponse.json(current(false))));
     render(<StackAutomationSettings />, { wrapper: wrapper() });
     const toggle = await screen.findByRole('checkbox', {
-      name: /Rebuild stack previews on their own/,
+      name: /Automatically refresh stack previews/,
     });
     expect(toggle).not.toBeChecked();
     const arrival = screen.getByLabelText('Minutes to wait after new frames');
@@ -56,7 +56,7 @@ describe('StackAutomationSettings', () => {
     );
     render(<StackAutomationSettings />, { wrapper: wrapper() });
     fireEvent.click(
-      await screen.findByRole('checkbox', { name: /Rebuild stack previews on their own/ })
+      await screen.findByRole('checkbox', { name: /Automatically refresh stack previews/ })
     );
     await waitFor(() =>
       expect(saved).toEqual({
@@ -172,7 +172,7 @@ describe('StackAutomationSettings', () => {
       })
     );
     render(<StackAutomationSettings />, { wrapper: wrapper() });
-    const days = await screen.findByLabelText("Days back a new channel's frames may reach");
+    const days = await screen.findByLabelText("Recent-frame requirement (days)");
     expect(days).toHaveValue(7);
     fireEvent.change(days, { target: { value: '30' } });
     fireEvent.blur(days);

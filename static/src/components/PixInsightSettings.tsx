@@ -56,8 +56,7 @@ export default function PixInsightSettings() {
       <UnsavedMark label="PixInsight settings" dirty={changed} />
       <h3>PixInsight</h3>
       <p className="review-preferences-note">
-        Where PixInsight is on this server, for stacking a project with WBPP from the Library,
-        and where its runs write.
+        Set the PixInsight executable and WBPP output folder to stack projects from the Library.
       </p>
       <p
         className={`pixinsight-status${current.ready ? ' is-ready' : ' is-missing'}`}
@@ -72,8 +71,7 @@ export default function PixInsightSettings() {
             Executable
             <small>
               <code>PixInsight.sh</code> under <code>bin/</code> on Linux, the binary inside the
-              app bundle on macOS, <code>PixInsight.exe</code> on Windows. Empty looks in the
-              standard places.
+              app bundle on macOS, <code>PixInsight.exe</code> on Windows. Leave blank to search the standard installation folders.
             </small>
           </span>
           <PathField
@@ -92,9 +90,8 @@ export default function PixInsightSettings() {
           <span>
             WBPP runs folder
             <small>
-              Where runs put their script and WBPP&apos;s output; a run writes gigabytes, so pick
-              a disk with room. Empty means the database&apos;s export directory when it has
-              one, else its stack folder.
+              Save WBPP scripts and output here. Choose a disk with room for several gigabytes per run.
+              Leave blank to use the database&apos;s export directory, or its stack folder if no export directory is set.
               {current.runs_dir && current.runs_dir_free_bytes != null && (
                 <> {formatFree(current.runs_dir_free_bytes)} free there now.</>
               )}

@@ -18,13 +18,13 @@ import UnsavedMark from './UnsavedMark';
 
 /** What each group's settings change, said once above them. */
 const GROUP_NOTES: Record<CalibrationRuleField['group'], string> = {
-  matching: 'Which frames calibrate a light. Changes rebuild the masters they touch.',
-  darks: 'Which darks a master takes. Changes rebuild the masters they touch.',
-  flat_groups: 'Which nights share a flat master. Changes rebuild the masters they touch.',
+  matching: 'Choose which frames PSF Guard uses to calibrate lights. Changes rebuild affected masters.',
+  darks: 'Choose which dark frames PSF Guard uses to build masters. Changes rebuild affected masters.',
+  flat_groups: 'Choose which nights to combine in a flat master. Changes rebuild affected masters.',
   checks:
-    'What the Library, Images and the Calibration panel flag. Nothing is rebuilt; a check never keeps a light out of a stack.',
+    'Choose which calibration issues to flag in the Library, Images and Calibration panel. These checks do not rebuild masters. The Stacks and exports setting below controls whether to exclude lights that cannot be calibrated.',
   grades:
-    'When a calibration frame turns suspect, then poor. A poor frame leaves its masters; empty means never.',
+    'Set the thresholds for Suspect and Poor grades. PSF Guard excludes frames graded Poor when building masters. Leave a threshold blank to disable it.',
 };
 
 /** What a global field shows: an unset number is empty, so its placeholder names the default. */
@@ -178,7 +178,7 @@ export default function CalibrationMatchingSettings({ focusField = null }: { foc
       <UnsavedMark label="calibration settings" dirty={dirty} />
       <h3>Calibration</h3>
       <p className="review-preferences-note">
-        For every rig without its own value (see Rigs below), from the next match, check and stack.
+        These defaults apply to rigs without an override. Changes take effect the next time PSF Guard matches calibration frames, checks quality, or builds a stack.
       </p>
       {fieldset('matching')}
       {fieldset('darks')}
@@ -216,7 +216,7 @@ export default function CalibrationMatchingSettings({ focusField = null }: { foc
             Leave out lights that can't be calibrated
             <small>
               Lights the checks flag for a missing flat, bias or dark, or flats past the age limit.
-              Stacks, WBPP runs and exports skip them and say how many.
+              Stacks, WBPP runs and exports skip these lights and show how many were excluded.
             </small>
           </span>
         </label>

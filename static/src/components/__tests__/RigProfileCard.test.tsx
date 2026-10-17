@@ -170,7 +170,7 @@ describe('Rig profile card', () => {
   it('names a registered peer the plans push to, and keeps an unregistered one visible', async () => {
     const { saves } = fixture(); mount();
     fireEvent.click(await screen.findByRole('tab', { name: 'Limits and delivery' }));
-    const select = await screen.findByLabelText('Plans push to');
+    const select = await screen.findByLabelText('Send plans to');
     await waitFor(() => expect(screen.getByRole('option', { name: 'Observatory' })).toBeInTheDocument());
     expect(select).toHaveValue('');
     fireEvent.change(select, { target: { value: 'obs' } });
@@ -272,7 +272,7 @@ describe('Rig profile card', () => {
     fireEvent.change(await screen.findByLabelText('Planning site'), { target: { value: backyard.id } });
     fireEvent.change(screen.getByLabelText('Bortle class'), { target: { value: '5' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Profile saved, site and limits not: metadata is busy');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Rig profile saved, but site and limits could not be saved: metadata is busy');
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
     expect(await screen.findByText('Saved rig profile revision 2.')).toBeInTheDocument();
     // The second Save names the revision the first one wrote.

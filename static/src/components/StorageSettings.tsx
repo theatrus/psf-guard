@@ -71,14 +71,14 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
       </p>
       {volume.culled_files > 0 && (
         <p className="muted storage-volume-note">
-          The last check culled {volume.culled_files} files, {bytes(volume.freed_bytes)}.
+          The last check deleted {volume.culled_files} files, {bytes(volume.freed_bytes)}.
         </p>
       )}
       {volume.over_limit && (
         <p className="storage-volume-note is-error" role="alert">
           {volume.kinds.includes('cache')
-            ? 'Over the limit with nothing left that may be culled. Stacks are never culled, so free space on this volume or move a folder to a larger one; preview pre-generation waits meanwhile.'
-            : 'Over the limit with nothing left that may be culled: stacks, and masters used this week or whose frames are gone, stay. Free space on this volume or move the folder to a larger one.'}
+            ? 'Disk usage exceeds the limit, and no more files can be deleted automatically. PSF Guard preserves stacks. Free space on this volume or move a folder to a larger volume. Automatic preview generation is paused until space is available.'
+            : 'Disk usage exceeds the limit, and no more files can be deleted automatically. PSF Guard preserves stacks, masters used within the last week, and masters with missing source frames. Free space on this volume or move the folder to a larger volume.'}
         </p>
       )}
     </div>
@@ -87,10 +87,10 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
 
 const FOLDER_LABELS: Record<StorageFolderKind, { name: string; hint: string }> = {
   cache: { name: 'Cache', hint: 'Image previews, star lists and plate solves.' },
-  stacks: { name: 'Stacks', hint: 'Stacks, their processing, and WBPP runs. Empty uses the cache.' },
+  stacks: { name: 'Stacks', hint: 'Stacks, their processing, and WBPP runs. Leave blank to use the cache folder.' },
   calibration: {
     name: 'Calibration masters',
-    hint: 'Masters built from your calibration frames. Empty uses the cache.',
+    hint: 'Masters built from your calibration frames. Leave blank to use the cache folder.',
   },
 };
 
@@ -194,7 +194,7 @@ function StorageFolders({ current, canManage }: { current: StorageSettingsData; 
         </p>
       ))}
       {!current.can_choose_folders && (
-        <p className="muted">This server keeps no settings file, so only its config file sets the folders.</p>
+        <p className="muted">This server has no writable settings file. Change these folders in its configuration file.</p>
       )}
       {editable && (
         <div className="storage-folder-actions">
@@ -203,8 +203,8 @@ function StorageFolders({ current, canManage }: { current: StorageSettingsData; 
           </button>
           {pending && (
             <span className="muted">
-              The new folders take effect when PSF Guard next starts, which moves the files across
-              first. A large move delays that start.
+              Restart PSF Guard to use the new folders. PSF Guard moves existing files before startup
+        finishes. Moving many files may delay startup.
             </span>
           )}
           {pending && isTauriApp() && (
@@ -317,11 +317,11 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
     <div className="stack-method-settings storage-settings">
       <h3>Disk use</h3>
       <p className="muted">
-        When a volume fills past its limit, PSF Guard deletes image previews from it, least recently
-        viewed first, until it is two points under, then stack checkpoints a day old or more, then
-        calibration masters unused for a week. Stacks and color previews are never culled. Previews
-        come back the next time someone opens the image, and masters are built again from their
-        frames.
+        When disk usage exceeds the limit, PSF Guard first deletes the least recently viewed image
+        previews, aiming for two percentage points below the limit. It then checks stack checkpoints
+        at least a day old and calibration masters unused for a week. Stacks and color previews
+        are never deleted automatically. PSF Guard regenerates previews when you open an image
+        and rebuilds masters from their source frames when needed.
       </p>
       {current.volumes.length === 0 ? (
         <p className="muted">The first check runs a minute after the server starts.</p>
@@ -330,13 +330,13 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
       )}
       <fieldset className="calibration-settings-group" disabled={!canManage}>
         <LimitSlider
-          label={separate ? 'Most of the cache volume to use' : 'Most of the volume to use'}
+          label={separate ? 'Cache volume usage limit' : 'Volume usage limit'}
           ariaLabel={
             separate
-              ? 'Most of the cache volume to use, in percent'
-              : 'Most of the volume to use, in percent'
+              ? 'Cache volume usage limit, in percent'
+              : 'Volume usage limit, in percent'
           }
-          hint={`Of the whole volume, other files included. Default ${current.default_max_volume_percent}%; 100% turns culling off.${separate ? ' A volume shared with stacks or masters uses the lowest of their limits.' : ''}${needsManagement}`}
+          hint={`Percentage of total disk space used, including other files. Default ${current.default_max_volume_percent}%; 100% disables automatic cleanup.${separate ? ' A volume shared with stacks or masters uses the lowest of their limits.' : ''}${needsManagement}`}
           value={current.max_volume_percent}
           min={current.min_max_volume_percent}
           disabled={!canManage}
@@ -371,9 +371,9 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
         {separate && (
           <>
             <LimitSlider
-              label="Most of the stack volume to use"
-              ariaLabel="Most of the stack volume to use, in percent"
-              hint="Stacks are never culled: on their own volume only checkpoints a day old or more go. On the cache's volume the lower limit culls previews too."
+              label="Stack volume usage limit"
+              ariaLabel="Stack volume usage limit, in percent"
+              hint="PSF Guard never deletes stacks automatically. On a separate stack volume, cleanup deletes only checkpoints at least a day old. If stacks share the cache volume, the lower limit also applies to preview cleanup."
               value={current.stack_max_volume_percent ?? current.max_volume_percent}
               min={current.min_max_volume_percent}
               disabled={!canManage}
@@ -381,9 +381,9 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
               onCommit={(percent) => commit({ stack_max_volume_percent: percent })}
             />
             <LimitSlider
-              label="Most of the calibration master volume to use"
-              ariaLabel="Most of the calibration master volume to use, in percent"
-              hint="Past it, masters unused for a week go, least recently used first, when that brings the volume back under; one whose frames are gone always stays. On the cache's volume the lower limit culls previews too."
+              label="Calibration master volume usage limit"
+              ariaLabel="Calibration master volume usage limit, in percent"
+              hint="Above this limit, PSF Guard deletes masters unused for a week, least recently used first, but only if cleanup can bring usage below the limit. It preserves masters whose source frames are missing. If masters share the cache volume, the lower limit also applies to preview cleanup."
               value={current.calibration_max_volume_percent ?? current.max_volume_percent}
               min={current.min_max_volume_percent}
               disabled={!canManage}

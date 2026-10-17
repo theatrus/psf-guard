@@ -69,7 +69,7 @@ describe("ScanRulesFields", () => {
     });
     expect(latest.include).toEqual(["*LIGHT*"]);
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Lights must say LIGHT" }),
+      screen.getByRole("checkbox", { name: "Require LIGHT in the image-type header" }),
     );
     fireEvent.click(
       screen.getByRole("checkbox", { name: "Lights need a target name" }),
@@ -79,7 +79,7 @@ describe("ScanRulesFields", () => {
     });
     expect(byPosition).toBeChecked();
     fireEvent.click(byPosition);
-    fireEvent.change(screen.getByLabelText("Shortest light (s):"), {
+    fireEvent.change(screen.getByLabelText("Minimum light exposure (s):"), {
       target: { value: "10" },
     });
     expect(latest).toMatchObject({
@@ -88,7 +88,7 @@ describe("ScanRulesFields", () => {
       match_by_position: false,
       min_exposure_seconds: 10,
     });
-    fireEvent.change(screen.getByLabelText("Shortest light (s):"), {
+    fireEvent.change(screen.getByLabelText("Minimum light exposure (s):"), {
       target: { value: "" },
     });
     expect(latest.min_exposure_seconds).toBeNull();

@@ -4,6 +4,8 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- UI labels, settings help, and confirmation messages now state actions,
+  limits, defaults, and deletion rules more clearly.
 - Purge Rejects' Preview, Remove, Restore and Empty trash run as a job. The
   dialog and the background jobs list say what it is doing and how far, as
   `Moving to the trash 37 of 203`, and **Stop** ends it after the frame in

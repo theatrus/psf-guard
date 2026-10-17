@@ -184,7 +184,7 @@ describe('BackupSettings', () => {
     )).toBeInTheDocument();
     // An archive with secrets is never offered as a download.
     expect(within(list).queryByRole('link', { name: `Download ${SECRET}` })).not.toBeInTheDocument();
-    expect(within(list).getByText(/Holds secrets: stays on the server's disk/)).toBeInTheDocument();
+    expect(within(list).getByText(/Download unavailable: this backup contains credentials/)).toBeInTheDocument();
     expect(screen.getByText(/succeeded, 52.0 MB/)).toBeInTheDocument();
   });
 

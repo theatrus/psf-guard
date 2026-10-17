@@ -56,10 +56,7 @@ export default function AstroBinSettings() {
     <div className="astrobin-settings">
       <h3>AstroBin</h3>
       <p className="review-preferences-note">
-        Default AstroBin ids by filter name, for any catalog whose own filter map (under
-        Databases) has no entry for that name. AstroBin knows a filter by the number in the
-        address of its page in the equipment database. A rig that changed filters keeps the
-        history in its catalog&apos;s map; this is the fallback.
+        Set default AstroBin IDs by filter name. A catalog uses these defaults when its filter map under Databases has no matching entry. Find a filter&apos;s ID in its AstroBin equipment page URL. Use the catalog&apos;s filter map to record filter changes over time.
       </p>
       {names.length > 0 && (
         <table className="astrobin-settings-table">

@@ -59,7 +59,7 @@ export function GroupMarks({ entry, scopeName }: { entry: GroupEntry; scopeName?
     <span className="calibration-session-counts">
       {entry.current && (
         <span className="calibration-badge flat-group-mark" data-mark="current"
-          title="A light shot now takes this group's flats">Current</span>
+          title="New lights use this flat group for calibration">Current</span>
       )}
       {entry.unmeasured.length > 0 && (
         <span className="calibration-badge flat-group-mark" data-mark="partial"
@@ -77,13 +77,13 @@ export function GroupMarks({ entry, scopeName }: { entry: GroupEntry; scopeName?
       )}
       {entry.context === 'neighbour' && (
         <span className="calibration-badge flat-group-mark" data-mark="context"
-          title={scopeName ? `Not used by ${scopeName}: shown for the edge it shares` : 'Shown for the edge it shares'}>
+          title={scopeName ? `Not used by ${scopeName}: shown to compare adjacent groups` : 'Shown to compare adjacent groups'}>
           Neighbour
         </span>
       )}
       {entry.context === 'map' && (
         <span className="calibration-badge flat-group-mark" data-mark="context"
-          title={`${scopeName ?? 'The project'}'s lights take none of its flats; a correction's map is measured from it`}>
+          title={`${scopeName ?? 'The project'} does not use these flats directly; this group provides measurements for a correction map`}>
           Correction map
         </span>
       )}

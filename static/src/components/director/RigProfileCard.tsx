@@ -95,7 +95,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           client.setQueryData(['observingSettings', 'rig', settings.scope_id], settings);
           void client.invalidateQueries({ queryKey: ['observingEffective'] });
         } catch (error) {
-          throw new Error(`Profile saved, site and limits not: ${message(error)}`, { cause: error });
+          throw new Error(`Rig profile saved, but site and limits could not be saved: ${message(error)}`, { cause: error });
         }
       }
       return saved;
@@ -181,7 +181,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           </span>
         </label>
         <p className="director-muted" data-testid="rig-site-origin">{describePlacement(placed)}</p>
-        <p className="director-muted">The rig takes its site's location and horizon. Type a location or give a horizon here only when this rig differs; leave them empty to use the site's.</p>
+        <p className="director-muted">This rig uses its site's location and horizon by default. Enter a location or horizon here to override the site settings. Leave these fields blank to use the site settings.</p>
         <p className="director-muted rig-profile-source">{describeSource(form.siteSource ?? data.profile.site?.source, data.profile.site?.reported_at_ms)}
           {canWrite && data.defaults.site && <button type="button" className="link-button" onClick={() => { update(applyDefaults(form, { ...data.defaults, optics: null })); setNotice(''); }}><Download size={14} />Use frame headers</button>}
         </p>
@@ -213,17 +213,17 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       </fieldset>
       <fieldset disabled={disabled} className="scheduling-defaults">
         <legend>Target Scheduler limits</legend>
-        <p className="director-muted">Every project in this rig's database takes these on Apply. A plan's own limits win for its project; empty fields follow the site and every plan.</p>
+        <p className="director-muted">Click Apply to update projects in this rig's database. Plan-specific limits override these values. Blank fields use the site's defaults, then the global defaults.</p>
         <SchedulingFields label="Rig Target Scheduler limits" overrides={scheduling} onChange={next => setScheduling(compactOverrides(next))}
           inherited={parentLimits.values} inheritedFrom={limit => parentLimits.from[limit]} disabled={disabled || !rigSettings.data} />
       </fieldset>
       {rigId && <RigSchedulingApply rigId={rigId} unsaved={schedulingChanged} />}
       <fieldset disabled={disabled}>
         <legend>Remote site</legend>
-        <p className="director-muted">When this rig's real database lives on another PSF Guard, pick that peer. Activation writes the plan into the copy here, then pushes the same rows there through Sync.</p>
-        <label className="rig-profile-field" htmlFor={`${slug}-peer`}><span>Plans push to</span>
+        <p className="director-muted">If this rig's database runs on another PSF Guard server, choose that peer. Activation updates the local copy, then sends the changes to the remote server through Sync.</p>
+        <label className="rig-profile-field" htmlFor={`${slug}-peer`}><span>Send plans to</span>
           <span className="rig-profile-input">
-            <select id={`${slug}-peer`} aria-label="Plans push to" value={form.peerId} onChange={event => update({ peerId: event.target.value })}>
+            <select id={`${slug}-peer`} aria-label="Send plans to" value={form.peerId} onChange={event => update({ peerId: event.target.value })}>
               <option value="">This server only</option>
               {peers.data?.map(peer => <option key={peer.id} value={peer.id}>{peer.name}</option>)}
               {form.peerId && !peers.data?.some(peer => peer.id === form.peerId) && <option value={form.peerId}>{form.peerId} (no longer registered)</option>}

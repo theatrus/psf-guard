@@ -1352,7 +1352,7 @@ export default function TauriSettings({
               className="file-path-input"
               dialogTitle="Select the export directory"
               placeholder="Absolute server path; empty disables server export"
-              title="Exports triggered from the Library land here (reflinked where the filesystem supports it). Leave empty to offer the archive download instead."
+              title="Save Library exports in this folder. Leave blank to offer an archive download instead."
               value={formExportDir}
               onChange={setFormExportDir}
             />
@@ -1364,7 +1364,7 @@ export default function TauriSettings({
               className="file-path-input"
               dialogTitle="Select the process directory"
               placeholder="Absolute server path, such as the rig's _Process folder"
-              title="Where this rig's finished work lives. A WBPP run can save its masters below it, one folder per processing project, in a master/ subfolder."
+              title="Save finished work for this rig here. WBPP can save masters in a master/ subfolder within each processing project folder."
               value={formProcessDir}
               onChange={setFormProcessDir}
             />
@@ -1384,7 +1384,7 @@ export default function TauriSettings({
               <strong>Queue background quality analysis</strong>
               <small>
                 Reads every image to measure stars, background, clouds, obstructions,
-                and pointing. This can take a long time, especially in a debug build.
+                and pointing. This can take a long time.
                 You can run it later from this database&apos;s settings.
               </small>
             </span>

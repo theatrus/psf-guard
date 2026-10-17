@@ -63,7 +63,7 @@ export default function CalibrationFramePanel({
   const overruled = suspectOverruled(detail);
   const uuids = [detail.frame_uuid];
   const forget = () => {
-    if (window.confirm(`Forget ${name}? Its catalog record and the masters built from it go. The file stays.`)) {
+    if (window.confirm(`Remove the catalog record for ${name} and the masters built from this frame? The source file will remain on disk.`)) {
       onForget(detail.frame_uuid);
     }
   };

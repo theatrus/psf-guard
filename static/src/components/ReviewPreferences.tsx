@@ -119,8 +119,7 @@ export default function ReviewPreferences() {
             <span>
               Project list grouping
               <small>
-                By how recently each project was worked, or one group per
-                database.
+                Group projects by recent activity or by database.
               </small>
             </span>
             <select
@@ -165,7 +164,7 @@ export default function ReviewPreferences() {
         <p className="review-preferences-note">
           {status.username
             ? `These preferences apply at once and are saved with your account, ${status.username}, so they follow you to any browser.`
-            : 'These preferences live in this browser and apply at once.'}
+            : 'These preferences are saved in this browser and apply immediately.'}
         </p>
       </section>
     </>

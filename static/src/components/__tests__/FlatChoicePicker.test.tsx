@@ -95,7 +95,7 @@ describe('a light’s flat choices', () => {
       choice_options: { changes: [{ ...change, chosen: 'after', by: 'undetermined' }], groups: [] },
     }));
     const chosen = await screen.findByTestId('calibration-flat-chosen');
-    expect(chosen).toHaveTextContent('Put after the change of 2026-09-12');
+    expect(chosen).toHaveTextContent('Assigned after the change of 2026-09-12');
     expect(await screen.findByRole('button', { name: 'After' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(within(chosen).getByRole('button', { name: 'Reset' }));
     await waitFor(() => expect(sent).toEqual([
@@ -123,7 +123,7 @@ describe('a light’s flat choices', () => {
       choices: [{ choice: 'group', label: 'the group HA at 0.0°, 2026-09-20', chosen_at: 1 }],
     }), false);
     const chosen = await screen.findByTestId('calibration-flat-chosen');
-    expect(chosen).toHaveTextContent('Takes the group HA at 0.0°, 2026-09-20');
+    expect(chosen).toHaveTextContent('Uses the group HA at 0.0°, 2026-09-20');
     // The gate is read once the server answers; still no buttons after.
     await waitFor(() => expect(screen.queryByRole('button')).toBeNull());
     expect(screen.queryByTestId('calibration-flat-side')).toBeNull();

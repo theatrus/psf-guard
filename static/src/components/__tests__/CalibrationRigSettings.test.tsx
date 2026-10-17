@@ -47,24 +47,24 @@ describe('CalibrationRigSettings', () => {
     ]))));
     render(<CalibrationRigSettings />, { wrapper: wrapper() });
     const askar = await screen.findByRole('button', { name: /Askar 120 · ASI2600MM/ });
-    expect(askar).toHaveTextContent('2 own values');
+    expect(askar).toHaveTextContent('2 overrides');
     expect(askar).toHaveTextContent('6248×4176 · bin 1×1 · Observatory · 40 calibration frames');
-    expect(screen.getByRole('button', { name: /RedCat 51/ })).toHaveTextContent('Inherits all');
+    expect(screen.getByRole('button', { name: /RedCat 51/ })).toHaveTextContent('Uses global settings');
     expect(askar).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.click(askar);
     expect(askar).toHaveAttribute('aria-expanded', 'true');
     const editor = screen.getByRole('region', { name: 'Askar 120 · ASI2600MM calibration settings' });
     // Its own values are set and editable.
-    expect(within(editor).getByLabelText('Dark reach')).toHaveValue(400);
-    expect(within(editor).getByRole('button', { name: 'Dark reach: own value' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(editor).getByLabelText('Maximum time difference for darks')).toHaveValue(400);
+    expect(within(editor).getByRole('button', { name: 'Maximum time difference for darks: override global setting' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(editor).getByLabelText('No matching flat')).toHaveValue('advisory');
     // The rest inherit, and say from where.
-    const thin = within(editor).getByRole('button', { name: 'Thin master: own value' });
+    const thin = within(editor).getByRole('button', { name: 'Minimum frames in bias and dark masters: override global setting' });
     expect(thin).toHaveAttribute('aria-pressed', 'false');
     expect(thin.closest('.calibration-rule-row')).toHaveTextContent('4 frames · global');
     expect(
-      within(editor).getByRole('button', { name: 'Flat age limit: own value' }).closest('.calibration-rule-row'),
+      within(editor).getByRole('button', { name: 'Flat age limit: override global setting' }).closest('.calibration-rule-row'),
     ).toHaveTextContent('60 days · default');
   });
 
@@ -96,19 +96,19 @@ describe('CalibrationRigSettings', () => {
     const editor = screen.getByRole('region', { name: /calibration settings/ });
     const save = within(editor).getByRole('button', { name: 'Save rig' });
     expect(save).toBeDisabled();
-    fireEvent.click(within(editor).getByRole('button', { name: 'Thin master: own value' }));
-    const thin = within(editor).getByLabelText('Thin master');
+    fireEvent.click(within(editor).getByRole('button', { name: 'Minimum frames in bias and dark masters: override global setting' }));
+    const thin = within(editor).getByLabelText('Minimum frames in bias and dark masters');
     expect(thin).toHaveValue(4);
     fireEvent.change(thin, { target: { value: '' } });
-    expect(within(editor).getByText('Enter a value, or let it inherit.')).toBeInTheDocument();
+    expect(within(editor).getByText('Enter a value, or use the global setting.')).toBeInTheDocument();
     expect(save).toBeDisabled();
     fireEvent.change(thin, { target: { value: '3' } });
     fireEvent.click(save);
     await waitFor(() => expect(saved).toEqual({ name: 'Askar 120 · ASI2600MM', rules: { thin_master_frames: 3 } }));
-    await waitFor(() => expect(screen.getByRole('button', { name: /Askar 120/ })).toHaveTextContent('1 own value'));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Askar 120/ })).toHaveTextContent('1 override'));
     // Letting it inherit again takes the field away.
-    fireEvent.click(within(editor).getByRole('button', { name: 'Thin master: own value' }));
-    expect(within(editor).queryByLabelText('Thin master')).not.toBeInTheDocument();
+    fireEvent.click(within(editor).getByRole('button', { name: 'Minimum frames in bias and dark masters: override global setting' }));
+    expect(within(editor).queryByLabelText('Minimum frames in bias and dark masters')).not.toBeInTheDocument();
     expect(within(editor).getByRole('button', { name: 'Save rig' })).toBeEnabled();
   });
 
@@ -124,7 +124,7 @@ describe('CalibrationRigSettings', () => {
     render(<CalibrationRigSettings />, { wrapper: wrapper() });
     fireEvent.click(await screen.findByRole('button', { name: /C925/ }));
     const editor = screen.getByRole('region', { name: /calibration settings/ });
-    const own = within(editor).getByRole('button', { name: "Rig's time zone: own value" });
+    const own = within(editor).getByRole('button', { name: "Rig's time zone: override global setting" });
     // Automatic until the rig says otherwise.
     expect(own.closest('.calibration-rule-row')).toHaveTextContent("Automatic (from frames) · default");
     fireEvent.click(own);
@@ -171,10 +171,10 @@ describe('CalibrationRigSettings', () => {
     );
     render(<CalibrationRigSettings />, { wrapper: wrapper() });
     fireEvent.click(await screen.findByRole('button', { name: /Askar 120/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Inherit everything' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use global settings for all fields' }));
     await waitFor(() => expect(deleted).toBe(true));
-    await waitFor(() => expect(screen.getByRole('button', { name: /Askar 120/ })).toHaveTextContent('Inherits all'));
-    expect(screen.getByRole('button', { name: 'Inherit everything' })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Askar 120/ })).toHaveTextContent('Uses global settings'));
+    expect(screen.getByRole('button', { name: 'Use global settings for all fields' })).toBeDisabled();
   });
 
   it('opens a rig a light named, even one no catalog lists', async () => {
@@ -214,18 +214,18 @@ describe('CalibrationRigSettings', () => {
     );
     const view = render(page());
     const editor = await screen.findByRole('region', { name: 'Askar 120 · ASI2600MM calibration settings' });
-    const own = within(editor).getByRole('button', { name: 'Thin master: own value' });
+    const own = within(editor).getByRole('button', { name: 'Minimum frames in bias and dark masters: override global setting' });
     fireEvent.click(own);
     expect(own).toHaveAttribute('aria-pressed', 'true');
     // The parent draws again, and the settings come back with a global change.
     view.rerender(page());
-    expect(within(editor).getByRole('button', { name: 'Thin master: own value' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(editor).getByRole('button', { name: 'Minimum frames in bias and dark masters: override global setting' })).toHaveAttribute('aria-pressed', 'true');
     queryClient.setQueryData(
       ['calibration-settings'],
       current([rig(REDCAT, 'RedCat 51 · ASI533MC')], { thin_master_frames: 6 }).data,
     );
     await waitFor(() => expect(screen.getByRole('button', { name: /RedCat 51/ })).toBeInTheDocument());
-    expect(within(editor).getByRole('button', { name: 'Thin master: own value' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(editor).getByRole('button', { name: 'Minimum frames in bias and dark masters: override global setting' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(editor).getByRole('button', { name: 'Save rig' })).toBeEnabled();
   });
 

@@ -1354,13 +1354,13 @@ Darks keep for months, so a dark master can pool several nights, nearest
 first. Three settings under **Settings › Calibration › Dark masters** shape
 it:
 
-- **Dark reach** (default 183 days): a dark shot further than this from the
-  light does not match. A dark marked to serve only lights before or after it
+- **Maximum time difference for darks** (default 183 days): darks outside this
+  time range do not match the light. A dark marked to serve only lights before or after it
   follows its mark instead, however old.
-- **Complete night** (default 10 darks): when the nearest night alone has
-  this many matching darks, the master uses that night only. With fewer, the
-  nights within reach pool.
-- **Dark choice** (default *Complete set first*): the nearest temperature
+- **Minimum darks for a single-night master** (default 10 darks): when the
+  nearest night has this many matching darks, the master uses that night
+  alone. Otherwise, PSF Guard combines nights within the allowed time range.
+- **Dark selection preference** (default *Complete set first*): the nearest temperature
   cluster with a complete night's worth of darks builds the master, and a
   nearer, shorter cluster builds it only when no cluster is complete. Darks
   match a light within 3 °C but cluster within 1 °C, so two warm darks shot
@@ -1689,8 +1689,8 @@ calibration frame is graded by its own rig's limits. The **Rigs** list
 shows every rig an open catalog records, with its databases and frame
 count; a rig opened from a light's Calibration panel shows even when no
 catalog lists it. Each row says whether a value is the rig's own or what
-it inherits and from where; **Own value** sets or clears one, and
-**Inherit everything** clears them all.
+it inherits and from where; **Override global setting** sets or clears one, and
+**Use global settings for all fields** clears them all.
 
 **Start from** fills a rig's form with a preset to review before saving:
 
@@ -1753,27 +1753,27 @@ ASI2600MM)`. An editor can open the rig's settings from there.
 | `external_masters` | External masters | use whenever one matches | prefer, fallback, ignore | matching |
 | `night_zone` | Rig's time zone: where a rig's nights split ([Nights](#nights)) | automatic | `auto`, or a UTC offset in hours from `-12` to `14` (`-9.5`, `5.75` and the other half and quarter hours zones keep) | frame grades and flat measuring |
 | `light_nights` | Nights end: where Images, Sequence and the calibration reports split a rig's lights ([Dates are nights](SCREENING.md#dates-are-nights)) | `rig` | `rig` (At each rig's noon, as above) or `catalog` (Same time for all rigs: the catalog's daytime gap when nothing is shot); a view can show the other from its View panel | the light checks, on their kept headers |
-| `dark_reach_days` | Dark reach | 183 days | 1–3650 | matching |
-| `complete_dark_frames` | Complete night | 10 darks | 2–64 | matching |
-| `dark_choice` | Dark choice | complete set first | complete, nearest | matching |
+| `dark_reach_days` | Maximum time difference for darks | 183 days | 1–3650 | matching |
+| `complete_dark_frames` | Minimum darks for a single-night master | 10 darks | 2–64 | matching |
+| `dark_choice` | Dark selection preference | complete set first | complete, nearest | matching |
 | `flat_grouping` | Group flats | by measurement | measured, time | matching |
 | `flat_split_dust_pct` | Dust split | 1% | 0.1–10% | matching |
 | `flat_split_pattern_pct` | Light pattern split | 2% | 0.2–20% | matching |
 | `flat_max_age_days` | Flat age limit | 60 days | 0 (no limit)–3650 | light checks |
 | `flat_check_age_days` | Flat age warning | 30 days | 0 (off)–3650 | light checks |
-| `thin_master_frames` | Thin master | 5 frames | 2–64 | light checks |
+| `thin_master_frames` | Minimum frames in bias and dark masters | 5 frames | 2–64 | light checks |
 | `check_no_library` | No frames for its camera | flag (Poor) | flag, advisory, off | light checks |
 | `check_no_flat` | No matching flat | flag (Poor) | flag, advisory, off | light checks |
 | `check_no_bias_or_dark` | No matching bias or dark | flag (Poor) | flag, advisory, off | light checks |
 | `check_stale_flats` | Flats past the age limit | flag (Poor) | flag, advisory, off | light checks |
-| `check_thin_dark` | Thin dark master | flag (Poor) | flag, advisory, off | light checks |
-| `check_thin_bias` | Thin bias master | flag (Poor without a dark, Check with one) | flag, advisory, off | light checks |
+| `check_thin_dark` | Dark master has too few frames | flag (Poor) | flag, advisory, off | light checks |
+| `check_thin_bias` | Bias master has too few frames | flag (Poor without a dark, Check with one) | flag, advisory, off | light checks |
 | `check_flat_spots` | Changing spots in flats | flag (as the spot limits grade them) | flag, advisory, off | light checks |
 | `check_old_flats` | Old flats | flag (Check) | flag, off | light checks |
 | `check_mixed_flats` | Flats from several nights not measured against each other | flag (Check) | flag, off | light checks |
 | `check_flats_differ` | Flats from across a change | flag (Check) | flag, off | light checks |
-| `check_suspect_frames` | Suspect frames in its masters | flag (Check) | flag, off | light checks |
-| `check_short_after_keep_out` | Short after keeping frames out | flag (Check) | flag, off | light checks |
+| `check_suspect_frames` | Suspect frames in calibration masters | flag (Check) | flag, off | light checks |
+| `check_short_after_keep_out` | Too few frames after manual exclusions | flag (Check) | flag, off | light checks |
 | `grade_bias_level` | Bias level, in the set's noise | suspect 1, poor 3 | 0–1000 | frame grades |
 | `grade_bias_noise` | Bias noise, ratio to its set | 1.1, 1.3 | 0–100 | frame grades |
 | `grade_bias_banding` | Bias banding, ratio to its noise | 0.25, 0.5 | 0–100 | frame grades |

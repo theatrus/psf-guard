@@ -251,7 +251,7 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
               </button>
             </div>
           ) : (
-            <p className="light-calibration-panel-message">Choose a finding to pick out the frames behind it.</p>
+            <p className="light-calibration-panel-message">Choose a finding to show the affected frames.</p>
           )}
         </>
       ) : (
@@ -261,7 +261,7 @@ export default function CalibrationPanel({ dbId, imageId, projectId }: Calibrati
       {explanation && <LightRules explanation={explanation} />}
 
       {explanation && kinds.length === 0 && (
-        <p className="light-calibration-panel-message">The library holds no calibration frames.</p>
+        <p className="light-calibration-panel-message">The library contains no calibration frames.</p>
       )}
       {explanation && kinds.map((kind) => {
         const parts = focusParts(chosen, kind);
@@ -416,7 +416,7 @@ function KindAccount({ kind, parts, folded, level, lightNight, hrefFor, extra }:
           )}
           {kind.suspect.length > 0 && (
             <div className={`light-calibration-part${focused('suspect')}`}>
-              <span className="light-calibration-part-label">Suspect frames it takes</span>
+              <span className="light-calibration-part-label">Included frames graded Suspect</span>
               <ul>
                 {kind.suspect.map((frame) => (
                   <li key={`${frame.night}:${frame.file}`} className="light-calibration-frame">

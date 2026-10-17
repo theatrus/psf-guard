@@ -59,8 +59,8 @@ describe('StorageSettings', () => {
     expect(screen.getByRole('meter', { name: /Disk use of/ })).toHaveAttribute('aria-valuenow', '93');
     expect(screen.getByText(/Stacks 120.0 GiB · calibration masters 8.0 GiB · image previews 40.0 GiB/))
       .toBeInTheDocument();
-    expect(screen.getByText(/culled 1200 files, 3.0 GiB/)).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('Stacks are never culled');
+    expect(screen.getByText(/deleted 1200 files, 3.0 GiB/)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('PSF Guard preserves stacks');
   });
 
   it('saves a new limit when the slider is let go', async () => {
@@ -73,7 +73,7 @@ describe('StorageSettings', () => {
       })
     );
     render(<StorageSettings canManage />, { wrapper: wrapper() });
-    const slider = await screen.findByRole('slider', { name: /Most of the volume to use/ });
+    const slider = await screen.findByRole('slider', { name: /Volume usage limit/ });
     fireEvent.change(slider, { target: { value: '80' } });
     fireEvent.pointerUp(slider);
     await waitFor(() => expect(saved).toEqual({ max_volume_percent: 80 }));
@@ -94,7 +94,7 @@ describe('StorageSettings', () => {
     fireEvent.change(screen.getByLabelText('Stacks'), { target: { value: ' /mnt/stacks ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save folders' }));
     await waitFor(() => expect(saved).toEqual({ stack_dir: '/mnt/stacks', calibration_dir: '' }));
-    expect(await screen.findByText(/take effect when PSF Guard next starts/)).toBeInTheDocument();
+    expect(await screen.findByText(/Restart PSF Guard to use the new folders/)).toBeInTheDocument();
     expect(screen.getByText('/cache', { selector: 'code' })).toBeInTheDocument();
   });
 
@@ -112,12 +112,12 @@ describe('StorageSettings', () => {
     );
     render(<StorageSettings canManage />, { wrapper: wrapper() });
     expect(await screen.findByText(/holds the cache, stacks and calibration masters/)).toBeInTheDocument();
-    expect(screen.queryByRole('slider', { name: /stack volume/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('slider', { name: /Stack volume/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: /Separate limits/ }));
     await waitFor(() =>
       expect(saved).toEqual([{ stack_max_volume_percent: 90, calibration_max_volume_percent: 90 }])
     );
-    const stack = await screen.findByRole('slider', { name: /stack volume/ });
+    const stack = await screen.findByRole('slider', { name: /Stack volume/ });
     fireEvent.change(stack, { target: { value: '97' } });
     fireEvent.pointerUp(stack);
     await waitFor(() => expect(saved.at(-1)).toEqual({ stack_max_volume_percent: 97 }));
@@ -126,7 +126,7 @@ describe('StorageSettings', () => {
   it('shows the limit but cannot change it without database management', async () => {
     server.use(http.get('/api/settings/storage', () => HttpResponse.json(settings(90))));
     render(<StorageSettings canManage={false} />, { wrapper: wrapper() });
-    expect(await screen.findByRole('slider', { name: /Most of the volume to use/ })).toBeDisabled();
+    expect(await screen.findByRole('slider', { name: /Volume usage limit/ })).toBeDisabled();
     expect(screen.getByText(/needs database management/)).toBeInTheDocument();
   });
 });

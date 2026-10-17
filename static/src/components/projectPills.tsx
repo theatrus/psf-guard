@@ -31,7 +31,7 @@ export function StateControl({ state, name, dbName, editable, pending = null, on
   const choose = (next: number) => {
     // The select is controlled, so a refusal leaves it on the saved state.
     if (pending !== null || next === state) return;
-    if (window.confirm(`Set ${name} to ${stateLabel(next)} in ${dbName}? Target Scheduler acts on it from its next pick.`)) onChange(next);
+    if (window.confirm(`Set ${name} to ${stateLabel(next)} in ${dbName}? Target Scheduler uses this state the next time it selects a target.`)) onChange(next);
   };
   // The pill draws the caret, inside its rounded edge.
   return <span className={`library-pill library-pill-state library-pill-select is-state-${shown}`}>
@@ -100,7 +100,7 @@ export function FamilyPill({ rigs }: { rigs: number }) {
 /** The arrow that opens a row into its card and folds it back. */
 export function FoldButton({ open, name, onClick }: { open: boolean; name: string; onClick: () => void }) {
   return <button type="button" className={`library-expand${open ? ' is-open' : ''}`} aria-expanded={open}
-    aria-label={`${open ? 'Hide' : 'Show'} details for ${name}`} title={open ? 'Fold to a row' : 'Show details'} onClick={onClick}>{open ? '▾' : '▸'}</button>;
+    aria-label={`${open ? 'Hide' : 'Show'} details for ${name}`} title={open ? 'Collapse details' : 'Show details'} onClick={onClick}>{open ? '▾' : '▸'}</button>;
 }
 
 /** The Compact / Detailed switch both lists carry, as the toolbar's

@@ -90,7 +90,7 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
         {canWrite && <button type="button" disabled={!!edit} onClick={() => begin({ creating: true, record: { id: identityId(), name: '', revision: 1 } })}><Plus size={16} />New plan</button>}
       </div>
     </div>
-    <p className="director-muted">A plan waits here from its framing until a rig captures its first frame, then joins the projects above.</p>
+    <p className="director-muted">Plans appear here until a rig captures the first frame. After that, they appear in the project list.</p>
     {plans.query.data?.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
     {incomplete && <p className="director-muted">Some databases could not be read, so their plans are left out here.</p>}
     {notice && <p role="status">{notice}</p>}

@@ -625,7 +625,7 @@ frame their channels were built in.
 ## Automatic refresh
 
 Once a project's previews have been built, PSF Guard can keep them current on
-its own. Turn on **Rebuild stack previews on their own** under Settings →
+its own. Turn on **Automatically refresh stack previews** under Settings →
 Stacking → Stack previews. It applies to every database on the server and is
 off by default.
 
@@ -757,7 +757,7 @@ server without a registry keeps no journal.
 **Settings → Performance → Processor use** sets how many cores each kind of work
 may use, as a share of the logical cores:
 
-- **Work you wait on**: stack builds you start, quality scans, and previews
+- **Interactive work**: stack builds you start, quality scans, and previews
   being looked at. Default 50%, or the server config's `scan_worker_ratio`.
 - **Background work**: automatic stack refreshes, preview pre-generation, and
   quality backfill. Default 25%, or `background_worker_ratio`.
@@ -768,7 +768,7 @@ a quality backfill in every database and preview pre-generation split the
 background share between them, and a build you start shares the other with
 the previews you look at meanwhile. A job takes what is free when it starts
 and gives it back when it ends. It never waits for workers: one that starts
-while the budget is spent runs on one. Work you wait on also pauses
+while the budget is spent runs on one. Interactive work also pauses
 background work, as before.
 
 The limit covers Seiza's own threads too. Seiza splits debayering,
@@ -839,7 +839,7 @@ Settings → **Storage** → **Disk use** shows every volume the three folders s
 on: how full it is, which folders and databases it holds, and how much of it
 is previews, stacks and masters.
 
-**Most of the volume to use** (90% by default) is the highest share of the
+**Volume usage limit** (90% by default) is the highest share of the
 whole volume, other files included, that may be used, as `df` counts it. It
 applies to all three folders unless **Separate limits for stacks and
 calibration masters** gives those two their own. A volume holding more than

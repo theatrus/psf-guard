@@ -79,14 +79,14 @@ describe('plan page', () => {
     const other = { id: '66666666-6666-4666-8666-666666666666', name: 'M31 on RC51', revision: 1 };
     server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([row(record, { links: [linkOn('c925', 7)] }), row(other, { links: [linkOn('rc51', 3)] })])))));
     mount(true, '/plan?plan=abcd-1');
-    expect(await screen.findByText('Several plans carry this Target Scheduler GUID; pick one.')).toBeInTheDocument();
+    expect(await screen.findByText('Several plans have this Target Scheduler GUID. Choose a plan.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'M31 on RC51' })).toHaveAttribute('href', `/plan?plan=${other.id}`);
   });
 
   it('says so when no plan goes by the name in the address', async () => {
     server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([row()])))));
     mount(true, '/plan?db=old-catalog&plan=nowhere');
-    expect(await screen.findByRole('alert')).toHaveTextContent('No plan goes by that name here.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('No plan found with that name.');
     expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/?db=old-catalog');
   });
 

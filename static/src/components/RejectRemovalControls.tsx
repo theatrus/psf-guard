@@ -55,7 +55,7 @@ function outcomeNotice(status: RejectRemovalStatus): string {
   if (outcome?.emptied) {
     const report = outcome.emptied;
     return `Deleted ${report.files_deleted.toLocaleString()} file${report.files_deleted === 1 ? '' : 's'} (${size(report.bytes)}) from the trash.`
-      + (report.stopped ? ' Stopped there: the rest wait for the next Empty trash.' : '')
+      + (report.stopped ? ' Stopped. Choose Empty trash again to delete the remaining files.' : '')
       + (report.problems.length ? ` ${report.problems[0]}` : '');
   }
   return '';
@@ -194,7 +194,7 @@ export default function RejectRemovalControls({ dbId, canManage }: { dbId: strin
             {!gone && <button type="button" className="browse-button" disabled={busy} aria-label={`Restore the rejects removed ${day(batch.removed_at)}`}
               onClick={() => start.mutate(() => apiClient.restoreRemovedRejects(dbId, batch.batch_id))}>Restore</button>}
             {gone && !purged && <button type="button" className="browse-button" disabled={busy} aria-label={`Purge the rejects removed ${day(batch.removed_at)}`}
-              title="Forget their saved records. A marker stays so they never come back." onClick={() => purge.mutate(batch.batch_id)}>Purge</button>}
+              title="Delete the saved records. PSF Guard keeps a marker to prevent reimporting these frames." onClick={() => purge.mutate(batch.batch_id)}>Purge</button>}
           </li>;
         })}
       </ul>}

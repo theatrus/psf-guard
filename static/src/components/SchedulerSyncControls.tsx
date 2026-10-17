@@ -46,7 +46,7 @@ const calibrationChoiceLine = (result: SchedulerSyncResponse) => {
   if (parts.length === 0) return null;
   return `Calibration choices: ${parts.join(', ')}. ${frames
     ? 'Masters built from these frames change.'
-    : 'The flats these lights take may change.'}`;
+    : 'The flats used to calibrate these lights may change.'}`;
 };
 
 export default function SchedulerSyncControls({
@@ -407,7 +407,7 @@ export default function SchedulerSyncControls({
           )}
           <small>
             Preview expires at {new Date(pending.expiresAt * 1000).toLocaleTimeString()}.
-            Source edits wait for the next preview; destination edits make this one stale.
+            Changes to the source appear in a new preview. Changes to the destination invalidate this preview.
           </small>
           <div className="scheduler-sync-confirm">
             <button className="save-button" onClick={apply} disabled={disabled}>

@@ -119,7 +119,7 @@ test('a flat group links to exactly the lights that take its flats', async ({ pa
   const detail = page.getByTestId('flat-group-detail');
   await expect(page.getByTestId('flat-group-header').getByRole('heading', { level: 2 })).toHaveText(/ · ha · /i);
   const feeds = detail.getByTestId('flat-group-feeds');
-  await expect(feeds.getByTestId('flat-group-lights')).toHaveText('2 lights take its flats.');
+  await expect(feeds.getByTestId('flat-group-lights')).toHaveText('2 lights use this flat group.');
   const link = feeds.getByTestId('flat-group-lights-link');
   await expect(link).toHaveText('M 44: 2 lights');
   await link.click();

@@ -339,7 +339,7 @@ describe('CalibrationPanel', () => {
       kinds: explanation.kinds.map((entry) => (entry.kind === 'flat' ? { ...entry, suspect: [suspectFlat] } : entry)),
     };
     show('/detail/8?db=c925&project=1', flagged, [{ image_id: 8, level: 'check', codes: ['suspect_frames'] }]);
-    expect(await screen.findByText('Suspect frames it takes')).toBeInTheDocument();
+    expect(await screen.findByText('Included frames graded Suspect')).toBeInTheDocument();
     expect(screen.getByTestId('calibration-panel')).toHaveTextContent('Check');
     cleanup();
 
@@ -349,7 +349,7 @@ describe('CalibrationPanel', () => {
     await waitFor(() => expect(heading()).toHaveAccessibleName('Calibration no findings'));
     fireEvent.click(heading());
     expect(await screen.findByText(/calibrates this light with no findings/)).toBeInTheDocument();
-    expect(screen.queryByText('Suspect frames it takes')).toBeNull();
+    expect(screen.queryByText('Included frames graded Suspect')).toBeNull();
     expect(screen.getByTestId('calibration-panel')).not.toHaveTextContent('Check');
   });
 
@@ -370,7 +370,7 @@ describe('CalibrationPanel', () => {
     setDetailSection('calibration', 'closed');
     show('/detail/8?db=c925&project=1', explanation, [thinDark]);
     await waitFor(() =>
-      expect(heading()).toHaveAccessibleName('Calibration Thin dark master · Flats from several nights'));
+      expect(heading()).toHaveAccessibleName('Calibration Dark master has too few frames · Flats from several nights'));
     expect(screen.getByTestId('calibration-panel')).toHaveTextContent('Poor');
     expect(asked).toEqual([]);
   });
@@ -395,7 +395,7 @@ describe('CalibrationPanel', () => {
     fireEvent.click(heading());
     expect(heading()).toHaveAttribute('aria-expanded', 'false');
     view.showImage(10);
-    await waitFor(() => expect(heading()).toHaveAccessibleName(/^Calibration Thin dark master/));
+    await waitFor(() => expect(heading()).toHaveAccessibleName(/^Calibration Dark master has too few frames/));
     expect(heading()).toHaveAttribute('aria-expanded', 'false');
 
     // Opened on a light with no finding, it stays open on the next one.
@@ -445,7 +445,7 @@ describe('CalibrationPanel', () => {
           rig_name: 'Askar 120 · Cam',
           rig_has_settings: true,
           notes: [
-            { key: 'thin_master_frames', label: 'Thin master', value: 4, text: '4 frames', source: 'global' },
+            { key: 'thin_master_frames', label: 'Minimum frames in bias and dark masters', value: 4, text: '4 frames', source: 'global' },
             { key: 'check_mixed_flats', label: 'Flats from several nights', value: 'off', text: 'off', source: 'rig' },
           ],
         },
@@ -456,7 +456,7 @@ describe('CalibrationPanel', () => {
       expect(within(rules).getByText("Checked by Askar 120 · Cam's own settings")).toBeInTheDocument();
       const notes = within(rules).getByRole('list', { name: 'Settings that differ from the defaults' });
       expect(within(notes).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
-        'Thin master4 framesglobal',
+        'Minimum frames in bias and dark masters4 framesglobal',
         'Flats from several nightsoffthis rig',
       ]);
       fireEvent.click(within(rules).getByRole('button', { name: 'Tune checks for Askar 120 · Cam' }));

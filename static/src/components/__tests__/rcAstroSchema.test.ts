@@ -29,7 +29,7 @@ describe('rcAstroProblem', () => {
     expect(rcAstroProblem(steps({ ss: 0.9, sn: 0.9 }), [bxt]))
       .toBe('RC-Astro BlurXTerminator: Sharpen Stars must be between 0 and 0.7');
     expect(rcAstroProblem(steps({ tiles: 2.5 }), [bxt]))
-      .toBe('RC-Astro BlurXTerminator: Tiles takes a whole number');
+      .toBe('RC-Astro BlurXTerminator: Tiles requires a whole number');
   });
 
   it('refuses a cleared field even before the schema loads', () => {

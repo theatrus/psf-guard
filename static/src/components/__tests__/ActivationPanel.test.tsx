@@ -347,7 +347,7 @@ describe('Activation panel', () => {
     const savePlan = vi.fn(async () => true);
     const view = mount(true, { unsavedPlan: true, savePlan });
     const note = await screen.findByRole('note', { name: 'Unsaved changes' });
-    expect(note).toHaveTextContent('Unsaved changes in Plan. Activation writes the saved plan, so save first; the preview follows.');
+    expect(note).toHaveTextContent('Unsaved changes in Plan. Save your changes before activating. PSF Guard then updates the preview.');
     // No preview of a plan about to change, and nothing to activate.
     await new Promise(resolve => setTimeout(resolve, 400));
     expect(previewCount()).toBe(0);

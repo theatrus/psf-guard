@@ -15,13 +15,13 @@ import UnsavedMark from './UnsavedMark';
 type Texts = Record<ScoringField, string>;
 
 const HINTS: Record<ScoringField, string> = {
-  satellite: 'The score hit for a pixel-confirmed trail. At 0% trails neither lower the score nor drive reject recommendations.',
-  pointing: 'The score hit for off-target, pointing-jump and drift evidence, and the solve failures it corroborates.',
-  temporal: 'The score hit when a frame suddenly departs from its neighbours.',
-  hfrRise: 'How hard an HFR above the sequence\'s sharpest frames marks a frame down. 200% makes half the rise cost as much; at 0% it costs nothing. Sudden jumps count under Temporal anomalies.',
-  starLoss: 'How hard fewer stars than the sequence\'s best frames marks a frame down. 200% makes half the loss cost as much; at 0% it costs nothing. Sudden drops count under Temporal anomalies.',
-  hfrRejectAbove: 'Recommend rejecting a frame whose measured HFR is over this. Empty turns it off.',
-  starCountRejectBelow: 'Recommend rejecting a frame with fewer detected stars than this. Empty turns it off.',
+  satellite: 'The score penalty for a pixel-confirmed trail. At 0% trails neither lower the score nor drive reject recommendations.',
+  pointing: 'The score penalty for off-target, pointing-jump and drift evidence, and the solve failures it corroborates.',
+  temporal: 'The score penalty when a frame suddenly departs from its neighbours.',
+  hfrRise: 'Penalty for HFR above the sequence\'s sharpest frames. At 200%, half the HFR increase produces the same penalty. At 0%, this penalty is disabled. Sudden jumps count under Temporal anomalies.',
+  starLoss: 'Penalty for fewer stars than the sequence\'s best frames. At 200%, half the star-count decrease produces the same penalty. At 0%, this penalty is disabled. Sudden drops count under Temporal anomalies.',
+  hfrRejectAbove: 'Recommend rejecting a frame whose measured HFR is over this. Leave blank to disable this limit.',
+  starCountRejectBelow: 'Recommend rejecting a frame with fewer detected stars than this. Leave blank to disable this limit.',
 };
 
 /** The unit shown beside a field; its name is part of the field's. */
@@ -165,8 +165,7 @@ export default function ScoringDefaultsSettings() {
       </p>
       {newerArrived && (
         <p className="scoring-defaults-newer" role="status">
-          Newer defaults were saved elsewhere while you were editing. Saving
-          replaces them with what is here.{' '}
+          Newer defaults were saved elsewhere while you were editing. Saving will replace them with your edits.{' '}
           <button type="button" onClick={() => adopt(defaults)}>
             Show the newer defaults
           </button>

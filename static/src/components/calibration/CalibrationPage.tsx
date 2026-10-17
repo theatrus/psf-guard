@@ -618,7 +618,7 @@ function CalibrationFrames({
     actions.mark.mutate({ frameUuids: sessionFrames.map((frame) => frame.frame_uuid), direction });
   const forgetSession = () => {
     if (!session) return;
-    if (window.confirm(`Forget these ${plural(sessionFrames.length, 'frame')}? Their catalog records and the masters built from them go. The files stay.`)) {
+    if (window.confirm(`Remove the catalog records for these ${plural(sessionFrames.length, 'frame')} and the masters built from them? The source files will remain on disk.`)) {
       actions.forget.mutate(sessionFrames.map((frame) => frame.frame_uuid), {
         onSuccess: () => selectSession(null),
       });

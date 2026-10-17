@@ -50,7 +50,7 @@ describe('Settings › Review › Sequence scoring', () => {
   it('names each field with its unit and describes it with its hint', () => {
     render(<ScoringDefaultsSettings />);
     expect(field(NAMES.satellite)).toHaveAccessibleDescription(
-      /^The score hit for a pixel-confirmed trail\..*Built in: 100%\.$/,
+      /^The score penalty for a pixel-confirmed trail\..*Built in: 100%\.$/,
     );
     expect(field(NAMES.hfr)).toHaveAccessibleDescription(/measured HFR.*Built in: off\.$/);
     expect(field(NAMES.stars)).not.toHaveAttribute('aria-label');

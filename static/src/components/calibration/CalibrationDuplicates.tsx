@@ -344,7 +344,7 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
                 <p className="calibration-muted">
                   {dialog.phase === 'repair'
                     ? 'The plan is checked against the files once more, then the exposures merge in one transaction. Stop rolls the whole repair back.'
-                    : 'Looking at each file the duplicate rows record, and comparing copies that could hold one exposure. Close this and the check goes on; the job line shows it.'}
+                    : 'Checking files linked to duplicate records and comparing possible copies of the same exposure. You can close this dialog; the check continues in the background jobs list.'}
                 </p>
               </>
             ) : dialogStatus?.state === 'stopped' ? (
