@@ -375,6 +375,11 @@ The desktop app and web server provide the same review tools. Start in the
   choose **Show in folder** in the desktop app. Inspect sensor tilt and field
   curvature with 1:1 corner crops and star measurements across a 3×3 grid.
 
+On phones, the header hides as you scroll down and returns when you scroll
+up. Image details have a bottom bar for grading and navigation. Open the
+Images or Sequence toolbar menu for Undo and Redo, or **Options** in Stacks
+for build settings. Side-by-side comparison is hidden from the phone toolbar.
+
 Previews load in the background and preserve your scroll position. Grading
 supports undo and redo. These shortcuts apply where the corresponding tool
 is available:
@@ -1037,8 +1042,12 @@ permissions.
 
 Use **Settings → Backups** for a manual or scheduled archive of settings and
 catalogs. SQLite's online backup supports catalogs that N.I.N.A. is still
-writing. Secrets are excluded unless you choose to include them. Restoration
-is manual; follow the archive's instructions.
+writing. The desktop app suggests `~/Documents/psf-guard/backups` and includes
+secrets by default for manual backups and new schedules. Existing schedules
+keep their saved choice. Browser and CLI backups exclude secrets by default;
+archives with secrets cannot be downloaded. Restoration is manual; follow
+the archive's instructions. The last backup result remains visible after a
+restart.
 
 Image files and generated previews, stacks, and masters are not included.
 Back up original FITS and XISF files separately. See [Backups](docs/BACKUPS.md)
