@@ -82,6 +82,13 @@ function urlDate(date: Date | null): string {
   return instant.endsWith('T00:00:00.000Z') ? instant.slice(0, 10) : instant;
 }
 
+/** Whether the key lands on a control that Enter or Space presses. */
+function pressesFocusedControl(event: KeyboardEvent): boolean {
+  return event.target instanceof Element && event.target.closest(
+    'button, a[href], summary, [role="button"], [role="link"], [role="tab"], [role="switch"], [role="checkbox"]',
+  ) !== null;
+}
+
 export default function GroupedImageGrid({ useLazyImages = false }: GroupedImageGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Get state from URL hooks
@@ -776,6 +783,16 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     () => ({ enabled: isGridRoute, preventDefault: true }),
     [isGridRoute],
   );
+  // Enter and Space press a focused button or link, such as View in the
+  // toolbar; that press is the person's, so the grid stays out of it.
+  const gridPressHotkeyOptions = useMemo(
+    () => ({ enabled: isGridRoute, ignoreEventWhen: pressesFocusedControl }),
+    [isGridRoute],
+  );
+  const gridSpaceHotkeyOptions = useMemo(
+    () => ({ ...gridPressHotkeyOptions, preventDefault: true }),
+    [gridPressHotkeyOptions],
+  );
   // React Router updates the hash before this component rerenders. Opening
   // detail or Compare draws them in the same step (useNavigateNow), but other
   // route changes, such as Back, do not. Guard each callback against the live
@@ -851,7 +868,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   useHotkeys(
     'space',
     () => onLiveGridRoute(toggleCurrentImageSelection),
-    gridArrowHotkeyOptions,
+    gridSpaceHotkeyOptions,
     [toggleCurrentImageSelection, onLiveGridRoute],
   );
   useHotkeys('a,shift+a', (event) => {
@@ -883,7 +900,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
     if (lastSelectedImageId) {
       navigateToDetail(lastSelectedImageId);
     }
-  }, gridHotkeyOptions, [lastSelectedImageId, navigateToDetail, isLiveGridRoute]);
+  }, gridPressHotkeyOptions, [lastSelectedImageId, navigateToDetail, isLiveGridRoute]);
   useHotkeys('escape', () => {
     if (!isLiveGridRoute()) return;
     // Just clear selection on escape (we're already in grid view)

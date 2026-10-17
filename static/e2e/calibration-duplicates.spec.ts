@@ -144,7 +144,8 @@ test('finds exposures recorded twice, previews the repair and applies it', async
 
   await dialog.getByRole('button', { name: 'Apply' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Repaired 5 exposures' })).toBeVisible();
-  await expect(section.getByText('No exposure is recorded more than once.')).toBeVisible();
+  // The repair leaves the plan stale; the check after it runs in the background.
+  await expect(section.getByText('No exposure is recorded more than once.')).toBeVisible({ timeout: 30_000 });
   await shot(page, testInfo, 'after-apply-390');
   await page.setViewportSize({ width: 1440, height: 900 });
   await shot(page, testInfo, 'after-apply-1440');

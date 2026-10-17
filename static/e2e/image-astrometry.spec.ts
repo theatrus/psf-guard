@@ -4,6 +4,7 @@ import {
   resetDatabases,
   waitForCacheReady,
 } from './helpers';
+import { lockedCrateVersion } from './fixtures/astrometry';
 
 let dbId: string;
 let slugCounter = 0;
@@ -129,7 +130,7 @@ test('keeps catalog-only association distinct when a real FITS file has no WCS',
     mode: 'hinted',
     catalog_scope: 'solved_footprint',
     solver_provenance: {
-      seiza_version: '0.33.0',
+      seiza_version: lockedCrateVersion('seiza'),
       detection_backend: 'mtf_u8',
       star_catalog: { format: 'SEIZAST2' },
     },
