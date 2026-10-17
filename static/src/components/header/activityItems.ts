@@ -695,7 +695,7 @@ export interface ActivitySummary {
   /** Work stopped until a person acts. */
   attention: number;
   running: number;
-  /** Automatic work that stepped aside, and held transfers. */
+  /** Automatic work that stepped aside, and paused or retrying transfers. */
   waiting: number;
   /** Jobs in a line a person can reorder, such as builds they asked for. */
   queued: number;
