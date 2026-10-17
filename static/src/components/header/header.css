@@ -159,6 +159,10 @@
   color: var(--state-waiting-fg);
 }
 
+.activity-count[data-job-state='attention'] {
+  color: var(--state-attention-fg);
+}
+
 .activity-count-icon {
   flex: 0 0 auto;
 }
@@ -319,6 +323,13 @@ div.activity-error {
   color: var(--color-text-hint);
 }
 
+.activity-popover-title {
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
 .activity-popover-counts {
   font-weight: 400;
   letter-spacing: 0;
@@ -388,14 +399,18 @@ div.activity-error {
   background: var(--state-waiting-fill);
 }
 
-/* Work that failed or needs a person: the one row the warning colour is
-   for. After the waiting rules, which such a row also matches. */
-.activity-row[data-attention='true'] {
+/* Work stopped until a person acts: the one row the warning colour is
+   for. What it needs wraps rather than clips. */
+.activity-row[data-job-state='attention'] {
   box-shadow: inset 3px 0 0 var(--state-attention-border);
 }
 
-.activity-row[data-attention='true'] .activity-row-state {
+.activity-row[data-job-state='attention'] .activity-row-state {
   color: var(--state-attention-fg);
+}
+
+.activity-row[data-job-state='attention'] .activity-row-detail {
+  white-space: normal;
 }
 
 .activity-row-head {
@@ -440,7 +455,20 @@ div.activity-error {
   gap: 0.25rem;
 }
 
+/* A transfer's controls come in a group of their own; the row lays them
+   out on one line beside the detail. */
+.activity-row-actions .director-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+  margin: 0;
+}
+
 .activity-row-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
   min-width: 1.6rem;
   padding: 0.1rem 0.4rem;
   border: 1px solid var(--color-border-secondary);
@@ -473,7 +501,7 @@ div.activity-error {
   color: var(--color-text-muted);
 }
 
-/* How much is left behind the step under way. */
+/* What else waits behind the step under way. */
 .activity-row-remaining {
   color: var(--color-text-secondary);
 }

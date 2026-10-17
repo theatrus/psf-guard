@@ -1009,9 +1009,20 @@ fn the_status_lists_what_waits_for_the_next_pass() {
     let running = status(path);
     assert_eq!(running.rigs, ["a", "b"]);
     assert_eq!(running.next_pass, ["b"]);
+    // A retry due by now joins the next pass; one due later does not.
+    {
+        let mut queue = job.queue();
+        let now = Instant::now();
+        queue.due.insert("c".into(), now - Duration::from_secs(1));
+        queue.due.insert("d".into(), now + Duration::from_secs(600));
+    }
+    let retrying = status(path);
+    assert_eq!(retrying.next_pass, ["b", "c"]);
+    assert_eq!(retrying.rigs, ["a", "b", "c", "d"]);
     let mut queue = job.queue();
     queue.running = None;
     queue.pending = Scope::default();
+    queue.due.clear();
 }
 
 /// A use/exclude choice through its route queues the frames' rig alone.

@@ -28,7 +28,8 @@ describe('job line colours', () => {
 
   it('keeps the warning colour for work that needs a person', () => {
     expect(values('--state-attention-border')).toEqual(['var(--color-warning)']);
-    expect(header).toMatch(/\.activity-row\[data-attention='true'\]\s*\{[^}]*--state-attention-border/);
+    expect(header).toMatch(/\.activity-row\[data-job-state='attention'\]\s*\{[^}]*--state-attention-border/);
+    expect(header).toMatch(/\.activity-count\[data-job-state='attention'\]\s*\{[^}]*--state-attention-fg/);
     // Waiting rows read the waiting tokens only.
     const waiting = Array.from(header.matchAll(/\[data-job-state='waiting'\][^{]*\{([^}]*)\}/g), (m) => m[1]).join('\n');
     expect(waiting).not.toMatch(/warning|attention/);

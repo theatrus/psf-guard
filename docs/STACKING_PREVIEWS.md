@@ -288,15 +288,18 @@ day.
 A build belongs to the server, not to the page that started it. The header's
 background jobs chip counts it for as long as any mono or color build, or
 processing run, is queued or running, in every view and in every database. The chip shows only
-the overall progress and three counts, each an icon: running, queued (in a
-line you can reorder) and waiting (automatic work stepped aside for yours).
-Hover, focus or click it to open the queue. It lists the work you started
-under **Started by you** and the rest under **Automatic**, each heading with
-its counts, and in each running work first, then the lines in order, then
-waiting work. Each build shows its target and channel, how far it has got and
-how many frames are left, and waiting builds say `queued` with their place in
-line. Waiting automatic work is drawn muted, since it is normal; only a row
-that needs you, such as a transfer to review, takes the warning colour.
+the overall progress and a count for each kind of job, each an icon:
+running, queued (in a line you can reorder), waiting (automatic work stepped
+aside for yours) and needs attention. Hover, focus or click it to open the
+queue. It lists the work you started under **Started by you** and the rest
+under **Automatic**, each heading with its counts; in each, rows that need
+you come first, then running work, then queued builds, then waiting work.
+Each build shows its target and channel and how far it has got. The build
+line is one line for both headings, since an automatic refresh's build can
+wait ahead of yours, so a waiting build says its place in the whole line
+and how many are ahead of it, as `queued · 4 · 3 ahead`. Waiting automatic
+work is drawn muted, since it is normal; only a row that needs you, such as
+a transfer to review, takes the warning colour.
 Catalog refreshes,
 quality scans and WBPP runs share the same chip. Click what a row works on to
 go there: a build or WBPP run opens its target's stacks, a quality scan the

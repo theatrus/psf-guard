@@ -9,9 +9,11 @@ describe('Transfers activity', () => {
   it('reports byte progress and keeps source scope', () => {
     expect(transferItem(job)).toMatchObject({ kind: 'transfer', title: 'Transfers', scope: 'redcat · M31', percent: 30, status: 'running', stateLabel: 'Uploading' });
   });
-  it.each(['paused', 'review', 'retry', 'needs_review'] as const)('does not spin or average a %s job into running progress', state => {
+  it.each([
+    ['paused', 'waiting'], ['retry', 'waiting'], ['review', 'attention'], ['needs_review', 'attention'],
+  ] as const)('does not spin or average a %s job into running progress', (state, status) => {
     const item = transferItem({ ...job, state });
-    expect(item.status).toBe('waiting'); expect(item.percent).toBeNull();
+    expect(item.status).toBe(status); expect(item.percent).toBeNull();
     expect(summarize([item]).percent).toBeNull();
   });
   it('keeps unfinished transfers visible, not completed history', () => {

@@ -71,7 +71,8 @@ pub struct Progress<'a> {
     pub stage: &'a str,
     pub done: usize,
     pub total: usize,
-    /// Rigs this pass works on after this one.
+    /// Rigs this pass checks after this one. Whether each has work is
+    /// known only once the pass reaches it.
     pub rigs_after: usize,
 }
 

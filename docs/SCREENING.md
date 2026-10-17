@@ -283,8 +283,8 @@ scan while you move between views, in every database; hover or click it for
 the frame and solve progress. A database-wide analysis, or the analysis of
 new frames, steps aside while you work: while a scan, build or plate solve
 you started runs, the chip lists it as **waiting** under **Automatic**,
-with what it waits for, how far it had got and how many targets are left,
-and it goes on when your work ends. A scan you
+with what it waits for and how far it had got, and it goes on when your
+work ends. A scan you
 start on the same database is listed above the analysis, which waits for
 it. A scan whose frames failed leaves a note there,
 with a link to the target's sequence, until you dismiss it; with nothing else

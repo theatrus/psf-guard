@@ -103,10 +103,11 @@ pub struct FlatMeasureStatus {
     pub total: usize,
     /// Rigs whose work waits or runs; `*` for every rig.
     pub rigs: Vec<String>,
-    /// Rigs the running pass measures after this one.
+    /// Rigs the running pass checks after this one; some may turn out to
+    /// have nothing to measure.
     pub rigs_after: usize,
-    /// While a pass runs, the rigs asked for since it began, or due a
-    /// retry, which the next pass takes; `*` for every rig.
+    /// While a pass runs, the rigs asked for since it began, or whose retry
+    /// is due by now, which the next pass takes; `*` for every rig.
     pub next_pass: Vec<String>,
     /// Rigs Stop paused.
     pub stopped: Vec<String>,
@@ -334,15 +335,22 @@ pub fn status(path: &str) -> FlatMeasureStatus {
     let job = job(path);
     let queue = job.queue();
     let mut status = job.status.read().unwrap_or_else(|p| p.into_inner()).clone();
+    // What the next pass takes: requests since this one began, and retries
+    // due by now. A retry not yet due waits for its time, not this pass.
+    let now = Instant::now();
+    let mut next = queue.pending.clone();
+    for (key, _) in queue.due.iter().filter(|(_, at)| **at <= now) {
+        next.merge(scope_of(key));
+    }
+    status.next_pass = if queue.running.is_some() {
+        rig_list(&next)
+    } else {
+        Vec::new()
+    };
     let mut waiting = queue.pending.clone();
     for key in queue.due.keys() {
         waiting.merge(scope_of(key));
     }
-    status.next_pass = if queue.running.is_some() {
-        rig_list(&waiting)
-    } else {
-        Vec::new()
-    };
     if let Some(running) = &queue.running {
         waiting.merge(running.clone());
     }
