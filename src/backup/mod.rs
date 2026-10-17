@@ -727,16 +727,49 @@ pub fn write(
     })
 }
 
+/// `~/Documents/psf-guard/backups`: the folder Settings suggests. It is on
+/// the home disk, so it is made whole whenever it is missing.
+pub fn default_destination() -> Option<PathBuf> {
+    dirs::document_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join("Documents")))
+        .map(|documents| documents.join("psf-guard").join("backups"))
+}
+
+/// Make `folder` and any folders above it when it is the suggested one.
+/// Returns whether it was.
+pub fn make_default_destination(folder: &Path) -> Result<bool> {
+    make_if_default(folder, default_destination().as_deref())
+}
+
+fn make_if_default(folder: &Path, default: Option<&Path>) -> Result<bool> {
+    if default != Some(folder) {
+        return Ok(false);
+    }
+    std::fs::create_dir_all(folder).with_context(|| format!("creating {}", folder.display()))?;
+    Ok(true)
+}
+
 /// Make sure the destination folder is there without creating a mount
 /// point. Only the last folder is created, and a scheduled run creates
 /// none: an unmounted disk then fails the run instead of filling the system
-/// disk.
+/// disk. The suggested folder, on the home disk, is made whole either way.
 fn prepare_destination(destination: &Path, trigger: Trigger) -> Result<()> {
+    prepare_destination_with(destination, trigger, default_destination().as_deref())
+}
+
+fn prepare_destination_with(
+    destination: &Path,
+    trigger: Trigger,
+    default: Option<&Path>,
+) -> Result<()> {
     if destination.is_dir() {
         return Ok(());
     }
     if destination.exists() {
         anyhow::bail!("{} is not a folder", destination.display());
+    }
+    if make_if_default(destination, default)? {
+        return Ok(());
     }
     let parent_exists = destination
         .parent()
