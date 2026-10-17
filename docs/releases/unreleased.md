@@ -4,6 +4,11 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Stacks of frames rotated slightly between nights no longer show
+  cross-hatched bands across a faint sky. The SNR a stack reports on a
+  faint sky is lower than before, often by about a tenth, because it now
+  measures the sky's real noise; the old resampling smoothed that noise
+  and lost no signal doing so. Stacks made before rebuild once.
 - The background jobs chip counts queued work and work that needs you,
   beside running and waiting, as a small icon each. Its list splits into
   **Started by you** and **Automatic**, each with its counts: what needs

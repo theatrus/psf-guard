@@ -134,7 +134,9 @@ chosen. Any single choice can also be changed on its own.
   distortion, which turns against the sky after a meridian flip. A frame with
   too few paired stars keeps the similarity.
 - **Resampling.** Lanczos-3 gives sharper stars and clamps the negative lobes
-  where they would ring. Bilinear is faster.
+  where they would ring, at edges that stand above the noise. Faint sky is
+  left unclamped, so frames rotated slightly against each other leave no
+  cross-hatch, and the stack's noise is the sky's own. Bilinear is faster.
 - **Bayer drizzle.** Each registered pixel takes only the nearest photosite, in
   its own color, so nothing is interpolated. Each channel then sees a third to
   a quarter of the samples. It pays only when frames are dithered by several
