@@ -141,9 +141,12 @@ pub struct BackupManager {
     director_meta: RwLock<Option<PathBuf>>,
     /// Pause between SQLite steps; tests slow it down.
     step_pause: RwLock<Option<Duration>>,
-    /// Where a stopped or failed scheduled run is remembered across
-    /// restarts, beside the registry.
+    /// Where a stopped or failed scheduled run, and the last run, are
+    /// remembered across restarts, beside the registry.
     state_path: RwLock<Option<PathBuf>>,
+    /// Held from the change to the rename, so the file ends with the newest
+    /// state and two saves never share the temporary file.
+    saving: Mutex<()>,
 }
 
 /// What the backups keep across restarts: a stopped run waits for its
@@ -198,6 +201,10 @@ impl BackupManager {
 
     /// Change what the backups remember, and save it.
     fn remember(&self, change: impl FnOnce(&mut Inner)) {
+        let _saving = self
+            .saving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let saved = {
             let mut inner = self
                 .inner
