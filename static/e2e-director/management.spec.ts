@@ -12,7 +12,7 @@ test('plans without a database survive reload, conflicts, and narrow viewports i
   // With no database the Library offers to add one; Settings opens once by itself.
   const settings = page.locator('.tauri-settings');
   await expect(settings).toBeVisible();
-  await settings.getByRole('button', { name: '×' }).click();
+  await settings.getByRole('button', { name: 'Close settings' }).click();
   await expect(settings).toHaveCount(0);
   await page.waitForTimeout(1500);
   await expect(settings).toHaveCount(0);
@@ -39,7 +39,7 @@ test('plans without a database survive reload, conflicts, and narrow viewports i
   await expect(page.getByText('Renamed Andromeda survey.')).toBeVisible();
 
   await page.reload();
-  await page.locator('.tauri-settings').getByRole('button', { name: '×' }).click();
+  await page.locator('.tauri-settings').getByRole('button', { name: 'Close settings' }).click();
   // Other specs in this run leave plans behind, so read this plan's own row.
   const survey = plans.getByTestId('plan-row').filter({ hasText: 'Andromeda survey' });
   await expect(survey).toHaveCount(1);
