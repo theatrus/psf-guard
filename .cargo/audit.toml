@@ -1,0 +1,19 @@
+# cargo-audit configuration. CI runs `cargo audit` in
+# .github/workflows/security-audit.yml.
+
+[advisories]
+# zip 4.6.1 archive extraction: symlink targets outside the destination,
+# permissions applied through symlinks, and SUID/SGID bits kept.
+#
+# psf-guard itself uses zip 9. zip 4 comes only from tauri-plugin-updater
+# 2.14.0, on Windows, where it unpacks a downloaded update. Upstream moved
+# the updater to zip 9 in tauri-apps/plugins-workspace#3698; it ships in
+# tauri-plugin-updater 2.14.1.
+#
+# Remove these three lines once `cargo update -p tauri-plugin-updater`
+# reaches 2.14.1 or later and zip 4 is gone from Cargo.lock.
+ignore = [
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]
