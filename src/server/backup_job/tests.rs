@@ -756,6 +756,26 @@ fn a_stopped_or_failed_run_is_remembered_across_a_restart() {
         next > Utc::now().timestamp(),
         "the stopped run would start again at once"
     );
+    // Settings still says how the last backup went.
+    let last = restarted
+        .last_run()
+        .expect("the last run survives a restart");
+    assert_eq!(last.outcome, Outcome::Stopped);
+    assert_eq!(last.trigger, Trigger::Schedule);
+}
+
+#[test]
+fn the_last_backup_is_remembered_across_a_restart() {
+    let fixture = fixture(1);
+    fixture.state.backups.load_state(&fixture.registry);
+    let folder = fixture.root.join("now");
+    start(&fixture.state, manual(BackupScope::Meta, Some(folder))).unwrap();
+    let finished = wait_for_the_run(&fixture.state);
+    assert_eq!(finished.outcome, Outcome::Succeeded);
+    let restarted = BackupManager::default();
+    assert!(restarted.last_run().is_none());
+    restarted.load_state(&fixture.registry);
+    assert_eq!(restarted.last_run(), Some(finished));
 }
 
 #[test]

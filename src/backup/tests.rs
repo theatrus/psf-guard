@@ -557,6 +557,24 @@ fn a_folder_on_a_missing_mount_is_not_created() {
     .is_err());
 }
 
+/// The suggested `~/Documents/psf-guard/backups` is on the home disk, so
+/// any run makes it whole; another missing folder keeps the rule above.
+#[test]
+fn the_suggested_folder_is_made_whole() {
+    let setup = setup();
+    let suggested = setup
+        .root
+        .join("Documents")
+        .join("psf-guard")
+        .join("backups");
+    prepare_destination_with(&suggested, Trigger::Schedule, Some(&suggested)).unwrap();
+    assert!(suggested.is_dir());
+    let other = setup.root.join("Elsewhere").join("backups");
+    assert!(prepare_destination_with(&other, Trigger::Manual, Some(&suggested)).is_err());
+    assert!(!other.exists());
+    assert!(default_destination().is_some_and(|folder| folder.ends_with("psf-guard/backups")));
+}
+
 /// Two installs (the desktop app and a server, or two registries)
 /// scheduled into one NAS folder must not prune each other's backups: the
 /// manifest says which install made each.
