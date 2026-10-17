@@ -115,3 +115,29 @@ button:focus-visible {
   color: var(--color-input-disabled-text);
   cursor: not-allowed;
 }
+
+/* Native select arrows can sit against the border despite padding. Draw
+   an inset arrow and reserve its space, while keeping the native menu and
+   keyboard controls. Component background/padding shorthands must not
+   erase it, so only the arrow and its reserved space use !important.
+   List boxes and toolbar pills already have their own presentation. */
+select:not([multiple]):is(:not([size]), [size='0'], [size='1']):not(.toolbar-pill-select select) {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 2rem !important;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%) !important;
+  background-position: right 1rem center, right 0.7rem center !important;
+  background-size: 0.3rem 0.3rem !important;
+  background-repeat: no-repeat !important;
+}
+
+/* Let the system draw the arrow in high-contrast modes. */
+@media (forced-colors: active) {
+  select:not([multiple]):is(:not([size]), [size='0'], [size='1']):not(.toolbar-pill-select select) {
+    appearance: auto;
+    -webkit-appearance: auto;
+    background-image: none !important;
+  }
+}

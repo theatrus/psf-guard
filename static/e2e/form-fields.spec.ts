@@ -112,3 +112,57 @@ for (const width of [1280, 390]) {
     await page.screenshot({ path: testInfo.outputPath(`backups-${width}.png`) });
   });
 }
+
+for (const width of [1280, 390]) {
+  test(`dropdown arrows have room inside the border at ${width}px`, async ({ page, browserName }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await openSettings(page);
+    await page.getByRole('tab', { name: 'Calibration', exact: true }).click();
+    const preference = page.getByLabel('Dark selection preference', { exact: true });
+    await expect(preference).toBeVisible();
+    await preference.scrollIntoViewIfNeeded();
+
+    // Settings override the base field's padding and background, but must
+    // still leave room for the arrow and keep it inside the border.
+    const geometry = await preference.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        appearance: style.appearance,
+        image: style.backgroundImage,
+        insets: style.backgroundPositionX.split(',').map((position) =>
+          Number(/calc\(100% - ([\d.]+)px\)/.exec(position)?.[1] ?? NaN),
+        ),
+        repeat: style.backgroundRepeat,
+        padding: parseFloat(style.paddingRight),
+        sizes: style.backgroundSize.split(',').map((size) => parseFloat(size)),
+      };
+    });
+    expect(geometry.appearance).toBe('none');
+    expect(geometry.image).toContain('linear-gradient');
+    expect(geometry.repeat.split(',').map((repeat) => repeat.trim())).toEqual(
+      expect.arrayContaining(['no-repeat']),
+    );
+    expect(geometry.repeat.split(',').every((repeat) => repeat.trim() === 'no-repeat')).toBe(true);
+    expect(geometry.insets).toHaveLength(2);
+    for (const [index, inset] of geometry.insets.entries()) {
+      expect(inset).toBeGreaterThanOrEqual(8);
+      expect(inset + geometry.sizes[index % geometry.sizes.length] + 4).toBeLessThanOrEqual(geometry.padding);
+    }
+
+    const options = await preference.locator('option').evaluateAll((items) =>
+      items.map((item) => (item as HTMLOptionElement).value),
+    );
+    await preference.selectOption(options[1]);
+    await expect(preference).toHaveValue(options[1]);
+    await preference.focus();
+    await expect(preference).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath(`dropdown-${width}.png`) });
+
+    if (browserName === 'chromium') {
+      await page.emulateMedia({ forcedColors: 'active' });
+      await expect(preference).toHaveCSS('appearance', 'auto');
+      await expect(preference).toHaveCSS('background-image', 'none');
+    }
+  });
+}

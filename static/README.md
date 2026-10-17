@@ -120,6 +120,9 @@ browser uses for its own parts of a control: spinners, date pickers, a
 select's menu and scrollbars. A theme added later sets its own
 `color-scheme` and input tokens beside its other tokens;
 `src/__tests__/formFields.test.ts` checks that every theme does.
+Dropdowns use a shared inset arrow in `src/index.css`, with space reserved
+for it. Native menus and keyboard controls still work. List boxes and
+toolbar pills keep their own styles; forced-colors mode uses the system arrow.
 
 Write attribute selectors with single quotes, as in `[aria-pressed='true']`.
 `src/components/toolbar/toolbar.css` shows the pattern: its states come from
