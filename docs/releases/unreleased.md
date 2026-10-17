@@ -752,3 +752,7 @@
   Sessions and Groups.
 - Forgetting a calibration frame now always shows the next one, not
   sometimes the first.
+- Backups suggest `~/Documents/psf-guard/backups` and create it when it is
+  missing. In the desktop app they include secrets unless you untick
+  **Include secrets**. Settings › Backups still shows how the last backup
+  went after PSF Guard restarts.
