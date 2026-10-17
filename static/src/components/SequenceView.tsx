@@ -58,6 +58,8 @@ import ImageOrderToggle from './toolbar/ImageOrderToggle';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
 import { CalendarRange, ScanSearch, X } from 'lucide-react';
+import { SequenceIssueList, SequenceIssuePills } from './SequenceIssues';
+import { sequenceIssues, type SequenceIssue } from '../utils/sequenceIssues';
 import { GradingStatus } from '../api/types';
 import type { CalibrationLightMark, Image, ScoredSequence, ImageQualityResult } from '../api/types';
 import {
@@ -397,6 +399,18 @@ export default function SequenceView() {
     () => activeSequence ? inImageOrder(activeSequence.images, order) : [],
     [activeSequence, order],
   );
+  // The suspect pills, each opening a list of its frames. A list belongs
+  // to the view it was opened in.
+  const issues = useMemo(() => sequenceIssues(orderedImages), [orderedImages]);
+  const [openIssueState, setOpenIssueState] = useState<{ view: string; key: SequenceIssue['key'] } | null>(null);
+  const openIssue = issues.find(issue =>
+    issue.key === openIssueState?.key && openIssueState.view === activeChoice?.key,
+  ) ?? null;
+  const toggleIssue = useCallback((key: SequenceIssue['key']) => {
+    setOpenIssueState(current => current?.key === key && current.view === activeChoice?.key
+      ? null
+      : { view: activeChoice?.key ?? '', key });
+  }, [activeChoice?.key]);
   const activeScoreScope: QualityScoreScope = activeChoice?.scoreScope ?? 'capture_sequence';
   // The cutoff in the measure chosen: each frame's reading, the slider's
   // travel over the readings on screen, and the frames past the cutoff,
@@ -806,6 +820,14 @@ export default function SequenceView() {
     setCurrentImageId(nextImageId);
   }, [orderedImages, setCurrentImageId]);
 
+  // From an issue's list: the cursor moves to the frame, which scrolls
+  // into view; the selection stays as it is.
+  const goToImage = useCallback((imageId: number) => {
+    touchedRef.current = true;
+    activeImageIdRef.current = imageId;
+    setCurrentImageId(imageId);
+  }, [setCurrentImageId]);
+
   const sequenceHotkeyOptions = useMemo(() => ({
     enabled: !!activeSequence && !isAnalyzing && !showRejectReview,
     preventDefault: true,
@@ -1145,24 +1167,17 @@ export default function SequenceView() {
                     }`
                     : 'Session comparison · one capture run'}
                 </div>
-                <div className="summary-issues">
-                  {activeSequence.summary.cloud_events_detected > 0 && (
-                    <span className="issue-badge clouds">{activeSequence.summary.cloud_events_detected} cloud events</span>
-                  )}
-                  {activeSequence.summary.focus_drift_detected && (
-                    <span className="issue-badge focus">Focus drift</span>
-                  )}
-                  {activeSequence.summary.tracking_issues_detected && (
-                    <span className="issue-badge tracking">Tracking issues</span>
-                  )}
-                  {activeSequence.summary.out_of_target_count > 0 && (
-                    <span className="issue-badge tracking">{activeSequence.summary.out_of_target_count} off target</span>
-                  )}
-                  {activeSequence.summary.plate_solve_failed_count > 0 && (
-                    <span className="issue-badge clouds">{activeSequence.summary.plate_solve_failed_count} unsolved</span>
-                  )}
-                </div>
+                <SequenceIssuePills issues={issues} open={openIssue?.key ?? null} onToggle={toggleIssue} />
               </div>
+              {openIssue && (
+                <SequenceIssueList
+                  issue={openIssue}
+                  imageMap={imageMap}
+                  currentImageId={activeImageId}
+                  onGo={goToImage}
+                  onClose={() => setOpenIssueState(null)}
+                />
+              )}
 
               {/* Timeline chart */}
               <SequenceTimeline

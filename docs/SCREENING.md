@@ -295,6 +295,12 @@ scatter, a session view, and an all-session stack comparison for each filter.
 In its score chart, a dot under each bar shows the frame's grade: green for
 accepted, red for rejected, faint grey for pending. The dots follow grading,
 undo and redo.
+Each suspect pill in its summary (cloud events, focus drift, tracking
+issues, off target and unsolved) opens a list of the frames it counts, in
+the strip's order, with each frame's time and score. A click on one moves
+the cursor to that frame and scrolls it into view; the selection stays as it
+is. A click on the pill again closes the list. Each filter's **All sessions**
+tab leads its row of session tabs and is marked in its own colour.
 When analysis finds a cause, the same reason and supporting evidence appear on
 the Sequence card, the matching Grid card, and the image detail panel.
 For a localized finding, image detail also offers **Show affected regions**.

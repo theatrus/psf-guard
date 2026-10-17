@@ -17,6 +17,9 @@
 - In Sequence, a **Select** rule stays on after you reject its frames, with
   nothing selected. A rule no longer picks frames already rejected, so its
   counts show what is left to reject.
+- In Sequence, the suspect pills (cloud events, focus drift, tracking
+  issues, off target, unsolved) each open a list of their frames. A click
+  on one goes to that frame in the strip, without changing the selection.
 - A click anywhere on a toolbar pill with a list, such as **Select**, **Type**
   or **Rig**, now opens its list, including on its name or chevron.
 - Stacks of frames rotated slightly between nights no longer show

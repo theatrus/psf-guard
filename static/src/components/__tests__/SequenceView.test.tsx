@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -589,6 +589,37 @@ describe('SequenceView: quality display', () => {
     await waitFor(() => {
       expect(screen.getByText(/cloud event/i)).toBeInTheDocument();
     });
+  });
+
+  it("lists a suspect pill's frames and goes to one without changing the selection", async () => {
+    server.use(
+      http.get('/api/db/:dbId/analysis/sequence', () => HttpResponse.json(cloudsFixture)),
+      http.get('/api/db/:dbId/projects/:projectId/targets', () =>
+        HttpResponse.json({ success: true, data: mockTargets, error: null, status: 'ready' })),
+      http.get('/api/db/:dbId/images', () =>
+        HttpResponse.json({ success: true, data: mockImages, error: null, status: 'ready' })),
+    );
+    const user = userEvent.setup();
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    const pill = await screen.findByRole('button', { name: '2 cloud events' });
+    expect(pill).toHaveAttribute('aria-expanded', 'false');
+    await user.click(pill);
+    expect(pill).toHaveAttribute('aria-expanded', 'true');
+    const list = screen.getByRole('region', { name: 'Likely clouds' });
+    expect(list).toHaveTextContent('2 frames');
+    const frames = within(list).getAllByRole('button').filter(button => button.classList.contains('sequence-issue-frame'));
+    expect(frames).toHaveLength(2);
+
+    await user.click(frames[1]);
+    await waitFor(() => expect(document.querySelector('[data-card-image-id="105"]')!.closest('.sequence-image-card'))
+      .toHaveClass('current-selection'));
+    expect(frames[1]).toHaveAttribute('aria-current', 'true');
+    expect(document.querySelectorAll('.sequence-image-card.selected')).toHaveLength(0);
+
+    // The pill closes its list again.
+    await user.click(pill);
+    expect(screen.queryByRole('region', { name: 'Likely clouds' })).not.toBeInTheDocument();
   });
 
   it('shows category labels on cloud-affected images', async () => {
