@@ -892,7 +892,7 @@ pub fn describe_family(family: &FlatFamily) -> Option<String> {
     let basis = match &family.basis {
         FamilyBasis::Angle => family.label.contains(" & ").then(|| {
             format!(
-                "Flats of the {} family, whose flats at those angles measure alike ({angle})",
+                "Flats from the {} family: measured responses match across these angles ({angle})",
                 family.label
             )
         }),
@@ -902,8 +902,8 @@ pub fn describe_family(family: &FlatFamily) -> Option<String> {
             moved: false,
             ..
         } => Some(format!(
-            "Chosen by its own pixels: its imaging session's lights ({}) follow the flats of \
-             the {} family, at its recorded angle, rather than {others} ({angle})",
+            "Selected based on pixel analysis: lights from this imaging session ({}) match \
+             the {} flat family at the recorded angle, rather than {others} ({angle})",
             of_targets(*lights, targets),
             family.label
         )),
@@ -913,26 +913,26 @@ pub fn describe_family(family: &FlatFamily) -> Option<String> {
             corroborated,
             ..
         } => Some(format!(
-            "Chosen by its own pixels, and {} agree: its imaging session's lights ({}) follow \
-             the flats of the {} family rather than {others} ({angle})",
-            corroborated.as_deref().unwrap_or("its other evidence"),
+            "Reassigned based on pixel analysis, confirmed by {}: lights from this imaging \
+             session ({}) match the {} flat family rather than {others} ({angle})",
+            corroborated.as_deref().unwrap_or("other evidence"),
             of_targets(*lights, targets),
             family.label
         )),
         FamilyBasis::Nearest { undecided } => Some(format!(
-            "Flats of the {} family, at its recorded angle: {others} could stand in within \
-             {:.0}° of its angle, and {} ({angle})",
+            "Using the {} flat family at the recorded angle. Other candidates within {:.0}°: \
+             {others}. {} ({angle})",
             family.label,
             lights::ANGLE_PRIOR_DEG,
             if *undecided {
-                "its imaging session's lights could not tell them apart"
+                "Pixel analysis of this imaging session could not distinguish the candidate families"
             } else {
-                "its lights have not been read to tell them apart yet"
+                "Pixel analysis of this imaging session has not run yet"
             }
         )),
         FamilyBasis::Disputed { .. } => describe_family_flag(family),
         FamilyBasis::Person => Some(format!(
-            "Chosen by you: flats of the {} family ({angle})",
+            "Selected by you: flats from the {} family ({angle})",
             family.label
         )),
     };
@@ -943,14 +943,12 @@ pub fn describe_family(family: &FlatFamily) -> Option<String> {
     }
 }
 
-/// Why a light's flats at another angle serve it through its family's
-/// measured angle term: "Flats at 104.0°: this family's flats at 101.9–102.2°
-/// and 104.2° measure alike (4 pairs over 4 nights), so the stack reads the
-/// light at 104.0°".
+/// Explain why measured responses allow flats at another angle and state
+/// the matching angle used for stack calibration.
 pub fn describe_alike_range(range: &AlikeRangeNote) -> String {
     format!(
-        "Flats at {:.1}°: this family's flats at {} measure alike ({} pairs over {} nights{}), \
-         so the stack reads the light at {:.1}°",
+        "Using flats at {:.1}°: measured responses match across {} ({} pairs over {} nights{}). \
+         Stack calibration uses {:.1}° as the matching angle for this light",
         range.flats_angle,
         range.label,
         range.pairs,
@@ -976,16 +974,16 @@ pub fn describe_family_flag(family: &FlatFamily) -> Option<String> {
     };
     let kept = if family.at_recorded {
         format!(
-            "it keeps the flats of the {} family, at its recorded angle",
+            "PSF Guard retains the {} flat family at the recorded angle",
             family.label
         )
     } else {
-        "it keeps the flats matched by its recorded angle".to_string()
+        "PSF Guard retains the flats matched by the recorded angle".to_string()
     };
     Some(format!(
-        "Its imaging session's lights ({}) follow the flats of the {} family, at another \
-         angle than the {:.1}° it recorded, but neither its other filters nor the rotator's \
-         epochs confirm the move: {kept}",
+        "Pixel analysis of this imaging session ({}) suggests the {} flat family, at a different \
+         angle from the recorded {:.1}°. Neither analysis of other filters nor the rotator's \
+         epochs confirm this reassignment. {kept}",
         of_targets(*lights, targets),
         family.pointed.as_deref().unwrap_or("another"),
         family.light_angle
@@ -1085,8 +1083,9 @@ pub fn describe_flag(basis: &FlatBasis, rules: &super::Rules) -> Option<String> 
                 _ => String::new(),
             };
             Some(format!(
-                "Shot during a measured change: {}, between {} and {}, {}. Nothing tells which \
-                 side it is on{pixels}, so its flats may not match",
+                "Captured during the interval of a measured change: {}, between {} and {}, {}. \
+                 Evidence does not establish whether this light was captured before or after \
+                 the change{pixels}, so its flats may not match",
                 describe_event(event, rules),
                 when(event.start),
                 when(event.end),
@@ -1099,10 +1098,10 @@ pub fn describe_flag(basis: &FlatBasis, rules: &super::Rules) -> Option<String> 
                 _ => "after",
             };
             Some(format!(
-                "No flats from {side} the change at its angle: {}, between {} and {}. Its \
-                 flats are from the other side and may not match. Retake flats at this angle, \
-                 or let flats from another angle stand in once this rig's flats are measured \
-                 alike across angles",
+                "No flats from {side} the change at this light's angle: {}, between {} and {}. \
+                 The selected flats are from the other side of the change and may not match. \
+                 Retake flats at this angle. Flats from another angle can be used once \
+                 measurements show matching responses across those angles",
                 describe_event(event, rules),
                 day(event.start),
                 day(event.end)
@@ -1117,7 +1116,7 @@ pub fn describe_flag(basis: &FlatBasis, rules: &super::Rules) -> Option<String> 
 pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String> {
     let placed = |placement: &Placement| match placement {
         Placement::Time { side } => format!(
-            "shot {} the change by its time",
+            "the capture time places this light {} the change",
             if *side == Side::Before {
                 "before"
             } else {
@@ -1125,14 +1124,14 @@ pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String>
             }
         ),
         Placement::Session { side, start, end } => format!(
-            "its imaging session ({} to {}) {} the change's window, and a change does not \
-             land inside one session",
+            "the imaging session ({} to {}) {} the change interval; \
+             PSF Guard treats each continuous session as being on one side of the change",
             when(*start),
             when(*end),
             if *side == Side::Before {
                 "began before"
             } else {
-                "ran past"
+                "ended after"
             }
         ),
         Placement::Pixels {
@@ -1141,16 +1140,21 @@ pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String>
             filters,
             lights,
         } => format!(
-            "its session's own lights ({lights} of {} in {}) {} the change",
+            "pixel analysis of this imaging session ({lights} lights of {} in {}) \
+             {} the measured change",
             targets.join(", "),
             filters.join(", "),
             if *side == Side::Before {
-                "lack"
+                "does not show"
             } else {
-                "carry"
+                "shows"
             }
         ),
-        Placement::Undetermined { .. } => "nothing tells which side it is on".into(),
+        Placement::Undetermined { .. } => {
+            "evidence does not establish whether this light was captured \
+             before or after the change"
+                .into()
+        }
         Placement::Person { side } => format!(
             "chosen by you: {} the change",
             if *side == Side::Before {
@@ -1163,7 +1167,7 @@ pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String>
     match basis {
         FlatBasis::Nearest => None,
         FlatBasis::Group { group } => Some(format!(
-            "Chosen by you: flats of the group {}, whatever the measured changes say",
+            "Selected by you: flat group {}, overriding the selection based on measured changes",
             group.label()
         )),
         FlatBasis::SameSide {
@@ -1171,8 +1175,8 @@ pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String>
             placement,
             left_out,
         } => Some(format!(
-            "Flats from its side of a measured change ({}): {}. {left_out} matching flat(s) \
-             from the other side left out",
+            "Using flats from the same side of the measured change as this light ({}): {}. \
+             Excluded {left_out} matching flat(s) from the other side of the change",
             describe_event(event, rules),
             placed(placement)
         )),
@@ -1183,9 +1187,9 @@ pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String>
             angle_term,
             ..
         } => Some(format!(
-            "No flats from its side of a measured change ({}) at its angle: {}. Flats from \
-             its side at {} stand in; this rig's flats differ by at most {:.1}% broad and \
-             {:.1}% dust between angles",
+            "No flats at this light's angle from the same side of the measured change ({}): {}. \
+             Using flats from the same side at {}; measured differences between angles \
+             are at most {:.1}% in light pattern and {:.1}% in dust",
             describe_event(event, rules),
             placed(placement),
             rotation.map_or_else(|| "another angle".to_string(), |r| format!("{r:.1}°")),
@@ -1195,9 +1199,9 @@ pub fn describe_basis(basis: &FlatBasis, rules: &super::Rules) -> Option<String>
         FlatBasis::Corrected {
             event, placement, ..
         } => Some(format!(
-            "No flats from its side of a measured change ({}) at any angle that may stand in: \
-             {}. Its flats at its angle, from the other side, are carried across with the \
-             change's map",
+            "No suitable flats from the same side of the measured change as this light ({}), \
+             including at other angles: {}. Using flats at this light's angle from the other \
+             side, corrected with the measured change map",
             describe_event(event, rules),
             placed(placement)
         )),

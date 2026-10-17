@@ -145,7 +145,7 @@ export default function CalibrationMasterList({
                   {[master.rig_name, `built ${serverTime(master.created_at)}`].filter(Boolean).join(' · ')}
                 </p>
                 <div className="calibration-badges">
-                  {master.thin && <span className="calibration-badge calibration-badge-poor" title="Fewer frames than a master needs; its noise goes into every light">Thin</span>}
+                  {master.thin && <span className="calibration-badge calibration-badge-poor" title="This master has too few frames and can add noise during calibration">Too few frames</span>}
                   {verdict && verdict !== 'ok' && (
                     <span className={`calibration-badge calibration-badge-${verdict}`} title={flatSet ?? undefined}>
                       {verdict === 'poor' ? 'Poor' : 'Suspect'} · spots

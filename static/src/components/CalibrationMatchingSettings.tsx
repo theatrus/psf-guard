@@ -41,7 +41,7 @@ function wanted(field: CalibrationRuleField, value: CalibrationRuleValue | null)
 function defaultNote(field: CalibrationRuleField): string {
   const text = describeRuleValue(field, field.default);
   return field.kind.type === 'number' || field.kind.type === 'count'
-    ? `Empty: ${text}.`
+    ? `When blank, uses ${text}.`
     : `Default: ${text}.`;
 }
 

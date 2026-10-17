@@ -197,7 +197,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
             ? (form.horizon.source.kind === data.profile.horizon?.source.kind && form.horizon.value === data.profile.horizon?.value
               ? describeSource(data.profile.horizon.source, data.profile.horizon.reported_at_ms).toLowerCase()
               : 'not saved yet')
-            : placed?.horizon_from === 'site' ? `none of its own, so ${placed.site?.name ?? 'the site'}'s applies` : 'none of its own'}
+            : placed?.horizon_from === 'site' ? `Uses the horizon for ${placed.site?.name ?? 'the site'}` : 'No rig horizon set'}
           onChange={horizon => update({ horizon: horizon ? { value: horizon, source: { kind: 'manual' } } : null })} />
       </fieldset>
       </div>

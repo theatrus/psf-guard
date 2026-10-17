@@ -323,15 +323,15 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             <span>
               Run folder
               <small>
-                Where this run&apos;s script and WBPP&apos;s output go; a run writes gigabytes.
-                Empty uses{' '}
+                Folder for this run&apos;s script and WBPP output. A run can write gigabytes of data.
+                When blank, uses{' '}
                 {pixinsight.data?.runs_dir
                   ? `the runs folder in Settings (${pixinsight.data.runs_dir}${
                       pixinsight.data.runs_dir_free_bytes != null
                         ? `, ${formatFree(pixinsight.data.runs_dir_free_bytes)} free`
                         : ''
                     })`
-                  : "the database's export directory, else its stack folder"}
+                  : "the database's export directory, or its stack folder if no export directory is set"}
                 .
               </small>
             </span>

@@ -1325,7 +1325,7 @@ fn a_light_takes_its_familys_other_angle_only_where_measured_alike() {
     assert!(selected.match_tolerances().light_rotation.is_recorded());
     assert!(super::describe_family(family)
         .unwrap()
-        .contains("whose flats at those angles measure alike"));
+        .contains("measured responses match across these angles"));
 
     // Between them: nothing at its angle, and nothing measured for it.
     let between = light(temp.path(), "2026-09-12T04:00:00", 77.0);
@@ -1517,9 +1517,9 @@ fn the_lights_own_pixels_move_a_light_only_with_another_filter_agreeing() {
     assert!(family.flags(), "{family:?}");
     assert_eq!(family.pointed.as_deref(), Some("Ha at 8.0°"));
     assert!(selected.flat.is_empty(), "{:?}", names(&selected.flat));
-    assert!(super::describe_family_flag(family)
-        .unwrap()
-        .contains("neither its other filters nor the rotator's epochs confirm the move"));
+    assert!(super::describe_family_flag(family).unwrap().contains(
+        "Neither analysis of other filters nor the rotator's epochs confirm this reassignment"
+    ));
 
     // The session's OIII lights point the same way.
     lights_through_eight(&conn, temp.path(), "OIII", 11, 10);
@@ -1603,7 +1603,7 @@ fn the_lights_own_pixels_confirm_their_recorded_family() {
     assert_eq!(names(&selected.flat), ["ha-8"]);
     assert!(super::describe_family(family)
         .unwrap()
-        .starts_with("Chosen by its own pixels"));
+        .starts_with("Selected based on pixel analysis"));
 }
 
 /// A catalog of these sessions with the comparisons `dust` names, no pixels
@@ -1897,7 +1897,7 @@ fn a_familys_alike_range_serves_a_light_from_its_own_side() {
     );
     let said = super::describe_family(family).unwrap();
     assert!(
-        said.contains("Flats at 104.0°: this family's flats at 101.9° and 104.2° measure alike"),
+        said.contains("Using flats at 104.0°: measured responses match across 101.9° and 104.2°"),
         "{said}"
     );
     assert!(

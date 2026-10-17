@@ -241,8 +241,8 @@ describe('CalibrationPanel', () => {
 
   it('names the flat family its own pixels chose', async () => {
     show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
-      chosen_by: 'Chosen by its own pixels: its imaging session\'s lights (8 of M 27) follow the flats of '
-        + 'the OIII at 72.6° & 82.2° family rather than OIII at 100.1–104.4° (77.0° recorded)',
+      chosen_by: 'Selected based on pixel analysis: lights from this imaging session (8 of M 27) match '
+        + 'the OIII at 72.6° & 82.2° flat family at the recorded angle, rather than OIII at 100.1–104.4° (77.0° recorded)',
       family: {
         key: 'OIII:s-oiii72', label: 'OIII at 72.6° & 82.2°', by: 'pixels', lights: 8, targets: ['M 27'],
         moved: false, at_recorded: true,
@@ -253,14 +253,14 @@ describe('CalibrationPanel', () => {
     const family = await screen.findByTestId('calibration-flat-family');
     expect(family).toHaveTextContent('Flat family');
     expect(family).toHaveTextContent('OIII at 72.6° & 82.2°');
-    expect(family).toHaveTextContent('chosen by its own pixels');
-    expect(screen.getByTestId('calibration-flat-chosen-by')).toHaveTextContent('follow the flats of');
+    expect(family).toHaveTextContent('selected based on pixel analysis');
+    expect(screen.getByTestId('calibration-flat-chosen-by')).toHaveTextContent('lights from this imaging session (8 of M 27) match');
   });
 
   it('says over which span its family measures alike when its flats lie at another angle', async () => {
     show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
-      chosen_by: 'Flats at 104.0°: this family\'s flats at 101.5–102.2° and 104.2–104.4° measure alike '
-        + '(10 pairs over 9 nights), so the stack reads the light at 104.0°',
+      chosen_by: 'Using flats at 104.0°: measured responses match across 101.5–102.2° and 104.2–104.4° '
+        + '(10 pairs over 9 nights). Stack calibration uses 104.0° as the matching angle for this light',
       family: {
         key: 'OIII:s-oiii104', label: 'OIII at 101.3–104.4°', by: 'angle', at_recorded: true,
         light_angle: 100.9, shift: 0, candidates: ['OIII at 101.3–104.4°'],
@@ -274,7 +274,7 @@ describe('CalibrationPanel', () => {
     expect(await screen.findByTestId('calibration-flat-alike-range'))
       .toHaveTextContent('flats at 104.0°, measured alike at 101.5–102.2° and 104.2–104.4° (10 pairs)');
     expect(screen.getByTestId('calibration-flat-chosen-by'))
-      .toHaveTextContent('101.5–102.2° and 104.2–104.4° measure alike');
+      .toHaveTextContent('measured responses match across 101.5–102.2° and 104.2–104.4°');
   });
 
   it('names what confirmed a move its own pixels made', async () => {
@@ -287,7 +287,7 @@ describe('CalibrationPanel', () => {
     })] });
     fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
     expect(await screen.findByTestId('calibration-flat-family'))
-      .toHaveTextContent('moved by its own pixels, confirmed by its OIII lights');
+      .toHaveTextContent('reassigned based on pixel analysis, confirmed by its OIII lights');
   });
 
   it('says when no flat family stood clear and the recorded angle was kept', async () => {
@@ -299,12 +299,12 @@ describe('CalibrationPanel', () => {
     })] });
     fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
     expect(await screen.findByTestId('calibration-flat-family'))
-      .toHaveTextContent('at its recorded angle: its lights could not tell');
+      .toHaveTextContent('uses the recorded angle: pixel analysis was inconclusive');
   });
 
   it('marks a move its own pixels made that nothing confirmed as a check', async () => {
     show('/detail/8?db=c925&project=1', { ...explanation, findings: [], kinds: [kind('flat', {
-      chosen_by: 'Its imaging session\'s lights (5 of M 27) follow the flats of the Ha at 8.0° family',
+      chosen_by: 'Its imaging session\'s lights (5 of M 27) match the flats of the Ha at 8.0° family',
       family: {
         key: 'Ha:s-ha0', label: 'Ha at 0.0°', by: 'disputed', lights: 5, targets: ['M 27'],
         pointed: 'Ha at 8.0°', at_recorded: true,
@@ -313,7 +313,7 @@ describe('CalibrationPanel', () => {
     })] });
     fireEvent.click(await screen.findByRole('button', { name: /^Calibration/ }));
     expect(await screen.findByTestId('calibration-flat-family'))
-      .toHaveTextContent('check: its lights point to Ha at 8.0°, unconfirmed');
+      .toHaveTextContent('check: pixel analysis suggests Ha at 8.0°, unconfirmed');
     expect(screen.getByTestId('calibration-flat-chosen-by')).toHaveClass('is-check');
   });
 

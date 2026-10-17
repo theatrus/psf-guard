@@ -51,16 +51,16 @@ function familyBasisLabel(family: FlatFamilyNote): string {
       return 'chosen by you';
     case 'pixels':
       return family.moved
-        ? `moved by its own pixels, confirmed by ${family.corroborated ?? 'other evidence'}`
-        : 'chosen by its own pixels';
+        ? `reassigned based on pixel analysis, confirmed by ${family.corroborated ?? 'other evidence'}`
+        : 'selected based on pixel analysis';
     case 'nearest':
       return family.undecided
-        ? 'at its recorded angle: its lights could not tell'
-        : 'at its recorded angle: its lights not read yet';
+        ? 'uses the recorded angle: pixel analysis was inconclusive'
+        : 'uses the recorded angle: pixel analysis has not run yet';
     case 'disputed':
-      return `check: its lights point to ${family.pointed ?? 'another family'}, unconfirmed`;
+      return `check: pixel analysis suggests ${family.pointed ?? 'another family'}, unconfirmed`;
     default:
-      return 'its angles measure alike';
+      return 'flats at these angles have matching measured responses';
   }
 }
 

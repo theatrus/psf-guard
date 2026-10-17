@@ -134,7 +134,7 @@ describe('CalibrationMatchingSettings', () => {
     expect(suspect).toHaveValue(2);
     expect(poor).toHaveValue(5);
     fireEvent.change(suspect, { target: { value: '12' } });
-    expect(screen.getByText('A frame must turn suspect before it turns poor.')).toBeInTheDocument();
+    expect(screen.getByText('Set thresholds so a frame reaches Suspect before Poor.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     fireEvent.change(suspect, { target: { value: '5' } });
     fireEvent.change(poor, { target: { value: '' } });

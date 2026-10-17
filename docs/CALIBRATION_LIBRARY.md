@@ -315,7 +315,7 @@ The **Masters** tab lists every master the library recorded, newest first:
 its kind, filter or exposure, its source frames with their nights and
 temperatures, when it was built, and the projects whose latest stacks use
 it. Badges mark a bias or dark master built from fewer than five frames
-(**Thin**), a flat master whose set carries changing spots, one the flat
+(**Too few frames**), a flat master whose set carries changing spots, one the flat
 check set aside, one from other software, and one whose file is gone.
 **View** opens the master in the same inspector a stack's **Masters** button
 opens (see [Inspect calibration masters](STACKING_PREVIEWS.md#inspect-calibration-masters)),
@@ -1807,7 +1807,7 @@ it refuses:
   filter and telescope must agree; they are identity, not tolerance.
 - The integrator's own stray-light screen, which applies only while some
   dark of a master is not graded yet, uses its default limit.
-- The **Masters** tab's **Thin** badge and changing-spots note describe the
+- The **Masters** tab's **Too few frames** badge and changing-spots note describe the
   master itself, which may serve lights of several rigs, so they keep the
   defaults.
 
