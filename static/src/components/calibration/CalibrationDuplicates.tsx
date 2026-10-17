@@ -138,7 +138,12 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
   const [dialog, setDialog] = useState<DialogRun | null>(null);
   // The repair this view started, so its result shows here once.
   const [repairRun, setRepairRun] = useState<number | null>(null);
-  const store = (fresh: CalibrationDuplicateStatus) => queryClient.setQueryData(duplicatesKey(dbId), fresh);
+  // A status read sent before this run started can answer after it, and
+  // would put the last run back: drop any read in flight first.
+  const store = async (fresh: CalibrationDuplicateStatus) => {
+    await queryClient.cancelQueries({ queryKey: duplicatesKey(dbId) });
+    queryClient.setQueryData(duplicatesKey(dbId), fresh);
+  };
 
   // `true` for the check the view starts on its own, which runs in the
   // background; a click runs one at once.
@@ -148,8 +153,8 @@ export default function CalibrationDuplicates({ dbId, canRepair, repairNote, can
   });
   const repairing = useMutation({
     mutationFn: (token: string) => apiClient.repairCalibrationDuplicates(dbId, token),
-    onSuccess: (fresh) => {
-      store(fresh);
+    onSuccess: async (fresh) => {
+      await store(fresh);
       setRepairRun(fresh.run);
       setDialog({ phase: 'repair', run: fresh.run });
     },
