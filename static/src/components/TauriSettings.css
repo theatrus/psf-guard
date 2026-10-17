@@ -269,15 +269,6 @@
   color: var(--color-error);
 }
 
-.tauri-settings .path-info {
-  font-size: 12px;
-  color: var(--color-text-muted);
-  padding: 8px;
-  background-color: var(--color-bg-tertiary);
-  border-radius: 4px;
-  word-break: break-all;
-}
-
 .tauri-settings .add-directory-button {
   padding: 10px 16px;
   background-color: var(--color-success);
@@ -439,9 +430,10 @@
   opacity: 0.6;
 }
 
-/* B5/F3: multi-DB list rows */
+/* A database, laid out as a rig is: its icon, name and actions on one row,
+   and its paths and settings below at the card's full width. */
 .tauri-settings .db-entry {
-  margin-bottom: 8px;
+  margin-bottom: 12px;
   overflow: hidden;
   border: 1px solid var(--color-group-border);
   border-radius: 8px;
@@ -454,32 +446,51 @@
 }
 
 .tauri-settings .db-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  display: grid;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 14px 16px;
 }
 
-.tauri-settings .db-row-main {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
+.tauri-settings .db-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
 }
 
 .tauri-settings .db-row-title {
-  margin-bottom: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 17px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.tauri-settings .db-row-title svg {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+
+.tauri-settings .db-entry.editing .db-row-title svg {
+  color: var(--color-primary);
 }
 
 .tauri-settings .db-row-slug {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-button);
   padding: 1px 6px;
   border-radius: 3px;
-  margin-left: 6px;
+  background: var(--color-bg-button);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 400;
 }
 
+/* The user and token lists line their actions up at the right. */
 .tauri-settings .db-row-actions {
   display: flex;
   gap: 6px;
@@ -488,9 +499,131 @@
   justify-content: flex-end;
 }
 
-.tauri-settings .db-row-actions .remove-button {
-  width: auto;
-  padding: 4px 10px;
+.tauri-settings .db-row-head .db-row-actions {
+  align-items: center;
+}
+
+/* Compact actions: a database's own, and the two that add one. */
+.tauri-settings .db-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.tauri-settings .db-action-button:hover:not(:disabled) {
+  border-color: var(--color-border-primary);
+  background: var(--color-bg-tertiary);
+}
+
+.tauri-settings .db-action-button:focus-visible {
+  outline: 2px solid var(--state-focus-ring);
+  outline-offset: 1px;
+}
+
+.tauri-settings .db-action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.tauri-settings .db-action-button.is-primary {
+  border-color: var(--color-primary-alpha-50);
+  color: var(--color-primary);
+}
+
+.tauri-settings .db-action-button.is-primary:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  background: var(--color-primary-alpha-10);
+}
+
+.tauri-settings .db-action-button.is-icon {
+  width: 30px;
+  padding: 0;
+}
+
+.tauri-settings .db-action-button.is-danger {
+  color: var(--color-error);
+}
+
+.tauri-settings .db-action-button.is-danger:hover:not(:disabled) {
+  border-color: var(--color-border-error);
+  background: var(--color-error-alpha-10);
+}
+
+/* Where the catalog and its frames live: a label, then the path. */
+.tauri-settings .db-row-paths {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.tauri-settings .db-row-paths > div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.tauri-settings .db-row-paths dt {
+  padding-top: 1px;
+  color: var(--color-text-hint);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tauri-settings .db-row-paths dd {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+
+/* What the database holds and does, each a block of its own. */
+.tauri-settings .db-row-details {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.tauri-settings .db-row-details > * {
+  margin-top: 0;
+}
+
+/* Inside a database the actions are compact, as its own are. The settings
+   tab sizes its buttons too, so this names the tab to win. */
+.tauri-settings .settings-setups .db-row-details .browse-button {
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
+/* The library and AstroBin summaries sit in the card as rows, not as boxes
+   of their own inside it. */
+.tauri-settings .db-row-details .calibration-summary {
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+/* An empty library says so and offers Calibration on the same line. */
+.tauri-settings .db-row-details .calibration-summary.muted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .tauri-settings .db-row-editor {
@@ -554,14 +687,9 @@
 
 .tauri-settings .db-add-buttons {
   display: flex;
-  gap: 8px;
   flex-wrap: wrap;
-}
-
-.tauri-settings .db-add-buttons .add-directory-button {
-  width: auto;
-  flex: 1;
-  min-width: 180px;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .tauri-settings .import-progress-panel {
@@ -800,11 +928,12 @@
 
 @media (max-width: 760px) {
   .tauri-settings .db-row {
-    flex-direction: column;
+    padding: 12px;
   }
 
-  .tauri-settings .db-row-actions {
-    justify-content: flex-start;
+  .tauri-settings .db-row-paths > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 
   .tauri-settings .db-row-editor {

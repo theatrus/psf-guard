@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Eraser } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../api/client';
@@ -23,9 +24,10 @@ export function PurgeRejectsButton({ dbId, dbName, canManage, disabled }: { dbId
   const [open, setOpen] = useState(false);
   if (!canManage) return null;
   return <>
-    <button type="button" className="browse-button" disabled={disabled} onClick={() => setOpen(true)}
-      title="Take rejects rejected a while ago out of the catalog, files to a trash folder">
-      Purge Rejects
+    <button type="button" className="db-action-button is-icon" disabled={disabled} onClick={() => setOpen(true)}
+      aria-label={`Purge rejects in ${dbName}`}
+      title="Purge rejects: take frames rejected a while ago out of the catalog, files to a trash folder">
+      <Eraser size={15} aria-hidden="true" />
     </button>
     <Dialog open={open} onClose={() => setOpen(false)} title={`Purge rejects — ${dbName}`} className="purge-rejects-dialog">
       <RejectRemovalControls dbId={dbId} canManage={canManage} />
