@@ -15,26 +15,69 @@ function mount(canManage = true) {
   return render(<div className="tauri-settings"><RejectRemovalControls dbId="rig" canManage={canManage} /></div>, { wrapper });
 }
 
+/** The catalog's reject removal job, mocked: a run finishes as it starts,
+ *  unless `hold` keeps it running for the page to follow and stop. */
+function mockJob(handlers: {
+  preview?: (body: unknown) => object;
+  apply?: (body: unknown) => object;
+  restore?: (body: unknown) => object;
+  empty?: () => object;
+}) {
+  let status: Record<string, unknown> = {
+    state: 'idle', action: null, stage: null, done: 0, total: 0, run: 0, started_at: null,
+    finished_at: null, plan: null, changed: false, outcome: null, error: null, priority: null,
+  };
+  const finish = (action: string, change: (run: number) => object) => {
+    const run = (status.run as number) + 1;
+    status = { ...status, run, action, state: 'done', stage: null, changed: false, finished_at: run, ...change(run) };
+    return HttpResponse.json({ success: true, data: status, error: null }, { status: 202 });
+  };
+  server.use(
+    http.get('/api/db/rig/rejects/removal', () => ok(status)),
+    http.post('/api/db/rig/rejects/removal/preview', async ({ request }) => {
+      const body = await request.json();
+      return finish('preview', () => ({ plan: handlers.preview?.(body) }));
+    }),
+    http.post('/api/db/rig/rejects/removal/apply', async ({ request }) => {
+      const body = await request.json();
+      return finish('remove', run => handlers.apply?.(body) ?? {
+        ...status,
+        plan: null,
+        outcome: { run, finished_at: run, action: 'remove', removed: { batch_id: 'b1', removed: [], failed: [], files_moved: 0, bytes: 0, trash_until: 0 } },
+      });
+    }),
+    http.post('/api/db/rig/rejects/removed/restore', async ({ request }) => {
+      const body = await request.json();
+      return finish('restore', run => ({ outcome: { run, finished_at: run, action: 'restore', restored: handlers.restore?.(body) } }));
+    }),
+    http.post('/api/db/rig/rejects/trash/empty', () =>
+      finish('empty_trash', run => ({ outcome: { run, finished_at: run, action: 'empty_trash', emptied: handlers.empty?.() } }))),
+  );
+}
+
 describe('Remove rejects', () => {
   it('previews with the chosen age, removes with the digest, and lists the batch to restore', async () => {
     const previews: unknown[] = [];
     const applies: unknown[] = [];
     let removed = false;
-    server.use(
-      http.post('/api/db/rig/rejects/removal/preview', async ({ request }) => {
-        previews.push(await request.json());
-        return ok({ min_age_days: 3, waiting: 2, next_eligible_at: NOW + 86_400, without_files: 0, bytes: 3 * 1024 ** 2, digest: 'd'.repeat(64),
+    mockJob({
+      preview: body => {
+        previews.push(body);
+        return { min_age_days: 3, waiting: 2, next_eligible_at: NOW + 86_400, without_files: 0, bytes: 3 * 1024 ** 2, digest: 'd'.repeat(64),
           frames: [{ image_id: 1, guid: 'g1', target_id: 1, target_name: 'M42', file_name: 'M42_Ha_001.fits', rejected_at: NOW - 9 * 86_400, reject_reason: 'Clouds', files: [] }],
-          skipped: [{ image_id: 5, guid: 'g5', target_name: 'M42', file_name: null, reason: 'it is in a collaboration report' }] });
-      }),
-      http.post('/api/db/rig/rejects/removal/apply', async ({ request }) => {
-        applies.push(await request.json());
+          skipped: [{ image_id: 5, guid: 'g5', target_name: 'M42', file_name: null, reason: 'it is in a collaboration report' }] };
+      },
+      apply: body => {
+        applies.push(body);
         removed = true;
-        return ok({ batch_id: 'b1', removed: [{ image_id: 1, guid: 'g1' }], failed: [], files_moved: 1, bytes: 3 * 1024 ** 2, trash_until: NOW + 14 * 86_400 });
-      }),
+        return { plan: null, outcome: { run: 2, finished_at: 2, action: 'remove',
+          removed: { batch_id: 'b1', removed: [{ image_id: 1, guid: 'g1' }], failed: [], files_moved: 1, bytes: 3 * 1024 ** 2, trash_until: NOW + 14 * 86_400 } } };
+      },
+      restore: () => ({ restored: [{ guid: 'g1', image_id: 1 }], failed: [], renamed: [] }),
+    });
+    server.use(
       http.get('/api/db/rig/rejects/removed', () => ok({ frames: [], batches: removed
         ? [{ batch_id: 'b1', removed_at: NOW, frames: 1, bytes: 3 * 1024 ** 2, trash_until: NOW + 14 * 86_400, files_deleted: 0, purged: 0 }] : [] })),
-      http.post('/api/db/rig/rejects/removed/restore', () => ok({ restored: [{ guid: 'g1', image_id: 1 }], failed: [], renamed: [] })),
     );
     mount();
     const group = screen.getByRole('group', { name: 'Remove rejects' });
@@ -59,12 +102,12 @@ describe('Remove rejects', () => {
   it('empties the trash past its retention, then purges that batch', async () => {
     let emptied = false;
     let purged = false;
+    mockJob({ empty: () => { emptied = true; return { frames: 2, files_deleted: 4, bytes: 1024 ** 2, problems: [] }; } });
     server.use(
       http.get('/api/db/rig/rejects/removed', () => ok({ frames: [], batches: [
         { batch_id: 'old', removed_at: NOW - 30 * 86_400, frames: 2, bytes: 1024 ** 2, trash_until: NOW - 86_400,
           files_deleted: emptied ? 2 : 0, purged: purged ? 2 : 0 },
       ] })),
-      http.post('/api/db/rig/rejects/trash/empty', () => { emptied = true; return ok({ frames: 2, files_deleted: 4, bytes: 1024 ** 2, problems: [] }); }),
       http.post('/api/db/rig/rejects/removed/purge', async ({ request }) => {
         expect(await request.json()).toEqual({ batch_id: 'old' });
         purged = true;
@@ -83,20 +126,49 @@ describe('Remove rejects', () => {
     expect(within(batches).queryByRole('button', { name: /^Purge/ })).not.toBeInTheDocument();
   });
 
-  it('says a stale preview changed and offers nothing without database management', async () => {
-    server.use(
-      http.post('/api/db/rig/rejects/removal/preview', () => ok({ min_age_days: 7, waiting: 0, next_eligible_at: null, without_files: 0, bytes: 1, digest: 'a'.repeat(64),
-        frames: [{ image_id: 1, guid: 'g1', target_id: 1, target_name: 'M42', file_name: 'x.fits', rejected_at: 0, reject_reason: null, files: [] }], skipped: [] })),
-      http.post('/api/db/rig/rejects/removal/apply', () => HttpResponse.json({ success: false, data: null, error: 'stale' }, { status: 409 })),
-    );
+  it('shows the new preview when the rejects changed, and offers nothing without database management', async () => {
+    const stale = { min_age_days: 7, waiting: 0, next_eligible_at: null, without_files: 0, bytes: 1, digest: 'a'.repeat(64),
+      frames: [{ image_id: 1, guid: 'g1', target_id: 1, target_name: 'M42', file_name: 'x.fits', rejected_at: 0, reject_reason: null, files: [] }], skipped: [] };
+    mockJob({
+      preview: () => stale,
+      // The rejects changed: nothing removed, the preview as they stand now.
+      apply: () => ({ changed: true, outcome: null, plan: { ...stale, digest: 'b'.repeat(64), frames: [] } }),
+    });
     const { unmount } = mount();
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Remove 1 reject' }));
-    expect(await screen.findByRole('status')).toHaveTextContent('The rejects changed since the preview; preview again.');
-    expect(screen.queryByTestId('reject-removal-plan')).not.toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent('The rejects changed since the preview; this is the preview as they stand now.');
+    expect(screen.getByTestId('reject-removal-plan')).toHaveTextContent('Nothing to remove.');
     unmount();
     mount(false);
     expect(screen.queryByRole('group', { name: 'Remove rejects' })).not.toBeInTheDocument();
+  });
+
+  it('follows a removal under way, and stops it between frames', async () => {
+    let status: Record<string, unknown> = {
+      state: 'running', action: 'remove', stage: 'moving', done: 37, total: 203, run: 4, started_at: 1,
+      finished_at: null, plan: null, changed: false, outcome: null, error: null, priority: 'interactive',
+    };
+    const stops: string[] = [];
+    server.use(
+      http.get('/api/db/rig/rejects/removal', () => ok(status)),
+      http.get('/api/db/rig/rejects/removed', () => ok({ frames: [], batches: [] })),
+      http.post('/api/db/rig/rejects/removal/stop', () => {
+        stops.push('stop');
+        status = { ...status, state: 'stopped', stage: null, finished_at: 9,
+          outcome: { run: 4, finished_at: 9, action: 'remove', removed: { batch_id: 'b4', removed: [], failed: [], files_moved: 0, bytes: 0, trash_until: 0, stopped: true } } };
+        return ok(status);
+      }),
+    );
+    mount();
+    const progress = await screen.findByRole('status', { name: 'Reject removal progress' });
+    expect(progress).toHaveTextContent('Removing rejects · Moving to the trash 37 of 203');
+    // A run under way holds every other action.
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeDisabled();
+    fireEvent.click(within(progress).getByRole('button', { name: 'Stop' }));
+    await waitFor(() => expect(stops).toEqual(['stop']));
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Reject removal progress' })).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeEnabled();
   });
 
   it('opens the removal flow in a Purge Rejects dialog, only with database management', async () => {

@@ -109,7 +109,8 @@ read, below `/api`, as you.
 | `get_light_flat_options` | The changes some lights were shot during, with each change's key and the sides already chosen | yes, as in the app |
 | `get_calibration_duplicates` | The duplicate check or repair, and its plan a page at a time, with the plan's `token` | |
 | `get_sky_coverage` | Every target's footprint and exposure by filter | |
-| `get_jobs` | One database's jobs: import, quality backfill and scan, WBPP, calibration grading, flat measuring, frame sites, and the duplicate check or repair, each with what it waits for | |
+| `get_jobs` | One database's jobs: import, quality backfill and scan, WBPP, calibration grading, flat measuring, frame sites, the duplicate check or repair, and reject removal, each with what it waits for | |
+| `get_reject_removal` | The reject removal job: what it does and how far, the latest preview with its `digest`, and the last outcome | |
 | `astrobin_csv` | The AstroBin acquisition CSV for a project or target | |
 | `grade_images` | Set `accepted`, `rejected` or `pending` with a reason; returns the grades it replaced | yes |
 | `start_quality_backfill` | Start the background quality scan | yes |
@@ -145,8 +146,8 @@ read, below `/api`, as you.
 | `start_stack`, `cancel_stack` | Build stack previews for a project, target or filter; stop one | yes |
 | `update_project`, `update_target` | Change scheduler settings; send only the fields to change | yes |
 | `update_exposure_plan`, `create_exposure_plan` | Change or add an exposure plan | yes |
-| `preview_reject_removal` | The rejects removal would take out, with a `digest` | yes |
-| `apply_reject_removal`, `restore_removed_rejects` | Remove those rejects to the trash with the digest; bring a batch back | yes |
+| `preview_reject_removal` | Start working out the rejects removal would take out; `get_reject_removal` has them, with a `digest` | yes |
+| `apply_reject_removal`, `restore_removed_rejects` | Start removing those rejects to the trash with the digest; start bringing a batch back. `get_reject_removal` has the outcome | yes |
 | `preview_sync`, `apply_sync` | Preview a pull or push between two open databases; apply it | yes |
 | `set_calibration_validity` | Mark calibration frames for later or earlier lights, or clear the mark | yes |
 | `solve_astrometry`, `predict_satellites` | Plate-solve a light; predict satellite crossings and check them in the pixels | yes |

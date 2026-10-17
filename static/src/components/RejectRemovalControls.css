@@ -82,3 +82,17 @@
   gap: 8px;
   color: var(--color-text-secondary);
 }
+
+/* A run under way: what it does and how far, with Stop beside it. */
+.purge-rejects .reject-removal-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--color-primary);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}

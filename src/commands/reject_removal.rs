@@ -31,6 +31,75 @@ pub const TRASH_DIR: &str = ".psf-guard-trash";
 pub const DEFAULT_MIN_AGE_DAYS: u32 = 7;
 /// How long removed files stay in the trash before emptying it deletes them.
 pub const DEFAULT_RETENTION_DAYS: u32 = 14;
+
+/// What a long step is doing, for a job's progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// Indexing the image folders, by folder.
+    Indexing,
+    /// Finding each qualifying frame's files, by frame.
+    Checking,
+    /// Moving frames' files to the trash, by frame.
+    Moving,
+    /// Bringing frames back from the trash, by frame.
+    Restoring,
+    /// Deleting the files of removals past their retention, by frame.
+    Deleting,
+}
+
+impl Stage {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Indexing => "indexing",
+            Self::Checking => "checking",
+            Self::Moving => "moving",
+            Self::Restoring => "restoring",
+            Self::Deleting => "deleting",
+        }
+    }
+}
+
+/// How a step reports where it stands, and learns it should stop. A stop
+/// lands between frames: each frame's files and rows move together, so the
+/// frames done before it stay done. The command line passes [`Work::quiet`].
+pub struct Work<'a> {
+    pub progress: &'a (dyn Fn(Stage, usize, usize) + Sync),
+    pub stop: &'a (dyn Fn() -> bool + Sync),
+}
+
+fn no_progress(_: Stage, _: usize, _: usize) {}
+
+fn never() -> bool {
+    false
+}
+
+impl Work<'static> {
+    /// No progress, and no stop.
+    pub fn quiet() -> Self {
+        Work {
+            progress: &no_progress,
+            stop: &never,
+        }
+    }
+}
+
+impl Work<'_> {
+    fn stopped(&self) -> bool {
+        (self.stop)()
+    }
+}
+
+/// A preview stopped before it finished; it changed nothing.
+#[derive(Debug)]
+pub struct Stopped;
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Stopped")
+    }
+}
+
+impl std::error::Error for Stopped {}
 const DAY: i64 = 86_400;
 
 const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_removed_image (
@@ -209,11 +278,17 @@ struct RejectRow {
 
 /// Index each image directory once; a directory that cannot be read is
 /// left out.
-fn trees_for(image_dirs: &[String]) -> Vec<Option<DirectoryTree>> {
-    image_dirs
-        .iter()
-        .map(|dir| DirectoryTree::build_multiple(&[Path::new(dir)]).ok())
-        .collect()
+fn trees_for(image_dirs: &[String], work: &Work<'_>) -> Result<Vec<Option<DirectoryTree>>> {
+    let mut trees = Vec::with_capacity(image_dirs.len());
+    for (index, dir) in image_dirs.iter().enumerate() {
+        if work.stopped() {
+            bail!(Stopped);
+        }
+        (work.progress)(Stage::Indexing, index, image_dirs.len());
+        trees.push(DirectoryTree::build_multiple(&[Path::new(dir)]).ok());
+    }
+    (work.progress)(Stage::Indexing, image_dirs.len(), image_dirs.len());
+    Ok(trees)
 }
 
 /// Which rejected frames qualify, with their files and the reason for each
@@ -222,6 +297,17 @@ pub fn plan(
     conn: &Connection,
     image_dirs: &[String],
     options: &PlanOptions<'_>,
+) -> Result<RemovalPlan> {
+    plan_with(conn, image_dirs, options, &Work::quiet())
+}
+
+/// [`plan`], saying where it stands and stopping when asked, with
+/// [`Stopped`].
+pub fn plan_with(
+    conn: &Connection,
+    image_dirs: &[String],
+    options: &PlanOptions<'_>,
+    work: &Work<'_>,
 ) -> Result<RemovalPlan> {
     if !has_column(conn, "acquiredimage", "guid")
         || !has_column(conn, "acquiredimage", "gradingStatus")
@@ -287,7 +373,7 @@ pub fn plan(
     }
 
     let cutoff = options.now - i64::from(options.min_age_days) * DAY;
-    let trees = trees_for(image_dirs);
+    let trees = trees_for(image_dirs, work)?;
     let mut plan = RemovalPlan {
         scope: options.scope,
         min_age_days: options.min_age_days,
@@ -341,7 +427,12 @@ pub fn plan(
         taking.push((row, guid));
     }
 
-    for (row, guid) in taking {
+    let checking = taking.len();
+    for (index, (row, guid)) in taking.into_iter().enumerate() {
+        if work.stopped() {
+            bail!(Stopped);
+        }
+        (work.progress)(Stage::Checking, index, checking);
         let file_name = reject_archive::parse_filename_from_metadata(&row.metadata);
         let files = frame_files(conn, image_dirs, &trees, &row, &guid, file_name.as_deref())?;
         if !files.iter().any(|file| file.kind == FileKind::Light) {
@@ -516,6 +607,10 @@ pub struct ApplyReport {
     pub files_moved: usize,
     pub bytes: u64,
     pub trash_until: i64,
+    /// Stopped before every frame was removed: `removed` lists the frames
+    /// that went, and the rest stay in the catalog.
+    #[serde(default)]
+    pub stopped: bool,
 }
 
 /// Where a file waits: under the image directory that holds it, the same
@@ -613,7 +708,28 @@ pub fn apply(
     expected_digest: &str,
     retention_days: u32,
 ) -> Result<ApplyReport> {
-    let current = plan(conn, image_dirs, options)?;
+    apply_with(
+        conn,
+        image_dirs,
+        options,
+        expected_digest,
+        retention_days,
+        &Work::quiet(),
+    )
+}
+
+/// [`apply`], saying where it stands. A stop while it checks changes
+/// nothing ([`Stopped`]); one while it moves files ends after the frame in
+/// hand, with the frames removed so far and `stopped` set.
+pub fn apply_with(
+    conn: &Connection,
+    image_dirs: &[String],
+    options: &PlanOptions<'_>,
+    expected_digest: &str,
+    retention_days: u32,
+    work: &Work<'_>,
+) -> Result<ApplyReport> {
+    let current = plan_with(conn, image_dirs, options, work)?;
     if current.digest != expected_digest {
         bail!(StaleRemovalPlan);
     }
@@ -625,7 +741,12 @@ pub fn apply(
         trash_until,
         ..Default::default()
     };
-    for frame in &current.frames {
+    for (index, frame) in current.frames.iter().enumerate() {
+        if work.stopped() {
+            report.stopped = true;
+            break;
+        }
+        (work.progress)(Stage::Moving, index, current.frames.len());
         match remove_one(conn, image_dirs, &batch_id, frame, options.now, trash_until) {
             Ok(trashed) => {
                 report.files_moved += trashed.len();
@@ -1038,6 +1159,9 @@ pub struct RestoreReport {
     pub failed: Vec<SkippedFrame>,
     /// Files that came back under another name because theirs was taken.
     pub renamed: Vec<String>,
+    /// Stopped before every frame came back: the rest stay removed.
+    #[serde(default)]
+    pub stopped: bool,
 }
 
 struct Tombstone {
@@ -1141,8 +1265,25 @@ fn insert_row(
 /// tombstone. A frame whose files were deleted from the trash, or whose
 /// GUID is in the catalog again, stays removed and is named.
 pub fn restore(conn: &Connection, selection: &RestoreSelection) -> Result<RestoreReport> {
+    restore_with(conn, selection, &Work::quiet())
+}
+
+/// [`restore`], saying where it stands, and stopping after the frame in
+/// hand when asked.
+pub fn restore_with(
+    conn: &Connection,
+    selection: &RestoreSelection,
+    work: &Work<'_>,
+) -> Result<RestoreReport> {
     let mut report = RestoreReport::default();
-    for tombstone in tombstones(conn, selection)? {
+    let tombstones = tombstones(conn, selection)?;
+    let total = tombstones.len();
+    for (index, tombstone) in tombstones.into_iter().enumerate() {
+        if work.stopped() {
+            report.stopped = true;
+            break;
+        }
+        (work.progress)(Stage::Restoring, index, total);
         let fail = |report: &mut RestoreReport, reason: String| {
             report.failed.push(SkippedFrame {
                 image_id: tombstone.image_id,
@@ -1351,11 +1492,20 @@ pub struct TrashReport {
     pub files_deleted: usize,
     pub bytes: u64,
     pub problems: Vec<String>,
+    /// Stopped before every removal past its retention was emptied.
+    #[serde(default)]
+    pub stopped: bool,
 }
 
 /// Delete the files of every removal past its retention, and mark those
 /// frames as having none. The tombstones stay.
 pub fn empty_trash(conn: &Connection, now: i64) -> Result<TrashReport> {
+    empty_trash_with(conn, now, &Work::quiet())
+}
+
+/// [`empty_trash`], saying where it stands, and stopping after the frame in
+/// hand when asked.
+pub fn empty_trash_with(conn: &Connection, now: i64, work: &Work<'_>) -> Result<TrashReport> {
     let mut report = TrashReport::default();
     if !table_exists(conn, "psf_guard_removed_image") {
         return Ok(report);
@@ -1370,7 +1520,13 @@ pub fn empty_trash(conn: &Connection, now: i64) -> Result<TrashReport> {
             .collect::<rusqlite::Result<_>>()?
     };
     let mut emptied_dirs: BTreeSet<PathBuf> = BTreeSet::new();
-    for (guid, files) in due {
+    let total = due.len();
+    for (index, (guid, files)) in due.into_iter().enumerate() {
+        if work.stopped() {
+            report.stopped = true;
+            break;
+        }
+        (work.progress)(Stage::Deleting, index, total);
         let files: Vec<TrashedFile> = serde_json::from_str(&files)?;
         let mut kept = false;
         for file in &files {
@@ -1506,6 +1662,104 @@ mod tests {
             now: NOW,
             protected_guids: protected,
         }
+    }
+
+    /// A stop lands between frames: a preview stopped changes nothing; a
+    /// removal stopped after its first frame keeps that frame removed, leaves
+    /// the second in the catalog, and says it stopped; progress names each
+    /// stage as it goes.
+    #[test]
+    fn a_stopped_removal_keeps_the_frames_it_finished() {
+        let c = catalog();
+        let none = BTreeSet::new();
+        let always = || true;
+        let quiet = |_: Stage, _: usize, _: usize| {};
+        let stopped = plan_with(
+            &c.conn,
+            &c.images(),
+            &options(&none, 7),
+            &Work {
+                progress: &quiet,
+                stop: &always,
+            },
+        )
+        .unwrap_err();
+        assert!(stopped.downcast_ref::<Stopped>().is_some(), "{stopped:#}");
+
+        let plan = plan(&c.conn, &c.images(), &options(&none, 7)).unwrap();
+        assert_eq!(plan.frames.len(), 2);
+        let stages = std::sync::Mutex::new(Vec::new());
+        let progress = |stage: Stage, done: usize, total: usize| {
+            stages.lock().unwrap().push((stage, done, total));
+        };
+        // Stop once the first frame has started moving: the check before the
+        // second frame sees it.
+        let moving = || {
+            stages
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(stage, ..)| *stage == Stage::Moving)
+        };
+        let report = apply_with(
+            &c.conn,
+            &c.images(),
+            &options(&none, 7),
+            &plan.digest,
+            14,
+            &Work {
+                progress: &progress,
+                stop: &moving,
+            },
+        )
+        .unwrap();
+        assert!(report.stopped, "{report:?}");
+        assert_eq!(report.removed.len(), 1, "{report:?}");
+        assert_eq!(report.removed[0].guid, "g1");
+        assert_eq!(
+            c.count("SELECT COUNT(*) FROM acquiredimage WHERE guid = 'g2'"),
+            1
+        );
+        assert!(c
+            .root
+            .join("images/M31/2026-10-01/LIGHT/M31_L_002.fits")
+            .is_file());
+        let seen: Vec<Stage> = stages
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(stage, ..)| *stage)
+            .collect();
+        for stage in [Stage::Indexing, Stage::Checking, Stage::Moving] {
+            assert!(seen.contains(&stage), "{stage:?} in {seen:?}");
+        }
+
+        // The frame that went comes back, and a stop before it leaves it out.
+        let restored = restore_with(
+            &c.conn,
+            &RestoreSelection {
+                batch_id: Some(report.batch_id.clone()),
+                guids: Vec::new(),
+            },
+            &Work {
+                progress: &quiet,
+                stop: &always,
+            },
+        )
+        .unwrap();
+        assert!(
+            restored.stopped && restored.restored.is_empty(),
+            "{restored:?}"
+        );
+        let restored = restore(
+            &c.conn,
+            &RestoreSelection {
+                batch_id: Some(report.batch_id),
+                guids: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(restored.restored.len(), 1, "{restored:?}");
     }
 
     #[test]

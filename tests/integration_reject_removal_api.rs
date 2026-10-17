@@ -65,6 +65,14 @@ fn server() -> Server {
         .insert("rig".into(), Arc::new(context));
     let app = Router::new()
         .route(
+            "/api/db/{db_id}/rejects/removal",
+            get(reject_removal::get_status),
+        )
+        .route(
+            "/api/db/{db_id}/rejects/removal/stop",
+            post(reject_removal::stop_removal),
+        )
+        .route(
             "/api/db/{db_id}/rejects/removal/preview",
             post(reject_removal::preview),
         )
@@ -118,6 +126,23 @@ async fn call(app: &Router, method: &str, uri: &str, body: Value) -> (StatusCode
     )
 }
 
+/// Start a run of the removal job, which answers `202` at once, and wait for
+/// it to end. Returns the final status.
+async fn run_job(app: &Router, uri: &str, body: Value) -> Value {
+    let (status, started) = call(app, "POST", uri, body).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{uri}: {started}");
+    let run = started["data"]["run"].as_u64().unwrap();
+    for _ in 0..400 {
+        let (_, now) = call(app, "GET", "/api/db/rig/rejects/removal", Value::Null).await;
+        let data = &now["data"];
+        if data["run"].as_u64() == Some(run) && data["state"] != "running" {
+            return data.clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("{uri} did not finish");
+}
+
 #[tokio::test]
 async fn rejects_are_previewed_removed_listed_and_restored_over_http() {
     let s = server();
@@ -126,39 +151,54 @@ async fn rejects_are_previewed_removed_listed_and_restored_over_http() {
     std::fs::create_dir_all(solve.parent().unwrap()).unwrap();
     std::fs::write(&solve, b"{}").unwrap();
 
-    let (status, preview) = call(
+    // Preview is a job: it reads every image folder.
+    let preview = run_job(
         &s.app,
-        "POST",
         "/api/db/rig/rejects/removal/preview",
         json!({"min_age_days": 0}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{preview}");
-    let data = &preview["data"];
+    assert_eq!(preview["state"], "done", "{preview}");
+    assert_eq!(preview["action"], "preview");
+    let data = &preview["plan"];
     assert_eq!(data["frames"].as_array().unwrap().len(), 1, "{preview}");
     assert_eq!(data["frames"][0]["guid"], "bad-one");
     assert_eq!(data["bytes"], 4096);
     let digest = data["digest"].as_str().unwrap().to_owned();
 
-    // A stale digest is refused and nothing changes.
-    let (status, refused) = call(
+    // A stale digest removes nothing: the run says the rejects changed and
+    // leaves the preview as it now stands.
+    let refused = run_job(
         &s.app,
-        "POST",
         "/api/db/rig/rejects/removal/apply",
         json!({"min_age_days": 0, "digest": "0".repeat(64)}),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["state"], "done", "{refused}");
+    assert_eq!(refused["changed"], true, "{refused}");
+    assert_eq!(refused["plan"]["digest"], digest.as_str());
+    assert!(refused["outcome"].is_null(), "{refused}");
+    assert!(s
+        .root
+        .join("images/M42/2026-10-01/LIGHT/M42_Ha_001.fits")
+        .is_file());
 
-    let (status, applied) = call(
+    let applied = run_job(
         &s.app,
-        "POST",
         "/api/db/rig/rejects/removal/apply",
         json!({"min_age_days": 0, "digest": digest}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{applied}");
-    assert_eq!(applied["data"]["removed"].as_array().unwrap().len(), 1);
+    assert_eq!(applied["state"], "done", "{applied}");
+    assert_eq!(applied["outcome"]["action"], "remove");
+    assert_eq!(
+        applied["outcome"]["removed"]["removed"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(applied["plan"].is_null(), "an applied preview is spent");
     assert!(!s
         .root
         .join("images/M42/2026-10-01/LIGHT/M42_Ha_001.fits")
@@ -194,28 +234,27 @@ async fn rejects_are_previewed_removed_listed_and_restored_over_http() {
     assert_eq!(status, StatusCode::OK, "{purged}");
     assert_eq!(purged["data"]["frames"], 0);
 
-    let (status, emptied) = call(
-        &s.app,
-        "POST",
-        "/api/db/rig/rejects/trash/empty",
-        Value::Null,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{emptied}");
+    let emptied = run_job(&s.app, "/api/db/rig/rejects/trash/empty", Value::Null).await;
+    assert_eq!(emptied["state"], "done", "{emptied}");
     assert_eq!(
-        emptied["data"]["files_deleted"], 0,
+        emptied["outcome"]["emptied"]["files_deleted"], 0,
         "still inside its retention"
     );
 
-    let (status, restored) = call(
+    let restored = run_job(
         &s.app,
-        "POST",
         "/api/db/rig/rejects/removed/restore",
         json!({"batch_id": batch}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{restored}");
-    assert_eq!(restored["data"]["restored"].as_array().unwrap().len(), 1);
+    assert_eq!(restored["state"], "done", "{restored}");
+    assert_eq!(
+        restored["outcome"]["restored"]["restored"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert!(s
         .root
         .join("images/M42/2026-10-01/LIGHT/M42_Ha_001.fits")

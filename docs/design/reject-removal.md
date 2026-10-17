@@ -14,14 +14,31 @@ once a batch is past its retention, and **Purge** once its files are gone. These
 files move only between an image folder and its own trash, so the database-management gate does
 not apply.
 
+Preview, Remove, Restore and Empty trash read every image folder or move
+files, which takes minutes on a network share, so each runs as the
+catalog's reject removal job (`src/server/reject_removal.rs`, see
+[background jobs](background-jobs.md)). Its route answers `202` with the
+job's status, and the dialog follows the job: what it does and how far
+(`Indexing folders 2 of 5`, `Moving to the trash 37 of 203`), with **Stop**.
+The header's job line lists it too, with Stop. Stop lands between frames:
+each frame's files and rows move together, so the frames done stay done and
+the report says it stopped. A server stop waits for the frame in hand. A
+Remove that finds the rejects changed since the preview removes nothing,
+sets `changed` and leaves the new preview. Listing removals and Purge touch
+only the database, and answer directly.
+
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/api/db/{db}/rejects/removal/preview` | `{min_age_days, project_id?, target_id?}`: the plan, its skipped rejects and `digest` |
-| POST | `/api/db/{db}/rejects/removal/apply` | the same and `digest`, `retention_days`; 409 when the plan changed |
+| GET | `/api/db/{db}/rejects/removal` | the job: `state`, `action`, `stage`, `done` of `total`, the latest preview (`plan`, with its `digest`), `changed`, and the last `outcome` |
+| POST | `/api/db/{db}/rejects/removal/preview` | `{min_age_days, project_id?, target_id?}`: `202`; the plan, its skipped rejects and `digest` land in the status |
+| POST | `/api/db/{db}/rejects/removal/apply` | the same and `digest`, `retention_days`: `202`; the outcome lands in the status |
+| POST | `/api/db/{db}/rejects/removal/stop` | stops the run between frames |
 | GET | `/api/db/{db}/rejects/removed` | `?batch=` adds that batch's frames |
-| POST | `/api/db/{db}/rejects/removed/restore` | `{batch_id}` or `{guids}` |
-| POST | `/api/db/{db}/rejects/trash/empty` | deletes files past their retention |
+| POST | `/api/db/{db}/rejects/removed/restore` | `{batch_id}` or `{guids}`: `202` |
+| POST | `/api/db/{db}/rejects/trash/empty` | deletes files past their retention: `202` |
 | POST | `/api/db/{db}/rejects/removed/purge` | `{batch_id?}`: forgets saved rows of emptied removals |
+
+A run already under way on the catalog refuses another with 409.
 
 The CLI has the same steps: `remove-rejects` (a preview unless `--apply`),
 `list-removed`, `restore-removed`, `empty-reject-trash` and

@@ -203,6 +203,8 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(exposure_groups::get_project_settings)
                 .put(exposure_groups::update_project_settings),
         )
+        .route("/rejects/removal", get(reject_removal::get_status))
+        .route("/rejects/removal/stop", post(reject_removal::stop_removal))
         .route("/rejects/removal/preview", post(reject_removal::preview))
         .route("/rejects/removal/apply", post(reject_removal::apply))
         .route("/rejects/removed", get(reject_removal::removed))

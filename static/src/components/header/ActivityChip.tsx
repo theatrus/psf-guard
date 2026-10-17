@@ -6,6 +6,7 @@ import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
 import { duplicatesKey } from '../calibration/duplicateJob';
+import { rejectRemovalKey } from '../rejectRemovalJob';
 import {
   groupActivity,
   lineLengths,
@@ -74,6 +75,7 @@ function runAction(action: ActivityAction): Promise<unknown> {
   if (control.kind === 'flats') return apiClient.cancelFlatMeasure(control.dbId);
   if (control.kind === 'sites') return apiClient.cancelFrameSites(control.dbId);
   if (control.kind === 'duplicates') return apiClient.stopCalibrationDuplicates(control.dbId);
+  if (control.kind === 'rejects') return apiClient.stopRejectRemoval(control.dbId);
   if (control.kind === 'backup') return apiClient.stopBackup();
   if (control.kind === 'wbpp-running') return apiClient.cancelWbppRun(control.dbId);
   return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
@@ -333,6 +335,8 @@ export default function ActivityChip() {
         queryClient.setQueryData(STACK_ACTIVITY_QUERY_KEY, result);
       } else if (variables.control.kind === 'duplicates') {
         queryClient.setQueryData(duplicatesKey(variables.control.dbId), result);
+      } else if (variables.control.kind === 'rejects') {
+        queryClient.setQueryData(rejectRemovalKey(variables.control.dbId), result);
       } else if (variables.type === 'move') {
         queryClient.setQueryData(WBPP_ACTIVITY_QUERY_KEY, result);
       }

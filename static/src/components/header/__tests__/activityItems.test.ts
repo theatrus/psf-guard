@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   CacheRefreshProgress,
   CalibrationDuplicateStatus,
+  RejectRemovalStatus,
   FlatMeasureStatus,
   FrameSitesStatus,
   QualityBackfillStatus,
@@ -475,6 +476,37 @@ describe('reading frame sites in the job line', () => {
     expect(activityItems([{ ...db, sites: { ...reading, state: 'queued', active: false, retry_at: 99 } }], []))
       .toEqual([]);
     expect(frameSitesLabel({ done: 0, total: 1 })).toBe('Reading frame sites · 0 of 1 frame');
+  });
+});
+
+describe('reject removal in the job line', () => {
+  const idle: RejectRemovalStatus = {
+    state: 'idle', action: null, stage: null, done: 0, total: 0, run: 0, started_at: null, finished_at: null,
+    plan: null, changed: false, outcome: null, error: null, priority: null,
+  };
+  const db = { dbId: 'c925', dbName: 'C925' };
+
+  it("lists a person's removal with how far it got and a stop, and nothing once it ends", () => {
+    const [item] = activityItems([{
+      ...db, rejects: { ...idle, state: 'running', action: 'remove', stage: 'moving', done: 37, total: 203, run: 3, priority: 'interactive' },
+    }], []);
+    expect(item).toMatchObject({
+      key: 'rejects:c925',
+      kind: 'rejects',
+      title: 'Removing rejects',
+      scope: 'C925',
+      detail: 'Moving to the trash 37 of 203',
+      status: 'running',
+      stoppable: true,
+      control: { kind: 'rejects', dbId: 'c925' },
+    });
+    expect(item.background).toBeFalsy();
+    expect(item.percent).toBeCloseTo(18.23, 1);
+    const [preview] = activityItems([{
+      ...db, rejects: { ...idle, state: 'running', action: 'preview', stage: 'indexing', done: 2, total: 5, run: 1 },
+    }], []);
+    expect(preview).toMatchObject({ title: 'Previewing reject removal', detail: 'Indexing folders 2 of 5' });
+    expect(activityItems([{ ...db, rejects: { ...idle, state: 'stopped', action: 'remove', run: 3 } }], [])).toEqual([]);
   });
 });
 

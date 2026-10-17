@@ -1,6 +1,7 @@
 import type {
   CacheRefreshProgress,
   CalibrationDuplicateStatus,
+  RejectRemovalStatus,
   FlatMeasureStatus,
   FrameSitesStatus,
   QualityBackfillStatus,
@@ -15,6 +16,7 @@ import type { BackupJob } from '../../api/backupTypes';
 import { describeJob, jobPercent } from '../../utils/backupJob';
 import { flatMeasureLabel } from '../calibration/flatMeasureLabel';
 import { duplicateJobLabel, duplicateJobPercent, duplicateJobTitle } from '../calibration/duplicateJob';
+import { rejectRemovalLabel, rejectRemovalPercent, rejectRemovalTitle } from '../rejectRemovalJob';
 
 /** What a row can do: stop its job, and move it in its line. */
 export type ActivityControl =
@@ -22,6 +24,7 @@ export type ActivityControl =
   | { kind: 'flats'; dbId: string }
   | { kind: 'sites'; dbId: string }
   | { kind: 'duplicates'; dbId: string }
+  | { kind: 'rejects'; dbId: string }
   | { kind: 'backup' }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string };
@@ -49,7 +52,7 @@ export type ActivityTier = 'person' | 'automatic';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup';
   transfer?: TransferJob;
   stateLabel?: string;
   /** What is happening: "Stacking", "Analyzing quality". */
@@ -125,6 +128,7 @@ export interface DatabaseActivity {
   flats?: FlatMeasureStatus;
   sites?: FrameSitesStatus;
   duplicates?: CalibrationDuplicateStatus;
+  rejects?: RejectRemovalStatus;
 }
 
 /** Automatic stack work out of the line, waiting for the worker. */
@@ -371,6 +375,22 @@ function duplicatesItem(db: DatabaseActivity, duplicates: CalibrationDuplicateSt
   };
 }
 
+/** Purge Rejects' preview, removal, restore or trash emptying. A person
+ *  starts each, from Settings › Databases. */
+function rejectsItem(db: DatabaseActivity, rejects: RejectRemovalStatus): ActivityItem {
+  return {
+    key: `rejects:${db.dbId}`,
+    kind: 'rejects',
+    title: rejectRemovalTitle(rejects),
+    scope: db.dbName,
+    detail: rejectRemovalLabel(rejects),
+    status: 'running',
+    percent: rejectRemovalPercent(rejects),
+    stoppable: true,
+    control: { kind: 'rejects', dbId: db.dbId },
+  };
+}
+
 /** A stretch, deconvolution or RC-Astro run on a finished stack. It waits in
  *  the same line as builds, so it moves and leaves the line the same way. */
 function processingItem(entry: StackActivityEntry): ActivityItem {
@@ -595,6 +615,7 @@ export function activityItems(
     if (db.flats?.active) items.push(flatsItem(db, db.flats));
     if (db.sites?.active) items.push(sitesItem(db, db.sites));
     if (db.duplicates?.state === 'running') items.push(duplicatesItem(db, db.duplicates));
+    if (db.rejects?.state === 'running') items.push(rejectsItem(db, db.rejects));
   }
   // The server lists builds running first, then the line in order.
   const ordered = [...stacks].sort(

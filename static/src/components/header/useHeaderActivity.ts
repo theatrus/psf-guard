@@ -4,6 +4,7 @@ import { apiClient } from '../../api/client';
 import type {
   CacheRefreshProgress,
   CalibrationDuplicateStatus,
+  RejectRemovalStatus,
   FlatMeasureStatus,
   FrameSitesStatus,
   QualityBackfillStatus,
@@ -18,6 +19,7 @@ import { useAccess } from '../../auth/access';
 import { isTauriApp } from '../../utils/tauri';
 import { flatMeasureKey, flatMeasurePollMs } from '../calibration/flatMeasureLabel';
 import { duplicatesKey, duplicatesPollMs } from '../calibration/duplicateJob';
+import { rejectRemovalKey, rejectRemovalPollMs } from '../rejectRemovalJob';
 import { activityItems, summarize, type DatabaseActivity, type ProjectOf } from './activityItems';
 import { frameSitesKey } from '../calibration/frameSitesKey';
 
@@ -51,6 +53,8 @@ function busy(db: DatabaseActivity): boolean {
     || db.sites?.active
     // A repair changes frames, masters and grades; a check changes nothing.
     || (db.duplicates?.state === 'running' && db.duplicates.action === 'repair')
+    // Removing or restoring rejects takes frames out of the catalog or back.
+    || (db.rejects?.state === 'running' && db.rejects.action !== 'preview')
   );
 }
 
@@ -179,6 +183,18 @@ export function useHeaderActivity() {
     })),
   });
 
+  // Reject removal runs only when a person starts it, the same way.
+  const rejects = useQueries({
+    queries: databases.map((db) => ({
+      queryKey: rejectRemovalKey(db.id),
+      queryFn: () => apiClient.getRejectRemoval(db.id),
+      refetchInterval: (query: { state: { data?: RejectRemovalStatus } }) =>
+        rejectRemovalPollMs(query.state.data),
+      refetchIntervalInBackground: false,
+      retry: false,
+    })),
+  });
+
   const perDb: DatabaseActivity[] = databases.map((db, index) => ({
     dbId: db.id,
     dbName: db.name,
@@ -188,6 +204,7 @@ export function useHeaderActivity() {
     flats: flats[index]?.data,
     sites: sites[index]?.data,
     duplicates: duplicates[index]?.data,
+    rejects: rejects[index]?.data,
   }));
   const items = activityItems(perDb, stacks, wbpp.data, projectOf, {
     scheduled,

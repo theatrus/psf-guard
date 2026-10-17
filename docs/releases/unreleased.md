@@ -4,6 +4,11 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Purge Rejects' Preview, Remove, Restore and Empty trash run as a job. The
+  dialog and the background jobs list say what it is doing and how far, as
+  `Moving to the trash 37 of 203`, and **Stop** ends it after the frame in
+  hand, keeping the frames already done. A large removal over a network
+  share no longer times out in the browser.
 - Settings › Databases lays each database out as Rigs does: its name and
   compact actions on one line (**Import**, **Purge Rejects** as an eraser
   icon, **Edit**, and **Remove** as a trash icon), with its catalog and image
