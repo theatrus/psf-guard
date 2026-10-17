@@ -280,6 +280,9 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* The screen a phone shows now: iOS Safari's 100vh runs on under its
+     toolbar, where the page's end and the detail's grading bar would sit. */
+  height: 100dvh;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
 }
@@ -1475,6 +1478,7 @@
   background: var(--color-bg-secondary);
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -2638,6 +2642,7 @@
   border-radius: 0;
   width: 100%;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -5689,6 +5694,7 @@
   .stack-inspector {
     width: 100vw;
     height: 100vh;
+    height: 100dvh;
     border: 0;
     border-radius: 0;
   }

@@ -75,7 +75,10 @@ export function useTuckAway(header: RefObject<HTMLElement | null>, page: string)
       setTucked(next.tucked);
     };
     const onScroll = () => {
-      const top = scroller.scrollTop;
+      // Within the page's scroll range: Safari's bounce past either end
+      // springs back, and that is no scroll up.
+      const bottom = Math.max(scroller.scrollHeight - scroller.clientHeight, 0);
+      const top = Math.min(Math.max(scroller.scrollTop, 0), bottom);
       if (!phone.matches) {
         if (state.current.tucked) apply({ tucked: false, anchor: top });
         return;
@@ -84,7 +87,7 @@ export function useTuckAway(header: RefObject<HTMLElement | null>, page: string)
         state.current = { ...state.current, anchor: top };
         return;
       }
-      const roomBelow = scroller.scrollHeight - scroller.clientHeight - top;
+      const roomBelow = bottom - top;
       const next = nextTuck(state.current, top, roomBelow, height);
       if (next !== state.current) apply(next);
     };
