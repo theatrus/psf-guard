@@ -40,7 +40,7 @@ test('backs up settings and catalogs now and downloads the archive', async ({ pa
   await page.goto('/');
   await openBackups(page);
   const card = page.getByRole('region', { name: 'Back up now' });
-  await expect(card.getByText(/the catalog, copied safely/)).toBeVisible();
+  await expect(card.getByText(/plus the catalog\./)).toBeVisible();
   await card.getByRole('button', { name: 'Back up now' }).click();
   const done = card.locator('.backup-note.is-good');
   await expect(done).toContainText(/Backed up .*psf-guard-backup-.*-full\.zip/, { timeout: 30_000 });

@@ -43,7 +43,7 @@ function overview(change: Partial<BackupsOverview> = {}): BackupsOverview {
       include_secrets: false,
       retention: { kind: 'count', count: 7 },
     },
-    suggested_destination: '/home/astro/.config/psf-guard/backups',
+    suggested_destination: '/home/astro/Documents/psf-guard/backups',
     job: null,
     last_run: null,
     next_run_at: null,
@@ -207,14 +207,14 @@ describe('BackupSettings', () => {
     render(<BackupSettings />, { wrapper: wrapper() });
     const card = await screen.findByRole('region', { name: 'Back up now' });
     const folder = within(card).getByLabelText(/Save to/);
-    expect(folder).toHaveValue('/home/astro/.config/psf-guard/backups');
+    expect(folder).toHaveValue('/home/astro/Documents/psf-guard/backups');
     expect(within(card).getByRole('button', { name: 'Browse…' })).toBeInTheDocument();
     fireEvent.change(folder, { target: { value: '' } });
     expect(within(card).getByRole('button', { name: 'Back up now' })).toBeDisabled();
     fireEvent.change(folder, { target: { value: '/Volumes/Backup/psf' } });
     fireEvent.click(within(card).getByRole('button', { name: 'Back up now' }));
     await waitFor(() =>
-      expect(asked).toEqual({ scope: 'full', include_secrets: false, destination: '/Volumes/Backup/psf' })
+      expect(asked).toEqual({ scope: 'full', include_secrets: true, destination: '/Volumes/Backup/psf' })
     );
     expect(screen.queryByRole('link', { name: /Download/ })).not.toBeInTheDocument();
   });
@@ -238,7 +238,7 @@ describe('BackupSettings', () => {
     expect(save).toBeDisabled();
     expect(save).toHaveAccessibleDescription('No changes to save.');
     fireEvent.click(within(card).getByRole('checkbox', { name: /Back up on a schedule/ }));
-    expect(within(card).getByLabelText(/^Folder/)).toHaveValue('/home/astro/.config/psf-guard/backups');
+    expect(within(card).getByLabelText(/^Folder/)).toHaveValue('/home/astro/Documents/psf-guard/backups');
     fireEvent.change(within(card).getByLabelText('Every'), { target: { value: 'weekly' } });
     fireEvent.change(within(card).getByLabelText('On'), { target: { value: '2' } });
     fireEvent.change(within(card).getByLabelText('At'), { target: { value: '12:30' } });
@@ -257,13 +257,33 @@ describe('BackupSettings', () => {
         frequency: 'weekly',
         weekday: 2,
         time: '12:30',
-        destination: '/home/astro/.config/psf-guard/backups',
+        destination: '/home/astro/Documents/psf-guard/backups',
         scope: 'full',
         include_secrets: false,
         retention: { kind: 'age', days: 30 },
       })
     );
     expect(await within(card).findByText(/2030/)).toBeInTheDocument();
+  });
+
+  it('starts a never-saved schedule with secrets in the desktop app', async () => {
+    desktop.isTauri = true;
+    let saved: unknown = null;
+    serve(() => overview());
+    server.use(
+      http.put('/api/backups/settings', async ({ request }) => {
+        saved = await request.json();
+        return ok(overview({ settings: { ...(saved as BackupsOverview['settings']), since: 1 } }));
+      })
+    );
+    render(<BackupSettings />, { wrapper: wrapper() });
+    const card = await screen.findByRole('region', { name: 'Scheduled backups' });
+    expect(within(card).getByRole('checkbox', { name: /Include secrets/ })).toBeChecked();
+    const save = within(card).getByRole('button', { name: 'Save schedule' });
+    expect(save).toHaveAccessibleDescription('No changes to save.');
+    fireEvent.click(within(card).getByRole('checkbox', { name: /Back up on a schedule/ }));
+    fireEvent.click(save);
+    await waitFor(() => expect(saved).toMatchObject({ enabled: true, include_secrets: true }));
   });
 
   it("says what the server refused about a schedule", async () => {

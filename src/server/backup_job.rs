@@ -83,7 +83,7 @@ pub struct JobStatus {
     pub stopping: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Succeeded,
@@ -91,8 +91,8 @@ pub enum Outcome {
     Stopped,
 }
 
-/// How the last run went.
-#[derive(Debug, Clone, Serialize)]
+/// How the last run went. Kept across restarts in `backup-state.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LastRun {
     pub trigger: Trigger,
     pub scope: BackupScope,
@@ -141,19 +141,25 @@ pub struct BackupManager {
     director_meta: RwLock<Option<PathBuf>>,
     /// Pause between SQLite steps; tests slow it down.
     step_pause: RwLock<Option<Duration>>,
-    /// Where a stopped or failed scheduled run is remembered across
-    /// restarts, beside the registry.
+    /// Where a stopped or failed scheduled run, and the last run, are
+    /// remembered across restarts, beside the registry.
     state_path: RwLock<Option<PathBuf>>,
+    /// Held from the change to the rename, so the file ends with the newest
+    /// state and two saves never share the temporary file.
+    saving: Mutex<()>,
 }
 
-/// What the schedule keeps across restarts: a stopped run waits for its
-/// next slot, and a failed one an hour, even when the server restarts.
+/// What the backups keep across restarts: a stopped run waits for its
+/// next slot, and a failed one an hour, even when the server restarts; and
+/// Settings still says how the last backup went.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 struct SavedState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     held_since: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     retry_after: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last: Option<LastRun>,
 }
 
 /// `backup-state.json` beside the standard registry, `<stem>.backup-state.json`
@@ -176,7 +182,7 @@ impl BackupManager {
         *self.director_meta.write().unwrap() = director_meta;
     }
 
-    /// Read what the schedule remembered before a restart, and keep it
+    /// Read what the backups remembered before a restart, and keep it
     /// beside `registry` from now on.
     pub fn load_state(&self, registry: &Path) {
         let path = state_path_for(registry);
@@ -188,18 +194,27 @@ impl BackupManager {
             let mut inner = self.inner.lock().unwrap();
             inner.held_since = saved.held_since;
             inner.retry_after = saved.retry_after;
+            inner.last = saved.last;
         }
         *self.state_path.write().unwrap() = Some(path);
     }
 
-    /// Change what the schedule remembers, and save it.
+    /// Change what the backups remember, and save it.
     fn remember(&self, change: impl FnOnce(&mut Inner)) {
+        let _saving = self
+            .saving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let saved = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self
+                .inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             change(&mut inner);
             SavedState {
                 held_since: inner.held_since,
                 retry_after: inner.retry_after,
+                last: inner.last.clone(),
             }
         };
         let Some(path) = self.state_path.read().unwrap().clone() else {
@@ -424,37 +439,33 @@ struct RunnerClaim<'a>(&'a AppState);
 
 impl Drop for RunnerClaim<'_> {
     fn drop(&mut self) {
-        let mut inner = self
-            .0
-            .backups
-            .inner
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(job) = inner.job.take()
-            && inner
-                .last
-                .as_ref()
-                .is_none_or(|last| last.started_at != job.started_at)
-        {
-            // The runner did not get to record how it went.
-            inner.last = Some(LastRun {
-                trigger: job.trigger,
-                scope: job.scope,
-                started_at: job.started_at,
-                finished_at: Utc::now().timestamp(),
-                outcome: Outcome::Failed,
-                location: job.location,
-                destination: job.destination,
-                file_name: None,
-                bytes: None,
-                error: Some("the backup stopped unexpectedly".into()),
-                problems: Vec::new(),
-                pruned: Vec::new(),
-                prune_kept: Vec::new(),
-                prune_kept_for: Vec::new(),
-                prune_skipped: None,
-            });
-        }
+        self.0.backups.remember(|inner| {
+            if let Some(job) = inner.job.take()
+                && inner
+                    .last
+                    .as_ref()
+                    .is_none_or(|last| last.started_at != job.started_at)
+            {
+                // The runner did not get to record how it went.
+                inner.last = Some(LastRun {
+                    trigger: job.trigger,
+                    scope: job.scope,
+                    started_at: job.started_at,
+                    finished_at: Utc::now().timestamp(),
+                    outcome: Outcome::Failed,
+                    location: job.location,
+                    destination: job.destination,
+                    file_name: None,
+                    bytes: None,
+                    error: Some("the backup stopped unexpectedly".into()),
+                    problems: Vec::new(),
+                    pruned: Vec::new(),
+                    prune_kept: Vec::new(),
+                    prune_kept_for: Vec::new(),
+                    prune_skipped: None,
+                });
+            }
+        });
     }
 }
 
@@ -620,9 +631,10 @@ fn run(
             }
         }
     }
-    let mut inner = manager.inner.lock().unwrap();
-    inner.last = Some(last);
-    inner.job = None;
+    manager.remember(|inner| {
+        inner.last = Some(last);
+        inner.job = None;
+    });
 }
 
 /// Archives made for a download are kept a day, three at most. Swept after
@@ -727,7 +739,8 @@ pub struct ListedBackup {
 #[derive(Debug, Clone, Serialize)]
 pub struct BackupsOverview {
     pub settings: BackupSettings,
-    /// Beside the registry, for a person who has not chosen a folder.
+    /// `~/Documents/psf-guard/backups`, for a person who has not chosen a
+    /// folder.
     pub suggested_destination: String,
     pub job: Option<JobStatus>,
     pub last_run: Option<LastRun>,
@@ -796,8 +809,8 @@ fn overview(state: &AppState, registry_path: &Path) -> Result<BackupsOverview, A
             &backup::install_id(&registry, registry_path),
             Utc::now(),
         ),
-        suggested_destination: registry_path
-            .with_file_name("backups")
+        suggested_destination: backup::default_destination()
+            .unwrap_or_else(|| registry_path.with_file_name("backups"))
             .display()
             .to_string(),
         settings,
@@ -872,6 +885,9 @@ pub async fn update_backup_settings(
     if wanted.enabled
         && let Some(folder) = wanted.destination_path().map(PathBuf::from)
         && !folder.is_dir()
+        && !backup::make_default_destination(&folder).map_err(|error| {
+            AppError::BadRequest(format!("could not create {}: {error:#}", folder.display()))
+        })?
     {
         let parent_exists = folder.parent().is_some_and(Path::is_dir);
         if folder.exists() || !parent_exists {

@@ -155,8 +155,8 @@ function ScopeChoice({
         <span>
           Settings and catalogs
           <small>
-            Everything below, plus {overview.catalogs === 1 ? 'the catalog' : `all ${overview.catalogs} catalogs`},
-            copied safely while N.I.N.A. keeps writing. About {fullSize} before compression.
+            Everything below, plus {overview.catalogs === 1 ? 'the catalog' : `all ${overview.catalogs} catalogs`}.
+            About {fullSize} before compression.
           </small>
         </span>
       </label>
@@ -261,7 +261,9 @@ function BackupNow({ overview, job }: { overview: BackupsOverview; job: BackupJo
   const queryClient = useQueryClient();
   const desktop = isTauriApp();
   const [scope, setScope] = useState<BackupScope>('full');
-  const [secrets, setSecrets] = useState(false);
+  // The desktop app saves to its own disk, so its backups keep secrets
+  // unless a person turns them off.
+  const [secrets, setSecrets] = useState(desktop);
   // The desktop app has no download: it saves to a folder, the schedule's
   // when there is one.
   const [folder, setFolder] = useState(() =>
@@ -290,10 +292,6 @@ function BackupNow({ overview, job }: { overview: BackupsOverview; job: BackupJo
   return (
     <section className="backup-card" aria-labelledby="backup-now-heading">
       <h3 id="backup-now-heading">Back up now</h3>
-      <p className="review-preferences-note">
-        One zip archive with a manifest of every file, its checksum and where it goes back. Previews,
-        stacks and masters are left out: PSF Guard makes them again.
-      </p>
       <ScopeChoice overview={overview} value={scope} onChange={setScope} name="backup-now-scope" />
       <SecretsToggle
         overview={overview}
@@ -356,9 +354,15 @@ function retentionCount(retention: BackupRetention): number {
   return retention.kind === 'count' ? retention.count : retention.days;
 }
 
+/** A schedule never saved (`since` is set by every save) starts with
+ * secrets in the desktop app, as Back up now does there. */
+function withDesktopDefaults(settings: Schedule): Schedule {
+  return isTauriApp() && settings.since == null ? { ...settings, include_secrets: true } : settings;
+}
+
 function BackupSchedule({ overview }: { overview: BackupsOverview }) {
   const queryClient = useQueryClient();
-  const saved = overview.settings;
+  const saved = withDesktopDefaults(overview.settings);
   const [draft, setDraft] = useState<Schedule>(saved);
   const [keep, setKeep] = useState(String(retentionCount(saved.retention)));
   // Follow a save made elsewhere unless this form has edits of its own.

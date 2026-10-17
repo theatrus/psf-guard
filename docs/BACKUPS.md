@@ -113,9 +113,11 @@ folder only you can read.
 Choose the scope and whether to include secrets, then **Back up now**. In a
 browser, leave the folder empty to download the archive; the server keeps
 it in `<cache>/backup-downloads/` for a day, and sweeps older ones every 30
-seconds and at start. In the desktop app, choose a folder with **Browse…**.
-A folder you name is created if its parent is there; a missing parent, such
-as an unmounted disk, fails the backup. The run shows in Settings and in the
+seconds and at start. In the desktop app, choose a folder with **Browse…**;
+`~/Documents/psf-guard/backups` is suggested, and **Include secrets** starts
+ticked. A folder you name is created if its parent is there; a missing
+parent, such as an unmounted disk, fails the backup. The suggested folder is
+on the home disk, so it is created whole, `psf-guard` folder and all. The run shows in Settings and in the
 header's job line, with a Stop button.
 
 ## Scheduled backups
@@ -125,15 +127,17 @@ Turn on **Back up on a schedule** and choose:
 - **Every** day or week, the weekday, and the time of day in the server's
   local time. Midday is the default: imaging runs at night, so catalogs are
   quiet by day.
-- **Folder**: required; the beside-the-registry `backups` folder is
-  suggested. Another disk is better. Saving creates the folder; a folder
-  whose disk is not mounted is refused. A run never creates folders, so a
-  disk unmounted later fails the run ("destination not found: is its disk
-  mounted?") instead of filling the system disk. Settings warns when the
+- **Folder**: required; `~/Documents/psf-guard/backups` is suggested.
+  Another disk is better. Saving creates the folder; a folder whose disk is
+  not mounted is refused. A run never creates another folder, so a disk
+  unmounted later fails the run ("destination not found: is its disk
+  mounted?") instead of filling the system disk. The suggested folder is the
+  exception: it is on the home disk, so a run makes it again if it is gone. Settings warns when the
   folder is inside a catalog's folder, an image folder, or PSF Guard's
   generated folders.
 - **What to back up**: settings and catalogs by default.
-- **Include secrets**: off by default.
+- **Include secrets**: on by default in the desktop app, off in a browser,
+  where an archive with secrets cannot be downloaded.
 - **How many to keep**: the newest 7 by default, or every one younger than a
   number of days, the newest always kept.
 
@@ -142,7 +146,8 @@ it waits while work you started runs, such as a stack build, and the job
 line lists it as waiting meanwhile. A server that was off at the scheduled
 time runs once when it comes back. A run that fails is tried again an hour
 later; a stopped run waits for the next scheduled time. Both hold across a
-restart: PSF Guard keeps them in `backup-state.json` beside the registry.
+restart, as does the last backup's result: PSF Guard keeps them in
+`backup-state.json` beside the registry.
 Stop works while a run waits, too.
 
 After a complete run the schedule removes its own older archives by the
@@ -169,7 +174,8 @@ replacing any file. On a file system that cannot rename without replacing,
 such as exFAT, the archive first claims its name with a new empty file and
 then replaces that.
 
-Settings shows the next run, the last run and its result, and lists the
+Settings shows the next run, the last backup and its result, even after a
+restart, and lists the
 archives in the schedule's folder and the download area, with a download
 link in a browser.
 

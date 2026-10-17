@@ -150,11 +150,11 @@
 
 - **Settings › Backups** backs up PSF Guard's settings, accounts, setups and
   Planning's store, and every catalog with the tables PSF Guard adds to it,
-  into one zip archive with a manifest of versions and checksums. Catalogs
-  are copied safely while N.I.N.A. keeps writing. Download the archive in a
-  browser or save it to a folder in the desktop app, or turn on scheduled
-  backups: daily or weekly at a time you choose, to a folder you choose,
-  keeping the newest few or those younger than some days. Scheduled backups
+  into one zip archive with a manifest of versions and checksums. Download
+  the archive in a browser or save it to a folder in the desktop app, or
+  turn on scheduled backups: daily or weekly at a time you choose, to a
+  folder you choose, keeping the newest few or those younger than some
+  days. Scheduled backups
   run in the background, step aside for your own work, show in the job line
   with Stop, and remove only their own older archives. Peer keys and tokens
   are left out unless you ask for them. `psf-guard backup` does the same
@@ -752,3 +752,7 @@
   Sessions and Groups.
 - Forgetting a calibration frame now always shows the next one, not
   sometimes the first.
+- Backups suggest `~/Documents/psf-guard/backups` and create it when it is
+  missing. In the desktop app they include secrets unless you untick
+  **Include secrets**. Settings › Backups still shows how the last backup
+  went after PSF Guard restarts.
