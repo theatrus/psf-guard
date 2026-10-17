@@ -57,7 +57,7 @@ import PillSelect from './toolbar/PillSelect';
 import ImageOrderToggle from './toolbar/ImageOrderToggle';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
-import { ScanSearch, X } from 'lucide-react';
+import { CalendarRange, ScanSearch, X } from 'lucide-react';
 import { GradingStatus } from '../api/types';
 import type { CalibrationLightMark, Image, ScoredSequence, ImageQualityResult } from '../api/types';
 import {
@@ -1100,11 +1100,14 @@ export default function SequenceView() {
                 return (
                   <button
                     key={choice.key}
-                    className="sequence-tab"
+                    className={choice.scoreScope === 'target_filter' ? 'sequence-tab sequence-tab-all-sessions' : 'sequence-tab'}
                     aria-pressed={choice.key === activeChoice?.key}
                     onClick={() => selectSequence(choice)}
                   >
-                    <span>{choice.label}</span>
+                    <span>
+                      {choice.scoreScope === 'target_filter' && <CalendarRange size={14} aria-hidden="true" />}
+                      {choice.label}
+                    </span>
                     {selectedCount > 0 && (
                       <span className="sequence-tab-selection-count">{selectedCount}</span>
                     )}

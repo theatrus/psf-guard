@@ -1243,8 +1243,12 @@ describe('SequenceView: multi-session', () => {
         multiSessionFixture.data.sequences[0].session_start * 1000,
       ).getFullYear();
       expect(tabs[0]).toHaveTextContent(String(year));
+      // Only the all-sessions tab is marked out from the sessions.
+      tabs.forEach(tab => expect(tab).not.toHaveClass('sequence-tab-all-sessions'));
     });
-    expect(screen.getByRole('button', { name: 'L · All sessions (10)' })).toHaveAttribute('aria-pressed', 'true');
+    const allSessions = screen.getByRole('button', { name: 'L · All sessions (10)' });
+    expect(allSessions).toHaveAttribute('aria-pressed', 'true');
+    expect(allSessions).toHaveClass('sequence-tab-all-sessions');
   });
 
   it('compares all stack candidates without replacing session scores', async () => {

@@ -237,6 +237,10 @@
   --color-time-hour-label: var(--color-text-muted);
   --color-time-hour-label-bg: var(--color-bg-tertiary);
   --color-time-night-band: rgb(150 175 235 / 8%);
+  /* Sequence's per-filter All sessions tab: the night markers' hue, apart
+     from the pressed tab's. */
+  --color-sequence-all-sessions: rgb(150 175 235);
+  --color-sequence-all-sessions-bg: rgb(150 175 235 / 10%);
 
   /* Border Colors */
   --color-border-primary: #333;
@@ -6544,6 +6548,27 @@
 
 .sequence-tab:hover:not([aria-pressed='true']) {
   background: var(--color-bg-quaternary);
+}
+
+/* A filter's All sessions tab leads its row and keeps its bar when pressed. */
+.sequence-tab-all-sessions {
+  grid-column-start: 1;
+  border-left: 3px solid var(--color-sequence-all-sessions);
+  font-weight: 600;
+}
+
+.sequence-tab-all-sessions:not([aria-pressed='true']) {
+  background: var(--color-sequence-all-sessions-bg);
+  color: var(--color-sequence-all-sessions);
+}
+
+.sequence-tab-all-sessions[aria-pressed='true'] {
+  border-left-color: var(--color-sequence-all-sessions);
+}
+
+.sequence-tab-all-sessions svg {
+  margin-right: 0.35rem;
+  vertical-align: -2px;
 }
 
 .sequence-tab-selection-count {
