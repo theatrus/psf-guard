@@ -280,6 +280,9 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* The screen a phone shows now: iOS Safari's 100vh runs on under its
+     toolbar, where the page's end and the detail's grading bar would sit. */
+  height: 100dvh;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
 }
@@ -856,17 +859,8 @@
   }
 }
 
-/* Phones stack from the first paint, before anything is measured. */
-@media (max-width: 760px) {
-  .app-header,
-  .app-header.compact {
-    grid-template-columns: auto minmax(0, 1fr);
-    grid-template-areas:
-      "brand utilities"
-      "nav nav";
-    padding: 0.5rem 0.8rem;
-  }
-}
+/* A phone lays the header out in two rows from the first paint, before
+   anything is measured: see header.css. */
 
 @media (max-width: 760px) {
   .site-banner {
@@ -919,21 +913,6 @@
 }
 
 @media (max-width: 520px) {
-  .app-header,
-  .app-header.compact {
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      "brand utilities"
-      "nav nav";
-    padding: 0.4rem 0.5rem;
-    column-gap: 0.4rem;
-  }
-
-  .header-view-tabs {
-    width: 100%;
-    min-width: 0;
-  }
-
   .brand-button {
     font-size: 0.85rem;
     gap: 0.4rem;
@@ -1499,6 +1478,7 @@
   background: var(--color-bg-secondary);
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1795,6 +1775,46 @@
   .detail-shortcuts {
     display: none;
   }
+
+  /* The bar under the panels grades instead. */
+  .detail-info .detail-actions {
+    display: none;
+  }
+
+  .image-detail .detail-phone-bar {
+    display: flex;
+    flex: none;
+    align-items: stretch;
+    gap: 6px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--color-border-primary);
+    background: var(--color-bg-secondary);
+  }
+
+  .detail-phone-bar .action-button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0.5rem 0.25rem;
+  }
+
+  .detail-phone-step {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    padding: 0;
+    border: 1px solid var(--color-border-primary);
+    border-radius: 4px;
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+  }
+}
+
+/* Only a phone grades from the bar. */
+.detail-phone-bar {
+  display: none;
 }
 
 .detail-astrometry-overlay {
@@ -2622,6 +2642,7 @@
   border-radius: 0;
   width: 100%;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -3471,6 +3492,16 @@
   border-radius: 4px;
   font-size: 0.75rem;
   color: var(--color-text-muted);
+}
+
+/* The build options: in the row on a wide screen, folded behind Options
+   on a phone. */
+.stack-preview-options {
+  display: contents;
+}
+
+.stack-preview-options-toggle {
+  display: none;
 }
 
 .stack-preview-build,
@@ -5506,7 +5537,8 @@
 }
 
 @media (max-width: 760px) {
-  .app-main:has(.grouped-image-container) {
+  /* Every page keeps a slim edge on a phone. */
+  .app-main {
     padding-inline: 0.5rem;
   }
 
@@ -5531,6 +5563,66 @@
 
   .stack-preview-actions {
     justify-content: flex-start;
+  }
+
+  .stack-preview-options-toggle {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.2rem 0.4rem;
+    padding: 0.48rem 0.8rem;
+    border: 1px solid var(--color-bg-quaternary);
+    border-radius: 5px;
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-primary);
+    font-size: 0.82rem;
+  }
+
+  .stack-preview-options-toggle small {
+    color: var(--color-text-muted);
+  }
+
+  .stack-preview-options-toggle.is-set {
+    border-color: var(--state-set-border);
+    background: var(--state-set-bg);
+  }
+
+  .stack-preview-options-toggle.is-set small {
+    color: var(--state-set-fg);
+  }
+
+  .stack-preview-options-toggle[aria-expanded='true'] {
+    border-color: var(--state-on-border);
+    background: var(--state-on-bg);
+    color: var(--state-on-fg);
+  }
+
+  .stack-preview-options-toggle[aria-expanded='false'] + .stack-preview-options {
+    display: none;
+  }
+
+  .stack-preview-options-toggle[aria-expanded='true'] + .stack-preview-options {
+    box-sizing: border-box;
+    display: flex;
+    flex: 1 0 100%;
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.6rem;
+    border: 1px solid var(--color-border-secondary);
+    border-radius: 6px;
+  }
+
+  .stack-preview-options select {
+    max-width: 100%;
+  }
+
+  .stack-preview-options .stack-preview-calibration-mode,
+  .stack-preview-options .stack-preview-frame-order {
+    min-width: 0;
+    max-width: 100%;
   }
 
   .stack-preview-statusline {
@@ -5602,6 +5694,7 @@
   .stack-inspector {
     width: 100vw;
     height: 100vh;
+    height: 100dvh;
     border: 0;
     border-radius: 0;
   }
@@ -5819,6 +5912,42 @@
   padding: 1.5rem;
   transition: grid-template-columns 0.3s;
   align-items: start;
+}
+
+/* A phone: a group's name and counts share a line where they fit, and
+   wrap by word rather than letter by letter. */
+@media (max-width: 760px) {
+  .filter-header {
+    gap: 0.35rem 0.75rem;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .filter-header h3 {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-size: 1rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .filter-stats {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.15rem 0.6rem;
+    font-size: 0.78rem;
+  }
+
+  .filter-stats span {
+    white-space: nowrap;
+  }
+
+  .filter-images {
+    --card-gap: 0.6rem;
+    --card-row-gap: 0.75rem;
+    padding: 0.6rem;
+  }
 }
 
 /* Night and hour marks between cards (TimeBreakMark). Everything is

@@ -18,6 +18,7 @@ import LazyImageCard from './LazyImageCard';
 import FilterControls, { type FilterOptions } from './FilterControls';
 import { imageFilterCount } from '../utils/imageFilterCount';
 import ViewToolbar from './toolbar/ViewToolbar';
+import PhoneUndoItems from './toolbar/PhoneUndoItems';
 import ScopeChip from './toolbar/ScopeChip';
 import RescanImageFolders from './toolbar/RescanImageFolders';
 import SelectionBar from './toolbar/SelectionBar';
@@ -1066,6 +1067,13 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
           )}
           menu={grading.canWrite ? (
             <>
+            <PhoneUndoItems
+              canUndo={grading.canUndo}
+              canRedo={grading.canRedo}
+              isProcessing={grading.isLoading}
+              onUndo={grading.undo}
+              onRedo={grading.redo}
+            />
             <button
               type="button"
               className="toolbar-menu-item organization-action"

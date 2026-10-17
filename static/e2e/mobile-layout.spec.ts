@@ -217,3 +217,71 @@ test('help overlay fits a phone', async ({ page }, testInfo) => {
   await expect(page.getByText('Keyboard Shortcuts').first()).toBeVisible();
   await expectPhoneFit(page, testInfo, 'help');
 });
+
+test('the phone header takes two rows and tucks away while the page scrolls down', async ({ page }) => {
+  // Short enough that the three fixture frames scroll well past the header.
+  await page.setViewportSize({ width: PHONE.width, height: 520 });
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.image-card').first()).toBeVisible({ timeout: 15_000 });
+  const header = page.locator('.app-header');
+  const height = (await header.boundingBox())!.height;
+  expect(height, 'the header holds two rows').toBeLessThan(130);
+  // The logo opens the Library, so the header leaves its tab out; the view
+  // in use is named by its highlighted icon.
+  await expect(header.getByRole('button', { name: 'Library', exact: true })).toBeHidden();
+  const images = header.getByRole('button', { name: 'Images', exact: true });
+  await expect(images).toHaveAttribute('aria-current', 'page');
+  // Icon only, the current view's too, and a tap opens no name.
+  await expect(images.locator('.view-tab-name')).toBeHidden();
+  await images.tap();
+  await expect(images.locator('.view-tab-name')).toBeHidden();
+  expect((await images.boundingBox())!.width).toBeLessThanOrEqual(40);
+
+  const main = page.locator('.app-main');
+  await main.evaluate((el) => el.scrollBy(0, 300));
+  await expect(header).toHaveClass(/is-tucked/);
+  await expect.poll(async () => (await header.boundingBox())!.y + (await header.boundingBox())!.height)
+    .toBeLessThanOrEqual(1);
+  await main.evaluate((el) => el.scrollBy(0, -60));
+  await expect(header).not.toHaveClass(/is-tucked/);
+  await expect.poll(async () => (await header.boundingBox())!.y).toBeGreaterThanOrEqual(0);
+
+  await header.getByRole('button', { name: 'PSF Guard' }).click();
+  await expect(page.getByRole('heading', { name: 'Earlier work' })).toBeVisible({ timeout: 15_000 });
+});
+
+test('a phone grades and steps from the bar under the detail panels', async ({ page, request }) => {
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('img.detail-main-image[alt="Alpha M44 - B"]')).toBeVisible({ timeout: 15_000 });
+  const bar = page.getByRole('group', { name: 'Grade and step' });
+  await expect(bar).toBeInViewport();
+  // The panel's own buttons give way to the bar.
+  await expect(page.locator('.detail-actions')).toBeHidden();
+  const status = async () => {
+    const response = await request.get(`/api/db/${encodeURIComponent(dbId)}/images/1`);
+    return (await response.json()).data.grading_status;
+  };
+  await bar.getByRole('button', { name: 'Reject', exact: true }).click();
+  await expect.poll(status).toBe(2);
+  await bar.getByRole('button', { name: 'Unmark', exact: true }).click();
+  await expect.poll(status).toBe(0);
+  await bar.getByRole('button', { name: 'Next image' }).click();
+  await expect(page).toHaveURL(/#\/detail\/2\?/);
+  await bar.getByRole('button', { name: 'Previous image' }).click();
+  await expect(page).toHaveURL(/#\/detail\/1\?/);
+});
+
+test('a phone grid toolbar keeps one row, with Undo under its ⋯ menu', async ({ page }) => {
+  await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
+  await expect(page.locator('.image-card').first()).toBeVisible({ timeout: 15_000 });
+  const toolbar = page.getByRole('region', { name: 'Image tools' });
+  await expect(toolbar.locator('.undo-redo-toolbar')).toBeHidden();
+  await expect(toolbar.getByRole('button', { name: /Compare/ })).toBeHidden();
+  await expect(toolbar.getByText('0 selected')).toBeHidden();
+  const tools = toolbar.locator('.view-toolbar-bar > *:visible');
+  const tops = await tools.evaluateAll((items) => items.map((item) => Math.round(item.getBoundingClientRect().top)));
+  expect(new Set(tops).size, 'the control row stays one row').toBe(1);
+  await toolbar.getByRole('button', { name: 'More tools' }).click();
+  await expect(toolbar.getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
+  await expect(toolbar.getByRole('button', { name: 'Redo', exact: true })).toBeVisible();
+});

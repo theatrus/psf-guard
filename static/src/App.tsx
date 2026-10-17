@@ -11,6 +11,7 @@ import HeaderMenu from './components/header/HeaderMenu';
 import ViewTab from './components/header/ViewTab';
 import { ChartColumn, Crosshair, Images, LibraryBig, SquareStack, Telescope, TestTubeDiagonal } from 'lucide-react';
 import { useHeaderFit } from './components/header/useHeaderFit';
+import { useTuckAway } from './components/header/useTuckAway';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import SiteBanner from './components/SiteBanner';
@@ -84,6 +85,7 @@ function AppContent() {
   const autoOpened = useRef(false);
   const headerRef = useRef<HTMLElement>(null);
   const headerStacked = useHeaderFit(headerRef);
+  const headerTucked = useTuckAway(headerRef, location.pathname);
 
   // Check configuration on mount. In both Tauri and browser/CLI-server mode,
   // we pop the settings modal automatically when no databases are configured.
@@ -164,7 +166,10 @@ function AppContent() {
 
   return (
     <div className="app">
-      <header ref={headerRef} className={`app-header compact${headerStacked ? ' is-stacked' : ''}`}>
+      <header
+        ref={headerRef}
+        className={`app-header compact${headerStacked ? ' is-stacked' : ''}${headerTucked ? ' is-tucked' : ''}`}
+      >
         <div className="header-brand" data-header-part="brand">
           <button
             type="button"

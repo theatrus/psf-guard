@@ -51,6 +51,7 @@ import UndoRedoToolbar from './UndoRedoToolbar';
 import ImageCard from './ImageCard';
 import Dialog from './Dialog';
 import ViewToolbar from './toolbar/ViewToolbar';
+import PhoneUndoItems from './toolbar/PhoneUndoItems';
 import RescanImageFolders from './toolbar/RescanImageFolders';
 import SelectionBar from './toolbar/SelectionBar';
 import PillSelect from './toolbar/PillSelect';
@@ -1090,7 +1091,18 @@ export default function SequenceView() {
           </>
         )}
         // On a phone the cutoff slider folds away; its value stays in sight.
-        menu={grading.canWrite ? <RescanImageFolders dbId={dbId ?? null} /> : undefined}
+        menu={grading.canWrite ? (
+          <>
+            <PhoneUndoItems
+              canUndo={grading.canUndo}
+              canRedo={grading.canRedo}
+              isProcessing={grading.isLoading}
+              onUndo={grading.undo}
+              onRedo={grading.redo}
+            />
+            <RescanImageFolders dbId={dbId ?? null} />
+          </>
+        ) : undefined}
         summary={threshold !== null && (
           <span className="toolbar-phone-only">
             {cutoffMetricOf(cutoffMetric).label} cutoff {formatCutoff(cutoffMetric, threshold)}

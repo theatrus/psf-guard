@@ -21,6 +21,7 @@ export default function ViewTab({ label, icon: Icon, current, disabled, title, o
       type="button"
       onClick={onClick}
       className="header-button view-tab"
+      data-view={label.toLowerCase()}
       aria-current={current ? 'page' : undefined}
       aria-label={label}
       disabled={disabled}

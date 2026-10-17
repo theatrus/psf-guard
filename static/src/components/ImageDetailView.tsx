@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiClient } from '../api/client';
 import { GradingStatus } from '../api/types';
 import type { ImageCopy, PreviewDescriptor } from '../api/types';
@@ -1094,6 +1095,41 @@ export default function ImageDetailView({
               </div>
             </div>
           </div>
+        </div>
+        {/* A phone grades from a bar under the panels, in reach of a thumb
+            however far they are scrolled; a wider screen hides it and grades
+            from the panel and the keys. */}
+        <div className="detail-phone-bar" role="group" aria-label="Grade and step">
+          <button type="button" className="detail-phone-step" aria-label="Previous image" onClick={onPrevious}>
+            <ChevronLeft size={20} aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            className="action-button accept"
+            onClick={() => onGrade('accepted', false)}
+            disabled={grading ? !grading.canWrite : false}
+          >
+            Accept
+          </button>
+          <button
+            type="button"
+            className="action-button reject"
+            onClick={() => onGrade('rejected', false)}
+            disabled={grading ? !grading.canWrite : false}
+          >
+            Reject
+          </button>
+          <button
+            type="button"
+            className="action-button pending"
+            onClick={() => onGrade('pending', false)}
+            disabled={grading ? !grading.canWrite : false}
+          >
+            Unmark
+          </button>
+          <button type="button" className="detail-phone-step" aria-label="Next image" onClick={onNext}>
+            <ChevronRight size={20} aria-hidden="true" />
+          </button>
         </div>
       </div>
       <TiltInspector
