@@ -15,6 +15,7 @@ import { useAccess } from '../auth/access';
 import type { SettingsIntent, SettingsRig } from '../utils/settingsIntent';
 import ReviewPreferences from './ReviewPreferences';
 import DirectorRigs from './director/DirectorRigs';
+import { Database as DatabaseIcon, Download, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import TemplateLibrary from './director/TemplateLibrary';
 import './director/DirectorPage.css';
 import { useDirectorStatus } from '../hooks/useDirectorStatus';
@@ -1818,29 +1819,85 @@ export default function TauriSettings({
                   aria-labelledby={`database-heading-${entry.id}`}
                 >
                   <div className="db-row">
-                    <div className="db-row-main">
-                      <div className="db-row-title">
-                        <strong id={`database-heading-${entry.id}`}>{entry.name}</strong>{' '}
+                    <div className="db-row-head">
+                      <h4 className="db-row-title">
+                        <DatabaseIcon size={18} aria-hidden="true" />
+                        <strong id={`database-heading-${entry.id}`}>{entry.name}</strong>
                         <code className="db-row-slug">{entry.id}</code>
+                      </h4>
+                      {canEdit && (
+                        <div className="db-row-actions">
+                          <button
+                            type="button"
+                            className="db-action-button is-primary"
+                            onClick={() => handleImport(entry)}
+                            disabled={isApplying || (importRunning && importDbId === entry.id)}
+                            title="Scan this database's image directories and import new frames"
+                          >
+                            <Download size={15} aria-hidden="true" />
+                            {importRunning && importDbId === entry.id ? 'Importing…' : 'Import'}
+                          </button>
+                          <PurgeRejectsButton dbId={entry.id} dbName={entry.name} canManage={canEdit} disabled={isApplying} />
+                          {/* Editing a database names its folders: the gate. */}
+                          {managementAllowed && (
+                            <>
+                              <button
+                                type="button"
+                                className="db-action-button"
+                                onClick={() => startEdit(entry)}
+                                disabled={isApplying}
+                                aria-label={`Edit ${entry.name}`}
+                                aria-expanded={isEditing}
+                                aria-controls={isEditing ? editorId : undefined}
+                              >
+                                <Pencil size={14} aria-hidden="true" />
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="db-action-button is-icon is-danger"
+                                onClick={() => handleRemove(entry)}
+                                disabled={isApplying}
+                                aria-label="Remove"
+                                title="Remove this database"
+                              >
+                                <Trash2 size={15} aria-hidden="true" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <dl className="db-row-paths">
+                      <div>
+                        <dt>Catalog</dt>
+                        <dd>{entry.db_path}</dd>
                       </div>
-                      <div className="path-info">{entry.db_path}</div>
                       {entry.image_dirs.length > 0 && (
-                        <div className="path-info muted">
-                          {entry.image_dirs.join(', ')}
+                        <div>
+                          <dt>{entry.image_dirs.length === 1 ? 'Images' : 'Image folders'}</dt>
+                          <dd>
+                            {entry.image_dirs.map((dir) => <span key={dir}>{dir}</span>)}
+                          </dd>
                         </div>
                       )}
                       {entry.remote_image_upload?.enabled && (
-                        <div className="path-info muted">
-                          Remote receive: {entry.remote_image_upload.image_dir} (
-                          {entry.remote_image_upload.placement === 'target_tree'
-                            ? entry.remote_image_upload.directory_template_source ===
-                              'catalog'
-                              ? `match catalog, ${entry.remote_image_upload.directory_template_samples ?? 0} ${entry.remote_image_upload.directory_template_samples === 1 ? 'sample' : 'samples'}`
-                              : 'match catalog'
-                            : 'receive directory'}
-                          )
+                        <div>
+                          <dt>Remote receive</dt>
+                          <dd>
+                            {entry.remote_image_upload.image_dir} (
+                            {entry.remote_image_upload.placement === 'target_tree'
+                              ? entry.remote_image_upload.directory_template_source ===
+                                'catalog'
+                                ? `match catalog, ${entry.remote_image_upload.directory_template_samples ?? 0} ${entry.remote_image_upload.directory_template_samples === 1 ? 'sample' : 'samples'}`
+                                : 'match catalog'
+                              : 'receive directory'}
+                            )
+                          </dd>
                         </div>
                       )}
+                    </dl>
+                    <div className="db-row-details">
                       <CalibrationLibrarySummary
                         dbId={entry.id}
                         onOpen={onClose}
@@ -1863,42 +1920,6 @@ export default function TauriSettings({
                         }
                       />
                     </div>
-                    {canEdit && (
-                      <div className="db-row-actions">
-                        <button
-                          className="browse-button"
-                          onClick={() => handleImport(entry)}
-                          disabled={isApplying || (importRunning && importDbId === entry.id)}
-                          title="Scan this database's image directories and import new frames"
-                        >
-                          {importRunning && importDbId === entry.id ? 'Importing…' : 'Import'}
-                        </button>
-                        <PurgeRejectsButton dbId={entry.id} dbName={entry.name} canManage={canEdit} disabled={isApplying} />
-                        {/* Editing a database names its folders: the gate. */}
-                        {managementAllowed && (
-                          <>
-                            <button
-                              className="browse-button"
-                              onClick={() => startEdit(entry)}
-                              disabled={isApplying}
-                              aria-label={`Edit ${entry.name}`}
-                              aria-expanded={isEditing}
-                              aria-controls={isEditing ? editorId : undefined}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className="remove-button"
-                              onClick={() => handleRemove(entry)}
-                              disabled={isApplying}
-                              title="Remove this database"
-                            >
-                              Remove
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    )}
                   </div>
                   {isEditing && <div id={editorId}>{renderDatabaseForm(entry)}</div>}
                   {importDbId === entry.id && importPreviewPanel && (
@@ -1913,19 +1934,24 @@ export default function TauriSettings({
             {managementAllowed && hasDatabases && !showAddForm && (
               <div className="db-add-buttons">
                 <button
-                  className="add-directory-button"
+                  type="button"
+                  className="db-action-button"
                   onClick={startAdd}
                   disabled={isApplying}
+                  title="Open a N.I.N.A. Target Scheduler database and point it at your image folders"
                 >
-                  + Add Database
+                  <Plus size={15} aria-hidden="true" />
+                  Add Database
                 </button>
                 <button
-                  className="add-directory-button"
+                  type="button"
+                  className="db-action-button"
                   onClick={startCreate}
                   disabled={isApplying}
                   title="Create a brand-new Target Scheduler database and import folders of images into it"
                 >
-                  ✨ New Database from Images
+                  <Sparkles size={15} aria-hidden="true" />
+                  New Database from Images
                 </button>
               </div>
             )}

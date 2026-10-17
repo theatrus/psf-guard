@@ -4,6 +4,10 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Settings › Databases lays each database out as Rigs does: its name and
+  compact actions on one line (**Import**, **Purge Rejects** as an eraser
+  icon, **Edit**, and **Remove** as a trash icon), with its catalog and image
+  folders labelled below and its settings using the card's full width.
 - A color composition running RC-Astro tools can be stopped from the
   background jobs list, and its row says which channel and tool it is on,
   as `H-alpha: BlurXTerminator (42%)`, with a percent that moves while the

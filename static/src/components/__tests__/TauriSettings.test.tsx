@@ -482,11 +482,9 @@ describe('TauriSettings import state', () => {
       wrapper: createWrapper(),
     });
 
-    expect(
-      await screen.findByText(
-        'Remote receive: /images/remote (match catalog, 18 samples)'
-      )
-    ).toBeInTheDocument();
+    // Labelled like the catalog and image paths above it.
+    const receive = (await screen.findByText('Remote receive')).closest('div')!;
+    expect(receive).toHaveTextContent('/images/remote (match catalog, 18 samples)');
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Remote catalog' }));
     expect(
       screen.getByRole('checkbox', { name: 'Accept remote image uploads' })
@@ -669,7 +667,7 @@ describe('TauriSettings import state', () => {
     fireEvent.click(within(ultraCat).getByRole('button', { name: 'Remove' }));
     confirmRemove.mockRestore();
 
-    expect(await screen.findByRole('button', { name: '+ Add Database' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Add Database' })).toBeEnabled();
     expect(screen.queryByText('Editing database')).not.toBeInTheDocument();
   });
 });
