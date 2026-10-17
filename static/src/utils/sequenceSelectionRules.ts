@@ -78,9 +78,13 @@ interface RuleInputs {
   /** The project's calibration marks came before a change and wait for a
    *  pass. Fine to show; not to select from, since a reject follows. */
   calibrationStale?: boolean;
+  /** Frames already rejected. A rule picks frames to reject, so it passes
+   *  these by and stays on after a reject without picking them again. */
+  rejected?: ReadonlySet<number>;
 }
 
 function matches(rule: SelectionRuleId, image: ImageQualityResult, inputs: RuleInputs): boolean {
+  if (inputs.rejected?.has(image.image_id)) return false;
   switch (rule) {
     case 'below-cutoff':
       return inputs.pastCutoff.has(image.image_id);

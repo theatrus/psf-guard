@@ -1197,7 +1197,7 @@
     max-width: none;
   }
 
-  .projects-toolbar .toolbar-pill-select select {
+  .projects-toolbar .toolbar-pill-select .toolbar-pill-value {
     flex: 1;
     max-width: none;
   }

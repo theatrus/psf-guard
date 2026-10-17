@@ -67,6 +67,7 @@ import NightSplitChoice from './NightSplitChoice';
 import { timeMarks, timeSlotAttributes } from '../utils/timeBreaks';
 import { matchesStatusFilter, statusFilterLabel } from '../utils/statusFilter';
 import { keepAcrossNightSplit, nightSplitNote, useNightSplit } from '../hooks/useNightSplit';
+import { pressesFocusedControl } from '../utils/focusedControl';
 
 interface GroupedImageGridProps {
   useLazyImages?: boolean;
@@ -80,13 +81,6 @@ function urlDate(date: Date | null): string {
   if (!date || Number.isNaN(date.getTime())) return '';
   const instant = date.toISOString();
   return instant.endsWith('T00:00:00.000Z') ? instant.slice(0, 10) : instant;
-}
-
-/** Whether the key lands on a control that Enter or Space presses. */
-function pressesFocusedControl(event: KeyboardEvent): boolean {
-  return event.target instanceof Element && event.target.closest(
-    'button, a[href], summary, [role="button"], [role="link"], [role="tab"], [role="switch"], [role="checkbox"]',
-  ) !== null;
 }
 
 export default function GroupedImageGrid({ useLazyImages = false }: GroupedImageGridProps) {

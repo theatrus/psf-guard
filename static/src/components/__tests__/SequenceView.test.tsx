@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -591,6 +591,51 @@ describe('SequenceView: quality display', () => {
     });
   });
 
+  it("lists a suspect pill's frames and goes to one without changing the selection", async () => {
+    server.use(
+      http.get('/api/db/:dbId/analysis/sequence', () => HttpResponse.json(cloudsFixture)),
+      http.get('/api/db/:dbId/projects/:projectId/targets', () =>
+        HttpResponse.json({ success: true, data: mockTargets, error: null, status: 'ready' })),
+      http.get('/api/db/:dbId/images', () =>
+        HttpResponse.json({ success: true, data: mockImages, error: null, status: 'ready' })),
+    );
+    const user = userEvent.setup();
+    render(<SequenceView />, { wrapper: createWrapper('/sequence?db=test&project=1&target=1') });
+
+    const pill = await screen.findByRole('button', { name: '2 cloud events' });
+    expect(pill).toHaveAttribute('aria-expanded', 'false');
+    await user.click(pill);
+    expect(pill).toHaveAttribute('aria-expanded', 'true');
+    const list = screen.getByRole('region', { name: 'Likely clouds' });
+    expect(list).toHaveTextContent('2 frames');
+    const frames = within(list).getAllByRole('button').filter(button => button.classList.contains('sequence-issue-frame'));
+    expect(frames).toHaveLength(2);
+
+    await user.click(frames[1]);
+    await waitFor(() => expect(document.querySelector('[data-card-image-id="105"]')!.closest('.sequence-image-card'))
+      .toHaveClass('current-selection'));
+    expect(frames[1]).toHaveAttribute('aria-current', 'true');
+    expect(document.querySelectorAll('.sequence-image-card.selected')).toHaveLength(0);
+
+    // The pill closes its list again.
+    await user.click(pill);
+    expect(screen.queryByRole('region', { name: 'Likely clouds' })).not.toBeInTheDocument();
+
+    // Space on the focused pill presses it, and leaves the frame unselected.
+    pill.focus();
+    await user.keyboard(' ');
+    expect(pill).toHaveAttribute('aria-expanded', 'true');
+    expect(document.querySelectorAll('.sequence-image-card.selected')).toHaveLength(0);
+    const reopened = screen.getByRole('region', { name: 'Likely clouds' });
+    within(reopened).getAllByRole('button')
+      .filter(button => button.classList.contains('sequence-issue-frame'))
+      .forEach(button => expect(button).toHaveAccessibleName(/, score \d+$/));
+
+    // × closes the list and hands focus back to the pill.
+    await user.click(screen.getByRole('button', { name: 'Close the list' }));
+    expect(pill).toHaveFocus();
+  });
+
   it('shows category labels on cloud-affected images', async () => {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => {
@@ -1039,6 +1084,69 @@ describe('SequenceView: selection rules', () => {
     expect(screen.getByText('0 selected')).toBeInTheDocument();
   });
 
+  it('keeps the rule on after a reject, and an undo does not select the frames again', async () => {
+    setupDefaultHandlers();
+    const words = ['pending', 'accepted', 'rejected'];
+    const grades = new Map<number, number>(mockImages.map(image => [image.id, 0]));
+    const rejected = () => [...grades.values()].filter(grade => grade === 2).length;
+    server.use(
+      http.get('/api/db/:dbId/images', () => HttpResponse.json({
+        success: true,
+        data: mockImages.map(image => ({ ...image, grading_status: grades.get(image.id) })),
+        error: null,
+        status: 'ready',
+      })),
+      http.post('/api/db/:dbId/images/grade', async ({ request }) => {
+        const body = await request.json() as { updates: Array<{ image_id: number; status: string }> };
+        const previous = body.updates.map(update => ({
+          image_id: update.image_id,
+          status: words[grades.get(update.image_id) ?? 0],
+          reason: null,
+        }));
+        body.updates.forEach(update => grades.set(update.image_id, words.indexOf(update.status)));
+        return HttpResponse.json({
+          success: true,
+          data: { updated: body.updates.length, previous },
+          error: null,
+          status: 'ready',
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    const params = renderWithLocation();
+    await cards();
+
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '80' } });
+    await user.selectOptions(screen.getByLabelText('Select frames'), 'below-cutoff');
+    await waitFor(() => expect(screen.getByText('4 selected')).toBeInTheDocument());
+
+    await user.click(screen.getByText('Review rejection'));
+    await user.click(screen.getByText(/Reject selected \(4\)/));
+    await waitFor(() => expect(rejected()).toBe(4));
+
+    // The rule stays on with nothing selected, and counts what is left.
+    await waitFor(() => expect(screen.getByText('0 selected')).toBeInTheDocument());
+    expect(params().get('selectRule')).toBe('below-cutoff');
+    expect(screen.getByLabelText('Select frames')).toHaveValue('below-cutoff');
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Below the cutoff (0)' })).toBeInTheDocument());
+    expect(document.querySelector('.sequence-selection-bar')).not.toHaveTextContent('changed by hand');
+
+    // An undo brings the frames back to the count, not into the selection.
+    await user.click(document.querySelector<HTMLButtonElement>('.undo-button')!);
+    await waitFor(() => expect(rejected()).toBe(0));
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Below the cutoff (4)' })).toBeInTheDocument());
+    // Let the rule answer the change before looking.
+    await act(() => new Promise(resolve => setTimeout(resolve, 100)));
+    expect(screen.getByText('0 selected')).toBeInTheDocument();
+    await user.click(document.querySelector<HTMLButtonElement>('.redo-button')!);
+    await waitFor(() => expect(rejected()).toBe(4));
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Below the cutoff (0)' })).toBeInTheDocument());
+
+    // A higher cutoff picks the next frames, not the rejected ones.
+    fireEvent.change(screen.getByLabelText('Score cutoff'), { target: { value: '85' } });
+    await waitFor(() => expect(screen.getByText('2 selected')).toBeInTheDocument());
+  });
+
   it('opens with the rule the URL holds, and keeps a selection it carries', async () => {
     setupDefaultHandlers();
     renderWithLocation('/sequence?db=test&project=1&target=1&cutoff=0.80&selectRule=below-cutoff');
@@ -1243,8 +1351,15 @@ describe('SequenceView: multi-session', () => {
         multiSessionFixture.data.sequences[0].session_start * 1000,
       ).getFullYear();
       expect(tabs[0]).toHaveTextContent(String(year));
+      // Only the all-sessions tab is marked out from the sessions, and it
+      // starts the filter's row.
+      tabs.forEach(tab => expect(tab).not.toHaveClass('sequence-tab-all-sessions'));
+      tabs.forEach(tab => expect(tab).not.toHaveClass('sequence-tab-filter-start'));
     });
-    expect(screen.getByRole('button', { name: 'L · All sessions (10)' })).toHaveAttribute('aria-pressed', 'true');
+    const allSessions = screen.getByRole('button', { name: 'L · All sessions (10)' });
+    expect(allSessions).toHaveAttribute('aria-pressed', 'true');
+    expect(allSessions).toHaveClass('sequence-tab-all-sessions');
+    expect(allSessions).toHaveClass('sequence-tab-filter-start');
   });
 
   it('compares all stack candidates without replacing session scores', async () => {

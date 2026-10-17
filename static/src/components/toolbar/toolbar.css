@@ -186,23 +186,41 @@
 }
 
 /* A pill around a native select: the select keeps its own list and
-   keyboard, and the pill shows its focus. */
+   keyboard, and the pill shows its focus. The select lies unseen over the
+   whole pill, so the name and the chevron open it too; the pill shows the
+   chosen text in .toolbar-pill-value. */
+.toolbar-pill.toolbar-pill-select {
+  position: relative;
+}
+
+.toolbar-pill.toolbar-pill-select .toolbar-pill-value {
+  max-width: 10rem;
+  padding: 0 0.1rem;
+  white-space: nowrap;
+}
+
 .toolbar-pill.toolbar-pill-select select {
   -webkit-appearance: none;
   appearance: none;
-  min-width: 0;
-  max-width: 10rem;
+  position: absolute;
+  inset: 0;
+  width: 100%;
   height: 100%;
-  padding: 0 0.1rem;
+  margin: 0;
+  padding: 0;
   border: 0;
+  border-radius: inherit;
   background: transparent;
   color: var(--color-text-strong);
   font: inherit;
-  font-weight: 600;
-  text-overflow: ellipsis;
+  opacity: 0;
   cursor: pointer;
   outline: none;
   box-shadow: none;
+}
+
+.toolbar-pill.toolbar-pill-select select:disabled {
+  cursor: default;
 }
 
 .toolbar-pill.toolbar-pill-select select option {
@@ -979,7 +997,7 @@
     max-width: none;
   }
 
-  .view-toolbar-filters .toolbar-pill-select select {
+  .view-toolbar-filters .toolbar-pill-select .toolbar-pill-value {
     flex: 1;
     max-width: none;
   }
