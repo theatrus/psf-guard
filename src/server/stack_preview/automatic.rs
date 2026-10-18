@@ -1283,7 +1283,7 @@ fn enqueue_color_after(
     request: &StackColorRequest,
     automatic: bool,
 ) {
-    let mut prepared = match color::prepare_color_job(ctx, project_id, request) {
+    let mut prepared = match color::prepare_color_job(ctx, &state.astrometry, project_id, request) {
         Ok(prepared) => prepared,
         Err(error) => {
             tracing::warn!(

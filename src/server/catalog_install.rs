@@ -20,6 +20,9 @@ pub enum CatalogInstallPreset {
     SolverGaia,
     BlindDeep,
     BlindDeepGaia20,
+    /// Gaia DR3 colors for color calibration; an addition to a solver
+    /// package, not a solver package itself.
+    GaiaPhotometry,
 }
 
 impl CatalogInstallPreset {
@@ -55,6 +58,7 @@ impl CatalogInstallPreset {
                 Dataset::BlindGaia16,
                 Dataset::StarsLiteTycho2Identifiers,
             ],
+            Self::GaiaPhotometry => &[Dataset::GaiaPhotometry],
         }
     }
 
@@ -389,6 +393,7 @@ mod tests {
 
         for (preset, file_count) in presets {
             assert_eq!(preset.file_count(), file_count);
+            assert!(!preset.datasets().contains(&Dataset::GaiaPhotometry));
             assert!(
                 preset
                     .datasets()
@@ -396,6 +401,16 @@ mod tests {
                 "{preset:?} must install the star identifier catalog"
             );
         }
+    }
+
+    #[test]
+    fn gaia_colors_install_alone() {
+        assert_eq!(
+            CatalogInstallPreset::GaiaPhotometry.datasets(),
+            &[Dataset::GaiaPhotometry]
+        );
+        let preset: CatalogInstallPreset = serde_json::from_str("\"gaia_photometry\"").unwrap();
+        assert_eq!(preset, CatalogInstallPreset::GaiaPhotometry);
     }
 
     #[test]

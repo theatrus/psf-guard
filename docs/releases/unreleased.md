@@ -11,6 +11,12 @@
 - Stacks also offer a **Layered** stretch, which keeps local contrast on
   bright structure, can compress star cores, and can lift saturation without
   shifting hue.
+- RGB and LRGB color previews are color calibrated against Gaia star colors,
+  so a Sun-colored star comes out white and the sky a neutral gray. The color
+  card shows the star count and gains, as `Calibrated on 143 stars · R ×1.12,
+  B ×0.87`, or the reason calibration was skipped. A switch in the processing
+  stack turns calibration off. Install the optional **Gaia colors** package
+  under Settings › Catalogs.
 - Dropdown arrows now sit inside the border with space between the arrow
   and the selected text.
 - UI labels, settings help, and confirmation messages now state actions,

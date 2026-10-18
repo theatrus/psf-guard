@@ -17,7 +17,8 @@ export type SettingsIntent =
   | 'storage'
   | 'backups'
   | 'review'
-  | 'calibration';
+  | 'calibration'
+  | 'catalogs';
 
 /** A calibration rig whose own settings the Calibration tab should open on. */
 export interface SettingsRig {
@@ -32,7 +33,8 @@ export interface OpenSettingsDetail {
   /** With `calibration`: the rig to open. */
   rig?: SettingsRig;
   /** With `calibration`: the setting to bring into view and focus, by its
-   *  key: the rig's own when a rig rides along, else the global one. */
+   *  key: the rig's own when a rig rides along, else the global one. With
+   *  `catalogs`: the catalog package to select. */
   field?: string;
 }
 

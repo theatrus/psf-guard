@@ -17,8 +17,10 @@ import { validateDeconvolution } from './stackDeconvolution';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import { defaultStretchRequest, stretchModelLabels } from './stackStretchModels';
 import {
+  colorCalibrationApplies,
   defaultBackgroundModel,
   defaultBackgroundExtraction,
+  defaultColorCalibration,
   defaultColorProcessing,
 } from './stackColorProcessing';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
@@ -378,6 +380,37 @@ function BackgroundControls({
   );
 }
 
+function ColorCalibrationControls({
+  calibration, disabled, onChange,
+}: {
+  calibration: StackColorProcessing['color_calibration'];
+  disabled: boolean;
+  onChange: (calibration: NonNullable<StackColorProcessing['color_calibration']>) => void;
+}) {
+  // An RGB request without settings is calibrated with the defaults.
+  const enabled = calibration?.enabled ?? true;
+  return (
+    <section className="stack-background-controls" aria-label="Color calibration">
+      <header>
+        <label>
+          <input
+            type="checkbox"
+            role="switch"
+            checked={enabled}
+            disabled={disabled}
+            onChange={(event) => onChange({
+              ...(calibration ?? defaultColorCalibration()),
+              enabled: event.target.checked,
+            })}
+          />
+          <strong>Color calibration</strong>
+        </label>
+        <span>{enabled ? 'Gaia star colors' : 'Off'}</span>
+      </header>
+    </section>
+  );
+}
+
 function StageLane({
   label, stages, channels, deconvolution, deconvolutionResult, rcAstro, rcAstroResult, disabled,
   onChange, onDeconvolutionChange, onRcAstroChange,
@@ -517,6 +550,7 @@ export default function StackColorProcessingControls({
   onApply: (processing: StackColorProcessing) => void;
 }) {
   const rcAstroTools = useRcAstroCapabilities().data?.tools;
+  const calibrates = colorCalibrationApplies(roles);
   const defaults = useMemo(() => defaultColorProcessing(roles), [roles]);
   const baseline = applied
     ? { ...applied, input_deconvolutions: applied.input_deconvolutions ?? {},
@@ -589,6 +623,7 @@ export default function StackColorProcessingControls({
           {' · '}RC-Astro {Object.values(draft.input_rc_astro ?? {}).reduce(
             (count, config) => count + (config?.steps.length ?? 0), 0
           ) || 'off'}
+          {calibrates && ` · Calibration ${draft.color_calibration?.enabled === false ? 'off' : 'on'}`}
           {' · '}{roles.map((role) => `${roleLabels[role]} ${draft.input_stretches[role]?.length ?? 0}`).join(' · ')}
           {' · '}RGB {draft.output_stretches.length}</small>
       </summary>
@@ -638,6 +673,15 @@ export default function StackColorProcessingControls({
             ...current, background_extraction,
           }))}
         />
+        {calibrates && (
+          <ColorCalibrationControls
+            calibration={draft.color_calibration}
+            disabled={disabled}
+            onChange={(color_calibration) => setDraft((current) => ({
+              ...current, color_calibration,
+            }))}
+          />
+        )}
         <div className="stack-color-stage-grid">
           {roles.map((role) => (
             <StageLane
