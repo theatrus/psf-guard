@@ -1085,8 +1085,8 @@ pub async fn download_backup(
     };
     if holds_secrets {
         return Err(AppError::Forbidden(
-            "This backup holds secrets, or cannot say it holds none, so it is never offered \
-             as a download. It stays on the server's disk."
+            "This backup contains secrets, or its manifest could not be read to check for them. \
+             Download is disabled. The backup remains on the server."
                 .into(),
         ));
     }

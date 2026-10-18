@@ -25,7 +25,7 @@ export function PurgeRejectsButton({ dbId, dbName, canManage, disabled }: { dbId
   return <>
     <button type="button" className="db-action-button is-icon" disabled={disabled} onClick={() => setOpen(true)}
       aria-label={`Purge rejects in ${dbName}`}
-      title="Purge rejects: take frames rejected a while ago out of the catalog, files to a trash folder">
+      title="Purge rejects: remove older rejected frames from the catalog and move their files to trash">
       <Eraser size={15} aria-hidden="true" />
     </button>
     <Dialog open={open} onClose={() => setOpen(false)} title={`Purge rejects — ${dbName}`} className="purge-rejects-dialog">
@@ -37,20 +37,20 @@ export function PurgeRejectsButton({ dbId, dbName, canManage, disabled }: { dbId
 /** What a finished run of this page's own did, in words. */
 function outcomeNotice(status: RejectRemovalStatus): string {
   if (status.state === 'failed') return '';
-  if (status.changed) return 'The rejects changed since the preview; this is the preview as they stand now.';
+  if (status.changed) return 'The rejected frames changed since the preview. Review the updated preview.';
   const outcome = status.outcome?.run === status.run ? status.outcome : null;
   if (status.state === 'stopped' && !outcome) return 'Stopped; nothing changed.';
   if (outcome?.removed) {
     const report = outcome.removed;
-    return `Removed ${frames(report.removed.length)}; their files wait in the trash until ${day(report.trash_until)}.`
-      + (report.stopped ? ' Stopped there: the rest stay in the catalog.' : '')
-      + (report.failed.length ? ` ${frames(report.failed.length)} stayed: ${report.failed[0].reason}` : '');
+    return `Removed ${frames(report.removed.length)}; files remain in the trash until ${day(report.trash_until)}.`
+      + (report.stopped ? ' Stopped. The remaining frames stay in the catalog.' : '')
+      + (report.failed.length ? ` ${frames(report.failed.length)} could not be removed: ${report.failed[0].reason}` : '');
   }
   if (outcome?.restored) {
     const report = outcome.restored;
     return `Restored ${frames(report.restored.length)}.`
-      + (report.stopped ? ' Stopped there: the rest stay removed.' : '')
-      + (report.failed.length ? ` ${frames(report.failed.length)} could not come back: ${report.failed[0].reason}` : '');
+      + (report.stopped ? ' Stopped. The remaining frames have not been restored.' : '')
+      + (report.failed.length ? ` ${frames(report.failed.length)} could not be restored: ${report.failed[0].reason}` : '');
   }
   if (outcome?.emptied) {
     const report = outcome.emptied;

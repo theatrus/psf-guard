@@ -270,24 +270,24 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
       )}
       {run.queued.length > 0 && !queuedEntry && (
         <p className="wbpp-run-muted" role="status">
-          In line: {run.queued.map((entry) => `${entry.scope} (${ordinal(entry.position)})`).join(', ')}.
+          Queued: {run.queued.map((entry) => `${entry.scope} (${ordinal(entry.position)})`).join(', ')}.
         </p>
       )}
       {queuedEntry && (
         <div className="wbpp-run-queued" role="status">
           <strong>{describeQueuedRun(queuedEntry)}.</strong>
           <p className="wbpp-run-muted">
-            It starts on its own when PixInsight is free, with the settings it was queued with.
-            Leave this window; the Library shows it either way.
+            The run starts when PixInsight is available, using its queued settings.
+            You can close this dialog and follow the run in the Library.
           </p>
         </div>
       )}
       {formVisible && (
         <>
           <p className="wbpp-run-intro">
-            PixInsight runs WBPP on the server against the frames where they are, with each
-            night&apos;s flats matched to its lights. Rejected lights are excluded. WBPP saves results in a run folder under the cache. Results appear here when the run finishes.
-            {willQueue && ' PixInsight is busy, so this run waits its turn.'}
+            PixInsight runs WBPP on the server using the original frame files, with each
+            night&apos;s flats matched to its lights. Rejected lights are excluded. WBPP saves results in the run folder. Results appear here when the run finishes.
+            {willQueue && ' PixInsight is busy, so this run will be queued.'}
           </p>
           <label className="export-dialog-option">
             <input
@@ -297,7 +297,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             />
             <span>
               <strong>Include ungraded lights</strong>
-              <small>Frames the grader has not judged yet, as the stack previews do.</small>
+              <small>Include frames with a Pending grade.</small>
             </span>
           </label>
           <fieldset className="export-layout-options">
@@ -352,7 +352,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               <span>
                 <strong>Save the masters when done</strong>
                 <small>
-                  Copies WBPP&apos;s master files to a folder of this project under{' '}
+                  Copies WBPP&apos;s master files to this project&apos;s folder under{' '}
                   <code>{processDir}</code>. Nothing already there is overwritten.
                 </small>
               </span>
@@ -367,7 +367,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             <label className="wbpp-run-extra">
               <span>
                 Folder under {processDir}
-                <small>The masters land in its <code>master/</code> subfolder.</small>
+                <small>Save masters in its <code>master/</code> subfolder.</small>
               </span>
               <input
                 type="text"
@@ -398,11 +398,11 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               {progress.frames - progress.lights} calibration frame
               {progress.frames - progress.lights === 1 ? '' : 's'}
               {progress.missing_files > 0 &&
-                `; ${progress.missing_files} catalog row(s) had no file and were left out`}
+                `; ${progress.missing_files} catalog row(s) excluded because their files were missing`}
               {(progress.kept_out_frames ?? 0) > 0 &&
-                `; ${progress.kept_out_frames} kept-out calibration frame(s) were left out`}
+                `; ${progress.kept_out_frames} calibration frame(s) excluded by grades or manual choices`}
               {(progress.uncalibrated_lights ?? 0) > 0 &&
-                `; ${progress.uncalibrated_lights} light(s) that can't be calibrated were left out, as stacks leave them out`}
+                `; ${progress.uncalibrated_lights} light(s) excluded because they cannot be calibrated (same rules as stacks)`}
               .
             </p>
           )}

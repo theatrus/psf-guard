@@ -1414,7 +1414,7 @@ pub async fn dismiss_wbpp_run(
         let mut s = ctx.wbpp_run.write().unwrap();
         if s.progress.running {
             return Err(AppError::Conflict(
-                "the WBPP run is still under way; stop it first".into(),
+                "WBPP is still running; stop the run first".into(),
             ));
         }
         if s.progress
@@ -1597,8 +1597,7 @@ pub async fn publish_wbpp_run(
     };
     if !ready {
         return Err(AppError::Conflict(
-            "the masters can be saved once a run has finished, and not while a save is under way"
-                .into(),
+            "Wait until the WBPP run and any current save finish before saving masters".into(),
         ));
     }
     update(&ctx.0.wbpp_run, |progress| {

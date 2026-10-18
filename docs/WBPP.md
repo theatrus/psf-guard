@@ -126,13 +126,12 @@ a while; the elapsed time keeps counting and PixInsight is still at work.
 
 PixInsight takes every core it can get, so the server runs one WBPP job at
 a time across all databases. Starting a second project while one runs
-queues it: the dialog opens under that project's own name, says which run
-PixInsight is busy with, and its button reads **Queue stacking**. A queued
-run starts on its own when the running one ends, with the settings it was
-queued with, whatever the first run's outcome. The Library lists runs in
-line with their place; **×** takes one out, and so does **Remove from
-queue** in its dialog. The header's background jobs chip lists the run under
-way and the whole line, on every database. There **↑** and **↓** change the
+queues it: the dialog shows that project's name, identifies the running job,
+and offers **Queue stacking**. A queued run starts when the current run ends,
+using its queued settings, whether the current run succeeds or fails. The
+Library lists queued runs with their positions; **×** removes a queued run,
+as does **Remove from queue** in its dialog. The header's background jobs
+chip lists the running job and queue across all databases. There **↑** and **↓** change the
 order, **×** takes a run out, and **Stop** ends the running one after asking
 once. Those controls need write access and a server that allows database
 management, like the dialog. `GET /api/wbpp/activity` reports the same, and

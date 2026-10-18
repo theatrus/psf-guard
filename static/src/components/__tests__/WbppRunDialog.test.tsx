@@ -175,7 +175,7 @@ describe('WbppRunDialog while another project runs', () => {
       { wrapper: wrapper() }
     );
     expect(
-      await screen.findByText(/2 light\(s\) that can't be calibrated were left out, as stacks leave them out/)
+      await screen.findByText(/2 light\(s\) excluded because they cannot be calibrated \(same rules as stacks\)/)
     ).toBeInTheDocument();
     expect(
       screen.getByText('Calibration frames matched with: Use darks: off (for Askar 120 · ASI2600MM Pro).')
