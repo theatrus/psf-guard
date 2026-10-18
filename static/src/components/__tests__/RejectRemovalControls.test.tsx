@@ -89,7 +89,7 @@ describe('Remove rejects', () => {
     expect(plan).toHaveTextContent('2 rejects rejected more recently');
     expect(plan).toHaveTextContent('1 stay: it is in a collaboration report.');
     fireEvent.click(within(group).getByRole('button', { name: 'Remove 1 reject' }));
-    expect(await within(group).findByRole('status')).toHaveTextContent('Removed 1 reject; their files wait in the trash until');
+    expect(await within(group).findByRole('status')).toHaveTextContent('Removed 1 reject; files remain in the trash until');
     expect(applies).toEqual([{ min_age_days: 3, digest: 'd'.repeat(64), retention_days: 14 }]);
     const batches = await screen.findByRole('list', { name: 'Removed rejects' });
     expect(batches).toHaveTextContent('1 reject · 3.0 MB · in the trash until');
@@ -137,7 +137,7 @@ describe('Remove rejects', () => {
     const { unmount } = mount();
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Remove 1 reject' }));
-    expect(await screen.findByRole('status')).toHaveTextContent('The rejects changed since the preview; this is the preview as they stand now.');
+    expect(await screen.findByRole('status')).toHaveTextContent('The rejected frames changed since the preview. Review the updated preview.');
     expect(screen.getByTestId('reject-removal-plan')).toHaveTextContent('Nothing to remove.');
     unmount();
     mount(false);

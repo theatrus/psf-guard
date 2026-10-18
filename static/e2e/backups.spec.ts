@@ -98,7 +98,7 @@ test('warns about a folder beside the catalog', async ({ page }) => {
   await openBackups(page);
   const card = page.getByRole('region', { name: 'Back up now' });
   await card.getByLabel(/Save on the server/).fill(path.join(tmpBase(), 'beside-the-catalog'));
-  await expect(card.getByText(/holds the catalog Imaging Rig e2e/)).toBeVisible();
+  await expect(card.getByText(/inside the catalog folder for Imaging Rig e2e/)).toBeVisible();
 });
 
 function fulfil(route: Route, data: unknown) {

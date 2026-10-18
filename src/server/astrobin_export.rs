@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::astrobin::{AstroBinDetail, AstroBinExport, AstroBinExportRequest, AstroBinFilterEntry};
+use crate::astrobin::{
+    AstroBinDetail, AstroBinExport, AstroBinExportRequest, AstroBinFilterEntry, SeenFilter,
+};
 use crate::db_registry::{AstroBinSettings, DbRegistry};
 use crate::server::{
     api::ApiResponse,
@@ -94,6 +96,14 @@ pub async fn update_astrobin_settings(
 pub struct AstroBinFilterMapResponse {
     /// The catalog's own filter map, oldest entry first.
     pub entries: Vec<AstroBinFilterEntry>,
+    /// The filter names the catalog's lights carry, for the dialog to offer.
+    pub seen: Vec<SeenFilter>,
+}
+
+fn seen_filters(ctx: &DbContext, conn: &rusqlite::Connection) -> Result<Vec<SeenFilter>, AppError> {
+    let boundary = crate::server::sky_coverage::cached_night_boundary(ctx, conn)?;
+    crate::astrobin::seen_filters(conn, boundary)
+        .map_err(|error| AppError::InternalError(format!("reading filter names: {error:#}")))
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,8 +121,10 @@ pub async fn get_astrobin_filters(
     let conn = conn.lock().map_err(AppError::db)?;
     let entries = crate::astrobin::load_filter_entries(&conn)
         .map_err(|error| AppError::InternalError(format!("reading the filter map: {error:#}")))?;
+    let seen = seen_filters(&ctx, &conn)?;
     Ok(Json(ApiResponse::success(AstroBinFilterMapResponse {
         entries,
+        seen,
     })))
 }
 
@@ -127,8 +139,10 @@ pub async fn update_astrobin_filters(
     let mut conn = conn.lock().map_err(AppError::db)?;
     let entries = crate::astrobin::save_filter_entries(&mut conn, &request.entries)
         .map_err(|error| AppError::BadRequest(format!("{error:#}")))?;
+    let seen = seen_filters(&ctx, &conn)?;
     Ok(Json(ApiResponse::success(AstroBinFilterMapResponse {
         entries,
+        seen,
     })))
 }
 

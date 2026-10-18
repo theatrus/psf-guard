@@ -67,7 +67,7 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
         image previews {bytes(volume.preview_bytes)}
         {volume.other_bytes > 0 && <> · other {bytes(volume.other_bytes)}</>}
         {volume.databases.length > 0 && <> · for {volume.databases.join(', ')}</>}
-        {volume.kinds.length > 0 && <> · holds the {kindList(volume.kinds)}</>}
+        {volume.kinds.length > 0 && <> · used for {kindList(volume.kinds)}</>}
       </p>
       {volume.culled_files > 0 && (
         <p className="muted storage-volume-note">

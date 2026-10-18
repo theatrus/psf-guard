@@ -227,8 +227,8 @@ export default function StacksView() {
                 wbppState
                   ? "Open this project's WBPP run"
                   : severalTargets
-                    ? 'Choose a target in the header first: WBPP stacks a project’s targets together, so their masters could not come back here as stacks'
-                    : "Stack in PixInsight's WBPP on the server; its master lights come back here as stacks"
+                    ? 'Choose a target in the header first. WBPP combines targets within a project, so PSF Guard cannot import their masters as separate target stacks.'
+                    : "Stack with PixInsight's WBPP on the server. Its master lights appear here as stacks."
               }
               onClick={() => setWbppOpen(true)}
             >

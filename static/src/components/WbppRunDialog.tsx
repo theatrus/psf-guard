@@ -119,8 +119,11 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
     setPublishFolder(projectSettings.data?.process_folder ?? request.label);
   }, [publishFolder, projectId, projectSettings.isLoading, projectSettings.data, request.label]);
   const publish = useMutation({
+    onMutate: () => queryClient.cancelQueries({ queryKey: ['db', request.dbId, 'wbpp-run'] }),
     mutationFn: () => apiClient.publishWbppRun(request.dbId, (publishFolder ?? '').trim()),
-    onSuccess: (status) => {
+    onError: () => queryClient.invalidateQueries({ queryKey: ['db', request.dbId, 'wbpp-run'] }),
+    onSuccess: async (status) => {
+      await queryClient.cancelQueries({ queryKey: ['db', request.dbId, 'wbpp-run'] });
       queryClient.setQueryData(['db', request.dbId, 'wbpp-run'], status);
       if (projectId !== undefined) {
         void queryClient.invalidateQueries({
@@ -170,6 +173,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
   });
 
   const running = progress?.running ?? false;
+  const copying = publish.isPending || progress?.publish?.state === 'running';
   const ready = pixinsight.data?.ready ?? false;
   const hasResult = !!progress && !running && !!progress.finished_at;
   // The run is shown when it is this project's own, or when asked to see
@@ -177,7 +181,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
   // run under way.
   const showRun = isRunOfInterest(progress) && (ownRun || viewingRun) && !formRequested;
   const formVisible = !showRun && !queuedEntry;
-  const willQueue = running || run.queued.length > 0;
+  const willQueue = running || copying || run.queued.length > 0;
   const title = showRun && progress?.scope ? progress.scope : request.label;
   const fileUrl = (path: string) => apiClient.wbppRunFileUrl(request.dbId, path);
   const relativeLog =
@@ -196,7 +200,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
           <button type="button" className="header-button" onClick={onClose}>
             Close
           </button>
-          {showRun && running && (
+          {showRun && running && !copying && (
             <button
               type="button"
               className="header-button"
@@ -206,7 +210,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               Stop PixInsight
             </button>
           )}
-          {showRun && !running && ownRun && (
+          {showRun && !running && !copying && ownRun && (
             <button type="button" className="header-button" onClick={() => setFormRequested(true)}>
               Stack again
             </button>
@@ -270,24 +274,24 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
       )}
       {run.queued.length > 0 && !queuedEntry && (
         <p className="wbpp-run-muted" role="status">
-          In line: {run.queued.map((entry) => `${entry.scope} (${ordinal(entry.position)})`).join(', ')}.
+          Queued: {run.queued.map((entry) => `${entry.scope} (${ordinal(entry.position)})`).join(', ')}.
         </p>
       )}
       {queuedEntry && (
         <div className="wbpp-run-queued" role="status">
           <strong>{describeQueuedRun(queuedEntry)}.</strong>
           <p className="wbpp-run-muted">
-            It starts on its own when PixInsight is free, with the settings it was queued with.
-            Leave this window; the Library shows it either way.
+            The run starts when PixInsight is available, using its queued settings.
+            You can close this dialog and follow the run in the Library.
           </p>
         </div>
       )}
       {formVisible && (
         <>
           <p className="wbpp-run-intro">
-            PixInsight runs WBPP on the server against the frames where they are, with each
-            night&apos;s flats matched to its lights. Rejected lights are excluded. WBPP saves results in a run folder under the cache. Results appear here when the run finishes.
-            {willQueue && ' PixInsight is busy, so this run waits its turn.'}
+            PixInsight runs WBPP on the server using the original frame files, with each
+            night&apos;s flats matched to its lights. Rejected lights are excluded. WBPP saves results in the run folder. Results appear here when the run finishes.
+            {willQueue && ' PixInsight is busy, so this run will be queued.'}
           </p>
           <label className="export-dialog-option">
             <input
@@ -297,7 +301,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             />
             <span>
               <strong>Include ungraded lights</strong>
-              <small>Frames the grader has not judged yet, as the stack previews do.</small>
+              <small>Include frames with a Pending grade.</small>
             </span>
           </label>
           <fieldset className="export-layout-options">
@@ -352,7 +356,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               <span>
                 <strong>Save the masters when done</strong>
                 <small>
-                  Copies WBPP&apos;s master files to a folder of this project under{' '}
+                  Copies WBPP&apos;s master files to this project&apos;s folder under{' '}
                   <code>{processDir}</code>. Nothing already there is overwritten.
                 </small>
               </span>
@@ -367,7 +371,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             <label className="wbpp-run-extra">
               <span>
                 Folder under {processDir}
-                <small>The masters land in its <code>master/</code> subfolder.</small>
+                <small>Save masters in its <code>master/</code> subfolder.</small>
               </span>
               <input
                 type="text"
@@ -384,12 +388,19 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
       {progress && showRun && (
         <div className="wbpp-run-progress" aria-live="polite">
           <div className="wbpp-run-stage">
-            <strong>{STAGE_LABEL[progress.stage] ?? progress.stage}</strong>
-            {elapsed !== null && <span className="wbpp-run-elapsed">{formatElapsed(elapsed)}</span>}
+            <strong>{copying ? 'Copying masters' : STAGE_LABEL[progress.stage] ?? progress.stage}</strong>
+            {!copying && elapsed !== null && <span className="wbpp-run-elapsed">{formatElapsed(elapsed)}</span>}
           </div>
+          {running && progress.publish?.state === 'running' && (
+            <p className="wbpp-run-muted" role="status">
+              Copying masters to {progress.publish.directory}…{' '}
+              {progress.publish.total != null && `${progress.publish.copied + progress.publish.skipped_existing + progress.publish.conflicts.length + progress.publish.errors.length} of ${progress.publish.total} files processed.`}
+              {progress.publish.current_file && ` Copying ${progress.publish.current_file}`}
+            </p>
+          )}
           {progress.free_bytes_at_start != null && (
             <p className="wbpp-run-muted">
-              {formatFree(progress.free_bytes_at_start)} free at the run folder when it began.
+              {formatFree(progress.free_bytes_at_start)} free at start.
             </p>
           )}
           {progress.frames > 0 && (
@@ -398,11 +409,11 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               {progress.frames - progress.lights} calibration frame
               {progress.frames - progress.lights === 1 ? '' : 's'}
               {progress.missing_files > 0 &&
-                `; ${progress.missing_files} catalog row(s) had no file and were left out`}
+                `; ${progress.missing_files} catalog row(s) excluded because their files were missing`}
               {(progress.kept_out_frames ?? 0) > 0 &&
-                `; ${progress.kept_out_frames} kept-out calibration frame(s) were left out`}
+                `; ${progress.kept_out_frames} calibration frame(s) excluded by grades or manual choices`}
               {(progress.uncalibrated_lights ?? 0) > 0 &&
-                `; ${progress.uncalibrated_lights} light(s) that can't be calibrated were left out, as stacks leave them out`}
+                `; ${progress.uncalibrated_lights} light(s) excluded because they cannot be calibrated (same rules as stacks)`}
               .
             </p>
           )}
@@ -425,6 +436,12 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
             </p>
           )}
           {progress.error && <p className="wbpp-run-error">{progress.error}</p>}
+          {progress.log_errors.some((line) => line.includes('No database files have been selected.')) && (
+            <p className="wbpp-run-muted">
+              PixInsight has no Gaia catalog files selected. Its plate solver may use another
+              catalog; check the WBPP log for the solve result. This does not refer to your image database.
+            </p>
+          )}
           {progress.log_errors.length > 0 && (
             <ul className="wbpp-run-log-errors">
               {progress.log_errors.slice(-5).map((line, index) => (
@@ -465,7 +482,11 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
                       role="status"
                     >
                       {progress.publish.state === 'running'
-                        ? `Copying the masters to ${progress.publish.directory}…`
+                        ? `Copying masters to ${progress.publish.directory}…` +
+                          (progress.publish.total != null
+                            ? ` ${progress.publish.copied + progress.publish.skipped_existing + progress.publish.conflicts.length + progress.publish.errors.length} of ${progress.publish.total} files processed.`
+                            : '') +
+                          (progress.publish.current_file ? ` Copying ${progress.publish.current_file}` : '')
                         : `${progress.publish.copied} copied to ${progress.publish.directory}` +
                           (progress.publish.skipped_existing > 0
                             ? `, ${progress.publish.skipped_existing} already there`
@@ -484,6 +505,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
                       <input
                         type="text"
                         aria-label="Process folder"
+                        disabled={copying}
                         value={publishFolder ?? ''}
                         onChange={(event) => setPublishFolder(event.target.value)}
                       />
@@ -492,13 +514,12 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
                       type="button"
                       className="header-button"
                       disabled={
-                        publish.isPending ||
-                        progress.publish?.state === 'running' ||
+                        copying ||
                         !(publishFolder ?? '').trim()
                       }
                       onClick={() => publish.mutate()}
                     >
-                      Save masters
+                      {copying ? 'Copying…' : 'Save masters'}
                     </button>
                   </div>
                   {publish.isError && (

@@ -184,7 +184,7 @@ test('a run writes the script for the install, launches it, and lists what it wr
         (await (await request.get(`/api/db/${dbId}/wbpp/runs/current`)).json()).data.progress.publish,
       { timeout: 15_000 }
     )
-    .toMatchObject({ state: 'complete', copied: 0, skipped_existing: 1, conflicts: [] });
+    .toMatchObject({ state: 'complete', copied: 0, total: 1, current_file: null, skipped_existing: 1, conflicts: [] });
   const bad = await request.post(`/api/db/${dbId}/wbpp/runs/current/publish`, { data: { folder: '..' } });
   expect(bad.status()).toBe(400);
 
