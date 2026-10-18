@@ -11,6 +11,11 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- A color composition you start no longer waits behind queued stack builds
+  when it reuses channels already prepared, or needs no deconvolution or
+  RC-Astro. Changing a color card's stretch, calibration or crop runs
+  while builds are still queued.
+
 - With **Snap** on, dragging a mosaic panel along its row no longer pulls it
   into the next row when a panel there shares only a corner with it.
 

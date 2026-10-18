@@ -572,6 +572,29 @@ pub(super) struct PreparedColorJob {
     color_calibration: Option<ColorCalibrationPlan>,
 }
 
+impl PreparedColorJob {
+    /// Whether the composition prepares nothing at length, so a person's
+    /// request runs in the quick lane rather than behind queued stack
+    /// builds: its prepared inputs (the registered, background-corrected
+    /// channels, with any deconvolution and RC-Astro results) are cached, or
+    /// it asks for neither deconvolution nor RC-Astro.
+    pub(super) fn runs_quickly(&self) -> bool {
+        let cached = self
+            .public
+            .linear_input_id
+            .as_deref()
+            .is_some_and(|input_id| {
+                color_input_manifest_path(&self.stack_root, input_id).is_file()
+            });
+        let deconvolves = self
+            .public
+            .processing
+            .as_ref()
+            .is_some_and(|processing| !processing.input_deconvolutions.is_empty());
+        cached || (!deconvolves && self.rc_astro_chains.is_empty())
+    }
+}
+
 fn color_progress(
     channel_count: usize,
     processing: Option<&StackColorProcessing>,
@@ -1005,8 +1028,12 @@ pub async fn start_stack_color(
         return Ok(Json(ApiResponse::success(existing)));
     }
 
-    // Real work is about to queue: the user's composition takes the worker.
-    super::interrupt_automatic(&state);
+    // Real work is about to queue. A composition that prepares nothing at
+    // length runs in the quick lane beside the builds; anything else takes
+    // the worker, and automatic work in the way yields.
+    if !prepared.runs_quickly() {
+        super::interrupt_automatic(&state);
+    }
     let response = prepared.public.clone();
     if !state.stack_previews.insert_color(response.clone()) {
         return Err(AppError::BadRequest(format!(
@@ -1925,11 +1952,19 @@ pub(super) fn enqueue_color_job(
     origin: super::journal::JournaledStackJob,
 ) {
     let job_id = prepared.public.job_id.clone();
+    // A person's composition that prepares nothing at length runs in the
+    // quick lane, beside the stack line rather than behind it. An automatic
+    // one waits in the line with the builds it follows.
+    let quick = !prepared.public.automatic && prepared.runs_quickly();
     // A composition stops while it waits for the worker, and while it runs
     // at its next channel or step; a running RC-Astro tool is killed.
     let cancel = state.stack_previews.track_cancel(&job_id);
     state.stack_previews.remember_origin(&job_id, origin);
-    state.stack_previews.join_line(&job_id);
+    if quick {
+        state.stack_previews.set_quick(&job_id, true);
+    } else {
+        state.stack_previews.join_line(&job_id);
+    }
     // A server stop waits for a running composition to reach its next stop
     // point; the journal brings it back, and its finished RC-Astro steps
     // stay cached.
@@ -1939,7 +1974,15 @@ pub(super) fn enqueue_color_job(
     ));
     tokio::spawn(async move {
         let _work = work;
-        let permit = state.stack_previews.wait_turn(&job_id, &cancel).await;
+        let _lane = QuickLaneEntry {
+            state: Arc::clone(&state),
+            job_id: job_id.clone(),
+        };
+        let permit = if quick {
+            state.stack_previews.wait_quick_turn(&cancel).await
+        } else {
+            state.stack_previews.wait_turn(&job_id, &cancel).await
+        };
         if permit.is_none() && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
             state.stack_previews.forget_cancel_of(&job_id, &cancel);
             return;
@@ -1973,6 +2016,18 @@ pub(super) fn enqueue_color_job(
         }
         state.stack_previews.forget_cancel_of(&job_id, &cancel);
     });
+}
+
+/// Takes a composition out of the quick lane's list however its task ends.
+struct QuickLaneEntry {
+    state: Arc<AppState>,
+    job_id: String,
+}
+
+impl Drop for QuickLaneEntry {
+    fn drop(&mut self) {
+        self.state.stack_previews.set_quick(&self.job_id, false);
+    }
 }
 
 /// The error a composition ends with when it is stopped, read back so the
@@ -4681,6 +4736,117 @@ mod tests {
             catalog_version: Some("openngc-test".into()),
             capture_time: None,
         }
+    }
+
+    /// A composition about to queue: `deconvolve` asks for deconvolution of
+    /// the red channel, `rc_astro` gives it an RC-Astro chain, and
+    /// `linear_input_id` names its prepared inputs.
+    fn prepared_color(
+        stack_root: &FsPath,
+        job_id: &str,
+        deconvolve: bool,
+        rc_astro: bool,
+        linear_input_id: Option<&str>,
+    ) -> PreparedColorJob {
+        let mut public = running_color_job(job_id, StackJobState::Queued);
+        public.phase = "Waiting for color processor".into();
+        public.linear_input_id = linear_input_id.map(str::to_string);
+        if deconvolve {
+            let mut processing = StackColorProcessing::default();
+            processing.input_deconvolutions.insert(
+                StackColorRole::Red,
+                seiza_deconvolution::DeconvolutionConfig::conservative(3.1),
+            );
+            public.processing = Some(processing);
+        }
+        let mut rc_astro_chains = BTreeMap::new();
+        if rc_astro {
+            rc_astro_chains.insert(StackColorRole::Red, vec!["blurxterminator".to_string()]);
+        }
+        PreparedColorJob {
+            public,
+            stack_root: stack_root.to_path_buf(),
+            background_regions: BTreeMap::new(),
+            rc_astro_schemas: BTreeMap::new(),
+            rc_astro_chains,
+            color_calibration: None,
+        }
+    }
+
+    #[test]
+    fn a_composition_runs_quickly_unless_it_prepares_inputs_at_length() {
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        assert!(prepared_color(root, "plain", false, false, Some("inputs")).runs_quickly());
+        assert!(prepared_color(root, "legacy", false, false, None).runs_quickly());
+        assert!(!prepared_color(root, "deconvolve", true, false, Some("inputs")).runs_quickly());
+        assert!(!prepared_color(root, "rc-astro", false, true, Some("inputs")).runs_quickly());
+        // Once those inputs are prepared and cached, reusing them is quick.
+        let manifest = color_input_manifest_path(root, "inputs");
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        std::fs::write(&manifest, b"{}").unwrap();
+        assert!(prepared_color(root, "deconvolve", true, false, Some("inputs")).runs_quickly());
+        assert!(prepared_color(root, "rc-astro", false, true, Some("inputs")).runs_quickly());
+    }
+
+    #[test]
+    fn a_running_quick_composition_is_not_named_as_holding_the_worker() {
+        let manager = super::super::StackPreviewManager::new();
+        let running = running_color_job(&"c".repeat(64), StackJobState::Running);
+        assert!(manager.insert_color(running.clone()));
+        assert_eq!(
+            manager.worker_holder("other").as_deref(),
+            Some("the color composition of Color target · SHO")
+        );
+        manager.set_quick(&running.job_id, true);
+        assert_eq!(manager.worker_holder("other"), None);
+        manager.set_quick(&running.job_id, false);
+        assert!(manager.worker_holder("other").is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_quick_composition_runs_while_a_build_holds_the_worker() {
+        let cache = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        // A build holds the stack worker.
+        let busy = Arc::clone(&state.stack_previews.permit)
+            .try_acquire_owned()
+            .unwrap();
+        let quick = prepared_color(cache.path(), &"a".repeat(64), false, false, Some("inputs"));
+        let slow = prepared_color(cache.path(), &"b".repeat(64), true, false, Some("other"));
+        for prepared in [&quick, &slow] {
+            assert!(state.stack_previews.insert_color(prepared.public.clone()));
+        }
+        let origin = |id: &str| super::super::processing_queue::test_origin(id);
+        enqueue_color_job(Arc::clone(&state), quick, origin("quick"));
+        enqueue_color_job(Arc::clone(&state), slow, origin("slow"));
+        // The quick one starts at once. Its database is not configured, so it
+        // ends there; what matters is that it did not wait for the build.
+        let quick_id = "a".repeat(64);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while state
+            .stack_previews
+            .get_color(&quick_id)
+            .is_some_and(|job| job.state == StackJobState::Queued)
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the quick composition never started"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(state.stack_previews.line_position(&quick_id), None);
+        // The deconvolving one waits in the build line.
+        let slow_id = "b".repeat(64);
+        assert_eq!(state.stack_previews.line_position(&slow_id), Some(0));
+        assert_eq!(
+            state.stack_previews.get_color(&slow_id).unwrap().state,
+            StackJobState::Queued
+        );
+        assert!(state.stack_previews.request_cancel(&slow_id));
+        drop(busy);
     }
 
     fn running_color_job(job_id: &str, state: StackJobState) -> StackColorJob {

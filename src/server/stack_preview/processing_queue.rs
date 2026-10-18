@@ -288,11 +288,13 @@ impl StackPreviewManager {
             }
         }
         {
+            // A composition in the quick lane runs beside the worker, not on it.
             let color_jobs = self.color_jobs.lock().unwrap();
-            if let Some(job) = color_jobs
-                .values()
-                .find(|job| job.state == StackJobState::Running && job.job_id != except)
-            {
+            if let Some(job) = color_jobs.values().find(|job| {
+                job.state == StackJobState::Running
+                    && job.job_id != except
+                    && !self.is_quick(&job.job_id)
+            }) {
                 return Some(format!(
                     "the color composition of {}",
                     channel_label(&job.target_name, &job.label)

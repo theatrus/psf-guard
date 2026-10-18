@@ -1403,6 +1403,20 @@ the display pipeline the color cards start from. A role with two of PSF
 Guard's own stacks, such as two exposure groups of R, is a choice left to
 you. Automatic refreshes compose only what was composed before.
 
+A composition you start does not wait behind queued stack builds when it
+prepares nothing at length: its channels were already registered, background
+corrected, deconvolved and run through RC-Astro for an earlier composition
+and are cached, or it asks for neither deconvolution nor RC-Astro. Changing a
+color card's stretch, color calibration or crop and pressing **Apply
+processing** is the usual case. So is the color that follows a **Build
+current set** or **Build channel** you start: once the target's own channels
+are built, its color composes without waiting for builds of other targets,
+unless its processing deconvolves or runs RC-Astro on the new stacks. Such a
+composition runs in a quick lane beside the build line, one at a time, and
+appears in the header's job list without a place in line. A composition that deconvolves or runs RC-Astro on
+channels not yet prepared joins the build line, as before, and so does every
+automatic composition.
+
 - **RGB** requires one Red, Green, and Blue stack in its exposure band.
 - **LRGB** requires one Luminance, Red, Green, and Blue stack in its exposure band.
   Luminance supplies the output luminance while Seiza retains the RGB
