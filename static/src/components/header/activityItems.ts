@@ -474,7 +474,7 @@ function stackItem(entry: StackActivityEntry): ActivityItem {
 const WBPP_STAGES: Record<string, string> = {
   planning: 'Planning the run',
   running: 'Running in PixInsight',
-  publishing: 'Saving masters',
+  publishing: 'Copying masters',
 };
 
 function wbppItems(wbpp: WbppActivity | undefined, projectOf: ProjectOf): ActivityItem[] {
@@ -486,7 +486,7 @@ function wbppItems(wbpp: WbppActivity | undefined, projectOf: ProjectOf): Activi
     // The start time is part of the key, so the next run on the same
     // database is a new row and never inherits an armed Stop.
     key: `wbpp:${run.db_id}:${run.started_at ?? ''}`,
-    stoppable: true,
+    stoppable: run.stage !== 'publishing',
     kind: 'wbpp',
     title: 'WBPP',
     scope: `${run.db_name} · ${run.scope}`,
@@ -498,7 +498,7 @@ function wbppItems(wbpp: WbppActivity | undefined, projectOf: ProjectOf): Activi
     status: 'running',
     percent: null,
     queue: 'wbpp',
-    control: { kind: 'wbpp-running', dbId: run.db_id },
+    control: run.stage === 'publishing' ? undefined : { kind: 'wbpp-running', dbId: run.db_id },
     href: href(run.db_id, run.project_id, run.target_id),
   }));
   const queued = wbpp.queued.map((run, index): ActivityItem => ({

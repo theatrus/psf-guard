@@ -146,6 +146,8 @@ pub struct PublishOutcome {
     /// The folder the masters went to.
     pub directory: String,
     pub copied: usize,
+    pub total: usize,
+    pub current_file: Option<String>,
     /// Already there with the same size, so left alone.
     pub skipped_existing: usize,
     /// Already there with a different size; left alone and named here.
@@ -185,13 +187,45 @@ impl WbppRunStore {
 
 pub type SharedWbppRun = Arc<RwLock<WbppRunStore>>;
 
+fn publish_running(progress: &WbppRunProgress) -> bool {
+    progress
+        .publish
+        .as_ref()
+        .is_some_and(|publish| publish.state == "running")
+}
+
+/// Claim the copy while holding the same lock that protects new runs.
+fn begin_publish(
+    store: &RwLock<WbppRunStore>,
+    process_dir: &Path,
+    folder: &str,
+) -> Result<(PathBuf, Option<i32>), AppError> {
+    let mut store = store.write().unwrap();
+    let progress = &mut store.progress;
+    if progress.running || progress.stage != "complete" || publish_running(progress) {
+        return Err(AppError::Conflict(
+            "Wait until the WBPP run and current copy finish before saving masters".into(),
+        ));
+    }
+    progress.publish = Some(PublishOutcome {
+        state: "running".into(),
+        directory: process_dir
+            .join(folder)
+            .join("master")
+            .display()
+            .to_string(),
+        ..Default::default()
+    });
+    Ok((PathBuf::from(&progress.output_dir), progress.project_id))
+}
+
 fn try_begin(
     store: &RwLock<WbppRunStore>,
     scope: String,
     options: WbppOptions,
 ) -> Option<Arc<AtomicBool>> {
     let mut s = store.write().unwrap();
-    if s.progress.running {
+    if s.progress.running || publish_running(&s.progress) {
         return None;
     }
     let cancel = Arc::new(AtomicBool::new(false));
@@ -452,10 +486,20 @@ pub fn publish_folder_name(folder: &str) -> Result<String, AppError> {
 /// taken as the same file and skipped, one with another size is left alone
 /// and reported. Each copy lands under a temporary name and is renamed
 /// into place, so a failed copy leaves no half file.
-pub fn publish_masters(
+#[cfg(test)]
+fn publish_masters(
     output_dir: &Path,
     process_dir: &Path,
     folder: &str,
+) -> Result<PublishOutcome, AppError> {
+    publish_masters_with_progress(output_dir, process_dir, folder, |_| {})
+}
+
+fn publish_masters_with_progress(
+    output_dir: &Path,
+    process_dir: &Path,
+    folder: &str,
+    mut report: impl FnMut(&PublishOutcome),
 ) -> Result<PublishOutcome, AppError> {
     let folder = publish_folder_name(folder)?;
     let destination = process_dir.join(&folder).join("master");
@@ -480,10 +524,14 @@ pub fn publish_masters(
         .filter(|path| path.is_file())
         .collect();
     files.sort();
+    outcome.total = files.len();
+    report(&outcome);
     for file in files {
         let Some(name) = file.file_name() else {
             continue;
         };
+        outcome.current_file = Some(name.to_string_lossy().into_owned());
+        report(&outcome);
         let target = destination.join(name);
         let size = std::fs::metadata(&file).map(|meta| meta.len()).unwrap_or(0);
         if let Ok(existing) = std::fs::metadata(&target) {
@@ -492,6 +540,7 @@ pub fn publish_masters(
             } else {
                 outcome.conflicts.push(name.to_string_lossy().into_owned());
             }
+            report(&outcome);
             continue;
         }
         let part = destination.join(format!("{}.part", name.to_string_lossy()));
@@ -506,6 +555,7 @@ pub fn publish_masters(
             }
         }
     }
+    outcome.current_file = None;
     outcome.state = if outcome.errors.is_empty() {
         "complete"
     } else {
@@ -513,6 +563,7 @@ pub fn publish_masters(
     }
     .to_string();
     outcome.finished_at = Some(chrono::Utc::now().timestamp());
+    report(&outcome);
     Ok(outcome)
 }
 
@@ -526,7 +577,12 @@ fn publish_and_record(
     folder: &str,
     project_id: Option<i32>,
 ) {
-    let outcome = match publish_masters(output_dir, process_dir, folder) {
+    let outcome = match publish_masters_with_progress(output_dir, process_dir, folder, |outcome| {
+        // Keep the claim until the project setting has also been saved.
+        let mut progress = outcome.clone();
+        progress.state = "running".into();
+        update(store, |p| p.publish = Some(progress));
+    }) {
         Ok(outcome) => outcome,
         Err(error) => PublishOutcome {
             state: "error".to_string(),
@@ -587,10 +643,10 @@ fn status(
 
 /// Whether PixInsight is busy with any database's run.
 fn any_run_active(state: &AppState) -> bool {
-    state
-        .all_databases()
-        .iter()
-        .any(|db| db.wbpp_run.read().unwrap().progress.running)
+    state.all_databases().iter().any(|db| {
+        let store = db.wbpp_run.read().unwrap();
+        store.progress.running || publish_running(&store.progress)
+    })
 }
 
 /// A queued run that could not start: shown as a failed run of its
@@ -603,7 +659,7 @@ fn record_failed_launch(
 ) {
     let now = chrono::Utc::now().timestamp();
     let mut s = store.write().unwrap();
-    if s.progress.running {
+    if s.progress.running || publish_running(&s.progress) {
         return;
     }
     s.progress = WbppRunProgress {
@@ -1500,15 +1556,38 @@ pub async fn get_wbpp_activity(
         .iter()
         .filter_map(|ctx| {
             let store = ctx.wbpp_run.read().unwrap();
-            store.progress.running.then(|| WbppActiveRun {
+            let copying = publish_running(&store.progress);
+            (store.progress.running || copying).then(|| WbppActiveRun {
                 db_id: ctx.id.clone(),
                 db_name: ctx.name.clone(),
                 scope: store.progress.scope.clone(),
                 project_id: store.progress.project_id,
                 target_id: store.progress.target_id,
-                stage: store.progress.stage.clone(),
-                wbpp_stage: store.progress.wbpp_stage.clone(),
-                wbpp_steps: store.progress.wbpp_steps,
+                stage: if copying {
+                    "publishing".into()
+                } else {
+                    store.progress.stage.clone()
+                },
+                wbpp_stage: if copying {
+                    store.progress.publish.as_ref().map(|p| {
+                        format!(
+                            "{} of {} files processed{}",
+                            p.copied + p.skipped_existing + p.conflicts.len() + p.errors.len(),
+                            p.total,
+                            p.current_file
+                                .as_ref()
+                                .map(|file| format!(" · {file}"))
+                                .unwrap_or_default()
+                        )
+                    })
+                } else {
+                    store.progress.wbpp_stage.clone()
+                },
+                wbpp_steps: if copying {
+                    0
+                } else {
+                    store.progress.wbpp_steps
+                },
                 started_at: store.progress.started_at,
             })
         })
@@ -1582,46 +1661,36 @@ pub async fn publish_wbpp_run(
         ));
     };
     let folder = publish_folder_name(&request.folder)?;
-    let (output_dir, project_id, ready) = {
-        let s = ctx.0.wbpp_run.read().unwrap();
-        let p = &s.progress;
-        let busy = p
-            .publish
-            .as_ref()
-            .is_some_and(|publish| publish.state == "running");
-        (
-            PathBuf::from(&p.output_dir),
-            p.project_id,
-            !p.running && p.stage == "complete" && !busy,
-        )
-    };
-    if !ready {
-        return Err(AppError::Conflict(
-            "Wait until the WBPP run and any current save finish before saving masters".into(),
-        ));
-    }
-    update(&ctx.0.wbpp_run, |progress| {
-        progress.publish = Some(PublishOutcome {
-            state: "running".to_string(),
-            directory: process_dir
-                .join(&folder)
-                .join("master")
-                .display()
-                .to_string(),
-            ..Default::default()
-        })
-    });
+    let (output_dir, project_id) = begin_publish(&ctx.wbpp_run, &process_dir, &folder)?;
     let publish_ctx = ctx.0.clone();
     let publish_store = ctx.0.wbpp_run.clone();
-    tokio::task::spawn_blocking(move || {
-        publish_and_record(
-            &publish_ctx,
-            &publish_store,
-            &output_dir,
-            &process_dir,
-            &folder,
-            project_id,
-        )
+    let failed_store = publish_store.clone();
+    let publish_state = Arc::clone(&state);
+    let priority = state.begin_named_interactive_job("copying WBPP masters");
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || {
+            let _priority = priority;
+            publish_and_record(
+                &publish_ctx,
+                &publish_store,
+                &output_dir,
+                &process_dir,
+                &folder,
+                project_id,
+            )
+        })
+        .await;
+        if let Err(error) = result {
+            update(&failed_store, |p| {
+                if let Some(publish) = p.publish.as_mut() {
+                    publish.state = "error".into();
+                    publish.current_file = None;
+                    publish.errors.push(format!("Copy stopped: {error}"));
+                    publish.finished_at = Some(chrono::Utc::now().timestamp());
+                }
+            });
+        }
+        drain_queue(publish_state).await;
     });
     let running = ctx.wbpp_run.read().unwrap().progress.running;
     Ok(Json(ApiResponse::success(status(
@@ -1732,6 +1801,50 @@ mod tests {
             scope_label: Some(label.into()),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn copying_appears_in_activity_and_holds_new_runs_in_the_queue() {
+        let (state, ctx) = state_with_management();
+        finish(&ctx.wbpp_run, "complete", None);
+        begin_publish(&ctx.wbpp_run, Path::new("/process"), "Iris").unwrap();
+        update(&ctx.wbpp_run, |p| {
+            let copy = p.publish.as_mut().unwrap();
+            copy.total = 3;
+            copy.copied = 1;
+            copy.current_file = Some("masterLight.xisf".into());
+        });
+        let activity = get_wbpp_activity(State(state.clone()))
+            .await
+            .0
+            .data
+            .unwrap();
+        assert_eq!(activity.running.len(), 1);
+        assert_eq!(activity.running[0].stage, "publishing");
+        assert_eq!(
+            activity.running[0].wbpp_stage.as_deref(),
+            Some("1 of 3 files processed · masterLight.xisf")
+        );
+        assert!(
+            dismiss_wbpp_run(State(state.clone()), DbContext(ctx.0.clone()))
+                .await
+                .is_err()
+        );
+        let queued = start_wbpp_run(
+            State(state.clone()),
+            DbContext(ctx.0.clone()),
+            Json(request(2, "next")),
+        )
+        .await
+        .unwrap()
+        .0
+        .data
+        .unwrap();
+        assert!(!queued.started);
+        assert!(queued.queue_id.is_some());
+        drain_queue(state.clone()).await;
+        assert_eq!(state.wbpp_queue.len(), 1);
+        assert!(publish_running(&ctx.wbpp_run.read().unwrap().progress));
     }
 
     #[tokio::test]
@@ -2012,6 +2125,62 @@ mod tests {
         assert_eq!(
             run_root(None, None, None, cache, "db-1"),
             PathBuf::from("/var/cache/psf-guard/db-1/wbpp")
+        );
+    }
+
+    #[test]
+    fn copy_claim_blocks_repeat_requests_and_new_runs() {
+        let store = RwLock::new(WbppRunStore::default());
+        finish(&store, "complete", None);
+        std::thread::scope(|scope| {
+            let attempts: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| begin_publish(&store, Path::new("/process"), "Iris").is_ok())
+                })
+                .collect();
+            assert_eq!(
+                attempts
+                    .into_iter()
+                    .map(|attempt| attempt.join().unwrap())
+                    .filter(|claimed| *claimed)
+                    .count(),
+                1
+            );
+        });
+        assert!(try_begin(&store, "next".into(), WbppOptions::default()).is_none());
+        update(&store, |p| {
+            p.publish.as_mut().unwrap().state = "complete".into()
+        });
+        assert!(try_begin(&store, "next".into(), WbppOptions::default()).is_some());
+    }
+
+    #[test]
+    fn copy_reports_each_file_and_final_counts() {
+        let run = tempfile::tempdir().unwrap();
+        let source = run.path().join("master");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("a.xisf"), b"first").unwrap();
+        std::fs::write(source.join("b.xisf"), b"second").unwrap();
+        let process = tempfile::tempdir().unwrap();
+        let mut reports = Vec::new();
+        let outcome = publish_masters_with_progress(run.path(), process.path(), "Iris", |p| {
+            reports.push(p.clone())
+        })
+        .unwrap();
+        assert_eq!(outcome.copied, 2);
+        assert_eq!(outcome.total, 2);
+        assert_eq!(reports[0].state, "running");
+        assert!(reports
+            .iter()
+            .any(|p| p.current_file.as_deref() == Some("a.xisf") && p.copied == 0));
+        assert!(reports
+            .iter()
+            .any(|p| p.current_file.as_deref() == Some("b.xisf") && p.copied == 1));
+        assert_eq!(reports.last().unwrap().state, "complete");
+        assert!(reports.last().unwrap().current_file.is_none());
+        assert_eq!(
+            std::fs::read(process.path().join("Iris/master/b.xisf")).unwrap(),
+            b"second"
         );
     }
 

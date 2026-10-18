@@ -177,6 +177,11 @@ skipped, one with a different size is left alone, and the
 outcome lists it. Only the `master/` files are copied; the calibrated and
 registered frames stay in the run folder.
 
+While copying, the dialog shows the current file and how many files it has
+processed. The copy button and destination field stay disabled until the
+copy ends. The background jobs list also shows the copy. A new WBPP run
+waits until the copy finishes, so it cannot replace the results being saved.
+
 ### See the stacks and their color in PSF Guard
 
 When a run for a project ends, PSF Guard takes its master lights in as
@@ -206,8 +211,10 @@ integrates the targets together.
   mode, so the log is the record.
 - **`*** Error: No database files have been selected.`** is WBPP's plate
   solver saying the server's PixInsight has no local star catalog. It
-  solves another way and the run goes on; the dialog shows every line WBPP
-  marks as an error, so this one appears even on a run that finished well.
+  may fall back to another catalog, such as TYCHO-2 from VizieR. Check the
+  log for the subsequent solve result. This message does not refer to your
+  image database and does not by itself mean the run failed. The dialog
+  keeps the original error and explains which catalog it refers to.
 - **A comma in a path.** WBPP's command line separates parameters with
   commas, so a run folder or frame path with one cannot be expressed; PSF
   Guard refuses rather than mangles it.

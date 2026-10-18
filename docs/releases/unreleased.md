@@ -4,6 +4,10 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- WBPP master copies show the current file and file counts in the dialog
+  and background jobs list. Copy controls stay disabled while copying, and
+  repeat copy requests cannot start a second copy. The dialog also explains
+  PixInsight’s missing Gaia catalog message.
 - Dropdown arrows now sit inside the border with space between the arrow
   and the selected text.
 - UI labels, settings help, and confirmation messages now state actions,

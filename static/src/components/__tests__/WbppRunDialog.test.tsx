@@ -210,3 +210,58 @@ describe('WbppRunDialog while another project runs', () => {
     expect(line).toHaveTextContent('3 lights use flats from across a change');
   });
 });
+
+describe('saving WBPP masters', () => {
+  it('locks copy controls from the request through completion and shows progress', async () => {
+    mockCommon();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    let progress: WbppRunProgress = { ...running, running: false, stage: 'complete', finished_at: 10 };
+    let copies = 0;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    server.use(
+      http.get('/api/databases', () => ok([{ id: 'alpha', process_directory: '/process' }])),
+      http.get('/api/db/alpha/wbpp/runs/current', () => ok({ started: false, queued: [], progress })),
+      http.post('/api/db/alpha/wbpp/runs/current/publish', async () => {
+        copies++;
+        await pending;
+        progress = { ...progress, publish: {
+          state: 'running', directory: '/process/Sh2 86/master', copied: 1, total: 3,
+          current_file: 'masterLight_L.xisf', skipped_existing: 0, conflicts: [], errors: [], finished_at: null,
+        } };
+        return ok({ started: false, queued: [], progress });
+      })
+    );
+    render(<QueryClientProvider client={client}>
+      <WbppRunDialog request={{ dbId: 'alpha', scope: { project_id: 1 }, label: 'Sh2 86' }}
+        defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />
+    </QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save masters' }));
+    const copying = await screen.findByRole('button', { name: 'Copying…' });
+    expect(copying).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Process folder' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Stack again' })).not.toBeInTheDocument();
+    fireEvent.click(copying);
+    release();
+    expect(await screen.findByText(/1 of 3 files processed.*masterLight_L.xisf/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copying…' })).toBeDisabled();
+    expect(copies).toBe(1);
+    progress = { ...progress, publish: { ...progress.publish!, state: 'complete', copied: 3, current_file: null, finished_at: 20 } };
+    await client.invalidateQueries({ queryKey: ['db', 'alpha', 'wbpp-run'] });
+    expect(await screen.findByRole('button', { name: 'Save masters' })).toBeEnabled();
+    expect(screen.getByRole('textbox', { name: 'Process folder' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Stack again' })).toBeEnabled();
+  });
+
+  it('explains the missing Gaia catalog without hiding the original error', async () => {
+    mockCommon();
+    server.use(http.get('/api/db/alpha/wbpp/runs/current', () => ok({ started: false, queued: [],
+      progress: { ...running, running: false, stage: 'complete', finished_at: 10,
+        log_errors: ['*** Error: No database files have been selected.'] },
+    })));
+    render(<WbppRunDialog request={{ dbId: 'alpha', scope: { project_id: 1 }, label: 'Sh2 86' }}
+      defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />, { wrapper: wrapper() });
+    expect(await screen.findByText(/PixInsight has no Gaia catalog files selected/)).toBeInTheDocument();
+    expect(screen.getByText('*** Error: No database files have been selected.')).toBeInTheDocument();
+  });
+});

@@ -48,6 +48,7 @@ export function useWbppRun(dbId: string | null | undefined) {
 export function describeWbppRun(progress: WbppRunProgress | undefined): string | null {
   if (!progress || (!progress.running && !progress.finished_at)) return null;
   const scope = progress.scope ? ` ${progress.scope}` : '';
+  if (progress.publish?.state === 'running') return `WBPP${scope}: copying masters…`;
   switch (progress.stage) {
     case 'planning':
       return `WBPP: planning${scope}…`;
@@ -97,7 +98,8 @@ export function describeQueuedRun(entry: WbppQueuedRun): string {
 
 /** The tone a run's line takes: what its colour says. */
 export function wbppRunTone(progress: WbppRunProgress): 'running' | 'done' | 'error' {
-  if (progress.running) return 'running';
+  if (progress.running || progress.publish?.state === 'running') return 'running';
+  if (progress.publish?.state === 'error') return 'error';
   return progress.stage === 'error' ? 'error' : 'done';
 }
 
@@ -159,6 +161,8 @@ export function describeWbppRunForProject(
   if (queued) return { label: 'Queued for WBPP', tone: 'queued' };
   const progress = status.progress;
   if (!isProjectsRun(progress, projectId) || !sameTarget(progress.target_id)) return null;
+  if (progress.publish?.state === 'running') return { label: 'Copying WBPP masters…', tone: 'running' };
+  if (progress.publish?.state === 'error') return { label: 'WBPP copy failed', tone: 'error' };
   if (progress.running) return { label: 'Stacking in WBPP…', tone: 'running' };
   switch (progress.stage) {
     case 'complete':
