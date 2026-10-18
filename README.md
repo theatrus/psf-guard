@@ -149,9 +149,17 @@ TS deliveries stay pending for retry. To import a standalone copy, turn off
 also offers a custom destination path. See
 [Target Scheduler imports](docs/IMPORTING.md#import-from-target-scheduler).
 
-Existing direct-open TS registrations keep working through 0.12. They are not
-copied or converted automatically. Direct access is deprecated; removal is
-planned for 0.13 or later.
+**PSF Guard is moving to its own catalogs.**
+
+For new Target Scheduler databases, choose **Settings → Databases → Import
+from Target Scheduler** to import the database and set up sync.
+
+Your current Target Scheduler setup will keep working in 0.12. A later update
+will create a PSF Guard catalog for you and keep captures, plans and grades in
+sync with Target Scheduler.
+
+Separate catalogs let us add features to PSF Guard and support new Target
+Scheduler versions. We plan to remove direct database access in 0.13 or later.
 
 ### Plan captures across rigs
 

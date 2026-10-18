@@ -145,7 +145,7 @@ export default function StackPreviewInspector({
 
   const startSearch = useMutation({
     mutationFn: async (selectedRegion: ReferenceRegion) => {
-      if (!artifactSource) throw new Error('This preview has no source-frame provenance');
+      if (!artifactSource) throw new Error('This preview has no record of its input frames');
       if (artifactSource.kind === 'mono') {
         return apiClient.startMonoArtifactSearch(
           artifactSource.dbId,

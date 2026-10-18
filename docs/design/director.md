@@ -1443,12 +1443,15 @@ one plan. Director rigs follow with the native records for their captures and
 
 ### Native catalogs and Target Scheduler exchange
 
-Transition, 2026-10-17: new imports use PSF Guard-owned snapshots with retained
+Transition, 2026-10-18: new imports use PSF Guard-owned snapshots with retained
 TS file connections. The working catalog still uses the TS schema. Automatic
 capture imports and conditional grade writeback establish the ownership and
 sync boundary before native schemas change. Existing direct-open registrations
-remain supported through 0.12 and are not converted automatically. Direct access
-is deprecated, with removal deferred to 0.13 or later.
+remain supported through 0.12; that release does not convert them. A later
+release will automatically migrate them to PSF Guard-owned catalogs with TS
+sync. Direct access is deprecated, with removal deferred to 0.13 or later.
+Separate catalogs let us add features to PSF Guard and support new Target
+Scheduler versions.
 
 Decision, 2026-09-26: neither Director nor future PSF Guard catalogs must use the
 TS schema internally. The meta/per-rig split remains: global coordination in the

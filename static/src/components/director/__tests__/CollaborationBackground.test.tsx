@@ -91,7 +91,7 @@ describe('Automatic collaboration work', () => {
     server.use(http.post('/api/director/v1/collaboration/connection/work', () => HttpResponse.json({ success: true, data })));
     setup();
     await userEvent.click(screen.getByText('Automatic work requests'));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Existing plans retained');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your existing plans are unchanged');
     expect(screen.getByText('Choose recipes in Planning')).toBeVisible();
     await userEvent.click(screen.getByLabelText('Pull tonight automatically'));
     expect(screen.getByRole('button', { name: 'Save automation' })).toBeEnabled();

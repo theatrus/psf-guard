@@ -248,7 +248,7 @@ export default function ImageDetailView({
   const qualityStatus = qualityScope.isLoading
       ? 'Loading the sequence quality score and reason…'
       : qualityScope.error
-        ? 'Sequence quality is unavailable for this scope.'
+        ? 'Could not load the sequence score for this image.'
         : quality
           ? undefined
           : 'No sequence score is available for this image.';

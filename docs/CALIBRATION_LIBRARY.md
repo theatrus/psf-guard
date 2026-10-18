@@ -139,77 +139,74 @@ duplicates repair alike. Night dates are the rig's local dates either way.
 
 ## Browse the library
 
-The **Calibration** page shows one database's library: its sessions, the
-frames of a session as pictures, one frame with its numbers beside its
-session's, and the masters built from them. Open it with the header's
-**Calibration** tab, between Sequence and Stacks. It shows the
-database the header's project picker has in scope, or the first database
-when none is. On Calibration the header's **Rig · target** control names
-the rig alone: the page shows a rig's library, never one target's. For a
-project shot by several rigs it offers only those rigs, and choosing one
-opens the same project there; the target stays in the address, so Images
-shows it again.
+Open the header's **Calibration** tab, between Sequence and Stacks, to browse
+sessions, preview frames, compare a frame's measurements with its session, and
+inspect the masters built from those frames. The page uses the selected
+database, or the first database when none is selected.
+
+On Calibration, the header's **Rig · target** control shows only the rig's name.
+The page covers a rig's library rather than one target. For a project shared
+by several rigs, the control lists those rigs. Choosing a rig opens that
+project's calibration in its database. The URL stores the selected target so
+Images can show it again when you return.
 
 ### Project scope
 
-Opened from a project's view (Images, Sequence, Stacks or a project's
-Calibration report), the page shows the calibration that project uses, with
-an **M 44 on Askar 120 ✕** chip first in the filter bar and the heading
-**Calibration · for M 44 · Askar 120**. Opened from the Library, the Sky or
-with All projects, it shows the whole library. A light's calibration panel
-accounts for frames it matched, was refused or lacks, most of which the
-scope leaves out, so its links open the rig's whole library narrowed to
-that kind and night.
+Open Calibration from Images, Sequence, Stacks or a project's Calibration
+report to see the calibration that project uses. The filter bar starts with
+an **M 44 on Askar 120 ✕** chip, and the heading reads
+**Calibration · for M 44 · Askar 120**. Opening Calibration from the Library,
+the Sky or All projects shows the whole library.
 
-The scope is what the project's lights use: each light is matched the way a
-stack matches it, then reduced the way a stack builds its masters, to the
-one coherent set of frames each master takes (for darks, the nearest
-complete session) or the master from other software the policy adopts.
-Matching alone has no age limit for flats, so an old session at the light's
-filter matches without being used; it is not in the scope.
+A light's calibration panel also lists frames that matched but were refused,
+and missing calibration. Those links open the rig's whole library filtered by
+kind and night, so you can inspect frames the project does not use.
 
-- **Frames**: the sessions holding a frame some light's masters use: its
-  rig, filter, exposure and settings, its nights, the frames kept out, and
-  flat grouping's choices (flats from another angle, corrected flats, the
-  side of a change). Corrected flats bring the two sessions the change's
-  map is made from. Flats a light keeps only so its stacks keep their keys,
-  from the far side of a change, are not in it.
-- **Masters**: the recorded masters whose every source frame sits in the
-  set one light would build that master from, and those the project's
-  latest stacks used.
-- **Flat groups** and their changes: only the families the scope's flat
-  sessions belong to.
+For a project, PSF Guard selects calibration with the same rules a stack uses
+to build masters or choose masters from other software. For darks, it selects
+the nearest complete session. A flat session that could match a light but
+would not supply its master stays out of this view; matching alone has no age
+limit for flats.
 
-A project whose lights span several calibration rigs, after a camera swap
-or at another binning, shows them all, grouped by rig, and the chip says
-how many. With one rig the Rig filter opens on it; with several, on All.
+- **Frames** shows the sessions that supply frames to the project's masters,
+  including their rig, filter, exposure, settings, nights and excluded frames.
+  It follows the selected flat groups, camera angles and sides of a change.
+  Corrected flats also include both sessions used to measure the correction
+  map. Flats from the far side of a change that a stack records only for its
+  cache key stay out of this view.
+- **Masters** shows recorded masters whose source frames all belong to the
+  set selected for one light, plus masters the project's latest stacks used.
+- **Flat groups** shows the families that contain the included flat sessions,
+  along with their changes.
 
-**✕** on the chip, or **Show all of Askar 120's calibration** under the
-heading, widens to the whole library and keeps the Rig filter, so you see
-everything for that rig; the Rig filter's **All** then shows the whole
-catalog. **Clear**
-removes the scope with every filter. Choosing another project in the
-header moves a scope to it; a page you widened stays wide. The address keeps
-the scope as `calProject=<id>`. **Scheduler flats** and **Duplicates** read
-the whole library.
+A project whose lights span several calibration rigs, after a camera swap or
+at another binning, shows all of those rigs. The chip shows the rig count.
+The Rig filter starts on the only rig, or **All** when there are several.
 
-The server works the scope out on a connection of its own, from the light
-headers the calibration health pass keeps. Lights the pass has not reached
-are read by a background job sized like other interactive work; the page
-says how many are still being read, the scope grows as they arrive, and
-the job stops once no view has asked for a minute. The scope is kept until
-something it depends on changes: a frame, its validity mark or whether it
-is kept out, flat grouping's measurements, the recorded masters, the
-settings, or the project's own lights. Grading the library in the
-background changes none of these unless it keeps a frame out. After a
-change the last scope is served while one refresh works out the next.
+Click **✕** on the chip or **Show all of Askar 120's calibration** under the
+heading to browse the whole library with the Rig filter still applied. Choose
+**All** in that filter to see the whole catalog. **Clear** removes the project
+filter and all other filters. Choosing another project in the header updates
+the project filter; if you already chose to show the whole library, that view
+stays open. The URL stores the project filter as `calProject=<id>`.
+**Scheduler flats** and **Duplicates** always use the whole library.
 
-**Browse calibration** in a project's Calibration report, which the
-Library's calibration pill also opens, and **Open Calibration** on a
-database's calibration summary in **Settings › Databases** lead to the same
-page. Everything chosen on the page lives in its address,
-`#/calibration?db=…`, so a reload or a shared link opens the same view: the
-database, the tab, the filters, the session, the frame and how it is drawn.
+The server calculates project scope on a separate database connection, using
+light headers saved by the calibration health pass. A background job reads any
+remaining headers with the same worker limits as other interactive work. The
+page shows how many headers remain and adds calibration as it reads them. The
+job stops when no view has requested it for a minute.
+
+The server caches the result until its inputs change: frames, validity marks,
+exclusions, flat measurements, recorded masters, settings or the project's
+lights. Background grading changes scope only when it excludes a frame. While
+one job refreshes the result, the page shows the last cached result.
+
+**Browse calibration** in a project's Calibration report opens this page; the
+Library's calibration pill opens that report. **Open Calibration** on a
+database's summary in **Settings › Databases** also opens the page. Its URL,
+`#/calibration?db=…`, stores the database, tab, filters, session, frame and display
+settings, so a reload or shared link opens the same view.
 
 ### Sessions and frames
 
@@ -280,14 +277,13 @@ shows in; dust this flat does not show is marked so, and what this flat
 alone holds, such as a drop of dew drying, is drawn as a transient, not
 as dust. Spots and Large dust are kept in the address like the stretch.
 
-Pictures are drawn by the same queue as light previews: the page asks, the
-server answers that the picture is on its way, and one poll for the whole
-page waits for it. Nothing is drawn while a request waits. The pictures and
-session medians are kept below the database's cache folder in
-`calibration-previews`, keyed by the frame's file as it is now, the view,
-size and stretch, and the drawing method, and the disk limit removes them
-with the other previews. Reading a frame costs more than drawing it, so the
-strip's picture and the viewer's come from one read.
+The server queues calibration previews alongside light previews. The page
+checks their progress through one shared poller and shows each image when it
+is ready. The server caches previews and session medians in
+`calibration-previews` below the database's cache folder. Cache keys include
+the source file's fingerprint, view, size, stretch and drawing method. The disk
+limit removes these files along with other previews. The strip and viewer
+share one frame read, which costs more than drawing either preview.
 
 ### One frame
 
@@ -788,8 +784,8 @@ each angle, and no change between the two flats of a pair; a pair
 measured apart that it would serve rules it out. It reaches across a
 change only when that change is dust on the camera side, which leaves
 how flats depend on the angle as it was. A flat served this way must
-come from the light's side of every change, and the panel names the
-angles and their pairs. A light whose flats sit at another angle than it recorded is read
+come from the light's side of every change. The panel shows which
+camera angles and pairs of sessions PSF Guard compared. A light whose flats sit at another angle than it recorded is read
 at its flats' angle when a stack judges it against its masters, so the
 stacker does not refuse the master its family chose.
 
@@ -1004,45 +1000,44 @@ browser:
   them out, and while a newer one is worked out it keeps the last counts
   and says **Updating…**, rather than saying the group feeds nothing.
 
-The address names the group as `calGroup=<key>`. The key is the first,
-by id, of the sessions holding the group's oldest night, so it survives a
-regroup that keeps that night, and a key naming any session of a group
-opens that group: a link still lands after nights join or split. When one
-session holds flats of two families, as a night shot at two gains may,
-each group's key also carries a digest of its family's key. A key that
-names no group's session any more, as when every flat of that night was
-kept out, opens the group of the family that session's flats would join
-(the same rig, filter, gain, frame size, binning and focal length class)
-at the nearest angle, around its night. A Groups link holds the sidebar at **Loading groups…** until
-the groups (and a project's scope) are in, rather than showing the
-session list for a moment.
+The URL stores the selected group as `calGroup=<key>`. The key uses the first
+session by id on the group's oldest night, so links still open the group after
+nights join or split. A link can use any session in the group. When a session
+contains two flat families, such as flats shot at two gains, each key also
+includes a digest of its family's key.
 
-**Images on one group's lights.** A project's line in **What it feeds**
-opens Images with `flatGroup=<db>:<key>` (or `…:flagged` for the flagged
-link) beside the database and project. The grid then keeps exactly the
-lights the group counts, by id: not other rigs' lights, other angles' or
-other filters' lights shot the same nights. A **Lights of a flat group ✕**
-chip heads the toolbar, the summary line says **Lights of one flat group**,
-and the filter counts as one of the Images filters; the chip's ✕ or
-**Clear** removes it. A value made in another database does nothing and
-is not counted. Until the lights are known the grid shows none, so that
-Select all, Accept and Reject reach nothing outside the group, and says
-*Finding the group's lights…*. A key that names no group any more, as
-after its nights joined an older group, says **This flat group no longer
-exists** with **Show every light**; when the lights cannot be found the
-grid says so and asks again after a growing wait.
+If a session no longer belongs to a group, for example because all its flats
+were excluded, the link opens the nearest group its flats would match. PSF
+Guard compares rig, filter, gain, frame size, binning and focal length class,
+then finds the nearest angle around that night. A Groups link shows
+**Loading groups…** until the groups and project scope are ready, so the
+session list does not appear briefly during loading.
 
-In a project scope, Groups lists the groups holding the project's
-sessions, each with its neighbour on either side, dimmed and marked
-**Neighbour**: a group's edges are where its flats stop being right, and
-the group across an edge is what Compare sets it against. A group the
-scope holds only because a correction's map is measured from it, and
-whose flats none of the project's lights take, is dimmed too and marked
-**Correction map**, once every light of the catalog has been read and none
-is unreadable. Groups further
-off are left out, and a gap row counts them. ↑ and ↓ keep to the
-project's own groups. **✕** on the chip widens to the rig's whole
-library, still in Groups.
+**Images on one group's lights.** Click a project under **What it feeds** to
+open Images with `flatGroup=<db>:<key>`, or `…:flagged` for flagged lights.
+The URL also stores the database and project. The grid shows exactly the
+lights counted for that group, by id. It excludes other rigs, camera angles
+and filters, even on the same nights.
+
+The toolbar shows a **Lights of a flat group ✕** chip and the summary
+**Lights of one flat group**. This counts as one Images filter. Click **✕**
+or **Clear** to remove it. A value from another database has no effect and
+does not count as a filter.
+
+While PSF Guard finds the lights, the grid stays empty and shows
+*Finding the group's lights…*. Select all, Accept and Reject cannot affect
+lights outside the group. If the group no longer exists, the grid shows
+**This flat group no longer exists** and **Show every light**. If the lookup
+fails, the grid explains the error and retries with longer waits between attempts.
+
+With a project selected, Groups lists the groups that contain the project's
+sessions and their neighbours on either side. Neighbours appear dimmed with
+**Neighbour** labels, so you can compare flats across a group boundary. A
+group used only to measure a correction map, whose flats none of the project's
+lights use, appears dimmed with **Correction map** once every light in the
+catalog has been read and none is unreadable. More distant groups stay hidden;
+a gap row counts them. ↑ and ↓ move only between the project's own groups.
+Click **✕** on the project chip to show the rig's whole library in Groups.
 
 On a wide screen the sidebar sticks beside the frame as the page scrolls
 and fits the window; its list scrolls on its own, so a long group detail

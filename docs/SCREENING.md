@@ -215,7 +215,7 @@ checks them too: a penalty from 0% to 200% in steps of 10%, a Max HFR above
 1,000,000. Either limit may be empty, which turns it off. A value outside
 them is refused and shown, never quietly changed.
 
-Once any value differs from your defaults, the address names all of them:
+Once any value differs from your defaults, the URL stores all of them:
 `penaltySatellite`, `penaltyPointing`, `penaltyTemporal`, `penaltyHfrRise`,
 `penaltyStarLoss` (1 is 100%), `maxHfr` and `minStars`, with `off` for a limit turned off. A link therefore
 scores the same for whoever opens it, whatever their defaults. A reload, the
@@ -340,7 +340,7 @@ obstruction, off target, failed plate solve, recommended rejects, or poor
 calibration. The cutoff rule takes its name from the measure: **Below the
 cutoff**, **Fewer stars than the cutoff** or **HFR above the cutoff**. Each
 choice shows how many frames it selects in the view on screen. A rule stays
-on, and the address keeps it as `selectRule` beside the cutoff: moving the
+active, and the URL stores it as `selectRule` beside the cutoff: moving the
 cutoff, changing its measure, rescoring, or opening another session tab
 selects again without choosing the rule a second time. Frames clicked by hand
 stay as you left them when the rule selects again. **×** beside the pill
@@ -452,7 +452,7 @@ order. A view you have not moved in treats that as a flip at rest: the page
 stays and the cursor goes to the new first card. Otherwise the current card
 stays current and is brought into view if the change left it off screen.
 
-The address keeps the choice as `order=newest`, shared by both views. The
+The URL stores the choice as `order=newest`, shared by both views. The
 last choice, like the grouping and the thumbnail size, is remembered and
 fills in a link that names none, such as a project opened from the Library.
 Each view has its own thumbnail size: `size` in the address is the size of

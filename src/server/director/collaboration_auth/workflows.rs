@@ -28,7 +28,7 @@ pub(super) async fn checkin(
         .await?
         .ok_or(Failure(
             StatusCode::CONFLICT,
-            "Credential missing; original work and reports retained",
+            "The saved token is missing. Your assigned work and queued reports are unchanged.",
         ))?;
     let remote = Remote::new(&b)?;
     let source = b.source().map_err(Error::from)?;
@@ -298,7 +298,7 @@ async fn execute(
         .await?
         .ok_or(Failure(
             StatusCode::CONFLICT,
-            "Credential missing; original work and reports retained",
+            "The saved token is missing. Your assigned work and queued reports are unchanged.",
         ))?;
     let remote = Remote::new(&b)?;
     let source = b.source().map_err(Error::from)?;

@@ -86,7 +86,8 @@ function NotesSection({ field, title, notes }: {
     {releases.map(release => <div key={release.version}>
       {notes.length > 1 && <h4>{displayVersion(release.version)}</h4>}
       <ul>{release[field].map(item => <li key={item.title}>
-        <strong>{item.title}</strong><p>{item.body}</p>
+        <strong>{item.title}</strong>
+        {item.body.split('\n\n').map((paragraph, index) => <p key={index}>{paragraph}</p>)}
       </li>)}</ul>
     </div>)}
   </section>;

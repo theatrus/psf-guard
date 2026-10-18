@@ -76,6 +76,28 @@ Rewrite the sentence, not just the verb. “The row identifies what waits” sti
 leaves the reader to work out what is waiting and why. Do not replace every
 “names” with “shows” or every “holds” with “stores.” Check the meaning first.
 
+### Explain changes in the reader's terms
+
+For a change or deprecation, explain what happens to the reader's setup, when
+it happens, what PSF Guard does automatically, and whether the reader needs
+to act. State the benefit in concrete terms. Do not make readers translate
+internal records or design goals into consequences for their work.
+
+If existing and new setups need different steps, state what each should do.
+Name the replacement and where to find it.
+
+| Avoid | Prefer |
+|---|---|
+| Existing direct-open registrations remain supported through 0.12. | Your current Target Scheduler setup will keep working in 0.12. |
+| A later release will migrate them automatically. | A later update will create a PSF Guard catalog for you and keep captures, plans and grades in sync with Target Scheduler. |
+| Separate catalogs give each product control of its own data. | Separate catalogs let us add features to PSF Guard and support new Target Scheduler versions. |
+
+Name what the reader keeps or gets: images, plans, grades, settings or a working
+connection. Explain “migrate,” “adopt,” “retain” or “ownership” when their effect
+would otherwise be unclear. These words are not banned; keep precise technical
+terms in API and design documentation, and explain them when they affect a
+user's choice. Never replace terms in bulk.
+
 ### Preserve technical meaning
 
 - In documentation, copy UI labels exactly, including capitalization. When

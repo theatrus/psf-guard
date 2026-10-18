@@ -50,7 +50,7 @@ describe('SatellitePanel', () => {
       />
     );
 
-    expect(screen.getByText(/identity remains a candidate association/i)).toBeInTheDocument();
+    expect(screen.getByText(/The satellite names are possible identifications/i)).toBeInTheDocument();
     expect(screen.getByText(/pixel match · high/i)).toBeInTheDocument();
     expect(screen.getByText('1 high')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /STARLINK-1234/ })).toHaveAttribute(

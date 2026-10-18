@@ -77,7 +77,7 @@ export default function CollaborationWorkflows({ connection, canWrite, refresh, 
     <div {...workspacePanel(id, 'reports', current)}>{connected && visited.has('reports') && <CollaborationReports embedded active={active && current === 'reports'} connection={connection.binding.id} canWrite={canWrite} />}</div>
     <div {...workspacePanel(id, 'connection', current)}>{connectionControls}</div>
     {mutation.isPending && <p role="status">Contacting collaboration server...</p>}
-    {mutation.isError && <p role="alert">{mutation.variables?.operation === 'checkin' && 'Check-in failed; queued reports retained. '}{mutation.error.message}</p>}
+    {mutation.isError && <p role="alert">{mutation.variables?.operation === 'checkin' && 'Check-in failed. Your reports are still queued to send. '}{mutation.error.message}</p>}
     {notice && <p role="status">{notice}</p>}
   </div>;
 }

@@ -41,7 +41,7 @@ describe('scheduler flat coverage', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select recorded coverage on this page' }));
     const submit = screen.getByRole('button', { name: 'Invalidate coverage' });
     expect(submit).toBeDisabled();
-    expect(screen.getByText(/Files and calibration masters are unchanged/)).toBeInTheDocument();
+    expect(screen.getByText(/Your files and calibration masters are unchanged/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: '  Bright-star artifacts  ' } });
     fireEvent.click(submit);
     await waitFor(() => expect(received).toEqual({

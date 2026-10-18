@@ -78,8 +78,8 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
       {saved?.automatic_reports && <p>Automatic reports: {!connected ? 'Paused' : status.reports ? `${status.reports.queued} queued, ${status.reports.delivered} delivered, ${status.reports.accepted ?? 0} accepted, ${status.reports.rejected ?? 0} rejected, ${status.reports.held} held` : 'Awaiting first pass'}</p>}
       {saved?.automatic_reports && status.reports?.deferred && <p>More contribution evidence pending; continuing next batch.</p>}
     </div>}
-    {status?.last_error && <p role="alert">{status.last_error}. Existing plans retained.</p>}
-    {status?.report_error && <p role="alert">{status.report_error}. Queued reports retained.</p>}
+    {status?.last_error && <p role="alert">{status.last_error}. Your existing plans are unchanged.</p>}
+    {status?.report_error && <p role="alert">{status.report_error}. Your reports are still queued to send.</p>}
     {!!status?.rejected_reports?.length && <section aria-label="Rejected contributions"><h4>Rejected contributions</h4><ul>
       {status.rejected_reports.map(report => <li key={report.id} role="alert">{report.night}, panel {report.panel}, {report.filter}: {report.reasons.length ? report.reasons.join('; ') : report.summary ?? 'Rejected by collaboration server; review contribution evidence'}</li>)}
     </ul></section>}

@@ -48,9 +48,9 @@ export default function DirectorRigs() {
         <div className="director-record director-record-wide">
           <div className="director-record-name">
             <h3 className="director-rig-title"><Telescope size={20} aria-hidden="true" />{db.name}</h3>
-            <span className="director-muted">{!profiles.data ? (profiles.isError ? 'Rig state unavailable' : 'Checking rig...') : !profile ? 'Not yet a rig; open the Library once to adopt it'
+            <span className="director-muted">{!profiles.data ? (profiles.isError ? 'Could not load rig settings' : 'Checking rig...') : !profile ? 'Open the Library to add this database as a rig'
               : profile.field_of_view ? `Field ${formatDegrees(profile.field_of_view.width_degrees)} × ${formatDegrees(profile.field_of_view.height_degrees)}, ${profile.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${profile.profile?.configuration ? ', camera reported' : ', camera not reported yet'}`
-              : 'A rig, no optics yet'}</span>
+              : 'Field of view not set'}</span>
             {profile?.profile?.peer_id && <span className="director-muted">Plans push to {peers.data?.find(peer => peer.id === profile.profile?.peer_id)?.name ?? profile.profile.peer_id}</span>}
             {status?.status && <span className="director-muted">Director plugin: {describeStatus(status.status.payload, status.status.reported_at_ms)}</span>}
             <CalibrationRigLinks rigs={calibration.data?.rigs?.filter(rig => rig.database_ids?.includes(db.id)) ?? []} />

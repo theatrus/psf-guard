@@ -142,6 +142,8 @@ test('auto-import keeps autofocus frames out and holds a new target for Review',
 
   await row.getByRole('button', { name: 'Review' }).click();
   const panel = page.locator('.import-progress-panel');
+  await expect(panel.getByRole('checkbox', { name: /^Skip processed files/ })).toBeVisible();
+  await expect(panel).toContainText('When pairing is off, also skip calibrated and registered copies.');
   await expect(panel).toContainText('NEW NGC 7000 — 1 target(s), 2 frame(s)', { timeout: 30_000 });
   // The held folder sits below the two levels the folder tree lists, so the
   // preview shows it on its own, ticked.

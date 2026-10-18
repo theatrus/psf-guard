@@ -216,12 +216,12 @@ bundles or shared configuration exports.
 
 **Check connection** rereads the saved credential and checks the remote server.
 If the credential file is missing, unreadable or the server rejects its token,
-the original agent identity and queued reports remain intact. The current
+your agent registration, assigned work and queued reports are unchanged. The current
 AstroCollab protocol cannot reissue that same agent's token. Recover it through
 the server when possible, or explicitly add a new connection; reports belonging
 to the old agent are never reassigned to the new one. **Disconnect** removes the
-local token but retains its identity and work. It does not revoke the remote
-agent. HTTPS is required except for explicitly enabled loopback HTTP tests.
+saved token for this connection. The agent stays registered on the remote server;
+assigned work and queued reports stay saved. HTTPS is required except for explicitly enabled loopback HTTP tests.
 
 ## Project Priority
 
@@ -526,12 +526,11 @@ rig profile. The identity API for sites remains for the plugin.
 
 ### Rigs and plans appear on their own
 
-Opening the Library, or any view with the header's scope, takes every
-registered database in as a rig and every Target Scheduler project in it as
-a plan. Nothing to enable, name or
-link: the database keeps a small identity table so a moved or renamed file
-stays the same rig, and each project row with a GUID gets a plan named after
-it. Projects that share a GUID across databases, as Sync copies do, become
+When you open the Library or a view with the project selector, PSF Guard adds
+each registered database as a rig and each Target Scheduler project with a GUID
+as a plan. You do not need to enable planning or link the projects yourself.
+PSF Guard stores a catalog id in each database, so it recognizes the same rig
+after you move or rename the file. Each plan uses its project's name. Projects that share a GUID across databases, as Sync copies do, become
 one plan with several rigs; projects that merely share a name stay separate
 plans. The first time a project is listed, what Target Scheduler already
 holds for it becomes Director's own drafts: its targets become the framing
@@ -1032,10 +1031,11 @@ SHO and colour layers); the **Survey** list under View holds every layer.
 The layer is how the sky is shown, not part of the framing: picking one is
 never an unsaved change, and this browser keeps it for every plan.
 On a narrow stage, such as a phone's, the chips fold behind one chip that
-shows the layer on screen, so they keep clear of the sky and the scale. The rectangle is the field of the **panel rig**: the first rig
-holding the project that knows its optics is chosen for you (rigs take their
-optics from their own frames when they are adopted), and you can pick another
-or type a panel size. Drag the rectangle to move the target, drag its handle
+shows the selected layer without covering the sky or scale. The rectangle shows
+the **panel rig**'s field of view. PSF Guard selects the first rig that contains
+the project and has known optics. It reads each rig's telescope and camera
+settings from its images when it adds the rig. Choose another rig or type a
+panel size. Drag the rectangle to move the target, drag its handle
 to turn it, and drag the sky to look around; scroll to zoom. The camera angle
 also takes a number, quarter turns, or the rig's fixed camera angle.
 **Mosaic panels** lays out the shared framing's panels (see
@@ -1439,8 +1439,8 @@ the database, and skipping the row would make a twin of it.
 The preview accounts for every exposure plan in the project: plans it adds
 (`create`), takes over (`adopt`), changes (`update`, including turning one
 on), turns off (`disable`) or leaves as they are (`unchanged`). Any action
-but `unchanged` counts as a change, so the plan asks to be activated until
-it is applied. A template activation creates is listed under `template`.
+but `unchanged` counts as a change. The plan shows **Needs activating** until
+you apply those changes. A template activation creates is listed under `template`.
 Each rig's report also carries `shoots`, the plans Target Scheduler runs
 afterwards (row, target, template, filter, gain, offset, exposure, desired
 and acquired frames, the objectives it serves, and whether it is turned on).
@@ -1615,7 +1615,7 @@ database that N.I.N.A. and Target Scheduler write. To plan for it from here:
 
 1. Register that PSF Guard as a peer under **Settings, Remote PSF Guard**,
    and pull its catalog into a database on this server. That copy is the rig
-   here: it is adopted like any other and holds the rig's profile.
+   here. PSF Guard adds it to planning and stores the rig's profile with it.
 2. Open **Rigs, Setup** for the copy and set **Remote site** to the peer.
 3. Activate as usual. Apply writes the rows into the copy, then sends the
    planning tables (projects, targets, exposure plans, templates and rule

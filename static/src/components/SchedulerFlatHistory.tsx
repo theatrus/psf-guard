@@ -119,9 +119,10 @@ export default function SchedulerFlatHistory({ dbId, canManage }: {
           }
         }}>
           <strong>Invalidate {selectedIds.length} coverage record{selectedIds.length === 1 ? '' : 's'}?</strong>
-          <p>This removes the selected coverage from Target Scheduler on the next grade pull or
-            applied reconcile. Sync before the next flats action. New flats remain subject to
-            scheduler eligibility. Files and calibration masters are unchanged.</p>
+          <p>The next grade pull or applied reconcile removes these coverage records from
+            Target Scheduler. Sync before the next flats action so Target Scheduler can check
+            whether new flats are needed. Its scheduling rules still apply. Your files and
+            calibration masters are unchanged.</p>
           <p>Duplicate coverage can still satisfy the scheduler. Include all suspect records for the run.</p>
           <label>Reason
             <input value={reason} required maxLength={1000} disabled={invalidate.isPending}

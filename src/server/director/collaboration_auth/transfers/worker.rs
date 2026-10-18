@@ -629,7 +629,7 @@ async fn upload(
         while let Some(chunk) = response.chunk().await.map_err(|_| {
             Failure(
                 StatusCode::BAD_GATEWAY,
-                "Upload acknowledgment interrupted; retry retained",
+                "The upload server’s reply was interrupted. PSF Guard will retry.",
             )
         })? {
             if bytes.len() + chunk.len() > 262_144 {
@@ -640,7 +640,7 @@ async fn upload(
         let ack: Value = serde_json::from_slice(&bytes).map_err(|_| {
             Failure(
                 StatusCode::BAD_GATEWAY,
-                "Upload acknowledgment unreadable; retry retained",
+                "Could not read the upload server’s reply. PSF Guard will retry.",
             )
         })?;
         if ack["file"]["name"] != artifact.name
@@ -691,7 +691,7 @@ fn stage(
     let mut input = std::fs::File::open(source).map_err(|_| {
         Failure(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Source file is temporarily unavailable; retry retained",
+            "The source file is temporarily unavailable. PSF Guard will retry.",
         )
     })?;
     let mut hash = Sha256::new();

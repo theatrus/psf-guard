@@ -199,7 +199,7 @@ export function CalibrationMasterInspector({ dbId, source, title, label, initial
           {catalog.data?.notes.map((note, index) => <p className="calibration-master-note" key={index}>{note}</p>)}
           {catalog.isError && (
             <div className="calibration-master-error" role="alert">
-              <span>{catalog.error instanceof Error ? catalog.error.message : 'Unable to read calibration provenance.'}</span>
+              <span>{catalog.error instanceof Error ? catalog.error.message : 'Could not load this master’s inputs and build settings.'}</span>
               <button type="button" className="stack-preview-card-action" onClick={() => void catalog.refetch()}
                 disabled={catalog.isFetching} title="Retry loading calibration masters" aria-label="Retry loading calibration masters">
                 <RotateCcw size={16} aria-hidden="true" />

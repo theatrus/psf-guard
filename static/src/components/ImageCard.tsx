@@ -367,7 +367,7 @@ export default function ImageCard({
             className={quality.satellite.pixel_aligned_high_risk_count > 0
               ? 'analysis-signal danger'
               : 'analysis-signal warning'}
-            title="Pixel corridor evidence matches an orbital candidate"
+            title="Detected trail aligns with a predicted satellite path"
           >
             satellite {quality.satellite.pixel_aligned_high_risk_count > 0
               ? 'trail matched'
