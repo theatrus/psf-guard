@@ -161,6 +161,29 @@ describe('extending a mosaic', () => {
 describe('placing a panel by hand', () => {
   const pair = layout([place('r1c1', 0, 0, true), place('p2', -0.8, 0)]);
 
+  it('keeps a dragged panel in its row beside a diagonal neighbour', () => {
+    // A 2 by 2 cover around a shot panel whose real edges sit a hair off its
+    // place. p3 is diagonal to p2: north of r1c1, not of p2.
+    const grid = layout([
+      { id: 'r1c1', x: 0, y: 0, locked: true }, { id: 'p2', x: -0.8, y: 0, locked: false },
+      { id: 'p3', x: 0, y: 0.8, locked: false }, { id: 'p4', x: -0.8, y: 0.8, locked: false },
+    ]);
+    const boxOf = (panel: DirectorLayout['panels'][number]) => {
+      const [x, y] = panel.id === 'r1c1' ? [panel.x, panel.y + 0.004] : [panel.x, panel.y];
+      return [x - 0.5, x + 0.5, y - 0.5, y + 0.5] as [number, number, number, number];
+    };
+    const overlapOf = (of: DirectorLayout, a: string, b: string) => {
+      const shape = (id: string) => unitShape(of.panels.find(panel => panel.id === id)!);
+      return shapeOverlap(shape(a), shape(b))?.thickness ?? null;
+    };
+    // Dragged east, short of the minimum beside r1c1: it stays in its row.
+    const settled = snapPlacement(grid, 'p2', -0.92, 0, 0.05, boxOf, overlapOf);
+    expect(Math.abs(settled.y)).toBeLessThan(0.01);
+    close(settled.x, -0.92);
+    // Beside a panel it is level with, it still settles at the minimum.
+    close(snapPlacement(grid, 'p2', -0.78, 0.02, 0.05, boxOf, overlapOf).x, -0.8);
+  });
+
   it('settles near the minimum overlap or a lined-up place, and not beyond the reach', () => {
     expect(snapPlacement(pair, 'p2', -0.78, 0.03, 0.05)).toEqual({ x: -0.8, y: 0, snappedX: true, snappedY: true });
     expect(snapPlacement(pair, 'p2', -0.6, 0.2, 0.05)).toEqual({ x: -0.6, y: 0.2, snappedX: false, snappedY: false });

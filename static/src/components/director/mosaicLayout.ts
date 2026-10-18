@@ -315,8 +315,18 @@ export function snapPlacement(layout: DirectorLayout, id: string, x: number, y: 
   // A place lined up with a panel, or beside one (`beside` names it).
   type Candidate = { value: number; beside?: number };
   const nearest = (value: number, candidates: Candidate[]) => candidates.reduce<Candidate | null>((best, candidate) => Math.abs(candidate.value - value) <= tolerance && (best === null || Math.abs(candidate.value - value) < Math.abs(best.value - value)) ? candidate : best, null);
+  // Beside a panel only when level with it, sharing at least half a side
+  // across the axis: a panel diagonal to this one shares a corner, and
+  // setting this one at the minimum overlap beside that would pull it out of
+  // its own row or column.
+  const level = (axis: 0 | 1, box: Bounds) => {
+    const [lo, hi] = axis === 0 ? [2, 3] : [0, 1];
+    const shared = Math.min(own[hi], box[hi]) - Math.max(own[lo], box[lo]);
+    return shared >= 0.5 * Math.min(own[hi] - own[lo], box[hi] - box[lo]);
+  };
   const along = (axis: 0 | 1, size: number, offset: number): Candidate[] => boxes.flatMap((box, index) => {
     const c = middle(box)[axis] - offset;
+    if (!level(axis, box)) return [{ value: c }];
     const gap = beside(axis === 0 ? box[1] - box[0] : box[3] - box[2], size, share);
     return [{ value: c }, { value: c - gap, beside: index }, { value: c + gap, beside: index }];
   });
