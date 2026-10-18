@@ -52,6 +52,6 @@ export default function CollaborationAuthorization({ connection, canWrite, refre
       <button type="submit" disabled={busy || !code.trim()}><Link2 size={16} />Pair</button>
     </form>}
     {capabilities && !capabilities.signin && !capabilities.pairing && <p role="alert">This server offers no supported authentication method.</p>}
-    {!fresh && !waiting && connection.status !== 'registered' && <p>Your agent registration, assigned work and queued reports are unchanged. Check the connection before registering a replacement agent.</p>}
+    {!fresh && !waiting && connection.status !== 'registered' && <p>PSF Guard keeps the saved agent details, assigned work and queued reports. Check the connection before registering a replacement agent.</p>}
   </section>;
 }

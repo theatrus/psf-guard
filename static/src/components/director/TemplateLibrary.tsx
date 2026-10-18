@@ -87,7 +87,7 @@ export default function TemplateLibrary() {
           </select></label>}
       </div>}
     </div>
-    <p className="director-muted">Save exposure templates to use across rigs. Choose a shared template when a rig has none for the filter. Activation adds the template to that rig’s database.</p>
+    <p className="director-muted">Save exposure templates to use across rigs. Choose a shared template when a rig has none for the band. Activation adds the template to that rig’s database.</p>
     {library.isError && <p className="director-error" role="alert">{message(library.error)} <button type="button" onClick={() => void library.refetch()}>Retry</button></p>}
     {copyFrom && <div className="template-copy-list" role="group" aria-label="Templates to copy">
       {source >= 0 && rigTemplates[source]?.isPending && <p role="status">Loading templates...</p>}
