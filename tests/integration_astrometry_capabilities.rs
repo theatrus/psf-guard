@@ -40,17 +40,29 @@ fn cache_versions_follow_the_resolved_seiza_crates() {
             psf_guard::satellites::SEIZA_SATELLITES_VERSION,
         ),
         (
-            "seiza-stacking",
-            psf_guard::server::stack_preview::SEIZA_STACKING_VERSION,
-        ),
-        ("seiza-stretch", env!("PSF_GUARD_SEIZA_STRETCH_VERSION")),
-        (
             "seiza-background",
             env!("PSF_GUARD_SEIZA_BACKGROUND_VERSION"),
         ),
     ] {
         assert_eq!(version, locked_version(name), "{name} cache provenance");
     }
+}
+
+/// Stacks and masters key on the release whose output Seiza reproduces, so
+/// an upgrade that changes no output keeps them. That release is never newer
+/// than the crate itself.
+#[test]
+fn stack_caches_follow_seiza_stacking_output_not_its_version() {
+    let parse = |version: &str| {
+        version
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap())
+            .collect::<Vec<_>>()
+    };
+    let output = psf_guard::server::stack_preview::SEIZA_STACKING_OUTPUT_VERSION;
+    assert_eq!(output, seiza_stacking::OUTPUT_VERSION);
+    assert!(parse(output) <= parse(&locked_version("seiza-stacking")));
+    assert!(parse(seiza_stretch::OUTPUT_VERSION) <= parse(&locked_version("seiza-stretch")));
 }
 
 fn build_app(state: Arc<AppState>) -> Router {

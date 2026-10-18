@@ -94,6 +94,13 @@ interface StackArtifact {
   group: StackGroupStatus;
 }
 
+/** The card preview's cache key: the stack's revision, and the preview's
+ *  own once it has been rendered again from the stack's FITS. */
+function previewRevision(artifact: StackArtifact): string {
+  const rendered = artifact.group.preview_revision;
+  return rendered ? `${artifact.artifactRevision}.${rendered}` : artifact.artifactRevision;
+}
+
 function stackScoringSettings(preferences: ScoringPreferences): StackScoringSettings {
   return {
     penalty_satellite: preferences.satellite,
@@ -592,11 +599,19 @@ export default function StackPreviewPanel({
   );
   useEffect(() => {
     if (adoptableIds.length === 0) return;
+    // A finished build runs again to render its previews from its FITS:
+    // the line lists it, so read it again and follow it to the end.
+    for (const jobId of adoptableIds) {
+      const cached = queryClient.getQueryData<StackPreviewJob>(stackJobQueryKey(dbId, projectId, jobId));
+      if (cached && terminalStates.has(cached.state)) {
+        queryClient.invalidateQueries({ queryKey: stackJobQueryKey(dbId, projectId, jobId) });
+      }
+    }
     setWatchedJobIds((current) => {
       const additions = adoptableIds.filter((jobId) => !current.includes(jobId));
       return additions.length === 0 ? current : [...current, ...additions];
     });
-  }, [adoptableIds]);
+  }, [adoptableIds, dbId, projectId, queryClient]);
 
   // The project's remembered and running stacks cover every target; the
   // grid shows one when the header names one, and so does this panel.
@@ -1090,7 +1105,11 @@ export default function StackPreviewPanel({
                         )
                       : 0;
                 const progressLabel =
-                  progressState === 'queued'
+                  progressState === 'ready' && progressGroup?.phase === 'render-queued'
+                    ? 'Preview render queued'
+                    : progressState === 'ready' && progressGroup?.phase === 'rendering'
+                      ? 'Rendering preview'
+                    : progressState === 'queued'
                     ? artifact
                       ? 'Rebuild queued'
                       : 'Waiting for stacker'
@@ -1230,7 +1249,7 @@ export default function StackPreviewPanel({
                           src={(stretchKey && starsView[stretchKey] && appliedStretch?.stars_preview_url)
                             || appliedStretch?.preview_url
                             || apiClient.getStackPreviewUrl(
-                              dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
+                              dbId, artifact.jobId, artifact.group.index, previewRevision(artifact)
                             )}
                           alt={`${targetName} ${channelLabel(filterName, exposureGroup)} stack preview`}
                         />
@@ -1529,7 +1548,7 @@ export default function StackPreviewPanel({
               dbId,
               inspector.jobId,
               inspector.group.index,
-              inspector.artifactRevision,
+              previewRevision(inspector),
               'original'
             )}
           fitsUrl={stretches[artifactStretchKey(inspector)]?.fits_url ??

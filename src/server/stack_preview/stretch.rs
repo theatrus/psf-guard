@@ -44,7 +44,9 @@ const STRETCH_BYTES_PER_SAMPLE: u64 = 16;
 const DECONVOLUTION_BYTES_PER_SAMPLE: u64 = 40;
 const LINEAR_BLACK_PERCENTILE: f64 = 0.001;
 const LINEAR_WHITE_PERCENTILE: f64 = 0.999;
-pub(super) const SEIZA_STRETCH_VERSION: &str = env!("PSF_GUARD_SEIZA_STRETCH_VERSION");
+/// The Seiza release whose stretch output this build reproduces. Stack
+/// previews and stretch runs key on it rather than on the crate version.
+pub(super) const SEIZA_STRETCH_OUTPUT_VERSION: &str = seiza_stretch::OUTPUT_VERSION;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StackDeconvolutionResult {
@@ -1036,7 +1038,7 @@ async fn prepare_run(
     hasher.update(source_key.as_bytes());
     hasher.update(source_revision.as_bytes());
     hasher.update(STRETCH_CACHE_VERSION.to_le_bytes());
-    hasher.update(SEIZA_STRETCH_VERSION.as_bytes());
+    hasher.update(SEIZA_STRETCH_OUTPUT_VERSION.as_bytes());
     hasher.update(&encoded);
     if let Some(deconvolution_id) = &deconvolution_id {
         hasher.update(b"deconvolution");
@@ -2011,7 +2013,7 @@ fn build_stretch_preview(
     StackStretchPreview {
         schema_version: 2,
         stretch_id: stretch_id.clone(),
-        stretch_version: SEIZA_STRETCH_VERSION.into(),
+        stretch_version: SEIZA_STRETCH_OUTPUT_VERSION.into(),
         deconvolution_version: rendered
             .deconvolution
             .as_ref()

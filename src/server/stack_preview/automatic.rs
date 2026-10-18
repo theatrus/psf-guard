@@ -852,6 +852,22 @@ async fn refresh_project(
                     .filter(|existing| existing.state == StackJobState::Completed)
             });
         if let Some(existing) = finished {
+            // Its previews may be out of date: they render again from its
+            // FITS. Checking reads files, so it runs off the async runtime.
+            let render_queued = {
+                let state = Arc::clone(state);
+                let ctx = Arc::clone(ctx);
+                let existing = existing.clone();
+                tokio::task::spawn_blocking(move || {
+                    super::queue_preview_render(&state, &ctx, &existing, true, None).is_some()
+                })
+                .await
+                .unwrap_or(false)
+            };
+            if render_queued {
+                started += 1;
+                continue;
+            }
             let state = Arc::clone(state);
             let ctx = Arc::clone(ctx);
             let _ = tokio::task::spawn_blocking(move || {

@@ -7,7 +7,7 @@
 //! rebuild reads only frames it has not scored, and the same frames always
 //! choose the same reference, which an additive rebuild needs.
 
-use super::{snr, PreparedFrame, SEIZA_STACKING_VERSION};
+use super::{snr, PreparedFrame, SEIZA_STACKING_OUTPUT_VERSION};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -49,13 +49,13 @@ fn cache_path(stack_root: &Path, source_fingerprint: &str) -> PathBuf {
 fn read_cached(stack_root: &Path, source_fingerprint: &str) -> Option<Option<Score>> {
     let bytes = std::fs::read(cache_path(stack_root, source_fingerprint)).ok()?;
     let cached: CachedScore = serde_json::from_slice(&bytes).ok()?;
-    (cached.stacking_version == SEIZA_STACKING_VERSION).then_some(cached.score)
+    (cached.stacking_version == SEIZA_STACKING_OUTPUT_VERSION).then_some(cached.score)
 }
 
 fn write_cached(stack_root: &Path, source_fingerprint: &str, score: Option<Score>) {
     let path = cache_path(stack_root, source_fingerprint);
     let record = CachedScore {
-        stacking_version: SEIZA_STACKING_VERSION.into(),
+        stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
         score,
     };
     if let Err(error) = super::stretch::write_json_atomic(&path, &record) {
@@ -101,7 +101,7 @@ pub(super) fn prune(stack_root: &Path) -> usize {
         let current = std::fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<CachedScore>(&bytes).ok())
-            .is_some_and(|cached| cached.stacking_version == SEIZA_STACKING_VERSION);
+            .is_some_and(|cached| cached.stacking_version == SEIZA_STACKING_OUTPUT_VERSION);
         if !current
             && path
                 .extension()

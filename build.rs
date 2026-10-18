@@ -30,7 +30,6 @@ fn emit_seiza_versions() {
         "seiza",
         "seiza-fits",
         "seiza-satellites",
-        "seiza-stretch",
         "seiza-background",
     ] {
         let mut matches = packages

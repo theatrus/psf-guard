@@ -862,6 +862,10 @@ export interface StackGroupStatus {
   color_calibration?: StackColorCalibrationOutcome | null;
   /** Why the calibrated preview is out of date: a new solve or Gaia catalog. */
   color_calibration_outdated?: string | null;
+  /** The Seiza stretch release that rendered the card preview. */
+  preview_stretch_version?: string | null;
+  /** Set each time the card preview is rendered again from the FITS. */
+  preview_revision?: string | null;
   sky_orientation: StackSkyOrientation | null;
   reference_image_id: number | null;
   total_exposure_seconds: number;

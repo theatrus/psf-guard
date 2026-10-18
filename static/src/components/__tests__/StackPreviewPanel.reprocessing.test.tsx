@@ -63,7 +63,11 @@ const run: StackActivityEntry = {
 };
 
 /** A card on a refreshed stack whose processing the server is making again. */
-function mockCard(stretch: () => StackStretchPreview | null, active: () => StackActivityEntry[]) {
+function mockCard(
+  stretch: () => StackStretchPreview | null,
+  active: () => StackActivityEntry[],
+  group: Record<string, unknown> = {},
+) {
   server.use(
     http.get('/api/settings/stacking/method', () => ok({ method: {}, recommended: {}, classic: {} })),
     http.get('/api/stack-activity', () => ok({ schema_version: 1, active: active() })),
@@ -88,6 +92,7 @@ function mockCard(stretch: () => StackStretchPreview | null, active: () => Stack
           calibration: { state: 'none', bias_frames: 0, dark_frames: 0, dark_flat_frames: 0, flat_frames: 0, warning: null },
           input_images: [{ image_id: 1, grading_status: 1 }, { image_id: 2, grading_status: 1 }],
           frames: [],
+          ...group,
         },
       }],
     })),
@@ -112,6 +117,42 @@ function renderPanel() {
 }
 
 describe('StackPreviewPanel on a refreshed stack', () => {
+  it('says the preview render is queued while the stack stays ready', async () => {
+    const group = {
+      index: 0, target_id: 42, target_name: 'Sh2 86', filter_name: 'Ha', state: 'ready',
+      phase: 'render-queued', total_candidates: 2, eligible_frames: 2, quality_excluded: 0,
+      missing_files: 0, processed_frames: 2, accepted_frames: 2, rejected_frames: 0,
+      output_channels: 1, reference_image_id: 1, total_exposure_seconds: 120,
+      preview_url: null, fits_url: null, error: null,
+      calibration: { state: 'none', bias_frames: 0, dark_frames: 0, dark_flat_frames: 0, flat_frames: 0, warning: null },
+      input_images: [{ image_id: 1, grading_status: 1 }, { image_id: 2, grading_status: 1 }],
+      frames: [],
+    };
+    const rendering: StackActivityEntry = {
+      kind: 'mono', job_id: 'refreshed-job', database_id: 'test', project_id: 1, target_id: 42,
+      state: 'queued', label: 'Sh2 86 · Ha', detail: 'Waiting to render preview', automatic: false,
+      processed_units: 2, total_units: 2, created_unix_seconds: 1,
+    };
+    mockCard(() => null, () => [rendering]);
+    server.use(http.get('/api/db/test/projects/1/stack-previews/refreshed-job', () => ok({
+      schema_version: 2, job_id: 'refreshed-job', database_id: 'test', project_id: 1, state: 'queued',
+      accepted_only: false, created_unix_seconds: 90, artifact_revision: 'revision-2', cache_version: 13,
+      stacking_version: '0.40.0', order: 'capture', groups: [group], error: null,
+    })));
+    renderPanel();
+    expect(await screen.findByText('Preview render queued')).toBeInTheDocument();
+  });
+
+  it('loads a preview rendered again from the FITS under its own revision', async () => {
+    mockCard(() => null, () => [], { preview_revision: 'rendered-3' });
+    const view = renderPanel();
+    await waitFor(() => expect(view.container.querySelector('.stack-preview-image img')).not.toBeNull());
+    expect(view.container.querySelector('.stack-preview-image img')).toHaveAttribute(
+      'src',
+      expect.stringContaining('/stack-previews/refreshed-job/0/preview?v=revision-2.rendered-3'),
+    );
+  });
+
   it('shows the previous result while reprocessing, with the run from the queue, then the new one', async () => {
     let done = false;
     mockCard(
