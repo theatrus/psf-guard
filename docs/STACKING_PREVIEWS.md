@@ -353,7 +353,8 @@ same run dialog as the Library's project cards, needs an editor, and
 shows the run's state while one is queued,
 running or finished. With a target chosen it shows only that target's run.
 For a project with several targets it asks for a target first: WBPP stacks
-a project's targets together, so their masters could not come back as stacks.
+a project's targets together, so PSF Guard cannot import their masters as
+separate target stacks.
 A WBPP run started from PSF Guard ends by taking its master lights in as
 stacks before PixInsight takes the next run, and the page shows them as soon
 as they are in. **WBPP stacks**, below PSF Guard's own in **Stacks**, shows each one

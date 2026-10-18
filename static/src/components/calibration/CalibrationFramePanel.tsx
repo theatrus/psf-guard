@@ -166,7 +166,7 @@ export default function CalibrationFramePanel({
             {detail.quality_override !== 'exclude' && (
               <button type="button" className="tool-button" disabled={actions.pending || stale}
                 title={detail.kept_out
-                  ? 'Keep out by hand, whatever later grades say; the frame stays in the library'
+                  ? 'Exclude from masters and exports even if its grade changes; keep the frame in the library'
                   : 'Leave out of masters and exports; the frame stays in the library'}
                 onClick={() => actions.choose.mutate({ frameUuids: uuids, choice: 'exclude' })}>
                 Keep out

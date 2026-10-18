@@ -75,7 +75,7 @@ function serve(view: () => BackupsOverview, status: () => { job: BackupJob | nul
         error: null,
         exists: true,
         warnings: path.startsWith('/rig')
-          ? ['This folder holds the catalog Imaging Rig (/rig/schedulerdb.sqlite); a failing disk would take the backups with it.']
+          ? ['This backup folder is inside the catalog folder for Imaging Rig (/rig/schedulerdb.sqlite). A disk failure could destroy both the catalog and its backups.']
           : [],
       });
     })
@@ -143,7 +143,7 @@ describe('BackupSettings', () => {
     expect(secrets).toBeEnabled();
     expect(within(card).getByText(/2 peer keys, collaboration sign-ins/)).toBeInTheDocument();
     fireEvent.click(secrets);
-    expect(await within(card).findByText(/holds the catalog Imaging Rig/)).toBeInTheDocument();
+    expect(await within(card).findByText(/inside the catalog folder for Imaging Rig/)).toBeInTheDocument();
     fireEvent.click(within(card).getByRole('button', { name: 'Back up now' }));
     await waitFor(() =>
       expect(asked).toEqual({ scope: 'meta', include_secrets: true, destination: '/rig/backups' })
@@ -180,7 +180,7 @@ describe('BackupSettings', () => {
     const now = screen.getByRole('region', { name: 'Back up now' });
     expect(within(now).getByText(/Removed 1 older/)).toBeInTheDocument();
     expect(within(now).getByText(
-      'Kept 1 older backup because it holds Observatory Rig, which this run left out.'
+      'Kept 1 older backup because it includes Observatory Rig, which this backup does not include.'
     )).toBeInTheDocument();
     // An archive with secrets is never offered as a download.
     expect(within(list).queryByRole('link', { name: `Download ${SECRET}` })).not.toBeInTheDocument();

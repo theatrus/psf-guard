@@ -116,8 +116,7 @@ folder** under **Settings → Setups → PixInsight** puts every database's
 runs below it (`<folder>/<database>/<project>-<time>/`) and shows the
 space free there. Without one, a database's runs go under its export
 directory when it has one, and only otherwise under the cache. The run
-dialog can also pick a folder for one run. The dialog shows the space
-free at the folder when the run began.
+dialog can also pick a folder for one run. The dialog shows free space at start.
 
 The dialog then follows WBPP's own log: which step it is on, how long the
 run has taken, the last lines, and any line WBPP marked as an error. WBPP
@@ -127,13 +126,12 @@ a while; the elapsed time keeps counting and PixInsight is still at work.
 
 PixInsight takes every core it can get, so the server runs one WBPP job at
 a time across all databases. Starting a second project while one runs
-queues it: the dialog opens under that project's own name, says which run
-PixInsight is busy with, and its button reads **Queue stacking**. A queued
-run starts on its own when the running one ends, with the settings it was
-queued with, whatever the first run's outcome. The Library lists runs in
-line with their place; **×** takes one out, and so does **Remove from
-queue** in its dialog. The header's background jobs chip lists the run under
-way and the whole line, on every database. There **↑** and **↓** change the
+queues it: the dialog shows that project's name, identifies the running job,
+and offers **Queue stacking**. A queued run starts when the current run ends,
+using its queued settings, whether the current run succeeds or fails. The
+Library lists queued runs with their positions; **×** removes a queued run,
+as does **Remove from queue** in its dialog. The header's background jobs
+chip lists the running job and queue across all databases. There **↑** and **↓** change the
 order, **×** takes a run out, and **Stop** ends the running one after asking
 once. Those controls need write access and a server that allows database
 management, like the dialog. `GET /api/wbpp/activity` reports the same, and
@@ -179,6 +177,11 @@ skipped, one with a different size is left alone, and the
 outcome lists it. Only the `master/` files are copied; the calibrated and
 registered frames stay in the run folder.
 
+While copying, the dialog shows the current file and how many files it has
+processed. The copy button and destination field stay disabled until the
+copy ends. The background jobs list also shows the copy. A new WBPP run
+waits until the copy finishes, so it cannot replace the results being saved.
+
 ### See the stacks and their color in PSF Guard
 
 When a run for a project ends, PSF Guard takes its master lights in as
@@ -208,8 +211,10 @@ integrates the targets together.
   mode, so the log is the record.
 - **`*** Error: No database files have been selected.`** is WBPP's plate
   solver saying the server's PixInsight has no local star catalog. It
-  solves another way and the run goes on; the dialog shows every line WBPP
-  marks as an error, so this one appears even on a run that finished well.
+  may fall back to another catalog, such as TYCHO-2 from VizieR. Check the
+  log for the subsequent solve result. This message does not refer to your
+  image database and does not by itself mean the run failed. The dialog
+  keeps the original error and explains which catalog it refers to.
 - **A comma in a path.** WBPP's command line separates parameters with
   commas, so a run folder or frame path with one cannot be expressed; PSF
   Guard refuses rather than mangles it.

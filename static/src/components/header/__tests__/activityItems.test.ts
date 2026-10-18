@@ -771,3 +771,11 @@ describe('the work left behind each row', () => {
     expect(refreshRow.remaining).toBe('2 channels to stack');
   });
 });
+
+it('shows a master copy as active without offering to stop PixInsight', () => {
+  const items = activityItems([], [], { running: [{ db_id: 'a', db_name: 'Askar', scope: 'Heart', stage: 'publishing',
+    wbpp_stage: '1 of 3 files processed · masterLight.xisf', wbpp_steps: 0, started_at: 1 }], queued: [] });
+  expect(items[0]).toMatchObject({ status: 'running', stoppable: false,
+    detail: 'Copying masters · 1 of 3 files processed · masterLight.xisf' });
+  expect(items[0].control).toBeUndefined();
+});

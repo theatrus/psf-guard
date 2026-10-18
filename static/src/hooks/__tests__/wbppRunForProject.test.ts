@@ -29,3 +29,8 @@ describe('describeWbppRunForProject', () => {
     expect(describeWbppRunForProject(queued, 3)?.tone).toBe('queued');
   });
 });
+
+it('shows copying on a finished run, including after reopening the page', () => {
+  const copying = status({ publish: { state: 'running', directory: '/p', copied: 1, skipped_existing: 0, conflicts: [], errors: [], finished_at: null } });
+  expect(describeWbppRunForProject(copying, 3)).toEqual({ label: 'Copying WBPP masters…', tone: 'running' });
+});

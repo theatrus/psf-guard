@@ -4,6 +4,11 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- WBPP master copies show the current file and file counts in the dialog
+  and background jobs list. Copy controls stay disabled while copying, and
+  repeat copy requests cannot start a second copy. A run requested while a
+  copy starts now joins the queue instead of being lost. The dialog also explains
+  PixInsight’s missing Gaia catalog message.
 - The AstroBin filter map (**Settings → Databases → Edit filters**) fits
   its window: each entry's fields wrap onto more lines on a narrow screen
   instead of scrolling sideways, and nights use date pickers. The dialog
@@ -15,6 +20,9 @@
 - UI labels, settings help, and confirmation messages now state actions,
   limits, defaults, and deletion rules more clearly. Calibration explanations
   distinguish pixel evidence from angle-based matching and explain duplicate repairs.
+  WBPP labels the initial free space as “free at start.” Its run and exclusion
+  messages, backup retention and download notices, storage labels, and reject
+  recovery messages now explain the action directly.
 - Purge Rejects' Preview, Remove, Restore and Empty trash run as a job. The
   dialog and the background jobs list say what it is doing and how far, as
   `Moving to the trash 37 of 203`, and **Stop** ends it after the frame in

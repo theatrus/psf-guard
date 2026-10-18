@@ -1126,8 +1126,8 @@ pub fn destination_warnings(
             && destination.starts_with(resolved(folder))
         {
             warnings.push(format!(
-                "This folder holds the catalog {} ({}); a failing disk would take the \
-                 backups with it.",
+                "This backup folder is inside the catalog folder for {} ({}). A disk failure could \
+                 destroy both the catalog and its backups.",
                 entry.name, entry.db_path
             ));
         }

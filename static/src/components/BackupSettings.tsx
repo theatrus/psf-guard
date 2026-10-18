@@ -235,7 +235,7 @@ function LastRunNote({ run, listing }: { run: BackupLastRun; listing?: BackupLis
     <div className="backup-note is-good">
       <span>
         Backed up {finished}: <code>{run.file_name}</code>, {formatBytes(run.bytes ?? 0)}, {where}.
-        {run.pruned.length > 0 && ` Removed ${run.pruned.length} older.`}
+        {run.pruned.length > 0 && ` Removed ${run.pruned.length} older backup${run.pruned.length === 1 ? '' : 's'}.`}
       </span>
       {listing && !isTauriApp() && listing.secrets !== 'included' && (
         <a className="header-button" href={apiClient.backupDownloadUrl(listing.download_path)} download>
@@ -248,8 +248,8 @@ function LastRunNote({ run, listing }: { run: BackupLastRun; listing?: BackupLis
       {run.prune_kept.length > 0 && (
         <span className="backup-note is-caution">
           Kept {run.prune_kept.length} older backup{run.prune_kept.length === 1 ? '' : 's'} because{' '}
-          {run.prune_kept.length === 1 ? 'it holds' : 'they hold'} {listNames(run.prune_kept_for)}, which
-          this run left out.
+          {run.prune_kept.length === 1 ? 'it includes' : 'they include'} {listNames(run.prune_kept_for)},
+          which this backup does not include.
         </span>
       )}
       {run.prune_skipped && <span className="backup-note is-caution">{run.prune_skipped}</span>}

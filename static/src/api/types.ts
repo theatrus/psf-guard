@@ -1878,6 +1878,8 @@ export interface WbppRunProgress {
 }
 
 export interface WbppPublishOutcome {
+  total?: number;
+  current_file?: string | null;
   state: 'running' | 'complete' | 'error';
   directory: string;
   copied: number;

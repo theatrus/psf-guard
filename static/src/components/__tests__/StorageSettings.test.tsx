@@ -111,7 +111,7 @@ describe('StorageSettings', () => {
       })
     );
     render(<StorageSettings canManage />, { wrapper: wrapper() });
-    expect(await screen.findByText(/holds the cache, stacks and calibration masters/)).toBeInTheDocument();
+    expect(await screen.findByText(/used for cache, stacks and calibration masters/)).toBeInTheDocument();
     expect(screen.queryByRole('slider', { name: /Stack volume/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: /Separate limits/ }));
     await waitFor(() =>
