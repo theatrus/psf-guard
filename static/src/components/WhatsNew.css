@@ -41,13 +41,14 @@
 
 .whats-new-deprecations {
   padding: 0.75rem;
-  border: 1px solid var(--color-warning);
+  border: 1px solid var(--color-border-secondary);
+  border-left: 3px solid var(--color-primary);
   border-radius: 4px;
-  background: var(--color-warning-alpha-20);
+  background: var(--color-bg-surface);
 }
 
 .whats-new-deprecations h3 {
-  color: var(--color-warning);
+  color: var(--color-primary);
 }
 
 .whats-new-links {

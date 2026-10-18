@@ -4,7 +4,7 @@
     "deprecations": [
       {
         "title": "Direct Target Scheduler access is deprecated",
-        "body": "Opening a live Target Scheduler database directly is deprecated. Existing direct-open registrations and CLI/API access stay supported through 0.12, with no automatic conversion. For new connections, import Target Scheduler into a PSF Guard-owned catalog and keep it connected for sync. Removal is planned for 0.13 or later."
+        "body": "Existing direct-open registrations and CLI/API access still work through 0.12. This release leaves registrations unchanged. A later release will migrate them automatically to PSF Guard-owned catalogs with Target Scheduler sync. Separate catalogs give each product control of its own data and help us support both products as they develop. Removal of direct access is planned for 0.13 or later."
       }
     ],
     "upgradeNotes": [

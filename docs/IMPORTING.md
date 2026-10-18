@@ -120,9 +120,14 @@ projects can be delivered independently. Retry never exports unreviewed local
 edits, and refreshing a preview in Settings does not approve an activation.
 
 Existing registrations that open TS directly remain supported through 0.12.
-They are not migrated on startup. Direct access is deprecated, with removal
-planned for 0.13 or later. The owned catalogs in this release still use the TS
-schema; a native schema is a separate change.
+PSF Guard 0.12 does not migrate them on startup. A later release will
+automatically migrate these registrations to PSF Guard-owned catalogs with
+Target Scheduler sync. Direct access is deprecated, with removal planned for
+0.13 or later.
+
+Separate catalogs give each product control of its own data and help us support
+both PSF Guard and Target Scheduler as they develop. The owned catalogs in 0.12
+still use the TS schema; a native schema is a separate change.
 
 ## What counts as a frame
 

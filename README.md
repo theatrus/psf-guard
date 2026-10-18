@@ -149,9 +149,13 @@ TS deliveries stay pending for retry. To import a standalone copy, turn off
 also offers a custom destination path. See
 [Target Scheduler imports](docs/IMPORTING.md#import-from-target-scheduler).
 
-Existing direct-open TS registrations keep working through 0.12. They are not
-copied or converted automatically. Direct access is deprecated; removal is
-planned for 0.13 or later.
+Existing direct-open TS registrations keep working through 0.12, which does
+not convert them. A later release will automatically migrate these
+registrations to PSF Guard-owned catalogs with Target Scheduler sync. Direct
+access is deprecated; removal is planned for 0.13 or later.
+
+Separate catalogs give each product control of its own data and help us support
+both PSF Guard and Target Scheduler as they develop.
 
 ### Plan captures across rigs
 
