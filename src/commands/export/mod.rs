@@ -2266,7 +2266,7 @@ mod tests {
                 assert!(
                     plan.calibration_settings
                         .iter()
-                        .any(|line| line.starts_with("Dark choice")),
+                        .any(|line| line.starts_with("Dark selection preference")),
                     "{plan:?}"
                 );
             }
