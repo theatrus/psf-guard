@@ -1,5 +1,8 @@
 # Unreleased
 
+- Settings keeps the last backup result when you restart just after a backup
+  finishes.
+
 - **What's new** shows release highlights after an upgrade, with deprecations
   and upgrade notes first. Close it for now, or tick **Don't show again for
   this version** to hide it until the next upgrade. Open it again from the

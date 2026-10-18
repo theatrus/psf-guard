@@ -205,17 +205,16 @@ impl BackupManager {
             .saving
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let saved = {
-            let mut inner = self
-                .inner
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            change(&mut inner);
-            SavedState {
-                held_since: inner.held_since,
-                retry_after: inner.retry_after,
-                last: inner.last.clone(),
-            }
+        // Readers must not see a finished job before its result is on disk.
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        change(&mut inner);
+        let saved = SavedState {
+            held_since: inner.held_since,
+            retry_after: inner.retry_after,
+            last: inner.last.clone(),
         };
         let Some(path) = self.state_path.read().unwrap().clone() else {
             return;
@@ -237,6 +236,7 @@ impl BackupManager {
                 path.display()
             );
         }
+        drop(inner);
     }
 
     fn update(&self, change: impl FnOnce(&mut JobStatus)) {
@@ -631,10 +631,8 @@ fn run(
             }
         }
     }
-    manager.remember(|inner| {
-        inner.last = Some(last);
-        inner.job = None;
-    });
+    // RunnerClaim keeps the slot until it saves and releases the final state.
+    manager.remember(|inner| inner.last = Some(last));
 }
 
 /// Archives made for a download are kept a day, three at most. Swept after

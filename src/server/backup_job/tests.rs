@@ -765,6 +765,43 @@ fn a_stopped_or_failed_run_is_remembered_across_a_restart() {
 }
 
 #[test]
+fn remembered_state_is_not_visible_before_its_file_is_saved() {
+    let fixture = fixture(1);
+    let manager = Arc::new(BackupManager::default());
+    manager.load_state(&fixture.registry);
+    // Hold the writer just before it saves, after it changes the state.
+    let path = manager.state_path.write().unwrap();
+    let (changed, changed_rx) = std::sync::mpsc::channel();
+    let writer = Arc::clone(&manager);
+    let writing = std::thread::spawn(move || {
+        writer.remember(|inner| {
+            inner.held_since = Some(1234);
+            changed.send(()).unwrap();
+        });
+    });
+    changed_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (visible, visible_rx) = std::sync::mpsc::channel();
+    let reader = Arc::clone(&manager);
+    let reading = std::thread::spawn(move || {
+        let held = reader.inner.lock().unwrap().held_since;
+        visible.send(held).unwrap();
+    });
+    let early = visible_rx.recv_timeout(Duration::from_millis(100));
+    // Always release and join the workers before asserting, even on failure.
+    drop(path);
+    writing.join().unwrap();
+    reading.join().unwrap();
+    assert!(
+        matches!(early, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+        "the new state became visible before its file was saved: {early:?}"
+    );
+    assert_eq!(visible_rx.recv().unwrap(), Some(1234));
+    let restarted = BackupManager::default();
+    restarted.load_state(&fixture.registry);
+    assert_eq!(restarted.inner.lock().unwrap().held_since, Some(1234));
+}
+
+#[test]
 fn the_last_backup_is_remembered_across_a_restart() {
     let fixture = fixture(1);
     fixture.state.backups.load_state(&fixture.registry);
