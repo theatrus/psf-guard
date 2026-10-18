@@ -1443,7 +1443,7 @@ one plan. Director rigs follow with the native records for their captures and
 
 ### Native catalogs and Target Scheduler exchange
 
-Transition, 2026-10-17: new imports use PSF Guard-owned snapshots with retained
+Transition, 2026-10-18: new imports use PSF Guard-owned snapshots with retained
 TS file connections. The working catalog still uses the TS schema. Automatic
 capture imports and conditional grade writeback establish the ownership and
 sync boundary before native schemas change. Existing direct-open registrations
