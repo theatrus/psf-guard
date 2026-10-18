@@ -451,6 +451,11 @@ pub struct StackGroupStatus {
     /// the new image while the stack keeps its artifact revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_revision: Option<String>,
+    /// The stretch release at which rendering the card preview again from
+    /// the FITS failed. No Build tries again until the release changes or
+    /// the stack is rebuilt; the card's note says why it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_render_failed: Option<String>,
     pub total_exposure_seconds: f64,
     pub preview_url: Option<String>,
     pub fits_url: Option<String>,
@@ -877,12 +882,7 @@ fn channel_label(target_name: &str, filter_name: &str) -> String {
 }
 
 fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
-    let pending = job.groups.iter().find(|group| {
-        matches!(
-            group.state,
-            StackGroupState::Running | StackGroupState::Queued
-        )
-    });
+    let pending = job.groups.iter().find(|group| group_in_flight(group));
     let label = match pending {
         Some(group) => {
             let mut base = channel_label(&group.target_name, &group.filter_name);
@@ -893,13 +893,7 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
             let remaining = job
                 .groups
                 .iter()
-                .filter(|entry| {
-                    entry.index != group.index
-                        && matches!(
-                            entry.state,
-                            StackGroupState::Running | StackGroupState::Queued
-                        )
-                })
+                .filter(|entry| entry.index != group.index && group_in_flight(entry))
                 .count();
             if remaining > 0 {
                 format!("{base} +{remaining} more")
@@ -910,7 +904,7 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
         None => format!("{} channels", job.groups.len()),
     };
     let detail = match pending {
-        Some(group) if group.state == StackGroupState::Queued && group.phase == "rendering" => {
+        Some(group) if group.phase == PHASE_RENDER_QUEUED => {
             "Waiting to render preview".to_string()
         }
         Some(group) if group.state == StackGroupState::Queued => "Waiting for stacker".to_string(),
@@ -1578,6 +1572,42 @@ impl StackPreviewManager {
         }
     }
 
+    /// Queue a preview render on a finished build, if it is still finished:
+    /// the check and the change happen under one lock, so two Builds that
+    /// find the build at once queue one render. A build no longer in memory
+    /// is put back first. False when the build is queued or running, or
+    /// there is no room for it. A person's Build makes the job theirs; an
+    /// automatic one leaves a person's job theirs.
+    fn begin_preview_render(
+        &self,
+        finished: &StackPreviewJob,
+        stale: &[usize],
+        automatic: bool,
+        color_defaults: Option<color::StackColorProcessing>,
+    ) -> bool {
+        if self.get(&finished.job_id).is_none() && !self.insert(finished.clone()) {
+            return false;
+        }
+        let mut jobs = self.jobs.lock().unwrap();
+        let Some(job) = jobs.get_mut(&finished.job_id) else {
+            return false;
+        };
+        if job.state != StackJobState::Completed {
+            return false;
+        }
+        job.state = StackJobState::Queued;
+        job.automatic &= automatic;
+        if color_defaults.is_some() {
+            job.color_defaults = color_defaults;
+        }
+        for &index in stale {
+            if let Some(group) = job.groups.get_mut(index) {
+                group.phase = PHASE_RENDER_QUEUED.into();
+            }
+        }
+        true
+    }
+
     /// Point the cards at a finished build's channels. Returns each card
     /// that moved, with the entry it showed before.
     fn persist_latest(
@@ -2070,9 +2100,29 @@ fn start_prepared(
     })
 }
 
+/// A finished channel waiting for its card preview to be rendered again. The
+/// channel stays Ready throughout: its stack is finished, so its processing,
+/// FITS and searches stay available.
+const PHASE_RENDER_QUEUED: &str = "render-queued";
+/// A finished channel whose card preview is being rendered again.
+const PHASE_RENDERING: &str = "rendering";
+
+/// Whether a channel is still in a job's work: building, or a finished
+/// channel whose preview is being rendered again.
+fn group_in_flight(group: &StackGroupStatus) -> bool {
+    match group.state {
+        StackGroupState::Queued | StackGroupState::Running => true,
+        StackGroupState::Ready => {
+            group.phase == PHASE_RENDER_QUEUED || group.phase == PHASE_RENDERING
+        }
+        _ => false,
+    }
+}
+
 /// Whether a finished channel's card preview should be rendered again from
 /// its FITS: an older stretch release rendered it, or a one-shot-color
-/// stack's color calibration is out of date. The stack itself is current.
+/// stack's color calibration is out of date. The stack itself is current. A
+/// render that already failed at this stretch release is not tried again.
 fn preview_needs_render(
     state: &AppState,
     ctx: &DatabaseContext,
@@ -2080,6 +2130,7 @@ fn preview_needs_render(
     group: &StackGroupStatus,
 ) -> bool {
     if group.state != StackGroupState::Ready
+        || group.preview_render_failed.as_deref() == Some(stretch::SEIZA_STRETCH_OUTPUT_VERSION)
         || !fits_path(&ctx.stack_root, job_id, group.index).is_file()
     {
         return false;
@@ -2103,8 +2154,10 @@ fn preview_needs_render(
 /// Queue a render of a finished build's out-of-date card previews from the
 /// FITS it wrote, when any are out of date, and return the job as it then
 /// stands. The stack is not built again. The job runs in the build line
-/// while it renders and is completed again afterwards, stopped or not; color
-/// then follows with `color_defaults`, as after a build.
+/// while it renders and is completed again afterwards, stopped or not.
+/// `automatic` is false for a person's Build, which makes the job theirs;
+/// `color_defaults` replaces the job's stored defaults when given. Reads
+/// files, so call it off the async runtime where that matters.
 fn queue_preview_render(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
@@ -2118,23 +2171,14 @@ fn queue_preview_render(
         .filter(|group| preview_needs_render(state, ctx, &finished.job_id, group))
         .map(|group| group.index)
         .collect::<Vec<_>>();
-    if stale.is_empty() {
-        return None;
-    }
-    let job_id = finished.job_id.clone();
-    if state.stack_previews.get(&job_id).is_none() && !state.stack_previews.insert(finished.clone())
+    if stale.is_empty()
+        || !state
+            .stack_previews
+            .begin_preview_render(finished, &stale, automatic, color_defaults)
     {
         return None;
     }
-    state.stack_previews.update(&job_id, |job| {
-        job.state = StackJobState::Queued;
-        job.automatic = automatic;
-        job.color_defaults = color_defaults;
-        for &index in &stale {
-            job.groups[index].state = StackGroupState::Queued;
-            job.groups[index].phase = "rendering".into();
-        }
-    });
+    let job_id = finished.job_id.clone();
     let cancel = state.stack_previews.track_cancel(&job_id);
     state.stack_previews.join_line(&job_id);
     let work = state.shutdown.hold(format!(
@@ -2184,7 +2228,8 @@ fn queue_preview_render(
 }
 
 /// Render each listed channel's card previews again from its FITS. A
-/// channel that cannot be rendered keeps the preview it had.
+/// channel that cannot be rendered keeps the preview it had, says why on
+/// its card, and is not tried again at this stretch release.
 fn render_stale_previews(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
@@ -2202,7 +2247,7 @@ fn render_stale_previews(
             return;
         }
         state.stack_previews.update(job_id, |job| {
-            job.groups[index].state = StackGroupState::Running;
+            job.groups[index].phase = PHASE_RENDERING.into();
         });
         let fits = fits_path(&ctx.stack_root, job_id, index);
         let budget = crate::concurrency::plan_workers(
@@ -2221,39 +2266,36 @@ fn render_stale_previews(
                     render_group_previews(state, ctx, &ctx.stack_root, job_id, index, &frame.image)
                 })
             });
-        match rendered {
-            Ok(()) => {
-                let revision = new_artifact_revision();
-                state.stack_previews.update(job_id, |job| {
-                    job.groups[index].preview_revision = Some(revision);
-                });
-            }
-            Err(error) => {
-                tracing::warn!(
-                    job_id,
-                    group_index = index,
-                    "Stack preview render failed: {error}"
-                );
-            }
-        }
+        let revision = new_artifact_revision();
         state.stack_previews.update(job_id, |job| {
-            job.groups[index].state = StackGroupState::Ready;
-            job.groups[index].phase = "ready".into();
+            let group = &mut job.groups[index];
+            match &rendered {
+                Ok(()) => {
+                    group.preview_revision = Some(revision);
+                    group.preview_render_failed = None;
+                }
+                Err(error) => {
+                    tracing::warn!(job_id, group_index = index, "Stack preview render failed: {error}");
+                    group.preview_render_failed = Some(stretch::SEIZA_STRETCH_OUTPUT_VERSION.into());
+                    add_note(
+                        &mut group.resume_note,
+                        &format!("The preview could not be rendered again from the stack's FITS: {error}"),
+                    );
+                }
+            }
+            group.phase = "ready".into();
         });
     }
 }
 
 /// Complete a preview render however it ended, and point the cards at the
-/// new previews. Every channel is ready again: the stack was finished before
-/// the render and still is, so the next Build reuses it.
+/// new previews. Every channel is ready: the stack was finished before the
+/// render and still is, so the next Build reuses it. Color is not composed
+/// again: it never waited for the render, and its inputs did not change.
 fn finish_preview_render(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>, job_id: &str) {
     state.stack_previews.update(job_id, |job| {
         for group in &mut job.groups {
-            if matches!(
-                group.state,
-                StackGroupState::Queued | StackGroupState::Running
-            ) {
-                group.state = StackGroupState::Ready;
+            if group.state == StackGroupState::Ready && group_in_flight(group) {
                 group.phase = "ready".into();
             }
         }
@@ -2270,8 +2312,6 @@ fn finish_preview_render(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>, job_
     if let Err(error) = persist_latest_and_reapply(state, ctx, &job) {
         tracing::warn!("Failed to persist latest stack preview index: {error}");
     }
-    // Color for this target may have waited for the channels to settle.
-    automatic::compose_colors_after(state, ctx, &job);
 }
 
 /// Let color follow builds a request matched rather than ran, carrying the
@@ -3637,6 +3677,7 @@ fn prepare_whole(
             color_calibration_outdated: None,
             preview_stretch_version: None,
             preview_revision: None,
+            preview_render_failed: None,
             total_exposure_seconds: 0.0,
             preview_url: None,
             fits_url: None,
@@ -6069,6 +6110,7 @@ mod tests {
             color_calibration_outdated: None,
             preview_stretch_version: None,
             preview_revision: None,
+            preview_render_failed: None,
             total_exposure_seconds: 120.0,
             preview_url: None,
             fits_url: None,
@@ -8696,7 +8738,16 @@ mod tests {
             let directory = cache.path().join(format!("channels-{channels}"));
             std::fs::create_dir_all(&directory).unwrap();
             let fits = directory.join("group-0.fits");
-            seiza_stacking::write_linear_image_fits_f32(&fits, &image, &[], &[]).unwrap();
+            // The build copies the reference frame's headers, which for a
+            // one-shot-color camera name its Bayer pattern.
+            let headers = [
+                (
+                    "BAYERPAT".to_string(),
+                    seiza_fits::HeaderValue::String("RGGB".into()),
+                ),
+                ("EXPTIME".to_string(), seiza_fits::HeaderValue::Float(120.0)),
+            ];
+            seiza_stacking::write_linear_image_fits_f32(&fits, &image, &headers, &[]).unwrap();
             let render = |image: &seiza_stacking::LinearImage, name: &str| {
                 let screen = directory.join(format!("{name}.png"));
                 let original = directory.join(format!("{name}-original.png"));
@@ -8715,6 +8766,7 @@ mod tests {
             };
             let built = render(&image, "built");
             let reread = crate::image_io::open_linear_frame(&fits).unwrap();
+            assert_eq!(reread.image.channels, channels);
             let rendered = render(&reread.image, "rendered");
             assert!(
                 built == rendered,
@@ -8732,15 +8784,20 @@ mod tests {
         let job = stack_on_disk(cache.path(), &job_id, "rev-1");
         let mut group = job.groups[0].clone();
         // A manifest from before the version was recorded rendered at the
-        // version its id was built with, which is still current.
+        // version its id was built with.
+        let renders_old = JOB_ID_STRETCH_VERSION != stretch::SEIZA_STRETCH_OUTPUT_VERSION;
         assert_eq!(
-            JOB_ID_STRETCH_VERSION,
-            stretch::SEIZA_STRETCH_OUTPUT_VERSION
+            preview_needs_render(&state, &ctx, &job_id, &group),
+            renders_old
         );
-        assert!(!preview_needs_render(&state, &ctx, &job_id, &group));
         group.preview_stretch_version = Some(stretch::SEIZA_STRETCH_OUTPUT_VERSION.into());
         assert!(!preview_needs_render(&state, &ctx, &job_id, &group));
         group.preview_stretch_version = Some("0.2.2".into());
+        assert!(preview_needs_render(&state, &ctx, &job_id, &group));
+        // A render that failed at this release is not tried again.
+        group.preview_render_failed = Some(stretch::SEIZA_STRETCH_OUTPUT_VERSION.into());
+        assert!(!preview_needs_render(&state, &ctx, &job_id, &group));
+        group.preview_render_failed = Some("0.2.2".into());
         assert!(preview_needs_render(&state, &ctx, &job_id, &group));
         // Nothing to render from without a finished channel and its FITS.
         group.state = StackGroupState::Error;
@@ -8808,8 +8865,12 @@ mod tests {
             .unwrap();
         let first = build_again(&state, cache.path(), &job_id);
         assert_eq!(first.job.state, StackJobState::Queued);
-        assert_eq!(first.job.groups[0].phase, "rendering");
+        assert_eq!(first.job.groups[0].phase, PHASE_RENDER_QUEUED);
         assert!(first.cached.is_none());
+        // The channel stays Ready, so its processing and FITS stay reachable.
+        assert_eq!(first.job.groups[0].state, StackGroupState::Ready);
+        let ctx = state.get_database("test").unwrap();
+        assert!(stack_processing_source(&state, &ctx, &job_id, 0).is_ok());
         let activity = mono_activity(&first.job);
         assert_eq!(activity.detail, "Waiting to render preview");
         // A second Build while it waits joins it rather than queueing more.
@@ -8882,7 +8943,72 @@ mod tests {
         assert_eq!(stopped.groups[0].preview_revision, None);
         // Still a finished stack: the next Build renders, it does not stack.
         let next = build_again(&state, cache.path(), &job_id);
-        assert_eq!(next.job.groups[0].phase, "rendering");
+        assert_eq!(next.job.groups[0].phase, PHASE_RENDER_QUEUED);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_render_says_why_and_the_next_build_reuses_the_stack() {
+        let cache = tempfile::tempdir().unwrap();
+        let state = state_with_project(cache.path());
+        let job_id = "3".repeat(64);
+        let mut job = stack_on_disk(cache.path(), &job_id, "rev-1");
+        job.groups[0].preview_stretch_version = Some("0.2.2".into());
+        stretch::write_json_atomic(&manifest_path(cache.path(), &job_id), &job).unwrap();
+        std::fs::write(fits_path(cache.path(), &job_id, 0), b"not a FITS file").unwrap();
+
+        build_again(&state, cache.path(), &job_id);
+        eventually("the render ends", || {
+            state
+                .stack_previews
+                .get(&job_id)
+                .is_some_and(|job| job.state == StackJobState::Completed)
+        })
+        .await;
+        let group = state.stack_previews.get(&job_id).unwrap().groups[0].clone();
+        assert_eq!(group.state, StackGroupState::Ready);
+        assert_eq!(group.preview_revision, None);
+        assert_eq!(
+            group.preview_render_failed.as_deref(),
+            Some(stretch::SEIZA_STRETCH_OUTPUT_VERSION)
+        );
+        assert!(group
+            .resume_note
+            .unwrap()
+            .starts_with("The preview could not be rendered again from the stack's FITS"));
+        let next = build_again(&state, cache.path(), &job_id);
+        assert_eq!(next.job.state, StackJobState::Completed);
+        assert!(next.cached.is_some(), "the next Build reuses the stack");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_automatic_render_leaves_a_persons_build_and_its_color_defaults_as_they_were() {
+        let cache = tempfile::tempdir().unwrap();
+        let state = state_with_project(cache.path());
+        let ctx = state.get_database("test").unwrap();
+        let job_id = "3".repeat(64);
+        let mut job = stack_on_disk(cache.path(), &job_id, "rev-1");
+        job.groups[0].preview_stretch_version = Some("0.2.2".into());
+        job.color_defaults = Some(color::StackColorProcessing::default());
+        let busy = Arc::clone(&state.stack_previews.permit)
+            .try_acquire_owned()
+            .unwrap();
+        let queued = queue_preview_render(&state, &ctx, &job, true, None).unwrap();
+        assert!(!queued.automatic, "a person's build stays theirs");
+        assert_eq!(
+            serde_json::to_value(&queued.color_defaults).unwrap(),
+            serde_json::to_value(&job.color_defaults).unwrap()
+        );
+        // The same build found again while it waits queues nothing more.
+        assert!(queue_preview_render(&state, &ctx, &job, false, None).is_none());
+        assert_eq!(state.stack_previews.line_position(&job_id), Some(0));
+        drop(busy);
+        eventually("the preview renders", || {
+            state
+                .stack_previews
+                .get(&job_id)
+                .is_some_and(|job| job.state == StackJobState::Completed)
+        })
+        .await;
     }
 
     /// Processing runs driven through the stand-in `rc-astro`, a shell

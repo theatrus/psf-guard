@@ -599,11 +599,19 @@ export default function StackPreviewPanel({
   );
   useEffect(() => {
     if (adoptableIds.length === 0) return;
+    // A finished build runs again to render its previews from its FITS:
+    // the line lists it, so read it again and follow it to the end.
+    for (const jobId of adoptableIds) {
+      const cached = queryClient.getQueryData<StackPreviewJob>(stackJobQueryKey(dbId, projectId, jobId));
+      if (cached && terminalStates.has(cached.state)) {
+        queryClient.invalidateQueries({ queryKey: stackJobQueryKey(dbId, projectId, jobId) });
+      }
+    }
     setWatchedJobIds((current) => {
       const additions = adoptableIds.filter((jobId) => !current.includes(jobId));
       return additions.length === 0 ? current : [...current, ...additions];
     });
-  }, [adoptableIds]);
+  }, [adoptableIds, dbId, projectId, queryClient]);
 
   // The project's remembered and running stacks cover every target; the
   // grid shows one when the header names one, and so does this panel.
@@ -1097,12 +1105,14 @@ export default function StackPreviewPanel({
                         )
                       : 0;
                 const progressLabel =
-                  progressState === 'queued'
-                    ? progressGroup?.phase === 'rendering'
-                      ? 'Preview render queued'
-                      : artifact
-                        ? 'Rebuild queued'
-                        : 'Waiting for stacker'
+                  progressState === 'ready' && progressGroup?.phase === 'render-queued'
+                    ? 'Preview render queued'
+                    : progressState === 'ready' && progressGroup?.phase === 'rendering'
+                      ? 'Rendering preview'
+                    : progressState === 'queued'
+                    ? artifact
+                      ? 'Rebuild queued'
+                      : 'Waiting for stacker'
                     : progressState === 'running'
                       ? progressGroup?.phase === 'calibration'
                         ? progressGroup.calibration_progress

@@ -229,9 +229,12 @@ The card preview is not part of the job id. Each channel records the stretch
 release that rendered its preview (`preview_stretch_version`). When **Build
 current set** or an automatic refresh finds a finished stack whose preview an
 older stretch release rendered, PSF Guard renders the preview again from the
-stack's FITS and does not stack again. The job line shows `Rendering
-preview`. A one-shot-color stack whose color calibration is out of date
-renders again the same way. The stack keeps its artifact revision, so its
+stack's FITS and does not stack again. The job line shows `Waiting to render
+preview`, then `Rendering preview`. The channel stays ready meanwhile, so its
+processing, FITS and source-frame searches stay available. A one-shot-color
+stack whose color calibration is out of date renders again the same way. A
+render that fails leaves the old preview, says why on the card, and is not
+tried again until the stretch release changes or the stack is rebuilt. The stack keeps its artifact revision, so its
 processing and the color previews built from it are not made again; they
 keep the stretch they were made with. The new preview gets a
 `preview_revision`, which the page adds to the image's address. Job ids still
@@ -1595,7 +1598,9 @@ When either changes, as when Gaia colors are installed or the reference
 frame is solved again, the card shows `Out of date — Gaia colors were
 installed; click Build current set to render the preview again`, or `…;
 apply the processing again` for processing. **Build current set** renders the
-card preview again from the stack's FITS without stacking again. A stack built before this release keeps its uncalibrated card
+card preview again from the stack's FITS without stacking again, unless the
+channel's frames or settings changed too, in which case it builds the stack
+again. A stack built before this release keeps its uncalibrated card
 preview until it is rebuilt or its view processing is applied.
 
 The request's `processing.color_calibration` takes `enabled`,
