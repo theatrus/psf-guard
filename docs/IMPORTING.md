@@ -52,11 +52,14 @@ registry:
 | Windows | `%APPDATA%\psf-guard\databases\` |
 
 A server started with `--registry /srv/psf-guard/config.json` uses
-`/srv/psf-guard/databases/`. To choose one import's destination, expand
-**Advanced import options** and enter **Destination database path (optional)**.
-Use an absolute path to a new file in an existing folder on the machine
-running PSF Guard. Leave it blank for managed storage. Import never overwrites
-an existing file, and the source and destination must be different files.
+`/srv/psf-guard/databases/`. Under **Catalog storage**, select
+**Use a custom database path (advanced)** and enter **Destination database path:**
+to choose another location. This choice is available for image folders,
+database-file imports and Sync plugin catalogs. Use an absolute path to a new
+file on the machine running PSF Guard. A database-file import needs an existing
+destination folder and never overwrites an existing file. The source and
+destination must be different files. Turn the custom-path option off to use
+managed storage.
 
 A catalog copy is not a complete installation restore. The registry, image
 folder settings, accounts, credentials and Director's global plans live

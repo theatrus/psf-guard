@@ -865,12 +865,58 @@ describe('TauriSettings first run', () => {
     fireEvent.change(await screen.findByPlaceholderText('Select or enter database path'), { target: { value: '/backups/catalog.sqlite' } });
     fireEvent.change(screen.getByLabelText('Display name (optional):'), { target: { value: 'Restored' } });
     fireEvent.click(screen.getByLabelText('Keep the source connected for Target Scheduler sync'));
-    fireEvent.click(screen.getByText('Advanced import options'));
-    fireEvent.change(screen.getByLabelText('Destination database path (optional):'), { target: { value: '/srv/catalogs/restored.sqlite' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Use a custom database path (advanced)' }));
+    fireEvent.change(screen.getByLabelText('Destination database path:'), { target: { value: '/srv/catalogs/restored.sqlite' } });
     fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     fireEvent.click(screen.getByRole('button', { name: 'Import catalog copy' }));
     await waitFor(() => expect(requests).toEqual([{ name: 'Restored', db_path: '/backups/catalog.sqlite', image_dirs: ['/images'], connect_source: false, destination_path: '/srv/catalogs/restored.sqlite' }]));
+  });
+
+  it.each([
+    ['Image folders', 'Create & Import'],
+    ['Use the PSF Guard Sync plugin', 'Create catalog for plugin'],
+  ])('offers custom catalog storage for %s', async (source, save) => {
+    serveEmptyRegistry();
+    const requests: unknown[] = [];
+    const database = { id: 'custom', name: 'Custom catalog', database_path: '/srv/custom.sqlite', image_directories: ['/images'] };
+    server.use(http.post('/api/databases/create', async ({ request }) => {
+      requests.push(await request.json());
+      return HttpResponse.json({ success: true, data: { database, import: { stage: 'complete', running: false } } });
+    }));
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.click(await screen.findByRole('radio', { name: source }));
+    expect(screen.getByRole('group', { name: 'Catalog storage' })).toBeVisible();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Use a custom database path (advanced)' }));
+    fireEvent.change(screen.getByLabelText('Destination database path:'), { target: { value: '/srv/custom.sqlite' } });
+    fireEvent.change(screen.getByLabelText('Display name (optional):'), { target: { value: 'Custom catalog' } });
+    fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: save }));
+    await waitFor(() => expect(requests).toEqual([{ name: 'Custom catalog', image_dirs: ['/images'], backfill: false, fill_metadata: true, db_path: '/srv/custom.sqlite' }]));
+  });
+
+  it('validates a custom path and ignores it after managed storage is restored', async () => {
+    serveEmptyRegistry();
+    const requests: unknown[] = [];
+    server.use(http.post('/api/databases/import-ts', async ({ request }) => {
+      requests.push(await request.json());
+      return HttpResponse.json({ success: true, data: { id: 'import:managed', running: true } });
+    }));
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.change(await screen.findByLabelText('Source database file:'), { target: { value: '/source.sqlite' } });
+    fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    const custom = screen.getByRole('checkbox', { name: 'Use a custom database path (advanced)' });
+    fireEvent.click(custom);
+    fireEvent.change(screen.getByLabelText('Destination database path:'), { target: { value: 'relative.sqlite' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import from Target Scheduler' }));
+    expect(await screen.findByText('Enter an absolute destination database path, or turn off Use a custom database path (advanced).')).toBeVisible();
+    expect(requests).toEqual([]);
+    fireEvent.click(custom);
+    expect(screen.queryByLabelText('Destination database path:')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Import from Target Scheduler' }));
+    await waitFor(() => expect(requests).toEqual([{ name: 'source', db_path: '/source.sqlite', image_dirs: ['/images'] }]));
   });
 
   it('offers the Sync plugin and opens pairing after creating its catalog without a TS file', async () => {

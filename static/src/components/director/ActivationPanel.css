@@ -32,6 +32,10 @@
 .activation-unsent { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; padding: 6px 10px; border: 1px solid var(--color-status-caution); border-radius: 6px; background: var(--color-status-caution-bg); }
 .activation-unsent ul { flex: 1 1 260px; min-width: 0; margin: 0; padding-left: 0; list-style: none; font-size: 13px; }
 .activation-unsent li { padding: 2px 0; overflow-wrap: anywhere; }
+.activation-unsent-help { flex-basis: 100%; margin: 0; font-size: 13px; }
+.activation-delivery-error { margin: 6px 0; font-size: 13px; }
+.activation-delivery-error > summary { cursor: pointer; color: var(--color-text-secondary); }
+.activation-delivery-error pre { max-height: 12rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .collaboration-activation { min-width: 0; margin: 0 0 12px; padding: 8px 0; border: 0; border-top: 1px solid var(--color-border-secondary); }
 .collaboration-activation label { overflow-wrap: anywhere; }
 

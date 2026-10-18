@@ -1582,7 +1582,8 @@ grade writeback does not disable an explicit activation.
 
 If TS changed since the preview, activation refuses the stale preview. If TS
 cannot receive the transfer after the local commit, the report shows
-**Activated locally** and the delivery error. The activation remains pending
+**Activated locally** and a short pending message. Expand **Error details**
+to read the cause. The activation remains pending
 until TS receives it. Use the send button for the pending TS delivery to
 retry, or let the existing file-sync startup, change detection and schedule
 settings retry approved deliveries. Retries use the frozen, reviewed planning;

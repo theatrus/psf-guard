@@ -280,6 +280,19 @@ describe('Activation panel', () => {
     expect(within(unsent).getByRole('button', { name: 'Send to observatory-pi' })).toBeInTheDocument();
     expect(unsent).not.toHaveTextContent('tried');
   });
+
+  it('shows a short TS delivery message and keeps full diagnostics collapsed', async () => {
+    const diagnostic = 'syncing /cache/sync-previews/snapshot.sqlite into /observatory/TS.sqlite: TS temporarily refuses planning: Error code 1811';
+    fixture(false, true, [{ ...sitePush(false, diagnostic), peer_id: 'ts:desert', peer_name: 'Target Scheduler' }]);
+    mount();
+    const pending = await screen.findByRole('note', { name: 'Not sent to Target Scheduler' });
+    expect(pending).toHaveTextContent('The plan is saved locally. Retry delivery');
+    const details = within(pending).getByText(diagnostic);
+    expect(details).not.toBeVisible();
+    fireEvent.click(within(pending).getByText('Error details'));
+    expect(details).toBeVisible();
+    expect(details).toHaveTextContent(diagnostic);
+  });
   it('offers no send when no rig is remote, or every site has the activation', async () => {
     fixture(false, true); const first = mount();
     expect(await screen.findByText(/^Last activated /)).toBeInTheDocument();
@@ -524,4 +537,6 @@ it('does not claim Target Scheduler shoots a plan when file delivery failed', ()
   expect(screen.getByText('Activated locally')).toBeInTheDocument();
   expect(screen.getByText('Planned locally; not sent to Target Scheduler')).toBeInTheDocument();
   expect(screen.queryByText('Target Scheduler now shoots')).not.toBeInTheDocument();
+  expect(screen.getByText(/TS delivery pending/)).toBeVisible();
+  expect(screen.getByText('TS file is unavailable')).not.toBeVisible();
 });
