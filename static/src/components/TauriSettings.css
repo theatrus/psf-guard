@@ -1184,6 +1184,42 @@
   background: var(--color-warning);
 }
 
+.tauri-settings .catalog-optional {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content max-content;
+  align-items: center;
+  gap: 4px 12px;
+  margin-bottom: 16px;
+  padding: 9px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 5px;
+  background: var(--color-bg-tertiary);
+}
+
+.tauri-settings .catalog-optional strong,
+.tauri-settings .catalog-optional small {
+  display: block;
+}
+
+.tauri-settings .catalog-optional small {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.tauri-settings .catalog-optional-state {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.tauri-settings .catalog-optional-state[data-installed='true'] {
+  color: var(--color-success);
+}
+
+.tauri-settings .catalog-optional-error {
+  grid-column: 1 / -1;
+}
+
 .tauri-settings .catalog-install-controls {
   display: grid;
   grid-template-columns: max-content minmax(220px, 1fr);
@@ -1328,6 +1364,14 @@
 
   .tauri-settings .catalog-resource-grid {
     grid-template-columns: 1fr;
+  }
+
+  .tauri-settings .catalog-optional {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+
+  .tauri-settings .catalog-optional > div {
+    grid-column: 1 / -1;
   }
 
   .tauri-settings .catalog-install-controls {

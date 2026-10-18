@@ -98,38 +98,42 @@ describe('SeizaCatalogControls', () => {
     expect(screen.getByRole('progressbar')).toHaveAttribute('value', '50');
   });
 
-  it('opens on Gaia colors when a color card sends the person to install them', async () => {
+  function capabilities(gaia: Record<string, unknown>, ready: boolean) {
+    return HttpResponse.json({
+      success: true,
+      data: {
+        seiza_version: '0.12.0',
+        seiza_fits_version: '0.2.0',
+        resources: {
+          objects: { name: 'objects', status: 'available' },
+          stars: { name: 'stars', status: 'available' },
+          star_identifiers: { name: 'star_identifiers', status: 'available' },
+          blind_index: { name: 'blind_index', status: 'available' },
+          transients: { name: 'transients', status: 'available' },
+          minor_bodies: { name: 'minor_bodies', status: 'available' },
+          gaia_photometry: gaia,
+        },
+        features: {
+          object_association: true,
+          object_name_search: false,
+          stellar_name_search: false,
+          hinted_solve: true,
+          blind_solve: true,
+          transient_annotations: false,
+          minor_body_annotations: false,
+          color_calibration: ready,
+        },
+      },
+      error: null,
+      status: 'ready',
+    });
+  }
+
+  it('installs Gaia colors on their own, and a color card brings the person to them', async () => {
     let requestedPreset = '';
     server.use(
       http.get('/api/astrometry/capabilities', () =>
-        HttpResponse.json({
-          success: true,
-          data: {
-            seiza_version: '0.12.0',
-            seiza_fits_version: '0.2.0',
-            resources: {
-              objects: { name: 'objects', status: 'available' },
-              stars: { name: 'stars', status: 'available' },
-              star_identifiers: { name: 'star_identifiers', status: 'available' },
-              blind_index: { name: 'blind_index', status: 'available' },
-              transients: { name: 'transients', status: 'available' },
-              minor_bodies: { name: 'minor_bodies', status: 'available' },
-              gaia_photometry: { name: 'gaia_photometry', status: 'not_configured' },
-            },
-            features: {
-              object_association: true,
-              object_name_search: false,
-              stellar_name_search: false,
-              hinted_solve: true,
-              blind_solve: true,
-              transient_annotations: false,
-              minor_body_annotations: false,
-              color_calibration: false,
-            },
-          },
-          error: null,
-          status: 'ready',
-        })
+        capabilities({ name: 'gaia_photometry', status: 'not_configured' }, false)
       ),
       http.post('/api/astrometry/catalogs/install', async ({ request }) => {
         requestedPreset = ((await request.json()) as { preset: string }).preset;
@@ -137,7 +141,11 @@ describe('SeizaCatalogControls', () => {
           success: true,
           data: {
             started: true,
-            progress: { running: true, phase: 'manifest', message: 'Checking…', files_completed: 0, files_total: 1 },
+            progress: {
+              running: true, phase: 'downloading', message: 'Downloading stars-gaia-photometry.bin…',
+              preset: 'gaia_photometry', files_completed: 0, files_total: 1,
+              bytes_completed: 100, bytes_total: 476,
+            },
           },
           error: null,
           status: 'ready',
@@ -146,12 +154,34 @@ describe('SeizaCatalogControls', () => {
     );
 
     const user = userEvent.setup();
-    render(<SeizaCatalogControls initialPreset="gaia_photometry" />, { wrapper: wrapper() });
+    render(<SeizaCatalogControls focus="gaia_photometry" />, { wrapper: wrapper() });
 
     expect(await screen.findByText('○ Color calibration')).toBeInTheDocument();
-    expect(screen.getByText('Gaia colors', { selector: 'strong' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Catalog package')).toHaveValue('gaia_photometry');
-    await user.click(screen.getByRole('button', { name: 'Install / update catalogs' }));
+    const item = screen.getByRole('region', { name: 'Gaia colors' });
+    expect(item).toHaveTextContent('Not installed');
+    const install = screen.getByRole('button', { name: 'Install Gaia colors' });
+    expect(install).toHaveFocus();
+    // The solver package stays as it was: Gaia colors are their own item.
+    expect(screen.getByLabelText('Catalog package')).toHaveValue('blind_deep');
+    await user.click(install);
     expect(requestedPreset).toBe('gaia_photometry');
+    expect(await screen.findByText('Downloading stars-gaia-photometry.bin…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Install Gaia colors' })).toBeDisabled();
+    expect(item).toHaveTextContent('Installing…');
+  });
+
+  it('shows Gaia colors as installed once they are', async () => {
+    server.use(
+      http.get('/api/astrometry/capabilities', () =>
+        capabilities(
+          { name: 'gaia_photometry', status: 'available', size_bytes: 476 * 1024 * 1024 },
+          true
+        )
+      )
+    );
+    render(<SeizaCatalogControls />, { wrapper: wrapper() });
+    expect(await screen.findByText('✓ Color calibration')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Gaia colors' })).toHaveTextContent('Installed · 476 MiB');
+    expect(screen.getByRole('button', { name: 'Update Gaia colors' })).toBeEnabled();
   });
 });

@@ -1971,7 +1971,7 @@ export default function TauriSettings({
 
           {currentTab === 'catalogs' && (
             <div className="settings-setups">
-              <SeizaCatalogControls initialPreset={initialIntent === 'catalogs' ? initialField : null} />
+              <SeizaCatalogControls focus={initialIntent === 'catalogs' ? initialField : null} />
             </div>
           )}
 

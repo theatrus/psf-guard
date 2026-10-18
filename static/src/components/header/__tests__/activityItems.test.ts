@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
   CacheRefreshProgress,
+  CatalogInstallProgress,
   CalibrationDuplicateStatus,
   RejectRemovalStatus,
   FlatMeasureStatus,
@@ -600,6 +601,41 @@ describe('backups in the job line', () => {
       background: true,
     });
     expect(activityItems([], [], undefined, undefined, {}, [], null)).toEqual([]);
+  });
+});
+
+describe('catalog installs in the job line', () => {
+  const progress: CatalogInstallProgress = {
+    running: true, phase: 'downloading', message: 'Downloading stars-gaia-photometry.bin…',
+    preset: 'gaia_photometry', output_dir: '/catalogs', file_name: 'stars-gaia-photometry.bin',
+    files_completed: 0, files_total: 1, bytes_completed: 119, bytes_total: 476, started_at: 1800,
+  };
+
+  it("shows a person's Gaia colors download with its progress", () => {
+    const [item] = activityItems([], [], undefined, undefined, {}, [], null, progress);
+    expect(item).toMatchObject({
+      key: 'catalog:1800',
+      kind: 'catalog',
+      title: 'Installing Gaia colors',
+      scope: 'Seiza catalogs',
+      detail: 'Downloading stars-gaia-photometry.bin…',
+      status: 'running',
+      percent: 25,
+      hint: '/catalogs',
+    });
+    expect(tierOf(item)).toBe('person');
+    expect(item.href).toBeUndefined();
+  });
+
+  it('counts finished files when the download gives no size, and leaves a finished install out', () => {
+    const [item] = activityItems([], [], undefined, undefined, {}, [], null, {
+      ...progress, preset: 'blind_deep', phase: 'installing', message: 'Installing objects.bin…',
+      bytes_completed: undefined, bytes_total: undefined, files_completed: 3, files_total: 6,
+    });
+    expect(item).toMatchObject({ title: 'Installing catalogs', percent: 50 });
+    expect(activityItems([], [], undefined, undefined, {}, [], null, {
+      ...progress, running: false, phase: 'complete',
+    })).toEqual([]);
   });
 });
 

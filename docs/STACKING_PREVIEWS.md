@@ -1503,48 +1503,62 @@ that mask through deconvolution and RC-Astro instead of treating gaps as data.
 RGB and LRGB previews are color calibrated against Gaia star colors by
 default. Narrowband palettes are false color and never are.
 
-Calibration runs after the channels are registered and normalized, before any
-stretch. PSF Guard places Gaia DR3 stars on the preview in two steps: the
-fresh pixel solve of the reference stack's reference frame takes each star to
-that frame's pixels, and the stack's saved source-to-output transform takes
-it on to the stack's grid. Every other channel was registered to that grid
-(R for RGB, L for LRGB), so the stars land on all three channels. Seiza's
-`calibrate_color` measures each star in R, G and B, fits instrumental color
-against Gaia BP−RP, and finds the gains that make a star the Sun's color come
-out white. It also offsets each channel so the sky is one gray. For LRGB the
-color channels are calibrated before luminance joins them.
+Seiza does the calibration (`seiza_stacking::calibrate_and_stretch`). It
+measures each Gaia star in R, G and B, fits instrumental color against Gaia
+BP−RP, and finds the gains that make a star the Sun's color come out white.
+It also offsets each channel so the sky is one gray. PSF Guard gives Seiza
+the solution of the image it calibrates: the fresh pixel solve of the
+reference stack's reference frame, carried through the stack's saved
+source-to-output transform and, for a composition, its edge crop
+(`seiza_stacking::transform_wcs`). Every other channel was registered to
+that stack's grid (R for RGB, L for LRGB), so the stars land on all three
+channels.
 
-When R, G and B carry the same stretch stages, as they do by default, a
-calibrated preview stretches them together as one linked RGB image. Three
-separate automatic stretches would each pull their channel to the same median
-and undo the calibration. Channels given different stages still stretch on
-their own.
+Where calibration runs depends on the stretches:
 
-The card says what happened, as `Calibrated on 143 stars · R ×1.12, B ×0.87`,
+- **The composed channels share their stretch stages**, as they do by
+  default. The channels are composed linear. For RGB, Seiza then calibrates
+  the composition and stretches it with those stages and the RGB output
+  stages, so one linked stretch keeps the calibrated balance. For LRGB, the
+  R, G and B channels are calibrated before luminance joins them, and the
+  composition is stretched the same way.
+- **The channels have stretches of their own.** R, G and B are calibrated
+  before anything stretches them. Each channel then gets its own stretch, as
+  configured, which pulls it toward its own median and largely undoes the
+  calibration.
+
+When calibration cannot run, the preview looks as it would without it: the
+shared stages stretch each channel on its own. One linked stretch of
+uncalibrated channels would show the camera's color cast.
+
+The card shows what happened, as `Calibrated on 143 stars · R ×1.12, B ×0.87`,
 or why it did not:
 
-- **Gaia colors not installed.** Install **Gaia colors** (about 480 MB) under
-  Settings › Catalogs. The card's **Install** opens it there.
+- **Gaia colors not installed.** Install **Gaia colors** (about 480 MB) in
+  Settings › Catalogs. The card's **Install** opens Settings there.
 - **Reference frame not plate solved.** Solve that frame. Embedded FITS WCS
   does not count.
 - **Too few Gaia stars.** The catalog stops at G 15. Seiza needs 20 clean,
   uncrowded stars down to G 13 for each fit, which a narrow field can lack.
-- Anything else gives Seiza's reason.
+- Anything else shows Seiza's reason.
 
-A skipped calibration leaves the preview as it would be without it. Turn
-calibration off with the **Color calibration** switch in the **Processing
-stack** editor.
+Turn calibration off with the **Color calibration** switch in the
+**Processing stack** editor.
 
 The request's `processing.color_calibration` takes `enabled`,
 `neutralize_background` (default true), and `white_reference`, either
 `"solar"` (the default) or a Gaia color such as `{"bp_rp": 0.65}`. An RGB or
 LRGB request without it is calibrated with the defaults. The manifest's
 `color_calibration` records the gains, offsets, sky levels, both color fits,
-and star counts, or the reason it skipped. The FITS gets `COLORCAL`,
-`CCWHITE`, `CCGAINR`, `CCGAING`, `CCGAINB` and `CCSTARS` cards. The settings,
-the reference frame's solve, and the Gaia catalog file are part of the job ID
-and the stale check, so a new solve or a newly installed catalog makes a new
-preview and marks the old one out of date.
+and star counts, or the reason calibration was skipped. The FITS gets
+`COLORCAL`, `CCWHITE`, `CCGAINR`, `CCGAING`, `CCGAINB` and `CCSTARS` cards.
+The settings, the reference frame's solve, and the Gaia catalog file are part
+of the job ID and the stale check, so a new solve or a newly installed catalog
+makes a new preview and marks the old one out of date.
+
+Installing Gaia colors runs in the background, like every catalog
+installation, and shows in the header's job line with its progress. Settings
+and the color cards update when it finishes.
 
 ### Edge crop
 

@@ -28,8 +28,8 @@ use seiza_background::{
 use seiza_stacking::{
     combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
     write_processed_image_fits_f32, ColorComposition, ColorCrop, ColorNormalization, ColorOptions,
-    ColorTransfer, CropReport, FitsFrame, ForaxxOptions, LinearImage, NarrowbandPalette, Registrar,
-    RegistrationOptions,
+    ColorTransfer, CropReport, FitsFrame, ForaxxOptions, LinearImage, NarrowbandPalette,
+    ReferenceRegion, Registrar, RegistrationOptions,
 };
 use seiza_stretch::{ImageShape, StretchStack, StretchStackOutput, StretchStageProgress};
 use serde::{Deserialize, Serialize};
@@ -2529,7 +2529,16 @@ fn compose_color(
     pool.install(|| {
         let reference_headers = reference.headers;
         let reference_image = reference.image;
-        let mut calibration_cards = Vec::new();
+        // What color calibration did, and the stretch every composed channel
+        // shares when calibration waits for the composition.
+        let mut calibration: Option<StackColorCalibrationOutcome> = None;
+        let mut deferred_stages: Option<Vec<super::stretch::StackStretchRequest>> = None;
+        let open_catalog = || {
+            state
+                .astrometry
+                .gaia_photometry_catalog()
+                .map(|(catalog, _)| catalog)
+        };
         let mut images = BTreeMap::new();
         images.insert(reference_role, reference_image);
         if reused_inputs {
@@ -2794,17 +2803,51 @@ fn compose_color(
             }
 
             stop.check()?;
-            let calibration =
-                run_color_calibration(state, color_calibration, &mut images, &progress);
-            let calibrated = matches!(
-                calibration,
-                Some(StackColorCalibrationOutcome::Calibrated(_))
-            );
-            if let Some(outcome) = calibration {
-                calibration_cards = color_calibration_cards(&outcome);
-                state.stack_previews.update_color(&job.job_id, |current| {
-                    current.color_calibration = Some(outcome);
-                });
+            // Calibration needs one stretch for every channel, after it:
+            // three stretches of their own pull each channel to the same
+            // median and undo it. When the composed channels share their
+            // stages, as they do by default, they are composed linear and
+            // stretched together after calibration.
+            let ready = color_calibration.and_then(|plan| {
+                plan.placement
+                    .as_ref()
+                    .ok()
+                    .map(|placement| (plan, placement))
+            });
+            match color_calibration {
+                None => progress.skip(
+                    StackColorProgressPhase::CalibratingColor,
+                    "Color calibration skipped (off)",
+                ),
+                Some(plan) => {
+                    if let Err(skip) = &plan.placement {
+                        calibration = Some(StackColorCalibrationOutcome::Skipped(skip.clone()));
+                    }
+                }
+            }
+            deferred_stages = ready.and_then(|_| {
+                shared_input_stages(processing, &composed_roles(job.kind, job.palette))
+            });
+            // LRGB, and channels with stretches of their own, are
+            // calibrated now, before luminance joins or anything stretches.
+            if let Some((plan, placement)) = ready
+                && (job.kind == StackColorKind::Lrgb || deferred_stages.is_none())
+            {
+                progress.begin(
+                    StackColorProgressPhase::CalibratingColor,
+                    "Calibrating color against Gaia",
+                    None,
+                    None,
+                );
+                calibration = Some(calibrate_registered_channels(
+                    placement,
+                    &plan.settings,
+                    &mut images,
+                    &open_catalog,
+                ));
+            }
+            if let Some(outcome) = &calibration {
+                report_calibration(&progress, outcome);
             }
 
             let input_stage_count = processing
@@ -2812,73 +2855,18 @@ fn compose_color(
                 .values()
                 .map(Vec::len)
                 .sum::<usize>();
-            // One stretch for all three calibrated channels keeps the balance
-            // calibration found; three independent ones would undo it.
-            let linked_rgb = calibrated.then(|| linked_rgb_stretch(processing)).flatten();
-            if input_stage_count == 0 {
+            if deferred_stages.is_some() {
+                progress.skip(
+                    StackColorProgressPhase::StretchingInputs,
+                    "Channel stretches run on the calibrated composition",
+                );
+            } else if input_stage_count == 0 {
                 progress.skip(
                     StackColorProgressPhase::StretchingInputs,
                     "Input stretch stages skipped",
                 );
             } else {
-                if let Some(stages) = linked_rgb {
-                    let configs = stages
-                        .iter()
-                        .map(super::stretch::StackStretchRequest::config)
-                        .collect::<Vec<_>>();
-                    let stack = StretchStack::new(configs).map_err(|error| error.to_string())?;
-                    let [Some(red), Some(green), Some(blue)] =
-                        RGB_ROLES.map(|role| images.remove(&role))
-                    else {
-                        return Err("A normalized red, green or blue channel is missing".into());
-                    };
-                    let rgb = color_calibration::interleave(&red, &green, &blue)?;
-                    let output = apply_input_stretch_stack(
-                        &stack,
-                        &rgb.data,
-                        super::stretch::image_shape(&rgb),
-                        |event| {
-                            let number = event.stage_index + 1;
-                            let action = match event.state {
-                                seiza_stretch::StretchStageState::Resolving => "Resolving",
-                                seiza_stretch::StretchStageState::Applying => "Applying",
-                                seiza_stretch::StretchStageState::Completed => "Applied",
-                            };
-                            progress.begin(
-                                StackColorProgressPhase::StretchingInputs,
-                                format!("{action} RGB stretch {number}/{}", event.stage_count),
-                                None,
-                                Some((number, event.stage_count)),
-                            );
-                            if event.state == seiza_stretch::StretchStageState::Completed {
-                                progress.advance(StackColorProgressPhase::StretchingInputs, 3);
-                            }
-                        },
-                    )
-                    .map_err(|error| error.to_string())?;
-                    let resolved = output
-                        .plans
-                        .iter()
-                        .map(|plan| serde_json::to_value(plan).map_err(|error| error.to_string()))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    state.stack_previews.update_color(&job.job_id, |current| {
-                        for role in RGB_ROLES {
-                            current
-                                .resolved_input_stretches
-                                .insert(role, resolved.clone());
-                        }
-                    });
-                    let stretched = LinearImage::new(red.width, red.height, 3, output.data)
-                        .map_err(|error| error.to_string())?;
-                    let [red, green, blue] = color_calibration::deinterleave(&stretched)?;
-                    images.insert(StackColorRole::Red, red);
-                    images.insert(StackColorRole::Green, green);
-                    images.insert(StackColorRole::Blue, blue);
-                }
                 for source in &job.sources {
-                    if linked_rgb.is_some() && RGB_ROLES.contains(&source.role) {
-                        continue;
-                    }
                     let Some(stages) = processing.input_stretches.get(&source.role) else {
                         continue;
                     };
@@ -2940,7 +2928,11 @@ fn compose_color(
             }
             ColorOptions {
                 normalization: ColorNormalization::None,
-                input_transfer: ColorTransfer::DisplayReferred,
+                input_transfer: if deferred_stages.is_some() {
+                    ColorTransfer::LinearLight
+                } else {
+                    ColorTransfer::DisplayReferred
+                },
                 crop: job.crop.seiza(),
             }
         } else {
@@ -2975,33 +2967,7 @@ fn compose_color(
             None,
             None,
         );
-        // The order the composition receives its channels, which is the order
-        // its coverage report preserves.
-        let composed_roles: Vec<StackColorRole> = match job.kind {
-            StackColorKind::Rgb => vec![
-                StackColorRole::Red,
-                StackColorRole::Green,
-                StackColorRole::Blue,
-            ],
-            StackColorKind::Lrgb => vec![
-                StackColorRole::Luminance,
-                StackColorRole::Red,
-                StackColorRole::Green,
-                StackColorRole::Blue,
-            ],
-            StackColorKind::Narrowband => {
-                let mut roles = vec![StackColorRole::Ha, StackColorRole::Oiii];
-                // A palette that does not use SII leaves it out of the
-                // composition, and so out of the report.
-                if job
-                    .palette
-                    .is_some_and(|palette| palette.seiza().requires_sii())
-                {
-                    roles.push(StackColorRole::Sii);
-                }
-                roles
-            }
-        };
+        let composed_roles = composed_roles(job.kind, job.palette);
         let mut composition = match job.kind {
             StackColorKind::Rgb => combine_rgb(
                 &images[&StackColorRole::Red],
@@ -3049,7 +3015,92 @@ fn compose_color(
         }
         progress.finish(StackColorProgressPhase::ComposingColor);
 
-        if let Some(processing) = &job.processing {
+        if let (Some(processing), Some(channel_stages), Some((plan, placement))) = (
+            &job.processing,
+            deferred_stages.as_ref(),
+            color_calibration.and_then(|plan| {
+                plan.placement
+                    .as_ref()
+                    .ok()
+                    .map(|placement| (plan, placement))
+            }),
+        ) {
+            stop.check()?;
+            progress.begin(
+                StackColorProgressPhase::StretchingOutput,
+                "Stretching the composition",
+                None,
+                None,
+            );
+            let stretched = match calibration.as_ref() {
+                // LRGB: calibrated before luminance joined.
+                Some(outcome) => {
+                    let linked = outcome.is_calibrated();
+                    let (image, plans) = match composition_stretch(
+                        channel_stages,
+                        &processing.output_stretches,
+                        linked,
+                    )? {
+                        Some(stack) => stretch_linear_composition(&composition.image, &stack)?,
+                        None => (composition.image.clone(), Vec::new()),
+                    };
+                    StretchedComposition {
+                        image,
+                        calibration: None,
+                        plans,
+                    }
+                }
+                None => {
+                    progress.begin(
+                        StackColorProgressPhase::CalibratingColor,
+                        "Calibrating color against Gaia",
+                        None,
+                        None,
+                    );
+                    let image = std::mem::replace(
+                        &mut composition.image,
+                        LinearImage::new(1, 1, 3, vec![0.0; 3])
+                            .map_err(|error| error.to_string())?,
+                    );
+                    calibrate_and_stretch_composition(
+                        placement,
+                        &plan.settings,
+                        image,
+                        composition.region,
+                        channel_stages,
+                        &processing.output_stretches,
+                        &open_catalog,
+                    )?
+                }
+            };
+            if let Some(outcome) = stretched.calibration {
+                report_calibration(&progress, &outcome);
+                calibration = Some(outcome);
+            }
+            let (channel_plans, output_plans) = stretched
+                .plans
+                .split_at(channel_stages.len().min(stretched.plans.len()));
+            let (channel_plans, output_plans) = (channel_plans.to_vec(), output_plans.to_vec());
+            let stretched_any = !stretched.plans.is_empty();
+            state.stack_previews.update_color(&job.job_id, |current| {
+                for role in &composed_roles {
+                    current
+                        .resolved_input_stretches
+                        .insert(*role, channel_plans.clone());
+                }
+                current.resolved_output_stretches = output_plans;
+            });
+            composition = ColorComposition {
+                image: stretched.image,
+                transfer: if stretched_any {
+                    ColorTransfer::DisplayReferred
+                } else {
+                    ColorTransfer::LinearLight
+                },
+                ..composition
+            };
+            progress.finish(StackColorProgressPhase::StretchingOutput);
+        } else if let Some(processing) = &job.processing {
             if processing.output_stretches.is_empty() {
                 progress.skip(
                     StackColorProgressPhase::StretchingOutput,
@@ -3119,14 +3170,21 @@ fn compose_color(
             None,
             None,
         );
+        let mut fits_headers_cards = Vec::new();
         let fits_destination = color_fits_path(stack_root, &job.job_id);
         let parent = fits_destination
             .parent()
             .ok_or_else(|| "Color FITS path has no parent".to_string())?;
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         let temporary = fits_destination.with_extension(format!("{}.tmp.fits", std::process::id()));
+        if let Some(outcome) = calibration {
+            fits_headers_cards = color_calibration_cards(&outcome);
+            state.stack_previews.update_color(&job.job_id, |current| {
+                current.color_calibration = Some(outcome);
+            });
+        }
         let mut fits_headers = reference_headers.clone();
-        fits_headers.extend(calibration_cards);
+        fits_headers.extend(fits_headers_cards);
         write_color_fits_f32(&temporary, &composition, &fits_headers, &job.label)
             .map_err(|error| error.to_string())?;
         std::fs::rename(&temporary, &fits_destination).map_err(|error| error.to_string())?;
@@ -3173,26 +3231,21 @@ const RGB_ROLES: [StackColorRole; 3] = [
     StackColorRole::Blue,
 ];
 
-/// Calibrate the registered R, G and B channels in place, as `plan` says,
-/// with the Gaia catalog `open_catalog` gives. A calibration that cannot run
-/// leaves the channels as they were and says why.
-fn calibrate_color_channels(
-    plan: &ColorCalibrationPlan,
-    images: &mut BTreeMap<StackColorRole, LinearImage>,
-    open_catalog: impl FnOnce() -> Result<Arc<seiza::catalog::PhotometryCatalog>, String>,
-) -> StackColorCalibrationOutcome {
-    use color_calibration::{StackColorCalibrationSkip, StackColorCalibrationSkipReason};
+/// The Gaia photometry catalog Seiza reads, or why it cannot.
+type OpenCatalog<'a> = &'a dyn Fn() -> Result<Arc<seiza::catalog::PhotometryCatalog>, String>;
 
-    let skip = |reason, detail: &str| {
-        StackColorCalibrationOutcome::Skipped(StackColorCalibrationSkip {
-            reason,
-            detail: detail.into(),
-        })
-    };
-    let placement = match &plan.placement {
-        Ok(placement) => placement,
-        Err(reason) => return StackColorCalibrationOutcome::Skipped(reason.clone()),
-    };
+/// Calibrate the registered R, G and B channels in place, on the grid every
+/// channel is registered to, before anything stretches them: for LRGB,
+/// whose luminance joins after, and for channels with stretches of their
+/// own. A calibration that cannot run leaves them as they were.
+fn calibrate_registered_channels(
+    placement: &color_calibration::StarPlacement,
+    settings: &StackColorCalibration,
+    images: &mut BTreeMap<StackColorRole, LinearImage>,
+    open_catalog: OpenCatalog<'_>,
+) -> StackColorCalibrationOutcome {
+    use color_calibration::StackColorCalibrationSkipReason as Reason;
+
     let grid = images
         .get(&StackColorRole::Red)
         .map(|image| (image.width, image.height));
@@ -3202,33 +3255,37 @@ fn calibrate_color_channels(
             placement.orientation.output_height,
         ))
     {
-        return skip(
-            StackColorCalibrationSkipReason::Failed,
+        return StackColorCalibrationOutcome::skipped(
+            Reason::Failed,
             "The reference stack's sky layout does not match its pixels; rebuild it",
         );
     }
+    let wcs = match placement.wcs_on(None) {
+        Ok(wcs) => wcs,
+        Err(error) => return StackColorCalibrationOutcome::skipped(Reason::Failed, error),
+    };
     let catalog = match open_catalog() {
         Ok(catalog) => catalog,
         Err(error) => {
-            return skip(
-                StackColorCalibrationSkipReason::NoGaiaCatalog,
-                &format!("Gaia colors could not be opened: {error}"),
+            return StackColorCalibrationOutcome::skipped(
+                Reason::NoGaiaCatalog,
+                format!("Gaia colors could not be opened: {error}"),
             )
         }
     };
-    let stars = placement.place(&placement.gaia_sources(&catalog));
     let [Some(mut red), Some(mut green), Some(mut blue)] =
         RGB_ROLES.map(|role| images.remove(&role))
     else {
-        return skip(
-            StackColorCalibrationSkipReason::Failed,
+        return StackColorCalibrationOutcome::skipped(
+            Reason::Failed,
             "A red, green or blue channel is missing",
         );
     };
     let outcome = color_calibration::calibrate_channels(
         [&mut red, &mut green, &mut blue],
-        &stars,
-        &plan.settings,
+        &wcs,
+        &catalog,
+        settings,
     );
     images.insert(StackColorRole::Red, red);
     images.insert(StackColorRole::Green, green);
@@ -3236,34 +3293,150 @@ fn calibrate_color_channels(
     outcome
 }
 
-/// Run `plan`'s calibration, reporting it on the job's progress. `None`
-/// when calibration is off.
-fn run_color_calibration(
-    state: &Arc<AppState>,
-    plan: Option<&ColorCalibrationPlan>,
-    images: &mut BTreeMap<StackColorRole, LinearImage>,
-    progress: &ColorProgressTracker<'_>,
-) -> Option<StackColorCalibrationOutcome> {
-    let Some(plan) = plan else {
-        progress.skip(
-            StackColorProgressPhase::CalibratingColor,
-            "Color calibration skipped (off)",
-        );
-        return None;
+/// A composition Seiza calibrated and stretched, or stretched alone.
+struct StretchedComposition {
+    image: LinearImage,
+    /// What calibration did, when it ran on this composition.
+    calibration: Option<StackColorCalibrationOutcome>,
+    /// Each stage's resolved plan, input stages first.
+    plans: Vec<serde_json::Value>,
+}
+
+/// The shared channel stretch, then the output stretch, as one stack.
+/// When `linked` is false the channel stages run per channel, as each
+/// channel's own stretch would have; the output stages keep their own
+/// strategy.
+fn composition_stretch(
+    channel_stages: &[super::stretch::StackStretchRequest],
+    output_stages: &[super::stretch::StackStretchRequest],
+    linked: bool,
+) -> Result<Option<StretchStack>, String> {
+    let configs = channel_stages
+        .iter()
+        .map(|stage| {
+            let mut config = stage.config();
+            if !linked {
+                config.color_strategy = seiza_stretch::ColorStrategy::Unlinked;
+            }
+            config
+        })
+        .chain(
+            output_stages
+                .iter()
+                .map(super::stretch::StackStretchRequest::config),
+        )
+        .collect::<Vec<_>>();
+    if configs.is_empty() {
+        return Ok(None);
+    }
+    StretchStack::new(configs)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+fn stretch_plans(plans: &[seiza_stretch::StretchPlan]) -> Result<Vec<serde_json::Value>, String> {
+    plans
+        .iter()
+        .map(|plan| serde_json::to_value(plan).map_err(|error| error.to_string()))
+        .collect()
+}
+
+fn stretch_linear_composition(
+    image: &LinearImage,
+    stack: &StretchStack,
+) -> Result<(LinearImage, Vec<serde_json::Value>), String> {
+    let output = stack
+        .apply_f32_image(&image.data, super::stretch::image_shape(image))
+        .map_err(|error| error.to_string())?;
+    let plans = stretch_plans(&output.plans)?;
+    let image = LinearImage::new(image.width, image.height, image.channels, output.data)
+        .map_err(|error| error.to_string())?;
+    Ok((image, plans))
+}
+
+/// Calibrate a linear RGB composition against Gaia and stretch it, in
+/// Seiza's one step: the reference frame's solve is carried through the
+/// stack's layout and the composition's crop. When calibration cannot run
+/// the channel stages stretch each channel on its own instead, as they
+/// would have without calibration: one linked stretch of uncalibrated
+/// channels shows the camera's color cast.
+#[allow(clippy::too_many_arguments)]
+fn calibrate_and_stretch_composition(
+    placement: &color_calibration::StarPlacement,
+    settings: &StackColorCalibration,
+    image: LinearImage,
+    crop: ReferenceRegion,
+    channel_stages: &[super::stretch::StackStretchRequest],
+    output_stages: &[super::stretch::StackStretchRequest],
+    open_catalog: OpenCatalog<'_>,
+) -> Result<StretchedComposition, String> {
+    use color_calibration::StackColorCalibrationSkipReason as Reason;
+
+    let uncalibrated = |image: LinearImage, outcome: StackColorCalibrationOutcome| {
+        let (image, plans) = match composition_stretch(channel_stages, output_stages, false)? {
+            Some(stack) => stretch_linear_composition(&image, &stack)?,
+            None => (image, Vec::new()),
+        };
+        Ok::<_, String>(StretchedComposition {
+            image,
+            calibration: Some(outcome),
+            plans,
+        })
     };
-    progress.begin(
-        StackColorProgressPhase::CalibratingColor,
-        "Calibrating color against Gaia",
-        None,
-        None,
-    );
-    let outcome = calibrate_color_channels(plan, images, || {
-        state
-            .astrometry
-            .gaia_photometry_catalog()
-            .map(|(catalog, _)| catalog)
-    });
-    match &outcome {
+    let wcs = match placement.wcs_on(Some(crop)) {
+        Ok(wcs) => wcs,
+        Err(error) => {
+            return uncalibrated(
+                image,
+                StackColorCalibrationOutcome::skipped(Reason::Failed, error),
+            )
+        }
+    };
+    let catalog = match open_catalog() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return uncalibrated(
+                image,
+                StackColorCalibrationOutcome::skipped(
+                    Reason::NoGaiaCatalog,
+                    format!("Gaia colors could not be opened: {error}"),
+                ),
+            )
+        }
+    };
+    let gaia = seiza_stacking::GaiaColors::Catalog(&catalog);
+    let Some(stack) = composition_stretch(channel_stages, output_stages, true)? else {
+        let mut image = image;
+        let outcome = seiza_stacking::calibrate_color_image(
+            &mut image,
+            Some(&wcs),
+            gaia,
+            &settings.options(),
+        );
+        return Ok(StretchedComposition {
+            image,
+            calibration: Some(outcome.into()),
+            plans: Vec::new(),
+        });
+    };
+    let linear = image.clone();
+    let result =
+        seiza_stacking::calibrate_and_stretch(image, Some(&wcs), gaia, &settings.options(), &stack)
+            .map_err(|error| error.to_string())?;
+    let outcome = StackColorCalibrationOutcome::from(result.calibration);
+    if !outcome.is_calibrated() {
+        return uncalibrated(linear, outcome);
+    }
+    Ok(StretchedComposition {
+        image: result.image,
+        calibration: Some(outcome),
+        plans: stretch_plans(&result.stretch_plans)?,
+    })
+}
+
+/// Report a calibration's outcome on the job's progress.
+fn report_calibration(progress: &ColorProgressTracker<'_>, outcome: &StackColorCalibrationOutcome) {
+    match outcome {
         StackColorCalibrationOutcome::Calibrated(report) => {
             tracing::info!(
                 gains = ?report.gains,
@@ -3281,22 +3454,56 @@ fn run_color_calibration(
             );
         }
     }
-    Some(outcome)
 }
 
-/// The input stretch R, G and B share, when they share one: it then runs
-/// once, linked across the three calibrated channels.
-fn linked_rgb_stretch(
+/// The input stretch every composed channel shares, when they share one.
+/// Calibration then runs on the linear composition, and that stretch after
+/// it, once for all the channels.
+fn shared_input_stages(
     processing: &StackColorProcessing,
-) -> Option<&[super::stretch::StackStretchRequest]> {
-    let [red, green, blue] = RGB_ROLES.map(|role| processing.input_stretches.get(&role));
-    let red = red.filter(|stages| !stages.is_empty())?;
-    let same = |stages: Option<&Vec<super::stretch::StackStretchRequest>>| {
-        stages.is_some_and(|stages| {
-            serde_json::to_value(stages).ok() == serde_json::to_value(red).ok()
-        })
-    };
-    (same(green) && same(blue)).then_some(red.as_slice())
+    roles: &[StackColorRole],
+) -> Option<Vec<super::stretch::StackStretchRequest>> {
+    let mut stages = roles.iter().map(|role| {
+        serde_json::to_value(
+            processing
+                .input_stretches
+                .get(role)
+                .cloned()
+                .unwrap_or_default(),
+        )
+        .ok()
+    });
+    let first = stages.next()??;
+    stages
+        .all(|stages| stages.as_ref() == Some(&first))
+        .then(|| serde_json::from_value(first).ok())
+        .flatten()
+}
+
+/// The channels a composition takes, in the order it takes them, which is
+/// the order its coverage report keeps.
+fn composed_roles(
+    kind: StackColorKind,
+    palette: Option<StackNarrowbandPalette>,
+) -> Vec<StackColorRole> {
+    match kind {
+        StackColorKind::Rgb => RGB_ROLES.to_vec(),
+        StackColorKind::Lrgb => vec![
+            StackColorRole::Luminance,
+            StackColorRole::Red,
+            StackColorRole::Green,
+            StackColorRole::Blue,
+        ],
+        StackColorKind::Narrowband => {
+            let mut roles = vec![StackColorRole::Ha, StackColorRole::Oiii];
+            // A palette that does not use SII leaves it out of the
+            // composition, and so out of the report.
+            if palette.is_some_and(|palette| palette.seiza().requires_sii()) {
+                roles.push(StackColorRole::Sii);
+            }
+            roles
+        }
+    }
 }
 
 /// FITS cards recording a calibration, as `seiza color-calibrate` writes
@@ -5540,30 +5747,22 @@ mod tests {
                 (StackColorRole::Blue, mono(64, 48, 0.1)),
             ])
         };
-        let unopened = || -> Result<Arc<seiza::catalog::PhotometryCatalog>, String> {
-            panic!("a planned skip opens no catalog")
-        };
+        let gone =
+            || -> Result<Arc<seiza::catalog::PhotometryCatalog>, String> { Err("gone".into()) };
         let reason = |outcome: StackColorCalibrationOutcome| match outcome {
             StackColorCalibrationOutcome::Skipped(skip) => skip.reason,
             calibrated => panic!("{calibrated:?}"),
         };
-
         let settings = StackColorCalibration::default();
-        let mut images = channels();
+
+        // No solve or no catalog is known when the job is prepared.
         let no_solve = plan(settings, Some(41), Some(&layout), None, catalog.clone());
         assert_eq!(
-            reason(calibrate_color_channels(&no_solve, &mut images, unopened)),
+            no_solve.placement.unwrap_err().reason,
             StackColorCalibrationSkipReason::NoPlateSolve
         );
-        assert_eq!(images, channels());
 
-        let no_catalog = plan(settings, Some(41), Some(&layout), Some(&solution), None);
-        assert_eq!(
-            reason(calibrate_color_channels(&no_catalog, &mut images, unopened)),
-            StackColorCalibrationSkipReason::NoGaiaCatalog
-        );
-        assert_eq!(images, channels());
-
+        // A catalog that has gone by the time the job runs.
         let ready = plan(
             settings,
             Some(41),
@@ -5571,10 +5770,15 @@ mod tests {
             Some(&solution),
             catalog.clone(),
         );
+        let placement = ready.placement.as_ref().unwrap();
+        let mut images = channels();
         assert_eq!(
-            reason(calibrate_color_channels(&ready, &mut images, || Err(
-                "gone".into()
-            ))),
+            reason(calibrate_registered_channels(
+                placement,
+                &settings,
+                &mut images,
+                &gone
+            )),
             StackColorCalibrationSkipReason::NoGaiaCatalog
         );
         assert_eq!(images, channels());
@@ -5588,15 +5792,65 @@ mod tests {
             Some(&solution),
             catalog,
         );
+        let unopened = || -> Result<Arc<seiza::catalog::PhotometryCatalog>, String> {
+            panic!("a stale layout opens no catalog")
+        };
         assert_eq!(
-            reason(calibrate_color_channels(&stale, &mut images, unopened)),
+            reason(calibrate_registered_channels(
+                stale.placement.as_ref().unwrap(),
+                &settings,
+                &mut images,
+                &unopened
+            )),
             StackColorCalibrationSkipReason::Failed
         );
         assert_eq!(images, channels());
+
+        // A composition that cannot be calibrated is still stretched, each
+        // channel on its own as it would have been without calibration.
+        let auto = super::super::stretch::StackStretchRequest {
+            model: seiza_stretch::StretchModel::AutoMtf(seiza_stretch::StretchParams::default()),
+            color_strategy: seiza_stretch::ColorStrategy::Linked,
+        };
+        let composition = color_calibration::interleave(
+            &images[&StackColorRole::Red],
+            &images[&StackColorRole::Green],
+            &images[&StackColorRole::Blue],
+        )
+        .unwrap();
+        let stretched = calibrate_and_stretch_composition(
+            placement,
+            &settings,
+            composition.clone(),
+            ReferenceRegion {
+                x: 0,
+                y: 0,
+                width: 64,
+                height: 48,
+            },
+            std::slice::from_ref(&auto),
+            &[],
+            &gone,
+        )
+        .unwrap();
+        assert_eq!(
+            reason(stretched.calibration.unwrap()),
+            StackColorCalibrationSkipReason::NoGaiaCatalog
+        );
+        let unlinked = composition_stretch(std::slice::from_ref(&auto), &[], false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            unlinked.stages()[0].color_strategy,
+            seiza_stretch::ColorStrategy::Unlinked
+        );
+        let (expected, _) = stretch_linear_composition(&composition, &unlinked).unwrap();
+        assert_eq!(stretched.image, expected);
+        assert_eq!(stretched.plans.len(), 1);
     }
 
     #[test]
-    fn identical_rgb_stretches_run_linked_and_custom_ones_stay_per_channel() {
+    fn shared_channel_stretches_wait_for_the_composition_and_custom_ones_do_not() {
         let auto = || super::super::stretch::StackStretchRequest {
             model: seiza_stretch::StretchModel::AutoMtf(seiza_stretch::StretchParams::default()),
             color_strategy: seiza_stretch::ColorStrategy::Linked,
@@ -5605,10 +5859,18 @@ mod tests {
         for role in RGB_ROLES {
             processing.input_stretches.insert(role, vec![auto()]);
         }
+        let rgb = composed_roles(StackColorKind::Rgb, None);
+        assert_eq!(
+            shared_input_stages(&processing, &rgb).map(|stages| stages.len()),
+            Some(1)
+        );
+        // LRGB shares only when luminance has the same stretch too.
+        let lrgb = composed_roles(StackColorKind::Lrgb, None);
+        assert!(shared_input_stages(&processing, &lrgb).is_none());
         processing
             .input_stretches
-            .insert(StackColorRole::Luminance, Vec::new());
-        assert_eq!(linked_rgb_stretch(&processing).map(<[_]>::len), Some(1));
+            .insert(StackColorRole::Luminance, vec![auto()]);
+        assert!(shared_input_stages(&processing, &lrgb).is_some());
 
         processing.input_stretches.insert(
             StackColorRole::Blue,
@@ -5617,12 +5879,18 @@ mod tests {
                 color_strategy: seiza_stretch::ColorStrategy::Linked,
             }],
         );
-        assert!(linked_rgb_stretch(&processing).is_none());
+        assert!(shared_input_stages(&processing, &rgb).is_none());
 
+        // No stretch on any channel is shared too: the output stages, if
+        // any, stretch the calibrated composition.
         for role in RGB_ROLES {
             processing.input_stretches.insert(role, Vec::new());
         }
-        assert!(linked_rgb_stretch(&processing).is_none());
+        assert_eq!(
+            shared_input_stages(&processing, &rgb).map(|stages| stages.len()),
+            Some(0)
+        );
+        assert!(composition_stretch(&[], &[], true).unwrap().is_none());
     }
 
     #[test]

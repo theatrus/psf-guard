@@ -1,18 +1,16 @@
 //! Photometric color calibration of RGB and LRGB previews against Gaia.
 //!
-//! Gaia stars are placed on the grid every channel is registered to: the
-//! reference frame's fresh pixel solve takes a star to that frame's pixels,
-//! and the reference stack's recorded sky layout takes it on to the stack's.
-//! Seiza then measures each star in the three linear channels and fits the
-//! gains that render a star of the white reference's color neutral.
+//! Seiza does the work (`seiza_stacking::calibrate_and_stretch` and its
+//! calibration half, `calibrate_color_image`). This module plans it and
+//! gives Seiza the solution of the image it calibrates: the reference
+//! frame's fresh pixel solve, carried through the reference stack's recorded
+//! sky layout and, for a composition, its crop, with
+//! `seiza_stacking::transform_wcs`.
 //!
-//! Calibration runs on the registered, normalized linear channels, before
-//! any stretch. For LRGB it calibrates the color channels before luminance
-//! joins them. Narrowband palettes are false color and never calibrate.
+//! Narrowband palettes are false color and never calibrate.
 
 use seiza_stacking::{
-    apply_color_gains, calibrate_color, ColorCalibrationOptions, ColorReferenceStar,
-    GaiaColorSource, LinearImage, SOLAR_BP_RP,
+    AffineTransform, ColorCalibrationOptions, GaiaColors, LinearImage, ReferenceRegion, SOLAR_BP_RP,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,13 +18,6 @@ use std::fmt::Write as _;
 
 use super::StackSkyOrientation;
 use crate::astrometry::{AstrometryCatalogFileSignature, AstrometrySolutionResponse};
-
-/// The installed Gaia photometry catalog stops at G 15.
-const GAIA_MAX_MAGNITUDE: f32 = 15.0;
-
-/// Gaia RUWE at and above which a star's colour is not trusted; Seiza's own
-/// threshold, applied here to catalogs that carry RUWE.
-const MAX_COLOR_RUWE: f32 = 1.4;
 
 /// What a color request asks of calibration. RGB and LRGB requests without
 /// this get the defaults: calibrated, sky neutral, white like the Sun.
@@ -64,7 +55,7 @@ impl StackColorCalibration {
         Ok(())
     }
 
-    fn options(&self) -> ColorCalibrationOptions {
+    pub(super) fn options(&self) -> ColorCalibrationOptions {
         ColorCalibrationOptions {
             white_bp_rp: self.white_reference.bp_rp(),
             neutralize_background: self.neutralize_background,
@@ -257,173 +248,106 @@ fn solution_fingerprint(solution: &AstrometrySolutionResponse) -> String {
     fingerprint
 }
 
-impl StarPlacement {
-    /// Where a sky position lands on the composition grid, zero-based with
-    /// pixel centers on whole numbers.
-    pub(super) fn grid_pixel(&self, ra: f64, dec: f64) -> Option<(f64, f64)> {
-        let (x, y) = self.wcs.world_to_pixel(ra, dec)?;
-        Some(self.orientation.source_to_output.apply(x, y))
-    }
-
-    /// The sky circle that covers the whole grid: its center and radius in
-    /// degrees.
-    fn field(&self) -> ((f64, f64), f64) {
-        let width = self.orientation.output_width as f64;
-        let height = self.orientation.output_height as f64;
-        let to_sky = |x: f64, y: f64| {
-            let (x, y) = self.orientation.source_to_output.inverse_apply(x, y);
-            self.wcs.pixel_to_world(x, y)
-        };
-        let center = to_sky((width - 1.0) / 2.0, (height - 1.0) / 2.0);
-        let radius = [
-            (-0.5, -0.5),
-            (width - 0.5, -0.5),
-            (-0.5, height - 0.5),
-            (width - 0.5, height - 0.5),
-        ]
-        .into_iter()
-        .map(|(x, y)| {
-            let corner = to_sky(x, y);
-            crate::astrometry::angular_separation_deg(center.0, center.1, corner.0, corner.1)
-        })
-        .fold(0.0_f64, f64::max);
-        (center, radius * 1.02)
-    }
-
-    /// Every source that lands on the grid. Sources without a trusted color
-    /// stay as neighbours: they cannot calibrate, but still disqualify the
-    /// calibrators they crowd.
-    pub(super) fn place(&self, sources: &[GaiaColorSource]) -> Vec<ColorReferenceStar> {
-        let width = self.orientation.output_width as f64;
-        let height = self.orientation.output_height as f64;
-        sources
-            .iter()
-            .filter_map(|source| {
-                let bp_rp = source
-                    .bp_rp
-                    .filter(|colour| colour.is_finite())
-                    .filter(|_| source.ruwe.is_none_or(|ruwe| ruwe < MAX_COLOR_RUWE));
-                // Catalog positions are already at the catalog's epoch.
-                let (x, y) = self.grid_pixel(source.ra, source.dec)?;
-                (x >= -0.5 && y >= -0.5 && x < width - 0.5 && y < height - 0.5).then_some(
-                    ColorReferenceStar {
-                        x,
-                        y,
-                        g: source.g,
-                        bp_rp,
-                    },
-                )
-            })
-            .collect()
-    }
-
-    /// The catalog's stars over the grid.
-    pub(super) fn gaia_sources(
-        &self,
-        catalog: &seiza::catalog::PhotometryCatalog,
-    ) -> Vec<GaiaColorSource> {
-        let ((ra, dec), radius) = self.field();
-        catalog
-            .cone_search(ra, dec, radius, GAIA_MAX_MAGNITUDE)
-            .into_iter()
-            .map(|star| GaiaColorSource {
-                ra: star.ra,
-                dec: star.dec,
-                pmra: None,
-                pmdec: None,
-                g: star.g,
-                // An unreliable colour still marks a neighbour.
-                bp_rp: star.calibration_bp_rp(),
-                ruwe: None,
-            })
-            .collect()
+impl From<seiza_stacking::ColorCalibrationOutcome> for StackColorCalibrationOutcome {
+    fn from(outcome: seiza_stacking::ColorCalibrationOutcome) -> Self {
+        use seiza_stacking::ColorCalibrationSkipReason as Seiza;
+        match outcome {
+            seiza_stacking::ColorCalibrationOutcome::Calibrated(calibration) => {
+                Self::Calibrated(StackColorCalibrationReport {
+                    gains: calibration.gains,
+                    offsets: calibration.offsets,
+                    background: calibration.background,
+                    white_bp_rp: calibration.white_bp_rp,
+                    red_fit: calibration.red_fit.into(),
+                    blue_fit: calibration.blue_fit.into(),
+                    aperture_radius: calibration.aperture_radius,
+                    stars_offered: calibration.stars_offered,
+                    stars_measured: calibration.stars_measured,
+                    stars_used: calibration.red_fit.stars.min(calibration.blue_fit.stars),
+                })
+            }
+            seiza_stacking::ColorCalibrationOutcome::Skipped(skip) => {
+                let reason = match skip.reason {
+                    Seiza::NoSolution => StackColorCalibrationSkipReason::NoPlateSolve,
+                    Seiza::NoCatalog => StackColorCalibrationSkipReason::NoGaiaCatalog,
+                    Seiza::NoStars | Seiza::TooFewStars => {
+                        StackColorCalibrationSkipReason::TooFewStars
+                    }
+                    Seiza::NotRgb | Seiza::InvalidOptions => {
+                        StackColorCalibrationSkipReason::Failed
+                    }
+                };
+                Self::Skipped(StackColorCalibrationSkip::new(reason, skip.detail))
+            }
+        }
     }
 }
 
-/// Calibrate the red, green and blue channels in place from `stars` on
-/// their shared grid. A calibration that cannot run leaves every channel
-/// as it was.
+impl StackColorCalibrationOutcome {
+    /// A skip for something PSF Guard found before Seiza ran.
+    pub(super) fn skipped(
+        reason: StackColorCalibrationSkipReason,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self::Skipped(StackColorCalibrationSkip::new(reason, detail))
+    }
+
+    pub(super) fn is_calibrated(&self) -> bool {
+        matches!(self, Self::Calibrated(_))
+    }
+}
+
+impl StarPlacement {
+    /// The solution of the grid every channel is registered to, or of the
+    /// part of it a composition kept: the reference frame's solve carried
+    /// through the stack's layout and the crop.
+    pub(super) fn wcs_on(&self, crop: Option<ReferenceRegion>) -> Result<seiza::Wcs, String> {
+        let mut source_to_image = self.orientation.source_to_output;
+        if let Some(region) = crop {
+            source_to_image = source_to_image.then(AffineTransform {
+                translation_x: -(region.x as f64),
+                translation_y: -(region.y as f64),
+                ..AffineTransform::IDENTITY
+            });
+        }
+        seiza_stacking::transform_wcs(&self.wcs, source_to_image)
+            .map_err(|error| format!("The reference solve does not carry to the stack: {error}"))
+    }
+}
+
+/// Calibrate the registered red, green and blue channels in place against
+/// `catalog`, through `wcs`, the solution of their shared grid. Seiza
+/// leaves the channels as they were when it cannot calibrate.
 pub(super) fn calibrate_channels(
     channels: [&mut LinearImage; 3],
-    stars: &[ColorReferenceStar],
+    wcs: &seiza::Wcs,
+    catalog: &seiza::catalog::PhotometryCatalog,
     settings: &StackColorCalibration,
 ) -> StackColorCalibrationOutcome {
-    let options = settings.options();
-    let coloured = stars.iter().filter(|star| star.bp_rp.is_some()).count();
-    if coloured < options.minimum_stars {
-        return StackColorCalibrationOutcome::Skipped(StackColorCalibrationSkip::new(
-            StackColorCalibrationSkipReason::TooFewStars,
-            format!(
-                "{coloured} Gaia stars with colors on the image; at least {} are needed",
-                options.minimum_stars
-            ),
-        ));
-    }
     let [red, green, blue] = channels;
-    let rgb = match interleave(red, green, blue) {
+    let mut rgb = match interleave(red, green, blue) {
         Ok(rgb) => rgb,
         Err(error) => {
-            return StackColorCalibrationOutcome::Skipped(StackColorCalibrationSkip::new(
+            return StackColorCalibrationOutcome::skipped(
                 StackColorCalibrationSkipReason::Failed,
                 error,
-            ))
+            )
         }
     };
-    let calibration = match calibrate_color(&rgb, stars, &options) {
-        Ok(calibration) => calibration,
-        Err(error) => {
-            let detail = error.to_string();
-            // Seiza's refusals for a thin field all count stars.
-            let reason = if detail.contains("stars") {
-                StackColorCalibrationSkipReason::TooFewStars
-            } else {
-                StackColorCalibrationSkipReason::Failed
-            };
-            return StackColorCalibrationOutcome::Skipped(StackColorCalibrationSkip::new(
-                reason, detail,
-            ));
-        }
-    };
-    let mut rgb = rgb;
-    if let Err(error) = apply_color_gains(&mut rgb.data, calibration.gains, calibration.offsets) {
-        return StackColorCalibrationOutcome::Skipped(StackColorCalibrationSkip::new(
-            StackColorCalibrationSkipReason::Failed,
-            error.to_string(),
-        ));
-    }
-    for (channel, image) in [red, green, blue].into_iter().enumerate() {
-        for (sample, pixel) in image.data.iter_mut().zip(rgb.data.chunks_exact(3)) {
-            *sample = pixel[channel];
+    let outcome = seiza_stacking::calibrate_color_image(
+        &mut rgb,
+        Some(wcs),
+        GaiaColors::Catalog(catalog),
+        &settings.options(),
+    );
+    if outcome.calibration().is_some() {
+        for (channel, image) in [red, green, blue].into_iter().enumerate() {
+            for (sample, pixel) in image.data.iter_mut().zip(rgb.data.chunks_exact(3)) {
+                *sample = pixel[channel];
+            }
         }
     }
-    StackColorCalibrationOutcome::Calibrated(StackColorCalibrationReport {
-        gains: calibration.gains,
-        offsets: calibration.offsets,
-        background: calibration.background,
-        white_bp_rp: calibration.white_bp_rp,
-        red_fit: calibration.red_fit.into(),
-        blue_fit: calibration.blue_fit.into(),
-        aperture_radius: calibration.aperture_radius,
-        stars_offered: calibration.stars_offered,
-        stars_measured: calibration.stars_measured,
-        stars_used: calibration.red_fit.stars.min(calibration.blue_fit.stars),
-    })
-}
-
-/// Deinterleave an RGB image into three mono channels.
-pub(super) fn deinterleave(rgb: &LinearImage) -> Result<[LinearImage; 3], String> {
-    if rgb.channels != 3 {
-        return Err("An RGB image has three channels".into());
-    }
-    let plane = |channel: usize| {
-        let data = rgb
-            .data
-            .chunks_exact(3)
-            .map(|pixel| pixel[channel])
-            .collect();
-        LinearImage::new(rgb.width, rgb.height, 1, data).map_err(|error| error.to_string())
-    };
-    Ok([plane(0)?, plane(1)?, plane(2)?])
+    outcome.into()
 }
 
 /// Interleave three mono channels on one grid into an RGB image.
@@ -449,6 +373,7 @@ pub(super) fn interleave(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use seiza_stacking::GaiaColorSource;
 
     fn orientation(width: usize, height: usize) -> StackSkyOrientation {
         StackSkyOrientation {
@@ -467,26 +392,11 @@ pub(super) mod tests {
         seiza::Wcs::from_center_scale_rotation((56.75, 24.1), (500.0, 400.0), 1.0, 0.0, false)
     }
 
-    #[test]
-    fn a_sky_position_lands_on_the_grid_through_the_solve_and_the_stack_layout() {
-        let wcs = wcs();
-        // A star 20 pixels left of and 30 above the solve's reference point.
-        let (ra, dec) = wcs.pixel_to_world(480.0, 370.0);
-        let identity = StarPlacement {
-            wcs: wcs.clone(),
-            orientation: orientation(1000, 800),
-        };
-        let (x, y) = identity.grid_pixel(ra, dec).unwrap();
-        assert!(
-            (x - 480.0).abs() < 1e-6 && (y - 370.0).abs() < 1e-6,
-            "{x} {y}"
-        );
-
-        // A stack published half a turn round, and drizzled 2x: the same
-        // star sits at 2 * (999 - 480), 2 * (799 - 370) on the 2000 x 1600
-        // grid.
-        let turned = StarPlacement {
-            wcs,
+    /// A stack published half a turn round and drizzled 2x, from the
+    /// 1000 x 800 reference frame `wcs` solves.
+    fn turned() -> StarPlacement {
+        StarPlacement {
+            wcs: wcs(),
             orientation: StackSkyOrientation {
                 source_to_output: seiza_stacking::AffineTransform {
                     matrix: [[-2.0, 0.0], [0.0, -2.0]],
@@ -495,67 +405,40 @@ pub(super) mod tests {
                 },
                 ..orientation(2000, 1600)
             },
-        };
-        let (x, y) = turned.grid_pixel(ra, dec).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_sky_position_lands_on_the_composed_image_through_the_layout_and_crop() {
+        let placement = turned();
+        // A star at reference-frame pixel (480, 370).
+        let (ra, dec) = placement.wcs.pixel_to_world(480.0, 370.0);
+        // On the stack's grid it sits at 2 * (999 - 480), 2 * (799 - 370).
+        let grid = placement.wcs_on(None).unwrap();
+        let (x, y) = grid.world_to_pixel(ra, dec).unwrap();
         assert!(
             (x - 1038.0).abs() < 1e-6 && (y - 858.0).abs() < 1e-6,
             "{x} {y}"
         );
-
-        let stars = turned.place(&[
-            GaiaColorSource {
-                ra,
-                dec,
-                pmra: None,
-                pmdec: None,
-                g: 11.0,
-                bp_rp: Some(0.8),
-                ruwe: None,
-            },
-            // Off the grid entirely.
-            GaiaColorSource {
-                ra: ra + 2.0,
-                dec,
-                pmra: None,
-                pmdec: None,
-                g: 11.0,
-                bp_rp: Some(0.8),
-                ruwe: None,
-            },
-            // A likely binary keeps no color.
-            GaiaColorSource {
-                ra,
-                dec: dec + 0.01,
-                pmra: None,
-                pmdec: None,
-                g: 11.0,
-                bp_rp: Some(0.8),
-                ruwe: Some(2.0),
-            },
-        ]);
-        assert_eq!(stars.len(), 2);
-        assert!((stars[0].x - 1038.0).abs() < 1e-6);
-        assert_eq!(stars[0].bp_rp, Some(0.8));
-        assert_eq!(stars[1].bp_rp, None);
-
-        // The cone covers the grid's corners.
-        let ((center_ra, center_dec), radius) = turned.field();
-        let corner = distance_to_source_corner(&turned, center_ra, center_dec);
+        // A composition cropped at (100, 50) moves it by that much.
+        let cropped = placement
+            .wcs_on(Some(ReferenceRegion {
+                x: 100,
+                y: 50,
+                width: 1800,
+                height: 1500,
+            }))
+            .unwrap();
+        let (x, y) = cropped.world_to_pixel(ra, dec).unwrap();
         assert!(
-            radius >= corner && radius < corner * 1.05,
-            "{radius} {corner}"
+            (x - 938.0).abs() < 1e-6 && (y - 808.0).abs() < 1e-6,
+            "{x} {y}"
         );
-    }
-
-    fn distance_to_source_corner(placement: &StarPlacement, ra: f64, dec: f64) -> f64 {
-        let (corner_ra, corner_dec) = placement.wcs.pixel_to_world(-0.5, -0.5);
-        crate::astrometry::angular_separation_deg(ra, dec, corner_ra, corner_dec)
     }
 
     /// Three registered mono channels whose camera records red at 0.6 and
     /// blue at 1.4 times a neutral response for a Sun-colored star, with
-    /// redder stars brighter in red; Seiza's own test field, split by
-    /// channel. Gaia stars are placed through `placement`.
+    /// redder stars brighter in red, and the Gaia sources for their stars.
     fn field(placement: &StarPlacement) -> ([LinearImage; 3], Vec<GaiaColorSource>) {
         let (width, height) = (
             placement.orientation.output_width,
@@ -620,8 +503,28 @@ pub(super) mod tests {
         )
     }
 
+    /// A Gaia photometry catalog file holding `sources`.
+    fn catalog(
+        directory: &std::path::Path,
+        sources: &[GaiaColorSource],
+    ) -> seiza::catalog::PhotometryCatalog {
+        let path = directory.join("stars-gaia-photometry.bin");
+        let mut builder = seiza::catalog::PhotometryCatalogBuilder::new(90, 2016.0, "test");
+        for source in sources {
+            builder.add(seiza::catalog::PhotometricStar {
+                ra: source.ra,
+                dec: source.dec,
+                g: source.g,
+                bp_rp: source.bp_rp,
+                reliable: true,
+            });
+        }
+        builder.write_to(&path).unwrap();
+        seiza::catalog::PhotometryCatalog::open(&path).unwrap()
+    }
+
     #[test]
-    fn calibration_recovers_known_channel_gains_through_the_stack_layout() {
+    fn registered_channels_calibrate_against_the_installed_catalog() {
         let placement = StarPlacement {
             wcs: wcs(),
             orientation: StackSkyOrientation {
@@ -634,19 +537,20 @@ pub(super) mod tests {
             },
         };
         let ([mut red, mut green, mut blue], sources) = field(&placement);
-        let stars = placement.place(&sources);
-        assert_eq!(stars.len(), sources.len());
+        let directory = tempfile::tempdir().unwrap();
+        let catalog = catalog(directory.path(), &sources);
         let outcome = calibrate_channels(
             [&mut red, &mut green, &mut blue],
-            &stars,
+            &placement.wcs_on(None).unwrap(),
+            &catalog,
             &StackColorCalibration::default(),
         );
         let StackColorCalibrationOutcome::Calibrated(report) = outcome else {
             panic!("{outcome:?}");
         };
-        assert!((report.gains[0] - 1.0 / 0.6).abs() < 0.02, "{report:?}");
+        assert!((report.gains[0] - 1.0 / 0.6).abs() < 0.03, "{report:?}");
         assert_eq!(report.gains[1], 1.0);
-        assert!((report.gains[2] - 1.0 / 1.4).abs() < 0.02, "{report:?}");
+        assert!((report.gains[2] - 1.0 / 1.4).abs() < 0.03, "{report:?}");
         assert!(report.stars_used >= 20, "{report:?}");
         // The channels now carry the gains, and the sky is one gray.
         let median = |image: &LinearImage| {
@@ -659,51 +563,6 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn stars_come_from_the_installed_gaia_catalog() {
-        let placement = StarPlacement {
-            wcs: wcs(),
-            orientation: orientation(1200, 1000),
-        };
-        let ([mut red, mut green, mut blue], sources) = field(&placement);
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("stars-gaia-photometry.bin");
-        let mut builder = seiza::catalog::PhotometryCatalogBuilder::new(90, 2016.0, "test");
-        for source in &sources {
-            builder.add(seiza::catalog::PhotometricStar {
-                ra: source.ra,
-                dec: source.dec,
-                g: source.g,
-                bp_rp: source.bp_rp,
-                reliable: true,
-            });
-        }
-        // A star far off the field, which the cone leaves out.
-        builder.add(seiza::catalog::PhotometricStar {
-            ra: 120.0,
-            dec: -60.0,
-            g: 8.0,
-            bp_rp: Some(0.8),
-            reliable: true,
-        });
-        builder.write_to(&path).unwrap();
-        let catalog = seiza::catalog::PhotometryCatalog::open(&path).unwrap();
-
-        let found = placement.gaia_sources(&catalog);
-        assert_eq!(found.len(), sources.len());
-        let stars = placement.place(&found);
-        let outcome = calibrate_channels(
-            [&mut red, &mut green, &mut blue],
-            &stars,
-            &StackColorCalibration::default(),
-        );
-        let StackColorCalibrationOutcome::Calibrated(report) = outcome else {
-            panic!("{outcome:?}");
-        };
-        assert!((report.gains[0] - 1.0 / 0.6).abs() < 0.03, "{report:?}");
-        assert!((report.gains[2] - 1.0 / 1.4).abs() < 0.03, "{report:?}");
-    }
-
-    #[test]
     fn a_field_with_too_few_stars_is_left_alone_and_says_why() {
         let placement = StarPlacement {
             wcs: wcs(),
@@ -711,10 +570,12 @@ pub(super) mod tests {
         };
         let ([mut red, mut green, mut blue], sources) = field(&placement);
         let before = [red.clone(), green.clone(), blue.clone()];
-        let stars = placement.place(&sources[..8]);
+        let directory = tempfile::tempdir().unwrap();
+        let catalog = catalog(directory.path(), &sources[..8]);
         let outcome = calibrate_channels(
             [&mut red, &mut green, &mut blue],
-            &stars,
+            &placement.wcs_on(None).unwrap(),
+            &catalog,
             &StackColorCalibration::default(),
         );
         let StackColorCalibrationOutcome::Skipped(skip) = outcome else {
@@ -722,29 +583,42 @@ pub(super) mod tests {
         };
         assert_eq!(skip.reason, StackColorCalibrationSkipReason::TooFewStars);
         assert_eq!([red, green, blue], before);
+    }
 
-        // Enough stars to try, but they all sit in one corner too crowded
-        // to measure: Seiza's own refusal also counts as too few stars.
-        let crowded = (0..30)
-            .map(|index| ColorReferenceStar {
-                x: 40.0 + (index % 6) as f64,
-                y: 40.0 + (index / 6) as f64,
-                g: 10.0,
-                bp_rp: Some(0.8),
-            })
-            .collect::<Vec<_>>();
-        let (mut red, mut green, mut blue) =
-            (before[0].clone(), before[1].clone(), before[2].clone());
-        let outcome = calibrate_channels(
-            [&mut red, &mut green, &mut blue],
-            &crowded,
-            &StackColorCalibration::default(),
-        );
-        let StackColorCalibrationOutcome::Skipped(skip) = outcome else {
-            panic!("{outcome:?}");
-        };
-        assert_eq!(skip.reason, StackColorCalibrationSkipReason::TooFewStars);
-        assert_eq!([red, green, blue], before);
+    #[test]
+    fn seiza_skips_map_onto_the_reasons_the_card_gives() {
+        use seiza_stacking::{ColorCalibrationSkip, ColorCalibrationSkipReason as Seiza};
+        for (reason, expected) in [
+            (
+                Seiza::NoSolution,
+                StackColorCalibrationSkipReason::NoPlateSolve,
+            ),
+            (
+                Seiza::NoCatalog,
+                StackColorCalibrationSkipReason::NoGaiaCatalog,
+            ),
+            (Seiza::NoStars, StackColorCalibrationSkipReason::TooFewStars),
+            (
+                Seiza::TooFewStars,
+                StackColorCalibrationSkipReason::TooFewStars,
+            ),
+            (Seiza::NotRgb, StackColorCalibrationSkipReason::Failed),
+            (
+                Seiza::InvalidOptions,
+                StackColorCalibrationSkipReason::Failed,
+            ),
+        ] {
+            let outcome: StackColorCalibrationOutcome =
+                seiza_stacking::ColorCalibrationOutcome::Skipped(ColorCalibrationSkip {
+                    reason,
+                    detail: "detail".into(),
+                })
+                .into();
+            assert_eq!(
+                outcome,
+                StackColorCalibrationOutcome::skipped(expected, "detail")
+            );
+        }
     }
 
     #[test]

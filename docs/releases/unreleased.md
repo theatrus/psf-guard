@@ -15,8 +15,11 @@
   so a Sun-colored star comes out white and the sky a neutral gray. The color
   card shows the star count and gains, as `Calibrated on 143 stars · R ×1.12,
   B ×0.87`, or the reason calibration was skipped. A switch in the processing
-  stack turns calibration off. Install the optional **Gaia colors** package
-  under Settings › Catalogs.
+  stack turns calibration off. Install the optional **Gaia colors** catalog
+  in Settings › Catalogs, which shows it as its own item with its size,
+  whether it is installed, and an **Install** button.
+- Catalog installations show in the header's job line with their progress.
+  Settings and the color cards update when an installation finishes.
 - Dropdown arrows now sit inside the border with space between the arrow
   and the selected text.
 - UI labels, settings help, and confirmation messages now state actions,

@@ -1,5 +1,6 @@
 import type {
   CacheRefreshProgress,
+  CatalogInstallProgress,
   CalibrationDuplicateStatus,
   RejectRemovalStatus,
   FlatMeasureStatus,
@@ -52,7 +53,7 @@ export type ActivityTier = 'person' | 'automatic';
 /** One piece of background work the header reports. */
 export interface ActivityItem {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog';
   transfer?: TransferJob;
   stateLabel?: string;
   /** What is happening: "Stacking", "Analyzing quality". */
@@ -606,7 +607,8 @@ export function activityItems(
   projectOf: ProjectOf = () => undefined,
   waiting: WaitingStackWork = {},
   transfers: TransferJob[] = [],
-  backup: BackupJob | null = null
+  backup: BackupJob | null = null,
+  catalogInstall: CatalogInstallProgress | null = null
 ): ActivityItem[] {
   const items: ActivityItem[] = [];
   for (const db of databases) {
@@ -628,6 +630,7 @@ export function activityItems(
   items.push(...(waiting.scheduled ?? []).filter((refresh) => refresh.waiting).map(waitingRefreshItem));
   items.push(...(waiting.reapplies ?? []).map(waitingReapplyItem));
   if (backup) items.push(backupItem(backup));
+  if (catalogInstall?.running) items.push(catalogInstallItem(catalogInstall));
   // Stable: rows that compare equal keep the order above.
   return items.sort(compare);
 }
@@ -676,6 +679,26 @@ export function backupItem(job: BackupJob): ActivityItem {
     stoppable: !job.stopping,
     control: { kind: 'backup' },
     hint: job.location === 'downloads' ? 'For download' : job.destination,
+  };
+}
+
+/** A Seiza catalog installation a person started in Settings › Catalogs.
+ *  Settings is a dialog, not a view, so the row links nowhere. */
+export function catalogInstallItem(progress: CatalogInstallProgress): ActivityItem {
+  const percent = progress.bytes_total
+    ? Math.min(100, (100 * (progress.bytes_completed ?? 0)) / progress.bytes_total)
+    : progress.files_total > 0
+      ? Math.min(100, (100 * progress.files_completed) / progress.files_total)
+      : null;
+  return {
+    key: `catalog:${progress.started_at ?? 0}`,
+    kind: 'catalog',
+    title: progress.preset === 'gaia_photometry' ? 'Installing Gaia colors' : 'Installing catalogs',
+    scope: 'Seiza catalogs',
+    detail: progress.message,
+    status: 'running',
+    percent,
+    hint: progress.output_dir,
   };
 }
 

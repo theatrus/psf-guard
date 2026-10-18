@@ -161,10 +161,25 @@ panic = "unwind"
 tauri-build = { version = "2.7.3", features = [] }
 toml_edit = "0.25"
 
-# Unreleased Seiza work, pinned to a commit on Seiza's main until the next
-# Seiza release collects it: seiza-stretch's median anchor (#300) and layered
-# (#301) models. seiza-stats is pinned with it so the build has one copy of
-# it. Drop this block once the release is out and bump the versions above.
+# Unreleased Seiza work, pinned to one Seiza commit until the next Seiza
+# release collects it: seiza-stretch's median anchor (#300) and layered (#301)
+# models, and seiza-stacking's colour calibration and stretch (#302, not yet
+# merged). Every Seiza crate is pinned to the same commit so the build has one
+# copy of each. Drop this block once the release is out and bump the versions
+# above.
 [patch.crates-io]
-seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "f7cc03c22f347f65e9b3a4626b4cbef013575b77" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "f7cc03c22f347f65e9b3a4626b4cbef013575b77" }
+seiza = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-background = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-core = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-deconvolution = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-satellites = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }

@@ -91,6 +91,11 @@ test('settings splits its jobs across tabs', async ({ page }) => {
   await expect(
     modal.getByRole('heading', { name: 'Seiza Catalogs' })
   ).toBeVisible();
+  // Gaia colors install on their own, beside the solver packages. The test
+  // does not press Install: it would download the catalog.
+  const gaiaColors = modal.getByRole('region', { name: 'Gaia colors' });
+  await expect(gaiaColors).toContainText('Star colors for color calibration');
+  await expect(gaiaColors.getByRole('button', { name: /(Install|Update) Gaia colors/ })).toBeEnabled();
   await expect(
     modal.getByRole('heading', { name: 'Configured Databases' })
   ).toBeHidden();
