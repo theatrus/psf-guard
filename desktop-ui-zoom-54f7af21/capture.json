@@ -1,0 +1,34 @@
+{
+  "sourceCommit": "54f7af211931b7ee0a18c3efd4d9945d20cff5ee",
+  "browser": "Playwright WebKit Desktop Safari",
+  "viewport": [
+    1440,
+    1000
+  ],
+  "deviceScaleFactor": 2,
+  "theme": "dark",
+  "route": "/",
+  "fixture": "global-setup.ts, ui-zoom-test catalog, two projects and four real FITS images",
+  "captureMethod": "Page screenshot, no crop or resizing",
+  "limitation": "Tauri bridge stub; CSS zoom represents native scale for this browser test. This is not a native app capture.",
+  "captures": [
+    {
+      "file": "desktop-ui-zoom-menu.png",
+      "state": "Library, detailed project cards, no project selected, menu open, UI zoom 110%.",
+      "pixels": [
+        2880,
+        2000
+      ],
+      "sha256": "f4cd91af36c488bd9b8f7e3cfcf21a1b7682b0b12bad594b662d9d659ba22efe"
+    },
+    {
+      "file": "desktop-ui-zoom-settings.png",
+      "state": "Settings > Databases open, Zoom test catalog, UI zoom 120% after Ctrl+= while Settings remained open.",
+      "pixels": [
+        2880,
+        2000
+      ],
+      "sha256": "ff738767a6bb4499b5a713145bf564cbcf248a1e67b03aee647a4322450274f8"
+    }
+  ]
+}
