@@ -6,7 +6,8 @@
 
 - WBPP master copies show the current file and file counts in the dialog
   and background jobs list. Copy controls stay disabled while copying, and
-  repeat copy requests cannot start a second copy. The dialog also explains
+  repeat copy requests cannot start a second copy. A run requested while a
+  copy starts now joins the queue instead of being lost. The dialog also explains
   PixInsight’s missing Gaia catalog message.
 - Dropdown arrows now sit inside the border with space between the arrow
   and the selected text.

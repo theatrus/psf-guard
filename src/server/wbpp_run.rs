@@ -830,44 +830,41 @@ pub async fn start_wbpp_run(
     } else {
         SlotClaim::take(&state)
     };
-    let Some(claim) = claim else {
-        if let Some(existing) = state.wbpp_queue.find_same(&ctx.id, &req) {
-            return Ok(Json(ApiResponse::success(status(
-                &state,
-                &ctx,
-                false,
-                Some(existing.id),
-            ))));
-        }
-        let scope = scope_of(&req);
-        let (queue_id, position) =
-            state
-                .wbpp_queue
-                .push(&ctx.id, scope.clone(), req, chrono::Utc::now().timestamp());
-        tracing::info!(
-            "🔭 WBPP run for db={} ({scope}) queued at position {position}",
-            ctx.id
-        );
-        // The holder may have let go between the claim and the push, and
-        // its drain found the line empty. A spare drain costs nothing: it
-        // claims before it takes a run.
-        if !any_run_active(&state) {
-            tokio::spawn(drain_queue(Arc::clone(&state)));
-        }
+    // Detection awaits a blocking task. A copy may claim this database
+    // meanwhile, so keep the request and queue it if launch cannot start.
+    if let Some(claim) = claim
+        && launch(Arc::clone(&state), ctx.0.clone(), req.clone(), claim).await?
+    {
+        return Ok(Json(ApiResponse::success(status(&state, &ctx, true, None))));
+    }
+
+    if let Some(existing) = state.wbpp_queue.find_same(&ctx.id, &req) {
         return Ok(Json(ApiResponse::success(status(
             &state,
             &ctx,
             false,
-            Some(queue_id),
+            Some(existing.id),
         ))));
-    };
-
-    // The claim travels with the launch: a run that starts holds it until
-    // it ends, and anything else, including this request being dropped
-    // while PixInsight is detected, lets it go.
-    let started = launch(Arc::clone(&state), ctx.0.clone(), req, claim).await?;
+    }
+    let scope = scope_of(&req);
+    let (queue_id, position) =
+        state
+            .wbpp_queue
+            .push(&ctx.id, scope.clone(), req, chrono::Utc::now().timestamp());
+    tracing::info!(
+        "🔭 WBPP run for db={} ({scope}) queued at position {position}",
+        ctx.id
+    );
+    // The run or copy may have finished before this request joined the
+    // queue. Drain again so it does not wait for another job to finish.
+    if !any_run_active(&state) {
+        tokio::spawn(drain_queue(Arc::clone(&state)));
+    }
     Ok(Json(ApiResponse::success(status(
-        &state, &ctx, started, None,
+        &state,
+        &ctx,
+        false,
+        Some(queue_id),
     ))))
 }
 
@@ -1801,6 +1798,64 @@ mod tests {
             scope_label: Some(label.into()),
             ..Default::default()
         }
+    }
+
+    // These platforms can resolve an install without DISPLAY or xvfb.
+    // The fixture never launches PixInsight.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[tokio::test]
+    async fn a_copy_during_detection_queues_the_start_request() {
+        let (state, ctx) = state_with_management();
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("bin/PixInsight");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"unused").unwrap();
+        let script = dir
+            .path()
+            .join(crate::commands::export::wbpp::BPP_MAIN_BELOW_INSTALL);
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        std::fs::write(script, b"// fixture").unwrap();
+        let path = dir.path().join("registry.json");
+        let registry = DbRegistry {
+            pixinsight: Some(PixInsightSettings {
+                binary: Some(binary.display().to_string()),
+                runs_dir: None,
+            }),
+            ..Default::default()
+        };
+        registry.save(&path).unwrap();
+        state.set_registry_path(Some(path));
+        finish(&ctx.wbpp_run, "complete", None);
+        let mut req = request(2, "new run");
+        req.include_pending = true;
+        req.extra_params = vec!["maxStars=500".into()];
+        let mut starting = Box::pin(start_wbpp_run(
+            State(state.clone()),
+            DbContext(ctx.0.clone()),
+            Json(req),
+        ));
+        {
+            // Poll through the slot claim, then block detection at the
+            // registry read while the copy claims the database.
+            let _registry_lock = state.registry_path.write().unwrap();
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(starting.as_mut().poll(&mut context).is_pending());
+            begin_publish(&ctx.wbpp_run, dir.path(), "saved").unwrap();
+        }
+        let response = starting.await.unwrap().0.data.unwrap();
+        assert!(!response.started);
+        assert_eq!(response.queued.len(), 1);
+        assert_eq!(
+            response.queue_id.as_deref(),
+            Some(response.queued[0].id.as_str())
+        );
+        assert_eq!(response.queued[0].scope, "new run");
+        assert_eq!(response.queued[0].project_id, Some(2));
+        drain_queue(state.clone()).await;
+        let queued = state.wbpp_queue.pop_front().unwrap();
+        assert!(queued.request.include_pending);
+        assert_eq!(queued.request.extra_params, vec!["maxStars=500"]);
+        assert!(publish_running(&ctx.wbpp_run.read().unwrap().progress));
     }
 
     #[tokio::test]
