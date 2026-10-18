@@ -6,6 +6,7 @@ mod allocation;
 mod checkin;
 mod database_rig;
 mod feasibility;
+mod file_delivery;
 mod framing;
 mod mosaic;
 mod plan;

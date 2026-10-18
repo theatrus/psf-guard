@@ -1561,6 +1561,46 @@ check-ins, program pulls and saves never wait behind rig databases. A rig
 whose plugin has not yet reported its camera still gets its rows; the Target
 Scheduler plugin can run them until Director acquisition arrives.
 
+### Activate through a connected TS file
+
+When an imported catalog keeps its TS source connected, activation uses
+that connection saved under **Settings → Databases**. No separate Director
+destination is needed. The activation preview shows the TS file and counts of
+new and updated projects, targets, exposure templates, exposure plans and rule
+weights. This transfer includes only the project being activated and its
+referenced templates; other TS projects stay unchanged.
+
+Existing TS descriptions, priorities, ROI, template settings and rule weights
+remain unchanged. Director applies its planning fields and explicitly configured
+scheduling limits. Collaboration requirements set a minimum altitude; a stricter
+TS limit stays in effect unless you set a different scheduling limit in PSF Guard.
+Closed projects stay closed. An inactive project stays inactive unless Director
+is re-enabling a rig it previously turned off.
+
+Click **Activate**. PSF Guard commits the owned catalog, then sends the reviewed
+planning through the same guarded sync path as **Send planning**. TS keeps its
+capture records, grades, and acquired and accepted counts. Turning off automatic
+grade writeback does not disable an explicit activation.
+
+If TS changed since the preview, activation refuses the stale preview. If TS
+cannot receive the transfer after the local commit, the report shows
+**Activated locally** and a short pending message. Expand **Error details**
+to read the cause. The activation remains pending
+until TS receives it. Use the send button for the pending TS delivery to
+retry, or let the existing file-sync startup, change detection and schedule
+settings retry approved deliveries, even when grade changes conflict. Each
+approval guards the affected project and its referenced templates, so unrelated
+projects can be delivered independently. Refreshing a staged Sync preview cannot
+change or extend an activation approval. Retries use the frozen, reviewed planning;
+later local edits are not sent. Click **Review TS delivery** to refresh the
+preview before activating again. A conflicting TS edit or a transfer older
+than 30 minutes requires this fresh approval. If TS was unavailable during
+the preview, PSF Guard can activate locally, but a fresh preview must review TS
+before any later delivery.
+
+**Take Target Scheduler's values** reads the connected TS file into the saved
+plan. The owned catalog changes when you activate that plan.
+
 ### Rigs at another site
 
 A rig can run on another PSF Guard, at a remote observatory, with its own

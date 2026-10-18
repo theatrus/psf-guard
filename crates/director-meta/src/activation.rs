@@ -77,6 +77,17 @@ pub struct RemotePush {
     /// Why the last push failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// A reviewed planning transfer to the catalog's saved TS connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_sync: Option<TsSyncDelivery>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TsSyncDelivery {
+    pub source_path: String,
+    /// Absent when TS could not be previewed. A new activation must review it.
+    pub preview_id: Option<String>,
 }
 
 /// The longest push error a record keeps; callers cut longer ones.
@@ -137,6 +148,14 @@ fn validate_activation(activation: &Activation) -> Result<(), Error> {
             || push.peer_id.is_empty()
             || push.peer_id.len() > 256
             || push.peer_name.chars().count() > MAX_PEER_NAME_CHARS
+            || push.ts_sync.as_ref().is_some_and(|delivery| {
+                delivery.source_path.is_empty()
+                    || delivery.source_path.len() > 32768
+                    || delivery
+                        .preview_id
+                        .as_ref()
+                        .is_some_and(|id| Uuid::parse_str(id).is_err())
+            })
             || push
                 .error
                 .as_ref()

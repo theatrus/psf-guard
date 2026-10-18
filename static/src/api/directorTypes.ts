@@ -345,6 +345,7 @@ export interface DirectorActivationPush {
   applied: boolean;
   summary: Record<string, number>;
   error: string | null;
+  ts_file?: { path: string; revision?: string | null };
 }
 /** An exposure plan Target Scheduler shoots after an activation. */
 export interface DirectorActivationShot {

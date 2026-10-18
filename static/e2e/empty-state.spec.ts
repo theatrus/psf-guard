@@ -26,7 +26,7 @@ test('overview shows the empty-state when no databases are configured', async ({
   ).toBeVisible();
   // The empty state offers an action that re-opens settings — confirm it
   // actually triggers the modal again.
-  await page.getByRole('button', { name: /Add Existing Database/i }).click();
+  await page.getByRole('button', { name: /Import from Target Scheduler/i }).click();
   await expect(
     page.getByRole('heading', { name: /Welcome to PSF Guard/i })
   ).toBeVisible();
@@ -47,7 +47,7 @@ test('first run offers importing images as well as opening a N.I.N.A. database',
   // offers the same two choices.
   const modal = page.locator('.tauri-settings');
   const create = modal.getByRole('button', { name: /New Database from Images/i });
-  const add = modal.getByRole('button', { name: /Add Existing Database/i });
+  const add = modal.getByRole('button', { name: /Import from Target Scheduler/i });
   await expect(create).toBeVisible();
   await expect(add).toBeVisible();
 
@@ -65,7 +65,7 @@ test('first run offers importing images as well as opening a N.I.N.A. database',
   await expect(
     modal.getByRole('heading', { name: 'New Database from Images' })
   ).toBeVisible();
-  await expect(modal.getByText('N.I.N.A. Database File:')).toBeHidden();
+  await expect(modal.getByLabel('Source database file:')).toBeHidden();
   await expect(modal.getByText('Image Directories:')).toBeVisible();
 });
 
@@ -78,7 +78,7 @@ test('settings splits its jobs across tabs', async ({ page }) => {
     'aria-selected',
     'true'
   );
-  // Sync needs a catalog before it has anything to say, so it stays off the
+  // Sync needs a catalog before it can transfer data, so it stays off the
   // tab strip on a first run.
   await expect(modal.getByRole('tab', { name: 'Sync' })).toHaveCount(0);
 
@@ -106,9 +106,11 @@ test('settings splits its jobs across tabs', async ({ page }) => {
     'aria-selected',
     'true'
   );
+  await expect(modal.getByRole('heading', { name: /Welcome to PSF Guard/i })).toBeVisible();
+  // A first run shows the starting choices without an empty database list.
   await expect(
     modal.getByRole('heading', { name: 'Configured Databases' })
-  ).toBeVisible();
+  ).toBeHidden();
 });
 
 test('the overview import action opens settings on the create form', async ({

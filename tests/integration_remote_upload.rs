@@ -59,6 +59,7 @@ impl Fixture {
 
         let entries = vec![
             DbEntry {
+                ts_sync: None,
                 id: "catalog-a".into(),
                 name: "Catalog A".into(),
                 db_path: database_a.to_string_lossy().into_owned(),
@@ -74,6 +75,7 @@ impl Fixture {
                 scan_calibrated_copies: false,
             },
             DbEntry {
+                ts_sync: None,
                 id: "catalog-b".into(),
                 name: "Catalog B".into(),
                 db_path: database_b.to_string_lossy().into_owned(),
@@ -128,6 +130,7 @@ impl Fixture {
         Arc::new(
             AppState::from_databases(
                 vec![DbEntry {
+                    ts_sync: None,
                     id: "catalog-a".into(),
                     name: "Catalog A".into(),
                     db_path: self.database_a.to_string_lossy().into_owned(),

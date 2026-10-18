@@ -65,7 +65,7 @@ interface Take {
  *  turns off and on, where its rows go, and every other row it touches.
  *  Where a preview would overwrite Target Scheduler's rows, the plan can
  *  take them instead. */
-export function RigActivation({ rig, applied, take, objectiveLabel = () => '' }: { rig: ReportRig; applied: boolean; take?: Take; objectiveLabel?: (id: string) => string }) {
+export function RigActivation({ rig, applied, take, objectiveLabel = () => '', showDeliveryError = true }: { rig: ReportRig; applied: boolean; take?: Take; objectiveLabel?: (id: string) => string; showDeliveryError?: boolean }) {
   const summary = KINDS
     .filter(({ kind }) => rig.changes.some(change => change.kind === kind))
     .map(({ kind, label }) => `${label}: ${counts(rig.changes, kind)}`);
@@ -73,13 +73,21 @@ export function RigActivation({ rig, applied, take, objectiveLabel = () => '' }:
   const on = (rig.shoots ?? []).filter(shot => shot.turned_on).length;
   return <div className="activation-rig" aria-label={`${rig.catalog_name} activation`}>
     <p className="activation-rig-summary">
-      <strong>{applied ? 'Activated' : 'Preview'}</strong>{rig.applied && <> <Check size={14} aria-label="activated" /></>}
+      <strong>{applied ? rig.push?.ts_file && !rig.push.applied ? 'Activated locally' : 'Activated' : 'Preview'}</strong>{rig.applied && <> <Check size={14} aria-label="activated" /></>}
       {off && <strong className="activation-off-count"> · {applied ? 'Turned off' : 'Turns off'} {off}</strong>}
       {on > 0 && <strong> · {applied ? 'Turned on' : 'Turns on'} {on} plan{on === 1 ? '' : 's'}</strong>}
       {summary.length > 0 ? ` · ${summary.join(' · ')}` : ''}
       {rig.push && <span className={rig.push.error ? 'director-error' : 'director-muted'}> · {describePush(rig.push, rig.applied)}</span>}
     </p>
     {rig.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
+    {showDeliveryError && rig.push?.ts_file && rig.push.error && <DeliveryError error={rig.push.error} />}
+    {rig.push?.ts_file && <div role="note" aria-label="Target Scheduler planning delivery">
+      <p>Planning destination: <code>{rig.push.ts_file.path}</code></p>
+      {!applied && <p>Activate sends this project's planning through the catalog's saved TS connection. Captures, grades, and acquisition counts stay in TS.</p>}
+      {!applied && Object.keys(rig.push.summary).length > 0 && <ul>{[
+        ['project', 'Projects'], ['target', 'Targets'], ['exposuretemplate', 'Exposure templates'], ['exposureplan', 'Exposure plans'], ['ruleweight', 'Rule weights'],
+      ].map(([key, label]) => <li key={key}>{label}: {rig.push!.summary[`${key}_inserted`] ?? 0} new, {rig.push!.summary[`${key}_updated`] ?? 0} updated</li>)}</ul>}
+    </div>}
     <Shoots rig={rig} applied={applied} objectiveLabel={objectiveLabel} />
     <TurnedOff rig={rig} applied={applied} />
     <TurnedOn rig={rig} applied={applied} />
@@ -110,7 +118,9 @@ function templateText(shot: DirectorActivationShot): string {
 function Shoots({ rig, applied, objectiveLabel }: { rig: ReportRig; applied: boolean; objectiveLabel: (id: string) => string }) {
   if (!rig.shoots) return null;
   return <div className="activation-shoots" role="note" aria-label={`Shoots in ${rig.catalog_name}`}>
-    <h4><Telescope size={14} aria-hidden="true" />{applied ? 'Target Scheduler now shoots' : 'After activation, Target Scheduler shoots'}</h4>
+    <h4><Telescope size={14} aria-hidden="true" />{rig.push?.ts_file && !rig.push.applied
+      ? applied ? 'Planned locally; not sent to Target Scheduler' : 'After delivery, Target Scheduler shoots'
+      : applied ? 'Target Scheduler now shoots' : 'After activation, Target Scheduler shoots'}</h4>
     {rig.shoots.length === 0 ? <p className="director-muted">Nothing in this project</p> : <ul>{rig.shoots.map(shot => {
       const summed = shot.objectives.length > 1 ? shot.objectives.map(objectiveLabel).filter(Boolean) : [];
       return <li key={shot.plan}>
@@ -174,9 +184,17 @@ function RigChanges({ rig }: { rig: ReportRig }) {
 /** One line on where a rig's rows go after this server: nowhere else, or a peer, and how that went. */
 function describePush(push: DirectorActivationPush | null, applied: boolean): string {
   if (!push) return 'This server';
+  if (push.error && push.ts_file) return applied ? 'TS delivery pending' : 'TS delivery unavailable; activation will be local';
   if (push.error) return `Push to ${push.peer_name} failed: ${push.error}`;
   if (push.applied) return `Pushed to ${push.peer_name}`;
   return applied ? `Push to ${push.peer_name} pending` : `Will push to ${push.peer_name}`;
+}
+
+function DeliveryError({ error }: { error: string }) {
+  return <details className="activation-delivery-error">
+    <summary>Error details</summary>
+    <pre>{error}</pre>
+  </details>;
 }
 
 /** Activate the framing and plan in each participating rig's database. The
@@ -303,6 +321,18 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
   // Sending the last activation again to the remote sites that lack it.
   const push = useSendAgain(projectId);
   const pushed = push.data;
+  useEffect(() => {
+    const shown = preview.result;
+    if (!shown?.applied || shown.activation_revision !== last.data?.revision) return;
+    let changed = false;
+    const rigs = shown.rigs.map(rig => {
+      const receipt = last.data?.pushes?.find(receipt => receipt.rig_id === rig.rig.id && receipt.peer_id === rig.push?.peer_id);
+      if (!rig.push?.ts_file || !receipt || receipt.applied === rig.push.applied && (receipt.error ?? null) === rig.push.error) return rig;
+      changed = true;
+      return { ...rig, push: { ...rig.push, applied: receipt.applied, error: receipt.error ?? null } };
+    });
+    if (changed) preview.replace({ ...shown, rigs });
+  }, [last.data, preview]);
   const run = (action: () => void) => { if (busy.current) return; busy.current = true; try { action(); } finally { busy.current = false; } };
   useEffect(() => { onReport?.(report); }, [report, onReport]);
   // Activate takes its own button away; the result takes focus in its place.
@@ -319,6 +349,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
     wasUnsaved.current = unsavedPlan;
   }, [unsavedPlan, save.isSuccess]);
   const writing = apply.isPending || push.isPending || takeValues.isPending || save.isPending;
+  const fileDeliveryPending = !!report?.rigs.some(rig => rig.push?.ts_file && !rig.push.applied);
   const applyRefused = apply.isError && httpStatus(apply.error) === 409;
   const previewFailed = notReady ? null : preview.error;
   const error = save.error ?? previewFailed ?? (applyRefused ? null : apply.error) ?? push.error ?? (tookStale ? null : takeValues.error);
@@ -330,7 +361,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
     : preview.loading ? 'Previewing…'
     : notReady ? `Not ready to activate: ${notReady}`
     : preview.error ? 'Preview failed'
-    : report?.applied ? 'Activated'
+    : report?.applied ? fileDeliveryPending ? 'Activated locally; TS delivery pending' : 'Activated'
     : preview.fresh ? 'Preview ready' : '';
   // Why Activate is off, said beside it and read with it.
   const sendWait = !manageable ? 'This server cannot change rig databases.'
@@ -344,10 +375,12 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
     <CollaborationActivation projectId={projectId} value={visits} disabled={writing || !canWrite} onChange={setVisits} />
     {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
     {last.data && (behind.length > 0 || unsent.length > 0) && <p className="activation-behind" role="note">{notSynced}</p>}
-    {unsent.length > 0 && <div className="activation-unsent" role="note" aria-label="Not sent to remote sites">
+    {unsent.length > 0 && <div className="activation-unsent" role="note" aria-label={unsent.some(site => site.peer_id.startsWith('ts:')) ? 'Not sent to Target Scheduler' : 'Not sent to remote sites'}>
+      {unsent.some(site => site.peer_id.startsWith('ts:')) && <p className="activation-unsent-help">The plan is saved locally. Retry delivery, or choose Review TS delivery if TS planning changed.</p>}
       <ul>{unsent.map(site => <li key={site.rig_id}>
-        {site.rig_name}: not sent to {site.peer_name}{site.error && <span className="director-error">: {site.error}</span>}
+        {site.rig_name}: not sent to {site.peer_name}{site.error && !site.peer_id.startsWith('ts:') && <span className="director-error">: {site.error}</span>}
         {site.attempted_at_ms !== undefined && <span className="director-muted"> · tried {new Date(site.attempted_at_ms).toLocaleString()}</span>}
+        {site.error && site.peer_id.startsWith('ts:') && <DeliveryError error={site.error} />}
       </li>)}</ul>
       {canWrite && <button type="button" disabled={writing || !manageable} title={manageable ? 'Send the last activation\'s rows to these sites again' : 'This server cannot change rig databases'} onClick={() => run(() => push.mutate())}>
         <RefreshCw size={16} />{push.isPending ? 'Sending…' : sendLabel(unsent)}
@@ -376,11 +409,12 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
       {reconciling ? 'Previewing again…' : 'This preview is new; check it, then activate.'}</p>}
     {tookStale && <p className="activation-changed" role="alert">The saved plan changed since this preview, so nothing was taken. The preview has run again.</p>}
     {report && <div className="activation-report" role="region" aria-label="Preview" aria-busy={preview.loading || reconciling}>
-      <p tabIndex={-1} ref={outcome}><strong>{report.applied ? 'Activated' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Revision ${report.activation_revision} on the rigs.`}</p>
+      <p tabIndex={-1} ref={outcome}><strong>{report.applied ? fileDeliveryPending ? 'Activated locally; TS delivery pending' : 'Activated' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Revision ${report.activation_revision} on the rigs.`}</p>
       {report.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
       {report.rigs.filter(rig => !shownElsewhere?.has(rig.rig.id)).map(rig => <div key={rig.rig.id}>
         <h4 className="activation-rig-name">{rig.catalog_name}</h4>
-        <RigActivation rig={rig} applied={report.applied} objectiveLabel={objectiveLabel} take={canWrite ? {
+        <RigActivation rig={rig} applied={report.applied} objectiveLabel={objectiveLabel}
+          showDeliveryError={!unsent.some(site => site.rig_id === rig.rig.id && !!site.error)} take={canWrite ? {
           run: () => run(() => take(rig.rig.id)),
           pending: takeValues.isPending && takeValues.variables === rig.rig.id,
           result: taken[rig.rig.id],
@@ -392,6 +426,9 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
       {pushed.warnings.map(warning => <p key={warning} className="director-muted">{warning}</p>)}
       <ul>{pushed.rigs.map(rig => <li key={rig.rig.id} className={rig.push.error ? 'director-error' : undefined}>{rig.catalog_name}: {describePush(rig.push, true)}</li>)}</ul>
     </div>}
+    {canWrite && report?.applied && fileDeliveryPending && <button type="button" disabled={writing} onClick={preview.refresh}>
+      <RefreshCw size={16} />Review TS delivery
+    </button>}
     {previewing && !report?.applied && <div className="director-actions">
       <button type="button" disabled={!preview.fresh || reconciling || writing || !!sendWait}
         aria-describedby={sendWait ? `${ids}-activate-wait` : undefined}

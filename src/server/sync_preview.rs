@@ -15,6 +15,7 @@ use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs;
@@ -54,6 +55,9 @@ pub(crate) fn error_is_sync_snapshot_contention(error: &anyhow::Error) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPreviewRecord {
     pub id: String,
+    /// Activation owns these records; ordinary Sync cannot refresh or apply them.
+    #[serde(default)]
+    pub activation: bool,
     pub local_db_id: String,
     pub request: SchedulerSyncRequest,
     pub source_snapshot_file: String,
@@ -86,9 +90,48 @@ impl SyncPreviewManager {
         destination_fingerprint: String,
         result: SchedulerSyncResponse,
     ) -> Result<SyncPreviewRecord> {
+        self.store_owned(
+            local_db_id,
+            request,
+            source_snapshot_file,
+            destination_fingerprint,
+            result,
+            false,
+        )
+    }
+
+    pub fn store_activation(
+        &self,
+        local_db_id: String,
+        request: SchedulerSyncRequest,
+        source_snapshot_file: String,
+        destination_fingerprint: String,
+        result: SchedulerSyncResponse,
+    ) -> Result<SyncPreviewRecord> {
+        self.store_owned(
+            local_db_id,
+            request,
+            source_snapshot_file,
+            destination_fingerprint,
+            result,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn store_owned(
+        &self,
+        local_db_id: String,
+        request: SchedulerSyncRequest,
+        source_snapshot_file: String,
+        destination_fingerprint: String,
+        result: SchedulerSyncResponse,
+        activation: bool,
+    ) -> Result<SyncPreviewRecord> {
         let created_at = unix_seconds();
         let record = SyncPreviewRecord {
             id: Uuid::new_v4().to_string(),
+            activation,
             local_db_id,
             request,
             source_snapshot_file,
@@ -209,7 +252,7 @@ impl SyncPreviewManager {
                 .unwrap_or(false);
             if record.expires_at <= now || !snapshot_exists {
                 dead.push((id.clone(), record.source_snapshot_file.clone()));
-            } else {
+            } else if !record.activation {
                 alive.push(record.clone());
             }
         }
@@ -232,7 +275,7 @@ impl SyncPreviewManager {
         let Some(record) = records.get(id).cloned() else {
             return Ok(None);
         };
-        if record.local_db_id != local_db_id {
+        if record.local_db_id != local_db_id || record.activation {
             return Ok(None);
         }
         if record.expires_at <= unix_seconds() {
@@ -280,6 +323,10 @@ impl SyncPreviewManager {
         destination_fingerprint: String,
         result: SchedulerSyncResponse,
     ) -> Result<SyncPreviewRecord> {
+        anyhow::ensure!(
+            !record.activation,
+            "Activation transfers require a new activation preview"
+        );
         let refreshed = SyncPreviewRecord {
             destination_fingerprint,
             result,
@@ -404,45 +451,58 @@ fn record_snapshot_progress(lowest_remaining: &mut Option<i32>, remaining: i32) 
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct FingerprintQuery {
     label: &'static str,
-    sql: &'static str,
+    sql: Cow<'static, str>,
+    ignored_columns: &'static [&'static str],
 }
 
 pub fn fingerprint_queries(request: &SchedulerSyncRequest) -> Vec<FingerprintQuery> {
     const EXPOSURE_TEMPLATE: FingerprintQuery = FingerprintQuery {
         label: "exposuretemplate",
-        sql: "SELECT * FROM exposuretemplate ORDER BY rowid",
+        ignored_columns: &[],
+        sql: Cow::Borrowed("SELECT * FROM exposuretemplate ORDER BY rowid"),
     };
     const PROJECT: FingerprintQuery = FingerprintQuery {
         label: "project",
-        sql: "SELECT * FROM project ORDER BY rowid",
+        ignored_columns: &[],
+        sql: Cow::Borrowed("SELECT * FROM project ORDER BY rowid"),
     };
     const RULE_WEIGHT: FingerprintQuery = FingerprintQuery {
         label: "ruleweight",
-        sql: "SELECT * FROM ruleweight ORDER BY rowid",
+        ignored_columns: &[],
+        sql: Cow::Borrowed("SELECT * FROM ruleweight ORDER BY rowid"),
     };
     const TARGET: FingerprintQuery = FingerprintQuery {
         label: "target",
-        sql: "SELECT * FROM target ORDER BY rowid",
+        ignored_columns: &[],
+        sql: Cow::Borrowed("SELECT * FROM target ORDER BY rowid"),
     };
     const EXPOSURE_PLAN: FingerprintQuery = FingerprintQuery {
         label: "exposureplan",
-        sql: "SELECT * FROM exposureplan ORDER BY rowid",
+        ignored_columns: &[],
+        sql: Cow::Borrowed("SELECT * FROM exposureplan ORDER BY rowid"),
     };
     const ACQUIRED_IMAGE: FingerprintQuery = FingerprintQuery {
         label: "acquiredimage",
-        sql: "SELECT * FROM acquiredimage ORDER BY rowid",
+        ignored_columns: &[],
+        sql: Cow::Borrowed("SELECT * FROM acquiredimage ORDER BY rowid"),
     };
     const IMAGE_DATA_KEYS: FingerprintQuery = FingerprintQuery {
         label: "imagedata-keys",
-        sql: "SELECT acquiredimageid, tag FROM imagedata \
+        ignored_columns: &[],
+        sql: Cow::Borrowed(
+            "SELECT acquiredimageid, tag FROM imagedata \
               ORDER BY acquiredimageid, tag, Id",
+        ),
     };
     const GRADES: FingerprintQuery = FingerprintQuery {
         label: "grades",
-        sql: "SELECT guid, gradingStatus, rejectreason FROM acquiredimage ORDER BY guid, Id",
+        ignored_columns: &[],
+        sql: Cow::Borrowed(
+            "SELECT guid, gradingStatus, rejectreason FROM acquiredimage ORDER BY guid, Id",
+        ),
     };
 
     match request.kind {
@@ -465,10 +525,79 @@ pub fn fingerprint_queries(request: &SchedulerSyncRequest) -> Vec<FingerprintQue
             PROJECT,
             RULE_WEIGHT,
             TARGET,
-            EXPOSURE_PLAN,
+            FingerprintQuery {
+                ignored_columns: &["acquired", "accepted"],
+                ..EXPOSURE_PLAN
+            },
         ],
         SchedulerSyncKind::PushGrades => vec![GRADES],
     }
+}
+
+/// Guard only rows this frozen planning source can affect, including GUID
+/// collisions outside its projects and shared templates. Unrelated projects
+/// may change without invalidating an independently approved activation.
+pub(crate) fn planning_destination_fingerprint(
+    source: &Connection,
+    destination: &Connection,
+) -> Result<String> {
+    fn guids(source: &Connection, table: &str) -> Result<String> {
+        let values = source
+            .prepare(&format!(
+                "SELECT guid FROM {table} WHERE guid IS NOT NULL ORDER BY guid"
+            ))?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // SQL text literals, never identifiers. An empty set matches no GUID.
+        Ok(if values.is_empty() {
+            "NULL".into()
+        } else {
+            values
+                .iter()
+                .map(|v| format!("'{}'", v.replace('\'', "''")))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+    }
+    let projects = format!("guid IN ({})", guids(source, "project")?);
+    let targets = format!(
+        "guid IN ({}) OR projectid IN (SELECT Id FROM project WHERE {projects})",
+        guids(source, "target")?
+    );
+    let plans = format!(
+        "guid IN ({}) OR targetid IN (SELECT Id FROM target WHERE {targets})",
+        guids(source, "exposureplan")?
+    );
+    let templates = format!(
+        "guid IN ({}) OR Id IN (SELECT exposureTemplateId FROM exposureplan WHERE {plans})",
+        guids(source, "exposuretemplate")?
+    );
+    let request = SchedulerSyncRequest {
+        peer_db_id: String::new(),
+        kind: SchedulerSyncKind::PushPlanning,
+        dry_run: true,
+        with_image_data: Some(false),
+        project: None,
+        target: None,
+        status: None,
+        reviewed_only: true,
+    };
+    let mut queries = fingerprint_queries(&request);
+    for query in &mut queries {
+        let filter = match query.label {
+            "project" => projects.clone(),
+            "target" => targets.clone(),
+            "exposureplan" => plans.clone(),
+            "exposuretemplate" => templates.clone(),
+            "ruleweight" => format!("projectid IN (SELECT Id FROM project WHERE {projects})"),
+            _ => unreachable!("planning tables only"),
+        };
+        query.sql = Cow::Owned(format!(
+            "SELECT * FROM {} WHERE {filter} ORDER BY rowid",
+            query.label
+        ));
+    }
+    connection_fingerprint(destination, &queries)
 }
 
 pub fn database_fingerprint(path: &Path, queries: &[FingerprintQuery]) -> Result<String> {
@@ -486,16 +615,27 @@ pub fn connection_fingerprint(
     for query in queries {
         hash_part(&mut hasher, query.label.as_bytes());
         let mut statement = connection
-            .prepare(query.sql)
+            .prepare(query.sql.as_ref())
             .with_context(|| format!("reading {} for sync fingerprint", query.label))?;
-        for column in statement.column_names() {
-            hash_part(&mut hasher, column.as_bytes());
-        }
-        let column_count = statement.column_count();
+        let columns: Vec<usize> = statement
+            .column_names()
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| {
+                !query
+                    .ignored_columns
+                    .iter()
+                    .any(|ignored| column.eq_ignore_ascii_case(ignored))
+            })
+            .map(|(index, column)| {
+                hash_part(&mut hasher, column.as_bytes());
+                index
+            })
+            .collect();
         let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
             hasher.update([0xff]);
-            for index in 0..column_count {
+            for &index in &columns {
                 match row.get_ref(index)? {
                     ValueRef::Null => hasher.update([0]),
                     ValueRef::Integer(value) => {
@@ -668,6 +808,108 @@ mod tests {
         assert!(manager.claim(&record.id, "source").unwrap().is_some());
         assert!(manager.claim(&record.id, "source").unwrap().is_none());
         assert!(manager.get(&record.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn activation_approval_stays_private_and_immutable_after_restart() {
+        let directory = tempdir().unwrap();
+        let manager = SyncPreviewManager::new(directory.path());
+        let snapshot = manager.create_empty_source_snapshot().unwrap();
+        Connection::open(manager.source_snapshot_path_for_file(&snapshot).unwrap()).unwrap();
+        let record = manager
+            .store_activation(
+                "rig".into(),
+                request(),
+                snapshot,
+                "original-approval".into(),
+                response(),
+            )
+            .unwrap();
+        drop(manager);
+        let manager = SyncPreviewManager::new(directory.path());
+        let restored = manager.get(&record.id).unwrap().unwrap();
+        assert!(restored.activation);
+        assert!(manager.list("rig").unwrap().is_empty());
+        assert!(manager.claim(&record.id, "rig").unwrap().is_none());
+        assert!(manager
+            .refresh(&restored, "new-approval".into(), response())
+            .is_err());
+        let unchanged = manager.get(&record.id).unwrap().unwrap();
+        assert_eq!(unchanged.destination_fingerprint, "original-approval");
+        assert_eq!(unchanged.source_snapshot_file, record.source_snapshot_file);
+        assert_eq!(unchanged.expires_at, record.expires_at);
+        let expired = SyncPreviewRecord {
+            expires_at: unix_seconds() - 1,
+            ..unchanged
+        };
+        manager.restore(&expired).unwrap();
+        assert!(manager.get(&record.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn planning_guard_tracks_dependencies_and_guid_collisions_without_unrelated_projects() {
+        fn db() -> Connection {
+            let db = Connection::open_in_memory().unwrap();
+            db.execute_batch("CREATE TABLE project (Id INTEGER PRIMARY KEY, guid TEXT, priority INTEGER);
+                CREATE TABLE target (Id INTEGER PRIMARY KEY, guid TEXT, projectid INTEGER, ra REAL);
+                CREATE TABLE exposureplan (Id INTEGER PRIMARY KEY, guid TEXT, targetid INTEGER, exposureTemplateId INTEGER, desired INTEGER, acquired INTEGER, accepted INTEGER);
+                CREATE TABLE exposuretemplate (Id INTEGER PRIMARY KEY, guid TEXT, gain INTEGER);
+                CREATE TABLE ruleweight (Id INTEGER PRIMARY KEY, projectid INTEGER, weight REAL);").unwrap();
+            db
+        }
+        let source = db();
+        source
+            .execute_batch(
+                "INSERT INTO project VALUES (1,'project''s-guid',1);
+            INSERT INTO target VALUES (1,'target-guid',1,1.0);
+            INSERT INTO exposuretemplate VALUES (1,'shared-template',100);
+            INSERT INTO exposureplan VALUES (1,'plan-guid',1,1,90,0,0);",
+            )
+            .unwrap();
+        let destination = db();
+        destination.execute_batch("INSERT INTO project VALUES (10,'project''s-guid',1),(20,'other',1);
+            INSERT INTO target VALUES (10,'target-guid',10,1.0),(20,'other-target',20,2.0);
+            INSERT INTO exposuretemplate VALUES (10,'shared-template',100),(20,'other-template',120);
+            INSERT INTO exposureplan VALUES (10,'plan-guid',10,10,72,5,4),(20,'other-plan',20,20,10,0,0);
+            INSERT INTO ruleweight VALUES (10,10,1.0),(20,20,1.0);").unwrap();
+        let fingerprint = || planning_destination_fingerprint(&source, &destination).unwrap();
+        let approved = fingerprint();
+        destination
+            .execute_batch(
+                "UPDATE project SET priority=5 WHERE Id=20;
+            UPDATE target SET ra=3.0 WHERE Id=20;
+            UPDATE exposuretemplate SET gain=140 WHERE Id=20;
+            UPDATE exposureplan SET desired=11 WHERE Id=20;
+            UPDATE ruleweight SET weight=2.0 WHERE Id=20;
+            UPDATE exposureplan SET acquired=6,accepted=5 WHERE Id=10;",
+            )
+            .unwrap();
+        assert_eq!(fingerprint(), approved);
+        for edit in [
+            "UPDATE project SET priority=2 WHERE Id=10",
+            "UPDATE target SET ra=4.0 WHERE Id=10",
+            "UPDATE exposuretemplate SET gain=321 WHERE Id=10",
+            "UPDATE exposureplan SET desired=90 WHERE Id=10",
+            "UPDATE ruleweight SET weight=3.0 WHERE Id=10",
+            // A GUID appearing under another project can be overwritten by
+            // the merge too, even before the activated project exists there.
+            "UPDATE target SET projectid=20 WHERE Id=10",
+            "INSERT INTO target VALUES (30,'new-target',20,5.0)",
+            "INSERT INTO exposureplan VALUES (30,'new-plan',20,20,1,0,0)",
+        ] {
+            source
+                .execute_batch(
+                    "INSERT OR IGNORE INTO target VALUES (3,'new-target',1,5.0);
+                INSERT OR IGNORE INTO exposureplan VALUES (3,'new-plan',1,1,1,0,0);",
+                )
+                .unwrap();
+            destination.execute_batch("SAVEPOINT edit").unwrap();
+            destination.execute_batch(edit).unwrap();
+            assert_ne!(fingerprint(), approved, "{edit}");
+            destination
+                .execute_batch("ROLLBACK TO edit; RELEASE edit")
+                .unwrap();
+        }
     }
 
     /// Build a manager holding one preview over a throwaway source database.
@@ -879,15 +1121,16 @@ mod tests {
 
         let query = FingerprintQuery {
             label: "acquiredimage",
-            sql: "SELECT * FROM acquiredimage ORDER BY rowid",
+            ignored_columns: &[],
+            sql: Cow::Borrowed("SELECT * FROM acquiredimage ORDER BY rowid"),
         };
-        let before = database_fingerprint(&path, &[query]).unwrap();
+        let before = database_fingerprint(&path, std::slice::from_ref(&query)).unwrap();
         let connection = Connection::open(&path).unwrap();
         connection
             .execute("UPDATE acquiredimage SET gradingStatus = 2", [])
             .unwrap();
         drop(connection);
-        let after = database_fingerprint(&path, &[query]).unwrap();
+        let after = database_fingerprint(&path, std::slice::from_ref(&query)).unwrap();
 
         assert_ne!(before, after);
     }

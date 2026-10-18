@@ -751,6 +751,7 @@ mod tests {
         DbRegistry {
             schema_version: CURRENT_SCHEMA_VERSION,
             databases: vec![DbEntry {
+                ts_sync: None,
                 id: "test".to_string(),
                 name: "Test".to_string(),
                 db_path: root.join("catalog.sqlite").display().to_string(),

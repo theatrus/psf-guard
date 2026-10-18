@@ -667,7 +667,7 @@ describe('TauriSettings import state', () => {
     fireEvent.click(within(ultraCat).getByRole('button', { name: 'Remove Ultra Cat' }));
     confirmRemove.mockRestore();
 
-    expect(await screen.findByRole('button', { name: 'Add Database' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Import from Target Scheduler' })).toBeEnabled();
     expect(screen.queryByText('Editing database')).not.toBeInTheDocument();
   });
 });
@@ -709,7 +709,7 @@ describe('TauriSettings first run', () => {
       await screen.findByRole('button', { name: /New Database from Images/ })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Add Existing Database/ })
+      screen.getByRole('button', { name: /Import from Target Scheduler/ })
     ).toBeInTheDocument();
 
     // Nothing that needs an existing catalog should sit between the welcome
@@ -781,7 +781,7 @@ describe('TauriSettings first run', () => {
       await screen.findByRole('heading', { name: 'New Database from Images' })
     ).toBeInTheDocument();
     // The create flow bootstraps its own database, so it never asks for one.
-    expect(screen.queryByText('N.I.N.A. Database File:')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Source database file:')).not.toBeInTheDocument();
   });
 
   it('keeps the catalog installer out of the way of the import form', async () => {
@@ -833,8 +833,116 @@ describe('TauriSettings first run', () => {
     );
 
     expect(
-      await screen.findByRole('heading', { name: 'Add Database' })
+      await screen.findByRole('heading', { name: 'Import from Target Scheduler' })
     ).toBeInTheDocument();
-    expect(screen.getByText('N.I.N.A. Database File:')).toBeInTheDocument();
+    expect(screen.getByLabelText('Source database file:')).toBeInTheDocument();
+  });
+
+  it('keeps image-folder import available from the TS flow and preserves entered folders', async () => {
+    serveEmptyRegistry();
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.change(await screen.findByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Image folders' }));
+    expect(screen.getByRole('heading', { name: 'New Database from Images' })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Select or enter database path')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create & Import' })).toBeEnabled();
+    expect(screen.getByText('📂 /images')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Configured Databases' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Import a local TS file' }));
+    expect(screen.getByPlaceholderText('Select or enter database path')).toBeInTheDocument();
+    expect(screen.getByText('📂 /images')).toBeInTheDocument();
+  });
+
+  it('imports a standalone catalog copy at an advanced destination', async () => {
+    serveEmptyRegistry();
+    const requests: unknown[] = [];
+    server.use(http.post('/api/databases/import-ts', async ({ request }) => {
+      requests.push(await request.json());
+      return HttpResponse.json({ success: true, data: { id: 'import:copy', catalog_id: null, name: 'Restored', running: true, automatic: false, source_connected: false, stage: 'copying', started_at: 1, pages_done: 0, pages_total: 0, error: null, report: null, stopping: false, waiting_for: null } });
+    }));
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.change(await screen.findByPlaceholderText('Select or enter database path'), { target: { value: '/backups/catalog.sqlite' } });
+    fireEvent.change(screen.getByLabelText('Display name (optional):'), { target: { value: 'Restored' } });
+    fireEvent.click(screen.getByLabelText('Keep the source connected for Target Scheduler sync'));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Use a custom database path (advanced)' }));
+    fireEvent.change(screen.getByLabelText('Destination database path:'), { target: { value: '/srv/catalogs/restored.sqlite' } });
+    fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import catalog copy' }));
+    await waitFor(() => expect(requests).toEqual([{ name: 'Restored', db_path: '/backups/catalog.sqlite', image_dirs: ['/images'], connect_source: false, destination_path: '/srv/catalogs/restored.sqlite' }]));
+  });
+
+  it.each([
+    ['Image folders', 'Create & Import'],
+    ['Use the PSF Guard Sync plugin', 'Create catalog for plugin'],
+  ])('offers custom catalog storage for %s', async (source, save) => {
+    serveEmptyRegistry();
+    const requests: unknown[] = [];
+    const database = { id: 'custom', name: 'Custom catalog', database_path: '/srv/custom.sqlite', image_directories: ['/images'] };
+    server.use(http.post('/api/databases/create', async ({ request }) => {
+      requests.push(await request.json());
+      return HttpResponse.json({ success: true, data: { database, import: { stage: 'complete', running: false } } });
+    }));
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.click(await screen.findByRole('radio', { name: source }));
+    expect(screen.getByRole('group', { name: 'Catalog storage' })).toBeVisible();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Use a custom database path (advanced)' }));
+    fireEvent.change(screen.getByLabelText('Destination database path:'), { target: { value: '/srv/custom.sqlite' } });
+    fireEvent.change(screen.getByLabelText('Display name (optional):'), { target: { value: 'Custom catalog' } });
+    fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: save }));
+    await waitFor(() => expect(requests).toEqual([{ name: 'Custom catalog', image_dirs: ['/images'], backfill: false, fill_metadata: true, db_path: '/srv/custom.sqlite' }]));
+  });
+
+  it('validates a custom path and ignores it after managed storage is restored', async () => {
+    serveEmptyRegistry();
+    const requests: unknown[] = [];
+    server.use(http.post('/api/databases/import-ts', async ({ request }) => {
+      requests.push(await request.json());
+      return HttpResponse.json({ success: true, data: { id: 'import:managed', running: true } });
+    }));
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.change(await screen.findByLabelText('Source database file:'), { target: { value: '/source.sqlite' } });
+    fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    const custom = screen.getByRole('checkbox', { name: 'Use a custom database path (advanced)' });
+    fireEvent.click(custom);
+    fireEvent.change(screen.getByLabelText('Destination database path:'), { target: { value: 'relative.sqlite' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import from Target Scheduler' }));
+    expect(await screen.findByText('Enter an absolute destination database path, or turn off Use a custom database path (advanced).')).toBeVisible();
+    expect(requests).toEqual([]);
+    fireEvent.click(custom);
+    expect(screen.queryByLabelText('Destination database path:')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Import from Target Scheduler' }));
+    await waitFor(() => expect(requests).toEqual([{ name: 'source', db_path: '/source.sqlite', image_dirs: ['/images'] }]));
+  });
+
+  it('offers the Sync plugin and opens pairing after creating its catalog without a TS file', async () => {
+    serveEmptyRegistry();
+    const database = { id: 'plugin', name: 'Plugin catalog', database_path: '/managed/plugin.sqlite', image_directories: ['/receive'] };
+    const requests: unknown[] = [];
+    let created = false;
+    server.use(
+      http.get('/api/databases', () => HttpResponse.json({ success: true, data: created ? [database] : [] })),
+      http.post('/api/databases/create', async ({ request }) => {
+        requests.push(await request.json());
+        created = true;
+        return HttpResponse.json({ success: true, data: { database, import: { stage: 'complete', running: false } } });
+      }),
+      http.post('/api/databases/plugin/pairing-token', () => HttpResponse.json({ success: true, data: { pairing_token: 'ONE-USE-CODE', expires_at: 4102444800 } })),
+    );
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.click(await screen.findByLabelText('Use the PSF Guard Sync plugin'));
+    expect(screen.queryByPlaceholderText('Select or enter database path')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('e.g. Imaging Rig (defaults to filename)'), { target: { value: 'Plugin catalog' } });
+    fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/receive' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create catalog for plugin' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate pairing code' }));
+    expect(await screen.findByDisplayValue('ONE-USE-CODE')).toBeInTheDocument();
+    expect(requests).toEqual([{ name: 'Plugin catalog', image_dirs: ['/receive'], backfill: false, fill_metadata: true }]);
+    expect(screen.getByText('https://nina-plugins.psf-guard.com/')).toBeInTheDocument();
   });
 });

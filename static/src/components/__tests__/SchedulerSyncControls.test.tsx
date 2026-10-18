@@ -36,6 +36,30 @@ describe('SchedulerSyncControls', () => {
     sessionStorage.clear();
   });
 
+  it('defaults a TS connection to its own catalog when another catalog appears first', () => {
+    render(<SchedulerSyncControls databases={[telescope, { ...local, ts_sync: { source_path: '/TS.sqlite', writeback: true, on_open: true, on_change: true, interval_minutes: 5 } }]} />, { wrapper: wrapper() });
+    const selects = screen.getAllByRole('combobox');
+    expect(selects[0]).toHaveValue('ts:local');
+    expect(selects[1]).toHaveValue('local');
+  });
+
+  it('offers a saved TS file with a single owned catalog, including when it loads later', async () => {
+    const requests: Record<string, unknown>[] = [];
+    server.use(http.post('/api/databases/local/sync/preview', async ({ request }) => {
+      requests.push(await request.json() as Record<string, unknown>);
+      return HttpResponse.json({ success: false, error: 'preview recorded' }, { status: 400 });
+    }));
+    const { rerender } = render(<SchedulerSyncControls databases={[]} />, { wrapper: wrapper() });
+    rerender(<SchedulerSyncControls databases={[{ ...local, ts_sync: { source_path: '/scope.sqlite', writeback: true, on_open: true, on_change: true, interval_minutes: 5 } }]} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByText('Preview failed: preview recorded')).toBeInTheDocument();
+    expect(requests[0]).toMatchObject({ peer_db_id: 'ts:local', kind: 'pull' });
+    await user.click(screen.getByRole('button', { name: 'Send reviewed grades' }));
+    await user.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(requests[1]).toMatchObject({ peer_db_id: 'ts:local', kind: 'push_grades' });
+  });
+
   it('restores a durable preview after the Settings UI reloads', async () => {
     const result = {
       kind: 'push_planning' as const,

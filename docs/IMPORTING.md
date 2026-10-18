@@ -1,10 +1,128 @@
 # Adding image folders
 
-PSF Guard can start from an existing N.I.N.A. Target Scheduler database or
+PSF Guard can import an existing N.I.N.A. Target Scheduler database or
 build a compatible image catalog from folders of image frames. The first
 import reads headers only. It does not decode every image or run quality
 analysis, so a large library becomes usable without waiting for star
 detection, photometry, or plate solving.
+
+## Import from Target Scheduler
+
+Open **Settings → Databases → Import from Target Scheduler**. The **Start a
+catalog** choices keep image-folder import available alongside both TS options.
+Choose **Image folders** to build a catalog from FITS or XISF folders; switching
+choices keeps any folders you have already added. To connect TS, choose:
+
+- **Import a local TS file**: select the source SQLite file, enter a display
+  name, add the image folders, then click **Import from Target Scheduler**.
+- **Use the PSF Guard Sync plugin**: add an empty image folder or a shared
+  folder containing your images, then click **Create catalog for plugin**.
+  PSF Guard opens the catalog's pairing controls. Install **PSF Guard Sync**
+  in N.I.N.A., click **Generate pairing code**, and enter the server URL and
+  code in the plugin. Click **Pair**, then **Test connection**. The plugin
+  controls its sync schedule; a local TS file is not required. Enable
+  **Accept remote image uploads** and choose a **Receive directory** if you
+  also want the plugin to send image files. See
+  [Connect N.I.N.A. with PSF Guard Sync](../README.md#connect-nina).
+
+Database management must be enabled for a browser server, as described under
+[Create a catalog in the UI](#create-a-catalog-in-the-ui).
+
+### Import a catalog copy and choose storage
+
+An import copies the complete SQLite catalog, including PSF Guard tables for
+analysis, calibration, frame associations and per-catalog Director provenance.
+PSF Guard keeps this embedded data for both import modes.
+
+Leave **Keep the source connected for Target Scheduler sync** on to import
+captures, exchange grades and deliver activated planning through the saved TS
+connection. Turn it off and click **Import catalog copy** for a standalone
+copy. The standalone import does not connect to or write back to the source,
+and preserves embedded sync history without enabling it.
+Connecting the source starts new grade-sync tracking for that connection;
+existing image grades and the other catalog records remain unchanged.
+
+The default destination is `databases/<uuid>.sqlite` beside the database
+registry:
+
+| Platform | Default catalog directory |
+| --- | --- |
+| macOS | `~/Library/Application Support/psf-guard/databases/` |
+| Linux | `~/.config/psf-guard/databases/` |
+| Windows | `%APPDATA%\psf-guard\databases\` |
+
+A server started with `--registry /srv/psf-guard/config.json` uses
+`/srv/psf-guard/databases/`. Under **Catalog storage**, select
+**Use a custom database path (advanced)** and enter **Destination database path:**
+to choose another location. This choice is available for image folders,
+database-file imports and Sync plugin catalogs. Use an absolute path to a new
+file on the machine running PSF Guard. A database-file import needs an existing
+destination folder and never overwrites an existing file. The source and
+destination must be different files. Turn the custom-path option off to use
+managed storage.
+
+A catalog copy is not a complete installation restore. The registry, image
+folder settings, accounts, credentials and Director's global plans live
+outside the catalog. Restore those from a [full backup](BACKUPS.md#restoring-by-hand).
+Image files also remain in their original folders.
+
+Servers can still register an explicit file through the positional database
+argument or a registry entry. Existing direct TS access remains supported
+through 0.12. A custom destination for an imported owned catalog does not
+require direct TS access.
+
+### Sync with a local TS file
+
+PSF Guard reads a consistent SQLite snapshot and creates a working catalog
+at the selected destination. The copy preserves existing IDs, GUIDs,
+thumbnails, calibration records, and other PSF Guard tables. The import does
+not write to the source. Image files remain in their existing folders.
+The background jobs list shows import progress; reopening Settings recovers
+that progress. If the import fails, correct the source path and try again.
+
+The source remains connected for automatic sync, with grade writeback enabled.
+The source needs the GUID columns provided by TS schema v22 or later. Under
+**Target Scheduler sync** on the imported catalog, choose:
+
+- **Sync when the desktop app or server starts** to import captures on startup.
+- **Sync when new images or grades arrive** to check database changes. Changes
+  are checked about every ten seconds; runs start no more than once per
+  thirty seconds.
+- **Sync interval (minutes; 0 disables the schedule)** for periodic sync. The
+  default is five minutes. Zero leaves startup and change detection unchanged.
+- **Automatically write grade changes back to Target Scheduler** to send edits made in
+  PSF Guard automatically. When this is off, manual planning and grade
+  transfers remain available through Preview and Apply.
+
+Click **Save sync settings**. Automatic imports preserve reviewed local grades
+and existing planning settings. They add missing parent records for new
+captures and update acquisition progress. Automatic writeback updates TS grades,
+reject reasons and accepted counts together. If both applications changed a
+frame's grade, the job reports a conflict and leaves the TS grade unchanged.
+Local pending changes survive restarts and can be retried safely.
+
+For a reviewed merge, planning export or explicit grade overwrite, open
+**Settings → Sync**. Select the working catalog and its **Target Scheduler**
+connection, preview the changes, then apply the preview. The source file does
+not need to be registered as a second catalog. If the source is unavailable,
+the working catalog remains usable and the sync job reports the problem.
+
+Director activation uses this same saved connection. Its preview shows the TS
+file and planning transfer counts. **Activate** commits the working catalog,
+then sends that project's planning to TS without changing captures, grades or
+acquisition counts. The automatic grade-writeback switch does not disable this
+explicit planning delivery. Failed deliveries remain pending and retry through
+the configured startup, change detection and schedule settings, or with the
+send button for the pending TS delivery. Grade conflicts do not block approved
+planning deliveries. A change to the affected TS project or its referenced
+templates, or an expired transfer, needs a new activation preview. Unrelated
+projects can be delivered independently. Retry never exports unreviewed local
+edits, and refreshing a preview in Settings does not approve an activation.
+
+Existing registrations that open TS directly remain supported through 0.12.
+They are not migrated on startup. Direct access is deprecated, with removal
+planned for 0.13 or later. The owned catalogs in this release still use the TS
+schema; a native schema is a separate change.
 
 ## What counts as a frame
 

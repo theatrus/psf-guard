@@ -699,7 +699,7 @@ pub async fn get_preview(
         .sync_previews
         .get(&preview_id)
         .map_err(internal)?
-        .filter(|record| record.local_db_id == catalog.id)
+        .filter(|record| record.local_db_id == catalog.id && !record.activation)
         .ok_or(AppError::NotFound)?;
     Ok(Json(ApiResponse::success(SyncPreview {
         preview_id: record.id,
@@ -828,7 +828,7 @@ pub async fn refresh_preview(
         .sync_previews
         .get(&preview_id)
         .map_err(internal)?
-        .filter(|record| record.local_db_id == catalog.id)
+        .filter(|record| record.local_db_id == catalog.id && !record.activation)
     else {
         audit(
             AuditOutcome::Refused,

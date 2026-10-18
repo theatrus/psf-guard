@@ -84,6 +84,7 @@ export interface RejectArchiveOverrides {
 
 // One configured database entry (mirrors `DbEntry` in the Rust db_registry module).
 export interface DbEntry {
+  ts_sync?: import('../api/tsSyncTypes').TsSyncSettings;
   id: string;
   name: string;
   db_path: string;

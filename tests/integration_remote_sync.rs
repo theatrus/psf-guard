@@ -202,6 +202,7 @@ impl Harness {
             AppState::from_databases(
                 vec![
                     DbEntry {
+                        ts_sync: None,
                         id: "source".into(),
                         name: "Source".into(),
                         db_path: source_path.to_string_lossy().into_owned(),
@@ -217,6 +218,7 @@ impl Harness {
                         scan_calibrated_copies: false,
                     },
                     DbEntry {
+                        ts_sync: None,
                         id: "destination".into(),
                         name: "Destination".into(),
                         db_path: destination_path.to_string_lossy().into_owned(),
@@ -657,6 +659,66 @@ async fn push_grades_moves_grading_state_and_leaves_planning_alone() {
 }
 
 #[tokio::test]
+async fn plugin_endpoints_cannot_read_refresh_or_apply_an_activation_approval() {
+    let harness = Harness::new("", "");
+    let normal_id = harness
+        .preview("push_planning", harness.export("push_planning").await)
+        .await;
+    let normal = harness
+        .state
+        .sync_previews
+        .get(&normal_id)
+        .unwrap()
+        .unwrap();
+    let snapshot = harness
+        .state
+        .sync_previews
+        .create_source_snapshot(&harness.destination_path)
+        .unwrap();
+    let approved = harness
+        .state
+        .sync_previews
+        .store_activation(
+            "destination".into(),
+            normal.request,
+            snapshot,
+            "approved-destination".into(),
+            normal.result,
+        )
+        .unwrap();
+    for (method, suffix) in [("GET", ""), ("POST", "/refresh"), ("POST", "/apply")] {
+        let (status, response) = call(
+            harness.router.clone(),
+            method,
+            &format!("/api/sync/v1/previews/{}{suffix}", approved.id),
+            Some(DESTINATION_TOKEN),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "{method} {suffix}: {response}"
+        );
+    }
+    let unchanged = harness
+        .state
+        .sync_previews
+        .get(&approved.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        unchanged.destination_fingerprint,
+        approved.destination_fingerprint
+    );
+    assert_eq!(
+        unchanged.source_snapshot_file,
+        approved.source_snapshot_file
+    );
+    assert_eq!(unchanged.expires_at, approved.expires_at);
+}
+
+#[tokio::test]
 async fn a_destination_that_moved_refuses_the_apply_but_keeps_the_preview() {
     let harness = Harness::new(
         "INSERT INTO project VALUES (1,'p','M42','remote settings',2,8,'project-guid');
@@ -962,6 +1024,7 @@ async fn an_upload_only_key_cannot_reach_the_sync_protocol() {
     let state = Arc::new(
         AppState::from_databases(
             vec![DbEntry {
+                ts_sync: None,
                 id: "catalog".into(),
                 name: "Catalog".into(),
                 db_path: database_path.to_string_lossy().into_owned(),

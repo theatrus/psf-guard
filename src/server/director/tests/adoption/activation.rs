@@ -3206,7 +3206,7 @@ async fn a_band_off_in_target_scheduler_is_turned_off_and_a_draft_is_named() {
     assert!(!plan.contributions[0].enabled);
 }
 
-async fn add_rig(f: &Fixture, slug: &str) -> (Uuid, rusqlite::Connection) {
+pub(super) async fn add_rig(f: &Fixture, slug: &str) -> (Uuid, rusqlite::Connection) {
     let path = f._dir.path().join(format!("{slug}.sqlite"));
     let db = crate::ts_schema::create_fresh_db(&path).unwrap();
     db.execute(

@@ -71,6 +71,7 @@ const idleWbppRun = {
 };
 
 export const handlers = [
+  http.get('/api/ts-sync', () => HttpResponse.json({ success: true, data: [], error: null })),
   emptyCollaborationActivation,
   emptyTransfers,
   // A whole-set build asks for one build per channel. A test that mocks only

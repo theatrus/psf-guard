@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import releaseHighlights from './src/updates/highlights.json' with { type: 'json' };
 import { mkdtempSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -41,7 +42,10 @@ export default defineConfig({
     // The plan list opens compact by default; these specs read the full cards.
     storageState: {
       cookies: [],
-      origins: [{ origin: `http://127.0.0.1:${port}`, localStorage: [{ name: 'psf-guard.display-preferences', value: JSON.stringify({ libraryDensity: 'detailed' }) }] }],
+      origins: [{ origin: `http://127.0.0.1:${port}`, localStorage: [
+        { name: 'psf-guard.whats-new.acknowledged', value: releaseHighlights[0].version },
+        { name: 'psf-guard.display-preferences', value: JSON.stringify({ libraryDensity: 'detailed' }) },
+      ] }],
     },
   },
   projects: [{ name: 'chromium', use: devices['Desktop Chrome'] }],

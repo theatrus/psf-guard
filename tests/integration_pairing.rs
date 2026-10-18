@@ -70,6 +70,7 @@ fn harness() -> (Arc<AppState>, Router, PathBuf, tempfile::TempDir) {
     let image_dir = directory.path().join("images");
     std::fs::create_dir(&image_dir).unwrap();
     let entry = DbEntry {
+        ts_sync: None,
         id: "review".into(),
         name: "Review copy".into(),
         db_path: db_path.to_string_lossy().into_owned(),

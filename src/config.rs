@@ -1107,6 +1107,7 @@ directory = "./cache"
 
     fn entry(id: &str) -> crate::db_registry::DbEntry {
         crate::db_registry::DbEntry {
+            ts_sync: None,
             id: id.into(),
             name: id.into(),
             db_path: format!("/tmp/{id}.sqlite"),

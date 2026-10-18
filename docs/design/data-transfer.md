@@ -1,19 +1,20 @@
 # Data transfer, database merge, and remote sync
 
 Status: local and remote merge, planning, grade, and image-upload paths are
-implemented. Native one-off file handles and the N.I.N.A. plugin remain
-follow-up work.
+implemented, including saved TS file connections and the N.I.N.A. Sync API.
+Native one-off file handles remain follow-up work.
 
 ## Purpose
 
-Architectural follow-on (planned, not current behavior): the
+Native-schema follow-on (planned): the
 [Director design](director.md#native-catalogs-and-target-scheduler-exchange)
 allows PSF Guard-owned catalog schemas. Target Scheduler becomes an explicit
 import and bidirectional sync connection in Settings/UI. The transfer rules in
 this document remain compatibility requirements at that boundary, not a demand
 that native catalogs mirror TS tables. The future adapter must report unsupported
-data and preserve the published Sync API during migration. No native-catalog
-migration is implemented by this design update.
+data and preserve the published Sync API during migration. New imports create
+owned TS-shaped working catalogs and retain the source as a file sync
+connection. Native-schema migration remains separate.
 
 PSF Guard needs one safe way to:
 
@@ -21,7 +22,7 @@ PSF Guard needs one safe way to:
 - merge one Target Scheduler database into another;
 - send planning changes or reviewed grades to another database;
 - do the same work through a remote PSF Guard server; and
-- later let a N.I.N.A. plugin provide the telescope-side endpoint.
+- let a N.I.N.A. plugin provide the telescope-side endpoint.
 
 The design must not require Syncthing, Dropbox, or another file copier to move
 a live SQLite database. N.I.N.A. may write that file while an outside process
@@ -44,21 +45,22 @@ The repository already has most of the local merge rules:
 - `sync planning` sends projects, targets, templates, plans, and rule weights
   without changing capture history, plan progress, or grades.
 - `sync grades` sends grading state and reject reasons by image GUID.
-- The management API and Settings UI expose local pull and planning push.
+- The management API and Settings UI expose previewed merges, planning pushes
+  and grade pushes.
+- Owned catalogs retain a TS connection for automatic capture imports and
+  conditional grade writeback, or receive captures through the Sync plugin.
 
 The remaining pieces are:
 
-- one clear transfer workspace instead of controls repeated under each catalog;
-- durable job and preview state;
-- local-file selection without first keeping a catalog in the registry;
-- a N.I.N.A. plugin that calls the remote sync and intake endpoints.
+- durable job history across server restarts;
+- one-off native file selection without retaining a connection.
 
 ## Terms
 
 **Catalog endpoint**
 : A readable or writable source of catalog records. It can be a registered
   local SQLite database, a file selected in the desktop app, a remote PSF Guard
-  server, or a future N.I.N.A. plugin.
+  server, or a N.I.N.A. plugin.
 
 **Merge**
 : A one-way, additive copy into a destination. It can insert and update rows
@@ -190,8 +192,35 @@ picker. The backend opens a source read-only and an existing destination
 read-write. A selected file does not need to remain in the normal catalog
 registry.
 
-Browser mode can use registered local catalogs. It must not accept arbitrary
-server filesystem paths from an HTTP request.
+Browser mode can use registered local catalogs and saved TS connections.
+Only database-management setup accepts a server filesystem path. Transfer
+requests select saved endpoint IDs and never accept an arbitrary path.
+
+Imported TS files are saved connections, addressed as `ts:<catalog-slug>` in
+`peer_db_id`; they are not Library catalogs. Connection setup requires database
+management, and normal sync requests select the stored endpoint rather than
+supplying a filesystem path. Startup, file-change and scheduled jobs import
+capture arrivals without overwriting local planning. Automatic grade writeback
+uses saved baselines, conditional TS updates and a durable pending record to
+recover an interrupted acknowledgement. Explicit planning and grade transfers
+retain Preview and Apply. Director activation uses the same planning merge,
+frozen source snapshots and destination guard for its retained TS connection.
+Its source is restricted to the activated project and referenced templates;
+TS-owned fields remain unchanged. The activation records an approved delivery
+before writing TS, so retries use that frozen source and existing file-sync
+triggers. Activation previews are private immutable records: ordinary Sync and
+plugin preview endpoints cannot refresh or consume them. Their destination
+guard covers the affected project, its descendants, referenced templates and
+matching source GUIDs elsewhere in TS, excluding acquisition counts. It is
+checked inside the TS write transaction. Independent projects do not invalidate
+each other; shared-template edits still require review. Grade conflicts do not
+block approved planning, while cancellation, shutdown and connection changes
+stop later sends. A stale or expired approval requires another activation
+preview.
+
+Setup can instead import a standalone catalog copy, retaining all embedded
+PSF Guard tables without a TS connection. An optional advanced destination is
+a new absolute file path; atomic publication refuses to overwrite a file.
 
 ### Remote peers
 

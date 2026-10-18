@@ -1,3 +1,6 @@
+import TsSyncSettings from './TsSyncSettings';
+import { useTsSyncJobs } from '../hooks/useTsSyncJobs';
+import { TS_SYNC_QUERY_KEY } from '../api/tsSyncTypes';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
@@ -206,6 +209,11 @@ export default function TauriSettings({
   // true = "create a brand-new TS database from image folders" flow (no
   // existing .sqlite required; the server bootstraps the full TS schema).
   const [createMode, setCreateMode] = useState(false);
+  const [tsImportMethod, setTsImportMethod] = useState<'file' | 'plugin'>('file');
+  const [connectImportedSource, setConnectImportedSource] = useState(true);
+  const [useCustomCatalogPath, setUseCustomCatalogPath] = useState(false);
+  const [importDestination, setImportDestination] = useState('');
+  const pluginImport = showAddForm && !editingId && !createMode && tsImportMethod === 'plugin';
   const [createAnalyzeQuality, setCreateAnalyzeQuality] = useState(false);
   const [importAnalyzeQuality, setImportAnalyzeQuality] = useState(false);
 
@@ -266,6 +274,7 @@ export default function TauriSettings({
                 id: summary.id,
                 name: summary.name,
                 db_path: summary.database_path,
+                ts_sync: summary.ts_sync,
                 image_dirs: summary.image_directories,
                 export_dir: summary.export_directory,
                 process_dir: summary.process_directory,
@@ -302,6 +311,7 @@ export default function TauriSettings({
             id: s.id,
             name: s.name,
             db_path: s.database_path,
+            ts_sync: s.ts_sync,
             image_dirs: s.image_directories,
             export_dir: s.export_directory,
             process_dir: s.process_directory,
@@ -389,6 +399,10 @@ export default function TauriSettings({
     setFormRemoteUploadTokenRevealed(false);
     setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(false);
+    setTsImportMethod('file');
+    setConnectImportedSource(true);
+    setUseCustomCatalogPath(false);
+    setImportDestination('');
     setCreateMode(false);
     setCreateAnalyzeQuality(false);
   };
@@ -443,6 +457,7 @@ export default function TauriSettings({
     setFormRemoteUploadTokenRevealed(false);
     setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
+    setTsImportMethod('file');
     setCreateMode(false);
   };
 
@@ -489,6 +504,7 @@ export default function TauriSettings({
     setFormRemoteUploadTokenRevealed(false);
     setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
+    setTsImportMethod('file');
     setCreateMode(false);
     setFormDbPath('');
 
@@ -595,29 +611,41 @@ export default function TauriSettings({
   };
 
   const handleSaveForm = async () => {
-    if (createMode) {
+    const destination = useCustomCatalogPath ? importDestination.trim() : '';
+    if (!editingId && useCustomCatalogPath && !/^(?:\/|[a-z]:[\\/]|\\\\[^\\]+\\[^\\]+)/i.test(destination)) {
+      setStatusMessage('Enter an absolute destination database path, or turn off Use a custom database path (advanced).');
+      return;
+    }
+    if (createMode || pluginImport) {
       // "New database from images": the server bootstraps a fresh TS-schema
       // database and imports the folders in the background.
       if (formImageDirs.length === 0) {
         setStatusMessage('Add at least one image directory to import');
         return;
       }
-      const name = formName.trim() || 'Imported Images';
+      const name = formName.trim() || (pluginImport ? 'Target Scheduler' : 'Imported Images');
       setIsApplying(true);
       setStatusMessage('');
       try {
         const created = await apiClient.createDatabaseFromImages({
           name,
           image_dirs: formImageDirs,
-          backfill: createAnalyzeQuality,
+          backfill: !pluginImport && createAnalyzeQuality,
           fill_metadata: starMetadataFillEnabled(),
+          ...(destination ? { db_path: destination } : {}),
         });
         queryClient.invalidateQueries({ queryKey: ['databases'] });
         queryClient.invalidateQueries({ queryKey: ['db'] });
         setImportDbId(created.database.id);
         await reload();
-        resetForm();
-        setStatusMessage(`Created ${created.database.name}; importing frames…`);
+        if (pluginImport) {
+          startEdit({ id: created.database.id, name: created.database.name,
+            db_path: created.database.database_path, image_dirs: created.database.image_directories });
+          setStatusMessage('Catalog created. Generate a pairing code below to connect PSF Guard Sync in N.I.N.A.');
+        } else {
+          resetForm();
+          setStatusMessage(`Created ${created.database.name}; importing frames…`);
+        }
       } catch (err) {
         console.error('create-from-images failed:', err);
         const msg = err instanceof Error ? err.message : String(err);
@@ -725,11 +753,16 @@ export default function TauriSettings({
           },
         });
       } else {
-        await apiClient.addDatabase({
+        const job = await apiClient.importTsDatabase({
           name: inferredName,
           db_path: formDbPath.trim(),
           image_dirs: formImageDirs,
+          ...(!connectImportedSource ? { connect_source: false } : {}),
+          ...(destination ? { destination_path: destination } : {}),
         });
+        queryClient.setQueryData<import('../api/tsSyncTypes').TsSyncJob[]>(TS_SYNC_QUERY_KEY, old => [...(old ?? []).filter(item => item.id !== job.id), job]);
+        setStatusMessage(connectImportedSource ? 'Importing Target Scheduler into a PSF Guard catalog…' : 'Importing a standalone catalog copy…');
+        return;
       }
 
       // Invalidate every per-DB query so the merged-overview hooks pull
@@ -904,9 +937,30 @@ export default function TauriSettings({
     }
   };
 
+  const databases = registry?.databases ?? [];
+  const tsJobs = useTsSyncJobs(managementAllowed && canEdit);
+  const tsImportRunning = tsJobs.data?.some(job => job.id.startsWith('import:') && job.running) ?? false;
+  const observedImports = useRef(new Set<string>());
+  useEffect(() => {
+    for (const job of tsJobs.data ?? []) {
+      if (!job.id.startsWith('import:')) continue;
+      const key = `${job.id}:${job.started_at}`;
+      if (job.running) {
+        observedImports.current.add(key);
+      } else if (observedImports.current.delete(key) && job.stage === 'complete' && job.catalog_id) {
+        void reload();
+        if (showAddForm && !editingId && !createMode && tsImportMethod === 'file') resetForm();
+        setStatusMessage(job.source_connected === false
+          ? 'Catalog import complete. The source file is not connected for sync.'
+          : 'Target Scheduler import complete. Automatic sync and grade writeback are enabled.');
+      }
+    }
+  // reload and resetForm are defined inside the component; job tracking does not depend on their identity.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tsJobs.data]);
+
   if (!isOpen) return null;
 
-  const databases = registry?.databases ?? [];
   const hasDatabases = databases.length > 0;
 
   // Installing catalogs and syncing take an editor; sync has nothing to
@@ -978,7 +1032,7 @@ export default function TauriSettings({
 
     return (
       <section
-        className={entry ? 'db-row-editor' : 'settings-section'}
+        className={entry ? 'db-row-editor' : 'settings-section catalog-create-form'}
         aria-labelledby={editorHeadingId}
       >
         {entry ? (
@@ -989,13 +1043,34 @@ export default function TauriSettings({
             </h3>
           </div>
         ) : (
-          <h3>{createMode ? 'New Database from Images' : 'Add Database'}</h3>
+          <h3>{createMode ? 'New Database from Images' : !pluginImport && !connectImportedSource ? 'Import a catalog copy' : 'Import from Target Scheduler'}</h3>
         )}
 
+        {!editingId && <>
+          <fieldset className="catalog-source-options" disabled={isApplying || tsImportRunning}>
+            <legend>Start a catalog</legend>
+            <div className="catalog-source-grid">
+              <label className="catalog-source-option">
+                <input type="radio" name="catalog-source" aria-label="Image folders" aria-checked={createMode} checked={createMode} onChange={() => setCreateMode(true)} />
+                <span><strong>Image folders</strong><small>Import FITS or XISF folders into a new catalog.</small></span>
+              </label>
+              <label className="catalog-source-option">
+                <input type="radio" name="catalog-source" aria-label="Import a local TS file" aria-checked={!createMode && tsImportMethod === 'file'} checked={!createMode && tsImportMethod === 'file'} onChange={() => { setCreateMode(false); setTsImportMethod('file'); }} />
+                <span><strong>Import a local TS file</strong><small>Copy a TS or PSF Guard database. Choose whether to keep TS connected.</small></span>
+              </label>
+              <label className="catalog-source-option">
+                <input type="radio" name="catalog-source" aria-label="Use the PSF Guard Sync plugin" aria-checked={pluginImport} checked={pluginImport} onChange={() => { setCreateMode(false); setTsImportMethod('plugin'); }} />
+                <span><strong>Use the PSF Guard Sync plugin</strong><small>Connect N.I.N.A. over the network. No local TS file required.</small></span>
+              </label>
+            </div>
+          </fieldset>
+          {!createMode && <p className="muted">{pluginImport
+            ? 'Choose a shared image folder or an empty folder for incoming uploads. Create the catalog, then pair the plugin. The plugin controls its own sync schedule.'
+            : 'PSF Guard copies all catalog data, including existing PSF Guard data. Image files stay in their current folders.'}</p>}
+        </>}
         {createMode && (
           <p className="muted">
-            Creates a brand-new Target Scheduler database and imports the
-            selected folders. Each target gets its own project. Nearby,
+            Builds a PSF Guard catalog from the selected image folders. Each target gets its own project. Nearby,
             similarly dated panels with matching panel names share a
             mosaic project. You can rename or reorganize them afterwards.
             The import reads headers only; pixel-based quality work is a
@@ -1004,8 +1079,9 @@ export default function TauriSettings({
         )}
 
         <div className="database-config">
-          <label>Display name (optional):</label>
+          <label htmlFor="database-display-name">Display name (optional):</label>
           <input
+            id="database-display-name"
             type="text"
             value={formName}
             onChange={(e) => setFormName(e.target.value)}
@@ -1018,12 +1094,27 @@ export default function TauriSettings({
           />
         </div>
 
-        {!createMode && (
+        {!editingId && <fieldset className="catalog-storage" disabled={isApplying || tsImportRunning}>
+          <legend>Catalog storage</legend>
+          <p className="muted">By default, PSF Guard stores new catalogs in the databases folder beside its registry.</p>
+          <label className="checkbox-label"><input type="checkbox" checked={useCustomCatalogPath} aria-checked={useCustomCatalogPath}
+            aria-controls="custom-catalog-location" onChange={event => setUseCustomCatalogPath(event.target.checked)} /> Use a custom database path (advanced)</label>
+          {useCustomCatalogPath && <div id="custom-catalog-location" className="database-config">
+            <label htmlFor="import-destination-path">Destination database path:</label>
+            <input id="import-destination-path" className="file-path-input" type="text" value={importDestination}
+              onChange={event => setImportDestination(event.target.value)} placeholder="e.g. /srv/psf-guard/catalog.sqlite" />
+            <p className="muted">Use an absolute path to a new file on the machine running PSF Guard. Existing catalogs are not replaced.</p>
+          </div>}
+        </fieldset>}
+
+        {!createMode && !pluginImport && (
           <div className="database-config">
-            <label>N.I.N.A. Database File:</label>
+            <label htmlFor="catalog-source-path">Source database file:</label>
             <div className="file-input-group">
               <PathField
+                id="catalog-source-path"
                 kind="file"
+                disabled={!!editingId && !!databases.find(entry => entry.id === editingId)?.ts_sync}
                 pick={tauriFileSystem.pickDatabaseFile}
                 value={formDbPath}
                 onChange={setFormDbPath}
@@ -1033,6 +1124,15 @@ export default function TauriSettings({
             </div>
           </div>
         )}
+
+        {!editingId && !createMode && !pluginImport && <>
+          <label className="checkbox-label"><input type="checkbox" checked={connectImportedSource} disabled={isApplying || tsImportRunning}
+            onChange={e => setConnectImportedSource(e.target.checked)} /> Keep the source connected for Target Scheduler sync</label>
+          <p className="muted">{connectImportedSource
+            ? 'Automatic sync imports new captures and writes grade changes back. Director activation sends reviewed planning through this connection.'
+            : 'Create a standalone catalog copy. PSF Guard will not sync with or write back to the source file.'}
+            {' '}Server settings and saved Director plans require a full backup restore.</p>
+        </>}
 
         <div className="database-config">
           <label>Image Directories:</label>
@@ -1078,7 +1178,8 @@ export default function TauriSettings({
 
         {editingId && (
           <div className="database-config">
-            <label>Pair a client:</label>
+            <label>Connect PSF Guard Sync in N.I.N.A.:</label>
+            <p>Install <strong>PSF Guard Sync</strong> from the N.I.N.A. plugin repository <code>https://nina-plugins.psf-guard.com/</code>, then restart N.I.N.A. Generate a pairing code and enter it with this server’s URL in the plugin. Click <strong>Pair</strong>, then <strong>Test connection</strong>. The plugin controls its own sync schedule. To receive image files too, enable <strong>Accept remote image uploads</strong> below and choose a <strong>Receive directory</strong>.</p>
             <div className="remote-upload-token-row">
               <button
                 type="button"
@@ -1403,14 +1504,16 @@ export default function TauriSettings({
             onClick={handleSaveForm}
             className="save-button"
             disabled={
-              (createMode ? formImageDirs.length === 0 : !formDbPath.trim()) || isApplying
+              (createMode || pluginImport ? formImageDirs.length === 0 : !formDbPath.trim() || formImageDirs.length === 0) || isApplying || (!editingId && !createMode && tsImportRunning)
             }
           >
-            {createMode
-              ? 'Create & Import'
+            {pluginImport
+              ? 'Create catalog for plugin'
+              : createMode
+                ? 'Create & Import'
               : editingId
                 ? 'Save Changes'
-                : 'Add Database'}
+                : connectImportedSource ? 'Import from Target Scheduler' : 'Import catalog copy'}
           </button>
         </div>
       </section>
@@ -1739,16 +1842,17 @@ export default function TauriSettings({
           aria-labelledby={`settings-tab-${currentTab}`}
         >
           {currentTab === 'review' && <div className="settings-setups"><ReviewPreferences /></div>}
+          {currentTab === 'databases' && <>{tsJobs.data?.filter(job => job.running || job.error).map(job => <p key={job.id} role={job.error ? 'alert' : 'status'}>{job.name || 'Target Scheduler'}: {job.error || (job.stage === 'copying' ? `Copying database · ${job.pages_done}/${job.pages_total} pages` : job.stage === 'initializing' ? 'Preparing the working catalog…' : 'Syncing captures and grades…')}</p>)}</>}
           {currentTab === 'databases' && (
           <div className="settings-setups">
           {!hasDatabases && managementAllowed && (
             <div className="welcome-message">
               <h3>🚀 Welcome to PSF Guard!</h3>
-              <p>
+              {!showAddForm && <p>
                 Start from folders of FITS or XISF images, or from a N.I.N.A.
                 scheduler database you already have. You can add more catalogs
                 later.
-              </p>
+              </p>}
               {!showAddForm && (
                 <div className="welcome-choices">
                   <button
@@ -1770,11 +1874,10 @@ export default function TauriSettings({
                     disabled={isApplying}
                   >
                     <span className="welcome-choice-title">
-                      + Add Existing Database
+                      + Import from Target Scheduler
                     </span>
                     <span className="welcome-choice-detail">
-                      Open a N.I.N.A. Target Scheduler database and point it at
-                      your image folders.
+                      Import a PSF Guard-owned copy of your Target Scheduler database and keep the source connected for sync.
                     </span>
                   </button>
                 </div>
@@ -1799,7 +1902,7 @@ export default function TauriSettings({
             </div>
           )}
 
-          <div className="settings-section">
+          {(hasDatabases || isLoading || importPreviewPanel) && <div className="settings-section">
             <h3>Configured Databases {hasDatabases && <span className="muted">({databases.length})</span>}</h3>
 
             {isLoading && <div className="detecting-database">Loading…</div>}
@@ -1872,7 +1975,7 @@ export default function TauriSettings({
                     </div>
                     <dl className="db-row-paths">
                       <div>
-                        <dt>Catalog</dt>
+                        <dt>{entry.ts_sync ? 'PSF Guard catalog' : 'Catalog'}</dt>
                         <dd>{entry.db_path}</dd>
                       </div>
                       {entry.image_dirs.length > 0 && (
@@ -1924,6 +2027,7 @@ export default function TauriSettings({
                     </div>
                   </div>
                   {isEditing && <div id={editorId}>{renderDatabaseForm(entry)}</div>}
+                  {managementAllowed && entry.ts_sync && <TsSyncSettings dbId={entry.id} settings={entry.ts_sync} onSaved={reload} />}
                   {importDbId === entry.id && importPreviewPanel && (
                     <div ref={importPreviewRef}>{importPreviewPanel}</div>
                   )}
@@ -1940,10 +2044,10 @@ export default function TauriSettings({
                   className="db-action-button"
                   onClick={startAdd}
                   disabled={isApplying}
-                  title="Open a N.I.N.A. Target Scheduler database and point it at your image folders"
+                  title="Import a PSF Guard catalog and keep Target Scheduler connected for sync"
                 >
                   <Plus size={15} aria-hidden="true" />
-                  Add Database
+                  Import from Target Scheduler
                 </button>
                 <button
                   type="button"
@@ -1963,7 +2067,7 @@ export default function TauriSettings({
             {importPreviewPanel && !databases.some((entry) => entry.id === importDbId) && (
               <div ref={importPreviewRef}>{importPreviewPanel}</div>
             )}
-          </div>
+          </div>}
 
           {managementAllowed && showAddForm && !editingId && renderDatabaseForm(null)}
           </div>

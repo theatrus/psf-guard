@@ -21,6 +21,7 @@ import { useHeaderActivity, WBPP_ACTIVITY_QUERY_KEY, type ScanErrorNote } from '
 import './header.css';
 import { TransferControls } from '../director/CollaborationTransfers';
 import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
+import { TS_SYNC_QUERY_KEY } from '../../api/tsSyncTypes';
 import { BACKUP_STATUS_QUERY_KEY } from '../../api/backupTypes';
 import type { TransferJob, TransferAction } from '../../api/transferTypes';
 
@@ -77,6 +78,7 @@ function runAction(action: ActivityAction): Promise<unknown> {
   if (control.kind === 'duplicates') return apiClient.stopCalibrationDuplicates(control.dbId);
   if (control.kind === 'rejects') return apiClient.stopRejectRemoval(control.dbId);
   if (control.kind === 'backup') return apiClient.stopBackup();
+  if (control.kind === 'ts-sync') return apiClient.stopTsSync(control.jobId);
   if (control.kind === 'wbpp-running') return apiClient.cancelWbppRun(control.dbId);
   return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
 }
@@ -346,6 +348,7 @@ export default function ActivityChip() {
       queryClient.invalidateQueries({ queryKey: WBPP_ACTIVITY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TRANSFER_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: BACKUP_STATUS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: TS_SYNC_QUERY_KEY });
     },
   });
   const [pinned, setPinned] = useState(false);

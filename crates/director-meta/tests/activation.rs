@@ -135,6 +135,7 @@ fn a_push_lands_on_its_own_activation_and_never_on_a_newer_one() {
         plans: vec![],
     };
     let waiting = RemotePush {
+        ts_sync: None,
         rig_id: remote,
         peer_id: "obs".into(),
         peer_name: "Observatory".into(),

@@ -5,7 +5,8 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext, useAccess } from '../../auth/access';
-import ActivationPanel from '../director/ActivationPanel';
+import ActivationPanel, { RigActivation } from '../director/ActivationPanel';
+import { describeChange, writesRows } from '../director/activationState';
 import { DraftProvider } from '../director/pageDrafts';
 import { useDraftSection, usePageDrafts } from '../director/pageDraftsState';
 import type { DirectorActivationRemotePush, DirectorActivationReport } from '../../api/directorTypes';
@@ -279,6 +280,19 @@ describe('Activation panel', () => {
     expect(within(unsent).getByRole('button', { name: 'Send to observatory-pi' })).toBeInTheDocument();
     expect(unsent).not.toHaveTextContent('tried');
   });
+
+  it('shows a short TS delivery message and keeps full diagnostics collapsed', async () => {
+    const diagnostic = 'syncing /cache/sync-previews/snapshot.sqlite into /observatory/TS.sqlite: TS temporarily refuses planning: Error code 1811';
+    fixture(false, true, [{ ...sitePush(false, diagnostic), peer_id: 'ts:desert', peer_name: 'Target Scheduler' }]);
+    mount();
+    const pending = await screen.findByRole('note', { name: 'Not sent to Target Scheduler' });
+    expect(pending).toHaveTextContent('The plan is saved locally. Retry delivery');
+    const details = within(pending).getByText(diagnostic);
+    expect(details).not.toBeVisible();
+    fireEvent.click(within(pending).getByText('Error details'));
+    expect(details).toBeVisible();
+    expect(details).toHaveTextContent(diagnostic);
+  });
   it('offers no send when no rig is remote, or every site has the activation', async () => {
     fixture(false, true); const first = mount();
     expect(await screen.findByText(/^Last activated /)).toBeInTheDocument();
@@ -493,4 +507,36 @@ describe('Activation panel', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('status')));
     expect(document.activeElement).not.toBe(document.body);
   });
+});
+
+it('previews planning through the saved TS file and detects changes beyond the local catalog', () => {
+  const view = report(false);
+  const local = view.rigs[0];
+  local.changes = local.changes.map(change => ({ ...change, action: 'unchanged' }));
+  local.push = { peer_id: 'ts:redcat', peer_name: 'Target Scheduler (RedCat)', applied: false,
+    summary: { project_inserted: 1, target_updated: 2 }, error: null,
+    ts_file: { path: '/observatory/TargetScheduler.sqlite', revision: 'before' } };
+  expect(writesRows(local)).toBe(true);
+  render(<RigActivation rig={local} applied={false} />);
+  const transfer = screen.getByRole('note', { name: 'Target Scheduler planning delivery' });
+  expect(transfer).toHaveTextContent('/observatory/TargetScheduler.sqlite');
+  expect(transfer).toHaveTextContent('Projects: 1 new, 0 updated');
+  expect(transfer).toHaveTextContent('Targets: 0 new, 2 updated');
+  const after = structuredClone(view);
+  after.rigs[0].push!.ts_file!.revision = 'after';
+  expect(describeChange(view, after)).toContain("RedCat 61's Target Scheduler connection or planning");
+});
+
+it('does not claim Target Scheduler shoots a plan when file delivery failed', () => {
+  const local = report(true).rigs[0];
+  local.push = { peer_id: 'ts:redcat', peer_name: 'Target Scheduler (RedCat)', applied: false,
+    summary: {}, error: 'TS file is unavailable', ts_file: { path: '/observatory/TS.sqlite' } };
+  local.shoots = [{ plan: 1, target: 'Heart', template: 'Ha', filter: 'Ha', gain: null, offset: null,
+    exposure_seconds: 300, desired: 72, acquired: 0, objectives: [], turned_on: false }];
+  render(<RigActivation rig={local} applied />);
+  expect(screen.getByText('Activated locally')).toBeInTheDocument();
+  expect(screen.getByText('Planned locally; not sent to Target Scheduler')).toBeInTheDocument();
+  expect(screen.queryByText('Target Scheduler now shoots')).not.toBeInTheDocument();
+  expect(screen.getByText(/TS delivery pending/)).toBeVisible();
+  expect(screen.getByText('TS file is unavailable')).not.toBeVisible();
 });

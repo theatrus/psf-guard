@@ -76,6 +76,7 @@ impl Harness {
             AppState::from_databases(
                 vec![
                     DbEntry {
+                        ts_sync: None,
                         id: "source".into(),
                         name: "Telescope".into(),
                         db_path: source_path.to_string_lossy().into_owned(),
@@ -91,6 +92,7 @@ impl Harness {
                         scan_calibrated_copies: false,
                     },
                     DbEntry {
+                        ts_sync: None,
                         id: "destination".into(),
                         name: "Review copy".into(),
                         db_path: destination_path.to_string_lossy().into_owned(),

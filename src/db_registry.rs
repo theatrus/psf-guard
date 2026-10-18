@@ -29,6 +29,9 @@ pub struct DbEntry {
     pub id: String,
     pub name: String,
     pub db_path: String,
+    /// External TS file retained after importing an owned working catalog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_sync: Option<crate::ts_sync::Settings>,
     #[serde(default)]
     pub image_dirs: Vec<String>,
     /// Per-DB overrides for the out-of-tree reject-archive feature (see
@@ -932,6 +935,7 @@ impl DbRegistry {
                 .unwrap_or_else(|| "Database".to_string());
             reg.active_db_id = Some(slug.clone());
             reg.databases.push(DbEntry {
+                ts_sync: None,
                 id: slug,
                 name,
                 db_path,
@@ -1006,6 +1010,7 @@ impl DbRegistry {
             None => self.unique_slug(compute_default_slug(&db_path)),
         };
         self.databases.push(DbEntry {
+            ts_sync: None,
             id: slug,
             name,
             db_path,
@@ -1241,6 +1246,7 @@ mod tests {
         let path = dir.path().join("config.json");
         let mut reg = DbRegistry::default();
         reg.databases.push(DbEntry {
+            ts_sync: None,
             id: "remote".into(),
             name: "Remote".into(),
             db_path: "/tmp/remote.sqlite".into(),

@@ -27,6 +27,7 @@ export type ActivityControl =
   | { kind: 'duplicates'; dbId: string }
   | { kind: 'rejects'; dbId: string }
   | { kind: 'backup' }
+  | { kind: 'ts-sync'; jobId: string }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string };
 
