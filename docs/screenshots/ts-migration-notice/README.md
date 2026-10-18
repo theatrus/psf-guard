@@ -26,3 +26,10 @@ paragraphs for the upgrade plan and its benefit.
 [captures-plain-copy.json](captures-plain-copy.json) records this reshoot's source,
 state, viewports, crops, hashes and steps. The earlier images and their record
 remain unchanged.
+
+## Import and sync recommendation
+
+The `*-import-sync.png` captures add the explicit recommendation for new
+Target Scheduler databases before the guidance for existing setups.
+[captures-import-sync.json](captures-import-sync.json) records this reshoot,
+including the server's source and binary hash. Earlier captures remain unchanged.

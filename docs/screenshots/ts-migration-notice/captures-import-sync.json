@@ -1,0 +1,132 @@
+{
+  "source_commit": "249c036e653e525a19996b4dac2185f34690bb41",
+  "server": "PSF Guard 0.12.0 debug server built from the Rust source at 46e5645f8c7b14f9b4da1b742a481b75d3181417; fresh frontend from source_commit served via --static-dir.",
+  "frontend_html_sha256": "57b7e93f504f7bcbf46c6d83e94ae456963d247189d2ba303450b07b51c90df5",
+  "reshoot": "npm ci; npm run build in static. Use scripts/e2e-local.mjs e2e/whats-new.spec.ts with PSF_GUARD_E2E_BINARY pointing to a wrapper that calls a 0.12.0 server with --static-dir set to this worktree static/dist. Runner isolates registry and cache. It captures mobile before resizing to desktop.",
+  "source_state": "Clean source tree at 249c036e653e525a19996b4dac2185f34690bb41",
+  "previous_captures": "captures.json and captures-plain-copy.json record the earlier wording; those images remain unchanged.",
+  "server_rust_source_commit": "46e5645f8c7b14f9b4da1b742a481b75d3181417",
+  "server_binary_sha256": "28ca7704041464ad56dc404f6ab16c7cb83f0c932d564f35a1192a6ba1b21e07",
+  "captures": [
+    {
+      "file": "whats-new-desktop-chromium-import-sync.png",
+      "source_commit": "249c036e653e525a19996b4dac2185f34690bb41",
+      "version": "0.12.0",
+      "engine": "chromium",
+      "playwright_version": "1.64.1",
+      "url": "http://127.0.0.1:21080/",
+      "viewport_css": {
+        "width": 1280,
+        "height": 900
+      },
+      "crop_css": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 900
+      },
+      "device_scale_factor": 1,
+      "theme": "dark",
+      "state": "No databases registered in the disposable registry. The Library is empty; the plans section behind the dialog shows Every plan has frames. /api/info reports 0.12.0 and disables database management. No saved acknowledgment; What's new opens automatically. Three paragraphs: import and sync for new Target Scheduler databases, the future upgrade for existing setups, and the reason and removal plan. Body at top, preference unchecked, Done and close controls visible. The phone body scrolls.",
+      "capture_method": "Playwright full viewport PNG; unchanged pixels; no native bridge or live catalogs.",
+      "test": "e2e/whats-new.spec.ts — notes scroll while dismiss controls stay visible on a narrow screen",
+      "pixels": [
+        1280,
+        900
+      ],
+      "sha256": "d8e4f9424995de27a7f888d54ac686c32108bce34dc020b8bf1249b0463db431",
+      "time_utc": "2026-10-18T20:04:26.309777+00:00",
+      "reduced_motion": "no explicit preference"
+    },
+    {
+      "file": "whats-new-mobile-chromium-import-sync.png",
+      "source_commit": "249c036e653e525a19996b4dac2185f34690bb41",
+      "version": "0.12.0",
+      "engine": "chromium",
+      "playwright_version": "1.64.1",
+      "url": "http://127.0.0.1:21080/",
+      "viewport_css": {
+        "width": 390,
+        "height": 700
+      },
+      "crop_css": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 700
+      },
+      "device_scale_factor": 1,
+      "theme": "dark",
+      "state": "No databases registered in the disposable registry. The Library is empty; the plans section behind the dialog shows Every plan has frames. /api/info reports 0.12.0 and disables database management. No saved acknowledgment; What's new opens automatically. Three paragraphs: import and sync for new Target Scheduler databases, the future upgrade for existing setups, and the reason and removal plan. Body at top, preference unchecked, Done and close controls visible. The phone body scrolls.",
+      "capture_method": "Playwright full viewport PNG; unchanged pixels; no native bridge or live catalogs.",
+      "test": "e2e/whats-new.spec.ts — notes scroll while dismiss controls stay visible on a narrow screen",
+      "pixels": [
+        390,
+        700
+      ],
+      "sha256": "3f978b06d46a07a15c09f83971f581d7ba118243b776b5fc27a0ce8a623378dd",
+      "time_utc": "2026-10-18T20:04:26.262237+00:00",
+      "reduced_motion": "no explicit preference"
+    },
+    {
+      "file": "whats-new-desktop-webkit-import-sync.png",
+      "source_commit": "249c036e653e525a19996b4dac2185f34690bb41",
+      "version": "0.12.0",
+      "engine": "webkit",
+      "playwright_version": "1.64.1",
+      "url": "http://127.0.0.1:21080/",
+      "viewport_css": {
+        "width": 1280,
+        "height": 900
+      },
+      "crop_css": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 900
+      },
+      "device_scale_factor": 2,
+      "theme": "dark",
+      "state": "No databases registered in the disposable registry. The Library is empty; the plans section behind the dialog shows Every plan has frames. /api/info reports 0.12.0 and disables database management. No saved acknowledgment; What's new opens automatically. Three paragraphs: import and sync for new Target Scheduler databases, the future upgrade for existing setups, and the reason and removal plan. Body at top, preference unchecked, Done and close controls visible. The phone body scrolls.",
+      "capture_method": "Playwright full viewport PNG; unchanged pixels; no native bridge or live catalogs.",
+      "test": "e2e/whats-new.spec.ts — notes scroll while dismiss controls stay visible on a narrow screen",
+      "pixels": [
+        2560,
+        1800
+      ],
+      "sha256": "78e5eec83afa030cf75f734ddfbc6604721a3ee5d9d95f9dc9049ecbba379431",
+      "time_utc": "2026-10-18T20:04:29.646100+00:00",
+      "reduced_motion": "reduce"
+    },
+    {
+      "file": "whats-new-mobile-webkit-import-sync.png",
+      "source_commit": "249c036e653e525a19996b4dac2185f34690bb41",
+      "version": "0.12.0",
+      "engine": "webkit",
+      "playwright_version": "1.64.1",
+      "url": "http://127.0.0.1:21080/",
+      "viewport_css": {
+        "width": 390,
+        "height": 700
+      },
+      "crop_css": {
+        "x": 0,
+        "y": 0,
+        "width": 390,
+        "height": 700
+      },
+      "device_scale_factor": 2,
+      "theme": "dark",
+      "state": "No databases registered in the disposable registry. The Library is empty; the plans section behind the dialog shows Every plan has frames. /api/info reports 0.12.0 and disables database management. No saved acknowledgment; What's new opens automatically. Three paragraphs: import and sync for new Target Scheduler databases, the future upgrade for existing setups, and the reason and removal plan. Body at top, preference unchecked, Done and close controls visible. The phone body scrolls.",
+      "capture_method": "Playwright full viewport PNG; unchanged pixels; no native bridge or live catalogs.",
+      "test": "e2e/whats-new.spec.ts — notes scroll while dismiss controls stay visible on a narrow screen",
+      "pixels": [
+        780,
+        1400
+      ],
+      "sha256": "41c621e4c7451e49d7f2d839da3e96850e0ebc0c790070368d900434f3cef8ad",
+      "time_utc": "2026-10-18T20:04:29.589247+00:00",
+      "reduced_motion": "reduce"
+    }
+  ]
+}
