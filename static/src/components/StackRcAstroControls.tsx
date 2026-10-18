@@ -45,7 +45,7 @@ export default function StackRcAstroControls({
           </header>
           <p>{capabilities.data?.error ?? capabilities.error?.message ??
             (capabilities.isPending ? 'Checking server availability.' :
-              'RC-Astro is not installed on this server. Saved steps are retained.')}</p>
+              'RC-Astro is not installed on this server. Your saved processing steps are unchanged.')}</p>
           {!!config?.steps.length && (
             <>
               <ol>{orderedSteps(config.steps).map((step) => (

@@ -151,21 +151,21 @@ rules persist across restarts, as does the last backup's result. PSF Guard
 saves them in `backup-state.json` beside the registry. You can also stop a
 run while it waits.
 
-After a complete run the schedule removes its own older archives by the
-rule you chose:
+After a complete scheduled backup, PSF Guard deletes older archives according
+to the rule you chose, with these safeguards:
 
-- It removes only files named like a scheduled backup whose manifest says
-  this install's schedule made them. Archives you made by hand, another
-  install's archives in a shared folder, and other files stay. Saving the
-  schedule gives the install an id, which every archive records.
-- An archive holding a catalog the new archive lacks stays, so the last copy
-  of a catalog is never removed. A catalog that stays unreachable, such as
-  one on an unplugged disk, does not stop pruning: later archives without it
-  still replace each other, the archives holding it stay, and Settings says
-  "Kept N older backups because they hold <catalog>, which this run left
-  out." After you change the scope from settings and catalogs to settings
-  only, remove the older full archives by hand.
-- A run that could not copy a settings file removes nothing, and says so.
+- It deletes only scheduled archives made by this installation. It checks both
+  the file name and the manifest. Manual backups, backups from another
+  installation and other files stay unchanged. Each archive records the
+  installation id created when you save the schedule.
+- It keeps older archives that contain a catalog missing from the new backup.
+  If a catalog stays unreachable, for example on an unplugged disk, PSF Guard
+  still removes older backups of the available catalogs. It keeps backups of
+  the missing catalog, and Settings shows "Kept N older backups because they
+  hold <catalog>, which this run left out." If you change the schedule to back
+  up settings only, remove older full backups by hand when you no longer need them.
+- If PSF Guard cannot copy a settings file, it reports the error and deletes
+  no older archives.
 
 Every run also clears work-in-progress files a crashed run left in its
 folder over a day ago.

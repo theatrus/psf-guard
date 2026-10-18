@@ -24,7 +24,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       const status = await apiClient.getAuthStatus();
       if (!status.authenticated) {
         throw new Error(
-          'Sign in succeeded, but this browser did not retain the session. ' +
+          'You signed in, but this browser could not save your session. ' +
           'Use HTTPS, or set secure_cookie = false in [server.auth] for a trusted direct HTTP connection.'
         );
       }

@@ -151,7 +151,7 @@ describe('AuthGate', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'this browser did not retain the session'
+      'this browser could not save your session'
     );
     expect(screen.getByRole('heading', { name: 'Sign in to PSF Guard' })).toBeInTheDocument();
   });

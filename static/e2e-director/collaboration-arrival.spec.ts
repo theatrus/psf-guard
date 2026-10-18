@@ -194,7 +194,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     await expect(collaboration).toContainText('Contribution queued for check-in');
     expect(received).toHaveLength(0);
     await collaboration.getByRole('button', { name: 'Check in', exact: true }).click();
-    await expect(collaboration.getByRole('alert')).toContainText('queued reports retained');
+    await expect(collaboration.getByRole('alert')).toContainText('Your reports are still queued to send');
     expect(received).toHaveLength(1);
     failDelivery = false;
     await collaboration.getByRole('button', { name: 'Check in', exact: true }).click();

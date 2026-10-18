@@ -49,7 +49,7 @@ describe('Collaboration work transfer', () => {
       HttpResponse.json({ error: 'Collaboration server returned an unsuccessful response' }, { status: 502 })));
     setup();
     await userEvent.click(screen.getByRole('button', { name: 'Check in' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Check-in failed; queued reports retained. Collaboration server returned an unsuccessful response');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Check-in failed. Your reports are still queued to send. Collaboration server returned an unsuccessful response');
     expect(screen.getByRole('button', { name: 'Check in' })).toBeEnabled();
   });
   it('pulls tonight without manual context and freezes the resolved night through review and apply', async () => {

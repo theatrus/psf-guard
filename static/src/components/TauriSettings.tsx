@@ -1651,10 +1651,10 @@ export default function TauriSettings({
               />
               <span>
                 <small>
-                  Skip processing artifacts (integration masters and
-                  calibrated/registered intermediates). Useful when a scanned
-                  folder contains a processing tree whose derived files repeat
-                  exposures already cataloged.
+                  Skip processed files. Skip integration masters. When pairing
+                  is off, also skip calibrated and registered copies. Use this
+                  when the folder contains processing results as well as raw
+                  images.
                 </small>
               </span>
             </label>
@@ -1667,11 +1667,10 @@ export default function TauriSettings({
               />
               <span>
                 <small>
-                  Include frames from other rigs. By default a light whose
-                  telescope matches none this catalog has recorded is listed
-                  and left out, since it is usually another instrument&apos;s
-                  file in this catalog&apos;s folders. Turn this on after a
-                  scope change.
+                  Include frames from other rigs. PSF Guard normally lists lights
+                  from an unknown telescope without importing them. If telescope
+                  headers are missing, it checks the camera instead. Turn this on
+                  when you change telescopes.
                 </small>
               </span>
             </label>
@@ -1693,14 +1692,13 @@ export default function TauriSettings({
           <>
             {(importProgress.outcome.skipped_processed ?? 0) > 0 && (
               <div className="muted">
-                {importProgress.outcome.skipped_processed} processing artifact(s)
-                (masters, calibrated/registered intermediates) skipped.
+                {importProgress.outcome.skipped_processed} processed file(s) skipped.
               </div>
             )}
             {(importProgress.outcome.skipped_out_of_scope ?? 0) > 0 && (
               <div className="muted">
-                {importProgress.outcome.skipped_out_of_scope} frame(s) outside the
-                selected scope.
+                {importProgress.outcome.skipped_out_of_scope} frame(s) excluded by the
+                selected frame type.
               </div>
             )}
             {scanRuleNotes(importProgress.outcome).length > 0 && (

@@ -7,7 +7,7 @@ import HeaderMenu from '../header/HeaderMenu';
 import { acknowledgeVersion, WHATS_NEW_KEY } from '../../updates/whatsNew';
 
 vi.mock('../../updates/highlights.json', () => ({ default: [
-  { version: '1.2.0', deprecations: [], upgradeNotes: [{ title: 'Move settings', body: 'Copy the settings folder.' }], highlights: [{ title: 'New stacks', body: 'Build stacks.' }] },
+  { version: '1.2.0', deprecations: [], upgradeNotes: [{ title: 'Move settings', body: 'Copy the settings folder.\n\nRestart PSF Guard.' }], highlights: [{ title: 'New stacks', body: 'Build stacks.' }] },
   { version: '1.1.0', deprecations: [{ title: 'Old export removed', body: 'Use the new export.' }], upgradeNotes: [], highlights: [] },
 ] }));
 
@@ -27,6 +27,8 @@ describe("What's new", () => {
     expect(screen.getByRole('dialog', { name: "What's new in PSF Guard v1.2.0" })).toBeVisible();
     expect(screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent)).toEqual(['Upgrade notes', 'New features']);
     expect(screen.queryByText('Old export removed')).not.toBeInTheDocument();
+    expect(screen.getByText('Copy the settings folder.').tagName).toBe('P');
+    expect(screen.getByText('Restart PSF Guard.').tagName).toBe('P');
     expect(screen.getByRole('link', { name: 'Full release notes for v1.2.0' })).toHaveAttribute('href', 'https://github.com/theatrus/psf-guard/releases/tag/v1.2.0');
   });
 

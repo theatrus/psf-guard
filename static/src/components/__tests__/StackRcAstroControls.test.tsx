@@ -183,7 +183,7 @@ describe('StackRcAstroControls', () => {
       result={{ cli_version: '2.6.6', has_stars: true, steps: [{ tool: 'sxt',
         name: 'StarXTerminator', ml_version: 11, warnings: [] }] }}
       disabled={false} onChange={onChange} />, { wrapper: wrapper() });
-    expect(await screen.findByText(/Saved steps are retained/)).toBeInTheDocument();
+    expect(await screen.findByText(/Your saved processing steps are unchanged/)).toBeInTheDocument();
     expect(screen.getByText('RC-Astro 2.6.6')).toBeInTheDocument();
     expect(screen.getByText(/StarXTerminator · model 11/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Remove RC-Astro steps' }));

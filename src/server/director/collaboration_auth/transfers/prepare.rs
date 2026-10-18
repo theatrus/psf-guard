@@ -161,7 +161,7 @@ pub(super) fn manifest(
     let mut calibration_sets = BTreeMap::new();
     let mut files = BTreeMap::new();
     let mut review_reasons = BTreeSet::new();
-    let mut warnings=vec!["Starfront stores these files but does not receive the per-light calibration manifest yet. The manifest is retained locally.".to_owned()];
+    let mut warnings=vec!["Starfront stores these files but does not yet receive the record of calibration used for each light. PSF Guard keeps that record in this catalog.".to_owned()];
     for (guid, (image, target, target_guid)) in &rows {
         if stopping() {
             return Err(Failure(

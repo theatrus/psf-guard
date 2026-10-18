@@ -1450,8 +1450,8 @@ sync boundary before native schemas change. Existing direct-open registrations
 remain supported through 0.12; that release does not convert them. A later
 release will automatically migrate them to PSF Guard-owned catalogs with TS
 sync. Direct access is deprecated, with removal deferred to 0.13 or later.
-Separate catalogs give each product control of its own data and help us support
-both PSF Guard and Target Scheduler as they develop.
+Separate catalogs let us add features to PSF Guard and support new Target
+Scheduler versions.
 
 Decision, 2026-09-26: neither Director nor future PSF Guard catalogs must use the
 TS schema internally. The meta/per-rig split remains: global coordination in the

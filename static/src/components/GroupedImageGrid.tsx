@@ -308,7 +308,7 @@ export default function GroupedImageGrid({ useLazyImages = false }: GroupedImage
   } else if (quality.error) {
     qualityStatus = {
       label: 'Quality: unavailable',
-      title: 'Sequence quality could not be loaded for this scope.',
+      title: 'Could not load sequence scores for the images in this view.',
     };
   } else if (scoredImageCount > 0 && unscoredImageCount > 0) {
     qualityStatus = {

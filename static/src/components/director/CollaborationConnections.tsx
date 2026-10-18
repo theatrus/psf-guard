@@ -62,11 +62,11 @@ function ConnectionControls({ connection, canWrite, refresh, onUpdate, onSetup }
   return <section aria-label="Connection details">
     <dl className="collaboration-evidence"><div><dt>Server</dt><dd>{b.base_url}</dd></div><div><dt>Status</dt><dd>{connectionStates[connection.status]}</dd></div>
       <div><dt>Agent</dt><dd>{b.agent_id ?? 'Not registered'}</dd></div></dl>
-    {['credential_missing', 'reauth_required', 'storage_unavailable', 'outcome_unknown'].includes(connection.status) && <p role="alert">{connectionStates[connection.status]}. Original agent, work and reports retained; check the connection before registering a replacement.</p>}
+    {['credential_missing', 'reauth_required', 'storage_unavailable', 'outcome_unknown'].includes(connection.status) && <p role="alert">{connectionStates[connection.status]}. Your agent registration, assigned work and queued reports are unchanged. Check the connection before registering a replacement agent.</p>}
     <div className="director-actions">
       {(fresh || (connection.status === 'registered' && !b.settings)) && <button type="button" disabled={busy} onClick={onSetup}><Link2 size={16} />Continue setup</button>}
       {b.agent_id && b.state !== 'disabled' && <button type="button" disabled={busy} onClick={() => operation.mutate('validate')}><RefreshCw size={16} />Check connection</button>}
-      {b.state !== 'disabled' && <button type="button" disabled={busy} onClick={() => { if (window.confirm('Disconnect this agent? Its identity, work and reports will be retained.')) operation.mutate('disconnect'); }}><Unplug size={16} />Disconnect</button>}
+      {b.state !== 'disabled' && <button type="button" disabled={busy} onClick={() => { if (window.confirm('Disconnect this agent? PSF Guard will remove the saved token for this connection. The agent stays registered on the server. Assigned work and queued reports stay saved.')) operation.mutate('disconnect'); }}><Unplug size={16} />Disconnect</button>}
     </div>
     {operation.isPending && <p role="status">Contacting collaboration server...</p>}
     {operation.isError && <p role="alert">{collaborationMessage(operation.error)}</p>}

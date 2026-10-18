@@ -160,10 +160,10 @@ export default function SatellitePanel({
       {analysis && (
         <p className="astrometry-message">
           {risk?.pixel_aligned_count
-            ? `Pixel corridor evidence supports ${risk.pixel_aligned_count} orbital candidate${risk.pixel_aligned_count === 1 ? '' : 's'}; identity remains a candidate association.`
+            ? `Detected trails line up with ${risk.pixel_aligned_count} predicted satellite path${risk.pixel_aligned_count === 1 ? '' : 's'}. The satellite names are possible identifications.`
             : risk?.pixel_alignment_attempted
-              ? 'Orbital prediction only; the pixel corridor check found no matching trail.'
-              : `Orbital prediction from ${analysis.catalog.state.replaceAll('_', ' ')} elements; pixel alignment was unavailable.`}
+              ? 'These paths are predictions. The trail check found no match along them.'
+              : `These paths are predictions from ${analysis.catalog.state.replaceAll('_', ' ')} orbital elements. The image could not be checked for matching trails.`}
         </p>
       )}
       {(error || predictError || analysis?.pixel_alignment_error || analysis?.catalog.warning) && (

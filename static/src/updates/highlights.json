@@ -3,8 +3,8 @@
     "version": "0.12.0",
     "deprecations": [
       {
-        "title": "Direct Target Scheduler access is deprecated",
-        "body": "Existing direct-open registrations and CLI/API access still work through 0.12. This release leaves registrations unchanged. A later release will migrate them automatically to PSF Guard-owned catalogs with Target Scheduler sync. Separate catalogs give each product control of its own data and help us support both products as they develop. Removal of direct access is planned for 0.13 or later."
+        "title": "PSF Guard is moving to its own catalogs",
+        "body": "Your current Target Scheduler setup will keep working in 0.12. A later update will create a PSF Guard catalog for you and keep captures, plans and grades in sync with Target Scheduler.\n\nSeparate catalogs let us add features to PSF Guard and support new Target Scheduler versions. We plan to remove direct database access in 0.13 or later."
       }
     ],
     "upgradeNotes": [

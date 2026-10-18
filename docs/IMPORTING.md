@@ -119,15 +119,15 @@ templates, or an expired transfer, needs a new activation preview. Unrelated
 projects can be delivered independently. Retry never exports unreviewed local
 edits, and refreshing a preview in Settings does not approve an activation.
 
-Existing registrations that open TS directly remain supported through 0.12.
-PSF Guard 0.12 does not migrate them on startup. A later release will
-automatically migrate these registrations to PSF Guard-owned catalogs with
-Target Scheduler sync. Direct access is deprecated, with removal planned for
-0.13 or later.
+**PSF Guard is moving to its own catalogs.** Your current Target Scheduler
+setup will keep working in 0.12. A later update will create a PSF Guard catalog
+for you and keep captures, plans and grades in sync with Target Scheduler.
 
-Separate catalogs give each product control of its own data and help us support
-both PSF Guard and Target Scheduler as they develop. The owned catalogs in 0.12
-still use the TS schema; a native schema is a separate change.
+Separate catalogs let us add features to PSF Guard and support new Target
+Scheduler versions. We plan to remove direct database access in 0.13 or later.
+
+Direct CLI/API access also keeps working in 0.12. The PSF Guard catalogs in
+0.12 still use the TS schema; a native schema is a separate change.
 
 ## What counts as a frame
 
@@ -312,22 +312,19 @@ The preview also carries the run's scope controls:
   over, keeping its grade. A registered copy with no light is left out.
   The database's **Pair calibrated and registered copies** setting turns
   this off; the CLI takes `--no-pairing`.
-- **Skip processing artifacts** (opt-in): leaves out integration masters,
-  and with pairing off, calibrated and registered copies too. Off by
-  default — masters are worth cataloging, and later releases will surface a
-  finished project's master lights in its display.
-- **Include frames from other rigs** (opt-in): a catalog learns its rigs,
-  the telescope and camera in its frames' headers, from the
-  calibration frames and lights it has accepted. Once it knows one, a light
-  whose telescope matches none of them (or whose camera does, when the
-  frame records no telescope) is listed by rig, with an example file, and
-  left out, because another instrument's file in this catalog's folders is
-  a filing mistake far more often than a new scope, and once filed it reads
-  as a night this rig never had. The same scope under a new camera, or a
-  camera whose driver spells its name differently, is still this rig. Turn
-  this on after a genuine scope change; the run then records the new rig
-  and later runs accept it on their own. A remote upload from another rig
-  is refused with the same explanation.
+- **Skip processed files** (opt-in): skip integration masters. When pairing
+  is off, also skip calibrated and registered copies. Leave this off to
+  catalog masters as well as raw images.
+- **Include frames from other rigs** (opt-in): import lights from a telescope
+  the catalog has not seen before. By default, PSF Guard learns telescope
+  and camera names from the calibration frames and lights already in the
+  catalog. It lists lights from an unknown telescope by rig, with an example
+  file, without importing them. When telescope headers are missing, it checks
+  the camera instead. This keeps another rig's images out of the catalog.
+  A known telescope with a new camera, or a different driver spelling for the
+  camera, still counts as the same rig. Turn this on when you change telescopes;
+  PSF Guard records the new rig and accepts its frames in later imports.
+  Remote uploads also refuse lights from an unknown rig.
 
 Change any of them and choose **Update preview** to re-run the dry preview
 before confirming.

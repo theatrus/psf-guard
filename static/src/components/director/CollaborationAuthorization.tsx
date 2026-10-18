@@ -52,6 +52,6 @@ export default function CollaborationAuthorization({ connection, canWrite, refre
       <button type="submit" disabled={busy || !code.trim()}><Link2 size={16} />Pair</button>
     </form>}
     {capabilities && !capabilities.signin && !capabilities.pairing && <p role="alert">This server offers no supported authentication method.</p>}
-    {!fresh && !waiting && connection.status !== 'registered' && <p>Original agent, work and reports retained. Check the connection before registering a replacement.</p>}
+    {!fresh && !waiting && connection.status !== 'registered' && <p>Your agent registration, assigned work and queued reports are unchanged. Check the connection before registering a replacement agent.</p>}
   </section>;
 }

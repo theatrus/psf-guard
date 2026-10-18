@@ -454,7 +454,7 @@ pub(super) async fn run(
                 .await?
                 .ok_or(Failure(
                     StatusCode::CONFLICT,
-                    "Credential missing; existing plans retained",
+                    "The saved token is missing. Your existing plans are unchanged.",
                 ))?;
             let remote = Remote::new(&b)?;
             workflows::hello(service.clone(), &b, &remote, &token).await?;
