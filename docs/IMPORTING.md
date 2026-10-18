@@ -8,7 +8,10 @@ detection, photometry, or plate solving.
 
 ## Import from Target Scheduler
 
-Open **Settings → Databases → Import from Target Scheduler**. Choose how to connect:
+Open **Settings → Databases → Import from Target Scheduler**. The **Start a
+catalog** choices keep image-folder import available alongside both TS options.
+Choose **Image folders** to build a catalog from FITS or XISF folders; switching
+choices keeps any folders you have already added. To connect TS, choose:
 
 - **Import a local TS file**: select the source SQLite file, enter a display
   name, add the image folders, then click **Import from Target Scheduler**.
@@ -44,8 +47,9 @@ The source needs the GUID columns provided by TS schema v22 or later. Under
   thirty seconds.
 - **Sync interval (minutes; 0 disables the schedule)** for periodic sync. The
   default is five minutes. Zero leaves startup and change detection unchanged.
-- **Write local grade changes back to Target Scheduler** to send edits made in
-  PSF Guard. Turn this off to import captures without writing grades to TS.
+- **Automatically write grade changes back to Target Scheduler** to send edits made in
+  PSF Guard automatically. When this is off, manual planning and grade
+  transfers remain available through Preview and Apply.
 
 Click **Save sync settings**. Automatic imports preserve reviewed local grades
 and existing planning settings. They add missing parent records for new

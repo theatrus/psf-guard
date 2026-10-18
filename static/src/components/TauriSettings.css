@@ -2802,3 +2802,76 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Every creation path stays available while choosing a catalog source. */
+.tauri-settings .catalog-source-options {
+  border: 0;
+  padding: 0;
+  margin: 0 0 20px;
+  min-width: 0;
+}
+
+.tauri-settings .catalog-source-options legend {
+  padding: 0;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.tauri-settings .catalog-source-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.tauri-settings .catalog-source-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tauri-settings .catalog-source-option:has(input[aria-checked='true']) {
+  background: var(--state-on-bg);
+  border-color: var(--state-on-border);
+}
+
+.tauri-settings .catalog-source-option:has(input:focus-visible) {
+  outline: 2px solid var(--state-focus-border);
+  box-shadow: var(--state-focus-ring);
+}
+
+.tauri-settings .catalog-source-option strong,
+.tauri-settings .catalog-source-option small {
+  display: block;
+  line-height: 1.4;
+}
+
+.tauri-settings .catalog-source-option small {
+  margin-top: 6px;
+  color: var(--color-text-secondary);
+}
+
+.tauri-settings .catalog-create-form .database-config {
+  margin-bottom: 16px;
+}
+
+.tauri-settings .catalog-create-form .database-config .file-path-input {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+
+.tauri-settings .catalog-create-form .file-input-group > .path-field {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .tauri-settings .catalog-source-grid {
+    grid-template-columns: 1fr;
+  }
+}

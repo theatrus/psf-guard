@@ -29,8 +29,8 @@ export default function TsSyncSettings({ dbId, settings, onSaved }: {
         <label className="checkbox-label"><input type="checkbox" checked={value.on_change} onChange={e => setValue({ ...value, on_change: e.target.checked })} /> Sync when new images or grades arrive</label>
         <label>Sync interval (minutes; 0 disables the schedule)<input type="number" min={0} max={10080} required value={value.interval_minutes}
           onChange={e => setValue({ ...value, interval_minutes: Number(e.target.value) })} /></label>
-        <label className="checkbox-label"><input type="checkbox" checked={value.writeback} onChange={e => setValue({ ...value, writeback: e.target.checked })} /> Write local grade changes back to Target Scheduler</label>
-        <p>Automatic writeback leaves conflicting TS grades unchanged. Use Sync to preview and apply planning changes or resolve grade differences.</p>
+        <label className="checkbox-label"><input type="checkbox" checked={value.writeback} onChange={e => setValue({ ...value, writeback: e.target.checked })} /> Automatically write grade changes back to Target Scheduler</label>
+        <p>Automatic writeback leaves conflicting TS grades unchanged. When this is off, you can still use Sync to preview and apply planning or grade transfers.</p>
         <button type="submit" disabled={!dirty}>Save sync settings</button>
       </fieldset>
     </form>

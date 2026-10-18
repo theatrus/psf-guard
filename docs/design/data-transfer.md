@@ -1,12 +1,12 @@
 # Data transfer, database merge, and remote sync
 
 Status: local and remote merge, planning, grade, and image-upload paths are
-implemented. Native one-off file handles and the N.I.N.A. plugin remain
-follow-up work.
+implemented, including saved TS file connections and the N.I.N.A. Sync API.
+Native one-off file handles remain follow-up work.
 
 ## Purpose
 
-Architectural follow-on (planned, not current behavior): the
+Native-schema follow-on (planned): the
 [Director design](director.md#native-catalogs-and-target-scheduler-exchange)
 allows PSF Guard-owned catalog schemas. Target Scheduler becomes an explicit
 import and bidirectional sync connection in Settings/UI. The transfer rules in
@@ -22,7 +22,7 @@ PSF Guard needs one safe way to:
 - merge one Target Scheduler database into another;
 - send planning changes or reviewed grades to another database;
 - do the same work through a remote PSF Guard server; and
-- later let a N.I.N.A. plugin provide the telescope-side endpoint.
+- let a N.I.N.A. plugin provide the telescope-side endpoint.
 
 The design must not require Syncthing, Dropbox, or another file copier to move
 a live SQLite database. N.I.N.A. may write that file while an outside process
@@ -45,21 +45,22 @@ The repository already has most of the local merge rules:
 - `sync planning` sends projects, targets, templates, plans, and rule weights
   without changing capture history, plan progress, or grades.
 - `sync grades` sends grading state and reject reasons by image GUID.
-- The management API and Settings UI expose local pull and planning push.
+- The management API and Settings UI expose previewed merges, planning pushes
+  and grade pushes.
+- Owned catalogs retain a TS connection for automatic capture imports and
+  conditional grade writeback, or receive captures through the Sync plugin.
 
 The remaining pieces are:
 
-- one clear transfer workspace instead of controls repeated under each catalog;
-- durable job and preview state;
-- local-file selection without first keeping a catalog in the registry;
-- a N.I.N.A. plugin that calls the remote sync and intake endpoints.
+- durable job history across server restarts;
+- one-off native file selection without retaining a connection.
 
 ## Terms
 
 **Catalog endpoint**
 : A readable or writable source of catalog records. It can be a registered
   local SQLite database, a file selected in the desktop app, a remote PSF Guard
-  server, or a future N.I.N.A. plugin.
+  server, or a N.I.N.A. plugin.
 
 **Merge**
 : A one-way, additive copy into a destination. It can insert and update rows

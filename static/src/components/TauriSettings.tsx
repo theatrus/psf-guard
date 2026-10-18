@@ -1016,7 +1016,7 @@ export default function TauriSettings({
 
     return (
       <section
-        className={entry ? 'db-row-editor' : 'settings-section'}
+        className={entry ? 'db-row-editor' : 'settings-section catalog-create-form'}
         aria-labelledby={editorHeadingId}
       >
         {entry ? (
@@ -1030,20 +1030,31 @@ export default function TauriSettings({
           <h3>{createMode ? 'New Database from Images' : 'Import from Target Scheduler'}</h3>
         )}
 
-        {!createMode && !editingId && <>
-          <fieldset className="autoimport-fields" disabled={isApplying || tsImportRunning}>
-            <legend>How to connect Target Scheduler</legend>
-            <label className="checkbox-label"><input type="radio" name="ts-import-method" checked={tsImportMethod === 'file'} onChange={() => setTsImportMethod('file')} /> Import a local TS file</label>
-            <label className="checkbox-label"><input type="radio" name="ts-import-method" checked={tsImportMethod === 'plugin'} onChange={() => setTsImportMethod('plugin')} /> Use the PSF Guard Sync plugin</label>
+        {!editingId && <>
+          <fieldset className="catalog-source-options" disabled={isApplying || tsImportRunning}>
+            <legend>Start a catalog</legend>
+            <div className="catalog-source-grid">
+              <label className="catalog-source-option">
+                <input type="radio" name="catalog-source" aria-label="Image folders" aria-checked={createMode} checked={createMode} onChange={() => setCreateMode(true)} />
+                <span><strong>Image folders</strong><small>Import FITS or XISF folders into a new catalog.</small></span>
+              </label>
+              <label className="catalog-source-option">
+                <input type="radio" name="catalog-source" aria-label="Import a local TS file" aria-checked={!createMode && tsImportMethod === 'file'} checked={!createMode && tsImportMethod === 'file'} onChange={() => { setCreateMode(false); setTsImportMethod('file'); }} />
+                <span><strong>Import a local TS file</strong><small>Copy a Target Scheduler database and keep it connected for sync.</small></span>
+              </label>
+              <label className="catalog-source-option">
+                <input type="radio" name="catalog-source" aria-label="Use the PSF Guard Sync plugin" aria-checked={pluginImport} checked={pluginImport} onChange={() => { setCreateMode(false); setTsImportMethod('plugin'); }} />
+                <span><strong>Use the PSF Guard Sync plugin</strong><small>Connect N.I.N.A. over the network. No local TS file required.</small></span>
+              </label>
+            </div>
           </fieldset>
-          <p className="muted">{pluginImport
-            ? 'Create a PSF Guard catalog, then pair the PSF Guard Sync plugin in N.I.N.A. The plugin transfers captures and reviewed grades over the network. Choose an empty image folder for a new catalog, or a shared folder containing your images. You can enable image uploads after creating the catalog.'
-            : 'PSF Guard copies this database into its own storage. The original remains connected for automatic imports and grade writeback. Image files stay in their current folders.'}</p>
+          {!createMode && <p className="muted">{pluginImport
+            ? 'Choose a shared image folder or an empty folder for incoming uploads. Create the catalog, then pair the plugin. The plugin controls its own sync schedule.'
+            : 'PSF Guard creates its own working copy. The original stays connected for automatic capture imports and grade writeback. Image files stay in their current folders.'}</p>}
         </>}
         {createMode && (
           <p className="muted">
-            Creates a brand-new Target Scheduler database and imports the
-            selected folders. Each target gets its own project. Nearby,
+            Builds a PSF Guard catalog from the selected image folders. Each target gets its own project. Nearby,
             similarly dated panels with matching panel names share a
             mosaic project. You can rename or reorganize them afterwards.
             The import reads headers only; pixel-based quality work is a
@@ -1052,8 +1063,9 @@ export default function TauriSettings({
         )}
 
         <div className="database-config">
-          <label>Display name (optional):</label>
+          <label htmlFor="database-display-name">Display name (optional):</label>
           <input
+            id="database-display-name"
             type="text"
             value={formName}
             onChange={(e) => setFormName(e.target.value)}
@@ -1797,11 +1809,11 @@ export default function TauriSettings({
           {!hasDatabases && managementAllowed && (
             <div className="welcome-message">
               <h3>🚀 Welcome to PSF Guard!</h3>
-              <p>
+              {!showAddForm && <p>
                 Start from folders of FITS or XISF images, or from a N.I.N.A.
                 scheduler database you already have. You can add more catalogs
                 later.
-              </p>
+              </p>}
               {!showAddForm && (
                 <div className="welcome-choices">
                   <button
@@ -1851,7 +1863,7 @@ export default function TauriSettings({
             </div>
           )}
 
-          <div className="settings-section">
+          {(hasDatabases || isLoading || importPreviewPanel) && <div className="settings-section">
             <h3>Configured Databases {hasDatabases && <span className="muted">({databases.length})</span>}</h3>
 
             {isLoading && <div className="detecting-database">Loading…</div>}
@@ -2016,7 +2028,7 @@ export default function TauriSettings({
             {importPreviewPanel && !databases.some((entry) => entry.id === importDbId) && (
               <div ref={importPreviewRef}>{importPreviewPanel}</div>
             )}
-          </div>
+          </div>}
 
           {managementAllowed && showAddForm && !editingId && renderDatabaseForm(null)}
           </div>

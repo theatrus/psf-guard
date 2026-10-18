@@ -148,6 +148,25 @@ test('first-run plugin import creates a catalog and opens pairing without a TS f
   await expect(page.locator('.remote-upload-token-notice').filter({ hasText: 'Paste this code' })).toBeVisible();
 });
 
+test('switch from TS setup to importing an image folder without selecting a database', async ({ page, request }) => {
+  await page.goto('/');
+  const modal = page.locator('.tauri-settings');
+  await modal.getByRole('button', { name: /Import from Target Scheduler/ }).click();
+  await modal.getByPlaceholder('Type an absolute path and press Add').fill(fixtureImageDir());
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
+  await modal.getByRole('radio', { name: 'Image folders', exact: true }).check();
+  await expect(modal.getByPlaceholder('Select or enter database path')).toBeHidden();
+  await modal.getByLabel('Display name (optional):').fill('Image folder import');
+  const createdResponse = page.waitForResponse(response => response.url().endsWith('/api/databases/create') && response.request().method() === 'POST');
+  await modal.getByRole('button', { name: 'Create & Import' }).click();
+  const response = await createdResponse;
+  expect(response.ok()).toBe(true);
+  const dbId = (await response.json()).data.database.id as string;
+  await expect.poll(async () => (await (await request.get(`/api/db/${dbId}/import`)).json()).data.progress.stage).toBe('complete');
+  const stats = (await (await request.get(`/api/db/${dbId}/stats/overall`)).json()).data;
+  expect(stats.total_images).toBe(4);
+});
+
 test('add then remove a database', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();

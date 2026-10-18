@@ -58,8 +58,9 @@ export default function SchedulerSyncControls({
     db_path: catalog.ts_sync.source_path, ts_sync: undefined,
   }] : [])]), [catalogs]);
   const queryClient = useQueryClient();
-  const [sourceId, setSourceId] = useState(databases.find(database => database.id.startsWith('ts:'))?.id ?? databases[0]?.id ?? '');
-  const [destinationId, setDestinationId] = useState(databases.some(database => database.id.startsWith('ts:')) ? databases[0]?.id ?? '' : databases[1]?.id ?? '');
+  const firstTs = databases.find(database => database.id.startsWith('ts:'));
+  const [sourceId, setSourceId] = useState(firstTs?.id ?? databases[0]?.id ?? '');
+  const [destinationId, setDestinationId] = useState(firstTs?.id.slice(3) ?? databases[1]?.id ?? '');
   const [kind, setKind] = useState<SchedulerSyncKind>('pull');
   const [withImageData, setWithImageData] = useState(true);
   const [pending, setPending] = useState<PendingSync | null>(null);
@@ -74,6 +75,7 @@ export default function SchedulerSyncControls({
   const destination = useMemo(
     () =>
       databases.find((database) => database.id === destinationId) ??
+      databases.find((database) => source?.id === `ts:${database.id}`) ??
       databases.find((database) => database.id !== source?.id),
     [databases, destinationId, source?.id]
   );

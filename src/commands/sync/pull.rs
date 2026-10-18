@@ -775,6 +775,7 @@ fn upsert_acquired_images(
     let guid_w = wpos("guid").unwrap();
     let grade_w = wpos("gradingStatus").ok_or_else(|| anyhow!("gradingStatus missing"))?;
     let reason_w = wpos("rejectreason");
+    let tracks_ts_grades = super::table_has_column(tx, "psf_guard_ts_sync_grade", "guid");
     let proj_w = wpos("projectId").ok_or_else(|| anyhow!("projectId missing"))?;
     let tgt_w = wpos("targetId").ok_or_else(|| anyhow!("targetId missing"))?;
     let expo_w = wpos("exposureId");
@@ -965,6 +966,24 @@ fn upsert_acquired_images(
                         _ => String::new(),
                     };
                     id_map.insert(src_id, dest_id);
+                    if tracks_ts_grades {
+                        crate::ts_sync::seed_imported_grade(
+                            tx,
+                            &guid,
+                            as_i64(&write_values[grade_w]).unwrap_or(0),
+                            reason_w.and_then(|index| match &write_values[index] {
+                                Value::Text(reason) => Some(reason.as_str()),
+                                _ => None,
+                            }),
+                        )?;
+                    }
+                    if preserve_metadata
+                        && !took_raw
+                        && let Some(index) = metadata_w
+                    {
+                        write_values[index] =
+                            merge_owned_metadata(&write_values[index], &cur_vals[index]);
+                    }
                     let dest_grade = as_i64(&cur_vals[grade_w]).unwrap_or(0);
                     if dest_grade != 0 {
                         write_values[grade_w] = cur_vals[grade_w].clone();
@@ -998,6 +1017,17 @@ fn upsert_acquired_images(
                 }
                 ins_stmt.execute(params_from_iter(write_values.iter()))?;
                 let dest_id = tx.last_insert_rowid();
+                if tracks_ts_grades {
+                    crate::ts_sync::seed_imported_grade(
+                        tx,
+                        &guid,
+                        as_i64(&write_values[grade_w]).unwrap_or(0),
+                        reason_w.and_then(|index| match &write_values[index] {
+                            Value::Text(reason) => Some(reason.as_str()),
+                            _ => None,
+                        }),
+                    )?;
+                }
                 id_map.insert(src_id, dest_id);
                 summary.acquiredimage.inserted += 1;
                 summary.changed_acquiredimages.push(ChangedAcquiredImage {

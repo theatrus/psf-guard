@@ -36,6 +36,13 @@ describe('SchedulerSyncControls', () => {
     sessionStorage.clear();
   });
 
+  it('defaults a TS connection to its own catalog when another catalog appears first', () => {
+    render(<SchedulerSyncControls databases={[telescope, { ...local, ts_sync: { source_path: '/TS.sqlite', writeback: true, on_open: true, on_change: true, interval_minutes: 5 } }]} />, { wrapper: wrapper() });
+    const selects = screen.getAllByRole('combobox');
+    expect(selects[0]).toHaveValue('ts:local');
+    expect(selects[1]).toHaveValue('local');
+  });
+
   it('offers a saved TS file with a single owned catalog, including when it loads later', async () => {
     const requests: Record<string, unknown>[] = [];
     server.use(http.post('/api/databases/local/sync/preview', async ({ request }) => {

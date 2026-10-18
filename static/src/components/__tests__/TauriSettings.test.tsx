@@ -838,6 +838,22 @@ describe('TauriSettings first run', () => {
     expect(screen.getByText('N.I.N.A. Database File:')).toBeInTheDocument();
   });
 
+  it('keeps image-folder import available from the TS flow and preserves entered folders', async () => {
+    serveEmptyRegistry();
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.change(await screen.findByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Image folders' }));
+    expect(screen.getByRole('heading', { name: 'New Database from Images' })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Select or enter database path')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create & Import' })).toBeEnabled();
+    expect(screen.getByText('📂 /images')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Configured Databases' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Import a local TS file' }));
+    expect(screen.getByPlaceholderText('Select or enter database path')).toBeInTheDocument();
+    expect(screen.getByText('📂 /images')).toBeInTheDocument();
+  });
+
   it('offers the Sync plugin and opens pairing after creating its catalog without a TS file', async () => {
     serveEmptyRegistry();
     const database = { id: 'plugin', name: 'Plugin catalog', database_path: '/managed/plugin.sqlite', image_directories: ['/receive'] };

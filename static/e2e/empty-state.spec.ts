@@ -78,7 +78,7 @@ test('settings splits its jobs across tabs', async ({ page }) => {
     'aria-selected',
     'true'
   );
-  // Sync needs a catalog before it has anything to say, so it stays off the
+  // Sync needs a catalog before it can transfer data, so it stays off the
   // tab strip on a first run.
   await expect(modal.getByRole('tab', { name: 'Sync' })).toHaveCount(0);
 
@@ -106,9 +106,11 @@ test('settings splits its jobs across tabs', async ({ page }) => {
     'aria-selected',
     'true'
   );
+  await expect(modal.getByRole('heading', { name: /Welcome to PSF Guard/i })).toBeVisible();
+  // A first run shows the starting choices without an empty database list.
   await expect(
     modal.getByRole('heading', { name: 'Configured Databases' })
-  ).toBeVisible();
+  ).toBeHidden();
 });
 
 test('the overview import action opens settings on the create form', async ({

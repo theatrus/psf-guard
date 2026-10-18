@@ -70,6 +70,10 @@ async fn import_owns_a_complete_snapshot_and_retains_a_writeback_connection() {
             "/databases/{db_id}/sync/preview",
             post(handlers::preview_sync_database_route),
         )
+        .route(
+            "/databases/{db_id}/sync/previews/{preview_id}/apply",
+            post(handlers::apply_sync_database_preview_route),
+        )
         .with_state(state.clone());
     let (status, response) = call(
         app.clone(),
@@ -183,6 +187,12 @@ async fn import_owns_a_complete_snapshot_and_retains_a_writeback_connection() {
     )
     .await;
     assert_eq!(status, 200, "{response}");
+    owned
+        .execute(
+            "UPDATE acquiredimage SET gradingStatus=2 WHERE guid='image-guid'",
+            [],
+        )
+        .unwrap();
     let (status, response) = call(
         app.clone(),
         "POST",
@@ -190,7 +200,38 @@ async fn import_owns_a_complete_snapshot_and_retains_a_writeback_connection() {
         json!({"peer_db_id":"ts:rig","kind":"push_grades","dry_run":true}),
     )
     .await;
-    assert_eq!(status, 400, "{response}");
+    assert_eq!(status, 200, "{response}");
+    assert_eq!(
+        original
+            .query_row(
+                "SELECT gradingStatus FROM acquiredimage WHERE guid='image-guid'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1,
+        "a preview cannot write grades"
+    );
+    let preview_id = response["data"]["preview_id"].as_str().unwrap();
+    let (status, applied) = call(
+        app.clone(),
+        "POST",
+        &format!("/databases/rig/sync/previews/{preview_id}/apply"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, 200, "{applied}");
+    assert_eq!(
+        original
+            .query_row(
+                "SELECT gradingStatus FROM acquiredimage WHERE guid='image-guid'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        2,
+        "automatic writeback being off does not disable an explicit Apply"
+    );
     disabled.source_path = "/tmp/different-source.sqlite".into();
     let (status, response) = call(app, "PUT", "/databases/rig", json!({"ts_sync":disabled})).await;
     assert_eq!(status, 400, "{response}");

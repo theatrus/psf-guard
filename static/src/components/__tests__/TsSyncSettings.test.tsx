@@ -14,10 +14,10 @@ it('saves independent automatic sync controls and retains edits across an unchan
     return HttpResponse.json({ success: true, data: { id: 'rig' } });
   }));
   const { rerender } = render(<TsSyncSettings dbId="rig" settings={settings} onSaved={onSaved} />);
-  fireEvent.click(screen.getByLabelText('Write local grade changes back to Target Scheduler'));
+  fireEvent.click(screen.getByLabelText('Automatically write grade changes back to Target Scheduler'));
   fireEvent.change(screen.getByLabelText('Sync interval (minutes; 0 disables the schedule)'), { target: { value: '0' } });
   rerender(<TsSyncSettings dbId="rig" settings={{ ...settings }} onSaved={onSaved} />);
-  expect(screen.getByLabelText('Write local grade changes back to Target Scheduler')).not.toBeChecked();
+  expect(screen.getByLabelText('Automatically write grade changes back to Target Scheduler')).not.toBeChecked();
   expect(screen.getByLabelText('Sync when new images or grades arrive')).toBeChecked();
   fireEvent.click(screen.getByRole('button', { name: 'Save sync settings' }));
   await waitFor(() => expect(saved).toHaveBeenCalledWith({ ts_sync: { ...settings, writeback: false, interval_minutes: 0 } }));

@@ -16,6 +16,7 @@ mod tests;
 #[serde(default)]
 pub struct Settings {
     pub source_path: String,
+    /// Automatically export local grade changes. Explicit Preview/Apply is separate.
     pub writeback: bool,
     pub on_open: bool,
     pub on_change: bool,
@@ -110,6 +111,21 @@ fn baseline(conn: &Connection, guid: &str, local: &Grade, source: &Grade) -> Res
     Ok(())
 }
 
+/// Record a capture's incoming grade before a local review can change it.
+/// Call only when the destination already has this connection's baseline table.
+pub(crate) fn seed_imported_grade(
+    conn: &Connection,
+    guid: &str,
+    status: i64,
+    reason: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO psf_guard_ts_sync_grade VALUES(?1,?2,?3,?2,?3)",
+        params![guid, status, reason],
+    )?;
+    Ok(())
+}
+
 /// Call on the owned snapshot only, never on an external TS source.
 pub fn initialize(conn: &Connection) -> Result<()> {
     crate::commands::sync::require_pull_capable(conn)?;
@@ -173,11 +189,13 @@ pub fn synchronize(
     let before = grades(&tx)?;
     let mut changes = Vec::new();
     let mut dirty = HashSet::new();
+    let mut untracked = HashSet::new();
     let mut report = Report::default();
     for (guid, current) in &before {
         let previous = tx.query_row("SELECT local_grade,local_reason,source_grade,source_reason FROM psf_guard_ts_sync_grade WHERE guid=?1", [guid],
             |r| Ok((Grade {status:r.get(0)?,reason:r.get(1)?}, Grade {status:r.get(2)?,reason:r.get(3)?}))).optional()?;
         let Some((previous_local, previous_source)) = previous else {
+            untracked.insert(guid.clone());
             continue;
         };
         if current == &previous_local {
@@ -211,9 +229,9 @@ pub fn synchronize(
         if !dirty.contains(guid)
             && let Some(current) = after.get(guid)
         {
-            // Adoption can replace a PSF Guard-minted GUID with the TS GUID.
-            // Preserve a reviewed local decision as a pending local edit.
-            let initial = if !before.contains_key(guid) {
+            // Captures may arrive through another import or acquire the TS GUID
+            // by adoption. Preserve an untracked local review as an edit.
+            let initial = if !before.contains_key(guid) || untracked.contains(guid) {
                 source
             } else {
                 current

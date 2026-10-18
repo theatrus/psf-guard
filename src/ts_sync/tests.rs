@@ -302,13 +302,74 @@ fn an_adopted_capture_retains_its_local_review_for_writeback() {
     let (_snapshot_dir, snapshot) = catalog();
     let (_source_dir, mut source) = catalog();
     initialize(&local).unwrap();
-    local.execute_batch("UPDATE acquiredimage SET guid='psf-minted',gradingStatus=1,metadata='{\"FileName\":\"frame.fits\"}'").unwrap();
+    local.execute_batch("UPDATE acquiredimage SET guid='psf-minted',gradingStatus=1,metadata='{\"FileName\":\"frame.fits\",\"DetectedStars\":100,\"PsfGuardQualityFields\":[\"DetectedStars\"],\"PsfGuardQualitySource\":\"file:current\"}'").unwrap();
     snapshot
         .execute_batch("UPDATE acquiredimage SET metadata='{\"FileName\":\"frame.fits\"}'")
         .unwrap();
     synchronize(&mut local, &snapshot, Some(&mut source)).unwrap();
     assert_eq!(grades(&local).unwrap()["image-guid"].status, 1);
+    let metadata: String = local
+        .query_row("SELECT metadata FROM acquiredimage", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&metadata).unwrap()["DetectedStars"],
+        100
+    );
     let report = synchronize(&mut local, &snapshot, Some(&mut source)).unwrap();
     assert_eq!(report.grades_written, 1);
     assert_eq!(grades(&source).unwrap()["image-guid"].status, 1);
+}
+
+#[test]
+fn a_capture_received_by_manual_sync_tracks_reviews_before_the_first_automatic_run() {
+    for ts_changed in [false, true] {
+        let (_local_dir, mut local) = catalog();
+        let (_snapshot_dir, snapshot) = catalog();
+        let (_source_dir, mut source) = catalog();
+        initialize(&local).unwrap();
+        for conn in [&snapshot, &source] {
+            conn.execute_batch("INSERT INTO acquiredimage(Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,guid)
+                VALUES(8,1,1,2000,'Ha',0,'{}','manual-arrival')").unwrap();
+        }
+        let merged = crate::commands::sync::sync_pull(
+            &snapshot,
+            &local,
+            &crate::commands::sync::PullOptions {
+                dry_run: false,
+                with_image_data: false,
+                project_filter: None,
+            },
+        )
+        .unwrap();
+        let id: i64 = local
+            .query_row(
+                "SELECT Id FROM acquiredimage WHERE guid='manual-arrival'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(merged
+            .changed_acquiredimages
+            .iter()
+            .any(|image| image.id == id));
+        local
+            .execute(
+                "UPDATE acquiredimage SET gradingStatus=1 WHERE guid='manual-arrival'",
+                [],
+            )
+            .unwrap();
+        if ts_changed {
+            for conn in [&snapshot, &source] {
+                conn.execute("UPDATE acquiredimage SET gradingStatus=2,rejectreason='TS review' WHERE guid='manual-arrival'", []).unwrap();
+            }
+        }
+        let report = synchronize(&mut local, &snapshot, Some(&mut source)).unwrap();
+        assert_eq!(report.grades_written, usize::from(!ts_changed));
+        assert_eq!(report.conflicts, usize::from(ts_changed));
+        assert_eq!(
+            grades(&source).unwrap()["manual-arrival"].status,
+            if ts_changed { 2 } else { 1 }
+        );
+        assert_eq!(grades(&local).unwrap()["manual-arrival"].status, 1);
+    }
 }

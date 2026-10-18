@@ -1287,11 +1287,6 @@ fn sync_endpoint_paths(
             .find(owner)
             .and_then(|e| e.ts_sync.as_ref())
             .ok_or(AppError::NotFound)?;
-        if !matches!(request.kind, SchedulerSyncKind::Pull) && !settings.writeback {
-            return Err(AppError::BadRequest(
-                "Writeback is disabled for this TS connection.".into(),
-            ));
-        }
         PathBuf::from(&settings.source_path)
     } else {
         PathBuf::from(

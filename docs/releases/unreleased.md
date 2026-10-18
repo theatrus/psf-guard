@@ -33,7 +33,8 @@
 - **Import from Target Scheduler** creates a PSF Guard-owned catalog and retains
   the source for automatic capture imports and grade writeback. Configure sync
   on startup, when images or grades change, or on a schedule. The same flow
-  also offers a catalog and pairing setup for the PSF Guard Sync plugin. Conflicting TS
+  also offers a catalog and pairing setup for the PSF Guard Sync plugin. Image-folder
+  import stays available alongside both TS choices. Conflicting TS
   grades are reported without overwriting them. Existing direct-open catalogs
   remain supported through 0.12; removal is planned for 0.13 or later.
 - WBPP master copies show the current file and file counts in the dialog
