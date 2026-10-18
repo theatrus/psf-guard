@@ -83,6 +83,9 @@ it happens, what PSF Guard does automatically, and whether the reader needs
 to act. State the benefit in concrete terms. Do not make readers translate
 internal records or design goals into consequences for their work.
 
+If existing and new setups need different steps, state what each should do.
+Name the replacement and where to find it.
+
 | Avoid | Prefer |
 |---|---|
 | Existing direct-open registrations remain supported through 0.12. | Your current Target Scheduler setup will keep working in 0.12. |
