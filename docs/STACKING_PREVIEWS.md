@@ -1559,9 +1559,13 @@ default stretch is linked, so the balance survives it. A view whose stretch
 is set to unlinked stretches each channel on its own, and the card adds
 `channels stretched separately`. The calibration settings, the reference
 frame's solve and the Gaia catalog are part of the view's processing ID, so
-a mono stack's processing IDs do not change. A stack built before this
-release keeps its uncalibrated card preview until it is rebuilt or its view
-processing is applied.
+a mono stack's processing IDs do not change. The card preview and the
+processing each record the solve and catalog their calibration rested on.
+When either changes, as when Gaia colors are installed or the reference
+frame is solved again, the card shows `Out of date — Gaia colors were
+installed; rebuild the stack`, or `…; apply the processing again` for
+processing. A stack built before this release keeps its uncalibrated card
+preview until it is rebuilt or its view processing is applied.
 
 The request's `processing.color_calibration` takes `enabled`,
 `neutralize_background` (default true), and `white_reference`, either

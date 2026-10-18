@@ -860,6 +860,8 @@ export interface StackGroupStatus {
   output_channels: number;
   /** What color calibration did for a one-shot-color stack's preview. */
   color_calibration?: StackColorCalibrationOutcome | null;
+  /** Why the calibrated preview is out of date: a new solve or Gaia catalog. */
+  color_calibration_outdated?: string | null;
   sky_orientation: StackSkyOrientation | null;
   reference_image_id: number | null;
   total_exposure_seconds: number;
@@ -1254,6 +1256,8 @@ export interface StackStretchPreview {
   deconvolution: StackDeconvolutionResult | null;
   /** What color calibration did for a one-shot-color stack. */
   color_calibration?: StackColorCalibrationOutcome | null;
+  /** Why this processing is out of date: a new solve or Gaia catalog. */
+  color_calibration_outdated?: string | null;
   rc_astro?: StackRcAstroResult | null;
   rc_astro_id?: string | null;
   preview_url: string;

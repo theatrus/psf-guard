@@ -1500,6 +1500,8 @@ mod tests {
             sky_orientation: None,
             reference_image_id: Some(1),
             color_calibration: None,
+            color_calibration_basis: None,
+            color_calibration_outdated: None,
             total_exposure_seconds: 3.0,
             preview_url: None,
             fits_url: None,

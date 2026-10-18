@@ -266,6 +266,16 @@ function seedSyntheticOscStack(databaseId: string, projectId: number): void {
     },
     reference_image_id: 4, total_exposure_seconds: 180, preview_url: null, fits_url: null,
     error: null, input_images: [], frames: [],
+    // Built when a Gaia catalog was installed that the test server lacks,
+    // so the calibrated preview is out of date.
+    color_calibration: { status: 'skipped', reason: 'too_few_stars', detail: 'only 3 stars' },
+    color_calibration_basis: {
+      reference_image_id: 4, solution_fingerprint: null,
+      catalog: {
+        name: 'gaia_photometry', path: '/gone/stars-gaia-photometry.bin', format: 'SEIZAPH1',
+        size_bytes: 1, modified_unix_seconds: 1,
+      },
+    },
   };
   const remembered = {
     job_id: jobId, artifact_revision: 'synthetic-osc', accepted_only: false,
@@ -1688,11 +1698,21 @@ test('a phone folds the build options behind Options and gives the color cards t
   expect(card!.width).toBeGreaterThan(340);
 });
 
-test('color calibrates a one-shot-color stack by default and says why it could not', async ({ page }) => {
+test('color calibrates a one-shot-color stack by default, says why it could not, and flags a stale calibration', async ({ page }) => {
   seedSyntheticOscStack(dbId, 2);
   await page.setViewportSize({ width: 1440, height: 1200 });
   await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
   const card = page.locator('.stack-preview-card').filter({ hasText: 'Beta Field' }).first();
+  // The build's calibration rested on a Gaia catalog that is gone. The
+  // seeded stack records no input images, which the card reports first, so
+  // read the server's verdict on the preview itself.
+  const latest = await page.request.get(`/api/db/${encodeURIComponent(dbId)}/projects/2/stack-previews/latest`);
+  const seeded = (await latest.json()).data.groups.find(
+    (entry: { job_id: string }) => entry.job_id === 'c'.repeat(64)
+  );
+  expect(seeded.group.color_calibration_outdated).toBe(
+    'Out of date — Gaia colors were removed; rebuild the stack'
+  );
   const controls = card.locator('.stack-stretch-controls');
   await controls.locator('summary').click();
   const toggle = controls.getByRole('switch', { name: 'Color calibration' });
@@ -1705,4 +1725,11 @@ test('color calibrates a one-shot-color stack by default and says why it could n
     timeout: 60_000,
   });
   await expect(controls.locator('summary')).toContainText('applied');
+  // Processing made now rests on what is installed now.
+  const processing = await page.request.get(
+    `/api/db/${encodeURIComponent(dbId)}/stack-previews/${'c'.repeat(64)}/0/stretch`
+  );
+  const applied = (await processing.json()).data;
+  expect(applied.color_calibration?.status).toBe('skipped');
+  expect(applied.color_calibration_outdated ?? null).toBeNull();
 });

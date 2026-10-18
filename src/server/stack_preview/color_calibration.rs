@@ -368,6 +368,15 @@ pub struct StackCalibrationSource {
 }
 
 impl StackCalibrationSource {
+    /// What a calibration made now would rest on.
+    pub(super) fn basis(&self) -> StackColorCalibrationBasis {
+        StackColorCalibrationBasis {
+            reference_image_id: self.reference_image_id,
+            solution_fingerprint: self.solution.as_ref().map(solution_fingerprint),
+            catalog: self.catalog.clone(),
+        }
+    }
+
     pub(super) fn plan(&self, settings: StackColorCalibration) -> ColorCalibrationPlan {
         plan(
             settings,
@@ -376,6 +385,53 @@ impl StackCalibrationSource {
             self.solution.as_ref(),
             self.catalog.clone(),
         )
+    }
+}
+
+/// Why a one-shot-color result is out of date, if it is: the solve or the
+/// Gaia catalog its calibration rested on (`recorded`) is not what
+/// `current` offers now. A result recorded before the basis was kept is
+/// judged by its outcome instead: a skip for a missing catalog or solve is
+/// out of date once there is one. Text in the card's "Out of date — …"
+/// form, without the action.
+pub(super) fn calibration_outdated(
+    recorded: Option<&StackColorCalibrationBasis>,
+    outcome: Option<&StackColorCalibrationOutcome>,
+    current: &StackCalibrationSource,
+) -> Option<&'static str> {
+    let now = current.basis();
+    let Some(recorded) = recorded else {
+        return match outcome {
+            Some(StackColorCalibrationOutcome::Skipped(skip))
+                if skip.reason == StackColorCalibrationSkipReason::NoGaiaCatalog
+                    && now.catalog.is_some() =>
+            {
+                Some("Out of date — Gaia colors were installed")
+            }
+            Some(StackColorCalibrationOutcome::Skipped(skip))
+                if skip.reason == StackColorCalibrationSkipReason::NoPlateSolve
+                    && now.solution_fingerprint.is_some() =>
+            {
+                Some("Out of date — the reference frame is now plate solved")
+            }
+            _ => None,
+        };
+    };
+    match (&recorded.catalog, &now.catalog) {
+        (None, Some(_)) => return Some("Out of date — Gaia colors were installed"),
+        (Some(_), None) => return Some("Out of date — Gaia colors were removed"),
+        (Some(then), Some(now)) if then != now => return Some("Out of date — Gaia colors changed"),
+        _ => {}
+    }
+    if recorded.reference_image_id != now.reference_image_id {
+        return Some("Out of date — the reference frame changed");
+    }
+    match (&recorded.solution_fingerprint, &now.solution_fingerprint) {
+        (None, Some(_)) => Some("Out of date — the reference frame is now plate solved"),
+        (then, now) if then != now => {
+            Some("Out of date — the reference frame's plate solve changed")
+        }
+        _ => None,
     }
 }
 
@@ -765,6 +821,84 @@ pub(super) mod tests {
                 "The reference frame has no plate solve"
             )
         );
+    }
+
+    #[test]
+    fn a_new_solve_or_catalog_puts_a_color_stack_out_of_date() {
+        let signature = |size_bytes| AstrometryCatalogFileSignature {
+            name: "gaia_photometry".into(),
+            path: "/catalogs/stars-gaia-photometry.bin".into(),
+            format: "SEIZAPH1".into(),
+            size_bytes,
+            modified_unix_seconds: 1,
+            modified_subsec_nanos: 0,
+            sha256: None,
+        };
+        let source = |solved: bool, catalog: Option<u64>| StackCalibrationSource {
+            reference_image_id: Some(7),
+            orientation: Some(orientation(1000, 800)),
+            solution: solved.then(tests::solution),
+            catalog: catalog.map(signature),
+        };
+        let ready = source(true, Some(10));
+        let recorded = ready.basis();
+
+        // Unchanged: not out of date.
+        assert_eq!(calibration_outdated(Some(&recorded), None, &ready), None);
+        // A catalog installed, replaced or removed since.
+        let before = source(true, None).basis();
+        assert_eq!(
+            calibration_outdated(Some(&before), None, &ready),
+            Some("Out of date — Gaia colors were installed")
+        );
+        assert_eq!(
+            calibration_outdated(Some(&recorded), None, &source(true, Some(11))),
+            Some("Out of date — Gaia colors changed")
+        );
+        assert_eq!(
+            calibration_outdated(Some(&recorded), None, &source(true, None)),
+            Some("Out of date — Gaia colors were removed")
+        );
+        // A solve made since, or a different one.
+        let unsolved = source(false, Some(10)).basis();
+        assert_eq!(
+            calibration_outdated(Some(&unsolved), None, &ready),
+            Some("Out of date — the reference frame is now plate solved")
+        );
+        let mut resolved = ready.clone();
+        resolved.solution.as_mut().unwrap().wcs.crval[0] += 0.01;
+        assert_eq!(
+            calibration_outdated(Some(&recorded), None, &resolved),
+            Some("Out of date — the reference frame's plate solve changed")
+        );
+
+        // Recorded before the basis was kept: judged by its skip.
+        let skipped = |reason| StackColorCalibrationOutcome::skipped(reason, "detail");
+        assert_eq!(
+            calibration_outdated(
+                None,
+                Some(&skipped(StackColorCalibrationSkipReason::NoGaiaCatalog)),
+                &ready
+            ),
+            Some("Out of date — Gaia colors were installed")
+        );
+        assert_eq!(
+            calibration_outdated(
+                None,
+                Some(&skipped(StackColorCalibrationSkipReason::NoPlateSolve)),
+                &ready
+            ),
+            Some("Out of date — the reference frame is now plate solved")
+        );
+        assert_eq!(
+            calibration_outdated(
+                None,
+                Some(&skipped(StackColorCalibrationSkipReason::TooFewStars)),
+                &ready
+            ),
+            None
+        );
+        assert_eq!(calibration_outdated(None, None, &ready), None);
     }
 
     #[test]

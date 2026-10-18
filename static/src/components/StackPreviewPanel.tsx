@@ -31,6 +31,7 @@ import { colorSourceKey } from './stackColorSources';
 import { defaultColorProcessing } from './stackColorProcessing';
 import StackStretchControls from './StackStretchControls';
 import StackColorCalibrationLine from './StackColorCalibrationLine';
+import { calibrationOutdated } from './stackCalibrationStale';
 import { isSkyOriented } from './stackOrientation';
 import { carriedLabel } from './stackProcessingLabel';
 import { useAccess } from '../auth/access';
@@ -755,8 +756,15 @@ export default function StackPreviewPanel({
           currentScoring,
           artifact.method,
           currentMethod
-        ) !== null
+        ) !== null || calibrationStale(key)
       : false;
+  }
+
+  // A color stack's calibration goes out of date with a new solve or Gaia
+  // catalog: its build preview, or the processing it shows instead.
+  function calibrationStale(key: string): boolean {
+    const card = artifactsByChannel.get(key);
+    return card ? calibrationOutdated(card.group, stretches[artifactStretchKey(card)]) !== null : false;
   }
   const staleCount = displayKeys.filter(channelStale).length;
   const outdatedSourceKeys = useMemo(() => {
@@ -1043,7 +1051,7 @@ export default function StackPreviewPanel({
                 const filterName = current?.filterName ?? group?.filter_name ?? '';
                 const exposureGroup = current?.exposureGroup ?? group?.exposure_group;
                 const outdated = artifact
-                  ? staleReason(
+                  ? (staleReason(
                       current,
                       artifact.group.input_images,
                       artifact.acceptedOnly,
@@ -1056,7 +1064,7 @@ export default function StackPreviewPanel({
                       currentScoring,
                       artifact.method,
                       currentMethod
-                    )
+                    ) ?? calibrationOutdated(artifact.group, appliedStretch))
                   : null;
                 const groupBusy =
                   activeGroup?.state === 'queued' || activeGroup?.state === 'running';

@@ -123,6 +123,13 @@ pub struct StackStretchPreview {
     /// What color calibration did for a one-shot-color stack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_calibration: Option<super::color_calibration::StackColorCalibrationOutcome>,
+    /// The solve and Gaia catalog that calibration rested on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_calibration_basis: Option<super::color_calibration::StackColorCalibrationBasis>,
+    /// Why this processing is out of date, worked out when it is served: a
+    /// new solve or Gaia catalog since. Never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_calibration_outdated: Option<String>,
     pub preview_url: String,
     pub original_preview_url: String,
     #[serde(default)]
@@ -2022,6 +2029,8 @@ fn build_stretch_preview(
         rc_astro: rendered.rc_astro,
         rc_astro_id: identity.rc_astro_id().map(str::to_string),
         color_calibration: rendered.color_calibration,
+        color_calibration_basis: rendered.color_calibration_basis,
+        color_calibration_outdated: None,
         preview_url: format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview"),
         original_preview_url: format!(
             "/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview?size=original"
@@ -2051,6 +2060,7 @@ struct RenderedVariant {
     deconvolution: Option<StackDeconvolutionResult>,
     rc_astro: Option<super::rc_astro::StackRcAstroResult>,
     color_calibration: Option<super::color_calibration::StackColorCalibrationOutcome>,
+    color_calibration_basis: Option<super::color_calibration::StackColorCalibrationBasis>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2065,7 +2075,7 @@ fn render_fits_variant(
     rc_astro_request: Option<super::rc_astro::RcAstroProcessing>,
     rc_astro_chain: Option<&[String]>,
     rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
-    color_calibration: Option<&super::color_calibration::ColorCalibrationPlan>,
+    color_calibration_plan: Option<&super::color_calibration::ColorCalibrationPlan>,
     stop: &RunStop,
     priority: crate::concurrency::Priority,
 ) -> Result<RenderedVariant, String> {
@@ -2217,7 +2227,7 @@ fn render_fits_variant(
     // A one-shot-color stack is calibrated on its linear pixels, after
     // restoration and before the stretch.
     let mut calibrated = None;
-    let color_calibration = match color_calibration {
+    let color_calibration = match color_calibration_plan {
         Some(plan) if source_transfer == StackStretchSourceTransfer::Linear => {
             stop.check()?;
             report_stage(stretch_id, "Color calibration");
@@ -2301,6 +2311,10 @@ fn render_fits_variant(
         luminance_statistics: source_analysis.luminance_statistics(),
         deconvolution,
         rc_astro: rc_astro_outcome.map(|outcome| outcome.result),
+        color_calibration_basis: color_calibration
+            .is_some()
+            .then(|| color_calibration_plan.map(|plan| plan.basis.clone()))
+            .flatten(),
         color_calibration,
     })
 }
@@ -2695,6 +2709,7 @@ mod tests {
                     has_stars: false,
                 }),
                 color_calibration: None,
+                color_calibration_basis: None,
             },
         );
         write_json_atomic(&stretch_manifest_path(cache, stretch_id), &preview).unwrap();

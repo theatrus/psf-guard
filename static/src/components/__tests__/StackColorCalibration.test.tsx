@@ -5,6 +5,7 @@ import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import StackColorProcessingControls from '../StackColorProcessingControls';
 import StackStretchControls from '../StackStretchControls';
+import { calibrationOutdated } from '../stackCalibrationStale';
 import StackColorCalibrationLine from '../StackColorCalibrationLine';
 import { defaultColorProcessing } from '../stackColorProcessing';
 import { colorSetupForRoles } from '../processingSetups';
@@ -188,5 +189,24 @@ describe('Color calibration of a one-shot-color stack', () => {
     renderWithQueries(<StackStretchControls label="Ha" channels={1} {...props} />);
     await user.click(screen.getByText('View processing'));
     expect(screen.queryByRole('switch', { name: 'Color calibration' })).not.toBeInTheDocument();
+  });
+});
+
+describe('an out-of-date color stack calibration', () => {
+  const stale = 'Out of date — Gaia colors were installed; rebuild the stack';
+  const reapply = 'Out of date — Gaia colors were installed; apply the processing again';
+
+  it('comes from applied processing when there is some, else from the build preview', () => {
+    const group = { output_channels: 3, color_calibration_outdated: stale };
+    expect(calibrationOutdated(group, undefined)).toBe(stale);
+    expect(calibrationOutdated(group, { color_calibration_outdated: reapply })).toBe(reapply);
+    // Fresh processing hides a stale build preview: the card shows the
+    // processing.
+    expect(calibrationOutdated(group, { color_calibration_outdated: null })).toBeNull();
+  });
+
+  it('never applies to a mono stack', () => {
+    expect(calibrationOutdated({ output_channels: 1, color_calibration_outdated: stale }, undefined))
+      .toBeNull();
   });
 });
