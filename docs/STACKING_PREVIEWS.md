@@ -315,9 +315,12 @@ sitting at 100%. While that pass runs the build's line reads, for example,
 
 Builds wait in a line of their own, and the line, not the order they were
 asked for, decides what runs next. In the queue, **↑** and **↓** move a
-waiting build, **×** takes it out of the line, and **Stop** ends the running
-build after asking once. Mono and color builds share the line, and so do
-stretch, deconvolution and RC-Astro processing runs (see
+waiting build one place. The arrow-to-top button (**Move to top**) moves a task
+under **Started by you** straight to the front, including past automatic tasks.
+It runs next after the current task finishes. The button is disabled when the
+task is already next. **×** takes a queued task out of the line, and **Stop**
+ends the running build after asking once. Mono and color builds share the line,
+and so do stretch, deconvolution and RC-Astro processing runs (see
 [Processing runs wait in the build line](#processing-runs-wait-in-the-build-line)).
 **Stop** on a running
 color composition ends it at its next channel or step, and kills a running

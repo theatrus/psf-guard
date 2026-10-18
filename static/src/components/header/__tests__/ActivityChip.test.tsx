@@ -6,7 +6,8 @@ import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../test/msw-server';
-import type { StackActivityEntry } from '../../../api/types';
+import type { StackActivityEntry, WbppActivity } from '../../../api/types';
+import { AccessContext } from '../../../auth/access';
 import ActivityChip from '../ActivityChip';
 
 function ok(data: unknown) {
@@ -76,7 +77,7 @@ function Location() {
   return <output aria-label="Location">{`${location.pathname}${location.search}`}</output>;
 }
 
-function renderChip({ showLocation = false } = {}) {
+function renderChip({ showLocation = false, canWrite = true } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
@@ -90,7 +91,14 @@ function renderChip({ showLocation = false } = {}) {
       </MemoryRouter>
     </QueryClientProvider>
   );
-  return render(<ActivityChip />, { wrapper: Wrapper });
+  return render(
+    <AccessContext.Provider value={{ canWrite, canCompute: canWrite,
+      status: { authentication_required: true, authenticated: true, role: canWrite ? 'read_write' : 'read_only', can_compute: canWrite },
+      logout: async () => undefined }}>
+      <ActivityChip />
+    </AccessContext.Provider>,
+    { wrapper: Wrapper }
+  );
 }
 
 describe('ActivityChip', () => {
@@ -414,6 +422,76 @@ describe('ActivityChip', () => {
     expect(calls).not.toContain('cancel R');
     await userEvent.click(within(list).getByRole('button', { name: 'Stop it' }));
     await waitFor(() => expect(calls).toContain('cancel R'));
+  });
+
+  it.each(['mono', 'processing'] as const)('moves a user-started %s task straight to the top across both headings', async (kind) => {
+    const promoted: StackActivityEntry = { ...stack('G', 'queued', 0, 0, 2), kind,
+      ...(kind === 'processing' ? { processing: { operation: 'BlurXTerminator', channel: 'G', stoppable: true } } : {}) };
+    let active = [stack('R', 'running', 1, 4),
+      { ...stack('Ha', 'queued', 0, 0, 0), automatic: true },
+      stack('B', 'queued', 0, 0, 1), promoted];
+    const calls: unknown[] = [];
+    mockServer({ stacks: () => active });
+    server.use(http.post('/api/stack-activity/:jobId/move', async ({ params, request }) => {
+      calls.push({ id: params.jobId, body: await request.json() });
+      active = [active[0], { ...promoted, queue_position: 0 },
+        { ...active[1], queue_position: 1 }, { ...active[2], queue_position: 2 }];
+      return ok({ schema_version: 1, active });
+    }));
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    const name = `${kind === 'processing' ? 'BlurXTerminator' : 'Stacking'}: Alpha M44 · G`;
+    const move = within(list).getByRole('button', { name: `Move ${name} to the top of the queue` });
+    expect(move).toHaveAttribute('title', 'Move to top');
+    expect(within(list).queryByRole('button', { name: 'Move Stacking: Alpha M44 · Ha to the top of the queue' })).toBeNull();
+    expect(within(list).queryByRole('button', { name: 'Move Stacking: Alpha M44 · R to the top of the queue' })).toBeNull();
+    await userEvent.click(move);
+    await waitFor(() => expect(calls).toEqual([{ id: 'G', body: { position: 0 } }]));
+    await waitFor(() => expect(move.closest('li')).toHaveTextContent('queued · 1 · next'));
+    expect(move).toBeDisabled();
+    expect(within(list).getByRole('group', { name: 'Automatic' })).toHaveTextContent('queued · 2 · 1 ahead');
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Alpha M44 · R');
+    expect(within(list).getAllByRole('listitem')[0]).toHaveAttribute('data-job-state', 'running');
+  });
+
+  it('moves a queued WBPP run to the top across databases and disables the task already next', async () => {
+    let activity: WbppActivity = {
+      running: [{ db_id: 'askar', db_name: 'Askar', scope: 'Running project', stage: 'running', wbpp_stage: null, wbpp_steps: 1, started_at: 1 }],
+      queued: [1, 2, 3].map((n) => ({ id: `q${n}`, db_id: n === 2 ? 'other' : 'askar',
+        db_name: n === 2 ? 'Other catalog' : 'Askar', scope: `Project ${n}`, project_id: n,
+        target_id: null, queued_at: n, position: n })),
+    };
+    const calls: unknown[] = [];
+    mockServer({});
+    server.use(
+      http.get('/api/info', () => ok({ version: 'test', allow_database_management: false })),
+      http.get('/api/wbpp/activity', () => ok(activity)),
+      http.post('/api/wbpp/queue/:queueId/move', async ({ params, request }) => {
+        calls.push({ id: params.queueId, body: await request.json() });
+        activity = { ...activity, queued: [activity.queued[2], activity.queued[0], activity.queued[1]]
+          .map((run, index) => ({ ...run, position: index + 1 })) };
+        return ok(activity);
+      }),
+    );
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(within(list).getByRole('button', { name: 'Move WBPP: Askar · Project 1 to the top of the queue' })).toBeDisabled();
+    await userEvent.click(within(list).getByRole('button', { name: 'Move WBPP: Askar · Project 3 to the top of the queue' }));
+    await waitFor(() => expect(calls).toEqual([{ id: 'q3', body: { position: 0 } }]));
+    await waitFor(() => expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent('Askar · Project 3'));
+    expect(within(list).getAllByRole('listitem')[1]).toHaveTextContent('queued · 1 · next');
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Askar · Running project');
+  });
+
+  it('does not offer queue controls to a read-only user', async () => {
+    mockServer({ stacks: () => [stack('R', 'running', 1, 4), stack('B', 'queued', 0, 0, 1)] });
+    renderChip({ canWrite: false });
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(list).toHaveTextContent('Alpha M44 · B');
+    expect(within(list).queryByRole('button', { name: /to the top of the queue/ })).toBeNull();
   });
 
   it("moves a person's build past an automatic one queued ahead of it, across the headings", async () => {

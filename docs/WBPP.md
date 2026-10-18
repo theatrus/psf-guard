@@ -131,10 +131,12 @@ and offers **Queue stacking**. A queued run starts when the current run ends,
 using its queued settings, whether the current run succeeds or fails. The
 Library lists queued runs with their positions; **×** removes a queued run,
 as does **Remove from queue** in its dialog. The header's background jobs
-chip lists the running job and queue across all databases. There **↑** and **↓** change the
-order, **×** takes a run out, and **Stop** ends the running one after asking
-once. Those controls need write access and a server that allows database
-management, like the dialog. `GET /api/wbpp/activity` reports the same, and
+chip lists the running job and queue across all databases. There **↑** and **↓**
+change the order one place at a time. The arrow-to-top button (**Move to top**)
+moves a queued run straight to the front; it starts after the current run ends.
+The button is disabled when the run is already next. **×** takes a run out,
+and **Stop** ends the running one after asking once. These controls need write
+access. `GET /api/wbpp/activity` reports the same, and
 `POST /api/wbpp/queue/{queue_id}/move` with `{"position": n}` (0 is next)
 moves a waiting run. The queue survives a restart through the job journal
 (see [Stack previews](STACKING_PREVIEWS.md#after-a-restart)): waiting runs keep

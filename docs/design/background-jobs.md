@@ -2,7 +2,7 @@
 
 Status: **Current contract** for new long or compute-heavy work. Older jobs
 follow most of it; the gaps are listed at the end.
-Last updated: 2026-10-16
+Last updated: 2026-10-18
 
 A task that reads many frames, measures pixels or runs for more than a
 moment is a **job**. A job:
@@ -93,7 +93,11 @@ an automatic refresh's build can wait ahead of a person's. So a queued row
 says its place in the whole line and how many wait before it, such as
 `queued · 4 · 3 ahead` or `queued · 1 · next`, whichever heading it sits
 under. ↑ and ↓ move it within the whole line, past rows under the other
-heading.
+heading. **Move to top** on a queued task under **Started by you** moves it
+straight to the front of its stack/processing or WBPP queue, past both manual
+and automatic tasks. The task runs after the current one finishes. The button
+is disabled when the task is already next or a queue change is in progress;
+read-only users cannot change the queue.
 
 A row adds what waits behind the step under way when the server knows it
 and the detail does not already say it: `1 more rig to check · 2 rigs

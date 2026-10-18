@@ -11,6 +11,10 @@
   incorrect missing-GUID guidance. Image-folder imports can open their plans
   from the same button.
 
+- In the header's background jobs list, **Move to top** moves a queued task
+  under **Started by you** to the front of its stack/processing or WBPP queue.
+  It runs next after the current task finishes.
+
 - Settings keeps the last backup result when you restart just after a backup
   finishes.
 
