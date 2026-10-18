@@ -85,6 +85,24 @@ Without the script, both Playwright configs still stop a local run after
 30 minutes (`globalTimeout`); CI keeps no limit. `npm run test:scripts`
 tests the script itself.
 
+### Reshoot the import guide
+
+From the repository root, run the capture spec through the local guard:
+
+```bash
+PSF_GUARD_E2E_BINARY=/path/to/psf-guard \
+PSF_GUARD_E2E_TMP=/tmp/psf-guard-012-flow \
+PSF_GUARD_CAPTURE_DIR=/absolute/path/to/captures \
+scripts/e2e-local.mjs e2e/import-flow-captures.spec.ts --project=chromium
+```
+
+The spec creates disposable catalogs, imports a TS snapshot, saves sync settings,
+previews and applies a transfer, and opens plugin pairing. It saves eight PNGs
+and `import-flow-captures.json` with the build, fixture paths, viewport, UI state,
+crop and checksum for each image. It skips the normal suite unless
+`PSF_GUARD_CAPTURE_DIR` is set. Use a fresh capture directory and a disposable
+`PSF_GUARD_E2E_TMP` path; global setup clears that fixture directory.
+
 ## Styling
 
 Colours are tokens in the `:root` block of `src/App.css`. Stylesheets and

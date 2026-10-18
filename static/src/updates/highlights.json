@@ -1,5 +1,66 @@
 [
   {
+    "version": "0.12.0",
+    "deprecations": [
+      {
+        "title": "Direct Target Scheduler access is deprecated",
+        "body": "Opening a live Target Scheduler database directly is deprecated. Existing direct-open registrations and CLI/API access stay supported through 0.12, with no automatic conversion. For new connections, import Target Scheduler into a PSF Guard-owned catalog and keep it connected for sync. Removal is planned for 0.13 or later."
+      }
+    ],
+    "upgradeNotes": [
+      {
+        "title": "Choose how Target Scheduler syncs",
+        "body": "New Target Scheduler connections create a PSF Guard-owned catalog. Local-file imports enable automatic sync and grade writeback; review the startup, change detection and schedule settings after importing. Grade writeback has its own switch. Manual planning and grade transfers use Preview and Apply. Director activation sends approved planning through the saved TS connection and retries failed deliveries."
+      },
+      {
+        "title": "Allow time for calibration checks and rebuilds",
+        "body": "The first start reads frame sites, grades calibration frames and measures flat groups in the background. Stacks and masters rebuild once when you next use them. Work you start takes priority over these checks."
+      },
+      {
+        "title": "Review new targets and planning changes",
+        "body": "Automatic image-folder import now holds frames for unknown targets for Review. Change New targets in the database settings to create projects automatically. Before activating a plan, check its preview: activation turns off exposure plans the plan does not include. Take Target Scheduler’s values keeps plans made in N.I.N.A."
+      }
+    ],
+    "highlights": [
+      {
+        "title": "Keep your catalog separate from Target Scheduler",
+        "body": "Import a local Target Scheduler file into a PSF Guard-owned catalog, or pair the PSF Guard Sync plugin without a local TS file. Capture imports keep local grades and measurements. Grade writeback reports conflicts instead of overwriting TS edits. You can also import a standalone catalog copy or choose its storage path."
+      },
+      {
+        "title": "Inspect calibration frames and masters",
+        "body": "The Calibration page shows each frame’s grade, the inputs to each master and the projects they serve. Keep a frame out, use it anyway, compare it with its session, or repair duplicate records without deleting files."
+      },
+      {
+        "title": "Match flats by what they measure",
+        "body": "Group flats across nights by their measured pattern and dust changes. Inspect disks, donuts and vignetting, split or join groups, and choose which side of a change supplies a light’s flats."
+      },
+      {
+        "title": "Stretch stacks and calibrate colour with Gaia",
+        "body": "Median anchor and Layered stretches join Auto MTF, which stays the default. Install Gaia colors in Settings › Catalogs to calibrate RGB, LRGB and one-shot-colour stacks against star colours. Stacks keep their processing when they rebuild."
+      },
+      {
+        "title": "Plan mosaics across rigs",
+        "body": "Place and turn panels one at a time, keep panels already shot in place, and frame rigs separately. Activation previews show what each rig will shoot, and a site that missed an activation can receive it again. Planning explains why a catalog is unavailable and offers Retry planning."
+      },
+      {
+        "title": "Back up now or on a schedule",
+        "body": "Back up settings, accounts, plans and catalogs to one archive. Download it in a browser, save it to a folder, or schedule daily or weekly backups with retention limits. Settings keeps the last result after a restart."
+      },
+      {
+        "title": "Review images on a laptop or phone",
+        "body": "Browse by each rig’s observing night, show newest frames first and cut Sequence by score, stars or HFR. View choices follow signed-in accounts. A smaller phone header and grading bar leave more room for images."
+      },
+      {
+        "title": "Resize the desktop UI",
+        "body": "Choose Zoom in, Zoom out or Reset to 100% from the menu. Cmd/Ctrl with +, − or 0 changes the whole UI from 50% to 200%, including Settings. The app remembers the scale on this device; image zoom stays separate."
+      },
+      {
+        "title": "Follow and stop background work",
+        "body": "The job list separates work you start from automatic work and shows queue positions and progress. Move to top makes a queued stack, processing or WBPP task run next. Stop processing, flat measuring or reject moves, follow each WBPP file copy, and resume processing after a restart."
+      }
+    ]
+  },
+  {
     "version": "0.11.0",
     "deprecations": [],
     "upgradeNotes": [

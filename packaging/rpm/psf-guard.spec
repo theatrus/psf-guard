@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.11.0
+Version:        0.12.0
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,11 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Sat Oct 17 2026 Yann Ramin <github@theatr.us> - 0.12.0-1
+- Add measured flat matching, calibration review, new stack processing,
+  scheduled backups, and Target Scheduler imports into owned catalogs
+- Deprecate direct Target Scheduler access; support continues through 0.12
+
 * Sun Oct 11 2026 Yann Ramin <github@theatr.us> - 0.11.0-1
 - Planning: frame targets and mosaics on the sky, set exposure plans per rig, and write them into each rig's Target Scheduler database
 - Stacks has a view of its own: noise-weighted channel stacks, colour composed after the last channel, and WBPP runs from the same page

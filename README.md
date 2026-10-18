@@ -5,7 +5,7 @@
 [![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-64748b.svg)](https://github.com/theatrus/psf-guard/releases/latest)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Catalog, review, calibrate, and stack your astrophotography images.**
+**Catalog, review, plan, calibrate, and stack your astrophotography images.**
 
 Import folders of FITS or XISF files, review image quality, plan captures,
 and build calibrated stacks. Use the desktop app on Windows, macOS, or
@@ -21,10 +21,11 @@ Scheduler plans and reviewed grades.
 · **[Repository guides](docs/README.md)**
 · **[Report an issue](https://github.com/theatrus/psf-guard/issues)**
 
-> This README follows the current source. Some features are planned for the
-> next release. Check the [unreleased changes](docs/releases/unreleased.md)
-> and the [release notes](https://github.com/theatrus/psf-guard/releases) for
-> the version you install.
+> This README describes the source prepared for 0.12. Read the
+> [0.12 changes and upgrade notes](docs/releases/v0.12.0.md), including the
+> Target Scheduler deprecation, and check the
+> [published releases](https://github.com/theatrus/psf-guard/releases) for the
+> version you install.
 
 ## 🧭 Choose a workflow
 
@@ -34,7 +35,10 @@ Scheduler plans and reviewed grades.
 | **On a server or NAS** | [Run PSF Guard with Docker](#docker-linux-servers--nas) beside your image storage and review it from a browser. |
 | **With N.I.N.A.** | [Connect the Sync plugin](#connect-nina) to upload captures and exchange plans and grades with Target Scheduler. |
 | **With an existing Target Scheduler database** | [Import the database](#existing-database) or connect with PSF Guard Sync. |
-| **From scripts or a terminal** | Use the [CLI](#cli-reference) or [REST API](#rest-api). |
+| **Planning a target or mosaic** | [Set framing and exposure goals](#planning) for one or more rigs, then preview activation. |
+| **Checking calibration** | [Review frames and masters](#calibration), compare flat groups, and inspect the calibration each light uses. |
+| **Processing a stack** | [Stack and process channels](#stack-processing), combine color, or send the project to WBPP. |
+| **From scripts or an agent** | Use the [CLI](#cli-reference), [REST API](#rest-api), or [MCP server](#agents). |
 
 ## ✨ What PSF Guard does
 
@@ -44,22 +48,29 @@ Scheduler plans and reviewed grades.
 - **Find quality problems.** Inspect star measurements, cloud and obstruction
   evidence, pointing errors, tracking loss, and pixel-aligned satellite trails.
   Review recommendations before changing grades.
-- **Check calibration.** Browse bias, dark, dark-flat, and flat frames; review
-  their grades; and see which lights lack suitable calibration. Compare flat
-  groups across nights, dust changes, and rotator angles.
-- **Build and process stacks.** Apply matching calibration masters, stack
-  channels, and combine RGB, LRGB, or narrowband previews. Inspect rejected
-  inputs and trace an artifact back to its source frames. Download linear or
+- **[Check calibration](#calibration).** Browse bias, dark, dark-flat, and flat
+  frames and their masters. Inspect grades and matching decisions, compare flat
+  groups across nights and rotator angles, and choose which frames to use.
+- **[Build and process stacks](#stack-processing).** Calibrate and integrate
+  channels, combine RGB, LRGB, or narrowband color, and adjust background,
+  stretch, and deconvolution. Inspect source frames and download linear or
   processed FITS results.
-- **Plan captures.** Frame targets and mosaics, set exposure goals for each
-  rig, and preview changes before writing Target Scheduler projects.
+- **[Plan captures across rigs](#planning).** Frame targets and mosaic panels,
+  assign filters and accepted exposure goals, check visibility, and set site
+  and scheduling limits. Preview activation into each rig's Target Scheduler
+  project.
 - **View sky coverage.** Explore every catalog on one sky map, inspect solved
   image overlays, and replay coverage by observing night.
 - **Export and sync.** Export lights with matching calibration frames, run
   PixInsight WBPP, create AstroBin acquisition CSVs, and exchange plans and
   grades with N.I.N.A.
-- **Manage the catalog.** Schedule backups, review imports, and remove rejected
-  frames with a preview and a recovery period.
+- **Manage the catalog.** Schedule [backups](#backups), review imports, and
+  remove rejected frames with a preview and a recovery period. Follow running,
+  queued, and waiting work in [background jobs](#background-jobs).
+- **[Coordinate contributions](#collaboration) (early beta).** Review Starfront
+  assignments, report accepted work, and deliver raw lights with calibration
+  frames or completed stacks. The Director plugin adds live rig status and
+  capture automation as a separate early beta.
 
 The N.I.N.A. Director plugin and collaboration are in early beta. Target
 Scheduler with PSF Guard Sync is the supported capture workflow described
@@ -97,10 +108,12 @@ calibration frames also work without Target Scheduler.
 1. In N.I.N.A., open **Options → General → Plugin Repositories** and add
    `https://nina-plugins.psf-guard.com/`. Install **PSF Guard Sync** from
    **Plugins → Available**, then restart N.I.N.A.
-2. In PSF Guard, choose a destination under **Settings → Databases**. You can
-   create a catalog from an empty image folder for the plugin to populate.
-3. Edit the catalog and choose **Generate pairing code**. In the N.I.N.A.
-   plugin, enter the server URL and code, then click **Pair** and
+2. In PSF Guard, open **Settings → Databases → Import from Target Scheduler**,
+   choose **Use the PSF Guard Sync plugin**, add a shared or empty image folder,
+   and click **Create catalog for plugin**. No local TS file is required.
+   To use an existing catalog, click its **Edit** button instead.
+3. Choose **Generate pairing code** in the catalog's pairing controls. In the
+   N.I.N.A. plugin, enter the server URL and code, then click **Pair** and
    **Test connection**.
 4. Choose what to sync. To transfer image files, also enable
    **Accept remote image uploads** and set a **Receive directory** in
@@ -129,7 +142,11 @@ writes local grade changes back to TS.
 It runs when the app or server starts, when files change, and every five minutes
 by default. Change these options under the imported catalog in Settings.
 Conflicting TS grades remain unchanged and are reported for review. Planning
-transfers still require Preview and Apply in **Settings → Sync**. See
+transfers still require Preview and Apply in **Settings → Sync**. Director
+activation sends reviewed planning through the saved TS connection; failed
+TS deliveries stay pending for retry. To import a standalone copy, turn off
+**Keep the source connected for Target Scheduler sync**. **Catalog storage**
+also offers a custom destination path. See
 [Target Scheduler imports](docs/IMPORTING.md#import-from-target-scheduler).
 
 Existing direct-open TS registrations keep working through 0.12. They are not
@@ -138,13 +155,14 @@ planned for 0.13 or later.
 
 ### Plan captures across rigs
 
-Open a project's **Planning** workspace from the Library to set framing and
-exposure goals. Add, move, and rotate mosaic panels while checking overlap.
-Captured panels remain locked until you unlock them. Review activation
-before applying changes to each rig's Target Scheduler database.
+Start with **New plan** in the Library, or open an existing project's
+**Planning** button. Set **Framing**, add participating **Rigs**, and choose
+accepted exposure goals under **Exposures**. Save the draft, then review
+**Activate…** before writing each rig's Target Scheduler project.
 
-See [planning and activation](docs/DIRECTOR.md#activation) for database
-changes and the distinction between Sync and the Director beta.
+The [planning tour](#planning) covers mosaics, templates, visibility, and
+activation. Ordinary planning with Target Scheduler does not need the
+Director beta plugin.
 
 ## 📷 See it in practice
 
@@ -153,34 +171,31 @@ check calibration, and inspect a stack before further processing.
 
 ### Review and grade a night quickly
 
-| Library | Images | Comparison |
+| Library | Images | Sequence |
 |:--:|:--:|:--:|
-| ![Library with recent projects and narrowband frames](docs/overview.png) | ![Flaming Star H-alpha frames in the image grid](docs/grid-flaming-star-narrowband.png) | ![Two frames with synchronized zoom](docs/compare.jpg) |
-| Project progress and grades | Filters and batch grading | Detailed comparison |
+| ![Compact Library with project progress, grades and calibration warnings](docs/screenshots/library-compact.jpg) | ![Iris Nebula frames with scores, stored grades and calibration warnings](docs/screenshots/grid.jpg) | ![Golf of Mexico H-alpha session with scores and rejected frames](docs/screenshots/sequence-session.jpg) |
+| Project progress and grades | Filters and batch grading | Scores and findings across a night |
 
 Use arrow keys to move between frames and `Space` to select them. Preview
 loads and refreshes preserve your position. **View → Sort** controls the
 order; a dot marks frames captured since your last visit from the Library.
 See [image order and new frames](docs/SCREENING.md#order-and-new-frames).
+Open **Compare** to inspect selected frames with synchronized zoom.
 
 <details>
 <summary>Responsive grid layout</summary>
 
-<img src="docs/grid-flaming-star-responsive.png" width="480" alt="Flaming Star image grid with controls arranged for a narrow window">
+<img src="docs/screenshots/grid-phone-filters.png" width="375" alt="Phone image grid with Filters expanded and two frame cards per row">
 
 </details>
 
 ### Build an image catalog from image folders
 
-![New Database from Images with optional background quality analysis](docs/import-from-images.png)
+![Image-folder import with Target Scheduler and Sync plugin choices, catalog storage and optional quality analysis](docs/screenshots/import-image-folders.png)
 
 PSF Guard reads `.fits`, `.fit`, `.fts`, and `.xisf` files. It groups lights
 into projects and targets and derives exposure plans from their headers.
 Calibration frames go into a separate library in the same catalog.
-
-| Exposure templates | Target coordinates and exposure plans |
-|:--:|:--:|
-| ![Shared templates for B, G, HA, L, OIII, R, and SII](docs/project-plan-narrowband.png) | ![Gulf of Mexico target coordinates and seven exposure plans](docs/target-plan-narrowband.png) |
 
 Import progress remains available after you close Settings or reload the page.
 Use **Analyze Missing Quality** to fill missing measurements, or **Rescan All
@@ -189,35 +204,30 @@ for grouping rules, scan settings, and database edits.
 
 ### See the evidence behind a quality decision
 
-| Sequence analysis | Star detection | PSF fitting |
-|:--:|:--:|:--:|
-| ![Sequence scores and astrometry findings](docs/sequence-quality-astrometry.png) | ![Detected stars with annotations](docs/annotated-stars.jpg) | ![Observed, fitted, and residual star images](docs/psf-visualization.jpg) |
-| Scores and reasons for each frame | Star measurements | Gaussian and Moffat fits |
+![Measured stars labeled by HFR on a rejected Golf of Mexico frame](docs/screenshots/annotated-hfr-labels.png)
 
 Sequence combines image statistics, spatial and photometric measurements,
 fresh plate solves, and cached satellite evidence. Review the findings before
 applying a grade. Missing optional evidence does not count as a failure.
+Star overlays show measurements from the pixels; imported capture statistics
+can differ. Open the PSF view to inspect Gaussian and Moffat fits.
 
 ### Preview a stack without leaving the grader
 
-| Stack preview | Full-size inspection | Input decisions |
-|:--:|:--:|:--:|
-| ![Three-frame B-channel stack of M44](docs/stack-preview.png) | ![Stack inspection at native resolution](docs/stack-preview-inspection.png) | ![Registration and admission details](docs/stack-preview-decisions.png) |
-| Calibrated integration by target and channel | Zoom, pan, and inspect | Exclusions and registration results |
+![Four Heart Mosaic SHO panel stacks with their solved, north-up placement](docs/screenshots/stacks-mosaic.jpg)
 
-This M44 example uses three B-channel frames. PSF Guard saves quality
-exclusions, registration matches, and residuals with the cached stack result.
+Each Heart Mosaic panel has its own stack; the sky view places the panels by
+their solves without stitching them. Inspect a stack at full size, or review
+the saved quality exclusions, registration matches and residuals.
 
 ### Combine real narrowband channel stacks
 
-![Gulf of Mexico Foraxx SHO preview from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
+![California Nebula Foraxx SHO preview with 918 inputs and 76 hours 30 minutes of integration](docs/screenshots/stack-foraxx-california.jpg)
 
-This Gulf of Mexico (NGC 7000) preview uses six accepted Ultracat frames:
-two each in H-alpha, OIII, and SII. Recombine the same linear channel stacks
-as SHO, Foraxx SHO, or another compatible palette without repeating the
-integrations.
-
-<img src="docs/stack-background-real.jpg" width="720" alt="Background extraction controls and per-channel fit diagnostics">
+This cached California Nebula preview combines H-alpha, OIII and SII channel
+stacks, with 918 inputs and 76 h 30 m of integration. It includes saved
+processing with optional RC-Astro tools. Recombine the same channel stacks as
+SHO, Foraxx SHO, or another compatible palette without repeating integration.
 
 Inspect background fits, adjust each channel's processing, and download a
 processed RGB FITS file. See [stack previews](docs/STACKING_PREVIEWS.md) for
@@ -419,6 +429,154 @@ Scheduler, or you sync grades back to it, the scheduler can update accepted
 counts and replace rejected exposures. See [quality screening](docs/SCREENING.md)
 and [stack previews](docs/STACKING_PREVIEWS.md).
 
+<a id="planning"></a>
+## Planning and mosaics
+
+Plans live in the **Library** alongside their captured projects. **New plan**
+starts a target before any frames exist; **Planning** opens an existing
+project's workspace. One plan can use several rigs and sites, with a shared
+framing or a separate framing for each rig.
+
+### Frame targets and mosaic panels
+
+Search for a target or enter coordinates in **Framing**. Place the camera's
+field over a survey image, adjust its angle, and check tonight's visibility
+against the rig's site and horizon. Rig setup includes optics, sensor size,
+pixel scale, camera angle, and a planning site. Sites can use N.I.N.A. `.hrz`
+horizon files.
+
+Add, move, rotate, or remove individual mosaic panels. Check neighboring
+panels against the minimum overlap, use snapping, and undo framing edits.
+Panels with captured frames start locked at their recorded fields. Unlock a
+panel only when you intend to change it. Assign different panels to different
+rigs, such as a wide-field rig for the whole target and a longer telescope
+for selected regions.
+
+![Heart Mosaic framing with four captured panels locked and overlap warnings](docs/screenshots/planning-mosaic.jpg)
+
+This Heart Mosaic capture keeps all four panels locked. Measured overlaps
+range from 18.1% to 19.4%, below the saved 20% minimum; the warning list shows
+which joins need review.
+
+### Set exposure goals and scheduling limits
+
+Under **Exposures**, add objectives by bandpass and purpose: faint detail or
+unsaturated stars. Set a goal in accepted hours or accepted frames. Each rig
+can use its own exposure length, template, goal, and panel selection. The
+coverage check identifies a band or panel that no rig covers.
+
+Choose templates from the rig's Target Scheduler database or the shared
+**Settings → Exposure templates** library. Templates keep filter, gain,
+offset, binning, and readout settings together. Set site and rig details under
+**Settings → Rigs**. In the workspace, **Rigs** shows scheduling limits and
+where each inherited value comes from; **Priority and defaults** sets project
+order and defaults. Limits include altitude, horizon, meridian window,
+filter switching, and dithering. Exposure templates can also set Moon rules.
+
+### Review and activate
+
+Saving a plan keeps a draft. **Activate…** previews what each rig's Target
+Scheduler project will run, turn off, or restore. Activation enables the
+plan's exposure rows and disables other exposure plans in that project;
+existing frames and acquisition counts stay intact. Use **Take Target
+Scheduler's values** before activation if you want to keep extra exposure
+plans made in N.I.N.A.
+
+For an imported TS catalog, the preview shows the saved TS destination.
+Activation writes the owned catalog, then delivers the reviewed planning to
+TS. A failed delivery stays pending and can retry through the saved sync
+settings. Rigs at another PSF Guard site can receive planning through a Sync
+peer. Activation updates planning; Target Scheduler runs the imaging session.
+
+See [framing](docs/DIRECTOR.md#framing-view),
+[mosaic panels](docs/DIRECTOR.md#mosaic-panels),
+[exposure goals](docs/DIRECTOR.md#acquisition-plan), and
+[activation](docs/DIRECTOR.md#activation) for the full rules.
+
+<a id="calibration"></a>
+## Calibration frames, flat groups, and masters
+
+Open **Calibration** from a project's review view to see the calibration it
+uses, or open it from the Library to browse the rig's whole library.
+**Frames** groups bias, dark, dark-flat, and flat frames by session or flat
+group. **Masters** shows generated masters, their source frames, and the
+projects that use them.
+
+Frame grades report measurements such as clipping, noise, uneven illumination,
+stray light, and dust changes. Poor frames stay out of masters by default.
+Use **Keep out** to exclude a frame through later regrades, **Use anyway** to
+override its grade, or **Clear** to return to automatic grading. These choices
+change which frames masters and exports use; they do not alter the raw files.
+
+![A poor OIII flat with its preview, session comparison measurements, and exclusion reason](docs/screenshots/calibration-review.jpg)
+
+This flat has no clipped pixels, but its illumination differs from its
+session by 13.9%, above the 5% limit. PSF Guard excludes it from masters.
+
+Flat groups compare measured illumination and dust patterns across nights
+and rotator angles. Compare groups to inspect a change, split or join a group,
+or choose which side of a change supplies a light's flats. A recorded angle
+alone does not prove that two sets of flats match.
+
+A light's **Calibration** panel explains the matched inputs and any gaps.
+Project coverage reports show affected lights before you build or export.
+PSF Guard tracks master inputs and rebuilds dependent results when those
+inputs change. Duplicate checks can merge duplicate records without deleting
+source files.
+
+See [calibration libraries](docs/CALIBRATION_LIBRARY.md),
+[flat groups](docs/CALIBRATION_LIBRARY.md#flat-groups), and
+[frame grades](docs/CALIBRATION_LIBRARY.md#frame-grades).
+
+<a id="stack-processing"></a>
+## Stack and process images
+
+Open **Stacks** for a target and channel, or use **Stack selected** in Images.
+PSF Guard matches calibration masters, registers frames, and integrates
+eligible inputs. By default, Accepted and usable Pending frames can join a
+stack; **Accepted only** leaves Pending frames out. Inspect admission
+decisions, rejected regions, and source frames when you find an artifact. The SNR curve shows how the result changes
+as more exposures join the stack.
+
+Combine channels as RGB, LRGB, or narrowband color, including SHO and Foraxx
+SHO. Adjust background extraction and channel processing, then download a
+linear or processed FITS result. OSC files with a recognized `BAYERPAT`
+header also support color previews.
+
+**View processing** offers display stretches and optional Seiza deconvolution.
+**Median anchor** and **Layered** join Auto MTF, which stays the default.
+Install the optional **Gaia colors** package under **Settings → Catalogs** to
+calibrate RGB, LRGB, and OSC stack colors against stars. The result shows the
+calibration's star count and gains, or why calibration could not run.
+
+With a licensed standalone RC-Astro CLI on the server, processing also offers
+BlurXTerminator, NoiseXTerminator, and StarXTerminator. Star removal keeps
+both the stars and starless results. Processing runs show queue position and
+progress, support Stop, and can resume after a restart. Saved processing
+choices remain available when a stack rebuilds.
+
+See [stack methods, processing, and downloads](docs/STACKING_PREVIEWS.md) or
+[run PixInsight WBPP](#wbpp) with the same calibration
+choices.
+
+<a id="background-jobs"></a>
+## Follow background work
+
+Open the header's jobs chip to see running, queued, waiting, and
+needs-attention work. The list separates **Started by you** from **Automatic**
+and shows progress and queue positions. A waiting job explains what it is
+waiting for. Stack builds, quality scans, flat measuring, catalog installs,
+backups, transfers, and WBPP copies report here.
+
+Work you start takes priority over automatic analysis and preview generation.
+Use Stop, queue controls, or transfer Pause and Retry where the job offers
+them. **Move to top** makes a queued stack, processing or WBPP task run next
+after the current task finishes. A task waiting for review stays visible until
+you address it. Configure
+processor shares under **Settings → Performance**. See the
+[background job guide](docs/design/background-jobs.md) for priority and
+restart behavior.
+
 ## 🗺️ Sky coverage map
 
 Open **Sky** to see targets from all registered catalogs on a flat sky map
@@ -429,7 +587,7 @@ Hover over a field for hours, filters, and nights, or click it to open the
 target in Images. Zoom in to see stack previews. Use the timeline to filter
 observing nights and replay how your coverage grew.
 
-![The Sky view](docs/sky-coverage.jpg)
+![Sky coverage from five rigs with observing-night history and the Live panel showing no reports yet](docs/screenshots/sky-live.jpg)
 
 See [sky coverage](docs/SKY_COVERAGE.md) for field placement, observing-night
 rules, and the totals shown on the map.
@@ -441,7 +599,7 @@ The **Sky context** panel shows the image's header coordinates and catalog
 target. With `objects.bin` installed, it lists objects expected nearby.
 Those coordinates do not prove what the pixels contain.
 
-![Cocoon Nebula frame with solved coordinates, labels, and outlines](docs/sky-context.jpg)
+![Solved Golf of Mexico frame with sky labels, object outlines and the Sky context panel](docs/screenshots/sky-context.jpg)
 
 A supported TAN WCS in the file enables an overlay immediately. To solve the
 pixels, choose **Solve field** or press `O`. PSF Guard tries the pointing
@@ -456,7 +614,7 @@ download. Open **Settings → Catalogs** to install, update, or validate them.
 Choose **Blind solving** for the usual setup. Browser access to these
 controls requires an editor and `--allow-database-management`.
 
-![Catalog readiness, package installation, and validation](docs/settings-seiza-catalogs.png)
+![Seiza catalog readiness, package choice, installation and validation](docs/screenshots/settings-catalogs.png)
 
 For a headless installation, use the Seiza CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases):
@@ -521,9 +679,10 @@ Opening Sequence or running `screen-fits --regrade-db` uses cached elements
 and does not download them. Bright-trail risk describes geometry and
 illumination, not apparent magnitude.
 
-| Solved track overlay | Sequence recommendation |
-|:--:|:--:|
-| ![California Nebula exposure with dashed predictions and solid green detected trails](docs/satellite-california-overlay.png) | ![Pixel-aligned bright trail flagged in Sequence](docs/satellite-california-sequence.png) |
+![SNR G132 frame with one pixel-aligned satellite candidate and four prediction-only crossings](docs/screenshots/satellite-pixel-match.png)
+
+This SNR G132 frame has one pixel match among five predicted crossings. The
+orbital identity remains a candidate; the frame's stored grade is Accepted.
 
 See [satellite prediction](docs/SATELLITES.md) for header requirements, data
 sources, score limits, and cache behavior.
@@ -543,19 +702,11 @@ across two sessions. The UI identifies frames without enough matches. A low
 relative score alone does not diagnose damage or recommend rejection, and
 stable framing offsets remain advisory.
 
-| Obstruction arriving | Clear and veiled views of the same field |
-|:--:|:--:|
-| ![Obstruction entering an exposure](docs/screening-onset.jpg) | ![A field affected by thin cloud](docs/screening-veil.jpg) |
-
 Use **Analyze Missing Quality** or **Rescan All Quality** in database
 settings for a background scan of the whole catalog. These jobs fill star,
 spatial, photometric, and pointing measurements and report progress after
 you close Settings. Star count and HFR use the N.I.N.A. Fast detector to
 stay comparable with Target Scheduler measurements.
-
-| Astrometry results | Rejection review |
-|:--:|:--:|
-| ![Quality findings across eleven frames](docs/sequence-quality-astrometry.png) | ![Review of proposed astrometry rejections](docs/sequence-quality-review.png) |
 
 From the CLI, screen folders without a database or add `--regrade-db` to
 check against catalog targets and preview grade changes:
@@ -578,7 +729,7 @@ Choose **Export** on a Library project or target to export lights with
 matched calibration frames. Use **Include ungraded lights** to control
 whether pending frames are included. Rejected frames are excluded.
 
-![Library project with the Export action](docs/export-overview.png)
+<img src="docs/screenshots/export-dialog.png" width="448" alt="Export dialog with Include ungraded lights on, Grouped by target and Zip of the frames selected">
 
 The desktop app can write to a chosen folder; a browser can download a ZIP.
 Set a database's **Server export directory** to write exports on the server
@@ -615,6 +766,7 @@ psf-guard astrobin-csv my-db --target-id 12 --detail full -o ngc7023.csv
 See [AstroBin acquisition export](docs/ASTROBIN_EXPORT.md) for row grouping
 and filter mapping.
 
+<a id="wbpp"></a>
 ## ⚗ Stack in WBPP from the Library
 
 Set the PixInsight path under **Settings → Setups → PixInsight**, then
@@ -690,7 +842,7 @@ merge, planning update, or grade transfer before **Apply**. The preview
 survives a page reload and refuses to apply if the destination changed.
 Pending grades are excluded from the UI grade push by default.
 
-![Data Transfer with source and destination catalogs](docs/data-transfer.png)
+![Target Scheduler transfer into an owned catalog with a two-row preview awaiting Apply](docs/screenshots/import-reviewed-transfer.png)
 
 The CLI accepts registered database slugs or SQLite paths. Back up both
 catalogs before the first transfer:
@@ -751,6 +903,41 @@ sync actions in `remote-sync-audit.jsonl` under the cache directory.
 See the [data-transfer protocol](docs/design/data-transfer.md) for snapshots,
 previews, uploads, and identity checks, and the
 [N.I.N.A. Sync guide](https://psf-guard.com/docs/sync-plugin.html) for plugin setup.
+
+<a id="collaboration"></a>
+## Collaboration and live rigs (early beta)
+
+Under **Settings → Rigs → Setup → Collaboration**, connect a Starfront server,
+browse compatible projects, and review assigned work before importing a draft.
+A collaboration assignment becomes an ordinary plan that you can inspect and
+activate. Joining a project does not start capture.
+
+From **Reports**, report accepted work and upload accepted raw lights with
+matched calibration, or an existing PSF Guard or WBPP stack. File delivery and
+contribution reports are separate actions. Transfers show progress, Pause,
+Resume, Retry, and Cancel, and retain completed-file receipts across restarts.
+Automatic assignment pulls and file uploads require their own opt-in settings.
+
+The separate N.I.N.A. Director plugin can report live rig status and run
+approved capture programs. The header's **Live** chip opens rig status on the
+Sky. Director pairing and capture automation remain early beta; pairing alone
+does not authorize acquisition. Planning with Target Scheduler and PSF Guard
+Sync remains available without Director. See
+[Director and collaboration](docs/DIRECTOR.md) for setup and current limits.
+
+<a id="agents"></a>
+## Work through an agent
+
+The desktop app and server expose MCP at `/api/mcp`. An agent can inspect
+catalogs, quality evidence, calibration matches, plans, and background jobs.
+With write access it can grade frames, start scans and WBPP, manage flat-group
+choices, or create backups.
+
+Use **Settings → Agents** on a local instance, or **Settings → Users → API
+tokens → Connect an agent** on a server with accounts. Read-only tokens can
+inspect results; write tools use the same account permissions and database
+management checks as the UI. See [MCP setup and tools](docs/MCP.md) for Codex,
+Claude Code, and other MCP clients.
 
 <a id="cli-reference"></a>
 ## ⌨️ CLI reference
@@ -1056,6 +1243,7 @@ path for diagnosis. Accepted uploads move into place only after checksum,
 header, and destination checks. They use the receive directory's normal
 permissions.
 
+<a id="backups"></a>
 ## Back up catalogs and settings
 
 Use **Settings → Backups** for a manual or scheduled archive of settings and
