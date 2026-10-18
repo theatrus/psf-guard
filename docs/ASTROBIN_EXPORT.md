@@ -87,9 +87,13 @@ two rigs' "G" are two filters. So each catalog keeps its own **filter
 map**, under **Settings → Databases → AstroBin filters**. An entry holds a
 filter as the catalog spells it, the AstroBin id it stands for, what it is
 ("Antlia V-Pro G 36mm"), and, when the rig's filter changed, the first and
-last night the entry applies to. To fill in an id, find the exact filter
-in AstroBin's equipment explorer and paste its page address, or the number
-alone; PSF Guard reads the id out of the address. Every saved id is a link
+last night the entry applies to. The dialog lists the filter names the
+catalog's lights carry that have no entry yet; click one, or **Add all**,
+to start its entry, with the server-wide default id filled in when there
+is one. Each entry shows how many lights carry its name and over which
+nights. To fill in an id, find the exact filter in AstroBin's equipment
+explorer and paste its page address, or the number alone; PSF Guard keeps
+just the id from the address. Every saved id is a link
 back to that page, so a wrong pick is one click to spot. PSF Guard cannot
 search AstroBin for you: its equipment listing is not a public API, and
 its terms forbid tools scraping it. Names match ignoring case. On a night
