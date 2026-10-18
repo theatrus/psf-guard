@@ -140,7 +140,7 @@ describe('StackPreviewPanel on a refreshed stack', () => {
       stacking_version: '0.40.0', order: 'capture', groups: [group], error: null,
     })));
     renderPanel();
-    expect(await screen.findByText('Preview render queued')).toBeInTheDocument();
+    expect(await screen.findByText('Waiting to render preview')).toBeInTheDocument();
   });
 
   it('loads a preview rendered again from the FITS under its own revision', async () => {

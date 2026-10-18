@@ -16,6 +16,19 @@ the cached result to every browser. Reloading the UI never fetches either public
 feed. Tauri uses GitHub when the website updater feed is unavailable.
 Browser/server mode never downloads or installs an executable.
 
+## Check the running version and folders
+
+Open **Menu › Server information** to see the running version, cache folder
+and configured databases. Each database lists its ID, database file and image
+folders separately. Long paths wrap, and the details scroll inside the dialog
+while the heading and close controls stay visible.
+
+Use the mouse wheel, touch, or Tab to **Server details** and press Page Down
+to scroll. **Done**, Escape or the close button closes the dialog and returns
+focus to the menu. Loading and connection errors appear separately for server
+information and the database list; **Retry server information** and **Retry
+databases** reload only the failed request.
+
 ## Notes after an upgrade
 
 **Menu › What's new** opens the release highlights bundled with the app.

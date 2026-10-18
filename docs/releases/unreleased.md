@@ -24,3 +24,10 @@
 - **Combine channel stacks** builds a color preview from WBPP masters in a
   card marked *WBPP*. Before, a project whose stacks were split by exposure
   showed the masters in an *Unknown exposure* card that could not be built.
+
+- **Server information** scrolls within the window and keeps its heading and
+  close controls visible. Database IDs, files and image folders have separate
+  labels; long paths wrap. Server information and the database list each show
+  their own loading, error and retry states.
+- A queued card preview shows **Waiting to render preview**, matching the
+  job list. The stack stays ready while its preview refreshes.

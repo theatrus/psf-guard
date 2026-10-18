@@ -1106,7 +1106,7 @@ export default function StackPreviewPanel({
                       : 0;
                 const progressLabel =
                   progressState === 'ready' && progressGroup?.phase === 'render-queued'
-                    ? 'Preview render queued'
+                    ? 'Waiting to render preview'
                     : progressState === 'ready' && progressGroup?.phase === 'rendering'
                       ? 'Rendering preview'
                     : progressState === 'queued'
