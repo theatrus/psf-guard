@@ -210,6 +210,8 @@ export default function TauriSettings({
   // existing .sqlite required; the server bootstraps the full TS schema).
   const [createMode, setCreateMode] = useState(false);
   const [tsImportMethod, setTsImportMethod] = useState<'file' | 'plugin'>('file');
+  const [connectImportedSource, setConnectImportedSource] = useState(true);
+  const [importDestination, setImportDestination] = useState('');
   const pluginImport = showAddForm && !editingId && !createMode && tsImportMethod === 'plugin';
   const [createAnalyzeQuality, setCreateAnalyzeQuality] = useState(false);
   const [importAnalyzeQuality, setImportAnalyzeQuality] = useState(false);
@@ -397,6 +399,8 @@ export default function TauriSettings({
     setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(false);
     setTsImportMethod('file');
+    setConnectImportedSource(true);
+    setImportDestination('');
     setCreateMode(false);
     setCreateAnalyzeQuality(false);
   };
@@ -745,9 +749,11 @@ export default function TauriSettings({
           name: inferredName,
           db_path: formDbPath.trim(),
           image_dirs: formImageDirs,
+          ...(!connectImportedSource ? { connect_source: false } : {}),
+          ...(importDestination.trim() ? { destination_path: importDestination.trim() } : {}),
         });
         queryClient.setQueryData<import('../api/tsSyncTypes').TsSyncJob[]>(TS_SYNC_QUERY_KEY, old => [...(old ?? []).filter(item => item.id !== job.id), job]);
-        setStatusMessage('Importing Target Scheduler into a PSF Guard catalog…');
+        setStatusMessage(connectImportedSource ? 'Importing Target Scheduler into a PSF Guard catalog…' : 'Importing a standalone catalog copy…');
         return;
       }
 
@@ -936,7 +942,9 @@ export default function TauriSettings({
       } else if (observedImports.current.delete(key) && job.stage === 'complete' && job.catalog_id) {
         void reload();
         if (showAddForm && !editingId && !createMode && tsImportMethod === 'file') resetForm();
-        setStatusMessage('Target Scheduler import complete. Automatic sync and grade writeback are enabled.');
+        setStatusMessage(job.source_connected === false
+          ? 'Catalog import complete. The source file is not connected for sync.'
+          : 'Target Scheduler import complete. Automatic sync and grade writeback are enabled.');
       }
     }
   // reload and resetForm are defined inside the component; job tracking does not depend on their identity.
@@ -1027,7 +1035,7 @@ export default function TauriSettings({
             </h3>
           </div>
         ) : (
-          <h3>{createMode ? 'New Database from Images' : 'Import from Target Scheduler'}</h3>
+          <h3>{createMode ? 'New Database from Images' : !pluginImport && !connectImportedSource ? 'Import a catalog copy' : 'Import from Target Scheduler'}</h3>
         )}
 
         {!editingId && <>
@@ -1040,7 +1048,7 @@ export default function TauriSettings({
               </label>
               <label className="catalog-source-option">
                 <input type="radio" name="catalog-source" aria-label="Import a local TS file" aria-checked={!createMode && tsImportMethod === 'file'} checked={!createMode && tsImportMethod === 'file'} onChange={() => { setCreateMode(false); setTsImportMethod('file'); }} />
-                <span><strong>Import a local TS file</strong><small>Copy a Target Scheduler database and keep it connected for sync.</small></span>
+                <span><strong>Import a local TS file</strong><small>Copy a TS or PSF Guard database. Choose whether to keep TS connected.</small></span>
               </label>
               <label className="catalog-source-option">
                 <input type="radio" name="catalog-source" aria-label="Use the PSF Guard Sync plugin" aria-checked={pluginImport} checked={pluginImport} onChange={() => { setCreateMode(false); setTsImportMethod('plugin'); }} />
@@ -1050,7 +1058,7 @@ export default function TauriSettings({
           </fieldset>
           {!createMode && <p className="muted">{pluginImport
             ? 'Choose a shared image folder or an empty folder for incoming uploads. Create the catalog, then pair the plugin. The plugin controls its own sync schedule.'
-            : 'PSF Guard creates its own working copy. The original stays connected for automatic capture imports and grade writeback. Image files stay in their current folders.'}</p>}
+            : 'PSF Guard copies all catalog data, including existing PSF Guard data. Image files stay in their current folders.'}</p>}
         </>}
         {createMode && (
           <p className="muted">
@@ -1080,9 +1088,10 @@ export default function TauriSettings({
 
         {!createMode && !pluginImport && (
           <div className="database-config">
-            <label>N.I.N.A. Database File:</label>
+            <label htmlFor="catalog-source-path">Source database file:</label>
             <div className="file-input-group">
               <PathField
+                id="catalog-source-path"
                 kind="file"
                 disabled={!!editingId && !!databases.find(entry => entry.id === editingId)?.ts_sync}
                 pick={tauriFileSystem.pickDatabaseFile}
@@ -1094,6 +1103,22 @@ export default function TauriSettings({
             </div>
           </div>
         )}
+
+        {!editingId && !createMode && !pluginImport && <>
+          <label className="checkbox-label"><input type="checkbox" checked={connectImportedSource} disabled={isApplying || tsImportRunning}
+            onChange={e => setConnectImportedSource(e.target.checked)} /> Keep the source connected for Target Scheduler sync</label>
+          <p className="muted">{connectImportedSource
+            ? 'Automatic sync imports new captures and writes grade changes back. Director activation sends reviewed planning through this connection.'
+            : 'Create a standalone catalog copy. PSF Guard will not sync with or write back to the source file.'}
+            {' '}Server settings and saved Director plans require a full backup restore.</p>
+          <details className="database-config">
+            <summary>Advanced import options</summary>
+            <label htmlFor="import-destination-path">Destination database path (optional):</label>
+            <input id="import-destination-path" className="file-path-input" type="text" value={importDestination}
+              disabled={isApplying || tsImportRunning} onChange={e => setImportDestination(e.target.value)} />
+            <p className="muted">Leave blank to use managed storage beside the registry. A custom path must be absolute and point to a new file in an existing folder on the machine running PSF Guard. Existing files are never overwritten.</p>
+          </details>
+        </>}
 
         <div className="database-config">
           <label>Image Directories:</label>
@@ -1474,7 +1499,7 @@ export default function TauriSettings({
                 ? 'Create & Import'
               : editingId
                 ? 'Save Changes'
-                : 'Import from Target Scheduler'}
+                : connectImportedSource ? 'Import from Target Scheduler' : 'Import catalog copy'}
           </button>
         </div>
       </section>

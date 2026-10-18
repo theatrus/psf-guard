@@ -48,6 +48,10 @@ pub(super) struct Push {
     pub(super) applied: bool,
     pub(super) summary: BTreeMap<String, i64>,
     pub(super) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) ts_file: Option<file_delivery::Preview>,
+    #[serde(skip)]
+    pub(super) ts_sync: Option<psf_guard_director_meta::activation::TsSyncDelivery>,
 }
 
 impl Push {
@@ -58,6 +62,8 @@ impl Push {
             applied: false,
             summary: BTreeMap::new(),
             error: None,
+            ts_file: None,
+            ts_sync: None,
         }
     }
 }
@@ -199,6 +205,8 @@ pub(super) async fn last(
     Path(id): Path<Uuid>,
 ) -> Result<Json<ApiResponse<Last>>, Error> {
     let peers = registered_peers(&state);
+    let catalogs = state.all_databases();
+    let instance = enabled(&state)?.instance_id;
     let activation = enabled(&state)?
         .query(move |store| {
             store.project(id)?.ok_or(StoreError::NotFound)?;
@@ -208,8 +216,20 @@ pub(super) async fn last(
             // A push to a peer since removed from the registry, or one the
             // rig no longer sends to, is moot: the rig's next activation goes
             // where Setup points. The others carry the peer's name now.
+            let found = identified_catalogs(&catalogs, instance);
             let mut pushes = Vec::new();
             for mut push in std::mem::take(&mut activation.pushes) {
+                if let Some(delivery) = &push.ts_sync {
+                    if let Some(context) = remote_push::catalog_of(&activation, push.rig_id)
+                        .and_then(|id| found.get(id))
+                        && push.peer_id == format!("ts:{}", context.id)
+                        && file_delivery::is_current(context, delivery)
+                    {
+                        push.peer_name = format!("Target Scheduler ({})", context.name);
+                        pushes.push(push);
+                    }
+                    continue;
+                }
                 let Some(peer) = peers.iter().find(|peer| peer.id == push.peer_id) else {
                     continue;
                 };
@@ -284,7 +304,7 @@ fn same_size(
         && (a.height_degrees - b.height_degrees).abs() <= 1e-6
 }
 
-fn now_ms() -> u64 {
+pub(super) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -468,14 +488,21 @@ async fn execute_guarded(
     } else {
         Some(admit(&service.discovery_admission).await?)
     };
+    let sync_guard = if expected.is_some() {
+        Some(state.sync_apply_lock.lock().await)
+    } else {
+        None
+    };
     let peers = registered_peers(&state);
     let known_peers = peers.clone();
+    let delivery_state = state.clone();
     // Everything up to the record runs on a pooled reader: the store's one
     // writer is taken only to record the result, so check-ins, program pulls
     // and saves never wait behind rig databases. The rig-database gate held
     // throughout keeps two activations apart.
     let recorder = service.clone();
-    let (mut report, to_record) = service.clone().with_reader(move |store| {
+    let (mut report, to_record, mut staged) = service.clone().with_reader(move |store| {
+        let mut staged = file_delivery::Staged::new(delivery_state.clone());
         let _catalog_permit = catalog_permit;
         let applying = expected.is_some();
         let project = store.project(id)?.ok_or(Error::Missing)?;
@@ -721,7 +748,7 @@ async fn execute_guarded(
             }
             // A rig on another PSF Guard: its rows land here first, then go
             // to the peer by Sync once Apply has committed them.
-            let push = if guard.is_none() {
+            let mut push = if guard.is_none() {
                 planned_push(profile.as_ref(), &known_peers, &mut warnings)
             } else {
                 None
@@ -803,6 +830,9 @@ async fn execute_guarded(
                         }
                     }
                 };
+                let before = if guard.is_none() && catalog.context.ts_sync.is_some() {
+                    Some(file_delivery::local_fingerprint(&tx).map_err(|_| Error::Internal)?)
+                } else { None };
                 let outcome = write_rig_inner(
                     &tx,
                     &Inputs {
@@ -824,7 +854,19 @@ async fn execute_guarded(
                     },
                 );
                 match outcome {
-                    Ok(outcome) => {
+                    Ok(mut outcome) => {
+                        if let Some(before) = before {
+                            push = file_delivery::prepare(&catalog.context, &tx, before, &outcome.record.project_guid.to_string(), file_delivery::Intent {
+                                active: true,
+                                reactivate: previous.as_ref().is_some_and(|p| p.inactive_rigs.iter().any(|r| r.rig_id == *rig_id)),
+                                scheduling: limits(&scheduling.values).into_iter().filter(|l| scheduling.sources.contains_key(l.field)).map(|l| l.column.into()).collect(),
+                            }, &outcome.shoots.iter().map(|s| (s.plan, s.exposure_seconds)).collect::<Vec<_>>());
+                            if let Some(push) = &push { for shot in &mut outcome.shoots {
+                                if let Some((name,filter,gain,offset)) = file_delivery::shot_template(push, shot.plan) {
+                                    shot.template=name;shot.filter=filter;shot.gain=gain;shot.offset=offset;
+                                }
+                            }}
+                        }
                         // Hold the writes uncommitted until the digest is checked.
                         if applying {
                             tx.commit_pending()?;
@@ -896,7 +938,7 @@ async fn execute_guarded(
             };
             let profile = store.rig_profile(*rig_id)?;
             let mut warnings = Vec::new();
-            let push = if guard.is_none() {
+            let mut push = if guard.is_none() {
                 planned_push(profile.as_ref(), &known_peers, &mut warnings)
             } else {
                 None
@@ -921,6 +963,9 @@ async fn execute_guarded(
                     continue;
                 }
             };
+            let before = if guard.is_none() && catalog.context.ts_sync.is_some() {
+                Some(file_delivery::local_fingerprint(&tx).map_err(|_| Error::Internal)?)
+            } else { None };
             let project_guid = was.project_guid.to_string();
             let mut changes = Vec::new();
             if let Some((row_id, name)) = project_row(&tx, &project_guid)? {
@@ -940,10 +985,11 @@ async fn execute_guarded(
                         inactive.push(was);
                     }
             }
-            if changes.is_empty() {
+            if changes.is_empty() && before.is_none() {
                 tx.rollback()?;
                 continue;
             }
+            if let Some(before) = before { push = file_delivery::prepare(&catalog.context, &tx, before, &project_guid, file_delivery::Intent { active: false, reactivate: false, scheduling: vec![] }, &[]); }
             if applying {
                 tx.commit_pending()?;
             } else {
@@ -997,7 +1043,7 @@ async fn execute_guarded(
                             .map(|c| (c.kind, c.action, &c.name, without_frame_counts(&c.detail)))
                             .collect::<Vec<_>>(),
                         &r.warnings,
-                        r.push.as_ref().map(|p| &p.peer_id),
+                        r.push.as_ref().map(|p| (&p.peer_id, p.ts_file.as_ref().map(|file| (&file.path, &file.local_fingerprint, &file.destination_fingerprint)))),
                         profile_revision,
                     )
                 })
@@ -1028,6 +1074,16 @@ async fn execute_guarded(
         }
         let mut to_record = None;
         if applying {
+            for (rig_id, _, _, _) in &pending {
+                if let Some(report) = reports.iter_mut().find(|r| r.rig.id == *rig_id)
+                    && let (Some(push), Some(slug)) = (&mut report.push, &report.catalog_slug) {
+                    file_delivery::stage(&delivery_state, slug, push).map_err(|error| {
+                        tracing::error!(?error, "Could not stage TS activation delivery");
+                        Error::Internal
+                    })?;
+                    staged.track(slug, push);
+                }
+            }
             let previously_inactive = |rig: Uuid| previous.as_ref().is_some_and(|p| p.inactive_rigs.iter().any(|r| r.rig_id == rig));
             let record_of = |rigs: Vec<ActivatedRig>, inactive: Vec<InactiveRig>, carried: &[ActivatedRig]| {
                 let mut all = rigs;
@@ -1051,9 +1107,9 @@ async fn execute_guarded(
             // The remote rigs this apply writes, and their peers. A
             // background apply sends nothing, so its rigs keep how their
             // last push went.
-            let remote: BTreeMap<Uuid, (String, String)> = reports
+            let remote: BTreeMap<Uuid, (String, String, Option<psf_guard_director_meta::activation::TsSyncDelivery>)> = reports
                 .iter()
-                .filter_map(|r| r.push.as_ref().map(|p| (r.rig.id, (p.peer_id.clone(), p.peer_name.clone()))))
+                .filter_map(|r| r.push.as_ref().map(|p| (r.rig.id, (p.peer_id.clone(), p.peer_name.clone(), p.ts_sync.clone()))))
                 .collect();
             let mut written: std::collections::BTreeSet<Uuid> = if guard.is_none() {
                 pending.iter().map(|(rig, ..)| *rig).collect()
@@ -1133,10 +1189,15 @@ async fn execute_guarded(
             preview_digest: digest,
             applied: applying,
             activation_revision: None,
-        }, to_record))
+        }, to_record, staged))
     })
     .await?;
     if let Some((record, links)) = to_record {
+        let approved: Vec<String> = record
+            .pushes
+            .iter()
+            .filter_map(|push| push.ts_sync.as_ref()?.preview_id.clone())
+            .collect();
         let names: Vec<(Uuid, String)> = report
             .rigs
             .iter()
@@ -1173,7 +1234,10 @@ async fn execute_guarded(
             .await?;
         report.activation_revision = Some(revision);
         report.warnings.extend(link_warnings);
+        staged.recorded(&approved);
     }
+    drop(staged);
+    drop(sync_guard);
     if let (true, Some(revision)) = (report.applied, report.activation_revision) {
         // The local rows are committed and the record says each remote rig
         // waits; now each rig's peer, and the record says how it went. A
@@ -1184,6 +1248,23 @@ async fn execute_guarded(
             let (Some(push), Some(slug)) = (rig.push.as_mut(), rig.catalog_slug.as_deref()) else {
                 continue;
             };
+            if let Some(delivery) = push.ts_sync.clone() {
+                if let Some(context) = state.get_database(slug) {
+                    *push = file_delivery::send(
+                        &state,
+                        &recorder,
+                        &context,
+                        remote_push::Waiting {
+                            project: id,
+                            revision,
+                            rig: rig.rig.id,
+                        },
+                        delivery,
+                    )
+                    .await;
+                }
+                continue;
+            }
             let (Some(peer), Some(context)) = (
                 peers.iter().find(|peer| peer.id == push.peer_id),
                 state.get_database(slug),
@@ -1256,7 +1337,14 @@ fn open_rig_for(path: &str, on_copy: bool, probe_write: bool) -> Result<Connecti
 fn pushes_of(
     record: &Activation,
     written: &std::collections::BTreeSet<Uuid>,
-    remote: &BTreeMap<Uuid, (String, String)>,
+    remote: &BTreeMap<
+        Uuid,
+        (
+            String,
+            String,
+            Option<psf_guard_director_meta::activation::TsSyncDelivery>,
+        ),
+    >,
     previous: Option<&Activation>,
 ) -> Vec<RemotePush> {
     let mut seen = std::collections::BTreeSet::new();
@@ -1268,17 +1356,20 @@ fn pushes_of(
         .filter(|rig| seen.insert(*rig))
         .filter_map(|rig| {
             if written.contains(&rig) {
-                remote.get(&rig).map(|(peer_id, peer_name)| RemotePush {
-                    rig_id: rig,
-                    peer_id: peer_id.clone(),
-                    peer_name: peer_name
-                        .chars()
-                        .take(psf_guard_director_meta::activation::MAX_PEER_NAME_CHARS)
-                        .collect(),
-                    applied: false,
-                    attempted_at_ms: None,
-                    error: None,
-                })
+                remote
+                    .get(&rig)
+                    .map(|(peer_id, peer_name, ts_sync)| RemotePush {
+                        rig_id: rig,
+                        ts_sync: ts_sync.clone(),
+                        peer_id: peer_id.clone(),
+                        peer_name: peer_name
+                            .chars()
+                            .take(psf_guard_director_meta::activation::MAX_PEER_NAME_CHARS)
+                            .collect(),
+                        applied: false,
+                        attempted_at_ms: None,
+                        error: None,
+                    })
             } else {
                 previous
                     .and_then(|p| p.pushes.iter().find(|push| push.rig_id == rig))
@@ -1306,15 +1397,20 @@ const PLANNING_TABLES: [&str; 10] = [
 /// one read: an activation run on the copy shows what it would change and
 /// never takes the file's write lock. These tables are small; frames and
 /// their metadata stay behind.
-fn planning_copy(path: &str) -> Result<Connection, String> {
+pub(super) fn planning_copy(path: &str) -> Result<Connection, String> {
     let read_failed = |error: rusqlite::Error| format!("Its database could not be read: {error}.");
     let source = super::super::database_context::open_scheduler_connection_with_flags(
         FilePath::new(path),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(read_failed)?;
-    let copy = Connection::open_in_memory().map_err(read_failed)?;
     let read = source.unchecked_transaction().map_err(read_failed)?;
+    planning_copy_from(&read)
+}
+
+pub(super) fn planning_copy_from(read: &Connection) -> Result<Connection, String> {
+    let read_failed = |error: rusqlite::Error| format!("Its database could not be read: {error}.");
+    let copy = Connection::open_in_memory().map_err(read_failed)?;
     for table in PLANNING_TABLES {
         let schema: Vec<(String, String)> = read
             .prepare(
@@ -1447,13 +1543,27 @@ pub(super) async fn push(
             let activation = store
                 .activation(id)?
                 .ok_or(ActivationError::NotReady("Activate the plan first."))?;
-            let mut targets: Vec<(NamedIdentity, Arc<DatabaseContext>, String)> = Vec::new();
+            let mut targets: Vec<(
+                NamedIdentity,
+                Arc<DatabaseContext>,
+                String,
+                Option<psf_guard_director_meta::activation::TsSyncDelivery>,
+            )> = Vec::new();
             let found = identified_catalogs(&catalogs, instance);
             let mut warnings = found.duplicates.clone();
             // The rigs whose site still lacks this activation, as the page
             // shows them.
             let mut unsent = std::collections::BTreeSet::new();
             for push in activation.pushes.iter().filter(|p| !p.applied) {
+                if let Some(delivery) = &push.ts_sync {
+                    if let Some(context) = remote_push::catalog_of(&activation, push.rig_id)
+                        .and_then(|id| found.get(id))
+                        && file_delivery::is_current(context, delivery)
+                    {
+                        unsent.insert(push.rig_id);
+                    }
+                    continue;
+                }
                 if registered.contains(&push.peer_id)
                     && remote_push::sends_to(store, push.rig_id, &push.peer_id)?
                 {
@@ -1475,6 +1585,26 @@ pub(super) async fn push(
                 .filter(|(rig, _)| unsent.is_empty() || unsent.contains(rig));
             for (rig_id, catalog_id) in reached {
                 let rig = store.rig(rig_id)?.ok_or(Error::Missing)?;
+                if let Some(context) = found.get(catalog_id)
+                    && let Some(settings) = &context.ts_sync
+                {
+                    let delivery = activation
+                        .pushes
+                        .iter()
+                        .find(|p| p.rig_id == rig_id)
+                        .and_then(|p| p.ts_sync.clone())
+                        .unwrap_or(psf_guard_director_meta::activation::TsSyncDelivery {
+                            source_path: settings.source_path.clone(),
+                            preview_id: None,
+                        });
+                    targets.push((
+                        rig,
+                        context.clone(),
+                        format!("ts:{}", context.id),
+                        Some(delivery),
+                    ));
+                    continue;
+                }
                 let Some(peer_id) = store
                     .rig_profile(rig_id)?
                     .and_then(|profile| profile.peer_id)
@@ -1482,7 +1612,7 @@ pub(super) async fn push(
                     continue;
                 };
                 match found.get(catalog_id) {
-                    Some(context) => targets.push((rig, context.clone(), peer_id)),
+                    Some(context) => targets.push((rig, context.clone(), peer_id, None)),
                     None => warnings.push(format!(
                         "{}: its database is no longer registered on this server.",
                         rig.name
@@ -1494,7 +1624,27 @@ pub(super) async fn push(
         .await?;
     let mut rigs = Vec::with_capacity(targets.len());
     let mut answered = std::collections::BTreeSet::new();
-    for (rig, context, peer_id) in targets {
+    for (rig, context, peer_id, delivery) in targets {
+        if let Some(delivery) = delivery {
+            let push = file_delivery::send(
+                &state,
+                &service,
+                &context,
+                remote_push::Waiting {
+                    project: id,
+                    revision,
+                    rig: rig.id,
+                },
+                delivery,
+            )
+            .await;
+            rigs.push(PushedRig {
+                rig,
+                catalog_name: context.name.clone(),
+                push,
+            });
+            continue;
+        }
         let push = match peers.iter().find(|peer| peer.id == peer_id) {
             Some(peer) => {
                 let waiting = remote_push::Waiting {
@@ -1512,6 +1662,8 @@ pub(super) async fn push(
                 error: Some(
                     "This peer is no longer registered; name another under Rigs, Setup.".into(),
                 ),
+                ts_file: None,
+                ts_sync: None,
             },
         };
         if push.applied {
@@ -1529,7 +1681,7 @@ pub(super) async fn push(
     }
     if rigs.is_empty() && warnings.is_empty() {
         warnings.push(
-            "No rig in this activation pushes to a remote site; name a peer under Rigs, Setup."
+            "No rig in this activation has a TS file connection or remote site. Configure sync before sending planning."
                 .into(),
         );
     }

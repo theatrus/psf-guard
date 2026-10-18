@@ -471,6 +471,7 @@ async fn a_replaced_activation_is_never_resent() {
         let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
         let mut record = store.activation(a.project).unwrap().unwrap();
         record.pushes = vec![psf_guard_director_meta::activation::RemotePush {
+            ts_sync: None,
             rig_id: a.rig,
             peer_id: "obs".into(),
             peer_name: "Observatory".into(),

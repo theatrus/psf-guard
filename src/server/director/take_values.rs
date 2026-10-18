@@ -103,7 +103,12 @@ pub(super) async fn take(
                     width_degrees: fov.width_degrees,
                     height_degrees: fov.height_degrees,
                 });
-            Ok((plan, framing, context.database_path.clone(), source, panel))
+            let path = context
+                .ts_sync
+                .as_ref()
+                .map(|s| s.source_path.clone())
+                .unwrap_or_else(|| context.database_path.clone());
+            Ok((plan, framing, path, source, panel))
         })
         .await?;
     let (plan, framing, path, source, field) = found;

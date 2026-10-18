@@ -203,7 +203,16 @@ supplying a filesystem path. Startup, file-change and scheduled jobs import
 capture arrivals without overwriting local planning. Automatic grade writeback
 uses saved baselines, conditional TS updates and a durable pending record to
 recover an interrupted acknowledgement. Explicit planning and grade transfers
-retain Preview and Apply.
+retain Preview and Apply. Director activation uses the same planning merge,
+frozen source snapshots and destination guard for its retained TS connection.
+Its source is restricted to the activated project and referenced templates;
+TS-owned fields remain unchanged. The activation records an approved delivery
+before writing TS, so retries use that frozen source and existing file-sync
+triggers. A stale or expired approval requires another activation preview.
+
+Setup can instead import a standalone catalog copy, retaining all embedded
+PSF Guard tables without a TS connection. An optional advanced destination is
+a new absolute file path; atomic publication refuses to overwrite a file.
 
 ### Remote peers
 

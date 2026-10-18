@@ -1345,7 +1345,7 @@ export const apiClient = {
     return data.data || [];
   },
 
-  importTsDatabase: async (request: { name: string; db_path: string; image_dirs: string[]; slug?: string }): Promise<import('./tsSyncTypes').TsSyncJob> => {
+  importTsDatabase: async (request: { name: string; db_path: string; image_dirs: string[]; slug?: string; connect_source?: boolean; destination_path?: string }): Promise<import('./tsSyncTypes').TsSyncJob> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<import('./tsSyncTypes').TsSyncJob>>('/databases/import-ts', request);
     if (!data.data) throw new Error(data.error || 'Could not start the Target Scheduler import.');

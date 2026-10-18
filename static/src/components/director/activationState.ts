@@ -8,7 +8,8 @@ import { retryWhenBusy } from './retry';
 
 /** Whether an activation would write anything in this rig's database: a
  *  row it creates, takes over, updates or turns off. */
-export const writesRows = (rig: DirectorActivationRig) => rig.changes.some(change => change.action !== 'unchanged' && change.action !== 'keep');
+export const writesRows = (rig: DirectorActivationRig) => rig.changes.some(change => change.action !== 'unchanged' && change.action !== 'keep')
+  || !!rig.push?.ts_file && Object.values(rig.push.summary).some(count => count > 0);
 
 /** A rig whose database already holds everything an activation would
  *  write there. */
@@ -57,6 +58,7 @@ export function describeChange(before: DirectorActivationReport, after: Director
     // A rig the activation found locked or unwritable says why, in its words.
     const said = (now?.warnings ?? []).filter(warning => !(was?.warnings ?? []).includes(warning));
     if (said.length > 0) parts.push(`${name}: ${said.join(' ')}`);
+    else if (JSON.stringify(was?.push?.ts_file) !== JSON.stringify(now?.push?.ts_file)) parts.push(`${name}'s Target Scheduler connection or planning`);
     else if (rows(was) !== rows(now)) parts.push(`${name}'s rows`);
   }
   return parts.length > 0 ? listed(parts) : 'something the preview cannot show';
@@ -66,7 +68,7 @@ export function describeChange(before: DirectorActivationReport, after: Director
 const withoutFrameCounts = (detail: string) => detail.replace(/\([^()]*frames taken\)/g, '');
 
 /** Whether every row activation would write in this rig turns one off. */
-const onlyTurnsOff = (rig: DirectorActivationRig) => rig.changes.every(change => change.action === 'unchanged' || change.action === 'keep' || change.action === 'disable');
+const onlyTurnsOff = (rig: DirectorActivationRig) => rig.changes.some(change => change.action === 'disable') && rig.changes.every(change => change.action === 'unchanged' || change.action === 'keep' || change.action === 'disable');
 
 const failure = (error: unknown) => isAxiosError(error) ? error.response?.data?.error || error.message
   : error instanceof Error ? error.message : 'The check failed';

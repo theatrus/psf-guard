@@ -408,40 +408,49 @@ fn record_snapshot_progress(lowest_remaining: &mut Option<i32>, remaining: i32) 
 pub struct FingerprintQuery {
     label: &'static str,
     sql: &'static str,
+    ignored_columns: &'static [&'static str],
 }
 
 pub fn fingerprint_queries(request: &SchedulerSyncRequest) -> Vec<FingerprintQuery> {
     const EXPOSURE_TEMPLATE: FingerprintQuery = FingerprintQuery {
         label: "exposuretemplate",
+        ignored_columns: &[],
         sql: "SELECT * FROM exposuretemplate ORDER BY rowid",
     };
     const PROJECT: FingerprintQuery = FingerprintQuery {
         label: "project",
+        ignored_columns: &[],
         sql: "SELECT * FROM project ORDER BY rowid",
     };
     const RULE_WEIGHT: FingerprintQuery = FingerprintQuery {
         label: "ruleweight",
+        ignored_columns: &[],
         sql: "SELECT * FROM ruleweight ORDER BY rowid",
     };
     const TARGET: FingerprintQuery = FingerprintQuery {
         label: "target",
+        ignored_columns: &[],
         sql: "SELECT * FROM target ORDER BY rowid",
     };
     const EXPOSURE_PLAN: FingerprintQuery = FingerprintQuery {
         label: "exposureplan",
+        ignored_columns: &[],
         sql: "SELECT * FROM exposureplan ORDER BY rowid",
     };
     const ACQUIRED_IMAGE: FingerprintQuery = FingerprintQuery {
         label: "acquiredimage",
+        ignored_columns: &[],
         sql: "SELECT * FROM acquiredimage ORDER BY rowid",
     };
     const IMAGE_DATA_KEYS: FingerprintQuery = FingerprintQuery {
         label: "imagedata-keys",
+        ignored_columns: &[],
         sql: "SELECT acquiredimageid, tag FROM imagedata \
               ORDER BY acquiredimageid, tag, Id",
     };
     const GRADES: FingerprintQuery = FingerprintQuery {
         label: "grades",
+        ignored_columns: &[],
         sql: "SELECT guid, gradingStatus, rejectreason FROM acquiredimage ORDER BY guid, Id",
     };
 
@@ -465,7 +474,10 @@ pub fn fingerprint_queries(request: &SchedulerSyncRequest) -> Vec<FingerprintQue
             PROJECT,
             RULE_WEIGHT,
             TARGET,
-            EXPOSURE_PLAN,
+            FingerprintQuery {
+                ignored_columns: &["acquired", "accepted"],
+                ..EXPOSURE_PLAN
+            },
         ],
         SchedulerSyncKind::PushGrades => vec![GRADES],
     }
@@ -488,14 +500,25 @@ pub fn connection_fingerprint(
         let mut statement = connection
             .prepare(query.sql)
             .with_context(|| format!("reading {} for sync fingerprint", query.label))?;
-        for column in statement.column_names() {
-            hash_part(&mut hasher, column.as_bytes());
-        }
-        let column_count = statement.column_count();
+        let columns: Vec<usize> = statement
+            .column_names()
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| {
+                !query
+                    .ignored_columns
+                    .iter()
+                    .any(|ignored| column.eq_ignore_ascii_case(ignored))
+            })
+            .map(|(index, column)| {
+                hash_part(&mut hasher, column.as_bytes());
+                index
+            })
+            .collect();
         let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
             hasher.update([0xff]);
-            for index in 0..column_count {
+            for &index in &columns {
                 match row.get_ref(index)? {
                     ValueRef::Null => hasher.update([0]),
                     ValueRef::Integer(value) => {
@@ -879,6 +902,7 @@ mod tests {
 
         let query = FingerprintQuery {
             label: "acquiredimage",
+            ignored_columns: &[],
             sql: "SELECT * FROM acquiredimage ORDER BY rowid",
         };
         let before = database_fingerprint(&path, &[query]).unwrap();

@@ -28,10 +28,50 @@ choices keeps any folders you have already added. To connect TS, choose:
 Database management must be enabled for a browser server, as described under
 [Create a catalog in the UI](#create-a-catalog-in-the-ui).
 
+### Import a catalog copy and choose storage
+
+An import copies the complete SQLite catalog, including PSF Guard tables for
+analysis, calibration, frame associations and per-catalog Director provenance.
+PSF Guard keeps this embedded data for both import modes.
+
+Leave **Keep the source connected for Target Scheduler sync** on to import
+captures, exchange grades and deliver activated planning through the saved TS
+connection. Turn it off and click **Import catalog copy** for a standalone
+copy. The standalone import does not connect to or write back to the source,
+and preserves embedded sync history without enabling it.
+Connecting the source starts new grade-sync tracking for that connection;
+existing image grades and the other catalog records remain unchanged.
+
+The default destination is `databases/<uuid>.sqlite` beside the database
+registry:
+
+| Platform | Default catalog directory |
+| --- | --- |
+| macOS | `~/Library/Application Support/psf-guard/databases/` |
+| Linux | `~/.config/psf-guard/databases/` |
+| Windows | `%APPDATA%\psf-guard\databases\` |
+
+A server started with `--registry /srv/psf-guard/config.json` uses
+`/srv/psf-guard/databases/`. To choose one import's destination, expand
+**Advanced import options** and enter **Destination database path (optional)**.
+Use an absolute path to a new file in an existing folder on the machine
+running PSF Guard. Leave it blank for managed storage. Import never overwrites
+an existing file, and the source and destination must be different files.
+
+A catalog copy is not a complete installation restore. The registry, image
+folder settings, accounts, credentials and Director's global plans live
+outside the catalog. Restore those from a [full backup](BACKUPS.md#restoring-by-hand).
+Image files also remain in their original folders.
+
+Servers can still register an explicit file through the positional database
+argument or a registry entry. Existing direct TS access remains supported
+through 0.12. A custom destination for an imported owned catalog does not
+require direct TS access.
+
 ### Sync with a local TS file
 
 PSF Guard reads a consistent SQLite snapshot and creates a working catalog
-under `databases/` beside its registry. The copy preserves existing IDs, GUIDs,
+at the selected destination. The copy preserves existing IDs, GUIDs,
 thumbnails, calibration records, and other PSF Guard tables. The import does
 not write to the source. Image files remain in their existing folders.
 The background jobs list shows import progress; reopening Settings recovers
@@ -63,6 +103,15 @@ For a reviewed merge, planning export or explicit grade overwrite, open
 connection, preview the changes, then apply the preview. The source file does
 not need to be registered as a second catalog. If the source is unavailable,
 the working catalog remains usable and the sync job reports the problem.
+
+Director activation uses this same saved connection. Its preview shows the TS
+file and planning transfer counts. **Activate** commits the working catalog,
+then sends that project's planning to TS without changing captures, grades or
+acquisition counts. The automatic grade-writeback switch does not disable this
+explicit planning delivery. Failed deliveries remain pending and retry through
+the configured startup, change detection and schedule settings, or with the
+send button for the pending TS delivery. A changed TS plan or expired transfer needs a
+new activation preview; retry never exports unreviewed local edits.
 
 Existing registrations that open TS directly remain supported through 0.12.
 They are not migrated on startup. Direct access is deprecated, with removal

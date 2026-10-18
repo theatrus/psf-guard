@@ -24,6 +24,9 @@ export function useTsSyncJobs(enabled: boolean) {
     if (changed) {
       void client.invalidateQueries({ queryKey: ['databases'] });
       void client.invalidateQueries({ queryKey: ['db'] });
+      void client.invalidateQueries({ queryKey: ['directorActivation'] });
+      void client.invalidateQueries({ queryKey: ['directorActivationCheck'] });
+      void client.invalidateQueries({ queryKey: ['directorPlanProgress'] });
     }
   }, [query.data, client]);
   return query;

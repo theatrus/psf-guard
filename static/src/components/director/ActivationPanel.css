@@ -49,3 +49,6 @@
 /* Unsaved edits: activation writes the saved plan, so saving comes first. */
 .activation-unsaved { margin: 8px 0; padding: 6px 10px; border: 1px solid var(--color-status-caution); border-radius: 6px; background: var(--color-status-caution-bg); }
 .activation-unsaved p { margin: 0 0 6px; }
+.activation-rig code {
+  overflow-wrap: anywhere;
+}

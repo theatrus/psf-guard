@@ -30,6 +30,11 @@ mod collaboration_activation;
 mod collaboration_auth;
 mod equipment_report;
 mod feasibility;
+mod file_delivery;
+
+pub(crate) async fn retry_ts_planning(state: &Arc<AppState>, slug: &str) -> anyhow::Result<()> {
+    file_delivery::retry_pending(state, slug).await
+}
 mod framing;
 mod import_drafts;
 #[cfg(test)]

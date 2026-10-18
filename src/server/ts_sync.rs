@@ -34,6 +34,7 @@ pub struct Job {
     pub name: String,
     pub running: bool,
     pub automatic: bool,
+    pub source_connected: bool,
     pub stage: String,
     pub pages_done: u64,
     pub pages_total: u64,
@@ -85,6 +86,7 @@ impl Manager {
             name,
             running: true,
             automatic,
+            source_connected: true,
             stage: "copying".into(),
             pages_done: 0,
             pages_total: 0,
@@ -117,7 +119,7 @@ impl Manager {
         });
     }
 
-    fn stopped(&self, id: &str) -> bool {
+    pub(super) fn stopped(&self, id: &str) -> bool {
         self.jobs
             .lock()
             .unwrap()
@@ -166,6 +168,16 @@ pub struct ImportRequest {
     pub image_dirs: Vec<String>,
     #[serde(default)]
     pub slug: Option<String>,
+    /// False imports a standalone catalog copy, retaining all embedded PSF data.
+    #[serde(default = "connected_by_default")]
+    pub connect_source: bool,
+    /// Advanced: a new catalog file in an existing directory on this server.
+    #[serde(default)]
+    pub destination_path: Option<String>,
+}
+
+fn connected_by_default() -> bool {
+    true
 }
 
 pub async fn import_route(
@@ -188,16 +200,25 @@ pub async fn import_route(
         super::slug::validate_slug(slug).map_err(AppError::BadRequest)?;
     }
     let key = format!("import:{}", uuid::Uuid::new_v4());
-    let job = state
+    let mut job = state
         .ts_sync
         .begin(key.clone(), None, request.name.clone(), false)
         .ok_or_else(||AppError::BadRequest("A Target Scheduler import is already running. Wait for it to finish or stop it from the job list.".into()))?;
+    job.source_connected = request.connect_source;
+    state.ts_sync.update(&key, |stored| {
+        stored.source_connected = request.connect_source
+    });
     let returned = job.clone();
     let runtime = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
         let _runtime = runtime.enter();
-        let _hold = state.shutdown.hold("Target Scheduler import");
-        let _interactive = state.begin_named_interactive_job("Target Scheduler import");
+        let label = if request.connect_source {
+            "Target Scheduler import"
+        } else {
+            "Catalog import"
+        };
+        let _hold = state.shutdown.hold(label);
+        let _interactive = state.begin_named_interactive_job(label);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             import(&state, &key, request)
         }))
@@ -269,30 +290,54 @@ fn import(state: &Arc<AppState>, job: &str, request: ImportRequest) -> Result<()
         .context("database registry directory")?
         .join("databases");
     std::fs::create_dir_all(&base)?;
-    let temporary = tempfile::tempdir_in(&base)?;
-    let copied = temporary.path().join("catalog.sqlite");
+    let destination = if let Some(path) = &request.destination_path {
+        let path = Path::new(path);
+        anyhow::ensure!(
+            path.is_absolute(),
+            "Choose an absolute destination database path."
+        );
+        anyhow::ensure!(!path.exists(), "The destination already exists. Choose a new file; import never overwrites a database.");
+        let parent = path
+            .parent()
+            .context("Choose a database filename inside an existing folder.")?;
+        let parent =
+            dunce::canonicalize(parent).context("The destination folder must already exist")?;
+        parent.join(
+            path.file_name()
+                .context("Choose a destination database filename.")?,
+        )
+    } else {
+        dunce::canonicalize(&base)?.join(format!("{}.sqlite", uuid::Uuid::new_v4()))
+    };
+    anyhow::ensure!(
+        destination != source,
+        "The source and destination database must be different files."
+    );
+    let temporary_directory = tempfile::tempdir_in(destination.parent().unwrap())?;
+    let copied = temporary_directory.path().join("catalog.sqlite");
     snapshot(state, job, &source, &copied)?;
     state
         .ts_sync
         .update(job, |j| j.stage = "initializing".into());
-    let mut conn = Connection::open(&copied)?;
-    let tx = conn.transaction()?;
-    crate::ts_sync::initialize(&tx)?;
-    tx.commit()?;
-    drop(conn);
+    if request.connect_source {
+        let mut conn = Connection::open(&copied)?;
+        let tx = conn.transaction()?;
+        crate::ts_sync::initialize(&tx)?;
+        tx.commit()?;
+    }
     let _guard = state.registry_write.blocking_lock();
     if state.shutdown.is_stopping() || state.ts_sync.stopped(job) {
         return Err(crate::backup::Cancelled.into());
     }
     let mut registry = DbRegistry::load_or_init(&registry_path)?;
     anyhow::ensure!(
-        !registry.databases.iter().any(|e| e
-            .ts_sync
-            .as_ref()
-            .is_some_and(|s| Path::new(&s.source_path) == source)),
+        !request.connect_source
+            || !registry.databases.iter().any(|e| e
+                .ts_sync
+                .as_ref()
+                .is_some_and(|s| Path::new(&s.source_path) == source)),
         "This Target Scheduler file is already connected to a catalog."
     );
-    let destination = base.join(format!("{}.sqlite", uuid::Uuid::new_v4()));
     let name = if request.name.trim().is_empty() {
         source
             .file_stem()
@@ -315,13 +360,16 @@ fn import(state: &Arc<AppState>, job: &str, request: ImportRequest) -> Result<()
         .iter_mut()
         .find(|e| e.id == entry.id)
         .unwrap();
-    entry.ts_sync = Some(Settings {
+    entry.ts_sync = request.connect_source.then(|| Settings {
         source_path: source.to_string_lossy().into_owned(),
         ..Default::default()
     });
     let entry = entry.clone();
     // The snapshot is complete and closed before it becomes the managed file.
-    std::fs::rename(&copied, &destination)?;
+    tempfile::TempPath::try_from_path(copied)?
+        .persist_noclobber(&destination)
+        .map_err(|e| e.error)
+        .context("Publishing the imported catalog without overwriting another file")?;
     let result = (|| -> Result<_> {
         let context = Arc::new(super::database_context::DatabaseContext::from_entry(
             &entry,
@@ -345,6 +393,7 @@ fn import(state: &Arc<AppState>, job: &str, request: ImportRequest) -> Result<()
     state.ts_sync.update(job, |j| {
         j.catalog_id = Some(entry.id.clone());
         j.name = entry.name.clone();
+        j.source_connected = entry.ts_sync.is_some();
     });
     let _ = context.ensure_cache_available();
     super::calibration_quality::request(state, &context.database_path);
@@ -443,7 +492,10 @@ pub fn spawn(state: Arc<AppState>) {
                             );
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    synchronize(&state, &job.id, &entry.db_path, &settings)
+                                    synchronize(&state, &job.id, &entry.db_path, &settings)?;
+                                    runtime.block_on(super::director::retry_ts_planning(
+                                        &state, &entry.id,
+                                    ))
                                 }))
                                 .unwrap_or_else(|_| {
                                     Err(anyhow::anyhow!("TS sync stopped unexpectedly."))

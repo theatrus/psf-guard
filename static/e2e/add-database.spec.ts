@@ -74,7 +74,8 @@ test('create an empty sync destination and load its overview without errors', as
   await page.screenshot({ path: testInfo.outputPath('empty-catalog-overview.png'), fullPage: true });
 });
 
-test('import a Target Scheduler database via settings → see it in the Overview', async ({ page, request }) => {
+test('import a Target Scheduler database via settings → see it in the Overview', async ({ page, request }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1080 });
   const source = tsSource();
   await page.goto('/');
 
@@ -103,6 +104,7 @@ test('import a Target Scheduler database via settings → see it in the Overview
 
   // The directory should appear in the list.
   await expect(page.getByText(fixtureImageDir())).toBeVisible();
+  await page.locator('.tauri-settings').screenshot({ path: testInfo.outputPath('local-file-import.png') });
 
   // Save the new entry.
   await page.locator('.tauri-settings').getByRole('button', { name: 'Import from Target Scheduler', exact: true }).click();
@@ -134,7 +136,8 @@ test('import a Target Scheduler database via settings → see it in the Overview
   await expect(page.locator('.project-database', { hasText: 'e2e Rig' })).toHaveCount(2);
 });
 
-test('first-run plugin import creates a catalog and opens pairing without a TS file', async ({ page }) => {
+test('first-run plugin import creates a catalog and opens pairing without a TS file', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1080 });
   const receive = mkdtempSync(path.join(tmpBase(), 'plugin-incoming-'));
   await page.goto('/');
   await page.locator('.tauri-settings').getByRole('button', { name: /Import from Target Scheduler/ }).click();
@@ -143,12 +146,14 @@ test('first-run plugin import creates a catalog and opens pairing without a TS f
   await page.getByPlaceholder('e.g. Imaging Rig (defaults to filename)').fill('Plugin Rig');
   await page.getByPlaceholder('Type an absolute path and press Add').fill(receive);
   await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await page.locator('.tauri-settings').screenshot({ path: testInfo.outputPath('plugin-import.png') });
   await page.getByRole('button', { name: 'Create catalog for plugin' }).click();
   await page.getByRole('button', { name: 'Generate pairing code' }).click();
   await expect(page.locator('.remote-upload-token-notice').filter({ hasText: 'Paste this code' })).toBeVisible();
 });
 
-test('switch from TS setup to importing an image folder without selecting a database', async ({ page, request }) => {
+test('switch from TS setup to importing an image folder without selecting a database', async ({ page, request }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1080 });
   await page.goto('/');
   const modal = page.locator('.tauri-settings');
   await modal.getByRole('button', { name: /Import from Target Scheduler/ }).click();
@@ -157,6 +162,7 @@ test('switch from TS setup to importing an image folder without selecting a data
   await modal.getByRole('radio', { name: 'Image folders', exact: true }).check();
   await expect(modal.getByPlaceholder('Select or enter database path')).toBeHidden();
   await modal.getByLabel('Display name (optional):').fill('Image folder import');
+  await modal.screenshot({ path: testInfo.outputPath('image-folder-import.png') });
   const createdResponse = page.waitForResponse(response => response.url().endsWith('/api/databases/create') && response.request().method() === 'POST');
   await modal.getByRole('button', { name: 'Create & Import' }).click();
   const response = await createdResponse;
@@ -202,4 +208,27 @@ test('add then remove a database', async ({ page }) => {
       .locator('.tauri-settings')
       .getByRole('button', { name: /New Database from Images/i })
   ).toBeVisible();
+});
+
+test('import a standalone catalog copy to an advanced server path', async ({ page, request }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  const source = tsSource();
+  const target = path.join(tmpBase(), 'standalone-restored.sqlite');
+  await page.goto('/');
+  const modal = page.locator('.tauri-settings');
+  await modal.getByRole('button', { name: /Import from Target Scheduler/ }).click();
+  await modal.getByPlaceholder('Select or enter database path').fill(source);
+  await modal.getByLabel('Display name (optional):').fill('Restored catalog');
+  await modal.getByLabel('Keep the source connected for Target Scheduler sync').uncheck();
+  await modal.getByText('Advanced import options', { exact: true }).click();
+  await modal.getByLabel('Destination database path (optional):').fill(target);
+  await modal.getByPlaceholder('Type an absolute path and press Add').fill(fixtureImageDir());
+  await modal.getByRole('button', { name: 'Add', exact: true }).click();
+  await modal.screenshot({ path: testInfo.outputPath('standalone-import-options.png') });
+  await modal.getByRole('button', { name: 'Import catalog copy' }).click();
+  await expect(modal.getByText('Catalog import complete. The source file is not connected for sync.')).toBeVisible();
+  const databases = (await (await request.get('/api/databases')).json()).data;
+  const catalog = databases.find((entry: { name: string }) => entry.name === 'Restored catalog');
+  expect(catalog.ts_sync ?? null).toBeNull();
+  expect(realpathSync(catalog.database_path)).toBe(realpathSync(target));
 });

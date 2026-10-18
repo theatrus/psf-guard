@@ -16,6 +16,7 @@ export interface TsSyncJob {
   name: string;
   running: boolean;
   automatic: boolean;
+  source_connected?: boolean;
   stage: string;
   pages_done: number;
   pages_total: number;

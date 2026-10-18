@@ -98,7 +98,8 @@ async fn import_owns_a_complete_snapshot_and_retains_a_writeback_connection() {
     let saved = DbRegistry::load_or_init(&registry).unwrap();
     let entry = saved.find("rig").unwrap();
     assert_ne!(std::path::Path::new(&entry.db_path), source);
-    assert!(std::path::Path::new(&entry.db_path).starts_with(dir.path().join("databases")));
+    assert!(std::path::Path::new(&entry.db_path)
+        .starts_with(std::fs::canonicalize(dir.path().join("databases")).unwrap()));
     let settings = entry.ts_sync.as_ref().unwrap();
     assert!(settings.writeback && settings.on_open && settings.on_change);
     assert_eq!(
@@ -296,4 +297,99 @@ async fn importing_a_file_requires_database_management() {
     )
     .await;
     assert_ne!(status, 202);
+}
+
+async fn run_import_in_fixture(dir: &std::path::Path, body: Value) -> Value {
+    let registry = dir.join("config.json");
+    if !registry.exists() {
+        DbRegistry::default().save(&registry).unwrap();
+    }
+    let state = Arc::new(
+        AppState::from_databases(vec![], dir.join("cache"), PregenerationConfig::default())
+            .unwrap(),
+    );
+    state.set_registry_path(Some(registry));
+    state.set_allow_database_management(true);
+    let app = Router::new()
+        .route("/import", post(ts_sync::import_route))
+        .route("/jobs", get(ts_sync::status_route))
+        .with_state(state);
+    let (status, response) = call(app.clone(), "POST", "/import", body).await;
+    assert_eq!(status, 202, "{response}");
+    for _ in 0..150 {
+        let (_, jobs) = call(app.clone(), "GET", "/jobs", Value::Null).await;
+        if let Some(job) = jobs["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"] == response["data"]["id"])
+            && job["running"] == false
+        {
+            return job.clone();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("import did not finish");
+}
+
+#[tokio::test]
+async fn standalone_import_keeps_psf_data_and_uses_an_advanced_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("old-catalog.sqlite");
+    let target = dir.path().join("restored-catalog.sqlite");
+    let db = psf_guard::ts_schema::create_fresh_db(&source).unwrap();
+    db.execute_batch("CREATE TABLE psf_guard_existing_note(value TEXT); INSERT INTO psf_guard_existing_note VALUES('my analysis');
+        CREATE TABLE psf_guard_ts_sync_pending(guid TEXT,grade INTEGER,reason TEXT);
+        INSERT INTO psf_guard_ts_sync_pending VALUES('old-capture',2,'saved review');").unwrap();
+    drop(db);
+    let before = std::fs::read(&source).unwrap();
+    let job = run_import_in_fixture(dir.path(), json!({"name":"Restored","db_path":source,"destination_path":target,"image_dirs":[dir.path()],"connect_source":false,"slug":"restored"})).await;
+    assert!(job["error"].is_null(), "{job}");
+    assert_eq!(job["source_connected"], false);
+    let registry = DbRegistry::load_or_init(&dir.path().join("config.json")).unwrap();
+    let entry = registry.find("restored").unwrap();
+    assert!(entry.ts_sync.is_none());
+    assert_eq!(
+        std::fs::canonicalize(&entry.db_path).unwrap(),
+        std::fs::canonicalize(&target).unwrap()
+    );
+    let copied = Connection::open(target).unwrap();
+    assert_eq!(
+        copied
+            .query_row("SELECT value FROM psf_guard_existing_note", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "my analysis"
+    );
+    assert_eq!(
+        copied
+            .query_row("SELECT reason FROM psf_guard_ts_sync_pending", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap(),
+        "saved review"
+    );
+    assert_eq!(std::fs::read(&source).unwrap(), before);
+}
+
+#[tokio::test]
+async fn advanced_import_destination_never_overwrites_an_existing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.sqlite");
+    let target = dir.path().join("existing.sqlite");
+    drop(psf_guard::ts_schema::create_fresh_db(&source).unwrap());
+    std::fs::write(&target, b"existing catalog must survive").unwrap();
+    let job = run_import_in_fixture(dir.path(), json!({"name":"Import","db_path":source,"destination_path":target,"image_dirs":[dir.path()]})).await;
+    assert!(
+        job["error"].as_str().unwrap().contains("already exists"),
+        "{job}"
+    );
+    assert_eq!(
+        std::fs::read(target).unwrap(),
+        b"existing catalog must survive"
+    );
+    assert!(DbRegistry::load_or_init(&dir.path().join("config.json"))
+        .unwrap()
+        .databases
+        .is_empty());
 }

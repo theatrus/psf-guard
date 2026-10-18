@@ -1460,9 +1460,12 @@ has shipped.
 
 The future Settings/UI workflow is **Import Target Scheduler database** into a
 native catalog, then optionally retain a TS sync connection. New imports
-create an owned working copy and grant grade writeback through the retained
-TS connection; the import UI explains this. Planning writeback remains a
-previewed, explicit transfer. That connection identifies source provenance,
+create an owned working copy and, by default, retain a TS connection for
+capture imports and grade writeback. A standalone copy preserves embedded PSF
+Guard data without connecting the source. Planning writeback remains an
+explicit, previewed transfer; Director activation uses the same saved TS
+connection and records pending delivery separately from the local commit. That
+connection identifies source provenance,
 destination catalog, supported schema version, selected data classes and
 direction, conflict policy, last successful sync and pending differences.
 Preview before Apply for operator transfers. A one-time import, recurring sync,

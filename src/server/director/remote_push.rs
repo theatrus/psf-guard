@@ -35,7 +35,7 @@ pub(super) fn sends_to(store: &MetaStore, rig: Uuid, peer: &str) -> Result<bool,
 }
 
 /// The rig database an activation wrote a rig's rows in.
-fn catalog_of(activation: &Activation, rig: Uuid) -> Option<Uuid> {
+pub(super) fn catalog_of(activation: &Activation, rig: Uuid) -> Option<Uuid> {
     activation
         .rigs
         .iter()
@@ -175,6 +175,7 @@ async fn send_and_record(
 fn outcome(push: &Push, rig: Uuid, at: u64) -> RemotePush {
     RemotePush {
         rig_id: rig,
+        ts_sync: None,
         peer_id: push.peer_id.clone(),
         peer_name: push.peer_name.chars().take(MAX_PEER_NAME_CHARS).collect(),
         applied: push.applied,

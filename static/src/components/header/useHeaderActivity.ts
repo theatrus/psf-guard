@@ -243,7 +243,7 @@ export function useHeaderActivity() {
   for (const job of tsSync.data ?? []) {
     if (!job.running && !job.error) continue;
     items.push({ key: `ts-sync:${job.id}`, kind: 'transfer',
-      title: job.id.startsWith('import:') ? 'Importing Target Scheduler' : 'Target Scheduler sync',
+      title: job.id.startsWith('import:') ? job.source_connected === false ? 'Importing catalog copy' : 'Importing Target Scheduler' : 'Target Scheduler sync',
       scope: job.name, detail: job.error || (job.stage === 'copying' ? 'Copying a consistent database snapshot' : job.stage === 'initializing' ? 'Preparing the working catalog' : 'Importing captures and syncing grades'),
       status: job.error ? 'attention' : job.waiting_for ? 'waiting' : 'running', waitingFor: job.waiting_for ?? undefined,
       control: job.running ? { kind: 'ts-sync', jobId: job.id } : undefined, stoppable: job.running && !job.stopping, percent: job.stage === 'copying' && job.pages_total > 0 ? Math.round(100 * job.pages_done / job.pages_total) : null,

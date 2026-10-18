@@ -781,7 +781,7 @@ describe('TauriSettings first run', () => {
       await screen.findByRole('heading', { name: 'New Database from Images' })
     ).toBeInTheDocument();
     // The create flow bootstraps its own database, so it never asks for one.
-    expect(screen.queryByText('N.I.N.A. Database File:')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Source database file:')).not.toBeInTheDocument();
   });
 
   it('keeps the catalog installer out of the way of the import form', async () => {
@@ -835,7 +835,7 @@ describe('TauriSettings first run', () => {
     expect(
       await screen.findByRole('heading', { name: 'Import from Target Scheduler' })
     ).toBeInTheDocument();
-    expect(screen.getByText('N.I.N.A. Database File:')).toBeInTheDocument();
+    expect(screen.getByLabelText('Source database file:')).toBeInTheDocument();
   });
 
   it('keeps image-folder import available from the TS flow and preserves entered folders', async () => {
@@ -852,6 +852,25 @@ describe('TauriSettings first run', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Import a local TS file' }));
     expect(screen.getByPlaceholderText('Select or enter database path')).toBeInTheDocument();
     expect(screen.getByText('📂 /images')).toBeInTheDocument();
+  });
+
+  it('imports a standalone catalog copy at an advanced destination', async () => {
+    serveEmptyRegistry();
+    const requests: unknown[] = [];
+    server.use(http.post('/api/databases/import-ts', async ({ request }) => {
+      requests.push(await request.json());
+      return HttpResponse.json({ success: true, data: { id: 'import:copy', catalog_id: null, name: 'Restored', running: true, automatic: false, source_connected: false, stage: 'copying', started_at: 1, pages_done: 0, pages_total: 0, error: null, report: null, stopping: false, waiting_for: null } });
+    }));
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.change(await screen.findByPlaceholderText('Select or enter database path'), { target: { value: '/backups/catalog.sqlite' } });
+    fireEvent.change(screen.getByLabelText('Display name (optional):'), { target: { value: 'Restored' } });
+    fireEvent.click(screen.getByLabelText('Keep the source connected for Target Scheduler sync'));
+    fireEvent.click(screen.getByText('Advanced import options'));
+    fireEvent.change(screen.getByLabelText('Destination database path (optional):'), { target: { value: '/srv/catalogs/restored.sqlite' } });
+    fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import catalog copy' }));
+    await waitFor(() => expect(requests).toEqual([{ name: 'Restored', db_path: '/backups/catalog.sqlite', image_dirs: ['/images'], connect_source: false, destination_path: '/srv/catalogs/restored.sqlite' }]));
   });
 
   it('offers the Sync plugin and opens pairing after creating its catalog without a TS file', async () => {

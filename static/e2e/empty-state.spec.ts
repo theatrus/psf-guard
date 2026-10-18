@@ -65,7 +65,7 @@ test('first run offers importing images as well as opening a N.I.N.A. database',
   await expect(
     modal.getByRole('heading', { name: 'New Database from Images' })
   ).toBeVisible();
-  await expect(modal.getByText('N.I.N.A. Database File:')).toBeHidden();
+  await expect(modal.getByLabel('Source database file:')).toBeHidden();
   await expect(modal.getByText('Image Directories:')).toBeVisible();
 });
 

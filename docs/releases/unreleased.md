@@ -37,6 +37,13 @@
   import stays available alongside both TS choices. Conflicting TS
   grades are reported without overwriting them. Existing direct-open catalogs
   remain supported through 0.12; removal is planned for 0.13 or later.
+- Database-file imports can create a standalone catalog copy, preserving
+  existing PSF Guard data without connecting the source. Advanced import
+  options accept a custom destination path and never overwrite existing files.
+- Director activation uses the catalog's saved TS connection to deliver the
+  reviewed project's planning. The preview includes the TS destination;
+  failed deliveries stay pending and retry through the existing sync settings.
+  Captures, grades, acquisition counts and other TS projects stay unchanged.
 - WBPP master copies show the current file and file counts in the dialog
   and background jobs list. Copy controls stay disabled while copying, and
   repeat copy requests cannot start a second copy. A run requested while a
