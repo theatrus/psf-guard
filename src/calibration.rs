@@ -7666,7 +7666,7 @@ fn record_master_unless_changed(
             frames.len() as i64,
             frame_uuids,
             chrono::Utc::now().timestamp(),
-            crate::server::stack_preview::SEIZA_STACKING_VERSION,
+            crate::server::stack_preview::SEIZA_STACKING_OUTPUT_VERSION,
             MASTER_CACHE_VERSION,
             master.exposure_seconds,
             frames[0].filter,
@@ -7979,7 +7979,7 @@ fn source_set_hash(
     hex_digest(&format!(
         "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         MASTER_CACHE_VERSION,
-        crate::server::stack_preview::SEIZA_STACKING_VERSION,
+        crate::server::stack_preview::SEIZA_STACKING_OUTPUT_VERSION,
         bias_dependency
             .map(|value| value.master_uuid.as_str())
             .unwrap_or("none"),

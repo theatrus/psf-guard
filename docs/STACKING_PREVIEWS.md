@@ -201,8 +201,8 @@ every recorded frame must still be requested with an identical source
 fingerprint, and the calibration set, Accepted-only policy, scoring policy,
 stacking method, stacking order, and pipeline version must match. Only the
 final pass may differ. Removing a frame, regrading
-one in place, changing calibration or scoring, or upgrading Seiza rebuilds
-from scratch — and when a checkpoint existed but could not be extended, the
+one in place, changing calibration or scoring, or a Seiza upgrade that
+changes stacking output rebuilds from scratch — and when a checkpoint existed but could not be extended, the
 card says why (`Full restack: the scoring policy changed`), so a slow rebuild
 is never a mystery. The checkpoint it could not extend is deleted as the
 restack starts, rather than left beside it until the restack saves its own;
@@ -210,6 +210,20 @@ only a quality-ordered build leaves it, as described below. A stopped build chec
 building again continues where the stop landed instead of starting over.
 Checkpoints live in the project cache and cost one full-frame state file per
 target/channel.
+
+### Seiza upgrades
+
+Stack job ids, resume checkpoints, reference scores and calibration masters
+record `seiza_stacking::OUTPUT_VERSION`: the Seiza release whose stacking
+output the build reproduces. Stack previews and stretch runs record
+`seiza_stretch::OUTPUT_VERSION` in the same way. Seiza moves these only when
+its output changes, and a test in each crate holds them to it.
+
+An upgrade that changes neither keeps every stack, checkpoint and master.
+**Build current set** reuses them, and no card goes out of date. An upgrade
+that changes stacking output gives every stack a new job id, so the next
+build of each channel stacks it again, and calibration masters are rebuilt
+as builds need them.
 
 ### Frame preparation and worker budgets
 

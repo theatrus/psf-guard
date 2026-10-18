@@ -202,7 +202,7 @@ impl Fixture {
             created_unix_seconds: 100,
             artifact_revision: "revision-old".into(),
             cache_version: super::super::STACK_PREVIEW_CACHE_VERSION,
-            stacking_version: super::super::SEIZA_STACKING_VERSION.into(),
+            stacking_version: super::super::SEIZA_STACKING_OUTPUT_VERSION.into(),
             order: super::super::snr::StackFrameOrder::Capture,
             scoring: super::super::StackScoringSettings::default(),
             method: Default::default(),
@@ -563,7 +563,7 @@ fn color_fixture(fixture: &Fixture, mono: &MasterSource) -> MasterSource {
         "palette": null, "label": "RGB", "state": "completed", "phase": "ready",
         "processed_channels": 2, "total_channels": 2, "created_unix_seconds": 100,
         "artifact_revision": "color-old", "cache_version": 1,
-        "stacking_version": super::super::SEIZA_STACKING_VERSION,
+        "stacking_version": super::super::SEIZA_STACKING_OUTPUT_VERSION,
         "sources": [
             { "role": "red", "filter_name": "R", "job_id": mono.job_id,
               "group_index": 0, "artifact_revision": mono.artifact_revision, "accepted_frames": 3 },

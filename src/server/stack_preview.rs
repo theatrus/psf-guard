@@ -59,7 +59,12 @@ use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 pub use method::{StackFinalPass, StackMethod, StackReference, StackWeighting};
 
-pub const SEIZA_STACKING_VERSION: &str = seiza_stacking::VERSION;
+/// The Seiza release whose stacking output this build reproduces. Stack
+/// ids, checkpoints, reference scores and calibration masters key on it
+/// rather than on the crate version, so a Seiza upgrade that changes no
+/// output keeps every stack and master. Seiza moves it when its stacking
+/// output changes, and holds it there with a test.
+pub const SEIZA_STACKING_OUTPUT_VERSION: &str = seiza_stacking::OUTPUT_VERSION;
 /// Bump whenever stack admission, rendering, or persisted artifact semantics
 /// change. This deliberately versions PSF Guard policy separately from Seiza.
 pub(super) const STACK_PREVIEW_CACHE_VERSION: u32 = 15;
@@ -1471,7 +1476,7 @@ impl StackPreviewManager {
                 return;
             }
         };
-        janitor::prune(stack_root, &keep, SEIZA_STACKING_VERSION);
+        janitor::prune(stack_root, &keep, SEIZA_STACKING_OUTPUT_VERSION);
         let active_sources = self
             .jobs
             .lock()
@@ -3124,11 +3129,11 @@ fn prepare_whole(
     hasher.update([request.accepted_only as u8]);
     hasher.update([request.north_up as u8]);
     hasher.update(STACK_PREVIEW_CACHE_VERSION.to_le_bytes());
-    hasher.update(SEIZA_STACKING_VERSION.as_bytes());
+    hasher.update(SEIZA_STACKING_OUTPUT_VERSION.as_bytes());
     hasher.update(seiza_stacking::SKY_ORIENTATION_VERSION.to_le_bytes());
     hasher.update(seiza_stacking::SKY_ORIENTATION_NAME.as_bytes());
     hasher.update(PREVIEW_MAX_DIMENSION.to_le_bytes());
-    hasher.update(stretch::SEIZA_STRETCH_VERSION.as_bytes());
+    hasher.update(stretch::SEIZA_STRETCH_OUTPUT_VERSION.as_bytes());
     hasher.update(request.order.as_str().as_bytes());
     // Only a non-default scoring policy enters the id. Artifacts built before
     // the policy was recorded were built at the calibrated defaults, and this
@@ -3444,7 +3449,7 @@ fn prepare_whole(
                 created_unix_seconds: now,
                 artifact_revision,
                 cache_version: STACK_PREVIEW_CACHE_VERSION,
-                stacking_version: SEIZA_STACKING_VERSION.into(),
+                stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
                 order: request.order,
                 scoring,
                 method: Some(method),
@@ -4254,7 +4259,7 @@ fn run_group(
         accepted_only,
         scoring,
         method,
-        SEIZA_STACKING_VERSION,
+        SEIZA_STACKING_OUTPUT_VERSION,
         &calibration_fingerprint,
         order,
         &requested,
@@ -4537,7 +4542,7 @@ fn run_group(
                 );
                 let manifest = resume::ResumeManifest {
                     schema_version: resume::RESUME_SCHEMA_VERSION,
-                    stacking_version: SEIZA_STACKING_VERSION.into(),
+                    stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
                     target_id: group_target_id,
                     filter_name: group_filter_name.clone(),
                     exposure_group_key: group_exposure_key.clone(),
@@ -5855,7 +5860,7 @@ mod tests {
             created_unix_seconds: 100,
             artifact_revision: format!("revision-{job_id}"),
             cache_version: STACK_PREVIEW_CACHE_VERSION,
-            stacking_version: SEIZA_STACKING_VERSION.into(),
+            stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
             order: snr::StackFrameOrder::Capture,
             scoring: StackScoringSettings::default(),
             method: Default::default(),

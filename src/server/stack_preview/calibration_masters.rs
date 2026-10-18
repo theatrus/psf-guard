@@ -703,8 +703,8 @@ pub(crate) fn master_preview_job(
         format!(
             "{PREVIEW_VERSION}:{}:{}:{}:{}:{fingerprint}:{size}:{midtone}:{shadow}:png",
             env!("CARGO_PKG_VERSION"),
-            super::stretch::SEIZA_STRETCH_VERSION,
-            seiza_stacking::VERSION,
+            super::stretch::SEIZA_STRETCH_OUTPUT_VERSION,
+            seiza_stacking::OUTPUT_VERSION,
             id
         )
         .as_bytes(),

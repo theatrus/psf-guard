@@ -15,7 +15,7 @@
 
 use super::{
     LatestStackPreviewGroup, LatestStackPreviews, StackGroupState, StackGroupStatus, StackJobState,
-    StackPreviewJob, SEIZA_STACKING_VERSION, STACK_PREVIEW_CACHE_VERSION,
+    StackPreviewJob, SEIZA_STACKING_OUTPUT_VERSION, STACK_PREVIEW_CACHE_VERSION,
 };
 use crate::server::database_context::DatabaseContext;
 use serde::{Deserialize, Serialize};
@@ -322,7 +322,7 @@ pub fn import_masters(
             created_unix_seconds: now,
             artifact_revision: revision.clone(),
             cache_version: STACK_PREVIEW_CACHE_VERSION,
-            stacking_version: SEIZA_STACKING_VERSION.into(),
+            stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
             order: Default::default(),
             scoring: Default::default(),
             method: None,

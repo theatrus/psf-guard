@@ -10,7 +10,7 @@ use super::color_calibration::{
 };
 use super::{
     LatestStackPreviews, StackJobState, StackPreviewImageQuery, StackPreviewImageSize,
-    StackPreviewManager, MAX_REMEMBERED_JOBS, SEIZA_STACKING_VERSION,
+    StackPreviewManager, MAX_REMEMBERED_JOBS, SEIZA_STACKING_OUTPUT_VERSION,
 };
 use axum::{
     body::Body,
@@ -1347,7 +1347,7 @@ pub(super) fn prepare_color_job(
             created_unix_seconds: chrono::Utc::now().timestamp(),
             artifact_revision: artifact_revision.clone(),
             cache_version: STACK_COLOR_CACHE_VERSION,
-            stacking_version: SEIZA_STACKING_VERSION.into(),
+            stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
             background_version: SEIZA_BACKGROUND_VERSION.into(),
             deconvolution_version: request
                 .processing
@@ -1443,7 +1443,7 @@ fn color_job_id(identity: &ColorJobIdentity<'_>) -> Result<String, AppError> {
     hasher.update(request.target_id.to_le_bytes());
     hasher.update(identity.label.as_bytes());
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
-    hasher.update(SEIZA_STACKING_VERSION.as_bytes());
+    hasher.update(SEIZA_STACKING_OUTPUT_VERSION.as_bytes());
     hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
     if let Some(input_id) = identity.rc_astro_input_id {
         hasher.update(input_id.as_bytes());
@@ -1622,7 +1622,7 @@ fn color_role_input_id(
     hasher.update(project_id.to_le_bytes());
     hasher.update(target_id.to_le_bytes());
     hasher.update(COLOR_INPUT_CACHE_VERSION.to_le_bytes());
-    hasher.update(SEIZA_STACKING_VERSION.as_bytes());
+    hasher.update(SEIZA_STACKING_OUTPUT_VERSION.as_bytes());
     hasher.update([role as u8, reference_role as u8]);
     let hash_source = |hasher: &mut Sha256, source: &StackColorSource| {
         hasher.update([source.role as u8]);
@@ -1726,7 +1726,7 @@ fn color_input_cache_id(
     hasher.update(project_id.to_le_bytes());
     hasher.update(target_id.to_le_bytes());
     hasher.update(COLOR_INPUT_CACHE_VERSION.to_le_bytes());
-    hasher.update(SEIZA_STACKING_VERSION.as_bytes());
+    hasher.update(SEIZA_STACKING_OUTPUT_VERSION.as_bytes());
     if processing.background_extraction.is_some() {
         hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
     }
@@ -4205,7 +4205,7 @@ fn color_job_outdated_reason(
     latest: &LatestStackPreviews,
 ) -> Result<Option<String>, AppError> {
     if job.cache_version != STACK_COLOR_CACHE_VERSION
-        || job.stacking_version != SEIZA_STACKING_VERSION
+        || job.stacking_version != SEIZA_STACKING_OUTPUT_VERSION
         || job.background_version != SEIZA_BACKGROUND_VERSION
         || (job
             .processing
@@ -4289,7 +4289,7 @@ fn persist_latest_color(stack_root: &FsPath, job: &StackColorJob) -> Result<(), 
 fn current_latest_colors(mut latest: LatestStackColorPreviews) -> LatestStackColorPreviews {
     latest.jobs.retain(|job| {
         job.cache_version == STACK_COLOR_CACHE_VERSION
-            && job.stacking_version == SEIZA_STACKING_VERSION
+            && job.stacking_version == SEIZA_STACKING_OUTPUT_VERSION
     });
     latest
 }
@@ -4698,7 +4698,7 @@ mod tests {
             created_unix_seconds: 200,
             artifact_revision: "rev".into(),
             cache_version: STACK_COLOR_CACHE_VERSION,
-            stacking_version: SEIZA_STACKING_VERSION.into(),
+            stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
             background_version: SEIZA_BACKGROUND_VERSION.into(),
             deconvolution_version: String::new(),
             linear_input_id: None,
