@@ -23,7 +23,10 @@ function represents(set: ColorExposureSet, saved: ColorExposureSet): boolean {
 }
 
 function completeKnownSet(sources: StackColorSource[], roles: StackColorRole[]): ColorExposureSet | undefined {
-  if (sources.length !== roles.length || !roles.every((role) => sources.filter((source) => source.role === role).length === 1)) {
+  // A recipe with a WBPP master is not an exposure set: the WBPP card or
+  // Custom combination shows it.
+  if (sources.length !== roles.length || sources.some((source) => source.wbpp)
+    || !roles.every((role) => sources.filter((source) => source.role === role).length === 1)) {
     return undefined;
   }
   const sets = buildColorExposureSets(sources, roles);

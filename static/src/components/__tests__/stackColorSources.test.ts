@@ -132,29 +132,48 @@ describe('WBPP masters beside PSF Guard stacks', () => {
     const sets = buildColorExposureSets([...own, ...masters], rgb);
     expect(sets).toHaveLength(1);
     expect(sets[0].known).toBe(true);
-    expect(sets[0].candidates).toEqual(expect.not.arrayContaining(masters));
+    expect(sets[0].candidates.every((candidate) => !candidate.wbpp)).toBe(true);
   });
 
   it('make one set from the masters, complete for the roles they cover', () => {
-    const set = wbppColorSet([...own, ...masters], rgb);
+    const set = wbppColorSet([...own, ...masters], rgb, { exposureMode: true });
     expect(set?.label).toBe('WBPP');
     expect(set?.known).toBe(true);
     expect(set?.candidates.map((candidate) => candidate.job_id).sort()).toEqual(['wbpp-blue', 'wbpp-green', 'wbpp-red']);
     expect(resolveColorSources(set!.candidates, rgb, {}).complete).toBe(true);
   });
 
-  it('make no separate set when the target has only masters, or none', () => {
-    expect(wbppColorSet(masters, rgb)).toBeUndefined();
-    expect(wbppColorSet(own, rgb)).toBeUndefined();
+  it('make their own set beside exposure sets even with no PSF Guard stack of those roles', () => {
+    // Split narrowband stacks, and WBPP R, G and B with no PSF Guard RGB.
+    expect(wbppColorSet(masters, rgb, { exposureMode: true })?.candidates).toHaveLength(3);
   });
 
-  it('leave an unchosen role to its one PSF Guard stack', () => {
+  it('make no separate set when the target has only masters and one card, or no masters', () => {
+    expect(wbppColorSet(masters, rgb, { exposureMode: false })).toBeUndefined();
+    expect(wbppColorSet(own, rgb, { exposureMode: true })).toBeUndefined();
+  });
+
+  it('make no set that could never build: masters must cover the roles needed', () => {
+    const lrgb: StackColorRole[] = ['luminance', ...rgb];
+    expect(wbppColorSet([...own, ...masters], lrgb, { exposureMode: true })).toBeUndefined();
+    const narrowband: StackColorRole[] = ['ha', 'oiii', 'sii'];
+    const hoo = [master('ha'), master('oiii')];
+    expect(wbppColorSet([interval('ha', 300), ...hoo], narrowband,
+      { exposureMode: true, needed: ['ha', 'oiii'] })?.candidates).toHaveLength(2);
+    expect(wbppColorSet([interval('ha', 300), master('ha')], narrowband,
+      { exposureMode: true, needed: ['ha', 'oiii'] })).toBeUndefined();
+  });
+
+  it('leave unchosen roles to PSF Guard stacks only when every role has exactly one', () => {
     const resolved = resolveColorSources([...own, ...masters], rgb, {});
     expect(resolved.complete).toBe(true);
     expect(resolved.sources.every((chosen) => !chosen.wbpp)).toBe(true);
     // Two PSF Guard stacks of a role are still a choice to make.
     const twoReds = [...own, interval('red', 30), ...masters];
     expect(resolveColorSources(twoReds, rgb, {}).complete).toBe(false);
+    // A PSF Guard red beside WBPP R, G and B is not mixed without a choice.
+    const oneOwn = [interval('red', 300), ...masters];
+    expect(resolveColorSources(oneOwn, rgb, {}).complete).toBe(false);
   });
 });
 

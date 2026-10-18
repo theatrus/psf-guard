@@ -856,7 +856,7 @@ export default function StackColorPreviewPanel({
               buildColorExposureSets(candidates, roles),
               jobs.filter((job) => job.kind === kind), roles,
             ) : [];
-            const wbpp = wbppColorSet(candidates, roles);
+            const wbpp = wbppColorSet(candidates, roles, { exposureMode });
             for (const set of [...sets, ...(wbpp ? [{ ...wbpp, retained: false }] : [])]) {
               cards.push(renderCard(target, kind, available, set));
             }
@@ -877,7 +877,10 @@ export default function StackColorPreviewPanel({
           const sets = exposureMode ? withRetainedColorExposureSets(
             buildColorExposureSets(candidates, narrowbandRoles), narrowbandJobs, narrowbandRoles,
           ) : [];
-          const wbppNarrowband = wbppColorSet(candidates, narrowbandRoles);
+          // Ha and OIII make an HOO palette; SII is optional.
+          const wbppNarrowband = wbppColorSet(candidates, narrowbandRoles, {
+            exposureMode, needed: ['ha', 'oiii'],
+          });
           for (const set of [...sets, ...(wbppNarrowband ? [{ ...wbppNarrowband, retained: false }] : [])]) {
             const paletteKey = target.target_id + ':narrowband:' + set.key;
             const localPalettes = paletteChoices.filter((choice) =>
