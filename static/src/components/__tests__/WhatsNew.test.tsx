@@ -1,4 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useHotkeys } from 'react-hotkeys-hook';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WhatsNew from '../WhatsNew';
 import HeaderMenu from '../header/HeaderMenu';
@@ -99,6 +101,21 @@ describe("What's new", () => {
     localStorage.setItem(WHATS_NEW_KEY, '2.0.0');
     acknowledgeVersion('1.2.0');
     expect(localStorage.getItem(WHATS_NEW_KEY)).toBe('2.0.0');
+  });
+
+  it('blocks grading, navigation and Escape shortcuts behind the popup', async () => {
+    const backgroundShortcut = vi.fn();
+    function BackgroundView() {
+      useHotkeys('a,right,escape', backgroundShortcut, []);
+      return <WhatsNew {...props} />;
+    }
+    const user = userEvent.setup();
+    render(<BackgroundView />);
+    await user.keyboard('a{ArrowRight}');
+    expect(backgroundShortcut).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+    expect(dialog()).not.toBeInTheDocument();
+    expect(backgroundShortcut).not.toHaveBeenCalled();
   });
 
   it('opens from the menu and closes the menu', () => {

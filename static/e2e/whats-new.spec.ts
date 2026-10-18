@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import highlights from '../src/updates/highlights.json' with { type: 'json' };
+import { registerFixtureDb, resetDatabases, stubPixelWork, waitForCacheReady } from './helpers';
 
 const version = highlights[0].version;
 const key = 'psf-guard.whats-new.acknowledged';
@@ -44,6 +45,30 @@ test('an earlier acknowledgment still shows the new version', async ({ page }) =
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('heading', { name: 'Upgrade notes' })).toBeVisible();
   await expect(dialog.getByRole('link', { name: `Full release notes for v${version}` })).toHaveAttribute('href', `https://github.com/theatrus/psf-guard/releases/tag/v${version}`);
+});
+
+test('reading the popup does not grade, navigate or close the image behind it', async ({ page, request }) => {
+  await resetDatabases(request);
+  const entry = await registerFixtureDb(request, { name: 'Release notes test', slug: 'release-notes-test' });
+  await waitForCacheReady(request, entry.id);
+  await stubPixelWork(page);
+  const grades: string[] = [];
+  await page.route('**/images/grade', async route => {
+    grades.push(route.request().postData() ?? '');
+    await route.fulfill({ status: 500, body: 'The popup must block grading shortcuts' });
+  });
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(entry.id)}&project=1`);
+  const dialog = page.getByRole('dialog', { name: `What's new in PSF Guard v${version}` });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('.detail-info')).toBeVisible();
+  const url = page.url();
+  await page.keyboard.press('a');
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(url);
+  expect(grades).toEqual([]);
+  await resetDatabases(request);
 });
 
 test('notes scroll while dismiss controls stay visible on a narrow screen', async ({ page }, testInfo) => {
