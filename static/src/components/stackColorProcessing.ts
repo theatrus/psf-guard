@@ -1,6 +1,7 @@
 import type {
   StackBackgroundConfig,
   StackBackgroundExtraction,
+  StackColorCalibration,
   StackColorJob,
   StackColorProcessing,
   StackColorRole,
@@ -43,6 +44,16 @@ export function defaultBackgroundExtraction(): StackBackgroundExtraction {
   };
 }
 
+export function defaultColorCalibration(): StackColorCalibration {
+  return { enabled: true, neutralize_background: true, white_reference: 'solar' };
+}
+
+/** Whether a composition of these channels can be color calibrated: RGB and
+ *  LRGB can, false-color narrowband palettes cannot. */
+export function colorCalibrationApplies(roles: StackColorRole[]): boolean {
+  return (['red', 'green', 'blue'] as const).every((role) => roles.includes(role));
+}
+
 export function defaultColorProcessing(roles: StackColorRole[]): StackColorProcessing {
   return {
     background_extraction: defaultBackgroundExtraction(),
@@ -52,6 +63,7 @@ export function defaultColorProcessing(roles: StackColorRole[]): StackColorProce
       roles.map((role) => [role, [defaultStretchRequest('auto-mtf')]])
     ),
     output_stretches: [],
+    ...(colorCalibrationApplies(roles) ? { color_calibration: defaultColorCalibration() } : {}),
   };
 }
 

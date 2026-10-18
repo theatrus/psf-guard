@@ -37,6 +37,10 @@ pub struct AstrometryConfig {
     pub transients: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minor_bodies: Option<String>,
+    /// Optional Gaia photometry catalog for color calibration. Relative paths
+    /// are resolved below `data_dir`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gaia_photometry: Option<String>,
     /// Optional local OMM JSON or TLE file. Relative paths are resolved below
     /// `data_dir`. When absent, on-demand satellite analysis uses the shared
     /// CelesTrak cache.
@@ -128,6 +132,24 @@ impl AstrometryConfig {
         self.resolve_required(&self.minor_bodies, seiza::data_paths::minor_bodies)
     }
 
+    /// The Gaia photometry catalog color calibration reads. Optional: no
+    /// install resolves to `Ok(None)`.
+    pub fn gaia_photometry_path(&self) -> AstrometryResourcePath {
+        let explicit = self
+            .gaia_photometry
+            .as_deref()
+            .is_some_and(|path| !path.is_empty());
+        let input = self.resolver_input(&self.gaia_photometry);
+        match seiza::data_paths::gaia_photometry(input.as_deref()) {
+            // A bundle directory without the optional catalog has simply not
+            // installed it.
+            Err(seiza::data_paths::DataPathError::NotFoundInDirectory { .. }) if !explicit => {
+                Ok(None)
+            }
+            other => other,
+        }
+    }
+
     pub fn satellite_elements_path(&self) -> Option<PathBuf> {
         let path = self
             .satellite_elements
@@ -185,6 +207,7 @@ pub struct AstrometryResources {
     pub blind_index: AstrometryResourceCapability,
     pub transients: AstrometryResourceCapability,
     pub minor_bodies: AstrometryResourceCapability,
+    pub gaia_photometry: AstrometryResourceCapability,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +219,9 @@ pub struct AstrometryFeatures {
     pub blind_solve: bool,
     pub transient_annotations: bool,
     pub minor_body_annotations: bool,
+    /// Gaia colors are installed, so RGB and LRGB previews can be color
+    /// calibrated.
+    pub color_calibration: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -535,6 +561,7 @@ type TileCatalog = seiza::catalog::TileCatalog;
 type StarIdentifierCatalog = seiza::star_ids::StarIdentifierCatalog;
 type BlindIndex = seiza::blind::BlindIndex;
 type MinorBodyCatalog = seiza::minor_bodies::MinorBodyCatalog;
+type PhotometryCatalog = seiza::catalog::PhotometryCatalog;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResourceFingerprint {
@@ -572,6 +599,7 @@ pub struct AstrometryContext {
     blind_index: ResourceCache<BlindIndex>,
     transients: ResourceCache<ObjectCatalog>,
     minor_bodies: ResourceCache<MinorBodyCatalog>,
+    gaia_photometry: ResourceCache<PhotometryCatalog>,
 }
 
 impl Default for AstrometryContext {
@@ -591,6 +619,7 @@ impl AstrometryContext {
             blind_index: RwLock::new(None),
             transients: RwLock::new(None),
             minor_bodies: RwLock::new(None),
+            gaia_photometry: RwLock::new(None),
         }
     }
 
@@ -632,6 +661,32 @@ impl AstrometryContext {
 
     pub fn minor_body_catalog(&self) -> Result<Arc<MinorBodyCatalog>, String> {
         self.load_minor_body_catalog().map(|loaded| loaded.value)
+    }
+
+    /// The Gaia photometry catalog, with its file identity for cache keys.
+    pub fn gaia_photometry_catalog(
+        &self,
+    ) -> Result<(Arc<PhotometryCatalog>, AstrometryCatalogFileSignature), String> {
+        self.load_gaia_photometry().map(|loaded| {
+            let signature = catalog_file_signature("gaia_photometry", &loaded.fingerprint);
+            (loaded.value, signature)
+        })
+    }
+
+    /// The installed Gaia photometry file's identity, without opening it.
+    /// `None` when none is installed or it cannot be read.
+    pub fn gaia_photometry_signature(&self) -> Option<AstrometryCatalogFileSignature> {
+        let path = self.config.gaia_photometry_path().ok()??;
+        let fingerprint = resource_fingerprint(&path).ok()?;
+        Some(catalog_file_signature("gaia_photometry", &fingerprint))
+    }
+
+    fn load_gaia_photometry(&self) -> Result<LoadedResource<PhotometryCatalog>, String> {
+        load_cached(
+            &self.gaia_photometry,
+            self.config.gaia_photometry_path(),
+            |path| PhotometryCatalog::open(path).map_err(|error| error.to_string()),
+        )
     }
 
     fn load_object_catalog(&self) -> Result<LoadedResource<ObjectCatalog>, String> {
@@ -1479,6 +1534,11 @@ impl AstrometryContext {
             self.load_minor_body_catalog()
                 .map(|loaded| loaded.fingerprint),
         );
+        let gaia_photometry = capability(
+            "gaia_photometry",
+            self.config.gaia_photometry_path(),
+            self.load_gaia_photometry().map(|loaded| loaded.fingerprint),
+        );
 
         // Feature flags describe executable PSF Guard paths, not merely files
         // found on disk. Hinted solving needs the star tiles; blind solving
@@ -1491,6 +1551,7 @@ impl AstrometryContext {
             blind_solve: stars.available() && blind_index.available(),
             transient_annotations: false,
             minor_body_annotations: false,
+            color_calibration: gaia_photometry.available(),
         };
 
         AstrometryCapabilities {
@@ -1504,6 +1565,7 @@ impl AstrometryContext {
                 blind_index,
                 transients,
                 minor_bodies,
+                gaia_photometry,
             },
             features,
         }
@@ -1562,6 +1624,12 @@ impl AstrometryContext {
                     .validate()
                     .map_err(|error| error.to_string())
             }),
+            // Seiza checks a photometry catalog's whole tile index on open.
+            validate_resource(
+                "gaia_photometry",
+                self.config.gaia_photometry_path(),
+                || self.load_gaia_photometry().map(|_| ()),
+            ),
         ];
         let configured: Vec<_> = resources
             .iter()
@@ -2228,7 +2296,7 @@ fn pointing_result(
     }
 }
 
-fn angular_separation_deg(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
+pub(crate) fn angular_separation_deg(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
     let (ra1, dec1, ra2, dec2) = (
         ra1.to_radians(),
         dec1.to_radians(),
@@ -2611,6 +2679,11 @@ mod tests {
         .unwrap();
         std::fs::write(directory.path().join("transients.bin"), b"transients").unwrap();
         std::fs::write(directory.path().join("minor-bodies.bin"), b"minor bodies").unwrap();
+        std::fs::write(
+            directory.path().join("stars-gaia-photometry.bin"),
+            b"photometry",
+        )
+        .unwrap();
 
         let config = AstrometryConfig {
             data_dir: Some(directory.path().to_string_lossy().into_owned()),
@@ -2644,6 +2717,10 @@ mod tests {
         assert_eq!(
             config.minor_bodies_path().unwrap().unwrap(),
             directory.path().join("minor-bodies.bin")
+        );
+        assert_eq!(
+            config.gaia_photometry_path().unwrap().unwrap(),
+            directory.path().join("stars-gaia-photometry.bin")
         );
         assert_eq!(
             config.satellite_elements_path(),

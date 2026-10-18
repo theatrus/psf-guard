@@ -31,6 +31,11 @@ const PRESETS: Array<{
     label: 'Deepest blind solving',
     description: 'G≤20 Gaia data plus the blind index. This adds about 9 GB.',
   },
+  {
+    value: 'gaia_photometry',
+    label: 'Gaia colors',
+    description: 'Star colors for calibrating RGB and LRGB stacks. About 480 MB.',
+  },
 ];
 
 const RESOURCE_LABELS: Array<[string, string]> = [
@@ -40,6 +45,7 @@ const RESOURCE_LABELS: Array<[string, string]> = [
   ['star_identifiers', 'Star identifiers'],
   ['transients', 'Transient objects'],
   ['minor_bodies', 'Minor bodies'],
+  ['gaia_photometry', 'Gaia colors'],
 ];
 
 function formatBytes(bytes?: number): string {
@@ -62,9 +68,20 @@ function resourceDetail(resource: AstrometryResourceCapability): string {
   return resource.error || resource.status.replace('_', ' ');
 }
 
-export default function SeizaCatalogControls() {
+function isPreset(value: string | null | undefined): value is CatalogInstallPreset {
+  return PRESETS.some((candidate) => candidate.value === value);
+}
+
+export default function SeizaCatalogControls({
+  initialPreset = null,
+}: {
+  /** The package to select on open, when another view sent the person here. */
+  initialPreset?: string | null;
+} = {}) {
   const queryClient = useQueryClient();
-  const [preset, setPreset] = useState<CatalogInstallPreset>('blind_deep');
+  const [preset, setPreset] = useState<CatalogInstallPreset>(
+    isPreset(initialPreset) ? initialPreset : 'blind_deep'
+  );
   const capabilities = useQuery({
     queryKey: ['astrometry', 'capabilities'],
     queryFn: apiClient.getAstrometryCapabilities,
@@ -122,6 +139,9 @@ export default function SeizaCatalogControls() {
             <span className={capabilities.data.features.blind_solve ? 'ready' : ''}>
               {capabilities.data.features.blind_solve ? '✓' : '○'} Blind solve
             </span>
+            <span className={capabilities.data.features.color_calibration ? 'ready' : ''}>
+              {capabilities.data.features.color_calibration ? '✓' : '○'} Color calibration
+            </span>
           </div>
         )}
       </div>
@@ -136,6 +156,8 @@ export default function SeizaCatalogControls() {
         <div className="catalog-resource-grid">
           {RESOURCE_LABELS.map(([key, label]) => {
             const resource = resources[key as keyof typeof resources];
+            // A server older than the Gaia colors resource reports none.
+            if (!resource) return null;
             return (
               <div className="catalog-resource" key={key}>
                 <span

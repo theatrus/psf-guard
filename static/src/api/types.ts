@@ -1297,7 +1297,49 @@ export interface StackColorProcessing {
   input_rc_astro?: Partial<Record<StackColorRole, RcAstroProcessing>>;
   input_stretches: Partial<Record<StackColorRole, StackStretchRequest[]>>;
   output_stretches: StackStretchRequest[];
+  /** RGB and LRGB only; the server calibrates when this is absent. */
+  color_calibration?: StackColorCalibration | null;
 }
+
+/** Photometric color calibration against Gaia star colors. */
+export interface StackColorCalibration {
+  enabled: boolean;
+  /** Offset each channel so the sky is the same gray in all three. */
+  neutralize_background: boolean;
+  /** The star color rendered white: the Sun's, or a Gaia BP-RP color. */
+  white_reference: 'solar' | { bp_rp: number };
+}
+
+export type StackColorCalibrationSkipReason =
+  | 'no_plate_solve'
+  | 'no_gaia_catalog'
+  | 'too_few_stars'
+  | 'failed';
+
+export interface StackColorFit {
+  intercept: number;
+  slope: number;
+  scatter: number;
+  stars: number;
+}
+
+export type StackColorCalibrationOutcome =
+  | {
+      status: 'calibrated';
+      /** R, G, B multipliers on the normalized channels; green's is 1. */
+      gains: [number, number, number];
+      offsets: [number, number, number];
+      background: [number, number, number];
+      white_bp_rp: number;
+      red_fit: StackColorFit;
+      blue_fit: StackColorFit;
+      aperture_radius: number;
+      stars_offered: number;
+      stars_measured: number;
+      /** Stars behind the weaker of the two fits. */
+      stars_used: number;
+    }
+  | { status: 'skipped'; reason: StackColorCalibrationSkipReason; detail: string };
 
 /**
  * A named, database-independent capture of one processing editor's
@@ -1416,6 +1458,7 @@ export type StackColorProgressPhase =
   | 'registering_sources'
   | 'deconvolving_inputs'
   | 'normalizing_inputs'
+  | 'calibrating_color'
   | 'stretching_inputs'
   | 'rc_astro_inputs'
   | 'composing_color'
@@ -1501,6 +1544,8 @@ export interface StackColorJob {
   resolved_backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   resolved_background_protection: Partial<Record<StackColorRole, StackBackgroundProtection>>;
   background_protection_fallbacks: Partial<Record<StackColorRole, string>>;
+  /** What color calibration did; absent when it was off or never ran. */
+  color_calibration?: StackColorCalibrationOutcome | null;
   preview_url: string;
   fits_url: string;
   error: string | null;
@@ -1567,6 +1612,7 @@ export interface AstrometryCapabilities {
     blind_index: AstrometryResourceCapability;
     transients: AstrometryResourceCapability;
     minor_bodies: AstrometryResourceCapability;
+    gaia_photometry?: AstrometryResourceCapability;
   };
   features: {
     object_association: boolean;
@@ -1576,6 +1622,7 @@ export interface AstrometryCapabilities {
     blind_solve: boolean;
     transient_annotations: boolean;
     minor_body_annotations: boolean;
+    color_calibration?: boolean;
   };
 }
 
@@ -1594,7 +1641,8 @@ export type CatalogInstallPreset =
   | 'solver_lite'
   | 'solver_gaia'
   | 'blind_deep'
-  | 'blind_deep_gaia20';
+  | 'blind_deep_gaia20'
+  | 'gaia_photometry';
 
 export interface CatalogInstallProgress {
   running: boolean;

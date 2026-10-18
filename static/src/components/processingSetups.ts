@@ -4,7 +4,11 @@ import type {
   StackStretchRequest,
   StackViewProcessingRequest,
 } from '../api/types';
-import { defaultColorProcessing } from './stackColorProcessing';
+import {
+  colorCalibrationApplies,
+  defaultColorCalibration,
+  defaultColorProcessing,
+} from './stackColorProcessing';
 import { defaultStretchRequest } from './stackStretchModels';
 
 /**
@@ -122,6 +126,11 @@ export function colorSetupForRoles(
       false,
       () => undefined
     ),
+    // A setup saved from a narrowband card says nothing of calibration, so
+    // an RGB card keeps the default; a narrowband card never calibrates.
+    ...(colorCalibrationApplies(roles)
+      ? { color_calibration: settings.color_calibration ?? defaultColorCalibration() }
+      : {}),
   };
 }
 

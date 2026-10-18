@@ -4,6 +4,11 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- RGB and LRGB color previews are color calibrated against Gaia star colors,
+  so a Sun-colored star comes out white and the sky a neutral gray. The card
+  says how, as `Calibrated on 143 stars · R ×1.12, B ×0.87`, or why it
+  skipped, and a switch in the processing stack turns it off. Install the
+  optional **Gaia colors** package under Settings › Catalogs.
 - Dropdown arrows now sit inside the border with space between the arrow
   and the selected text.
 - UI labels, settings help, and confirmation messages now state actions,

@@ -4410,6 +4410,26 @@
   font-weight: 600;
 }
 
+.stack-color-calibration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  padding: 0.4rem 0.65rem;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-bg-tertiary);
+  font-size: 0.68rem;
+}
+
+.stack-color-calibration[data-calibration='skipped'] {
+  color: var(--color-warning);
+}
+
+.stack-color-calibration button {
+  padding: 0.1rem 0.45rem;
+  font-size: 0.66rem;
+}
+
 .stack-color-image {
   background:
     linear-gradient(45deg, rgb(255 255 255 / 3%) 25%, transparent 25% 75%, rgb(255 255 255 / 3%) 75%),

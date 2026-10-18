@@ -9,6 +9,7 @@ pub mod artifact;
 pub mod automatic;
 pub mod calibration_masters;
 pub mod color;
+pub mod color_calibration;
 mod execution;
 mod final_integration;
 mod janitor;

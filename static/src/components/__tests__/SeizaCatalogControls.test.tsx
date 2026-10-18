@@ -97,4 +97,61 @@ describe('SeizaCatalogControls', () => {
     expect(screen.getByText('2/6 files')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toHaveAttribute('value', '50');
   });
+
+  it('opens on Gaia colors when a color card sends the person to install them', async () => {
+    let requestedPreset = '';
+    server.use(
+      http.get('/api/astrometry/capabilities', () =>
+        HttpResponse.json({
+          success: true,
+          data: {
+            seiza_version: '0.12.0',
+            seiza_fits_version: '0.2.0',
+            resources: {
+              objects: { name: 'objects', status: 'available' },
+              stars: { name: 'stars', status: 'available' },
+              star_identifiers: { name: 'star_identifiers', status: 'available' },
+              blind_index: { name: 'blind_index', status: 'available' },
+              transients: { name: 'transients', status: 'available' },
+              minor_bodies: { name: 'minor_bodies', status: 'available' },
+              gaia_photometry: { name: 'gaia_photometry', status: 'not_configured' },
+            },
+            features: {
+              object_association: true,
+              object_name_search: false,
+              stellar_name_search: false,
+              hinted_solve: true,
+              blind_solve: true,
+              transient_annotations: false,
+              minor_body_annotations: false,
+              color_calibration: false,
+            },
+          },
+          error: null,
+          status: 'ready',
+        })
+      ),
+      http.post('/api/astrometry/catalogs/install', async ({ request }) => {
+        requestedPreset = ((await request.json()) as { preset: string }).preset;
+        return HttpResponse.json({
+          success: true,
+          data: {
+            started: true,
+            progress: { running: true, phase: 'manifest', message: 'Checking…', files_completed: 0, files_total: 1 },
+          },
+          error: null,
+          status: 'ready',
+        });
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<SeizaCatalogControls initialPreset="gaia_photometry" />, { wrapper: wrapper() });
+
+    expect(await screen.findByText('○ Color calibration')).toBeInTheDocument();
+    expect(screen.getByText('Gaia colors', { selector: 'strong' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Catalog package')).toHaveValue('gaia_photometry');
+    await user.click(screen.getByRole('button', { name: 'Install / update catalogs' }));
+    expect(requestedPreset).toBe('gaia_photometry');
+  });
 });
