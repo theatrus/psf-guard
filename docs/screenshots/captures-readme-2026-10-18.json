@@ -1,0 +1,133 @@
+{
+  "reuse_date": "2026-10-18",
+  "captures": [
+    {
+      "file": "planning-mosaic.jpg",
+      "source_asset": "assets/release-012-mosaic-editing.jpg",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "9e9391f19efd3d88104d66ed7800f52d23ac00ed",
+      "sha256": "ec2c75fc35c76f9c963da0759e5393e2e70abf4acbc6b8ebd928568f7229f687",
+      "record": "README.md"
+    },
+    {
+      "file": "calibration-review.jpg",
+      "source_asset": "assets/release-012-calibration.jpg",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "9e9391f19efd3d88104d66ed7800f52d23ac00ed",
+      "sha256": "321d3be101c0138e03a985719c3fa2c307e02369f5edc4961fc9791a190023d8",
+      "record": "README.md"
+    },
+    {
+      "file": "library-compact.jpg",
+      "source_asset": "assets/library-compact.jpg",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "03e4159c97b5fbd281b94095c69cbd260540cf6550ffe5680630db3fb2b71093",
+      "record": "README.md"
+    },
+    {
+      "file": "grid.jpg",
+      "source_asset": "assets/grid.jpg",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "acce8b543106e2402ce43f5e77e56745cac2c27b9e0c6b0fc60e4fac28a2becc",
+      "record": "README.md"
+    },
+    {
+      "file": "sequence-session.jpg",
+      "source_asset": "assets/sequence-session.jpg",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "707112f1981979c6056d9dd1e70c777d1a58c4656130849c9708cf06be6938ad",
+      "record": "README.md"
+    },
+    {
+      "file": "grid-phone-filters.png",
+      "source_asset": "assets/grid-phone-filters.png",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "242ff40c7954b9160b69164cce198c96cac4e0bf617765d4d8595729959cdec8",
+      "record": "README.md"
+    },
+    {
+      "file": "import-image-folders.png",
+      "source_asset": "assets/import-image-folders.png",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "c6b7aa40fc58ffbdbc11c39931d835afd51f2dc2a29bdc4377b732078820186d",
+      "record": "README.md"
+    },
+    {
+      "file": "annotated-hfr-labels.png",
+      "source_asset": "assets/annotated-hfr-labels.png",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "f262f33b6e5a21e7b7f93c429940599794a0455ba20e1fcc8637649414c3ea2a",
+      "record": "README.md"
+    },
+    {
+      "file": "stacks-mosaic.jpg",
+      "source_asset": "assets/stacks-mosaic.jpg",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "aee3a571aa32ac26348b4a93ab672fbbf713aff2f3b79a02cb6b39547bfb1a7b",
+      "record": "README.md"
+    },
+    {
+      "file": "stack-foraxx-california.jpg",
+      "source_asset": "assets/stack-foraxx-california.jpg",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "1680caa3eb4ec1c5e234b36934db6fe1e259b49608300449bc152c48e6129ec1",
+      "record": "README.md"
+    },
+    {
+      "file": "sky-live.jpg",
+      "source_asset": "assets/sky-live.jpg",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "52e8a57e2c1a18dd6e81fcbcf991eda88de5ade97ffbd3132b7988546c850e42",
+      "record": "README.md"
+    },
+    {
+      "file": "sky-context.jpg",
+      "source_asset": "assets/sky-context.jpg",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "5091e673493d5c0a989392890e072abfca8e426ee08802df9a63dfc645b663d0",
+      "record": "README.md"
+    },
+    {
+      "file": "settings-catalogs.png",
+      "source_asset": "assets/settings-catalogs.png",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "d1f9b01ea27999b4d31dcf9e7ed43de1441d9a6b20a79261177d8a7505302ec4",
+      "record": "README.md"
+    },
+    {
+      "file": "satellite-pixel-match.png",
+      "source_asset": "assets/satellite-pixel-match.png",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "0683cd969d69006cb73282ac367045a8eb5f5ef37d235852897bf9bffce6b524",
+      "record": "README.md"
+    },
+    {
+      "file": "export-dialog.png",
+      "source_asset": "assets/export-dialog.png",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "bc85cd615628f1d5475b97a57eb0d2b3001a41895160ba34ff69f7de1d8d981c",
+      "record": "README.md"
+    },
+    {
+      "file": "import-reviewed-transfer.png",
+      "source_asset": "assets/import-reviewed-transfer.png",
+      "source_repository": "theatrus/psf-guard-docs",
+      "source_commit": "ed4dc3849733946bd5f35d574d5f9f4542643589",
+      "sha256": "9d34a2fafe12a5543d2babfbb648dea15b522b1fa3f373accebe1c4cbfa52d54",
+      "record": "README.md"
+    }
+  ]
+}

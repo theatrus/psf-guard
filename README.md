@@ -171,34 +171,31 @@ check calibration, and inspect a stack before further processing.
 
 ### Review and grade a night quickly
 
-| Library | Images | Comparison |
+| Library | Images | Sequence |
 |:--:|:--:|:--:|
-| ![Library with recent projects and narrowband frames](docs/overview.png) | ![Flaming Star H-alpha frames in the image grid](docs/grid-flaming-star-narrowband.png) | ![Two frames with synchronized zoom](docs/compare.jpg) |
-| Project progress and grades | Filters and batch grading | Detailed comparison |
+| ![Compact Library with project progress, grades and calibration warnings](docs/screenshots/library-compact.jpg) | ![Iris Nebula frames with scores, stored grades and calibration warnings](docs/screenshots/grid.jpg) | ![Golf of Mexico H-alpha session with scores and rejected frames](docs/screenshots/sequence-session.jpg) |
+| Project progress and grades | Filters and batch grading | Scores and findings across a night |
 
 Use arrow keys to move between frames and `Space` to select them. Preview
 loads and refreshes preserve your position. **View → Sort** controls the
 order; a dot marks frames captured since your last visit from the Library.
 See [image order and new frames](docs/SCREENING.md#order-and-new-frames).
+Open **Compare** to inspect selected frames with synchronized zoom.
 
 <details>
 <summary>Responsive grid layout</summary>
 
-<img src="docs/grid-flaming-star-responsive.png" width="480" alt="Flaming Star image grid with controls arranged for a narrow window">
+<img src="docs/screenshots/grid-phone-filters.png" width="375" alt="Phone image grid with Filters expanded and two frame cards per row">
 
 </details>
 
 ### Build an image catalog from image folders
 
-![New Database from Images with optional background quality analysis](docs/import-from-images.png)
+![Image-folder import with Target Scheduler and Sync plugin choices, catalog storage and optional quality analysis](docs/screenshots/import-image-folders.png)
 
 PSF Guard reads `.fits`, `.fit`, `.fts`, and `.xisf` files. It groups lights
 into projects and targets and derives exposure plans from their headers.
 Calibration frames go into a separate library in the same catalog.
-
-| Exposure templates | Target coordinates and exposure plans |
-|:--:|:--:|
-| ![Shared templates for B, G, HA, L, OIII, R, and SII](docs/project-plan-narrowband.png) | ![Gulf of Mexico target coordinates and seven exposure plans](docs/target-plan-narrowband.png) |
 
 Import progress remains available after you close Settings or reload the page.
 Use **Analyze Missing Quality** to fill missing measurements, or **Rescan All
@@ -207,35 +204,30 @@ for grouping rules, scan settings, and database edits.
 
 ### See the evidence behind a quality decision
 
-| Sequence analysis | Star detection | PSF fitting |
-|:--:|:--:|:--:|
-| ![Sequence scores and astrometry findings](docs/sequence-quality-astrometry.png) | ![Detected stars with annotations](docs/annotated-stars.jpg) | ![Observed, fitted, and residual star images](docs/psf-visualization.jpg) |
-| Scores and reasons for each frame | Star measurements | Gaussian and Moffat fits |
+![Measured stars labeled by HFR on a rejected Golf of Mexico frame](docs/screenshots/annotated-hfr-labels.png)
 
 Sequence combines image statistics, spatial and photometric measurements,
 fresh plate solves, and cached satellite evidence. Review the findings before
 applying a grade. Missing optional evidence does not count as a failure.
+Star overlays show measurements from the pixels; imported capture statistics
+can differ. Open the PSF view to inspect Gaussian and Moffat fits.
 
 ### Preview a stack without leaving the grader
 
-| Stack preview | Full-size inspection | Input decisions |
-|:--:|:--:|:--:|
-| ![Three-frame B-channel stack of M44](docs/stack-preview.png) | ![Stack inspection at native resolution](docs/stack-preview-inspection.png) | ![Registration and admission details](docs/stack-preview-decisions.png) |
-| Calibrated integration by target and channel | Zoom, pan, and inspect | Exclusions and registration results |
+![Four Heart Mosaic SHO panel stacks with their solved, north-up placement](docs/screenshots/stacks-mosaic.jpg)
 
-This M44 example uses three B-channel frames. PSF Guard saves quality
-exclusions, registration matches, and residuals with the cached stack result.
+Each Heart Mosaic panel has its own stack; the sky view places the panels by
+their solves without stitching them. Inspect a stack at full size, or review
+the saved quality exclusions, registration matches and residuals.
 
 ### Combine real narrowband channel stacks
 
-![Gulf of Mexico Foraxx SHO preview from PSF Guard channel stacks](docs/stack-color-real-previews.jpg)
+![California Nebula Foraxx SHO preview with 918 inputs and 76 hours 30 minutes of integration](docs/screenshots/stack-foraxx-california.jpg)
 
-This Gulf of Mexico (NGC 7000) preview uses six accepted Ultracat frames:
-two each in H-alpha, OIII, and SII. Recombine the same linear channel stacks
-as SHO, Foraxx SHO, or another compatible palette without repeating the
-integrations.
-
-<img src="docs/stack-background-real.jpg" width="720" alt="Background extraction controls and per-channel fit diagnostics">
+This cached California Nebula preview combines H-alpha, OIII and SII channel
+stacks, with 918 inputs and 76 h 30 m of integration. It includes saved
+processing with optional RC-Astro tools. Recombine the same channel stacks as
+SHO, Foraxx SHO, or another compatible palette without repeating integration.
 
 Inspect background fits, adjust each channel's processing, and download a
 processed RGB FITS file. See [stack previews](docs/STACKING_PREVIEWS.md) for
@@ -578,7 +570,9 @@ backups, transfers, and WBPP copies report here.
 
 Work you start takes priority over automatic analysis and preview generation.
 Use Stop, queue controls, or transfer Pause and Retry where the job offers
-them. A task waiting for review stays visible until you address it. Configure
+them. **Move to top** makes a queued stack, processing or WBPP task run next
+after the current task finishes. A task waiting for review stays visible until
+you address it. Configure
 processor shares under **Settings → Performance**. See the
 [background job guide](docs/design/background-jobs.md) for priority and
 restart behavior.
@@ -593,7 +587,7 @@ Hover over a field for hours, filters, and nights, or click it to open the
 target in Images. Zoom in to see stack previews. Use the timeline to filter
 observing nights and replay how your coverage grew.
 
-![The Sky view](docs/sky-coverage.jpg)
+![Sky coverage from five rigs with observing-night history and the Live panel showing no reports yet](docs/screenshots/sky-live.jpg)
 
 See [sky coverage](docs/SKY_COVERAGE.md) for field placement, observing-night
 rules, and the totals shown on the map.
@@ -605,7 +599,7 @@ The **Sky context** panel shows the image's header coordinates and catalog
 target. With `objects.bin` installed, it lists objects expected nearby.
 Those coordinates do not prove what the pixels contain.
 
-![Cocoon Nebula frame with solved coordinates, labels, and outlines](docs/sky-context.jpg)
+![Solved Golf of Mexico frame with sky labels, object outlines and the Sky context panel](docs/screenshots/sky-context.jpg)
 
 A supported TAN WCS in the file enables an overlay immediately. To solve the
 pixels, choose **Solve field** or press `O`. PSF Guard tries the pointing
@@ -620,7 +614,7 @@ download. Open **Settings → Catalogs** to install, update, or validate them.
 Choose **Blind solving** for the usual setup. Browser access to these
 controls requires an editor and `--allow-database-management`.
 
-![Catalog readiness, package installation, and validation](docs/settings-seiza-catalogs.png)
+![Seiza catalog readiness, package choice, installation and validation](docs/screenshots/settings-catalogs.png)
 
 For a headless installation, use the Seiza CLI from the
 [Seiza releases](https://github.com/theatrus/seiza/releases):
@@ -685,9 +679,10 @@ Opening Sequence or running `screen-fits --regrade-db` uses cached elements
 and does not download them. Bright-trail risk describes geometry and
 illumination, not apparent magnitude.
 
-| Solved track overlay | Sequence recommendation |
-|:--:|:--:|
-| ![California Nebula exposure with dashed predictions and solid green detected trails](docs/satellite-california-overlay.png) | ![Pixel-aligned bright trail flagged in Sequence](docs/satellite-california-sequence.png) |
+![SNR G132 frame with one pixel-aligned satellite candidate and four prediction-only crossings](docs/screenshots/satellite-pixel-match.png)
+
+This SNR G132 frame has one pixel match among five predicted crossings. The
+orbital identity remains a candidate; the frame's stored grade is Accepted.
 
 See [satellite prediction](docs/SATELLITES.md) for header requirements, data
 sources, score limits, and cache behavior.
@@ -707,19 +702,11 @@ across two sessions. The UI identifies frames without enough matches. A low
 relative score alone does not diagnose damage or recommend rejection, and
 stable framing offsets remain advisory.
 
-| Obstruction arriving | Clear and veiled views of the same field |
-|:--:|:--:|
-| ![Obstruction entering an exposure](docs/screening-onset.jpg) | ![A field affected by thin cloud](docs/screening-veil.jpg) |
-
 Use **Analyze Missing Quality** or **Rescan All Quality** in database
 settings for a background scan of the whole catalog. These jobs fill star,
 spatial, photometric, and pointing measurements and report progress after
 you close Settings. Star count and HFR use the N.I.N.A. Fast detector to
 stay comparable with Target Scheduler measurements.
-
-| Astrometry results | Rejection review |
-|:--:|:--:|
-| ![Quality findings across eleven frames](docs/sequence-quality-astrometry.png) | ![Review of proposed astrometry rejections](docs/sequence-quality-review.png) |
 
 From the CLI, screen folders without a database or add `--regrade-db` to
 check against catalog targets and preview grade changes:
@@ -742,7 +729,7 @@ Choose **Export** on a Library project or target to export lights with
 matched calibration frames. Use **Include ungraded lights** to control
 whether pending frames are included. Rejected frames are excluded.
 
-![Library project with the Export action](docs/export-overview.png)
+<img src="docs/screenshots/export-dialog.png" width="448" alt="Export dialog with Include ungraded lights on, Grouped by target and Zip of the frames selected">
 
 The desktop app can write to a chosen folder; a browser can download a ZIP.
 Set a database's **Server export directory** to write exports on the server
@@ -855,7 +842,7 @@ merge, planning update, or grade transfer before **Apply**. The preview
 survives a page reload and refuses to apply if the destination changed.
 Pending grades are excluded from the UI grade push by default.
 
-![Data Transfer with source and destination catalogs](docs/data-transfer.png)
+![Target Scheduler transfer into an owned catalog with a two-row preview awaiting Apply](docs/screenshots/import-reviewed-transfer.png)
 
 The CLI accepts registered database slugs or SQLite paths. Back up both
 catalogs before the first transfer:
