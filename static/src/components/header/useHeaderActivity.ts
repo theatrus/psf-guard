@@ -1,3 +1,4 @@
+import { useTsSyncJobs } from '../../hooks/useTsSyncJobs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
@@ -106,6 +107,7 @@ export function useHeaderActivity() {
   });
   const backupsAllowed =
     access.canWrite && (isTauriApp() || (serverInfo?.allow_database_management ?? false));
+  const tsSync = useTsSyncJobs(backupsAllowed);
   const backup = useQuery<BackupJobView>({
     queryKey: BACKUP_STATUS_QUERY_KEY,
     queryFn: apiClient.getBackupStatus,
@@ -238,6 +240,16 @@ export function useHeaderActivity() {
     reapplies: waitingReapplies,
   }, transfers.data?.jobs, backupsAllowed ? backup.data?.job ?? null : null,
   catalogInstall.data?.progress ?? null);
+  for (const job of tsSync.data ?? []) {
+    if (!job.running && !job.error) continue;
+    items.push({ key: `ts-sync:${job.id}`, kind: 'transfer',
+      title: job.id.startsWith('import:') ? 'Importing Target Scheduler' : 'Target Scheduler sync',
+      scope: job.name, detail: job.error || (job.stage === 'copying' ? 'Copying a consistent database snapshot' : job.stage === 'initializing' ? 'Preparing the working catalog' : 'Importing captures and syncing grades'),
+      status: job.error ? 'attention' : job.waiting_for ? 'waiting' : 'running', waitingFor: job.waiting_for ?? undefined,
+      control: job.running ? { kind: 'ts-sync', jobId: job.id } : undefined, stoppable: job.running && !job.stopping, percent: job.stage === 'copying' && job.pages_total > 0 ? Math.round(100 * job.pages_done / job.pages_total) : null,
+      automatic: job.automatic, background: job.automatic,
+    });
+  }
   const summary = summarize(items);
 
   // A database whose work just finished has new images, metrics and grades

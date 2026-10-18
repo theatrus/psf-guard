@@ -1334,7 +1334,25 @@ export const apiClient = {
     return data.data || [];
   },
 
-  /** Register a new database. Works in both Tauri and browser mode. */
+  stopTsSync: async (id: string): Promise<void> => {
+    const api = await getApi();
+    await api.post(`/ts-sync/${encodeURIComponent(id)}/stop`);
+  },
+
+  getTsSyncJobs: async (): Promise<import('./tsSyncTypes').TsSyncJob[]> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<import('./tsSyncTypes').TsSyncJob[]>>('/ts-sync');
+    return data.data || [];
+  },
+
+  importTsDatabase: async (request: { name: string; db_path: string; image_dirs: string[]; slug?: string }): Promise<import('./tsSyncTypes').TsSyncJob> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<import('./tsSyncTypes').TsSyncJob>>('/databases/import-ts', request);
+    if (!data.data) throw new Error(data.error || 'Could not start the Target Scheduler import.');
+    return data.data;
+  },
+
+  /** Register a legacy database. New UI imports create an owned catalog. */
   addDatabase: async (req: {
     name: string;
     db_path: string;
@@ -1351,6 +1369,7 @@ export const apiClient = {
   updateDatabase: async (
     dbId: string,
     req: {
+      ts_sync?: import('./tsSyncTypes').TsSyncSettings;
       name?: string;
       slug?: string;
       db_path?: string;

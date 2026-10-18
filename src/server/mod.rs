@@ -56,6 +56,7 @@ pub mod static_file_service;
 pub mod storage;
 pub mod storage_settings;
 pub mod sync_preview;
+pub mod ts_sync;
 pub mod update_notice;
 pub mod user_admin;
 pub mod user_preferences;
@@ -767,6 +768,9 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         // be updated/deleted (only POST collides, and POST /databases/create
         // is exactly this route).
         .route("/databases/create", post(handlers::create_database_route))
+        .route("/databases/import-ts", post(ts_sync::import_route))
+        .route("/ts-sync", get(ts_sync::status_route))
+        .route("/ts-sync/{job_id}/stop", post(ts_sync::stop_route))
         .route(
             "/databases/{db_id}/sync",
             post(handlers::sync_database_route),
@@ -1098,6 +1102,7 @@ async fn run_server_internal(
 
     // Databases that asked for it import new frames on open and on schedule.
     crate::server::autoimport::spawn(Arc::clone(&state));
+    crate::server::ts_sync::spawn(Arc::clone(&state));
     // Periodic backups, when Settings turned them on.
     crate::server::backup_job::spawn(Arc::clone(&state));
     crate::server::director::spawn_collaboration(Arc::clone(&state));

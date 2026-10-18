@@ -30,6 +30,12 @@
   whether it is installed, and an **Install** button.
 - Catalog installations show in the header's job line with their progress.
   Settings and the color cards update when an installation finishes.
+- **Import from Target Scheduler** creates a PSF Guard-owned catalog and retains
+  the source for automatic capture imports and grade writeback. Configure sync
+  on startup, when images or grades change, or on a schedule. The same flow
+  also offers a catalog and pairing setup for the PSF Guard Sync plugin. Conflicting TS
+  grades are reported without overwriting them. Existing direct-open catalogs
+  remain supported through 0.12; removal is planned for 0.13 or later.
 - WBPP master copies show the current file and file counts in the dialog
   and background jobs list. Copy controls stay disabled while copying, and
   repeat copy requests cannot start a second copy. A run requested while a

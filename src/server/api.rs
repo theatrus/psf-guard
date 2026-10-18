@@ -476,6 +476,8 @@ pub struct DatabaseSummary {
     pub id: String,
     pub name: String,
     pub database_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ts_sync: Option<crate::ts_sync::Settings>,
     pub image_directories: Vec<String>,
     pub remote_image_upload: RemoteImageUploadSummary,
     /// Operator-configured server-side export destination. When present the
@@ -1083,6 +1085,8 @@ pub struct MergeProjectResponse {
 /// leave the existing value unchanged.
 #[derive(Debug, Deserialize, Default)]
 pub struct UpdateDatabaseRequest {
+    #[serde(default)]
+    pub ts_sync: Option<crate::ts_sync::Settings>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]

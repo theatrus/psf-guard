@@ -33,7 +33,7 @@ Scheduler plans and reviewed grades.
 | **On your computer** | [Install the desktop app](#desktop-app-windows--macos--linux), then import your image folders. |
 | **On a server or NAS** | [Run PSF Guard with Docker](#docker-linux-servers--nas) beside your image storage and review it from a browser. |
 | **With N.I.N.A.** | [Connect the Sync plugin](#connect-nina) to upload captures and exchange plans and grades with Target Scheduler. |
-| **With an existing Target Scheduler database** | [Open the database](#existing-database) and add its image folders. |
+| **With an existing Target Scheduler database** | [Import the database](#existing-database) or connect with PSF Guard Sync. |
 | **From scripts or a terminal** | Use the [CLI](#cli-reference) or [REST API](#rest-api). |
 
 ## ✨ What PSF Guard does
@@ -115,16 +115,26 @@ for prerequisites, pairing, and sequencer instructions. The Director beta is
 not required for this workflow.
 
 <a id="existing-database"></a>
-### Open an existing Target Scheduler database
+### Import a Target Scheduler database
 
-Back up the database before PSF Guard first writes to it. Open
-**Settings → Databases → Add Database**, select the SQLite file, and add its
-image folders. On Windows, the default file is
+Open **Settings → Databases → Import from Target Scheduler**. Choose **Use the
+PSF Guard Sync plugin** for a network connection, or **Import a local TS file**
+to select the SQLite file, add its image folders, and click **Import from Target
+Scheduler**. On Windows, the default source is
 `%LOCALAPPDATA%\NINA\SchedulerPlugin\schedulerdb.sqlite`.
 
-Grading writes to that database. If PSF Guard opens the telescope database
-directly, no database sync is needed. Use [database transfer](#syncing-between-machines)
-when you maintain separate copies.
+When you import a local file, PSF Guard creates its own working copy and keeps
+the source connected for sync. Automatic file sync imports new captures and
+writes local grade changes back to TS.
+It runs when the app or server starts, when files change, and every five minutes
+by default. Change these options under the imported catalog in Settings.
+Conflicting TS grades remain unchanged and are reported for review. Planning
+transfers still require Preview and Apply in **Settings → Sync**. See
+[Target Scheduler imports](docs/IMPORTING.md#import-from-target-scheduler).
+
+Existing direct-open TS registrations keep working through 0.12. They are not
+copied or converted automatically. Direct access is deprecated; removal is
+planned for 0.13 or later.
 
 ### Plan captures across rigs
 

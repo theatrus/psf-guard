@@ -332,6 +332,7 @@ struct GuidUpsert {
 /// Upsert every (optionally filtered) source row of a guid-keyed `table` into
 /// the destination, matching by `guid` and remapping the named FK columns
 /// through the provided source-Id→dest-Id maps. Telescope wins on conflict.
+#[allow(clippy::too_many_arguments)]
 fn upsert_guid_table(
     src: &Connection,
     tx: &Transaction,
@@ -339,6 +340,7 @@ fn upsert_guid_table(
     fk_remaps: &[(&str, &HashMap<i64, i64>)],
     allowed_src_ids: Option<&HashSet<i64>>,
     preserve_on_update_zero_on_insert: &[&str],
+    preserve_existing: bool,
     changes: &mut Vec<String>,
 ) -> Result<GuidUpsert> {
     let cols = shared_columns(src, tx, table)?;
@@ -437,6 +439,10 @@ fn upsert_guid_table(
         match dest_map.get(&guid) {
             Some((dest_id, cur_vals)) => {
                 id_map.insert(src_id, *dest_id);
+                if preserve_existing {
+                    counts.unchanged += 1;
+                    continue;
+                }
                 for column in preserve_on_update_zero_on_insert {
                     if let Some(pos) = write_cols
                         .iter()
@@ -541,6 +547,71 @@ fn column_diffs(write_cols: &[&str], new_values: &[Value], old_values: &[Value])
 
 fn cols_str(cols: &[String]) -> Vec<&str> {
     cols.iter().map(|s| s.as_str()).collect()
+}
+
+/// Preserve locally measured fields while accepting capture metadata from TS.
+/// Source-owned metrics win; a metric absent in TS or recorded there by an
+/// older PSF Guard scan keeps the working catalog's measured value.
+fn merge_owned_metadata(incoming: &Value, current: &Value) -> Value {
+    let (Value::Text(incoming), Value::Text(current)) = (incoming, current) else {
+        return incoming.clone();
+    };
+    let (Ok(mut source), Ok(local)) = (
+        serde_json::from_str::<serde_json::Value>(incoming),
+        serde_json::from_str::<serde_json::Value>(current),
+    ) else {
+        return Value::Text(incoming.clone());
+    };
+    let (Some(source), Some(local)) = (source.as_object_mut(), local.as_object()) else {
+        return Value::Text(incoming.clone());
+    };
+    let owned = |map: &serde_json::Map<String, serde_json::Value>| -> Vec<String> {
+        map.get("PsfGuardQualityFields")
+            .and_then(|v| v.as_array())
+            .map(|fields| {
+                fields
+                    .iter()
+                    .filter_map(|f| f.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_else(|| {
+                if map.contains_key("PsfGuardQualitySource") {
+                    vec!["DetectedStars".into(), "HFR".into()]
+                } else {
+                    Vec::new()
+                }
+            })
+    };
+    let source_fields = owned(source);
+    let local_fields = owned(local);
+    let mut retained = Vec::new();
+    for field in local_fields {
+        if (source.get(&field).is_none_or(|v| v.is_null()) || source_fields.contains(&field))
+            && let Some(value) = local.get(&field)
+        {
+            source.insert(field.clone(), value.clone());
+            retained.push(field);
+        }
+    }
+    for (key, value) in local {
+        if key.to_ascii_lowercase().starts_with("psfguard") {
+            source.insert(key.clone(), value.clone());
+        }
+    }
+    if local.contains_key("PsfGuardQualitySource") {
+        source.insert("PsfGuardQualityFields".into(), serde_json::json!(retained));
+    }
+    // Keep the exact original string when no merge changed its meaning.
+    let value = serde_json::Value::Object(source.clone());
+    if serde_json::from_str::<serde_json::Value>(incoming)
+        .ok()
+        .as_ref()
+        == Some(&value)
+    {
+        Value::Text(incoming.clone())
+    } else {
+        Value::Text(value.to_string())
+    }
 }
 
 /// Upsert acquired-image rows with the grade rule: new rows take the telescope
@@ -679,6 +750,7 @@ impl AdoptableRows {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn upsert_acquired_images(
     src: &Connection,
     tx: &Transaction,
@@ -686,6 +758,8 @@ fn upsert_acquired_images(
     tgt_map: &HashMap<i64, i64>,
     plan_map: &HashMap<i64, i64>,
     allowed_project_ids: Option<&HashSet<i64>>,
+    preserve_metadata: bool,
+    preserve_grades: Option<&HashSet<String>>,
     summary: &mut PullSummary,
 ) -> Result<HashMap<i64, i64>> {
     let table = "acquiredimage";
@@ -816,9 +890,16 @@ fn upsert_acquired_images(
         match dest_map.get(&guid) {
             Some((dest_id, cur_vals)) => {
                 id_map.insert(src_id, *dest_id);
+                if preserve_metadata
+                    && !file_discovery_identity_changed(&write_cols, &write_values, cur_vals)
+                    && let Some(index) = metadata_w
+                {
+                    write_values[index] =
+                        merge_owned_metadata(&write_values[index], &cur_vals[index]);
+                }
                 let dest_grade = as_i64(&cur_vals[grade_w]).unwrap_or(0);
-                if dest_grade != 0 {
-                    // Preserve local decision.
+                if dest_grade != 0 || preserve_grades.is_some_and(|guids| guids.contains(&guid)) {
+                    // Preserve local decisions, including an edited reset to Pending.
                     write_values[grade_w] = cur_vals[grade_w].clone();
                     if let Some(rp) = reason_w {
                         write_values[rp] = cur_vals[rp].clone();
@@ -1123,6 +1204,7 @@ pub(super) fn sync_structure(
     tx: &Transaction,
     project_filter: Option<&str>,
     excluded_plan_counts: &[&str],
+    preserve_existing: bool,
     changes: &mut Vec<String>,
 ) -> Result<StructureSync> {
     let included_projects: Option<HashSet<i64>> = match project_filter {
@@ -1146,7 +1228,16 @@ pub(super) fn sync_structure(
 
     // Templates are profile-scoped. Sync all of them so every selected plan
     // can remap its template FK.
-    let tmpl = upsert_guid_table(src, tx, "exposuretemplate", &[], None, &[], changes)?;
+    let tmpl = upsert_guid_table(
+        src,
+        tx,
+        "exposuretemplate",
+        &[],
+        None,
+        &[],
+        preserve_existing,
+        changes,
+    )?;
     let tmpl_map = tmpl.id_map;
 
     let proj = upsert_guid_table(
@@ -1156,12 +1247,15 @@ pub(super) fn sync_structure(
         &[],
         included_projects.as_ref(),
         &[],
+        preserve_existing,
         changes,
     )?;
     let proj_map = proj.id_map;
 
     let mut ruleweight = TableCounts::default();
-    upsert_ruleweights(src, tx, &proj_map, &mut ruleweight, changes)?;
+    if !preserve_existing {
+        upsert_ruleweights(src, tx, &proj_map, &mut ruleweight, changes)?;
+    }
 
     let tgt = upsert_guid_table(
         src,
@@ -1170,6 +1264,7 @@ pub(super) fn sync_structure(
         &[("projectid", &proj_map)],
         included_targets.as_ref(),
         &[],
+        preserve_existing,
         changes,
     )?;
     let tgt_map = tgt.id_map;
@@ -1181,6 +1276,7 @@ pub(super) fn sync_structure(
         &[("targetid", &tgt_map), ("exposureTemplateId", &tmpl_map)],
         included_plans.as_ref(),
         excluded_plan_counts,
+        preserve_existing,
         changes,
     )?;
 
@@ -1213,6 +1309,47 @@ pub fn sync_pull(src: &Connection, dest: &Connection, opts: &PullOptions) -> Res
     Ok(summary)
 }
 
+/// Import capture arrivals automatically. Existing planning and PSF Guard
+/// analysis stay owned by the working catalog; explicit planning transfers
+/// continue to use a reviewed preview. New structure is inserted so every
+/// incoming capture can map its parent GUIDs.
+pub(crate) fn sync_arrivals(
+    src: &Connection,
+    tx: &Transaction<'_>,
+    dirty_grades: &HashSet<String>,
+) -> Result<PullSummary> {
+    require_pull_capable(src)?;
+    require_pull_capable(tx)?;
+    let mut summary = PullSummary::default();
+    let structure = sync_structure(src, tx, None, &["accepted"], true, &mut summary.changes)?;
+    upsert_acquired_images(
+        src,
+        tx,
+        &structure.project_map,
+        &structure.target_map,
+        &structure.plan_map,
+        None,
+        true,
+        Some(dirty_grades),
+        &mut summary,
+    )?;
+    // Acquisition progress belongs to TS; accepted counts follow local grades.
+    for (source_id, local_id) in structure.plan_map {
+        let acquired: Option<i64> = src.query_row(
+            "SELECT acquired FROM exposureplan WHERE Id=?1",
+            [source_id],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "UPDATE exposureplan SET acquired=?1 WHERE Id=?2 AND acquired IS NOT ?1",
+            params![acquired, local_id],
+        )?;
+    }
+    crate::db::reconcile_accepted_counts(tx)?;
+    crate::db::record_rejection_times_where_kept(tx)?;
+    Ok(summary)
+}
+
 /// Stage one full pull inside a transaction owned by the caller.
 pub(crate) fn sync_pull_in_transaction(
     src: &Connection,
@@ -1229,6 +1366,7 @@ pub(crate) fn sync_pull_in_transaction(
         tx,
         opts.project_filter.as_deref(),
         &["accepted"],
+        false,
         &mut summary.changes,
     )?;
     summary.exposuretemplate = structure.exposuretemplate;
@@ -1245,6 +1383,8 @@ pub(crate) fn sync_pull_in_transaction(
         &structure.target_map,
         &structure.plan_map,
         structure.selected_project_ids.as_ref(),
+        false,
+        None,
         &mut summary,
     )?;
 

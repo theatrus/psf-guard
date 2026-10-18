@@ -26,7 +26,7 @@ test('overview shows the empty-state when no databases are configured', async ({
   ).toBeVisible();
   // The empty state offers an action that re-opens settings — confirm it
   // actually triggers the modal again.
-  await page.getByRole('button', { name: /Add Existing Database/i }).click();
+  await page.getByRole('button', { name: /Import from Target Scheduler/i }).click();
   await expect(
     page.getByRole('heading', { name: /Welcome to PSF Guard/i })
   ).toBeVisible();
@@ -47,7 +47,7 @@ test('first run offers importing images as well as opening a N.I.N.A. database',
   // offers the same two choices.
   const modal = page.locator('.tauri-settings');
   const create = modal.getByRole('button', { name: /New Database from Images/i });
-  const add = modal.getByRole('button', { name: /Add Existing Database/i });
+  const add = modal.getByRole('button', { name: /Import from Target Scheduler/i });
   await expect(create).toBeVisible();
   await expect(add).toBeVisible();
 

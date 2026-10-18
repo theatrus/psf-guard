@@ -641,8 +641,8 @@ export default function Overview() {
         {managementAllowed ? (
           <>
             <p>
-              Build a catalog from folders of FITS or XISF images, or open a
-              N.I.N.A. scheduler database you already have.
+              Build a catalog from folders of FITS or XISF images, import a
+              Target Scheduler database, or connect PSF Guard Sync in N.I.N.A.
             </p>
             <div className="overview-empty-actions">
               <button
@@ -655,7 +655,7 @@ export default function Overview() {
                 className="action-button"
                 onClick={() => openSettings('add')}
               >
-                Add Existing Database
+                Import from Target Scheduler
               </button>
             </div>
           </>

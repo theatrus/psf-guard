@@ -2205,6 +2205,7 @@ export interface UpdateNoticeStatus {
 
 /** One configured database, returned by /api/databases. */
 export interface DatabaseSummary {
+  ts_sync?: import('./tsSyncTypes').TsSyncSettings;
   id: string;
   name: string;
   database_path: string;

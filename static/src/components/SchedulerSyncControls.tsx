@@ -50,12 +50,16 @@ const calibrationChoiceLine = (result: SchedulerSyncResponse) => {
 };
 
 export default function SchedulerSyncControls({
-  databases,
+  databases: catalogs,
   disabled = false,
 }: SchedulerSyncControlsProps) {
+  const databases = useMemo(() => catalogs.flatMap(catalog => [catalog, ...(catalog.ts_sync ? [{
+    ...catalog, id: `ts:${catalog.id}`, name: `${catalog.name} — Target Scheduler`,
+    db_path: catalog.ts_sync.source_path, ts_sync: undefined,
+  }] : [])]), [catalogs]);
   const queryClient = useQueryClient();
-  const [sourceId, setSourceId] = useState(databases[0]?.id ?? '');
-  const [destinationId, setDestinationId] = useState(databases[1]?.id ?? '');
+  const [sourceId, setSourceId] = useState(databases.find(database => database.id.startsWith('ts:'))?.id ?? databases[0]?.id ?? '');
+  const [destinationId, setDestinationId] = useState(databases.some(database => database.id.startsWith('ts:')) ? databases[0]?.id ?? '' : databases[1]?.id ?? '');
   const [kind, setKind] = useState<SchedulerSyncKind>('pull');
   const [withImageData, setWithImageData] = useState(true);
   const [pending, setPending] = useState<PendingSync | null>(null);
@@ -64,7 +68,7 @@ export default function SchedulerSyncControls({
   const recoveryAttempted = useRef(false);
 
   const source = useMemo(
-    () => databases.find((database) => database.id === sourceId) ?? databases[0],
+    () => databases.find((database) => database.id === sourceId) ?? databases.find(database => database.id.startsWith('ts:')) ?? databases[0],
     [databases, sourceId]
   );
   const destination = useMemo(
@@ -152,8 +156,9 @@ export default function SchedulerSyncControls({
     invalidatePreview();
   };
 
+  const invalidDirection = kind === 'pull' ? destination?.id.startsWith('ts:') : source?.id.startsWith('ts:');
   const preview = async () => {
-    if (!source || !destination || source.id === destination.id) return;
+    if (!source || !destination || source.id === destination.id || invalidDirection) return;
     setRunning(true);
     setMessage('');
     try {
@@ -248,6 +253,9 @@ export default function SchedulerSyncControls({
               type="button"
               aria-pressed={kind === operation}
               onClick={() => {
+                if ((operation !== 'pull' && source?.id.startsWith('ts:')) || (operation === 'pull' && destination?.id.startsWith('ts:'))) {
+                  if (source && destination) { setSourceId(destination.id); setDestinationId(source.id); }
+                }
                 setKind(operation);
                 invalidatePreview();
               }}
@@ -306,6 +314,7 @@ export default function SchedulerSyncControls({
         </label>
       </div>
 
+      {invalidDirection && <p role="alert">Import captures into a PSF Guard catalog. Send planning or grades from a PSF Guard catalog to Target Scheduler.</p>}
       <div className="scheduler-sync-description">
         {kind === 'pull' && (
           <>
@@ -352,7 +361,7 @@ export default function SchedulerSyncControls({
         <button
           className="browse-button"
           onClick={preview}
-          disabled={disabled || running || !source || !destination}
+          disabled={disabled || running || !source || !destination || invalidDirection}
         >
           Preview changes
         </button>

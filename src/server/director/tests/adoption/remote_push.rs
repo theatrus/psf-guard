@@ -18,6 +18,7 @@ async fn peer_server(dir: &std::path::Path) -> (String, Connection) {
     access.set_token(TOKEN).unwrap();
     access.sync_enabled = true;
     let entry = DbEntry {
+        ts_sync: None,
         id: "observatory".into(),
         name: "Observatory".into(),
         db_path: path.to_string_lossy().into_owned(),

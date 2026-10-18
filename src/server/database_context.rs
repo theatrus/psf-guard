@@ -481,6 +481,7 @@ pub struct DatabaseContext {
     /// Display name shown in the UI. Can be arbitrary user text.
     pub name: String,
     pub database_path: String,
+    pub ts_sync: Option<crate::ts_sync::Settings>,
     pub image_dirs: Vec<String>,
     pub image_dir_paths: Vec<PathBuf>,
     pub remote_image_upload: Option<crate::db_registry::RemoteImageUploadConfig>,
@@ -823,6 +824,7 @@ impl DatabaseContext {
         // database from opening. The update route validates what it saves,
         // and the scheduler does nothing with a block that names no trigger.
         context.autoimport = entry.autoimport.clone();
+        context.ts_sync = entry.ts_sync.clone();
         // Not validated here either: a bad pattern fails the import that
         // uses it, with the pattern in the error, rather than the open.
         context.scan_rules = entry.scan_rules.clone().unwrap_or_default();
@@ -935,6 +937,7 @@ impl DatabaseContext {
             id,
             name,
             database_path: db_path,
+            ts_sync: None,
             image_dirs,
             image_dir_paths,
             remote_image_upload,
@@ -2178,6 +2181,7 @@ impl DatabaseContext {
             id: "test".to_string(),
             name: "Test".to_string(),
             database_path: ":memory:".to_string(),
+            ts_sync: None,
             image_dirs: vec![],
             image_dir_paths: vec![],
             remote_image_upload: None,
@@ -2227,6 +2231,7 @@ impl Clone for DatabaseContext {
             id: self.id.clone(),
             name: self.name.clone(),
             database_path: self.database_path.clone(),
+            ts_sync: self.ts_sync.clone(),
             image_dirs: self.image_dirs.clone(),
             image_dir_paths: self.image_dir_paths.clone(),
             remote_image_upload: self.remote_image_upload.clone(),

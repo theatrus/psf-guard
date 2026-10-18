@@ -645,6 +645,7 @@ fn display_project_name(
 
 fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> DatabaseSummary {
     DatabaseSummary {
+        ts_sync: ctx.ts_sync.clone(),
         id: ctx.id.clone(),
         name: ctx.name.clone(),
         database_path: ctx.database_path.clone(),
@@ -765,23 +766,18 @@ async fn execute_scheduler_sync_guarded(
     }
 
     let local = state.get_database(db_id).ok_or(AppError::NotFound)?;
-    let peer = state
-        .get_database(&req.peer_db_id)
-        .ok_or(AppError::NotFound)?;
-    let (source_ctx, destination_ctx) = match req.kind {
-        SchedulerSyncKind::Pull => (Arc::clone(&peer), Arc::clone(&local)),
-        SchedulerSyncKind::PushPlanning | SchedulerSyncKind::PushGrades => {
-            (Arc::clone(&local), Arc::clone(&peer))
-        }
+    let (source_path, destination_path) = sync_endpoint_paths(state, db_id, &req)?;
+    let (source_id, destination_id) = match req.kind {
+        SchedulerSyncKind::Pull => (req.peer_db_id.clone(), local.id.clone()),
+        _ => (local.id.clone(), req.peer_db_id.clone()),
     };
-    let source_path = source_override.unwrap_or_else(|| PathBuf::from(&source_ctx.database_path));
-    let destination_path = PathBuf::from(&destination_ctx.database_path);
+    let source_path = source_override.unwrap_or(source_path);
     execute_scheduler_sync_paths(
         state,
         source_path,
         destination_path,
-        source_ctx.id.clone(),
-        destination_ctx.id.clone(),
+        source_id,
+        destination_id,
         req,
         guard_mode,
     )
@@ -1284,17 +1280,32 @@ fn sync_endpoint_paths(
         ));
     }
     let local = state.get_database(local_db_id).ok_or(AppError::NotFound)?;
-    let peer = state
-        .get_database(&request.peer_db_id)
-        .ok_or(AppError::NotFound)?;
-    let (source, destination) = match request.kind {
-        SchedulerSyncKind::Pull => (peer, local),
-        SchedulerSyncKind::PushPlanning | SchedulerSyncKind::PushGrades => (local, peer),
+    let peer_path = if let Some(owner) = request.peer_db_id.strip_prefix("ts:") {
+        let registry = crate::db_registry::DbRegistry::load_or_init(&require_registry_path(state)?)
+            .map_err(|e| AppError::InternalError(e.to_string()))?;
+        let settings = registry
+            .find(owner)
+            .and_then(|e| e.ts_sync.as_ref())
+            .ok_or(AppError::NotFound)?;
+        if !matches!(request.kind, SchedulerSyncKind::Pull) && !settings.writeback {
+            return Err(AppError::BadRequest(
+                "Writeback is disabled for this TS connection.".into(),
+            ));
+        }
+        PathBuf::from(&settings.source_path)
+    } else {
+        PathBuf::from(
+            &state
+                .get_database(&request.peer_db_id)
+                .ok_or(AppError::NotFound)?
+                .database_path,
+        )
     };
-    Ok((
-        PathBuf::from(&source.database_path),
-        PathBuf::from(&destination.database_path),
-    ))
+    let local_path = PathBuf::from(&local.database_path);
+    Ok(match request.kind {
+        SchedulerSyncKind::Pull => (peer_path, local_path),
+        _ => (local_path, peer_path),
+    })
 }
 
 /// Create a server-owned dry preview. Apply is a separate endpoint keyed by
@@ -1578,6 +1589,17 @@ pub async fn update_database_route(
 
     let previous_entry = reg.find(&db_id).cloned().ok_or(AppError::NotFound)?;
 
+    if previous_entry.ts_sync.is_some()
+        && req
+            .db_path
+            .as_ref()
+            .is_some_and(|path| path != &previous_entry.db_path)
+    {
+        return Err(AppError::BadRequest(
+            "An imported catalog keeps its PSF Guard database path.".into(),
+        ));
+    }
+
     reg.update(
         &db_id,
         req.name.clone(),
@@ -1589,6 +1611,24 @@ pub async fn update_database_route(
 
     // Pull the entry back out (post-rename) so we can rebuild the context.
     let new_id = req.slug.clone().unwrap_or_else(|| db_id.clone());
+    if let Some(settings) = req.ts_sync.as_ref() {
+        if previous_entry
+            .ts_sync
+            .as_ref()
+            .is_none_or(|previous| previous.source_path != settings.source_path)
+        {
+            return Err(AppError::BadRequest("Import a Target Scheduler file to create its sync connection. An existing connection cannot be changed to another source.".into()));
+        }
+        let entry = reg
+            .databases
+            .iter_mut()
+            .find(|entry| entry.id == new_id)
+            .ok_or(AppError::NotFound)?;
+        settings
+            .validate(std::path::Path::new(&entry.db_path))
+            .map_err(|e| AppError::BadRequest(e.to_string()))?;
+        entry.ts_sync = Some(settings.clone());
+    }
     let mut layout_chosen = false;
     if let Some(update) = req.remote_image_upload.as_ref() {
         let entry = reg
@@ -1962,6 +2002,7 @@ mod remote_image_layout_settings_tests {
 
     fn legacy_target_tree_entry() -> crate::db_registry::DbEntry {
         crate::db_registry::DbEntry {
+            ts_sync: None,
             id: "catalog".into(),
             name: "Catalog".into(),
             db_path: "catalog.sqlite".into(),
@@ -9023,6 +9064,7 @@ mod delayed_ready_tests {
         let state = Arc::new(
             AppState::from_databases(
                 vec![DbEntry {
+                    ts_sync: None,
                     id: "test".into(),
                     name: "Test".into(),
                     db_path: database_path.to_string_lossy().into_owned(),

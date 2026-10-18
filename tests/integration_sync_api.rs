@@ -90,6 +90,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
     std::fs::create_dir(&image_dir).unwrap();
     let entries = vec![
         DbEntry {
+            ts_sync: None,
             id: "local".into(),
             name: "Review copy".into(),
             db_path: local_path.to_string_lossy().into_owned(),
@@ -105,6 +106,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
             scan_calibrated_copies: false,
         },
         DbEntry {
+            ts_sync: None,
             id: "scope".into(),
             name: "Telescope".into(),
             db_path: telescope_path.to_string_lossy().into_owned(),
@@ -408,6 +410,7 @@ async fn a_pull_brings_structure_and_captures_down_and_keeps_local_grades() {
         AppState::from_databases(
             vec![
                 DbEntry {
+                    ts_sync: None,
                     id: "local".into(),
                     name: "Review copy".into(),
                     db_path: local_path.to_string_lossy().into_owned(),
@@ -423,6 +426,7 @@ async fn a_pull_brings_structure_and_captures_down_and_keeps_local_grades() {
                     scan_calibrated_copies: false,
                 },
                 DbEntry {
+                    ts_sync: None,
                     id: "scope".into(),
                     name: "Telescope".into(),
                     db_path: telescope_path.to_string_lossy().into_owned(),

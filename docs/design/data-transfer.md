@@ -12,8 +12,9 @@ allows PSF Guard-owned catalog schemas. Target Scheduler becomes an explicit
 import and bidirectional sync connection in Settings/UI. The transfer rules in
 this document remain compatibility requirements at that boundary, not a demand
 that native catalogs mirror TS tables. The future adapter must report unsupported
-data and preserve the published Sync API during migration. No native-catalog
-migration is implemented by this design update.
+data and preserve the published Sync API during migration. New imports create
+owned TS-shaped working catalogs and retain the source as a file sync
+connection. Native-schema migration remains separate.
 
 PSF Guard needs one safe way to:
 
@@ -190,8 +191,18 @@ picker. The backend opens a source read-only and an existing destination
 read-write. A selected file does not need to remain in the normal catalog
 registry.
 
-Browser mode can use registered local catalogs. It must not accept arbitrary
-server filesystem paths from an HTTP request.
+Browser mode can use registered local catalogs and saved TS connections.
+Only database-management setup accepts a server filesystem path. Transfer
+requests select saved endpoint IDs and never accept an arbitrary path.
+
+Imported TS files are saved connections, addressed as `ts:<catalog-slug>` in
+`peer_db_id`; they are not Library catalogs. Connection setup requires database
+management, and normal sync requests select the stored endpoint rather than
+supplying a filesystem path. Startup, file-change and scheduled jobs import
+capture arrivals without overwriting local planning. Automatic grade writeback
+uses saved baselines, conditional TS updates and a durable pending record to
+recover an interrupted acknowledgement. Explicit planning and grade transfers
+retain Preview and Apply.
 
 ### Remote peers
 

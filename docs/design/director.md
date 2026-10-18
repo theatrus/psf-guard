@@ -1443,16 +1443,26 @@ one plan. Director rigs follow with the native records for their captures and
 
 ### Native catalogs and Target Scheduler exchange
 
+Transition, 2026-10-17: new imports use PSF Guard-owned snapshots with retained
+TS file connections. The working catalog still uses the TS schema. Automatic
+capture imports and conditional grade writeback establish the ownership and
+sync boundary before native schemas change. Existing direct-open registrations
+remain supported through 0.12 and are not converted automatically. Direct access
+is deprecated, with removal deferred to 0.13 or later.
+
 Decision, 2026-09-26: neither Director nor future PSF Guard catalogs must use the
 TS schema internally. The meta/per-rig split remains: global coordination in the
 meta store, local acquisition and image evidence in PSF Guard-owned per-rig
 catalogs, and offline execution evidence in Director's local journal. This is
 the intended architecture, not the current catalog implementation. Existing
-catalog code still reads/writes TS-shaped tables; no migration has shipped.
+catalog code still reads/writes TS-shaped tables; no native-schema migration
+has shipped.
 
 The future Settings/UI workflow is **Import Target Scheduler database** into a
-native catalog, then optionally retain a TS sync connection. Import alone
-does not grant ongoing writeback. That connection identifies source provenance,
+native catalog, then optionally retain a TS sync connection. New imports
+create an owned working copy and grant grade writeback through the retained
+TS connection; the import UI explains this. Planning writeback remains a
+previewed, explicit transfer. That connection identifies source provenance,
 destination catalog, supported schema version, selected data classes and
 direction, conflict policy, last successful sync and pending differences.
 Preview before Apply for operator transfers. A one-time import, recurring sync,

@@ -202,6 +202,7 @@ impl Harness {
             AppState::from_databases(
                 vec![
                     DbEntry {
+                        ts_sync: None,
                         id: "source".into(),
                         name: "Source".into(),
                         db_path: source_path.to_string_lossy().into_owned(),
@@ -217,6 +218,7 @@ impl Harness {
                         scan_calibrated_copies: false,
                     },
                     DbEntry {
+                        ts_sync: None,
                         id: "destination".into(),
                         name: "Destination".into(),
                         db_path: destination_path.to_string_lossy().into_owned(),
@@ -962,6 +964,7 @@ async fn an_upload_only_key_cannot_reach_the_sync_protocol() {
     let state = Arc::new(
         AppState::from_databases(
             vec![DbEntry {
+                ts_sync: None,
                 id: "catalog".into(),
                 name: "Catalog".into(),
                 db_path: database_path.to_string_lossy().into_owned(),

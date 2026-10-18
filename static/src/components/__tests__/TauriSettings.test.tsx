@@ -667,7 +667,7 @@ describe('TauriSettings import state', () => {
     fireEvent.click(within(ultraCat).getByRole('button', { name: 'Remove Ultra Cat' }));
     confirmRemove.mockRestore();
 
-    expect(await screen.findByRole('button', { name: 'Add Database' })).toBeEnabled();
+    expect(await screen.findByRole('button', { name: 'Import from Target Scheduler' })).toBeEnabled();
     expect(screen.queryByText('Editing database')).not.toBeInTheDocument();
   });
 });
@@ -709,7 +709,7 @@ describe('TauriSettings first run', () => {
       await screen.findByRole('button', { name: /New Database from Images/ })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /Add Existing Database/ })
+      screen.getByRole('button', { name: /Import from Target Scheduler/ })
     ).toBeInTheDocument();
 
     // Nothing that needs an existing catalog should sit between the welcome
@@ -833,8 +833,35 @@ describe('TauriSettings first run', () => {
     );
 
     expect(
-      await screen.findByRole('heading', { name: 'Add Database' })
+      await screen.findByRole('heading', { name: 'Import from Target Scheduler' })
     ).toBeInTheDocument();
     expect(screen.getByText('N.I.N.A. Database File:')).toBeInTheDocument();
+  });
+
+  it('offers the Sync plugin and opens pairing after creating its catalog without a TS file', async () => {
+    serveEmptyRegistry();
+    const database = { id: 'plugin', name: 'Plugin catalog', database_path: '/managed/plugin.sqlite', image_directories: ['/receive'] };
+    const requests: unknown[] = [];
+    let created = false;
+    server.use(
+      http.get('/api/databases', () => HttpResponse.json({ success: true, data: created ? [database] : [] })),
+      http.post('/api/databases/create', async ({ request }) => {
+        requests.push(await request.json());
+        created = true;
+        return HttpResponse.json({ success: true, data: { database, import: { stage: 'complete', running: false } } });
+      }),
+      http.post('/api/databases/plugin/pairing-token', () => HttpResponse.json({ success: true, data: { pairing_token: 'ONE-USE-CODE', expires_at: 4102444800 } })),
+    );
+    render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
+    fireEvent.click(await screen.findByLabelText('Use the PSF Guard Sync plugin'));
+    expect(screen.queryByPlaceholderText('Select or enter database path')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('e.g. Imaging Rig (defaults to filename)'), { target: { value: 'Plugin catalog' } });
+    fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/receive' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create catalog for plugin' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate pairing code' }));
+    expect(await screen.findByDisplayValue('ONE-USE-CODE')).toBeInTheDocument();
+    expect(requests).toEqual([{ name: 'Plugin catalog', image_dirs: ['/receive'], backfill: false, fill_metadata: true }]);
+    expect(screen.getByText('https://nina-plugins.psf-guard.com/')).toBeInTheDocument();
   });
 });
