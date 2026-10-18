@@ -8,6 +8,35 @@ function capture(text, pattern, label) {
   return match[1];
 }
 
+export function checkReleaseHighlights(releases, requiredVersion) {
+  if (!Array.isArray(releases) || releases.length === 0) {
+    throw new Error('Release highlights must be a nonempty array.');
+  }
+  const versions = new Set();
+  for (const release of releases) {
+    if (!release || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(release.version ?? '')) {
+      throw new Error('Release highlights need a valid version.');
+    }
+    if (versions.has(release.version)) throw new Error(`Duplicate release highlights: ${release.version}`);
+    versions.add(release.version);
+    let count = 0;
+    for (const field of ['deprecations', 'upgradeNotes', 'highlights']) {
+      if (!Array.isArray(release[field])) throw new Error(`${release.version}: ${field} must be an array.`);
+      for (const item of release[field]) {
+        if (!item || typeof item.title !== 'string' || !item.title.trim()
+          || typeof item.body !== 'string' || !item.body.trim()) {
+          throw new Error(`${release.version}: ${field} entries need a title and body.`);
+        }
+      }
+      count += release[field].length;
+    }
+    if (!count) throw new Error(`${release.version}: release highlights are empty.`);
+  }
+  if (requiredVersion && !versions.has(requiredVersion)) {
+    throw new Error(`Release highlights are missing for ${requiredVersion}.`);
+  }
+}
+
 export async function checkReleaseVersion(repositoryRoot, expectedTag) {
   const [cargoToml, cargoLock, tauriConfig, rpmSpec] = await Promise.all([
     readFile(path.join(repositoryRoot, 'Cargo.toml'), 'utf8'),
@@ -46,6 +75,10 @@ export async function checkReleaseVersion(repositoryRoot, expectedTag) {
   if (expectedTag && expectedTag !== tag) {
     throw new Error(`Release tag ${expectedTag} does not match ${tag}.`);
   }
+  const highlights = JSON.parse(await readFile(
+    path.join(repositoryRoot, 'static/src/updates/highlights.json'), 'utf8',
+  ));
+  checkReleaseHighlights(highlights, expectedTag ? cargoVersion : undefined);
   // A tagged release must ship its own notes. Between releases, main is
   // stamped with the next version while its notes still gather in
   // unreleased.md, so a check without a tag accepts either file.

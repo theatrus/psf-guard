@@ -97,6 +97,17 @@ export default function Dialog({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
+        onKeyDown={(event) => {
+          // Keep view shortcuts from grading or navigating behind the dialog.
+          // Tab still reaches the shared focus trap on document.
+          if (event.key === 'Tab') return;
+          event.stopPropagation();
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            onCloseRef.current();
+          }
+        }}
+        onKeyUp={(event) => event.stopPropagation()}
       >
         <div className="dialog-header">
           <h2 id={titleId}>{title}</h2>

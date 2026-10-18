@@ -1,3 +1,4 @@
+import highlights from '../src/updates/highlights.json' with { type: 'json' };
 import { expect, type Browser, type Page } from '@playwright/test';
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
@@ -71,7 +72,15 @@ export async function startAccountsServer(name: string, offset: number): Promise
     base,
     dbId: () => dbId,
     async signIn(browser, user) {
-      const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+      const context = await browser.newContext({
+        storageState: {
+          cookies: [],
+          origins: [{
+            origin: base,
+            localStorage: [{ name: 'psf-guard.whats-new.acknowledged', value: highlights[0].version }],
+          }],
+        },
+      });
       const page = await context.newPage();
       await page.goto(`${base}/`);
       await page.getByLabel('Username').fill(user);

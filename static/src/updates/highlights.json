@@ -1,0 +1,38 @@
+[
+  {
+    "version": "0.11.0",
+    "deprecations": [],
+    "upgradeNotes": [
+      {
+        "title": "Docker settings moved",
+        "body": "Settings now live in /data/config/psf-guard and the cache in /data/cache. If you mounted /home/psfguard/.config, copy its psf-guard folder into /data/config/ before starting 0.11, or your databases and users will be missing."
+      },
+      {
+        "title": "Allow time for the first start",
+        "body": "PSF Guard backs up each catalog and updates its calibration tables. A background pass then measures raw darks. Stacks, masters and colour composites rebuild once when you next use them."
+      },
+      {
+        "title": "Cache cleanup starts at 90% disk use",
+        "body": "PSF Guard removes previews, checkpoints and unused masters it can rebuild. It never removes stacks. Change the limit in Settings › Storage. Read the full release notes before going back to 0.10.5."
+      }
+    ],
+    "highlights": [
+      {
+        "title": "Plan across rigs",
+        "body": "Frame targets, set goals per filter and share the work between rigs. Preview each plan before writing it to Target Scheduler."
+      },
+      {
+        "title": "Build and review stacks in one place",
+        "body": "Stacks has its own view, with noise-weighted builds, colour previews and WBPP runs."
+      },
+      {
+        "title": "Check calibration before stacking",
+        "body": "Find lights your library cannot calibrate and keep darks with stray light out of masters."
+      },
+      {
+        "title": "Connect an agent",
+        "body": "Let an MCP agent work with catalogs, plans and stacks within your account's access limits."
+      }
+    ]
+  }
+]

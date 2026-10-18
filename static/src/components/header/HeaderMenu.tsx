@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Info, Keyboard, LogOut, Menu, Settings } from 'lucide-react';
+import { Info, Keyboard, LogOut, Menu, Settings, Sparkles } from 'lucide-react';
 
 interface HeaderMenuProps {
   /** Present when the person may open Settings. */
   onSettings?: () => void;
+  onWhatsNew: () => void;
   onShortcuts: () => void;
   onServerInfo: () => void;
   /** Who is signed in, when the server asks people to sign in. */
@@ -13,10 +14,9 @@ interface HeaderMenuProps {
 }
 
 /**
- * Settings, keyboard shortcuts, server information and sign out, behind one
- * button at the right of the header so the views keep the room.
+ * App settings, release notes, help and account actions share one menu.
  */
-export default function HeaderMenu({ onSettings, onShortcuts, onServerInfo, signedInAs, onSignOut }: HeaderMenuProps) {
+export default function HeaderMenu({ onSettings, onWhatsNew, onShortcuts, onServerInfo, signedInAs, onSignOut }: HeaderMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -52,6 +52,7 @@ export default function HeaderMenu({ onSettings, onShortcuts, onServerInfo, sign
 
   const choose = (action: () => void) => () => {
     setOpen(false);
+    buttonRef.current?.focus();
     action();
   };
 
@@ -77,6 +78,9 @@ export default function HeaderMenu({ onSettings, onShortcuts, onServerInfo, sign
               <Settings size={15} aria-hidden="true" /> Settings
             </button>
           )}
+          <button type="button" role="menuitem" onClick={choose(onWhatsNew)}>
+            <Sparkles size={15} aria-hidden="true" /> What's new
+          </button>
           <button type="button" role="menuitem" onClick={choose(onShortcuts)}>
             <Keyboard size={15} aria-hidden="true" /> Keyboard shortcuts
           </button>

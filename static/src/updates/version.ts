@@ -3,7 +3,7 @@ type ParsedVersion = {
   prerelease: string[] | null;
 };
 
-function parseVersion(value: string): ParsedVersion | null {
+export function parseVersion(value: string): ParsedVersion | null {
   const match = value
     .trim()
     .match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/);

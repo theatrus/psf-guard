@@ -1,0 +1,57 @@
+.whats-new .dialog-footer {
+  flex-wrap: wrap;
+}
+
+.whats-new-preference {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-right: auto;
+  font-size: 0.875rem;
+}
+
+.whats-new-section {
+  margin: 1rem 0;
+}
+
+.whats-new-section h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.whats-new-section h4 {
+  margin: 0.75rem 0 0.5rem;
+}
+
+.whats-new-section ul {
+  padding-left: 1.25rem;
+  margin: 0;
+}
+
+.whats-new-section li + li {
+  margin-top: 0.75rem;
+}
+
+.whats-new-section p {
+  margin: 0.25rem 0 0;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.whats-new-deprecations {
+  padding: 0.75rem;
+  border: 1px solid var(--color-warning);
+  border-radius: 4px;
+  background: var(--color-warning-alpha-20);
+}
+
+.whats-new-deprecations h3 {
+  color: var(--color-warning);
+}
+
+.whats-new-links {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
