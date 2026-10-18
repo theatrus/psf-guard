@@ -2846,6 +2846,17 @@ fn compose_color(
                     &open_catalog,
                 ));
             }
+            // Calibrated channels stretched one by one keep little of the
+            // balance; the card says so.
+            if deferred_stages.is_none()
+                && processing
+                    .input_stretches
+                    .values()
+                    .any(|stages| !stages.is_empty())
+                && let Some(StackColorCalibrationOutcome::Calibrated(report)) = &mut calibration
+            {
+                report.stretched_separately = true;
+            }
             if let Some(outcome) = &calibration {
                 report_calibration(&progress, outcome);
             }
@@ -3356,11 +3367,11 @@ fn stretch_linear_composition(
 
 /// Calibrate a linear RGB composition against Gaia and stretch it, in
 /// Seiza's one step: the reference frame's solve is carried through the
-/// stack's layout and the composition's crop. When calibration cannot run
-/// the channel stages stretch each channel on its own instead, as they
-/// would have without calibration: one linked stretch of uncalibrated
-/// channels shows the camera's color cast.
-#[allow(clippy::too_many_arguments)]
+/// stack's layout and the composition's crop. The channel stages go to
+/// Seiza unlinked: once it has calibrated, Seiza links them so the balance
+/// survives, and when it cannot calibrate they stretch each channel on its
+/// own, as they would have without calibration. One linked stretch of
+/// uncalibrated channels would show the camera's color cast.
 fn calibrate_and_stretch_composition(
     placement: &color_calibration::StarPlacement,
     settings: &StackColorCalibration,
@@ -3372,9 +3383,10 @@ fn calibrate_and_stretch_composition(
 ) -> Result<StretchedComposition, String> {
     use color_calibration::StackColorCalibrationSkipReason as Reason;
 
+    let stack = composition_stretch(channel_stages, output_stages, false)?;
     let uncalibrated = |image: LinearImage, outcome: StackColorCalibrationOutcome| {
-        let (image, plans) = match composition_stretch(channel_stages, output_stages, false)? {
-            Some(stack) => stretch_linear_composition(&image, &stack)?,
+        let (image, plans) = match &stack {
+            Some(stack) => stretch_linear_composition(&image, stack)?,
             None => (image, Vec::new()),
         };
         Ok::<_, String>(StretchedComposition {
@@ -3405,7 +3417,7 @@ fn calibrate_and_stretch_composition(
         }
     };
     let gaia = seiza_stacking::GaiaColors::Catalog(&catalog);
-    let Some(stack) = composition_stretch(channel_stages, output_stages, true)? else {
+    let Some(stack) = stack else {
         let mut image = image;
         let outcome = seiza_stacking::calibrate_color_image(
             &mut image,
@@ -3419,17 +3431,12 @@ fn calibrate_and_stretch_composition(
             plans: Vec::new(),
         });
     };
-    let linear = image.clone();
     let result =
         seiza_stacking::calibrate_and_stretch(image, Some(&wcs), gaia, &settings.options(), &stack)
             .map_err(|error| error.to_string())?;
-    let outcome = StackColorCalibrationOutcome::from(result.calibration);
-    if !outcome.is_calibrated() {
-        return uncalibrated(linear, outcome);
-    }
     Ok(StretchedComposition {
         image: result.image,
-        calibration: Some(outcome),
+        calibration: Some(result.calibration.into()),
         plans: stretch_plans(&result.stretch_plans)?,
     })
 }
@@ -3442,8 +3449,17 @@ fn report_calibration(progress: &ColorProgressTracker<'_>, outcome: &StackColorC
                 gains = ?report.gains,
                 offsets = ?report.offsets,
                 stars = report.stars_used,
+                stretched_separately = report.stretched_separately,
                 "color calibrated against Gaia"
             );
+            if report.stretched_separately {
+                progress.begin(
+                    StackColorProgressPhase::CalibratingColor,
+                    "Calibrated, then each channel stretched separately",
+                    None,
+                    None,
+                );
+            }
             progress.finish(StackColorProgressPhase::CalibratingColor);
         }
         StackColorCalibrationOutcome::Skipped(skip) => {

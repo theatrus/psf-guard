@@ -19,8 +19,15 @@ export default function StackColorCalibrationLine({
   if (outcome.status === 'calibrated') {
     const [red, , blue] = outcome.gains;
     return (
-      <div className="stack-color-calibration" data-calibration="calibrated">
+      <div
+        className="stack-color-calibration"
+        data-calibration={outcome.stretched_separately ? 'separate' : 'calibrated'}
+        title={outcome.stretched_separately
+          ? 'Each channel has its own stretch, which undoes most of the balance. Give them the same stretch to keep it.'
+          : undefined}
+      >
         Calibrated on {outcome.stars_used} stars · R ×{red.toFixed(2)}, B ×{blue.toFixed(2)}
+        {outcome.stretched_separately && ' · channels stretched separately'}
       </div>
     );
   }

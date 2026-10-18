@@ -169,6 +169,11 @@ pub struct StackColorCalibrationReport {
     pub stars_measured: usize,
     /// Stars behind the weaker of the two fits.
     pub stars_used: usize,
+    /// The channels had stretches of their own and were stretched one by
+    /// one after calibration, which pulls each toward its own median and
+    /// undoes most of the balance.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stretched_separately: bool,
 }
 
 /// What color calibration did for one preview.
@@ -264,6 +269,7 @@ impl From<seiza_stacking::ColorCalibrationOutcome> for StackColorCalibrationOutc
                     stars_offered: calibration.stars_offered,
                     stars_measured: calibration.stars_measured,
                     stars_used: calibration.red_fit.stars.min(calibration.blue_fit.stars),
+                    stretched_separately: false,
                 })
             }
             seiza_stacking::ColorCalibrationOutcome::Skipped(skip) => {
@@ -273,7 +279,7 @@ impl From<seiza_stacking::ColorCalibrationOutcome> for StackColorCalibrationOutc
                     Seiza::NoStars | Seiza::TooFewStars => {
                         StackColorCalibrationSkipReason::TooFewStars
                     }
-                    Seiza::NotRgb | Seiza::InvalidOptions => {
+                    Seiza::NotRgb | Seiza::InvalidOptions | Seiza::FitFailed => {
                         StackColorCalibrationSkipReason::Failed
                     }
                 };
@@ -399,10 +405,13 @@ pub(super) mod tests {
             wcs: wcs(),
             orientation: StackSkyOrientation {
                 source_to_output: seiza_stacking::AffineTransform {
-                    matrix: [[-2.0, 0.0], [0.0, -2.0]],
-                    translation_x: 2.0 * 999.0,
-                    translation_y: 2.0 * 799.0,
-                },
+                    matrix: [[-1.0, 0.0], [0.0, -1.0]],
+                    translation_x: 999.0,
+                    translation_y: 799.0,
+                }
+                .then(seiza_stacking::AffineTransform::scale_about_pixel_centres(
+                    2.0,
+                )),
                 ..orientation(2000, 1600)
             },
         }
@@ -413,11 +422,12 @@ pub(super) mod tests {
         let placement = turned();
         // A star at reference-frame pixel (480, 370).
         let (ra, dec) = placement.wcs.pixel_to_world(480.0, 370.0);
-        // On the stack's grid it sits at 2 * (999 - 480), 2 * (799 - 370).
+        // Turned, it is at (519, 429); drizzled 2x, that pixel's centre is
+        // at 2 * 519 + 0.5, 2 * 429 + 0.5 on the stack's grid.
         let grid = placement.wcs_on(None).unwrap();
         let (x, y) = grid.world_to_pixel(ra, dec).unwrap();
         assert!(
-            (x - 1038.0).abs() < 1e-6 && (y - 858.0).abs() < 1e-6,
+            (x - 1038.5).abs() < 1e-6 && (y - 858.5).abs() < 1e-6,
             "{x} {y}"
         );
         // A composition cropped at (100, 50) moves it by that much.
@@ -431,7 +441,7 @@ pub(super) mod tests {
             .unwrap();
         let (x, y) = cropped.world_to_pixel(ra, dec).unwrap();
         assert!(
-            (x - 938.0).abs() < 1e-6 && (y - 808.0).abs() < 1e-6,
+            (x - 938.5).abs() < 1e-6 && (y - 808.5).abs() < 1e-6,
             "{x} {y}"
         );
     }
@@ -607,6 +617,7 @@ pub(super) mod tests {
                 Seiza::InvalidOptions,
                 StackColorCalibrationSkipReason::Failed,
             ),
+            (Seiza::FitFailed, StackColorCalibrationSkipReason::Failed),
         ] {
             let outcome: StackColorCalibrationOutcome =
                 seiza_stacking::ColorCalibrationOutcome::Skipped(ColorCalibrationSkip {

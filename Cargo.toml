@@ -168,18 +168,18 @@ toml_edit = "0.25"
 # copy of each. Drop this block once the release is out and bump the versions
 # above.
 [patch.crates-io]
-seiza = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-background = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-core = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-deconvolution = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-download = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-satellites = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
-seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "3462f2c2f3c09d42c2cfee080fbf48594fb84b4c" }
+seiza = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-background = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-core = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-deconvolution = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-satellites = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "f738a44883c23be97a40531cbf96184ac5e8e57c" }

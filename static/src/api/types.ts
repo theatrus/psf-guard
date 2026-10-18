@@ -1360,6 +1360,9 @@ export type StackColorCalibrationOutcome =
       stars_measured: number;
       /** Stars behind the weaker of the two fits. */
       stars_used: number;
+      /** The channels had stretches of their own, applied one by one after
+       *  calibration, which undoes most of the balance. */
+      stretched_separately?: boolean;
     }
   | { status: 'skipped'; reason: StackColorCalibrationSkipReason; detail: string };
 

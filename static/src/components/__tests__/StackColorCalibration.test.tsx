@@ -107,6 +107,13 @@ describe('StackColorCalibrationLine', () => {
     expect(screen.getByText('Calibrated on 143 stars · R ×1.12, B ×0.87')).toBeInTheDocument();
   });
 
+  it('says when channels stretched one by one undid the balance', () => {
+    render(<StackColorCalibrationLine outcome={{ ...calibrated, stretched_separately: true }} />);
+    expect(screen.getByText(
+      'Calibrated on 143 stars · R ×1.12, B ×0.87 · channels stretched separately'
+    )).toHaveAttribute('data-calibration', 'separate');
+  });
+
   it('says why it skipped in a few words', () => {
     const { rerender } = render(<StackColorCalibrationLine outcome={{
       status: 'skipped', reason: 'no_plate_solve', detail: 'The reference frame has no plate solve',

@@ -1524,12 +1524,15 @@ Where calibration runs depends on the stretches:
   composition is stretched the same way.
 - **The channels have stretches of their own.** R, G and B are calibrated
   before anything stretches them. Each channel then gets its own stretch, as
-  configured, which pulls it toward its own median and largely undoes the
-  calibration.
+  configured, which pulls it toward its own median and undoes most of the
+  calibration. The card adds `channels stretched separately` to its
+  calibration line. Give the channels the same stretch to keep the balance.
 
-When calibration cannot run, the preview looks as it would without it: the
-shared stages stretch each channel on its own. One linked stretch of
-uncalibrated channels would show the camera's color cast.
+PSF Guard hands the shared stages to Seiza as per-channel stretches. Once
+Seiza has calibrated, it links them, so the balance survives. When
+calibration cannot run, Seiza keeps them per channel, so the preview looks as
+it would without calibration. One linked stretch of uncalibrated channels
+would show the camera's color cast.
 
 The card shows what happened, as `Calibrated on 143 stars · R ×1.12, B ×0.87`,
 or why it did not:

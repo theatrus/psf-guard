@@ -4421,7 +4421,8 @@
   font-size: 0.68rem;
 }
 
-.stack-color-calibration[data-calibration='skipped'] {
+.stack-color-calibration[data-calibration='skipped'],
+.stack-color-calibration[data-calibration='separate'] {
   color: var(--color-warning);
 }
 
