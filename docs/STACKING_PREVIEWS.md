@@ -1161,8 +1161,8 @@ swept after two weeks. A selected view or current color preview keeps the
 RC-Astro artifacts it still needs.
 
 The controls expose Seiza's identity, explicit linear, asinh,
-percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), Auto-MTF, and
-median anchor models. Auto-MTF with PSF Guard's established target median and
+percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), Auto-MTF, median
+anchor, and layered models. Auto-MTF with PSF Guard's established target median and
 shadow clipping is the default for linear mono-stack artifacts.
 
 **Median anchor** places the background median exactly on **Target median**
@@ -1173,6 +1173,20 @@ use the image minimum instead. **Curves boost** (0–0.9) lifts the tones above
 the target, **Highlight compression** (0–1) softly lowers the tones above its
 **Knee** to keep star cores and bright structure from saturating, and
 **Normalize** brings the brightest sample to white.
+
+**Layered** applies the median anchor curve to luminance and treats large
+structure and fine detail apart. **Target background** (0.15 by default) sets
+where the background median lands. **Aggressiveness** (0–1) moves the black
+point from 6 robust sigmas below the median at 0 to 1.5 at 1. **Contrast
+recovery** (0–1) keeps more local contrast on bright structure, which the
+global curve would otherwise flatten; **Scale (px)** sets the size, in stack
+pixels, that separates structure from detail. **Dynamic range compression**
+(0–1) lowers star cores without dimming broad nebulosity. Colour follows
+luminance, so the stage shows no **Color** choice and keeps the stack's colour
+balance: calibrate colour first, or a cast stays in the result. On colour
+stages, **Saturation** lifts colour without changing hue or brightness;
+**Saturation boost** favours weakly coloured pixels, and **Lightness mask**
+keeps dark background noise from gaining colour.
 Explicit black, white, shadow, and highlight points use normalized zero–one
 display units. PSF Guard maps a robust 0.1%–99.9% range from linear FITS into
 that domain before invoking Seiza. After an application, the card shows the raw
@@ -1426,8 +1440,8 @@ normalizes the result and applies that role's ordered stretch stages before
 composition. Deconvolution is independently opt-in for L/R/G/B or
 H-alpha/OIII/SII and is off for every role by default. Expand those input lanes
 or RGB output to add, edit, remove, and reorder Seiza
-identity, linear, asinh, percentile-asinh, MTF, GHS, Auto-MTF, and median
-anchor stages.
+identity, linear, asinh, percentile-asinh, MTF, GHS, Auto-MTF, median anchor,
+and layered stages.
 **Apply processing stack** starts a new cached color job; **Revert edits**
 returns to the last rendered pipeline and **Reset defaults** restores additive
 background extraction, deconvolution and RC-Astro off, one Auto-MTF stage per

@@ -5,12 +5,12 @@ import type { StackStretchRequest } from '../../api/types';
 import StackStretchStageEditor from '../StackStretchStageEditor';
 import { defaultStretchRequest } from '../stackStretchModels';
 
-function Editor({ seen }: { seen: StackStretchRequest[] }) {
+function Editor({ seen, channels = 3 }: { seen: StackStretchRequest[]; channels?: 1 | 3 }) {
   const [request, setRequest] = useState(defaultStretchRequest());
   return (
     <StackStretchStageEditor
       label="Stack"
-      channels={3}
+      channels={channels}
       request={request}
       onChange={(next) => { seen.push(next); setRequest(next); }}
     />
@@ -46,5 +46,46 @@ describe('StackStretchStageEditor', () => {
     expect(seen.at(-1)!.model).toMatchObject({ normalize: true });
     // The color strategy is unchanged by the model's settings.
     expect(seen.at(-1)!.color_strategy).toBe('linked');
+  });
+
+  it('offers the layered stretch and drops the color strategy it cannot use', () => {
+    const seen: StackStretchRequest[] = [];
+    render(<Editor seen={seen} />);
+    fireEvent.change(screen.getByLabelText('Stack stretch color strategy'), { target: { value: 'unlinked' } });
+    fireEvent.change(screen.getByLabelText('Stack stretch model'), { target: { value: 'layered' } });
+    expect(seen.at(-1)).toEqual({
+      model: {
+        type: 'layered',
+        target_background: 0.15,
+        aggressiveness: 0.5,
+        dynamic_range_compression: 0,
+        scale_separation: 256,
+        contrast_recovery: 0,
+        saturation_amount: 0,
+        saturation_boost: 0.5,
+        lightness_mask: true,
+      },
+      color_strategy: 'linked',
+    });
+    expect(screen.queryByLabelText('Stack stretch color strategy')).not.toBeInTheDocument();
+    // The scale only matters once contrast recovery is on.
+    expect(screen.queryByLabelText('Stack Scale (px)')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Stack Contrast recovery'), { target: { value: '0.6' } });
+    expect(screen.getByLabelText('Stack Scale (px)')).toHaveValue(256);
+    // Saturation's own settings appear once saturation is lifted.
+    expect(screen.queryByLabelText('Stack Saturation boost')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Stack Saturation'), { target: { value: '0.3' } });
+    fireEvent.click(screen.getByLabelText('Stack Lightness mask'));
+    expect(seen.at(-1)!.model).toMatchObject({
+      type: 'layered', contrast_recovery: 0.6, saturation_amount: 0.3, lightness_mask: false,
+    });
+  });
+
+  it('leaves saturation out of a mono layered stretch', () => {
+    const seen: StackStretchRequest[] = [];
+    render(<Editor seen={seen} channels={1} />);
+    fireEvent.change(screen.getByLabelText('Stack stretch model'), { target: { value: 'layered' } });
+    expect(screen.getByLabelText('Stack Dynamic range compression')).toHaveValue(0);
+    expect(screen.queryByLabelText('Stack Saturation')).not.toBeInTheDocument();
   });
 });

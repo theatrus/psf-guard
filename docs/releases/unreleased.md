@@ -8,6 +8,9 @@
   background median exactly on a target from a robust black point, with
   optional curves boost, highlight compression and normalization. Auto MTF
   stays the default.
+- Stacks also offer a **Layered** stretch, which keeps local contrast on
+  bright structure, can compress star cores, and can lift saturation without
+  shifting hue.
 - Dropdown arrows now sit inside the border with space between the arrow
   and the selected text.
 - UI labels, settings help, and confirmation messages now state actions,

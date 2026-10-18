@@ -21,8 +21,8 @@ use seiza_deconvolution::{
 use seiza_fits::{HeaderValue, WriteHeaderCard};
 use seiza_stacking::{write_processed_image_fits_f32, LinearImage};
 use seiza_stretch::{
-    ColorStrategy, RobustStatistics, StretchAnalysis, StretchConfig, StretchModel, StretchParams,
-    StretchPlan,
+    ColorStrategy, ImageShape, RobustStatistics, StretchAnalysis, StretchConfig, StretchModel,
+    StretchParams, StretchPlan,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -351,7 +351,7 @@ fn render_previews_with_plan(
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let pixels = plan
-        .apply_u8(&image.data, image.channels)
+        .apply_u8_image(&image.data, image_shape(image))
         .map_err(|error| error.to_string())?;
     let dynamic = if image.channels == 1 {
         image::DynamicImage::ImageLuma8(
@@ -373,6 +373,12 @@ fn render_previews_with_plan(
     save_png_atomic(&resized, screen_destination)
 }
 
+/// The shape Seiza needs to run a stretch over the whole image; the layered
+/// stretch blurs it, so it cannot work sample by sample.
+pub(crate) fn image_shape(image: &LinearImage) -> ImageShape {
+    ImageShape::new(image.width, image.height, image.channels)
+}
+
 pub(crate) fn render_dynamic_image(
     image: &LinearImage,
     config: &StretchConfig,
@@ -390,7 +396,7 @@ pub(crate) fn render_dynamic_image(
         .resolve(&analysis)
         .map_err(|error| error.to_string())?;
     let pixels = plan
-        .apply_u8(&image.data, image.channels)
+        .apply_u8_image(&image.data, image_shape(image))
         .map_err(|error| error.to_string())?;
     let dynamic = if image.channels == 1 {
         image::DynamicImage::ImageLuma8(
@@ -2644,6 +2650,70 @@ mod tests {
         .unwrap();
         let plan = unclipped.stretch.config().resolve_for(&data, 1).unwrap();
         assert_eq!(plan.curves()[0].map(0.05), 0.0);
+    }
+
+    /// The layered stretch blurs the whole image, so it only works when the
+    /// render passes the image's shape. Mono and RGB stacks both reach it.
+    #[test]
+    fn a_layered_request_from_the_browser_renders_mono_and_rgb_stacks() {
+        let request: StackViewProcessingRequest = serde_json::from_value(serde_json::json!({
+            "model": {
+                "type": "layered",
+                "target_background": 0.2,
+                "aggressiveness": 0.5,
+                "dynamic_range_compression": 0.5,
+                "scale_separation": 16,
+                "contrast_recovery": 0.6,
+                "saturation_amount": 0.3,
+                "saturation_boost": 0.5,
+                "lightness_mask": true
+            },
+            "color_strategy": "linked"
+        }))
+        .unwrap();
+        let config = request.stretch.config();
+        let (width, height) = (64, 48);
+        // A noisy background near 0.05 with a bright square in one corner.
+        let level = |index: usize| {
+            let (x, y) = (index % width, index / width);
+            let noise = ((index * 7919) % 101) as f32 * 0.0001;
+            if x < 12 && y < 12 {
+                0.6 + noise
+            } else {
+                0.05 + noise
+            }
+        };
+        let median_of = |mut values: Vec<u8>| {
+            values.sort_unstable();
+            f32::from(values[values.len() / 2]) / 255.0
+        };
+
+        let mono =
+            LinearImage::new(width, height, 1, (0..width * height).map(level).collect()).unwrap();
+        let (rendered, _) = render_dynamic_image(&mono, &config).unwrap();
+        let median = median_of(rendered.into_luma8().into_raw());
+        assert!((median - 0.2).abs() < 0.03, "mono median {median}");
+
+        let rgb = LinearImage::new(
+            width,
+            height,
+            3,
+            (0..width * height)
+                .flat_map(|index| {
+                    let value = level(index);
+                    [value, value * 0.9, value * 0.8]
+                })
+                .collect(),
+        )
+        .unwrap();
+        let (rendered, _) = render_dynamic_image(&rgb, &config).unwrap();
+        let rendered = rendered.into_rgb8();
+        let red = median_of(rendered.pixels().map(|pixel| pixel[0]).collect());
+        let blue = median_of(rendered.pixels().map(|pixel| pixel[2]).collect());
+        assert!(
+            red > blue,
+            "colour follows the input: red {red}, blue {blue}"
+        );
     }
 
     #[test]

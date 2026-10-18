@@ -1103,6 +1103,18 @@ export type StackStretchModel =
       hdr_amount: number;
       hdr_knee: number;
       normalize: boolean;
+    }
+  | {
+      type: 'layered';
+      target_background: number;
+      aggressiveness: number;
+      dynamic_range_compression: number;
+      /** Pixels that split large structure from detail, 8 through 1024. */
+      scale_separation: number;
+      contrast_recovery: number;
+      saturation_amount: number;
+      saturation_boost: number;
+      lightness_mask: boolean;
     };
 
 export interface StackStretchRequest {

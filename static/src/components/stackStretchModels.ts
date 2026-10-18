@@ -11,6 +11,7 @@ export const stretchModelLabels: Record<StretchModelType, string> = {
   ghs: 'Generalized hyperbolic',
   'auto-mtf': 'Auto MTF',
   'median-anchor': 'Median anchor',
+  layered: 'Layered',
 };
 
 export function defaultStretchModel(type: StretchModelType): StackStretchModel {
@@ -42,6 +43,18 @@ export function defaultStretchModel(type: StretchModelType): StackStretchModel {
         hdr_amount: 0,
         hdr_knee: 0.75,
         normalize: false,
+      };
+    case 'layered':
+      return {
+        type,
+        target_background: 0.15,
+        aggressiveness: 0.5,
+        dynamic_range_compression: 0,
+        scale_separation: 256,
+        contrast_recovery: 0,
+        saturation_amount: 0,
+        saturation_boost: 0.5,
+        lightness_mask: true,
       };
   }
 }
