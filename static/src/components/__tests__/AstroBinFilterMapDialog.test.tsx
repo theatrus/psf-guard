@@ -43,6 +43,10 @@ describe('AstroBinFilterMapDialog', () => {
 
     expect(await screen.findByLabelText('Filter name, row 1')).toHaveValue('G');
     expect(screen.getByLabelText('Last night, row 1')).toHaveValue('2025-12-31');
+    // An open bound says so; Safari would otherwise draw today's date in the empty field.
+    expect(screen.getByLabelText('Last night, row 1')).toHaveClass('is-set');
+    expect(screen.getByLabelText('First night, row 1')).not.toHaveClass('is-set');
+    expect(screen.getByText('· any')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '+ Add entry' }));
     const save = screen.getByRole('button', { name: 'Save map' });

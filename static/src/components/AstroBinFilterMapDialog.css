@@ -33,7 +33,7 @@
 }
 
 .astrobin-filter-map-chip:hover {
-  border-color: var(--color-border-primary);
+  border-color: var(--color-border-tertiary);
 }
 
 /* Each entry is a row of labelled fields that rearranges to fit its width
@@ -72,7 +72,20 @@
 .astrobin-filter-field input {
   width: 100%;
   min-width: 0;
+  min-height: 2.1rem;
   box-sizing: border-box;
+}
+
+/* An empty night is open-ended. Safari draws an empty date field as
+   today's date in grey, which reads as a set date, so hide the date until
+   the field holds a night or has focus; the caption says "any". Safari
+   ignores a colour here, so it takes opacity. */
+.astrobin-filter-field input[type='date']:not(.is-set):not(:focus)::-webkit-datetime-edit {
+  opacity: 0;
+}
+
+.astrobin-filter-field .astrobin-filter-any {
+  font-size: inherit;
 }
 
 .astrobin-filter-field-name {

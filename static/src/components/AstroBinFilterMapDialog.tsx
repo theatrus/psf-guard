@@ -248,9 +248,13 @@ export default function AstroBinFilterMapDialog({ dbId, dbName, canManage, onClo
                   />
                 </label>
                 <label className="astrobin-filter-field astrobin-filter-field-from">
-                  <span>First night</span>
+                  <span>
+                    First night
+                    {!row.from_night && <span className="astrobin-filter-any"> · any</span>}
+                  </span>
                   <input
                     type="date"
+                    className={row.from_night ? 'is-set' : undefined}
                     aria-label={`First night, row ${index + 1}`}
                     aria-invalid={invalid('from_night')}
                     value={row.from_night}
@@ -259,9 +263,13 @@ export default function AstroBinFilterMapDialog({ dbId, dbName, canManage, onClo
                   />
                 </label>
                 <label className="astrobin-filter-field astrobin-filter-field-to">
-                  <span>Last night</span>
+                  <span>
+                    Last night
+                    {!row.to_night && <span className="astrobin-filter-any"> · any</span>}
+                  </span>
                   <input
                     type="date"
+                    className={row.to_night ? 'is-set' : undefined}
                     aria-label={`Last night, row ${index + 1}`}
                     aria-invalid={invalid('to_night')}
                     value={row.to_night}
