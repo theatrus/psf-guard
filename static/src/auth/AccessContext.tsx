@@ -35,6 +35,8 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         predicate: (query) => query.queryKey[0] !== 'authStatus',
       });
       queryClient.setQueryData(['authStatus'], status);
+      // A server restart ends sessions. Fetch the current UI after signing in.
+      window.location.reload();
     },
   });
 

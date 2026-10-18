@@ -213,33 +213,33 @@ target/channel.
 
 ### Seiza upgrades
 
-Stack job ids, resume checkpoints, reference scores and calibration masters
-record `seiza_stacking::OUTPUT_VERSION`: the Seiza release whose stacking
-output the build reproduces. Card previews and stretch runs record
-`seiza_stretch::OUTPUT_VERSION` in the same way. Seiza moves these only when
-its output changes, and a test in each crate holds them to it.
+A Seiza upgrade keeps completed stacks, resume checkpoints, reference scores
+and calibration masters when its calculated output is unchanged. **Build
+current set** reuses these results. When stacking output changes, the next
+build stacks each channel again and rebuilds the masters it needs.
 
-An upgrade that changes neither keeps every stack, checkpoint and master.
-**Build current set** reuses them, and no card goes out of date. An upgrade
-that changes stacking output gives every stack a new job id, so the next
-build of each channel stacks it again, and calibration masters are rebuilt
-as builds need them.
+When an engine update changes only the display stretch, **Build current set**
+or automatic refresh renders the card preview again from the saved FITS. The
+card and job list show **Waiting to render preview**, then **Rendering
+preview**. The channel stays ready: processing, FITS downloads, calibration
+masters and source-frame searches remain available. One-shot-color stacks
+refresh the same way when their color calibration is out of date.
 
-The card preview is not part of the job id. Each channel records the stretch
-release that rendered its preview (`preview_stretch_version`). When **Build
-current set** or an automatic refresh finds a finished stack whose preview an
-older stretch release rendered, PSF Guard renders the preview again from the
-stack's FITS and does not stack again. The job line shows `Waiting to render
-preview`, then `Rendering preview`. The channel stays ready meanwhile, so its
-processing, FITS and source-frame searches stay available. A one-shot-color
-stack whose color calibration is out of date renders again the same way. A
-render that fails leaves the old preview, says why on the card, and is not
-tried again until the stretch release changes or the stack is rebuilt. The stack keeps its artifact revision, so its
-processing and the color previews built from it are not made again; they
-keep the stretch they were made with. The new preview gets a
-`preview_revision`, which the page adds to the image's address. Job ids still
-hash stretch release `0.3.0`, the value they held when the preview left
-them, so no id changed.
+Refreshing a card preview preserves the stack's artifact revision, applied
+processing and color combinations. If you stop the refresh, the completed
+stack stays ready and the next build can retry the preview. A failed refresh
+keeps the old preview and explains the error on the card. It does not retry
+at the same stretch output version unless you rebuild the stack.
+
+Color combinations and WBPP previews keep their previous stretch until they
+are created again. Calibration master previews can also render again after
+an app update; this does not rebuild the masters.
+
+Stack cache keys use `seiza_stacking::OUTPUT_VERSION`; stretch results and
+card previews use `seiza_stretch::OUTPUT_VERSION`. These identify compatible
+output, rather than the installed crate release. Card previews record
+`preview_stretch_version`, and a new `preview_revision` lets the page load
+the refreshed image without discarding the completed stack.
 
 ### Frame preparation and worker budgets
 
@@ -1613,7 +1613,7 @@ apply the processing again` for processing. **Build current set** renders the
 card preview again from the stack's FITS without stacking again, unless the
 channel's frames or settings changed too, in which case it builds the stack
 again. A stack built before this release keeps its uncalibrated card
-preview until it is rebuilt or its view processing is applied.
+preview until **Build current set** refreshes it or its view processing is applied.
 
 The request's `processing.color_calibration` takes `enabled`,
 `neutralize_background` (default true), and `white_reference`, either

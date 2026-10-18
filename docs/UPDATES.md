@@ -16,6 +16,19 @@ the cached result to every browser. Reloading the UI never fetches either public
 feed. Tauri uses GitHub when the website updater feed is unavailable.
 Browser/server mode never downloads or installs an executable.
 
+## Check the running version and folders
+
+Open **Menu › Server information** to see the running version, cache folder
+and configured databases. Each database lists its ID, database file and image
+folders separately. Long paths wrap, and the details scroll inside the dialog
+while the heading and close controls stay visible.
+
+Use the mouse wheel, touch, or Tab to **Server details** and press Page Down
+to scroll. **Done**, Escape or the close button closes the dialog and returns
+focus to the menu. Loading and connection errors appear separately for server
+information and the database list; **Retry server information** and **Retry
+databases** reload only the failed request.
+
 ## Notes after an upgrade
 
 **Menu › What's new** opens the release highlights bundled with the app.
@@ -59,10 +72,15 @@ build other than the page's, the UI shows **PSF Guard was updated** with a
 **Reload now** button, and reloads by itself the next time the user changes
 views (Library, Images, Sequence, Stacks, Sky, Planning). Moving inside a view,
 such as from the grid to an image, never reloads. A page with unsaved plan
-edits asks first, as it does for any other way of leaving. A tab reloads by
-itself once per server build, so a cache that keeps serving the old page
+edits asks first, as it does for any other way of leaving. Reloads on view
+changes happen once per server build, so a cache that keeps serving the old page
 cannot make it reload on every change of view. The desktop app's page ships
 inside the app and never takes part.
+
+After each successful sign-in, the browser reloads the current URL to load the
+server's current UI. This also handles updates that restart the server and end
+the previous session. PSF Guard checks that the browser saved the new session
+before reloading. Failed sign-ins stay on the login form with an error message.
 
 The server sends `index.html` and every other file outside `assets/` with
 `Cache-Control: no-cache`, so a reload always checks for a new page. Vite puts

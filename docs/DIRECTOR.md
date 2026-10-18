@@ -1140,14 +1140,15 @@ instead** offers to start again.
   Alt, or **Turn anyway** in the note, turns it anyway. Planning always sets each panel's angle, whatever turns
   the rig's camera: a rotator, a camera turned by hand, or a fixed one. How
   the rig reaches the angle is the session's business, not the plan's.
-- **Drag a panel** with **Panel** among the sky's drag modes. It settles,
-  lined up with another panel or at the minimum overlap beside one it is
-  level with, turned panels included. A panel that shares only a corner with
-  it does not pull it out of its row or column. A drop that leaves a thin overlap, a gap or a lone panel
-  goes back and says why; hold Alt (Option) while dropping, or press **Place
-  anyway** in the note, to place it anyway. Turn **Snap** off beside the drag
-  modes to drag and turn freely: a drop stays where it lands, and the mosaic
-  lists what is wrong with it. Such a panel is dashed in the
+- **Drag a panel** with **Panel** selected among the sky's drag modes.
+  With **Snap** on, the panel aligns with nearby panels or snaps to the
+  minimum overlap beside a panel in the same row or column, including rotated
+  panels. If a drop would leave too little overlap, a gap or an isolated panel,
+  the panel returns to its previous position and the view explains why. Hold
+  Alt (Option) while dropping, or press **Place anyway** in the note, to keep
+  the panel there. Turn **Snap** off beside the drag modes to drag and turn
+  freely: the panel stays where you drop it, and the mosaic lists any overlap
+  problems. Such a panel is dashed in the
   warning colour and listed under the panels. A locked panel does not move;
   dragging it looks around. One finger or pen drags at a time; a cancelled
   touch, Escape or a lost release puts the panel back. On a phone or a small

@@ -1,65 +1,54 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { useAllDatabases } from '../hooks/useDatabases';
+import Dialog from './Dialog';
+import './ServerInfoPanel.css';
 
-/** What the server runs and where it keeps things, opened from the
- *  header menu. */
 export default function ServerInfoPanel({ onClose }: { onClose: () => void }) {
-  const { data: serverInfo, isLoading, error } = useQuery({
+  const info = useQuery({
     queryKey: ['serverInfo'],
     queryFn: apiClient.getServerInfo,
-    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+    staleTime: 5 * 60 * 1000,
   });
-
-  const { data: databases } = useAllDatabases();
+  const databases = useAllDatabases();
 
   return (
-    <div className="info-panel-overlay" onClick={onClose}>
-      <div className="info-panel" onClick={e => e.stopPropagation()}>
-        <div className="info-panel-header">
-          <h3>Server Information</h3>
-          <button className="close-button" onClick={onClose} aria-label="Close server information">×</button>
-        </div>
+    <Dialog open title="Server information" onClose={onClose} className="server-info-panel"
+      footer={<button type="button" className="action-button" onClick={onClose}>Done</button>}>
+      <section className="server-info-content" aria-label="Server details" tabIndex={0}>
+        {info.isPending && <p role="status">Loading server information...</p>}
+        {info.isError && <p role="alert">
+          Could not load server information.{' '}
+          <button type="button" onClick={() => void info.refetch()}>Retry server information</button>
+        </p>}
+        {info.data && <dl className="server-info-fields">
+          <dt>Version</dt><dd>{info.data.version}</dd>
+          <dt>Cache folder</dt><dd><code className="server-info-path">{info.data.cache_directory}</code></dd>
+        </dl>}
 
-        <div className="info-panel-content">
-          {isLoading && <div className="loading">Loading...</div>}
-          {error && <div className="error">Failed to load server info</div>}
-          {serverInfo && (
-            <dl>
-              <dt>Version:</dt>
-              <dd>{serverInfo.version}</dd>
-
-              <dt>Cache Directory:</dt>
-              <dd className="path" title={serverInfo.cache_directory}>
-                {serverInfo.cache_directory}
-              </dd>
-
-              <dt>Databases ({databases?.length ?? 0}):</dt>
-              <dd>
-                {databases?.length ? (
-                  <ul className="db-list">
-                    {databases.map((db) => (
-                      <li key={db.id}>
-                        <strong>{db.name}</strong> <code>({db.id})</code>
-                        <div className="path" title={db.database_path}>
-                          {db.database_path}
-                        </div>
-                        {db.image_directories.length > 0 && (
-                          <div className="image-dirs">
-                            {db.image_directories.join(', ')}
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <em>None configured</em>
-                )}
-              </dd>
-            </dl>
-          )}
-        </div>
-      </div>
-    </div>
+        <section className="server-info-databases" aria-label="Configured databases">
+          <h3>Databases{databases.data ? ` (${databases.data.length})` : ''}</h3>
+          {databases.isPending && <p role="status">Loading databases...</p>}
+          {databases.isError && <p role="alert">
+            Could not load configured databases.{' '}
+            <button type="button" onClick={() => void databases.refetch()}>Retry databases</button>
+          </p>}
+          {databases.data?.length === 0 && <p>No databases configured.</p>}
+          {!!databases.data?.length && <ul className="server-info-database-list">
+            {databases.data.map(db => <li key={db.id} className="server-info-database">
+              <h4>{db.name}</h4>
+              <dl className="server-info-fields">
+                <dt>Database ID</dt><dd><code className="server-info-path">{db.id}</code></dd>
+                <dt>Database file</dt><dd><code className="server-info-path">{db.database_path}</code></dd>
+                <dt>Image folders</dt><dd>{db.image_directories.length ?
+                  <ul className="server-info-folder-list">{db.image_directories.map(folder =>
+                    <li key={folder}><code className="server-info-path">{folder}</code></li>
+                  )}</ul> : 'No image folders configured.'}</dd>
+              </dl>
+            </li>)}
+          </ul>}
+        </section>
+      </section>
+    </Dialog>
   );
 }

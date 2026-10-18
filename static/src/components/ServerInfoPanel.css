@@ -1,0 +1,87 @@
+.dialog-panel.server-info-panel {
+  width: min(48rem, 100%);
+}
+
+.server-info-panel .dialog-body {
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+
+.server-info-content {
+  min-width: 0;
+  border-radius: 4px;
+}
+
+.server-info-content:focus-visible {
+  outline: none;
+  box-shadow: var(--state-focus-ring);
+}
+
+.server-info-fields {
+  display: grid;
+  grid-template-columns: minmax(7rem, 9rem) minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.server-info-fields dt {
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.server-info-fields dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.server-info-path {
+  font-size: 0.875rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.server-info-databases {
+  margin-top: 1.5rem;
+}
+
+.server-info-databases h3,
+.server-info-database h4 {
+  margin: 0;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.server-info-database-list,
+.server-info-folder-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.server-info-database {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 4px;
+  background: var(--color-bg-tertiary);
+}
+
+.server-info-database h4 {
+  margin-bottom: 0.75rem;
+}
+
+.server-info-folder-list li + li {
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 520px) {
+  .server-info-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+
+  .server-info-fields dt:not(:first-child) {
+    margin-top: 0.5rem;
+  }
+}

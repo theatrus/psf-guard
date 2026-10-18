@@ -416,6 +416,10 @@ up. Image details have a bottom bar for grading and navigation. Open the
 Images or Sequence toolbar menu for Undo and Redo, or **Options** in Stacks
 for build settings. Side-by-side comparison is hidden from the phone toolbar.
 
+Open **Menu → Server information** to check the running version, cache folder,
+database files and image folders. The database list scrolls while the heading
+and close controls stay visible, including on a phone.
+
 Previews load in the background and preserve your scroll position. Grading
 supports undo and redo. These shortcuts apply where the corresponding tool
 is available:
@@ -551,6 +555,13 @@ SHO. Adjust background extraction and channel processing, then download a
 linear or processed FITS result. OSC files with a recognized `BAYERPAT`
 header also support color previews.
 
+**Combine channel stacks** gives imported WBPP masters their own **WBPP**
+card when they cover the required channels, including projects split by
+exposure. Source labels show the sub-exposure when known. Use **Custom
+combination** to choose between several masters of one filter or to mix WBPP
+and PSF Guard sources. A target with only WBPP masters and no exposure split
+uses the standard color card.
+
 **View processing** offers display stretches and optional Seiza deconvolution.
 **Median anchor** and **Layered** join Auto MTF, which stays the default.
 Install the optional **Gaia colors** package under **Settings → Catalogs** to
@@ -562,6 +573,11 @@ BlurXTerminator, NoiseXTerminator, and StarXTerminator. Star removal keeps
 both the stars and starless results. Processing runs show queue position and
 progress, support Stop, and can resume after a restart. Saved processing
 choices remain available when a stack rebuilds.
+
+Engine updates reuse stacks and calibration masters when their output has not
+changed. If only the display stretch or an OSC stack's color calibration needs
+an update, **Build current set** refreshes the card preview from the saved FITS.
+You can keep using the stack and its processing while the preview refreshes.
 
 See [stack methods, processing, and downloads](docs/STACKING_PREVIEWS.md) or
 [run PixInsight WBPP](#wbpp) with the same calibration
