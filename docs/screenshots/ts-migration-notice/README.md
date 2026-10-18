@@ -18,3 +18,11 @@ To reshoot, build the frontend at the recorded source or a later revision and
 follow the wrapper and guarded test command in the JSON record. Run one local
 Playwright session at a time. Inspect each image before replacing it, and keep
 this record with the files. These are browser captures, not native app captures.
+
+## Revised copy
+
+The `*-plain-copy.png` captures show the approved wording, with separate
+paragraphs for the upgrade plan and its benefit.
+[captures-plain-copy.json](captures-plain-copy.json) records this reshoot's source,
+state, viewports, crops, hashes and steps. The earlier images and their record
+remain unchanged.
