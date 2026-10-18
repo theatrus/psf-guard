@@ -20,9 +20,9 @@ import {
   colorCalibrationApplies,
   defaultBackgroundModel,
   defaultBackgroundExtraction,
-  defaultColorCalibration,
   defaultColorProcessing,
 } from './stackColorProcessing';
+import ColorCalibrationSwitch from './ColorCalibrationSwitch';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import { builtinColorSetups, colorSetupForRoles } from './processingSetups';
 import { withChannelProcessing, type ChannelProcessing } from './channelProcessing';
@@ -380,37 +380,6 @@ function BackgroundControls({
   );
 }
 
-function ColorCalibrationControls({
-  calibration, disabled, onChange,
-}: {
-  calibration: StackColorProcessing['color_calibration'];
-  disabled: boolean;
-  onChange: (calibration: NonNullable<StackColorProcessing['color_calibration']>) => void;
-}) {
-  // An RGB request without settings is calibrated with the defaults.
-  const enabled = calibration?.enabled ?? true;
-  return (
-    <section className="stack-background-controls" aria-label="Color calibration">
-      <header>
-        <label>
-          <input
-            type="checkbox"
-            role="switch"
-            checked={enabled}
-            disabled={disabled}
-            onChange={(event) => onChange({
-              ...(calibration ?? defaultColorCalibration()),
-              enabled: event.target.checked,
-            })}
-          />
-          <strong>Color calibration</strong>
-        </label>
-        <span>{enabled ? 'Gaia star colors' : 'Off'}</span>
-      </header>
-    </section>
-  );
-}
-
 function StageLane({
   label, stages, channels, deconvolution, deconvolutionResult, rcAstro, rcAstroResult, disabled,
   onChange, onDeconvolutionChange, onRcAstroChange,
@@ -674,7 +643,7 @@ export default function StackColorProcessingControls({
           }))}
         />
         {calibrates && (
-          <ColorCalibrationControls
+          <ColorCalibrationSwitch
             calibration={draft.color_calibration}
             disabled={disabled}
             onChange={(color_calibration) => setDraft((current) => ({

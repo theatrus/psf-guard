@@ -418,6 +418,10 @@ pub struct StackGroupStatus {
     #[serde(default)]
     pub sky_orientation: Option<StackSkyOrientation>,
     pub reference_image_id: Option<i32>,
+    /// What color calibration did for a one-shot-color stack's preview.
+    /// The stack's FITS stays as integrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_calibration: Option<color_calibration::StackColorCalibrationOutcome>,
     pub total_exposure_seconds: f64,
     pub preview_url: Option<String>,
     pub fits_url: Option<String>,
@@ -2741,7 +2745,36 @@ fn stack_processing_source(
         },
         job_id: job_id.to_string(),
         group_index: group.index,
+        calibration: (group.output_channels == 3).then(|| {
+            osc_calibration_source(
+                state,
+                ctx,
+                group.reference_image_id,
+                group.sky_orientation.clone(),
+            )
+        }),
     })
+}
+
+/// What color calibration of a one-shot-color stack can use: its reference
+/// frame's fresh pixel solve, its layout, and the installed Gaia catalog.
+fn osc_calibration_source(
+    state: &AppState,
+    ctx: &DatabaseContext,
+    reference_image_id: Option<i32>,
+    orientation: Option<StackSkyOrientation>,
+) -> color_calibration::StackCalibrationSource {
+    color_calibration::StackCalibrationSource {
+        reference_image_id,
+        orientation,
+        solution: reference_image_id
+            .and_then(|image_id| {
+                ctx.astrometry_evidence
+                    .evidence_for_source(&ctx.cache_dir_path, image_id, None)
+            })
+            .and_then(|analysis| analysis.solution),
+        catalog: state.astrometry.gaia_photometry_signature(),
+    }
 }
 
 fn validate_request(request: &StackPreviewRequest) -> Result<(), AppError> {
@@ -3300,6 +3333,7 @@ fn prepare_whole(
             output_channels: 0,
             sky_orientation: None,
             reference_image_id,
+            color_calibration: None,
             total_exposure_seconds: 0.0,
             preview_url: None,
             fits_url: None,
@@ -5026,8 +5060,37 @@ fn run_group(
         )
         .map_err(|error| error.to_string())?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
+        // A one-shot-color stack's preview is color calibrated against Gaia,
+        // as its processing is by default; the FITS stays as integrated.
+        let calibrated = if image.channels == 3 {
+            let status = state
+                .stack_previews
+                .get(job_id)
+                .and_then(|job| job.groups.get(group.index).cloned());
+            let source = osc_calibration_source(
+                state,
+                &ctx,
+                status.as_ref().and_then(|status| status.reference_image_id),
+                status.and_then(|status| status.sky_orientation),
+            );
+            let plan = source.plan(color_calibration::StackColorCalibration::default());
+            let open_catalog = || {
+                state
+                    .astrometry
+                    .gaia_photometry_catalog()
+                    .map(|(catalog, _)| catalog)
+            };
+            let (calibrated, outcome) =
+                color_calibration::calibrate_stack(&plan, &image, &open_catalog);
+            state.stack_previews.update(job_id, |job| {
+                job.groups[group.index].color_calibration = Some(outcome);
+            });
+            calibrated
+        } else {
+            None
+        };
         stretch::render_image_previews_atomic(
-            &image,
+            calibrated.as_ref().unwrap_or(&image),
             &stretch::default_linear_config(),
             stretch::StackStretchSourceTransfer::Linear,
             &preview_path(stack_root, job_id, group.index),
@@ -5678,6 +5741,7 @@ mod tests {
             output_channels: 1,
             sky_orientation: Some(sky_orientation()),
             reference_image_id: Some(image_id),
+            color_calibration: None,
             total_exposure_seconds: 120.0,
             preview_url: None,
             fits_url: None,
@@ -8312,6 +8376,7 @@ mod tests {
                 },
                 job_id: "e".repeat(64),
                 group_index: 0,
+                calibration: None,
             }
         }
 

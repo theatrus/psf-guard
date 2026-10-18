@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import StackColorProcessingControls from '../StackColorProcessingControls';
+import StackStretchControls from '../StackStretchControls';
 import StackColorCalibrationLine from '../StackColorCalibrationLine';
 import { defaultColorProcessing } from '../stackColorProcessing';
 import { colorSetupForRoles } from '../processingSetups';
@@ -154,5 +155,38 @@ describe('StackColorCalibrationLine', () => {
     }} />);
     expect(screen.getByText('Not color calibrated: Gaia colors not installed')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Color calibration of a one-shot-color stack', () => {
+  const props = {
+    apply: vi.fn(),
+    onApplied: vi.fn(),
+    onRevert: vi.fn().mockResolvedValue(undefined),
+  };
+
+  it('is on by default in a color stack\'s view processing, and turning it off applies with it off', async () => {
+    const user = userEvent.setup();
+    const apply = vi.fn().mockRejectedValue(new Error('not now'));
+    renderWithQueries(<StackStretchControls label="Caldwell 23 L" channels={3} {...props} apply={apply} />);
+    await user.click(screen.getByText('View processing'));
+    const toggle = screen.getByRole('switch', { name: 'Color calibration' });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: 'Apply processing' }));
+    expect(apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        color_calibration: { enabled: false, neutralize_background: true, white_reference: 'solar' },
+      }),
+      expect.any(Function),
+      expect.anything()
+    );
+  });
+
+  it('is absent for a mono stack', async () => {
+    const user = userEvent.setup();
+    renderWithQueries(<StackStretchControls label="Ha" channels={1} {...props} />);
+    await user.click(screen.getByText('View processing'));
+    expect(screen.queryByRole('switch', { name: 'Color calibration' })).not.toBeInTheDocument();
   });
 });

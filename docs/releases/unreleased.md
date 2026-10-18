@@ -11,11 +11,12 @@
 - Stacks also offer a **Layered** stretch, which keeps local contrast on
   bright structure, can compress star cores, and can lift saturation without
   shifting hue.
-- RGB and LRGB color previews are color calibrated against Gaia star colors,
-  so a Sun-colored star comes out white and the sky a neutral gray. The color
-  card shows the star count and gains, as `Calibrated on 143 stars · R ×1.12,
-  B ×0.87`, or the reason calibration was skipped. A switch in the processing
-  stack turns calibration off. Install the optional **Gaia colors** catalog
+- RGB and LRGB color previews, and one-shot-color stacks, are color
+  calibrated against Gaia star colors, so a Sun-colored star comes out white
+  and the sky a neutral gray. The card shows the star count and gains, as
+  `Calibrated on 143 stars · R ×1.12, B ×0.87`, or the reason calibration was
+  skipped. A switch in the processing stack, or a one-shot-color stack's view
+  processing, turns calibration off. Install the optional **Gaia colors** catalog
   in Settings › Catalogs, which shows it as its own item with its size,
   whether it is installed, and an **Install** button.
 - Catalog installations show in the header's job line with their progress.

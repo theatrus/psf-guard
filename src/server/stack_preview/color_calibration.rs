@@ -356,6 +356,107 @@ pub(super) fn calibrate_channels(
     outcome.into()
 }
 
+/// What a one-shot-color stack offers color calibration: its reference
+/// frame, that frame's fresh pixel solve, the stack's sky layout, and the
+/// installed Gaia catalog, read when the stack's processing is asked for.
+#[derive(Debug, Clone)]
+pub struct StackCalibrationSource {
+    pub(super) reference_image_id: Option<i32>,
+    pub(super) orientation: Option<StackSkyOrientation>,
+    pub(super) solution: Option<AstrometrySolutionResponse>,
+    pub(super) catalog: Option<AstrometryCatalogFileSignature>,
+}
+
+impl StackCalibrationSource {
+    pub(super) fn plan(&self, settings: StackColorCalibration) -> ColorCalibrationPlan {
+        plan(
+            settings,
+            self.reference_image_id,
+            self.orientation.as_ref(),
+            self.solution.as_ref(),
+            self.catalog.clone(),
+        )
+    }
+}
+
+/// Calibrate a linear RGB stack, as a one-shot-color camera made it, on its
+/// own grid. Returns the calibrated copy, or `None` when calibration did
+/// not run, with what happened.
+pub(super) fn calibrate_stack(
+    plan: &ColorCalibrationPlan,
+    image: &LinearImage,
+    open_catalog: &dyn Fn() -> Result<std::sync::Arc<seiza::catalog::PhotometryCatalog>, String>,
+) -> (Option<LinearImage>, StackColorCalibrationOutcome) {
+    use StackColorCalibrationSkipReason as Reason;
+
+    let placement = match &plan.placement {
+        Ok(placement) => placement,
+        Err(skip) => return (None, StackColorCalibrationOutcome::Skipped(skip.clone())),
+    };
+    if image.channels != 3 {
+        return (
+            None,
+            StackColorCalibrationOutcome::skipped(Reason::Failed, "The stack is not RGB"),
+        );
+    }
+    if (image.width, image.height)
+        != (
+            placement.orientation.output_width,
+            placement.orientation.output_height,
+        )
+    {
+        return (
+            None,
+            StackColorCalibrationOutcome::skipped(
+                Reason::Failed,
+                "The stack's sky layout does not match its pixels; rebuild it",
+            ),
+        );
+    }
+    let wcs = match placement.wcs_on(None) {
+        Ok(wcs) => wcs,
+        Err(error) => {
+            return (
+                None,
+                StackColorCalibrationOutcome::skipped(Reason::Failed, error),
+            )
+        }
+    };
+    let catalog = match open_catalog() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return (
+                None,
+                StackColorCalibrationOutcome::skipped(
+                    Reason::NoGaiaCatalog,
+                    format!("Gaia colors could not be opened: {error}"),
+                ),
+            )
+        }
+    };
+    let mut calibrated = image.clone();
+    let outcome: StackColorCalibrationOutcome = seiza_stacking::calibrate_color_image(
+        &mut calibrated,
+        Some(&wcs),
+        GaiaColors::Catalog(&catalog),
+        &plan.settings.options(),
+    )
+    .into();
+    if outcome.is_calibrated() {
+        (Some(calibrated), outcome)
+    } else {
+        (None, outcome)
+    }
+}
+
+/// Note on a calibrated outcome that the stretch after it treats each
+/// channel on its own, which undoes most of the balance.
+pub(super) fn mark_stretched_separately(outcome: &mut StackColorCalibrationOutcome) {
+    if let StackColorCalibrationOutcome::Calibrated(report) = outcome {
+        report.stretched_separately = true;
+    }
+}
+
 /// Interleave three mono channels on one grid into an RGB image.
 pub(super) fn interleave(
     red: &LinearImage,
@@ -593,6 +694,77 @@ pub(super) mod tests {
         };
         assert_eq!(skip.reason, StackColorCalibrationSkipReason::TooFewStars);
         assert_eq!([red, green, blue], before);
+    }
+
+    #[test]
+    fn a_one_shot_color_stack_calibrates_on_its_own_grid_or_says_why_not() {
+        let placement = StarPlacement {
+            wcs: wcs(),
+            orientation: orientation(1200, 1000),
+        };
+        let ([red, green, blue], sources) = field(&placement);
+        let stack = interleave(&red, &green, &blue).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let catalog = std::sync::Arc::new(catalog(directory.path(), &sources));
+        let signature = AstrometryCatalogFileSignature {
+            name: "gaia_photometry".into(),
+            path: "/catalogs/stars-gaia-photometry.bin".into(),
+            format: "SEIZAPH1".into(),
+            size_bytes: 1,
+            modified_unix_seconds: 1,
+            modified_subsec_nanos: 0,
+            sha256: None,
+        };
+        let mut solution = tests::solution();
+        solution.image_width = 1200;
+        solution.image_height = 1000;
+        let source = StackCalibrationSource {
+            reference_image_id: Some(7),
+            orientation: Some(orientation(1200, 1000)),
+            solution: Some(solution),
+            catalog: Some(signature),
+        };
+        let open = || Ok(std::sync::Arc::clone(&catalog));
+        let (calibrated, outcome) = calibrate_stack(
+            &source.plan(StackColorCalibration::default()),
+            &stack,
+            &open,
+        );
+        let StackColorCalibrationOutcome::Calibrated(report) = &outcome else {
+            panic!("{outcome:?}");
+        };
+        assert!((report.gains[0] - 1.0 / 0.6).abs() < 0.03, "{report:?}");
+        assert!((report.gains[2] - 1.0 / 1.4).abs() < 0.03, "{report:?}");
+        assert_ne!(calibrated.unwrap(), stack);
+        let mut unlinked = outcome;
+        mark_stretched_separately(&mut unlinked);
+        let StackColorCalibrationOutcome::Calibrated(report) = unlinked else {
+            unreachable!()
+        };
+        assert!(report.stretched_separately);
+
+        // No solve: nothing to calibrate, and the stack is left to its
+        // uncalibrated stretch.
+        let unsolved = StackCalibrationSource {
+            solution: None,
+            ..source
+        };
+        let unopened = || -> Result<std::sync::Arc<seiza::catalog::PhotometryCatalog>, String> {
+            panic!("an unsolved stack opens no catalog")
+        };
+        let (calibrated, outcome) = calibrate_stack(
+            &unsolved.plan(StackColorCalibration::default()),
+            &stack,
+            &unopened,
+        );
+        assert!(calibrated.is_none());
+        assert_eq!(
+            outcome,
+            StackColorCalibrationOutcome::skipped(
+                StackColorCalibrationSkipReason::NoPlateSolve,
+                "The reference frame has no plate solve"
+            )
+        );
     }
 
     #[test]

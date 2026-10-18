@@ -30,6 +30,7 @@ import { appliedProcessingQueryKey as channelProcessingQueryKey } from './channe
 import { colorSourceKey } from './stackColorSources';
 import { defaultColorProcessing } from './stackColorProcessing';
 import StackStretchControls from './StackStretchControls';
+import StackColorCalibrationLine from './StackColorCalibrationLine';
 import { isSkyOriented } from './stackOrientation';
 import { carriedLabel } from './stackProcessingLabel';
 import { useAccess } from '../auth/access';
@@ -1253,6 +1254,16 @@ export default function StackPreviewPanel({
                         )}
                       </div>
                     )}
+                    {artifact && artifact.group.output_channels === 3 && (() => {
+                      // Applied processing says what it did; without any, the
+                      // build's own preview does.
+                      const outcome = appliedStretch
+                        ? appliedStretch.color_calibration
+                        : artifact.group.color_calibration;
+                      return outcome
+                        ? <StackColorCalibrationLine outcome={outcome} canInstall={canCompute} />
+                        : null;
+                    })()}
                     {artifact && appliedStretch?.reprocessing && (
                       <p
                         className="stack-preview-carried"

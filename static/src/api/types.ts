@@ -858,6 +858,8 @@ export interface StackGroupStatus {
   accepted_frames: number;
   rejected_frames: number;
   output_channels: number;
+  /** What color calibration did for a one-shot-color stack's preview. */
+  color_calibration?: StackColorCalibrationOutcome | null;
   sky_orientation: StackSkyOrientation | null;
   reference_image_id: number | null;
   total_exposure_seconds: number;
@@ -1125,6 +1127,8 @@ export interface StackStretchRequest {
 export interface StackViewProcessingRequest extends StackStretchRequest {
   deconvolution?: StackDeconvolutionConfig | null;
   rc_astro?: RcAstroProcessing | null;
+  /** One-shot-color stacks only; the server calibrates when this is absent. */
+  color_calibration?: StackColorCalibration | null;
 }
 
 /** One RC-Astro schema parameter's type, default, and range. */
@@ -1248,6 +1252,8 @@ export interface StackStretchPreview {
   channel_statistics: Array<StackStretchStatistics | null>;
   luminance_statistics: StackStretchStatistics | null;
   deconvolution: StackDeconvolutionResult | null;
+  /** What color calibration did for a one-shot-color stack. */
+  color_calibration?: StackColorCalibrationOutcome | null;
   rc_astro?: StackRcAstroResult | null;
   rc_astro_id?: string | null;
   preview_url: string;

@@ -1499,6 +1499,7 @@ mod tests {
             output_channels: 1,
             sky_orientation: None,
             reference_image_id: Some(1),
+            color_calibration: None,
             total_exposure_seconds: 3.0,
             preview_url: None,
             fits_url: None,

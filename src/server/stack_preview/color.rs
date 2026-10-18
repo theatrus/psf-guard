@@ -4609,6 +4609,7 @@ mod tests {
                     seiza_stacking::AffineTransform::IDENTITY,
                 )),
                 reference_image_id: Some(1),
+                color_calibration: None,
                 total_exposure_seconds: 180.0,
                 preview_url: None,
                 fits_url: None,

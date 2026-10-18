@@ -1500,8 +1500,9 @@ that mask through deconvolution and RC-Astro instead of treating gaps as data.
 
 ### Color calibration
 
-RGB and LRGB previews are color calibrated against Gaia star colors by
-default. Narrowband palettes are false color and never are.
+RGB and LRGB previews, and one-shot-color stacks, are color calibrated
+against Gaia star colors by default. Narrowband palettes are false color and
+never are.
 
 Seiza does the calibration (`seiza_stacking::calibrate_and_stretch`). It
 measures each Gaia star in R, G and B, fits instrumental color against Gaia
@@ -1547,6 +1548,19 @@ or why it did not:
 
 Turn calibration off with the **Color calibration** switch in the
 **Processing stack** editor.
+
+A one-shot-color stack is calibrated the same way, on its own linear RGB
+pixels, through the solve of its own reference frame carried through its
+layout. Its card preview is calibrated when the stack is built, and its
+**View processing** calibrates before the stretch unless its **Color
+calibration** switch is off. The stack's FITS stays as integrated. The
+default stretch is linked, so the balance survives it. A view whose stretch
+is set to unlinked stretches each channel on its own, and the card adds
+`channels stretched separately`. The calibration settings, the reference
+frame's solve and the Gaia catalog are part of the view's processing ID, so
+a mono stack's processing IDs do not change. A stack built before this
+release keeps its uncalibrated card preview until it is rebuilt or its view
+processing is applied.
 
 The request's `processing.color_calibration` takes `enabled`,
 `neutralize_background` (default true), and `white_reference`, either

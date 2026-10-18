@@ -291,6 +291,7 @@ pub fn import_masters(
             output_channels: channels,
             sky_orientation: None,
             reference_image_id: None,
+            color_calibration: None,
             total_exposure_seconds: 0.0,
             preview_url: Some(format!(
                 "/api/db/{}/stack-previews/{job_id}/0/preview?v={revision}",

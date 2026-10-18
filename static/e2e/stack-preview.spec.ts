@@ -219,6 +219,70 @@ function seedSyntheticColorStacks(databaseId: string, projectId: number, withCal
   );
 }
 
+/** A one-shot-color stack: three planes of a small star field, as a debayered
+ *  build leaves it, with its manifest and the project's latest index. */
+function seedSyntheticOscStack(databaseId: string, projectId: number): void {
+  const cacheRoot = path.join(process.env.PSF_GUARD_E2E_TMP!, 'cache', databaseId, 'stack-previews');
+  const jobId = 'c'.repeat(64);
+  const width = 96;
+  const height = 64;
+  const values = new Float32Array(width * height * 3);
+  for (let plane = 0; plane < 3; plane += 1) {
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const dx = x - 40;
+        const dy = y - 30;
+        values[plane * width * height + y * width + x] =
+          [120, 100, 90][plane] + 900 * Math.exp(-(dx * dx + dy * dy) / 8);
+      }
+    }
+  }
+  const cards = [
+    'SIMPLE  =                    T'.padEnd(80),
+    fitsIntegerCard('BITPIX', -32),
+    fitsIntegerCard('NAXIS', 3),
+    fitsIntegerCard('NAXIS1', width),
+    fitsIntegerCard('NAXIS2', height),
+    fitsIntegerCard('NAXIS3', 3),
+    'END'.padEnd(80),
+  ];
+  const headerText = cards.join('');
+  const header = Buffer.alloc(Math.ceil(headerText.length / 2880) * 2880, 0x20);
+  header.write(headerText, 0, 'ascii');
+  const pixels = Buffer.alloc(values.length * 4);
+  values.forEach((value, index) => pixels.writeFloatBE(value, index * 4));
+  const padding = Buffer.alloc((2880 - (pixels.length % 2880)) % 2880);
+  fs.mkdirSync(path.join(cacheRoot, jobId), { recursive: true });
+  fs.writeFileSync(path.join(cacheRoot, jobId, 'group-0.fits'), Buffer.concat([header, pixels, padding]));
+  const group = {
+    index: 0, target_id: 2, target_name: 'Beta Field', filter_name: 'B', state: 'ready',
+    phase: 'ready', total_candidates: 3, eligible_frames: 3, quality_excluded: 0,
+    missing_files: 0, processed_frames: 3, accepted_frames: 3, rejected_frames: 0,
+    output_channels: 3,
+    sky_orientation: {
+      convention: 'source_frame', version: 1, source: 'sky_anchor',
+      output_width: width, output_height: height,
+      source_to_output: { matrix: [[1, 0], [0, 1]], translation_x: 0, translation_y: 0 },
+    },
+    reference_image_id: 4, total_exposure_seconds: 180, preview_url: null, fits_url: null,
+    error: null, input_images: [], frames: [],
+  };
+  const remembered = {
+    job_id: jobId, artifact_revision: 'synthetic-osc', accepted_only: false,
+    created_unix_seconds: 1_760_000_200, cache_version: 15, group,
+  };
+  fs.writeFileSync(path.join(cacheRoot, jobId, 'manifest.json'), JSON.stringify({
+    schema_version: 1, database_id: databaseId, project_id: projectId, job_id: jobId,
+    artifact_revision: remembered.artifact_revision, state: 'completed', accepted_only: false,
+    created_unix_seconds: remembered.created_unix_seconds, cache_version: 15,
+    stacking_version: '0.14.0', groups: [group], error: null,
+  }));
+  fs.writeFileSync(path.join(cacheRoot, `latest-project-${projectId}.json`), JSON.stringify({
+    schema_version: 1, database_id: databaseId, project_id: projectId,
+    updated_unix_seconds: 1_760_000_300, groups: [remembered],
+  }, null, 2));
+}
+
 test('refuses RC-Astro values past the tool range beside Apply, where the server refusals show too', async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   seedSyntheticColorStacks(dbId, 2);
@@ -1622,4 +1686,23 @@ test('a phone folds the build options behind Options and gives the color cards t
   await expect(page.getByLabel('Card size')).toBeHidden();
   const card = await page.locator('.stack-color-card').first().boundingBox();
   expect(card!.width).toBeGreaterThan(340);
+});
+
+test('color calibrates a one-shot-color stack by default and says why it could not', async ({ page }) => {
+  seedSyntheticOscStack(dbId, 2);
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
+  const card = page.locator('.stack-preview-card').filter({ hasText: 'Beta Field' }).first();
+  const controls = card.locator('.stack-stretch-controls');
+  await controls.locator('summary').click();
+  const toggle = controls.getByRole('switch', { name: 'Color calibration' });
+  await expect(toggle).toBeChecked();
+  await controls.getByRole('button', { name: 'Apply processing' }).click();
+  // The fixture's reference frame has no fresh solve and the test server no
+  // Gaia catalog: the card says calibration did not run, and the view is
+  // still processed.
+  await expect(card.locator('.stack-color-calibration')).toContainText('Not color calibrated', {
+    timeout: 60_000,
+  });
+  await expect(controls.locator('summary')).toContainText('applied');
 });

@@ -72,6 +72,11 @@ pub struct StackViewProcessingRequest {
     /// the stars image beside the starless result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rc_astro: Option<super::rc_astro::RcAstroProcessing>,
+    /// Photometric color calibration of a one-shot-color stack against Gaia,
+    /// before the stretch. A color stack without it is calibrated with the
+    /// defaults; a mono stack never is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_calibration: Option<super::color_calibration::StackColorCalibration>,
 }
 
 impl StackStretchRequest {
@@ -115,6 +120,9 @@ pub struct StackStretchPreview {
     pub rc_astro: Option<super::rc_astro::StackRcAstroResult>,
     #[serde(default)]
     pub rc_astro_id: Option<String>,
+    /// What color calibration did for a one-shot-color stack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_calibration: Option<super::color_calibration::StackColorCalibrationOutcome>,
     pub preview_url: String,
     pub original_preview_url: String,
     #[serde(default)]
@@ -887,6 +895,8 @@ pub(crate) struct StretchSource {
     /// The stack build and channel group, for the job journal.
     pub job_id: String,
     pub group_index: usize,
+    /// What color calibration can use, for a one-shot-color stack.
+    pub calibration: Option<super::color_calibration::StackCalibrationSource>,
 }
 
 /// How long the request that starts a run waits for its result before it
@@ -907,6 +917,9 @@ fn validate_request(request: &StackViewProcessingRequest) -> Result<(), String> 
     if let Some(rc_astro) = &request.rc_astro {
         rc_astro.validate()?;
     }
+    if let Some(calibration) = &request.color_calibration {
+        calibration.validate()?;
+    }
     Ok(())
 }
 
@@ -923,6 +936,9 @@ struct PreparedRun {
     rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
     /// Per-prefix cache ids for the RC-Astro chain, canonical order.
     rc_astro_chain: Option<Vec<String>>,
+    /// The color calibration a one-shot-color stack asks for, spelt out.
+    color_calibration_settings: Option<super::color_calibration::StackColorCalibration>,
+    color_calibration: Option<super::color_calibration::ColorCalibrationPlan>,
 }
 
 impl PreparedRun {
@@ -932,6 +948,7 @@ impl PreparedRun {
             stretch: self.stretch.clone(),
             deconvolution: self.deconvolution,
             rc_astro: self.rc_astro.clone(),
+            color_calibration: self.color_calibration_settings,
         }
     }
 
@@ -953,9 +970,19 @@ async fn prepare_run(
     database_id: &str,
     source_key: &str,
     source_revision: &str,
+    calibration_source: Option<&super::color_calibration::StackCalibrationSource>,
     request: StackViewProcessingRequest,
 ) -> Result<PreparedRun, AppError> {
     let config = request.stretch.config();
+    // A one-shot-color stack is calibrated unless the request turns it off;
+    // a mono stack never is. The settings, the reference frame's solve and
+    // the Gaia catalog are part of the run's identity.
+    let color_calibration_settings =
+        calibration_source.map(|_| request.color_calibration.unwrap_or_default());
+    let color_calibration = calibration_source
+        .zip(color_calibration_settings)
+        .filter(|(_, settings)| settings.enabled)
+        .map(|(source, settings)| source.plan(settings));
     let deconvolution = request.deconvolution;
     let deconvolution_id = deconvolution
         .map(|request| deconvolution_cache_id(database_id, source_key, source_revision, &request))
@@ -1012,6 +1039,16 @@ async fn prepare_run(
         hasher.update(b"rc-astro");
         hasher.update(rc_astro_id.as_bytes());
     }
+    // Only a color stack adds these, so a mono stack's runs keep their ids.
+    if let Some(settings) = &color_calibration_settings {
+        hasher.update(b"color-calibration");
+        hasher.update(
+            serde_json::to_vec(&(settings, color_calibration.as_ref().map(|plan| &plan.basis)))
+                .map_err(|error| {
+                    AppError::InternalError(format!("Failed to encode color calibration: {error}"))
+                })?,
+        );
+    }
     let mut stretch_id = String::with_capacity(64);
     for byte in hasher.finalize() {
         write!(&mut stretch_id, "{byte:02x}").expect("writing to a String cannot fail");
@@ -1025,6 +1062,8 @@ async fn prepare_run(
         rc_astro,
         rc_astro_schemas,
         rc_astro_chain,
+        color_calibration_settings,
+        color_calibration,
     })
 }
 
@@ -1051,7 +1090,14 @@ pub(super) async fn apply_to_fits(
         )
         .map_err(AppError::InternalError)?;
     }
-    let prepared = prepare_run(&database_id, &source.key, &source.revision, request).await?;
+    let prepared = prepare_run(
+        &database_id,
+        &source.key,
+        &source.revision,
+        source.calibration.as_ref(),
+        request,
+    )
+    .await?;
     let stretch_id = prepared.stretch_id.clone();
     if let Some(generation) = &selection_generation {
         bind_selection(&selection_path, generation, &stretch_id)
@@ -1212,6 +1258,7 @@ fn start_run(
         prepared.deconvolution,
         prepared.rc_astro,
         prepared.rc_astro_schemas,
+        prepared.color_calibration,
     ));
     (run, waits)
 }
@@ -1288,9 +1335,15 @@ async fn restore_processing(
         )));
     }
     validate_request(&request).map_err(NotRestored::Skip)?;
-    let prepared = prepare_run(&ctx.id, &source.key, &source.revision, *request)
-        .await
-        .map_err(|error| NotRestored::Skip(format!("{error:?}")))?;
+    let prepared = prepare_run(
+        &ctx.id,
+        &source.key,
+        &source.revision,
+        source.calibration.as_ref(),
+        *request,
+    )
+    .await
+    .map_err(|error| NotRestored::Skip(format!("{error:?}")))?;
     let stretch_id = prepared.stretch_id.clone();
     if stretch_id != run_id {
         tracing::info!(
@@ -1385,12 +1438,18 @@ pub(super) async fn start_reapply(
         return Err("the stack was rebuilt meanwhile".into());
     }
     validate_request(&request)?;
-    let prepared = prepare_run(&ctx.id, &source.key, &source.revision, request)
-        .await
-        .map_err(|error| match error {
-            AppError::BadRequest(message) | AppError::InternalError(message) => message,
-            other => format!("{other:?}"),
-        })?;
+    let prepared = prepare_run(
+        &ctx.id,
+        &source.key,
+        &source.revision,
+        source.calibration.as_ref(),
+        request,
+    )
+    .await
+    .map_err(|error| match error {
+        AppError::BadRequest(message) | AppError::InternalError(message) => message,
+        other => format!("{other:?}"),
+    })?;
     let stretch_id = prepared.stretch_id.clone();
     let selection_path = selection_path(&ctx.stack_root, &source.key, &source.revision);
     // Asked for on this revision, as a person's Apply would be, so the run
@@ -1777,6 +1836,7 @@ async fn compute_stretch_variant(
     deconvolution: Option<DeconvolutionConfig>,
     rc_astro: Option<super::rc_astro::RcAstroProcessing>,
     rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+    color_calibration: Option<super::color_calibration::ColorCalibrationPlan>,
 ) -> Option<StackStretchPreview> {
     let ProcessingTicket {
         token,
@@ -1881,6 +1941,7 @@ async fn compute_stretch_variant(
             rc_astro,
             identity.rc_astro_chain.as_deref(),
             rc_astro_schemas,
+            color_calibration.as_ref(),
             &stop,
             priority,
         )
@@ -1960,6 +2021,7 @@ fn build_stretch_preview(
         deconvolution: rendered.deconvolution,
         rc_astro: rendered.rc_astro,
         rc_astro_id: identity.rc_astro_id().map(str::to_string),
+        color_calibration: rendered.color_calibration,
         preview_url: format!("/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview"),
         original_preview_url: format!(
             "/api/db/{database_id}/stack-previews/stretch/{stretch_id}/preview?size=original"
@@ -1988,6 +2050,7 @@ struct RenderedVariant {
     luminance_statistics: Option<RobustStatistics>,
     deconvolution: Option<StackDeconvolutionResult>,
     rc_astro: Option<super::rc_astro::StackRcAstroResult>,
+    color_calibration: Option<super::color_calibration::StackColorCalibrationOutcome>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2002,6 +2065,7 @@ fn render_fits_variant(
     rc_astro_request: Option<super::rc_astro::RcAstroProcessing>,
     rc_astro_chain: Option<&[String]>,
     rc_astro_schemas: Option<Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+    color_calibration: Option<&super::color_calibration::ColorCalibrationPlan>,
     stop: &RunStop,
     priority: crate::concurrency::Priority,
 ) -> Result<RenderedVariant, String> {
@@ -2146,11 +2210,36 @@ fn render_fits_variant(
             )
         })?);
     }
-    report_stage(stretch_id, "Rendering preview");
     let linear = rc_astro_outcome
         .as_ref()
         .map(|outcome| &outcome.image)
         .unwrap_or(linear);
+    // A one-shot-color stack is calibrated on its linear pixels, after
+    // restoration and before the stretch.
+    let mut calibrated = None;
+    let color_calibration = match color_calibration {
+        Some(plan) if source_transfer == StackStretchSourceTransfer::Linear => {
+            stop.check()?;
+            report_stage(stretch_id, "Color calibration");
+            let open_catalog = || {
+                state
+                    .astrometry
+                    .gaia_photometry_catalog()
+                    .map(|(catalog, _)| catalog)
+            };
+            let (image, mut outcome) = pool
+                .install(|| super::color_calibration::calibrate_stack(plan, linear, &open_catalog));
+            // An unlinked stretch pulls each channel to its own median.
+            if config.color_strategy == seiza_stretch::ColorStrategy::Unlinked {
+                super::color_calibration::mark_stretched_separately(&mut outcome);
+            }
+            calibrated = image;
+            Some(outcome)
+        }
+        _ => None,
+    };
+    let linear = calibrated.as_ref().unwrap_or(linear);
+    report_stage(stretch_id, "Rendering preview");
     let normalized = if source_transfer == StackStretchSourceTransfer::Linear {
         Some(normalize_linear_image(linear)?)
     } else {
@@ -2212,6 +2301,7 @@ fn render_fits_variant(
         luminance_statistics: source_analysis.luminance_statistics(),
         deconvolution,
         rc_astro: rc_astro_outcome.map(|outcome| outcome.result),
+        color_calibration,
     })
 }
 
@@ -2604,6 +2694,7 @@ mod tests {
                     steps: vec![],
                     has_stars: false,
                 }),
+                color_calibration: None,
             },
         );
         write_json_atomic(&stretch_manifest_path(cache, stretch_id), &preview).unwrap();
@@ -3108,5 +3199,84 @@ mod tests {
         assert_eq!(range.black, 10.0);
         assert_eq!(range.white, 1_000.0);
         assert_eq!(&normalized.data[..3], &[0.0, 90.0 / 990.0, 1.0]);
+    }
+
+    /// A one-shot-color stack's processing is calibrated by default, and its
+    /// id follows the calibration settings, the solve and the catalog; a mono
+    /// stack's id does not change.
+    #[tokio::test]
+    async fn a_color_stack_run_keys_on_its_calibration() {
+        use super::super::color_calibration::{
+            tests::solution, StackCalibrationSource, StackColorCalibration,
+        };
+        let request: StackViewProcessingRequest =
+            serde_json::from_value(serde_json::json!({"model": {"type": "identity"}})).unwrap();
+        let catalog = crate::astrometry::AstrometryCatalogFileSignature {
+            name: "gaia_photometry".into(),
+            path: "/catalogs/stars-gaia-photometry.bin".into(),
+            format: "SEIZAPH1".into(),
+            size_bytes: 10,
+            modified_unix_seconds: 1,
+            modified_subsec_nanos: 0,
+            sha256: None,
+        };
+        let source =
+            |solved: bool, catalog: Option<crate::astrometry::AstrometryCatalogFileSignature>| {
+                StackCalibrationSource {
+                    reference_image_id: Some(7),
+                    orientation: Some(super::super::StackSkyOrientation {
+                        convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
+                        version: seiza_stacking::SKY_ORIENTATION_VERSION,
+                        source: "test".into(),
+                        output_width: 1000,
+                        output_height: 800,
+                        source_to_output: seiza_stacking::AffineTransform::IDENTITY,
+                    }),
+                    solution: solved.then(solution),
+                    catalog,
+                }
+            };
+        async fn id(
+            calibration: Option<&StackCalibrationSource>,
+            request: StackViewProcessingRequest,
+        ) -> PreparedRun {
+            prepare_run("db", "mono:job:0", "rev", calibration, request)
+                .await
+                .unwrap()
+        }
+        let mono = id(None, request.clone()).await;
+        assert!(mono.color_calibration.is_none());
+        assert!(mono.request().color_calibration.is_none());
+
+        let ready = source(true, Some(catalog.clone()));
+        let color = id(Some(&ready), request.clone()).await;
+        assert_eq!(
+            color.request().color_calibration,
+            Some(StackColorCalibration::default())
+        );
+        assert!(color.color_calibration.as_ref().unwrap().placement.is_ok());
+        assert_ne!(color.stretch_id, mono.stretch_id);
+
+        // A newly installed catalog, or a new solve, is a new run.
+        let unsolved = source(false, Some(catalog.clone()));
+        assert_ne!(
+            id(Some(&unsolved), request.clone()).await.stretch_id,
+            color.stretch_id
+        );
+        let no_catalog = source(true, None);
+        assert_ne!(
+            id(Some(&no_catalog), request.clone()).await.stretch_id,
+            color.stretch_id
+        );
+
+        // Turned off, the stack keeps the setting but plans nothing.
+        let mut off = request;
+        off.color_calibration = Some(StackColorCalibration {
+            enabled: false,
+            ..StackColorCalibration::default()
+        });
+        let off = id(Some(&ready), off).await;
+        assert!(off.color_calibration.is_none());
+        assert_ne!(off.stretch_id, color.stretch_id);
     }
 }
