@@ -58,14 +58,22 @@ test('explicit validation opens and exhaustively validates the installed catalog
     status: 'available',
     validated: true,
   });
+  // Gaia colors are optional: without them the catalog is not configured,
+  // rather than missing like a required resource.
+  expect(resources.find((resource) => resource.name === 'gaia_photometry')).toMatchObject({
+    status: 'not_configured',
+    validated: false,
+  });
   expect(
     resources
-      .filter((resource) => !['objects', 'stars'].includes(resource.name))
-      .every(
-        (resource) =>
-          resource.status === 'missing' && resource.validated === false
-      )
-  ).toBe(true);
+      .filter((resource) => !['objects', 'stars', 'gaia_photometry'].includes(resource.name))
+      .map((resource) => [resource.name, resource.status, resource.validated])
+  ).toEqual([
+    ['star_identifiers', 'missing', false],
+    ['blind_index', 'missing', false],
+    ['transients', 'missing', false],
+    ['minor_bodies', 'missing', false],
+  ]);
   expect(resources.find((resource) => resource.name === 'stars')).toMatchObject({
     name: 'stars',
     status: 'available',
