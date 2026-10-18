@@ -1259,15 +1259,23 @@ Image files and generated previews, stacks, and masters are not included.
 Back up original FITS and XISF files separately. See [Backups](docs/BACKUPS.md)
 for permissions, schedules, archive contents, and restoration.
 
-## ⚠️ Known limitations
+<a id="️-known-limitations"></a>
+<a id="known-limitations"></a>
+## ⚠️ Requirements and beta features
 
-- **Folder layouts:** PSF Guard recognizes common N.I.N.A. layouts such as
-  `%DATEMINUS12%/%TARGETNAME%/%DATEMINUS12%/LIGHT/...`. If a layout is not
-  recognized, report it with an example path.
-- **Optional evidence:** plate solving needs Seiza catalogs; satellite checks
-  need exposure and site metadata. Missing inputs limit the checks available.
-- **Beta integrations:** Director pairing and collaboration remain early beta.
-  Use Target Scheduler with PSF Guard Sync for the capture workflow above.
+[Image-folder imports](docs/IMPORTING.md) scan subfolders and read frame
+headers. They do not require a N.I.N.A. folder layout.
+
+- **Plate solving:** solving image pixels requires Seiza star catalogs; blind
+  solving also needs the blind index. Install them under **Settings → Catalogs**.
+- **Satellite prediction:** requires a solved frame, UTC exposure timing,
+  observing-site coordinates and orbital elements. Missing inputs make the
+  check unavailable; they do not count as an image fault. See
+  [satellite prediction](docs/SATELLITES.md#required-fits-metadata).
+- **Beta integrations:** N.I.N.A. Director plugin pairing and collaboration
+  remain early beta. Planning itself is not beta and does not require the
+  Director plugin. Use Target Scheduler with PSF Guard Sync for capture. See
+  [Director and collaboration](docs/DIRECTOR.md).
 
 ## 🛠️ Development
 
