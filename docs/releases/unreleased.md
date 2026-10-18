@@ -11,6 +11,9 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- With **Snap** on, dragging a mosaic panel along its row no longer pulls it
+  into the next row when a panel there shares only a corner with it.
+
 - Upgrading PSF Guard no longer stacks every channel again and rebuilds every
   calibration master when the new Seiza release leaves stacking output
   unchanged. **Build current set** reuses the existing stacks.

@@ -1141,8 +1141,9 @@ instead** offers to start again.
   the rig's camera: a rotator, a camera turned by hand, or a fixed one. How
   the rig reaches the angle is the session's business, not the plan's.
 - **Drag a panel** with **Panel** among the sky's drag modes. It settles,
-  lined up with another panel or at the minimum overlap beside one, turned
-  panels included. A drop that leaves a thin overlap, a gap or a lone panel
+  lined up with another panel or at the minimum overlap beside one it is
+  level with, turned panels included. A panel that shares only a corner with
+  it does not pull it out of its row or column. A drop that leaves a thin overlap, a gap or a lone panel
   goes back and says why; hold Alt (Option) while dropping, or press **Place
   anyway** in the note, to place it anyway. Turn **Snap** off beside the drag
   modes to drag and turn freely: a drop stays where it lands, and the mosaic
