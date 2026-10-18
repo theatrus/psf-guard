@@ -410,6 +410,13 @@ project in the Review picker from the Library, Sky or a workspace opens
 Images for it, and the workspace's own URL parameter (`plan`) stays behind, so a
 plan you had open does not follow you into review.
 
+Choose a project to enable **Planning**, including a project imported from
+image folders. If its catalog cannot be planned, Planning opens the catalog
+warnings and **Retry planning**. A file copied with the same catalog identity
+as another registered database is excluded so it cannot become a second rig.
+Use the original catalog for planning. Missing-GUID repair guidance appears
+only when the selected project actually has no GUID.
+
 A workspace lives at `/plan?plan=<key>`. The key is the Target Scheduler
 GUID the plan's rigs share, so the same link opens the same plan on any
 PSF Guard instance that holds those databases. Director's own plan id serves

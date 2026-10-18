@@ -5,6 +5,12 @@
   to 200%, and the app remembers the scale on this device. Image zoom stays
   separate. Browser users keep their browser's zoom controls.
 
+- **Planning** opens for a selected project even when its catalog has no plan,
+  showing catalog warnings and **Retry planning**. Catalog copies excluded
+  because they share an identity no longer leave a disabled button or show
+  incorrect missing-GUID guidance. Image-folder imports can open their plans
+  from the same button.
+
 - Settings keeps the last backup result when you restart just after a backup
   finishes.
 

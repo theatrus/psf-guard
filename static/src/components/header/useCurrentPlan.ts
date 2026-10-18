@@ -46,5 +46,9 @@ export function useCurrentPlan() {
     if (dbId && projectId !== null) return planFor(dbId, projectId);
     return null;
   }, [rows, named, dbId, projectId, planFor]);
-  return { enabled: plans.enabled, rows, current, hrefFor: plans.hrefFor, loading: plans.loading, error: plans.error };
+  // A project without a plan still has a Planning entry: the source route
+  // retries adoption and explains why the catalog could not be taken in.
+  const href = current ? plans.hrefFor(current)
+    : dbId && projectId !== null ? plans.hrefFor(`${dbId}:${projectId}`) : null;
+  return { enabled: plans.enabled, rows, current, href, hrefFor: plans.hrefFor, loading: plans.loading, error: plans.error };
 }
