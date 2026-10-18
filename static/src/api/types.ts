@@ -1974,8 +1974,18 @@ export interface AstroBinFilterEntry {
   to_night?: string;
 }
 
+/** A filter name the catalog's lights carry, rejects aside, and the nights it spans. */
+export interface AstroBinSeenFilter {
+  filter_name: string;
+  frames: number;
+  first_night: string;
+  last_night: string;
+}
+
 export interface AstroBinFilterMap {
   entries: AstroBinFilterEntry[];
+  /** The catalog's filter names, for the map to offer. */
+  seen: AstroBinSeenFilter[];
 }
 
 /** One row of the AstroBin CSV: one night, filter and exposure length. */

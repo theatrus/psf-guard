@@ -261,6 +261,76 @@ pub fn save_filter_entries(
     Ok(cleaned)
 }
 
+/// A filter name the catalog's lights carry and the nights it spans, so the
+/// filter map can offer the name instead of asking the person to type it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeenFilter {
+    pub filter_name: String,
+    /// Lights under the name, rejects aside.
+    pub frames: u64,
+    pub first_night: String,
+    pub last_night: String,
+}
+
+/// Every filter name among the catalog's kept lights, spelled as most of
+/// them spell it, matched as [`FilterIdResolver::resolve`] matches: trimmed
+/// and ignoring case. `boundary` splits nights, as the export's do.
+pub fn seen_filters(conn: &Connection, boundary: i64) -> Result<Vec<SeenFilter>> {
+    let mut statement = conn
+        .prepare(
+            "SELECT TRIM(filtername), COUNT(*), MIN(acquireddate), MAX(acquireddate)
+             FROM acquiredimage
+             WHERE acquireddate IS NOT NULL AND TRIM(filtername) <> '' AND gradingStatus <> 2
+             GROUP BY TRIM(filtername)",
+        )
+        .context("preparing the filter name query")?;
+    let spellings = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .context("querying filter names")?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("reading filter names")?;
+    struct Tally {
+        spelling: String,
+        spelling_frames: i64,
+        frames: i64,
+        first: i64,
+        last: i64,
+    }
+    let mut by_name: BTreeMap<String, Tally> = BTreeMap::new();
+    for (name, frames, first, last) in spellings {
+        let tally = by_name.entry(name.to_lowercase()).or_insert_with(|| Tally {
+            spelling: name.clone(),
+            spelling_frames: 0,
+            frames: 0,
+            first,
+            last,
+        });
+        if frames > tally.spelling_frames {
+            tally.spelling = name;
+            tally.spelling_frames = frames;
+        }
+        tally.frames += frames;
+        tally.first = tally.first.min(first);
+        tally.last = tally.last.max(last);
+    }
+    Ok(by_name
+        .into_values()
+        .map(|tally| SeenFilter {
+            filter_name: tally.spelling,
+            frames: tally.frames.max(0) as u64,
+            first_night: night_of(tally.first, boundary),
+            last_night: night_of(tally.last, boundary),
+        })
+        .collect())
+}
+
 /// The AstroBin id a filter had on a given night: the catalog's own map
 /// first, then the server-wide defaults.
 #[derive(Debug, Clone, Default)]
@@ -1238,6 +1308,37 @@ mod tests {
         assert!(export
             .csv
             .starts_with("date,filter,number,duration,binning,"));
+    }
+
+    #[test]
+    fn seen_filters_offer_each_name_with_its_nights() {
+        let conn = catalog();
+        // Another spelling of L joins the L most lights use.
+        conn.execute(
+            "INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername, gradingStatus) VALUES (1, 2, ?1, ' l ', 0)",
+            [EVENING + 25 * HOUR],
+        )
+        .unwrap();
+        let boundary = catalog_night_boundary(&conn).unwrap();
+        let seen = seen_filters(&conn, boundary).unwrap();
+        assert_eq!(
+            seen,
+            vec![
+                SeenFilter {
+                    filter_name: "Ha".into(),
+                    frames: 1,
+                    first_night: "2026-04-16".into(),
+                    last_night: "2026-04-16".into(),
+                },
+                // The reject does not count.
+                SeenFilter {
+                    filter_name: "L".into(),
+                    frames: 5,
+                    first_night: "2026-04-16".into(),
+                    last_night: "2026-04-17".into(),
+                },
+            ]
+        );
     }
 
     #[test]
