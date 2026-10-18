@@ -1,5 +1,6 @@
-.astrobin-filter-map {
-  width: min(58rem, calc(100vw - 2rem));
+/* .dialog-panel sets 42rem and loads later, so match it to widen. */
+.dialog-panel.astrobin-filter-map {
+  width: min(58rem, 100%);
 }
 
 .astrobin-filter-map-intro {
@@ -8,43 +9,135 @@
   font-size: 0.88rem;
 }
 
-.astrobin-filter-map-table-wrap {
-  overflow-x: auto;
+/* The catalog's filter names with no entry yet, one tap each to add. */
+.astrobin-filter-map-seen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
   margin-bottom: 0.6rem;
-}
-
-.astrobin-filter-map-table {
-  border-collapse: collapse;
-  width: 100%;
   font-size: 0.85rem;
 }
 
-.astrobin-filter-map-table th,
-.astrobin-filter-map-table td {
-  text-align: left;
-  padding: 0.25rem 0.5rem 0.25rem 0;
-  border-bottom: 1px solid var(--color-border-secondary);
-  vertical-align: top;
-  white-space: nowrap;
+.astrobin-filter-map-seen-title {
+  color: var(--color-text-muted);
 }
 
-.astrobin-filter-map-table input {
+.astrobin-filter-map-chip {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-size: 0.85rem;
+}
+
+.astrobin-filter-map-chip:hover {
+  border-color: var(--color-border-primary);
+}
+
+/* Each entry is a row of labelled fields that rearranges to fit its width
+   rather than scrolling sideways: one line when there is room, then the
+   label on a line of its own, then a field per line on a phone. */
+.astrobin-filter-entries {
+  container-type: inline-size;
+  list-style: none;
+  margin: 0 0 0.6rem;
+  padding: 0;
+}
+
+.astrobin-filter-entry {
+  display: grid;
+  grid-template-columns: minmax(4rem, 7rem) minmax(8rem, 10rem) minmax(8rem, 1fr) 9.5rem 9.5rem auto;
+  grid-template-areas: 'name id label from to remove' 'note note note note note note';
+  align-items: end;
+  gap: 0.25rem 0.5rem;
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.astrobin-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  font-size: 0.85rem;
+}
+
+.astrobin-filter-field span {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+.astrobin-filter-field input {
   width: 100%;
-  min-width: 5rem;
+  min-width: 0;
   box-sizing: border-box;
 }
 
-/* The label is prose ("Antlia V-Pro G 36mm"); give it room to read. */
-.astrobin-filter-map-table td:nth-child(3) input {
-  min-width: 13rem;
+.astrobin-filter-field-name {
+  grid-area: name;
 }
 
-.astrobin-filter-map-table tr.has-problem input {
-  border-color: var(--color-warning);
+.astrobin-filter-field-label {
+  grid-area: label;
+}
+
+.astrobin-filter-field-from {
+  grid-area: from;
+}
+
+.astrobin-filter-field-to {
+  grid-area: to;
+}
+
+.astrobin-filter-field-id {
+  grid-area: id;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.astrobin-filter-field-id label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.astrobin-filter-field-id a {
+  padding-bottom: 0.35rem;
+  text-decoration: none;
+}
+
+.astrobin-filter-remove {
+  grid-area: remove;
+  padding: 0.3rem 0.6rem;
+}
+
+.astrobin-filter-entry-note {
+  grid-area: note;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.8rem;
+}
+
+@container (max-width: 46rem) {
+  .astrobin-filter-entry {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+    grid-template-areas: 'name id remove' 'label label label' 'from to to' 'note note note';
+  }
+}
+
+@container (max-width: 26rem) {
+  .astrobin-filter-entry {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-areas: 'name name remove' 'id id id' 'label label label' 'from to to' 'note note note';
+  }
 }
 
 .astrobin-problem {
-  display: block;
   color: var(--color-warning);
 }
 
@@ -52,18 +145,4 @@
    backdrop; sit above it as the calibration library dialog does. */
 .dialog-backdrop:has(> .astrobin-filter-map) {
   z-index: 100100;
-}
-
-.astrobin-filter-map-id {
-  white-space: nowrap;
-}
-
-.astrobin-filter-map-id input {
-  width: calc(100% - 1.6rem);
-  min-width: 9rem;
-}
-
-.astrobin-filter-map-id a {
-  margin-left: 0.35rem;
-  text-decoration: none;
 }

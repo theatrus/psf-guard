@@ -4,6 +4,12 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- The AstroBin filter map (**Settings → Databases → Edit filters**) fits
+  its window: each entry's fields wrap onto more lines on a narrow screen
+  instead of scrolling sideways, and nights use date pickers. The dialog
+  offers the catalog's filter names that have no entry yet, one click each
+  or **Add all**, with the server-wide default id filled in. A pasted
+  AstroBin page address becomes its id.
 - Dropdown arrows now sit inside the border with space between the arrow
   and the selected text.
 - UI labels, settings help, and confirmation messages now state actions,

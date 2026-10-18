@@ -144,8 +144,13 @@ test('Settings shows each database its own filter map with night ranges', async 
 
   const dialog = page.locator('.astrobin-filter-map');
   await expect(dialog).toContainText('AstroBin filters — AstroBin Rig');
-  await dialog.getByRole('button', { name: '+ Add entry' }).click();
-  await dialog.getByLabel('Filter name, row 1').fill('B');
+  // The catalog's B lights are offered; one click starts their entry.
+  await dialog
+    .getByRole('group', { name: 'Filters not in the map' })
+    .getByRole('button', { name: /^Add B, / })
+    .click();
+  await expect(dialog.getByLabel('Filter name, row 1')).toHaveValue('B');
+  await expect(dialog).toContainText('on 2026-04-16');
   await dialog.getByLabel('AstroBin id, row 1').fill('200');
   await dialog.getByLabel('Label, row 1').fill('Chroma B');
   await dialog.getByLabel('First night, row 1').fill('2026-04-16');
@@ -161,4 +166,53 @@ test('Settings shows each database its own filter map with night ranges', async 
       from_night: '2026-04-16',
     }),
   ]);
+});
+
+test('a filter map entry fits the dialog at every width, without scrolling sideways', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await openSettings(page);
+  await page.locator('.astrobin-filter-summary').getByRole('button', { name: 'Edit filters' }).click();
+  const dialog = page.locator('.astrobin-filter-map');
+  await dialog.getByRole('button', { name: /^Add B, / }).click();
+  await dialog
+    .getByLabel('AstroBin id, row 1')
+    .fill('https://app.astrobin.com/equipment/explorer/filter/4047/astronomik-b-deep-sky');
+  await dialog.getByLabel('Label, row 1').fill('Astronomik Deep-Sky B 36mm');
+  await expect(dialog.getByLabel('AstroBin id, row 1')).toHaveValue('4047');
+  await dialog.getByLabel('Last night, row 1').fill('2026-04-30');
+
+  for (const width of [1280, 900, 600, 360]) {
+    await page.setViewportSize({ width, height: 800 });
+    const box = await dialog.boundingBox();
+    expect(box, `dialog at ${width}px`).not.toBeNull();
+    // Every field and the remove button sit inside the dialog and the window.
+    for (const control of [
+      dialog.getByLabel('Filter name, row 1'),
+      dialog.getByLabel('AstroBin id, row 1'),
+      dialog.getByRole('link', { name: 'Open filter 4047 on AstroBin' }),
+      dialog.getByLabel('Label, row 1'),
+      dialog.getByLabel('First night, row 1'),
+      dialog.getByLabel('Last night, row 1'),
+      dialog.getByRole('button', { name: 'Remove row 1' }),
+    ]) {
+      const at = (await control.boundingBox())!;
+      expect(at.x, `left edge at ${width}px`).toBeGreaterThanOrEqual(box!.x);
+      expect(at.x + at.width, `right edge at ${width}px`).toBeLessThanOrEqual(
+        Math.min(box!.x + box!.width, width) + 0.5
+      );
+    }
+    // A text box scrolls its own long address; nothing else may.
+    const sideways = await dialog.evaluate((el) =>
+      Array.from(el.querySelectorAll(':not(input)')).some(
+        (child) =>
+          child.scrollWidth > child.clientWidth + 1 && getComputedStyle(child).overflowX !== 'visible'
+      )
+    );
+    expect(sideways, `a sideways scroller at ${width}px`).toBe(false);
+    if (process.env.PSF_GUARD_E2E_SHOT_DIR) {
+      await dialog.screenshot({ path: `${process.env.PSF_GUARD_E2E_SHOT_DIR}/astrobin-filters-${width}.png` });
+    }
+  }
 });
