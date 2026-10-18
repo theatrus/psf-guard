@@ -63,7 +63,11 @@ const run: StackActivityEntry = {
 };
 
 /** A card on a refreshed stack whose processing the server is making again. */
-function mockCard(stretch: () => StackStretchPreview | null, active: () => StackActivityEntry[]) {
+function mockCard(
+  stretch: () => StackStretchPreview | null,
+  active: () => StackActivityEntry[],
+  group: Record<string, unknown> = {},
+) {
   server.use(
     http.get('/api/settings/stacking/method', () => ok({ method: {}, recommended: {}, classic: {} })),
     http.get('/api/stack-activity', () => ok({ schema_version: 1, active: active() })),
@@ -88,6 +92,7 @@ function mockCard(stretch: () => StackStretchPreview | null, active: () => Stack
           calibration: { state: 'none', bias_frames: 0, dark_frames: 0, dark_flat_frames: 0, flat_frames: 0, warning: null },
           input_images: [{ image_id: 1, grading_status: 1 }, { image_id: 2, grading_status: 1 }],
           frames: [],
+          ...group,
         },
       }],
     })),
@@ -112,6 +117,17 @@ function renderPanel() {
 }
 
 describe('StackPreviewPanel on a refreshed stack', () => {
+  it('loads a preview rendered again from the FITS under its own revision', async () => {
+    mockCard(() => null, () => [], { preview_revision: 'rendered-3' });
+    const view = renderPanel();
+    await waitFor(() => expect(view.container.querySelector('.stack-preview-image img')).not.toBeNull());
+    expect(view.container.querySelector('.stack-preview-image img')).toHaveAttribute(
+      'src',
+      expect.stringContaining('/stack-previews/refreshed-job/0/preview?v=revision-2.rendered-3'),
+    );
+  });
+
+
   it('shows the previous result while reprocessing, with the run from the queue, then the new one', async () => {
     let done = false;
     mockCard(

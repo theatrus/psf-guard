@@ -215,7 +215,7 @@ target/channel.
 
 Stack job ids, resume checkpoints, reference scores and calibration masters
 record `seiza_stacking::OUTPUT_VERSION`: the Seiza release whose stacking
-output the build reproduces. Stack previews and stretch runs record
+output the build reproduces. Card previews and stretch runs record
 `seiza_stretch::OUTPUT_VERSION` in the same way. Seiza moves these only when
 its output changes, and a test in each crate holds them to it.
 
@@ -224,6 +224,19 @@ An upgrade that changes neither keeps every stack, checkpoint and master.
 that changes stacking output gives every stack a new job id, so the next
 build of each channel stacks it again, and calibration masters are rebuilt
 as builds need them.
+
+The card preview is not part of the job id. Each channel records the stretch
+release that rendered its preview (`preview_stretch_version`). When **Build
+current set** or an automatic refresh finds a finished stack whose preview an
+older stretch release rendered, PSF Guard renders the preview again from the
+stack's FITS and does not stack again. The job line shows `Rendering
+preview`. A one-shot-color stack whose color calibration is out of date
+renders again the same way. The stack keeps its artifact revision, so its
+processing and the color previews built from it are not made again; they
+keep the stretch they were made with. The new preview gets a
+`preview_revision`, which the page adds to the image's address. Job ids still
+hash stretch release `0.3.0`, the value they held when the preview left
+them, so no id changed.
 
 ### Frame preparation and worker budgets
 
@@ -1580,8 +1593,9 @@ a mono stack's processing IDs do not change. The card preview and the
 processing each record the solve and catalog their calibration rested on.
 When either changes, as when Gaia colors are installed or the reference
 frame is solved again, the card shows `Out of date — Gaia colors were
-installed; rebuild the stack`, or `…; apply the processing again` for
-processing. A stack built before this release keeps its uncalibrated card
+installed; click Build current set to render the preview again`, or `…;
+apply the processing again` for processing. **Build current set** renders the
+card preview again from the stack's FITS without stacking again. A stack built before this release keeps its uncalibrated card
 preview until it is rebuilt or its view processing is applied.
 
 The request's `processing.color_calibration` takes `enabled`,
@@ -1734,7 +1748,7 @@ immutable cached response for the rebuilt output.
   is not a final science product.
 - RGB and LRGB color is calibrated against Gaia broadband colors, not
   spectrophotometrically; narrowband color is a visual channel combination.
-  One-shot-color stacks are not calibrated yet. There is no custom mixing
+  There is no custom mixing
   matrix UI, mosaic, or cross-target integration, and no drizzle beyond Bayer
   drizzle.
 - Color frames are demosaiced with VNG. Seiza also offers MHC and bilinear,

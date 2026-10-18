@@ -4612,6 +4612,8 @@ mod tests {
                 color_calibration: None,
                 color_calibration_basis: None,
                 color_calibration_outdated: None,
+                preview_stretch_version: None,
+                preview_revision: None,
                 total_exposure_seconds: 180.0,
                 preview_url: None,
                 fits_url: None,

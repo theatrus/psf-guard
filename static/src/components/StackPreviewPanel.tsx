@@ -94,6 +94,13 @@ interface StackArtifact {
   group: StackGroupStatus;
 }
 
+/** The card preview's cache key: the stack's revision, and the preview's
+ *  own once it has been rendered again from the stack's FITS. */
+function previewRevision(artifact: StackArtifact): string {
+  const rendered = artifact.group.preview_revision;
+  return rendered ? `${artifact.artifactRevision}.${rendered}` : artifact.artifactRevision;
+}
+
 function stackScoringSettings(preferences: ScoringPreferences): StackScoringSettings {
   return {
     penalty_satellite: preferences.satellite,
@@ -1091,9 +1098,11 @@ export default function StackPreviewPanel({
                       : 0;
                 const progressLabel =
                   progressState === 'queued'
-                    ? artifact
-                      ? 'Rebuild queued'
-                      : 'Waiting for stacker'
+                    ? progressGroup?.phase === 'rendering'
+                      ? 'Preview render queued'
+                      : artifact
+                        ? 'Rebuild queued'
+                        : 'Waiting for stacker'
                     : progressState === 'running'
                       ? progressGroup?.phase === 'calibration'
                         ? progressGroup.calibration_progress
@@ -1230,7 +1239,7 @@ export default function StackPreviewPanel({
                           src={(stretchKey && starsView[stretchKey] && appliedStretch?.stars_preview_url)
                             || appliedStretch?.preview_url
                             || apiClient.getStackPreviewUrl(
-                              dbId, artifact.jobId, artifact.group.index, artifact.artifactRevision
+                              dbId, artifact.jobId, artifact.group.index, previewRevision(artifact)
                             )}
                           alt={`${targetName} ${channelLabel(filterName, exposureGroup)} stack preview`}
                         />
@@ -1529,7 +1538,7 @@ export default function StackPreviewPanel({
               dbId,
               inspector.jobId,
               inspector.group.index,
-              inspector.artifactRevision,
+              previewRevision(inspector),
               'original'
             )}
           fitsUrl={stretches[artifactStretchKey(inspector)]?.fits_url ??

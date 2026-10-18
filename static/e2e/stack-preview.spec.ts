@@ -1711,7 +1711,7 @@ test('color calibrates a one-shot-color stack by default, says why it could not,
     (entry: { job_id: string }) => entry.job_id === 'c'.repeat(64)
   );
   expect(seeded.group.color_calibration_outdated).toBe(
-    'Out of date — Gaia colors were removed; rebuild the stack'
+    'Out of date — Gaia colors were removed; click Build current set to render the preview again'
   );
   const controls = card.locator('.stack-stretch-controls');
   await controls.locator('summary').click();

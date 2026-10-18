@@ -852,6 +852,20 @@ async fn refresh_project(
                     .filter(|existing| existing.state == StackJobState::Completed)
             });
         if let Some(existing) = finished {
+            // Its previews may be out of date: they render again from its
+            // FITS, and color follows once they have.
+            if super::queue_preview_render(
+                state,
+                ctx,
+                &existing,
+                true,
+                existing.color_defaults.clone(),
+            )
+            .is_some()
+            {
+                started += 1;
+                continue;
+            }
             let state = Arc::clone(state);
             let ctx = Arc::clone(ctx);
             let _ = tokio::task::spawn_blocking(move || {

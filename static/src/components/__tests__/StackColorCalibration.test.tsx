@@ -193,7 +193,7 @@ describe('Color calibration of a one-shot-color stack', () => {
 });
 
 describe('an out-of-date color stack calibration', () => {
-  const stale = 'Out of date — Gaia colors were installed; rebuild the stack';
+  const stale = 'Out of date — Gaia colors were installed; click Build current set to render the preview again';
   const reapply = 'Out of date — Gaia colors were installed; apply the processing again';
 
   it('comes from applied processing when there is some, else from the build preview', () => {
