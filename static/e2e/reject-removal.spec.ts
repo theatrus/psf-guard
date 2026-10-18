@@ -52,7 +52,7 @@ test('old rejects are removed to the trash from Settings and restored', async ({
     await group.getByRole('button', { name: 'Preview' }).click();
     await expect(group.getByTestId('reject-removal-plan')).toContainText('1 reject to remove (2.0 MB).');
     await group.getByRole('button', { name: 'Remove 1 reject' }).click();
-    await expect(group.getByRole('status')).toContainText('Removed 1 reject; their files wait in the trash until');
+    await expect(group.getByRole('status')).toContainText('Removed 1 reject; files remain in the trash until');
     expect(fs.existsSync(path.join(light, 'M42_Ha_001.fits'))).toBe(false);
     expect(fs.existsSync(path.join(light, 'M42_Ha_002.fits'))).toBe(true);
     expect(count('SELECT COUNT(*) AS n FROM acquiredimage')).toBe(1);
