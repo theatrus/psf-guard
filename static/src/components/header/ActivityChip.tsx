@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Hourglass, ListOrdered, Play, TriangleAlert } from 'lucide-react';
+import { ArrowUpToLine, Hourglass, ListOrdered, Play, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
@@ -11,6 +11,7 @@ import {
   groupActivity,
   lineLengths,
   queueText,
+  tierOf,
   type ActivityControl,
   type ActivityItem,
   type ActivityQueue,
@@ -245,6 +246,17 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
           <div className="activity-row-actions">
             {inLine && (
               <>
+                {tierOf(item) === 'person' && (
+                  <button
+                    type="button"
+                    aria-label={`Move ${name} to the top of the queue`}
+                    title="Move to top"
+                    disabled={controls.busy || item.position === 0}
+                    onClick={() => controls.run({ type: 'move', control, position: 0 })}
+                  >
+                    <ArrowUpToLine size={10} aria-hidden="true" />
+                  </button>
+                )}
                 <button
                   type="button"
                   aria-label={`Run ${name} earlier`}
