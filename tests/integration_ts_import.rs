@@ -98,7 +98,8 @@ async fn import_owns_a_complete_snapshot_and_retains_a_writeback_connection() {
     let saved = DbRegistry::load_or_init(&registry).unwrap();
     let entry = saved.find("rig").unwrap();
     assert_ne!(std::path::Path::new(&entry.db_path), source);
-    assert!(std::path::Path::new(&entry.db_path)
+    assert!(std::fs::canonicalize(&entry.db_path)
+        .unwrap()
         .starts_with(std::fs::canonicalize(dir.path().join("databases")).unwrap()));
     let settings = entry.ts_sync.as_ref().unwrap();
     assert!(settings.writeback && settings.on_open && settings.on_change);

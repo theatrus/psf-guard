@@ -1572,8 +1572,10 @@ referenced templates; other TS projects stay unchanged.
 
 Existing TS descriptions, priorities, ROI, template settings and rule weights
 remain unchanged. Director applies its planning fields and explicitly configured
-scheduling limits. Closed projects stay closed. An inactive project stays
-inactive unless Director is re-enabling a rig it previously turned off.
+scheduling limits. Collaboration requirements set a minimum altitude; a stricter
+TS limit stays in effect unless you set a different scheduling limit in PSF Guard.
+Closed projects stay closed. An inactive project stays inactive unless Director
+is re-enabling a rig it previously turned off.
 
 Click **Activate**. PSF Guard commits the owned catalog, then sends the reviewed
 planning through the same guarded sync path as **Send planning**. TS keeps its
@@ -1586,7 +1588,10 @@ cannot receive the transfer after the local commit, the report shows
 to read the cause. The activation remains pending
 until TS receives it. Use the send button for the pending TS delivery to
 retry, or let the existing file-sync startup, change detection and schedule
-settings retry approved deliveries. Retries use the frozen, reviewed planning;
+settings retry approved deliveries, even when grade changes conflict. Each
+approval guards the affected project and its referenced templates, so unrelated
+projects can be delivered independently. Refreshing a staged Sync preview cannot
+change or extend an activation approval. Retries use the frozen, reviewed planning;
 later local edits are not sent. Click **Review TS delivery** to refresh the
 preview before activating again. A conflicting TS edit or a transfer older
 than 30 minutes requires this fresh approval. If TS was unavailable during

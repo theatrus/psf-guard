@@ -10,7 +10,7 @@ use crate::commands::sync::{sync_planning, PlanningOptions};
 use crate::server::{
     api::{SchedulerSyncKind, SchedulerSyncRequest, SchedulerSyncResponse},
     handlers::{execute_scheduler_sync_paths, SyncGuardMode},
-    sync_preview::{connection_fingerprint, fingerprint_queries},
+    sync_preview::{connection_fingerprint, fingerprint_queries, planning_destination_fingerprint},
 };
 use anyhow::Context;
 use psf_guard_director_meta::activation::{RemotePush, TsSyncDelivery, MAX_PUSH_ERROR_CHARS};
@@ -100,6 +100,8 @@ pub(super) struct Intent {
     pub active: bool,
     pub reactivate: bool,
     pub scheduling: Vec<String>,
+    /// Collaboration adds a floor without lowering a stricter live TS limit.
+    pub minimum_altitude: Option<f64>,
 }
 
 fn quoted(name: &str) -> String {
@@ -218,6 +220,9 @@ fn preserve_settings(
         ),
     ] {
         preserve_ts_fields(copy, ts, table, &fields)?;
+    }
+    if let Some(minimum) = intent.minimum_altitude {
+        copy.execute("UPDATE project SET minimumaltitude=?2 WHERE guid=?1 AND COALESCE(minimumaltitude,0)<?2", rusqlite::params![guid, minimum])?;
     }
     if let Some((ts_id, state)) = ts
         .query_row(
@@ -345,9 +350,8 @@ pub(super) fn prepare(
         // Read only the small planning tables in one transaction. The live
         // TS file is never opened for writing by an activation preview.
         let destination = planning_copy(&settings.source_path).map_err(anyhow::Error::msg)?;
-        let fingerprint =
-            connection_fingerprint(&destination, &fingerprint_queries(&request(&context.id)))?;
         let source = projection(source, project_guid)?;
+        let fingerprint = planning_destination_fingerprint(&source, &destination)?;
         preserve_settings(&source, &destination, project_guid, &intent)?;
         for (id, exposure) in exposures {
             source.execute(
@@ -421,7 +425,7 @@ pub(super) fn stage(state: &AppState, context: &str, push: &mut Push) -> anyhow:
             .sync_previews
             .source_snapshot_path_for_file(&snapshot)?;
         copy.backup("main", &path, None)?;
-        let record = state.sync_previews.store(
+        let record = state.sync_previews.store_activation(
             context.into(),
             request(context),
             snapshot.clone(),
@@ -455,6 +459,17 @@ pub(super) async fn send(
     waiting: Waiting,
     delivery: TsSyncDelivery,
 ) -> Push {
+    send_inner(state, service, context, waiting, delivery, false).await
+}
+
+async fn send_inner(
+    state: &Arc<AppState>,
+    service: &Arc<Service>,
+    context: &Arc<DatabaseContext>,
+    waiting: Waiting,
+    delivery: TsSyncDelivery,
+    automatic: bool,
+) -> Push {
     let _guard = state.sync_apply_lock.lock().await;
     let mut push = Push {
         peer_id: format!("ts:{}", context.id),
@@ -472,6 +487,9 @@ pub(super) async fn send(
         ts_sync: Some(delivery.clone()),
     };
     let send = async {
+        if automatic && (state.shutdown.is_stopping() || state.ts_sync.stopped(&context.id)) {
+            return Err("TS planning delivery was stopped.".into());
+        }
         let current = service.clone().query(move |store| Ok(store.activation(waiting.project)?.is_some_and(|a| a.revision == waiting.revision))).await
             .map_err(|e| format!("Could not check the activation: {e:?}"))?;
         if !current { return Err("A newer activation replaced this delivery. Refresh the plan.".into()); }
@@ -479,7 +497,7 @@ pub(super) async fn send(
             .ok_or("This TS connection was removed or changed. Preview and activate again.")?;
         let preview_id = delivery.preview_id.as_ref().ok_or("TS was unavailable in the activation preview. Preview and activate again before sending planning.")?;
         let record = state.sync_previews.get(preview_id).map_err(|e| e.to_string())?
-            .filter(|r| r.local_db_id == context.id && r.request.peer_db_id == push.peer_id && matches!(r.request.kind, SchedulerSyncKind::PushPlanning))
+            .filter(|r| r.activation && r.local_db_id == context.id && r.request.peer_db_id == push.peer_id && matches!(r.request.kind, SchedulerSyncKind::PushPlanning))
             .ok_or("The approved TS transfer expired or was removed. Preview and activate again.")?;
         let source = state.sync_previews.source_snapshot_path(&record).map_err(|e| e.to_string())?;
         let destination = PathBuf::from(&connected.ts_sync.as_ref().unwrap().source_path);
@@ -489,9 +507,9 @@ pub(super) async fn send(
         };
         // Recover a TS commit whose receipt was interrupted. A no-op comparison
         // acknowledges matching rows without overwriting anything TS changed.
-        let (comparison, _) = run(true, SyncGuardMode::Preview).await.map_err(sync_error)?;
+        let (comparison, _) = run(true, SyncGuardMode::PlanningPreview).await.map_err(sync_error)?;
         if comparison.total_inserted == 0 && comparison.total_updated == 0 { return Ok(comparison); }
-        run(false, SyncGuardMode::Apply { destination_fingerprint: record.destination_fingerprint }).await
+        run(false, SyncGuardMode::PlanningApply { destination_fingerprint: record.destination_fingerprint }).await
             .map(|(result, _)| result).map_err(|e| format!("{} Preview and activate again to review the current TS planning.", sync_error(e)))
     }.await;
     match send {
@@ -591,7 +609,7 @@ pub(super) async fn retry_pending(state: &Arc<AppState>, slug: &str) -> anyhow::
         if state.shutdown.is_stopping() || state.ts_sync.stopped(slug) {
             break;
         }
-        let push = send(state, &service, &context, waiting, delivery).await;
+        let push = send_inner(state, &service, &context, waiting, delivery, true).await;
         if !push.applied {
             failures.push(push.error.unwrap_or_default());
         }

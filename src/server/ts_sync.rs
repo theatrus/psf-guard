@@ -492,10 +492,31 @@ pub fn spawn(state: Arc<AppState>) {
                             );
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    synchronize(&state, &job.id, &entry.db_path, &settings)?;
-                                    runtime.block_on(super::director::retry_ts_planning(
-                                        &state, &entry.id,
-                                    ))
+                                    let captures =
+                                        synchronize(&state, &job.id, &entry.db_path, &settings);
+                                    if captures
+                                        .as_ref()
+                                        .is_err_and(|e| e.is::<crate::backup::Cancelled>())
+                                    {
+                                        return captures;
+                                    }
+                                    // Grade conflicts and capture errors do not revoke a
+                                    // separate, already reviewed planning delivery.
+                                    current_settings(&state, &job.id, &entry.db_path, &settings)?;
+                                    let planning = runtime.block_on(
+                                        super::director::retry_ts_planning(&state, &entry.id),
+                                    );
+                                    if state.shutdown.is_stopping()
+                                        || state.ts_sync.stopped(&job.id)
+                                    {
+                                        return Err(crate::backup::Cancelled.into());
+                                    }
+                                    match (captures, planning) {
+                                        (Ok(()), result) | (result, Ok(())) => result,
+                                        (Err(captures), Err(planning)) => {
+                                            Err(anyhow::anyhow!("{captures:#}; {planning:#}"))
+                                        }
+                                    }
                                 }))
                                 .unwrap_or_else(|_| {
                                     Err(anyhow::anyhow!("TS sync stopped unexpectedly."))
@@ -508,6 +529,33 @@ pub fn spawn(state: Arc<AppState>) {
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
     });
+}
+
+/// Validate again between independent sync phases: a stopped job or a
+/// removed/replaced connection must never send pending planning afterward.
+fn current_settings(
+    state: &AppState,
+    job: &str,
+    catalog: &str,
+    settings: &Settings,
+) -> Result<Settings> {
+    if state.shutdown.is_stopping() || state.ts_sync.stopped(job) {
+        return Err(crate::backup::Cancelled.into());
+    }
+    let entry = state
+        .registry_path
+        .read()
+        .unwrap()
+        .clone()
+        .and_then(|p| DbRegistry::load_or_init(&p).ok())
+        .and_then(|r| r.find(job).cloned())
+        .context("The TS sync connection was removed while the job was running.")?;
+    let current = entry
+        .ts_sync
+        .context("The TS sync connection was removed while the job was running.")?;
+    anyhow::ensure!(entry.db_path == catalog && current.source_path == settings.source_path,
+        "The TS source or catalog changed while sync was running. Start sync again for the new connection.");
+    Ok(current)
 }
 
 fn synchronize(state: &Arc<AppState>, job: &str, catalog: &str, settings: &Settings) -> Result<()> {
@@ -524,19 +572,7 @@ fn synchronize(state: &Arc<AppState>, job: &str, catalog: &str, settings: &Setti
     if state.shutdown.is_stopping() || state.ts_sync.stopped(job) {
         return Err(crate::backup::Cancelled.into());
     }
-    let current = state
-        .registry_path
-        .read()
-        .unwrap()
-        .clone()
-        .and_then(|p| DbRegistry::load_or_init(&p).ok())
-        .and_then(|r| r.find(job).and_then(|e| e.ts_sync.clone()));
-    let current =
-        current.context("The TS sync connection was removed while the job was running.")?;
-    anyhow::ensure!(
-        current.source_path == settings.source_path,
-        "The TS source changed while sync was running. Start sync again for the new source."
-    );
+    let current = current_settings(state, job, catalog, settings)?;
     let writer = if current.writeback {
         Some(
             super::database_context::open_scheduler_connection_with_flags(
@@ -622,6 +658,79 @@ mod tests {
             Some((&unchanged, Duration::from_secs(30))),
             &changed
         ));
+    }
+
+    #[tokio::test]
+    async fn phase_boundary_refuses_stopped_removed_or_replaced_connections() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state = Arc::new(
+            AppState::from_databases(
+                vec![],
+                temporary
+                    .path()
+                    .join("cache")
+                    .to_string_lossy()
+                    .into_owned(),
+                crate::cli::PregenerationConfig::default(),
+            )
+            .unwrap(),
+        );
+        state.set_allow_database_management(true);
+        let catalog = temporary
+            .path()
+            .join("owned.sqlite")
+            .to_string_lossy()
+            .into_owned();
+        let settings = Settings {
+            source_path: temporary
+                .path()
+                .join("ts.sqlite")
+                .to_string_lossy()
+                .into_owned(),
+            ..Default::default()
+        };
+        let mut registry = DbRegistry::default();
+        registry
+            .add("Rig".into(), catalog.clone(), vec![], Some("rig".into()))
+            .unwrap();
+        registry.databases[0].ts_sync = Some(settings.clone());
+        let path = temporary.path().join("registry.json");
+        registry.save(&path).unwrap();
+        *state.registry_path.write().unwrap() = Some(path.clone());
+        assert!(current_settings(&state, "rig", &catalog, &settings).is_ok());
+        state
+            .ts_sync
+            .begin("rig".into(), Some("rig".into()), "Rig".into(), true)
+            .unwrap();
+        let _ = stop_route(State(state.clone()), UrlPath("rig".into()))
+            .await
+            .unwrap();
+        assert!(current_settings(&state, "rig", &catalog, &settings)
+            .unwrap_err()
+            .is::<crate::backup::Cancelled>());
+        state
+            .ts_sync
+            .finish("rig", Err(crate::backup::Cancelled.into()));
+        state
+            .ts_sync
+            .begin("rig".into(), Some("rig".into()), "Rig".into(), true)
+            .unwrap();
+        registry.databases[0].ts_sync = None;
+        registry.save(&path).unwrap();
+        assert!(current_settings(&state, "rig", &catalog, &settings).is_err());
+        let mut changed = settings.clone();
+        changed.source_path.push_str(".replacement");
+        registry.databases[0].ts_sync = Some(changed);
+        registry.save(&path).unwrap();
+        assert!(current_settings(&state, "rig", &catalog, &settings).is_err());
+        registry.databases[0].ts_sync = Some(settings.clone());
+        registry.databases[0].db_path.push_str(".replacement");
+        registry.save(&path).unwrap();
+        assert!(current_settings(&state, "rig", &catalog, &settings).is_err());
+        state.shutdown.begin();
+        assert!(current_settings(&state, "rig", &catalog, &settings)
+            .unwrap_err()
+            .is::<crate::backup::Cancelled>());
     }
 
     #[tokio::test]

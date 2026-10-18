@@ -738,7 +738,14 @@ async fn execute_scheduler_sync(
 pub(crate) enum SyncGuardMode {
     None,
     Preview,
-    Apply { destination_fingerprint: String },
+    Apply {
+        destination_fingerprint: String,
+    },
+    /// Activation has a frozen, project-scoped source rather than a whole catalog.
+    PlanningPreview,
+    PlanningApply {
+        destination_fingerprint: String,
+    },
 }
 
 #[derive(Debug)]
@@ -966,8 +973,17 @@ pub(crate) async fn execute_scheduler_sync_paths(
         sync_planning_in_transaction, sync_pull, sync_pull_in_transaction, PlanningOptions,
         PullOptions, SyncGradesOptions,
     };
-    use rusqlite::{Transaction, TransactionBehavior};
+    use rusqlite::{Connection, Transaction, TransactionBehavior};
 
+    let scoped_planning = matches!(
+        &guard_mode,
+        SyncGuardMode::PlanningPreview | SyncGuardMode::PlanningApply { .. }
+    );
+    if scoped_planning && !matches!(req.kind, SchedulerSyncKind::PushPlanning) {
+        return Err(AppError::BadRequest(
+            "A planning guard requires a planning transfer.".into(),
+        ));
+    }
     let fingerprint_queries = crate::server::sync_preview::fingerprint_queries(&req);
     let kind = req.kind;
     let dry_run = req.dry_run;
@@ -1172,12 +1188,19 @@ pub(crate) async fn execute_scheduler_sync_paths(
                     Ok((response, changed_image_ids))
                 };
 
+            let fingerprint = |destination: &Connection| {
+                if scoped_planning {
+                    crate::server::sync_preview::planning_destination_fingerprint(&source, destination)
+                } else {
+                    crate::server::sync_preview::connection_fingerprint(destination, &fingerprint_queries)
+                }
+            };
             match guard_mode {
                 SyncGuardMode::None => {
                     let (response, changed_image_ids) = run(None)?;
                     Ok((response, None, changed_image_ids))
                 }
-                SyncGuardMode::Preview => {
+                SyncGuardMode::Preview | SyncGuardMode::PlanningPreview => {
                     // A pull or planning preview writes, then rolls back; a
                     // grade preview only reads.
                     let behavior = if matches!(kind, SchedulerSyncKind::PushGrades) {
@@ -1186,23 +1209,16 @@ pub(crate) async fn execute_scheduler_sync_paths(
                         TransactionBehavior::Immediate
                     };
                     let transaction = Transaction::new_unchecked(&destination, behavior)?;
-                    let fingerprint = crate::server::sync_preview::connection_fingerprint(
-                        &transaction,
-                        &fingerprint_queries,
-                    )?;
+                    let fingerprint = fingerprint(&transaction)?;
                     let (response, _) = run(Some(&transaction))?;
                     transaction.rollback()?;
                     Ok((response, Some(fingerprint), Vec::new()))
                 }
-                SyncGuardMode::Apply {
-                    destination_fingerprint,
-                } => {
+                SyncGuardMode::Apply { destination_fingerprint }
+                | SyncGuardMode::PlanningApply { destination_fingerprint } => {
                     let transaction =
                         Transaction::new_unchecked(&destination, TransactionBehavior::Immediate)?;
-                    let fingerprint = crate::server::sync_preview::connection_fingerprint(
-                        &transaction,
-                        &fingerprint_queries,
-                    )?;
+                    let fingerprint = fingerprint(&transaction)?;
                     if fingerprint != destination_fingerprint {
                         return Err(StaleSyncPreview.into());
                     }
@@ -1376,7 +1392,7 @@ pub async fn get_sync_database_preview_route(
         .sync_previews
         .get(&preview_id)
         .map_err(|error| AppError::InternalError(format!("loading sync preview: {error}")))?
-        .filter(|record| record.local_db_id == db_id)
+        .filter(|record| record.local_db_id == db_id && !record.activation)
         .ok_or(AppError::NotFound)?;
     Ok(Json(ApiResponse::success(SchedulerSyncPreviewResponse {
         preview_id: record.id,
@@ -1436,7 +1452,7 @@ pub async fn refresh_sync_database_preview_route(
         .sync_previews
         .get(&preview_id)
         .map_err(|error| AppError::InternalError(format!("loading sync preview: {error}")))?
-        .filter(|record| record.local_db_id == db_id)
+        .filter(|record| record.local_db_id == db_id && !record.activation)
         .ok_or(AppError::NotFound)?;
     let source_snapshot = state
         .sync_previews

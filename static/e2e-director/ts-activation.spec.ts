@@ -63,6 +63,15 @@ test('activation previews the saved TS connection, refuses stale planning, and r
     expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy();
     await page.setViewportSize({ width: 1440, height: 1200 });
     await pending.getByText('Error details', { exact: true }).click();
+    // Activation owns its approval. Settings' Sync endpoints cannot refresh
+    // or consume it, and rejecting those requests leaves normal retry usable.
+    const mappings = (await (await request.get(`/api/director/v1/catalogs/${slug}/mappings`)).json()).data;
+    const activation = (await (await request.get(`/api/director/v1/projects/${mappings.items[0].project_id}/activation`)).json()).data;
+    const deliveryId = activation.activation.pushes.find((push: { peer_id: string }) => push.peer_id === `ts:${slug}`).ts_sync.preview_id;
+    const staged = (await (await request.get(`/api/databases/${slug}/sync/previews`)).json()).data;
+    expect(staged.some((entry: { preview_id: string }) => entry.preview_id === deliveryId)).toBe(false);
+    expect((await request.post(`/api/databases/${slug}/sync/previews/${deliveryId}/refresh`)).status()).toBe(404);
+    expect((await request.post(`/api/databases/${slug}/sync/previews/${deliveryId}/apply`)).status()).toBe(404);
     ts.exec('DROP TRIGGER refuse_planning');
     await dialog.getByRole('button', { name: /^Send to Target Scheduler/ }).click();
     await expect(dialog.getByRole('status')).toHaveText('Activated');

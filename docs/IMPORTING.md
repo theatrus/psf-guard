@@ -113,8 +113,11 @@ then sends that project's planning to TS without changing captures, grades or
 acquisition counts. The automatic grade-writeback switch does not disable this
 explicit planning delivery. Failed deliveries remain pending and retry through
 the configured startup, change detection and schedule settings, or with the
-send button for the pending TS delivery. A changed TS plan or expired transfer needs a
-new activation preview; retry never exports unreviewed local edits.
+send button for the pending TS delivery. Grade conflicts do not block approved
+planning deliveries. A change to the affected TS project or its referenced
+templates, or an expired transfer, needs a new activation preview. Unrelated
+projects can be delivered independently. Retry never exports unreviewed local
+edits, and refreshing a preview in Settings does not approve an activation.
 
 Existing registrations that open TS directly remain supported through 0.12.
 They are not migrated on startup. Direct access is deprecated, with removal

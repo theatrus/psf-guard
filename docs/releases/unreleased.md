@@ -45,7 +45,10 @@
   reviewed project's planning. The preview includes the TS destination;
   failed deliveries stay pending and retry through the existing sync settings.
   A short pending message keeps detailed errors under **Error details**.
-  Captures, grades, acquisition counts and other TS projects stay unchanged.
+  Independent projects retry separately even when grades conflict. Collaboration
+  minimum-altitude limits reach TS, and Sync preview refreshes cannot change an
+  activation's approval. Captures, grades, acquisition counts and other TS
+  projects stay unchanged.
 - WBPP master copies show the current file and file counts in the dialog
   and background jobs list. Copy controls stay disabled while copying, and
   repeat copy requests cannot start a second copy. A run requested while a

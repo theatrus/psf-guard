@@ -856,10 +856,15 @@ async fn execute_guarded(
                 match outcome {
                     Ok(mut outcome) => {
                         if let Some(before) = before {
+                            let collaboration_minimum = assignment
+                                .and_then(|a| a.import.plan.share().requirements.as_ref())
+                                .and_then(|r| r.min_altitude_degrees)
+                                .filter(|minimum| *minimum > 0.0);
                             push = file_delivery::prepare(&catalog.context, &tx, before, &outcome.record.project_guid.to_string(), file_delivery::Intent {
                                 active: true,
                                 reactivate: previous.as_ref().is_some_and(|p| p.inactive_rigs.iter().any(|r| r.rig_id == *rig_id)),
-                                scheduling: limits(&scheduling.values).into_iter().filter(|l| scheduling.sources.contains_key(l.field)).map(|l| l.column.into()).collect(),
+                                scheduling: limits(&scheduling.values).into_iter().filter(|limit| scheduling.sources.contains_key(limit.field)).map(|limit| limit.column.into()).collect(),
+                                minimum_altitude: collaboration_minimum,
                             }, &outcome.shoots.iter().map(|s| (s.plan, s.exposure_seconds)).collect::<Vec<_>>());
                             if let Some(push) = &push { for shot in &mut outcome.shoots {
                                 if let Some((name,filter,gain,offset)) = file_delivery::shot_template(push, shot.plan) {
@@ -989,7 +994,7 @@ async fn execute_guarded(
                 tx.rollback()?;
                 continue;
             }
-            if let Some(before) = before { push = file_delivery::prepare(&catalog.context, &tx, before, &project_guid, file_delivery::Intent { active: false, reactivate: false, scheduling: vec![] }, &[]); }
+            if let Some(before) = before { push = file_delivery::prepare(&catalog.context, &tx, before, &project_guid, file_delivery::Intent { active: false, reactivate: false, scheduling: vec![], minimum_altitude: None }, &[]); }
             if applying {
                 tx.commit_pending()?;
             } else {
