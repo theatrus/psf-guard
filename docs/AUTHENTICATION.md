@@ -107,6 +107,10 @@ the browser will show a PSF Guard login page. A successful login creates an
 HttpOnly, SameSite=Strict session cookie. Sessions live in server memory,
 expire after `session_hours`, and end when the server restarts.
 
+After signing in, PSF Guard checks that the browser saved the session, then
+reloads the current URL. This loads the current UI after a server update while
+keeping your view and catalog scope. Failed sign-ins stay on the login form.
+
 When `secure_cookie` is omitted, a same-origin browser login on a direct
 connection follows the URL: HTTPS receives a Secure cookie and direct HTTP
 receives a non-Secure cookie. A proxy must preserve Host for automatic mode.

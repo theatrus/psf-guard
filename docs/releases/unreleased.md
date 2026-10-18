@@ -31,3 +31,6 @@
   their own loading, error and retry states.
 - A queued card preview shows **Waiting to render preview**, matching the
   job list. The stack stays ready while its preview refreshes.
+- Successful browser sign-ins reload the current URL to load the server's
+  current UI after an update. PSF Guard checks that the session was saved first;
+  failed sign-ins stay on the login form.

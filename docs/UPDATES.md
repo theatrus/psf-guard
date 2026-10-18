@@ -72,10 +72,15 @@ build other than the page's, the UI shows **PSF Guard was updated** with a
 **Reload now** button, and reloads by itself the next time the user changes
 views (Library, Images, Sequence, Stacks, Sky, Planning). Moving inside a view,
 such as from the grid to an image, never reloads. A page with unsaved plan
-edits asks first, as it does for any other way of leaving. A tab reloads by
-itself once per server build, so a cache that keeps serving the old page
+edits asks first, as it does for any other way of leaving. Reloads on view
+changes happen once per server build, so a cache that keeps serving the old page
 cannot make it reload on every change of view. The desktop app's page ships
 inside the app and never takes part.
+
+After each successful sign-in, the browser reloads the current URL to load the
+server's current UI. This also handles updates that restart the server and end
+the previous session. PSF Guard checks that the browser saved the new session
+before reloading. Failed sign-ins stay on the login form with an error message.
 
 The server sends `index.html` and every other file outside `assets/` with
 `Cache-Control: no-cache`, so a reload always checks for a new page. Vite puts

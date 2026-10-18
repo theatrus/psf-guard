@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
+import { resetDatabases } from './helpers';
 
 const apiResponse = (data: unknown) => ({
   success: true,
@@ -11,6 +12,10 @@ const apiResponse = (data: unknown) => ({
 
 test('viewer signs in through the app and gets a read-only session', async ({ page }) => {
   let authenticated = false;
+  let documentLoads = 0;
+  page.on('request', request => {
+    if (request.isNavigationRequest() && request.resourceType() === 'document') documentLoads += 1;
+  });
   await page.setViewportSize({ width: 320, height: 700 });
 
   await page.route('**/api/auth/status', (route) =>
@@ -44,8 +49,10 @@ test('viewer signs in through the app and gets a read-only session', async ({ pa
     await route.fulfill({ status: 204 });
   });
 
-  await page.goto('/');
+  await page.goto('/#/sky');
+  const signedInUrl = page.url();
   await expect(page.getByRole('heading', { name: 'Sign in to PSF Guard' })).toBeVisible();
+  expect(documentLoads).toBe(1);
 
   const cardBox = await page.locator('.auth-card').boundingBox();
   const usernameBox = await page.getByLabel('Username').boundingBox();
@@ -60,17 +67,52 @@ test('viewer signs in through the app and gets a read-only session', async ({ pa
   await page.getByLabel('Username').fill('viewer');
   await page.getByLabel('Password').fill('secret');
   await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect.poll(() => documentLoads).toBe(2);
+  await expect(page).toHaveURL(signedInUrl);
 
   // A viewer's header menu has no Settings, and signs out.
   await page.getByRole('button', { name: 'Menu', exact: true }).click();
   await expect(page.getByText('Signed in as viewer')).toBeVisible();
   await expect(page.getByRole('menuitem', { name: 'Settings' })).toHaveCount(0);
+  expect(documentLoads).toBe(2);
 
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
   await expect(page.getByRole('heading', { name: 'Sign in to PSF Guard' })).toBeVisible();
+  expect(documentLoads).toBe(2);
 });
 
-test('editor manages browser users from a separate Settings tab', async ({ page }) => {
+for (const failure of ['incorrect credentials', 'session not saved']) {
+  test(`sign-in does not reload after ${failure}`, async ({ page }) => {
+    let documentLoads = 0;
+    page.on('request', request => {
+      if (request.isNavigationRequest() && request.resourceType() === 'document') documentLoads += 1;
+    });
+    await page.route('**/api/auth/status', route => route.fulfill({ json: apiResponse({
+      authentication_required: true, authenticated: false, can_compute: false,
+    }) }));
+    await page.route('**/api/auth/login', route => failure === 'incorrect credentials'
+      ? route.fulfill({ status: 401, json: {
+        success: false, data: null, error: 'The username or password is incorrect',
+      } })
+      : route.fulfill({ json: apiResponse({
+        authentication_required: true, authenticated: true, role: 'read_only',
+        username: 'viewer', can_compute: false,
+      }) }));
+    await page.goto('/');
+    await page.getByLabel('Username').fill('viewer');
+    await page.getByLabel('Password').fill('secret');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await expect(page.getByRole('alert')).toContainText(failure === 'incorrect credentials'
+      ? 'The username or password is incorrect' : 'this browser could not save your session');
+    await expect(page.getByRole('heading', { name: 'Sign in to PSF Guard' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeEnabled();
+    expect(documentLoads).toBe(1);
+  });
+}
+
+test('editor manages browser users from a separate Settings tab', async ({ page, request }) => {
+  // An empty registry opens Settings on first use, regardless of prior specs.
+  await resetDatabases(request);
   let users = [
     { username: 'editor', role: 'read_write' },
     { username: 'reviewer', role: 'read_only', email: 'reviewer@example.com' },
