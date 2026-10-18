@@ -4001,7 +4001,14 @@ fn collect_sources(
                 role,
                 filter_name: entry.group.filter_name.clone(),
                 label: match (&entry.wbpp, &entry.group.exposure_group) {
-                    (Some(_), _) => format!("{} (WBPP)", entry.group.filter_name),
+                    // Two masters of one filter differ only in sub-exposure,
+                    // so the label carries it where WBPP's file name did.
+                    (Some(wbpp), _) => match wbpp.exposure_seconds {
+                        Some(seconds) => {
+                            format!("{} (WBPP, {seconds} s)", entry.group.filter_name)
+                        }
+                        None => format!("{} (WBPP)", entry.group.filter_name),
+                    },
                     (None, Some(group)) => format!("{} ({})", entry.group.filter_name, group.label),
                     (None, None) => entry.group.filter_name.clone(),
                 },
@@ -5082,6 +5089,45 @@ mod tests {
                 StackColorRole::Blue
             ]
         );
+    }
+
+    #[test]
+    fn wbpp_masters_of_one_filter_are_told_apart_by_their_sub_exposure() {
+        let cache = tempfile::tempdir().unwrap();
+        let mut groups = vec![
+            source_group("R", 0),
+            source_group("R", 1),
+            source_group("G", 2),
+        ];
+        for (group, seconds) in groups.iter_mut().zip([Some(60.0), Some(300.0), None]) {
+            group.wbpp = Some(super::super::wbpp_stacks::WbppStackSource {
+                master_file: "masterLight.xisf".into(),
+                output_dir: "/wbpp".into(),
+                exposure_seconds: seconds,
+                drizzle: false,
+                autocrop: true,
+                imported_unix_seconds: 1,
+            });
+            let path = super::super::fits_path(cache.path(), &group.job_id, group.group.index);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        let latest = LatestStackPreviews {
+            schema_version: 1,
+            database_id: "db".into(),
+            project_id: 1,
+            updated_unix_seconds: 1,
+            groups,
+        };
+        let targets = collect_sources(cache.path(), &latest);
+        let target = targets.get(&7).unwrap();
+        let mut reds = target.by_role[&StackColorRole::Red]
+            .iter()
+            .map(|source| source.label.as_str())
+            .collect::<Vec<_>>();
+        reds.sort();
+        assert_eq!(reds, ["R (WBPP, 300 s)", "R (WBPP, 60 s)"]);
+        assert_eq!(target.by_role[&StackColorRole::Green][0].label, "G (WBPP)");
     }
 
     #[test]

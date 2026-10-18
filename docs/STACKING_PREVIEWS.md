@@ -413,6 +413,18 @@ editor, like starting a run.
 - A color preview built from WBPP channels is kept apart from one built from
   PSF Guard's stacks of the same filters, and a rebuilt PSF Guard stack never
   takes a WBPP channel's place in a remembered preview.
+- **Combine channel stacks** shows a card marked *WBPP* that composes the
+  masters when they cover the channels a preview needs (Hα and OIII at least
+  for narrowband). It appears in a project that splits stacks by exposure,
+  and beside PSF Guard's own stacks in one that does not. A target with only
+  WBPP masters and no exposure split has one card, which uses them.
+- The target's other cards use PSF Guard's stacks when each channel has
+  exactly one. Otherwise they ask you to choose each channel, so PSF Guard
+  stacks and WBPP masters are never mixed unless you choose them.
+- A master's label gives its sub-exposure, such as `R (WBPP, 300 s)`. When
+  WBPP made two masters of one filter at different exposures, the WBPP card
+  says so and stays disabled. Choose the master in **Custom combination**,
+  or in the card's source lists when the project does not split exposures.
 - A master that cannot be read is listed as skipped and the rest go in.
 
 ## Stop a build

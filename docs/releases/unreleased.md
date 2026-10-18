@@ -21,3 +21,6 @@
   stacks anything again. **Build current set** renders each card preview
   again from the stack's FITS. A one-shot-color stack whose color calibration
   is out of date renders again the same way; it used to need a rebuild.
+- **Combine channel stacks** builds a color preview from WBPP masters in a
+  card marked *WBPP*. Before, a project whose stacks were split by exposure
+  showed the masters in an *Unknown exposure* card that could not be built.

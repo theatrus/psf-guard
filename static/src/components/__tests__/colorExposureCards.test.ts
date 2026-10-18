@@ -22,6 +22,13 @@ function recorded(
 }
 
 describe('retained automatic color exposure cards', () => {
+  it('does not retain a saved recipe that used a WBPP master as an exposure card', () => {
+    const wbppRed: StackColorSource = { ...source('red', 30), exposure_group: null, wbpp: true, job_id: 'wbpp-red' };
+    const saved = [wbppRed, source('green', 30), source('blue', 30)];
+    expect(withRetainedColorExposureSets([], [recorded(saved)], rgb)).toEqual([]);
+  });
+
+
   it('fills missing family descriptors without duplicating rebuilt current roles', () => {
     const saved = rgb.map((role) => source(role, 30));
     const current = [{ ...saved[0], job_id: 'rebuilt', artifact_revision: 'new' }, saved[1]];

@@ -106,6 +106,60 @@ const selector = (role: StackColorRole) => screen.getByRole('combobox', {
   name: `M31 rgb ${role[0].toUpperCase()} source stack`,
 });
 
+const masters: StackColorSource[] = roles.map((role, index) => ({
+  role, filter_name: role, label: `${role} (WBPP)`, exposure_group: null, wbpp: true,
+  job_id: `wbpp-${role}`, group_index: index, artifact_revision: 'rev', accepted_frames: 1,
+  reference_image_id: null, sky_orientation: null, registration_transform: null,
+}));
+
+describe('WBPP masters beside exposure-split stacks', () => {
+  it('build from a WBPP card of their own, and no unknown-exposure card appears', async () => {
+    const { submissions } = mount({ sources: [...candidates, ...masters] });
+    const wbpp = await screen.findByRole('button', { name: 'Build RGB WBPP color preview' });
+    expect(wbpp).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Build RGB 30 s color preview' })).toBeEnabled();
+    expect(screen.queryByText('Unknown exposure')).not.toBeInTheDocument();
+    expect(screen.queryByText('Exposure duration unavailable')).not.toBeInTheDocument();
+    await userEvent.click(wbpp);
+    await waitFor(() => expect(submissions).toHaveLength(1));
+    expect(submissions[0].input_sources).toEqual(references(masters));
+  });
+
+  it('shows a saved WBPP preview on the WBPP card alone', async () => {
+    mount({ sources: [...candidates, ...masters], jobs: [job(masters, { job_id: 'saved-wbpp' })] });
+    const rebuild = await screen.findByRole('button', { name: 'Rebuild RGB WBPP color preview' });
+    expect(rebuild).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: /^Rebuild RGB/ })).toHaveLength(1);
+  });
+
+  it('builds an HOO preview from WBPP masters beside split narrowband stacks', async () => {
+    const narrowband = (['ha', 'oiii'] as const).map((role, index) => ({
+      ...candidates[0], role, filter_name: role, label: `${role} (300 s)`, job_id: `${role}-300`, group_index: 10 + index,
+      exposure_group: { key: `${role}-300`, label: '300 s', min_seconds: 300, max_seconds: 300 },
+    }));
+    const narrowbandMasters = narrowband.map((source) => ({
+      ...source, label: `${source.role} (WBPP)`, exposure_group: null, wbpp: true, job_id: `wbpp-${source.role}`,
+    }));
+    const { submissions } = mount({ sources: [...narrowband, ...narrowbandMasters], narrowbandPalettes: ['hoo'] });
+    const wbpp = await screen.findByRole('button', { name: 'Build HOO WBPP color preview' });
+    expect(wbpp).toBeEnabled();
+    await userEvent.click(wbpp);
+    await waitFor(() => expect(submissions).toHaveLength(1));
+    expect(submissions[0].input_sources).toEqual(references(narrowbandMasters));
+  });
+
+  it('builds the target card from its own stacks when they are not split', async () => {
+    const unsplit = atSeconds(300).map((source) => ({ ...source, exposure_group: null }));
+    const { submissions } = mount({ sources: [...unsplit, ...masters] });
+    const own = await screen.findByRole('button', { name: 'Build RGB color preview' });
+    expect(own).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Build RGB WBPP color preview' })).toBeEnabled();
+    await userEvent.click(own);
+    await waitFor(() => expect(submissions).toHaveLength(1));
+    expect(submissions[0].input_sources).toEqual(references(unsplit));
+  });
+});
+
 describe('automatic color exposure cards', () => {
   it('offers independent short and long builds without manual source choices', async () => {
     mount();

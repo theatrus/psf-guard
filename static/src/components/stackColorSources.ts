@@ -35,7 +35,9 @@ function makeExposureSet(
   return { key, label, candidates: ordered, known: kind === 'known', minSeconds, maxSeconds };
 }
 
-/** Match physical exposure ranges; filter-local family keys only identify the resulting set. */
+/** Match physical exposure ranges; filter-local family keys only identify the resulting set.
+ *  WBPP masters carry no exposure group and are left out: they have a set of
+ *  their own, from `wbppColorSet`. */
 export function buildColorExposureSets(
   candidates: StackColorSource[],
   roles: StackColorRole[],
@@ -45,7 +47,7 @@ export function buildColorExposureSets(
   const unknown: StackColorSource[] = [];
   const mixed: Array<{ source: StackColorSource; min: number; max: number }> = [];
   for (const source of candidates) {
-    if (!required.has(source.role)) continue;
+    if (!required.has(source.role) || source.wbpp) continue;
     const min = source.exposure_group?.min_seconds;
     const max = source.exposure_group?.max_seconds;
     if (typeof min !== 'number' || typeof max !== 'number'
@@ -82,6 +84,27 @@ export function buildColorExposureSets(
   return sets;
 }
 
+/** The WBPP masters for `roles`, as one set beside PSF Guard's exposure sets:
+ *  WBPP integrated each channel itself, so its masters combine with each
+ *  other. `undefined` unless the masters cover every role in `needed`
+ *  (default: all of `roles`). Without exposure sets, a target whose sources
+ *  for `roles` are all masters has no separate set: its one card already
+ *  builds from them. */
+export function wbppColorSet(
+  candidates: StackColorSource[],
+  roles: StackColorRole[],
+  options: { exposureMode: boolean; needed?: StackColorRole[] },
+): ColorExposureSet | undefined {
+  const required = new Set(roles);
+  const relevant = candidates.filter((source) => required.has(source.role));
+  const masters = relevant.filter((source) => source.wbpp).sort(compareSourceFamilies);
+  const needed = options.needed ?? roles;
+  if (!needed.every((role) => masters.some((source) => source.role === role))) return undefined;
+  if (!options.exposureMode && masters.length === relevant.length) return undefined;
+  const key = JSON.stringify(['wbpp-set', masters.map(sourceFamilyIdentity).sort()]);
+  return { key, label: 'WBPP', candidates: masters, known: true, minSeconds: null, maxSeconds: null };
+}
+
 export function completedColorArtifact(
   watched: StackColorJob | undefined,
   catalog: StackColorJob[],
@@ -108,11 +131,18 @@ export function resolveColorSources(
   selected: Partial<Record<StackColorRole, string>>,
 ): { sources: StackColorSource[]; complete: boolean; inputSources: StackColorInputSources } {
   const sources: StackColorSource[] = [];
+  // When every role has exactly one PSF Guard stack, an unchosen role uses
+  // it and leaves the WBPP masters to their own card, as the server's first
+  // composite does. Otherwise only a role's sole candidate is used, so PSF
+  // Guard stacks and WBPP masters are never mixed without a choice.
+  const ownOnly = (role: StackColorRole) =>
+    candidates.filter((source) => source.role === role && !source.wbpp);
+  const ownComplete = roles.every((role) => ownOnly(role).length === 1);
   for (const role of roles) {
     const matching = candidates.filter((source) => source.role === role);
     const key = selected[role];
     const source = key === undefined
-      ? matching.length === 1 ? matching[0] : undefined
+      ? ownComplete ? ownOnly(role)[0] : matching.length === 1 ? matching[0] : undefined
       : matching.find((candidate) => colorSourceKey(candidate) === key);
     if (source) sources.push(source);
   }
