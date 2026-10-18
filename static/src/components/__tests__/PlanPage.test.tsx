@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -88,6 +88,31 @@ describe('plan page', () => {
     mount(true, '/plan?db=old-catalog&plan=nowhere');
     expect(await screen.findByRole('alert')).toHaveTextContent('No plan found with that name.');
     expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/?db=old-catalog');
+  });
+
+  it('explains a catalog copy and retries without claiming its project lacks a GUID', async () => {
+    let listings = 0;
+    const warning = 'Review copy: carries the same catalog identity as Images, so it is a copy of that file; it is left out of planning.';
+    mount(true, '/plan?db=review&project=7&plan=review:7', [
+      http.get('/api/director/v1/plans', () => { listings++; return HttpResponse.json(ok(list([], [warning]))); }),
+      http.get('/api/db/review/projects', () => HttpResponse.json(ok([{ id: 7, guid: 'project-guid', name: 'M31' }]))),
+    ]);
+    expect(await screen.findByText(warning)).toBeInTheDocument();
+    const retry = await screen.findByRole('button', { name: 'Retry planning' });
+    await waitFor(() => expect(retry).toBeEnabled());
+    expect(screen.queryByText('Fill in GUIDs')).not.toBeInTheDocument();
+    const before = listings;
+    fireEvent.click(retry);
+    await waitFor(() => expect(listings).toBeGreaterThan(before));
+  });
+
+  it('offers GUID repair only after checking that the source project has no GUID', async () => {
+    mount(true, '/plan?db=legacy&project=7&plan=legacy:7', [
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([])))),
+      http.get('/api/db/legacy/projects', () => HttpResponse.json(ok([{ id: 7, guid: null, name: 'M31' }]))),
+    ]);
+    expect(await screen.findByText('Fill in GUIDs')).toBeInTheDocument();
+    expect(screen.getByText(/This project has no Target Scheduler GUID/)).toBeInTheDocument();
   });
 
   it.each([{ ...enabled, enabled: false }, { ...enabled, protocol_version: 2 }])('does not load records when unavailable: %j', async status => {

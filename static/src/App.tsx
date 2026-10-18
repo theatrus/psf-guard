@@ -46,7 +46,6 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
   const { dbId } = useDbProjectTarget();
   const hasReviewScope = dbId !== null;
   const plan = useCurrentPlan();
-  const isOnWorkspace = location.pathname === '/plan' && !!plan.current;
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
     queryFn: apiClient.getServerInfo,
@@ -213,10 +212,10 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
               <ViewTab
                 label="Planning"
                 icon={Crosshair}
-                current={isOnWorkspace}
-                disabled={!plan.current}
-                title={plan.current ? undefined : 'Choose a project with a plan first'}
-                onClick={() => plan.current && navigate(plan.hrefFor(plan.current))}
+                current={isOnPlan}
+                disabled={!plan.href}
+                title={plan.href ? undefined : 'Choose a project first'}
+                onClick={() => plan.href && navigate(plan.href)}
               />
             )}
             <span className="header-scope-divider" aria-hidden="true" />
