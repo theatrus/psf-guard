@@ -9,6 +9,7 @@
 - UI labels, settings help, and confirmation messages now state actions,
   limits, defaults, and deletion rules more clearly. Calibration explanations
   distinguish pixel evidence from angle-based matching and explain duplicate repairs.
+  WBPP labels the initial free space as “free at start.”
 - Purge Rejects' Preview, Remove, Restore and Empty trash run as a job. The
   dialog and the background jobs list say what it is doing and how far, as
   `Moving to the trash 37 of 203`, and **Stop** ends it after the frame in

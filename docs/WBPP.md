@@ -116,8 +116,7 @@ folder** under **Settings → Setups → PixInsight** puts every database's
 runs below it (`<folder>/<database>/<project>-<time>/`) and shows the
 space free there. Without one, a database's runs go under its export
 directory when it has one, and only otherwise under the cache. The run
-dialog can also pick a folder for one run. The dialog shows the space
-free at the folder when the run began.
+dialog can also pick a folder for one run. The dialog shows free space at start.
 
 The dialog then follows WBPP's own log: which step it is on, how long the
 run has taken, the last lines, and any line WBPP marked as an error. WBPP

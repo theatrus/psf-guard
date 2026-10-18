@@ -389,7 +389,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
           </div>
           {progress.free_bytes_at_start != null && (
             <p className="wbpp-run-muted">
-              {formatFree(progress.free_bytes_at_start)} free at the run folder when it began.
+              {formatFree(progress.free_bytes_at_start)} free at start.
             </p>
           )}
           {progress.frames > 0 && (
