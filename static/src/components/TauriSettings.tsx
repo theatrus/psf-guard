@@ -68,7 +68,7 @@ type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' 
 
 /** An intent that only picks a tab. */
 type TabIntent = Extract<SettingsIntent, SettingsTab>;
-const TAB_INTENTS: readonly TabIntent[] = ['rigs', 'templates', 'stacking', 'storage', 'backups', 'review', 'calibration'];
+const TAB_INTENTS: readonly TabIntent[] = ['rigs', 'templates', 'stacking', 'storage', 'backups', 'review', 'calibration', 'catalogs'];
 function isTabIntent(intent: SettingsIntent | null): intent is TabIntent {
   return TAB_INTENTS.includes(intent as TabIntent);
 }
@@ -1969,7 +1969,11 @@ export default function TauriSettings({
           </div>
           )}
 
-          {currentTab === 'catalogs' && <div className="settings-setups"><SeizaCatalogControls /></div>}
+          {currentTab === 'catalogs' && (
+            <div className="settings-setups">
+              <SeizaCatalogControls focus={initialIntent === 'catalogs' ? initialField : null} />
+            </div>
+          )}
 
           {/* Planning's panels keep Planning's controls; the container adds no padding. */}
           {currentTab === 'rigs' && <div className="settings-setups director-page director-embedded"><DirectorRigs /></div>}

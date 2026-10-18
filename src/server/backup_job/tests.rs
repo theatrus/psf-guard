@@ -70,6 +70,16 @@ fn wait_for_the_run(state: &AppState) -> LastRun {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+    // The run's end shows in memory before `remember` writes it to disk, and
+    // `remember` holds `saving` until the file is written. Taking the lock
+    // waits for that write, so a restarted manager reads the finished run.
+    drop(
+        state
+            .backups
+            .saving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    );
     state.backups.last_run().expect("a recorded run")
 }
 

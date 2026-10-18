@@ -9,6 +9,7 @@ import StackDeconvolutionControls from './StackDeconvolutionControls';
 import StackRcAstroControls from './StackRcAstroControls';
 import { rcAstroProblem, useRcAstroCapabilities } from './rcAstroSchema';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
+import ColorCalibrationSwitch from './ColorCalibrationSwitch';
 import { builtinViewSetups } from './processingSetups';
 import { validateDeconvolution } from './stackDeconvolution';
 import { applyingLabel } from './stackProcessingLabel';
@@ -180,6 +181,16 @@ export default function StackStretchControls({
             rc_astro,
           }))}
         />
+        {channels === 3 && !displayReferred && (
+          <ColorCalibrationSwitch
+            calibration={request.color_calibration}
+            disabled={disabled || pending}
+            onChange={(color_calibration) => setRequest((current) => ({
+              ...current,
+              color_calibration,
+            }))}
+          />
+        )}
         <StackStretchStageEditor
           label={label}
           channels={channels}

@@ -10,6 +10,8 @@ export const stretchModelLabels: Record<StretchModelType, string> = {
   mtf: 'MTF',
   ghs: 'Generalized hyperbolic',
   'auto-mtf': 'Auto MTF',
+  'median-anchor': 'Median anchor',
+  layered: 'Layered',
 };
 
 export function defaultStretchModel(type: StretchModelType): StackStretchModel {
@@ -32,6 +34,28 @@ export function defaultStretchModel(type: StretchModelType): StackStretchModel {
         white: 1,
       };
     case 'auto-mtf': return { type, target_median: 0.2, shadows_clip: -2.8 };
+    case 'median-anchor':
+      return {
+        type,
+        target_median: 0.25,
+        black_point_sigma: 2.7,
+        curves_boost: 0,
+        hdr_amount: 0,
+        hdr_knee: 0.75,
+        normalize: false,
+      };
+    case 'layered':
+      return {
+        type,
+        target_background: 0.15,
+        aggressiveness: 0.5,
+        dynamic_range_compression: 0,
+        scale_separation: 256,
+        contrast_recovery: 0,
+        saturation_amount: 0,
+        saturation_boost: 0.5,
+        lightness_mask: true,
+      };
   }
 }
 

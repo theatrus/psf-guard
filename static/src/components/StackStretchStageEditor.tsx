@@ -38,6 +38,29 @@ function NumberField({
   );
 }
 
+function CheckField({
+  controlLabel, label, checked, onChange, disabled,
+}: {
+  controlLabel: string;
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="stack-stretch-field stack-stretch-check">
+      <span>{label}</span>
+      <input
+        type="checkbox"
+        aria-label={`${controlLabel} ${label}`}
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
+  );
+}
+
 export default function StackStretchStageEditor({
   label, channels, request, disabled = false, onChange,
 }: {
@@ -61,17 +84,23 @@ export default function StackStretchStageEditor({
           aria-label={`${label} stretch model`}
           value={model.type}
           disabled={disabled}
-          onChange={(event) => onChange({
-            ...request,
-            model: defaultStretchModel(event.target.value as StretchModelType),
-          })}
+          onChange={(event) => {
+            const type = event.target.value as StretchModelType;
+            // The layered stretch carries colour by luminance itself, so it
+            // takes no color strategy and refuses unlinked channels.
+            onChange({
+              ...request,
+              model: defaultStretchModel(type),
+              color_strategy: type === 'layered' ? 'linked' : request.color_strategy,
+            });
+          }}
         >
           {Object.entries(stretchModelLabels).map(([value, optionLabel]) => (
             <option key={value} value={value}>{optionLabel}</option>
           ))}
         </select>
       </label>
-      {channels === 3 && (
+      {channels === 3 && model.type !== 'layered' && (
         <label className="stack-stretch-field stack-stretch-strategy">
           <span>Color</span>
           <select
@@ -139,6 +168,63 @@ export default function StackStretchStageEditor({
           onChange={(black) => updateModel({ black })} />
         <NumberField controlLabel={label} label="White" value={model.white} disabled={disabled}
           onChange={(white) => updateModel({ white })} />
+      </>}
+      {model.type === 'median-anchor' && <>
+        <NumberField controlLabel={label} label="Target median" value={model.target_median}
+          min={0.001} max={0.999} step={0.01} disabled={disabled}
+          onChange={(target_median) => updateModel({ target_median })} />
+        <CheckField controlLabel={label} label="Clip black" checked={model.black_point_sigma !== null}
+          disabled={disabled}
+          onChange={(clip) => updateModel({ black_point_sigma: clip ? 2.7 : null })} />
+        {model.black_point_sigma !== null && (
+          <NumberField controlLabel={label} label="Black point σ" value={model.black_point_sigma}
+            min={0.1} step={0.1} disabled={disabled}
+            onChange={(black_point_sigma) => updateModel({ black_point_sigma })} />
+        )}
+        <NumberField controlLabel={label} label="Curves boost" value={model.curves_boost}
+          min={0} max={0.9} step={0.05} disabled={disabled}
+          onChange={(curves_boost) => updateModel({ curves_boost })} />
+        <NumberField controlLabel={label} label="Highlight compression" value={model.hdr_amount}
+          min={0} max={1} step={0.05} disabled={disabled}
+          onChange={(hdr_amount) => updateModel({ hdr_amount })} />
+        {model.hdr_amount > 0 && (
+          <NumberField controlLabel={label} label="Knee" value={model.hdr_knee}
+            min={0.01} max={0.99} step={0.01} disabled={disabled}
+            onChange={(hdr_knee) => updateModel({ hdr_knee })} />
+        )}
+        <CheckField controlLabel={label} label="Normalize" checked={model.normalize}
+          disabled={disabled} onChange={(normalize) => updateModel({ normalize })} />
+      </>}
+      {model.type === 'layered' && <>
+        <NumberField controlLabel={label} label="Target background" value={model.target_background}
+          min={0.001} max={0.999} step={0.01} disabled={disabled}
+          onChange={(target_background) => updateModel({ target_background })} />
+        <NumberField controlLabel={label} label="Aggressiveness" value={model.aggressiveness}
+          min={0} max={1} step={0.05} disabled={disabled}
+          onChange={(aggressiveness) => updateModel({ aggressiveness })} />
+        <NumberField controlLabel={label} label="Dynamic range compression"
+          value={model.dynamic_range_compression} min={0} max={1} step={0.05} disabled={disabled}
+          onChange={(dynamic_range_compression) => updateModel({ dynamic_range_compression })} />
+        <NumberField controlLabel={label} label="Contrast recovery" value={model.contrast_recovery}
+          min={0} max={1} step={0.05} disabled={disabled}
+          onChange={(contrast_recovery) => updateModel({ contrast_recovery })} />
+        {model.contrast_recovery > 0 && (
+          <NumberField controlLabel={label} label="Scale (px)" value={model.scale_separation}
+            min={8} max={1024} step={8} disabled={disabled}
+            onChange={(scale_separation) => updateModel({ scale_separation })} />
+        )}
+        {channels === 3 && <>
+          <NumberField controlLabel={label} label="Saturation" value={model.saturation_amount}
+            min={0} max={1} step={0.05} disabled={disabled}
+            onChange={(saturation_amount) => updateModel({ saturation_amount })} />
+          {model.saturation_amount > 0 && <>
+            <NumberField controlLabel={label} label="Saturation boost" value={model.saturation_boost}
+              min={0} max={1} step={0.05} disabled={disabled}
+              onChange={(saturation_boost) => updateModel({ saturation_boost })} />
+            <CheckField controlLabel={label} label="Lightness mask" checked={model.lightness_mask}
+              disabled={disabled} onChange={(lightness_mask) => updateModel({ lightness_mask })} />
+          </>}
+        </>}
       </>}
       {model.type === 'auto-mtf' && <>
         <NumberField controlLabel={label} label="Target median" value={model.target_median}

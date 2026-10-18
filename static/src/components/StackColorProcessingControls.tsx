@@ -17,10 +17,12 @@ import { validateDeconvolution } from './stackDeconvolution';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import { defaultStretchRequest, stretchModelLabels } from './stackStretchModels';
 import {
+  colorCalibrationApplies,
   defaultBackgroundModel,
   defaultBackgroundExtraction,
   defaultColorProcessing,
 } from './stackColorProcessing';
+import ColorCalibrationSwitch from './ColorCalibrationSwitch';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import { builtinColorSetups, colorSetupForRoles } from './processingSetups';
 import { withChannelProcessing, type ChannelProcessing } from './channelProcessing';
@@ -517,6 +519,7 @@ export default function StackColorProcessingControls({
   onApply: (processing: StackColorProcessing) => void;
 }) {
   const rcAstroTools = useRcAstroCapabilities().data?.tools;
+  const calibrates = colorCalibrationApplies(roles);
   const defaults = useMemo(() => defaultColorProcessing(roles), [roles]);
   const baseline = applied
     ? { ...applied, input_deconvolutions: applied.input_deconvolutions ?? {},
@@ -589,6 +592,7 @@ export default function StackColorProcessingControls({
           {' · '}RC-Astro {Object.values(draft.input_rc_astro ?? {}).reduce(
             (count, config) => count + (config?.steps.length ?? 0), 0
           ) || 'off'}
+          {calibrates && ` · Calibration ${draft.color_calibration?.enabled === false ? 'off' : 'on'}`}
           {' · '}{roles.map((role) => `${roleLabels[role]} ${draft.input_stretches[role]?.length ?? 0}`).join(' · ')}
           {' · '}RGB {draft.output_stretches.length}</small>
       </summary>
@@ -638,6 +642,15 @@ export default function StackColorProcessingControls({
             ...current, background_extraction,
           }))}
         />
+        {calibrates && (
+          <ColorCalibrationSwitch
+            calibration={draft.color_calibration}
+            disabled={disabled}
+            onChange={(color_calibration) => setDraft((current) => ({
+              ...current, color_calibration,
+            }))}
+          />
+        )}
         <div className="stack-color-stage-grid">
           {roles.map((role) => (
             <StageLane

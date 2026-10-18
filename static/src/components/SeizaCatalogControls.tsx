@@ -62,9 +62,24 @@ function resourceDetail(resource: AstrometryResourceCapability): string {
   return resource.error || resource.status.replace('_', ' ');
 }
 
-export default function SeizaCatalogControls() {
+/** Where a view sends a person to install Gaia colors. */
+export const GAIA_COLORS_FIELD = 'gaia_photometry';
+
+export default function SeizaCatalogControls({
+  focus = null,
+}: {
+  /** The item to bring into view on open: `gaia_photometry` when a color
+   *  card sent the person here to install Gaia colors. */
+  focus?: string | null;
+} = {}) {
   const queryClient = useQueryClient();
   const [preset, setPreset] = useState<CatalogInstallPreset>('blind_deep');
+  const gaiaInstall = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (focus !== GAIA_COLORS_FIELD) return;
+    gaiaInstall.current?.scrollIntoView?.({ block: 'center' });
+    gaiaInstall.current?.focus();
+  }, [focus]);
   const capabilities = useQuery({
     queryKey: ['astrometry', 'capabilities'],
     queryFn: apiClient.getAstrometryCapabilities,
@@ -100,6 +115,10 @@ export default function SeizaCatalogControls() {
   const progress = installStatus.data?.progress;
   const selectedPreset = PRESETS.find((candidate) => candidate.value === preset)!;
   const resources = capabilities.data?.resources;
+  const gaia = resources?.gaia_photometry;
+  const gaiaInstalled = gaia?.status === 'available';
+  const installingGaia = running && progress?.preset === 'gaia_photometry';
+  const busy = running || install.isPending || validation.isPending;
 
   return (
     <section className="settings-section catalog-settings" aria-labelledby="seiza-catalog-title">
@@ -122,6 +141,9 @@ export default function SeizaCatalogControls() {
             <span className={capabilities.data.features.blind_solve ? 'ready' : ''}>
               {capabilities.data.features.blind_solve ? '✓' : '○'} Blind solve
             </span>
+            <span className={capabilities.data.features.color_calibration ? 'ready' : ''}>
+              {capabilities.data.features.color_calibration ? '✓' : '○'} Color calibration
+            </span>
           </div>
         )}
       </div>
@@ -136,6 +158,8 @@ export default function SeizaCatalogControls() {
         <div className="catalog-resource-grid">
           {RESOURCE_LABELS.map(([key, label]) => {
             const resource = resources[key as keyof typeof resources];
+            // A server older than the Gaia colors resource reports none.
+            if (!resource) return null;
             return (
               <div className="catalog-resource" key={key}>
                 <span
@@ -151,6 +175,31 @@ export default function SeizaCatalogControls() {
           })}
         </div>
       )}
+
+      <section className="catalog-optional" aria-labelledby="gaia-colors-title">
+        <div>
+          <strong id="gaia-colors-title">Gaia colors</strong>
+          <small>Star colors for color calibration · about 480 MB</small>
+        </div>
+        <span className="catalog-optional-state" data-installed={gaiaInstalled ? 'true' : 'false'}>
+          {gaiaInstalled
+            ? `Installed${gaia?.size_bytes ? ` · ${formatBytes(gaia.size_bytes)}` : ''}`
+            : installingGaia ? 'Installing…' : 'Not installed'}
+        </span>
+        <button
+          ref={gaiaInstall}
+          type="button"
+          className="browse-button"
+          aria-label={gaiaInstalled ? 'Update Gaia colors' : 'Install Gaia colors'}
+          onClick={() => install.mutate('gaia_photometry')}
+          disabled={busy}
+        >
+          {installingGaia ? 'Installing…' : gaiaInstalled ? 'Update' : 'Install'}
+        </button>
+        {gaia?.status === 'invalid' && gaia.error && (
+          <small className="catalog-optional-error">{gaia.error}</small>
+        )}
+      </section>
 
       <div className="catalog-install-controls">
         <label htmlFor="catalog-preset">Catalog package</label>

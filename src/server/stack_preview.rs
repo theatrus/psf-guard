@@ -9,6 +9,7 @@ pub mod artifact;
 pub mod automatic;
 pub mod calibration_masters;
 pub mod color;
+pub mod color_calibration;
 mod execution;
 mod final_integration;
 mod janitor;
@@ -417,6 +418,17 @@ pub struct StackGroupStatus {
     #[serde(default)]
     pub sky_orientation: Option<StackSkyOrientation>,
     pub reference_image_id: Option<i32>,
+    /// What color calibration did for a one-shot-color stack's preview.
+    /// The stack's FITS stays as integrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_calibration: Option<color_calibration::StackColorCalibrationOutcome>,
+    /// The solve and Gaia catalog that calibration rested on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_calibration_basis: Option<color_calibration::StackColorCalibrationBasis>,
+    /// Why the calibrated preview is out of date, worked out when the stack
+    /// is served: a new solve or Gaia catalog since. Never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_calibration_outdated: Option<String>,
     pub total_exposure_seconds: f64,
     pub preview_url: Option<String>,
     pub fits_url: Option<String>,
@@ -2469,6 +2481,7 @@ pub async fn import_wbpp_stacks(
 }
 
 pub async fn get_latest_stack_previews(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
 ) -> Result<Json<ApiResponse<LatestStackPreviews>>, AppError> {
@@ -2494,7 +2507,21 @@ pub async fn get_latest_stack_previews(
         return Err(AppError::NotFound);
     }
     let latest = current_project_latest_stacks(&ctx, project_id, latest)?;
-    Ok(Json(ApiResponse::success(latest.for_client())))
+    let mut latest = latest.for_client();
+    // A one-shot-color stack's calibrated preview goes out of date with a
+    // new solve or Gaia catalog; a mono stack's never does.
+    for entry in &mut latest.groups {
+        let group = &mut entry.group;
+        group.color_calibration_outdated = preview_calibration_outdated(group, || {
+            osc_calibration_source(
+                &state,
+                &ctx,
+                group.reference_image_id,
+                group.sky_orientation.clone(),
+            )
+        });
+    }
+    Ok(Json(ApiResponse::success(latest)))
 }
 
 pub async fn get_stack_preview_job(
@@ -2640,12 +2667,23 @@ pub async fn get_stack_preview_processing(
 ) -> Result<Json<ApiResponse<Option<stretch::StackStretchPreview>>>, AppError> {
     let source = stack_processing_source(&state, &ctx, &job_id, group_index)?;
     validate_processing_revision(query.v.as_deref(), &source.revision)?;
-    Ok(Json(ApiResponse::success(stretch::selected_or_carried(
+    let mut preview = stretch::selected_or_carried(
         &state.stack_previews,
         &ctx.stack_root,
         &source.key,
         &source.revision,
-    )?)))
+    )?;
+    // A one-shot-color stack's processing goes out of date with a new solve
+    // or Gaia catalog, as its build preview does.
+    if let (Some(preview), Some(current)) = (preview.as_mut(), source.calibration.as_ref()) {
+        preview.color_calibration_outdated = color_calibration::calibration_outdated(
+            preview.color_calibration_basis.as_ref(),
+            preview.color_calibration.as_ref(),
+            current,
+        )
+        .map(|reason| format!("{reason}; apply the processing again"));
+    }
+    Ok(Json(ApiResponse::success(preview)))
 }
 
 pub async fn clear_stack_preview_processing(
@@ -2740,7 +2778,54 @@ fn stack_processing_source(
         },
         job_id: job_id.to_string(),
         group_index: group.index,
+        calibration: (group.output_channels == 3).then(|| {
+            osc_calibration_source(
+                state,
+                ctx,
+                group.reference_image_id,
+                group.sky_orientation.clone(),
+            )
+        }),
     })
+}
+
+/// Why a stack's calibrated card preview is out of date, if it is. Only a
+/// one-shot-color stack whose build calibrated, or tried to, can be: a mono
+/// stack never is, and `current` is not read for one.
+fn preview_calibration_outdated(
+    group: &StackGroupStatus,
+    current: impl FnOnce() -> color_calibration::StackCalibrationSource,
+) -> Option<String> {
+    if group.output_channels != 3 || group.color_calibration.is_none() {
+        return None;
+    }
+    color_calibration::calibration_outdated(
+        group.color_calibration_basis.as_ref(),
+        group.color_calibration.as_ref(),
+        &current(),
+    )
+    .map(|reason| format!("{reason}; rebuild the stack"))
+}
+
+/// What color calibration of a one-shot-color stack can use: its reference
+/// frame's fresh pixel solve, its layout, and the installed Gaia catalog.
+fn osc_calibration_source(
+    state: &AppState,
+    ctx: &DatabaseContext,
+    reference_image_id: Option<i32>,
+    orientation: Option<StackSkyOrientation>,
+) -> color_calibration::StackCalibrationSource {
+    color_calibration::StackCalibrationSource {
+        reference_image_id,
+        orientation,
+        solution: reference_image_id
+            .and_then(|image_id| {
+                ctx.astrometry_evidence
+                    .evidence_for_source(&ctx.cache_dir_path, image_id, None)
+            })
+            .and_then(|analysis| analysis.solution),
+        catalog: state.astrometry.gaia_photometry_signature(),
+    }
 }
 
 fn validate_request(request: &StackPreviewRequest) -> Result<(), AppError> {
@@ -3299,6 +3384,9 @@ fn prepare_whole(
             output_channels: 0,
             sky_orientation: None,
             reference_image_id,
+            color_calibration: None,
+            color_calibration_basis: None,
+            color_calibration_outdated: None,
             total_exposure_seconds: 0.0,
             preview_url: None,
             fits_url: None,
@@ -5025,8 +5113,39 @@ fn run_group(
         )
         .map_err(|error| error.to_string())?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
+        // A one-shot-color stack's preview is color calibrated against Gaia,
+        // as its processing is by default; the FITS stays as integrated.
+        let calibrated = if image.channels == 3 {
+            let status = state
+                .stack_previews
+                .get(job_id)
+                .and_then(|job| job.groups.get(group.index).cloned());
+            let source = osc_calibration_source(
+                state,
+                &ctx,
+                status.as_ref().and_then(|status| status.reference_image_id),
+                status.and_then(|status| status.sky_orientation),
+            );
+            let plan = source.plan(color_calibration::StackColorCalibration::default());
+            let open_catalog = || {
+                state
+                    .astrometry
+                    .gaia_photometry_catalog()
+                    .map(|(catalog, _)| catalog)
+            };
+            let (calibrated, outcome) =
+                color_calibration::calibrate_stack(&plan, &image, &open_catalog);
+            let basis = source.basis();
+            state.stack_previews.update(job_id, |job| {
+                job.groups[group.index].color_calibration = Some(outcome);
+                job.groups[group.index].color_calibration_basis = Some(basis);
+            });
+            calibrated
+        } else {
+            None
+        };
         stretch::render_image_previews_atomic(
-            &image,
+            calibrated.as_ref().unwrap_or(&image),
             &stretch::default_linear_config(),
             stretch::StackStretchSourceTransfer::Linear,
             &preview_path(stack_root, job_id, group.index),
@@ -5677,6 +5796,9 @@ mod tests {
             output_channels: 1,
             sky_orientation: Some(sky_orientation()),
             reference_image_id: Some(image_id),
+            color_calibration: None,
+            color_calibration_basis: None,
+            color_calibration_outdated: None,
             total_exposure_seconds: 120.0,
             preview_url: None,
             fits_url: None,
@@ -8311,6 +8433,7 @@ mod tests {
                 },
                 job_id: "e".repeat(64),
                 group_index: 0,
+                calibration: None,
             }
         }
 
@@ -8747,5 +8870,55 @@ mod tests {
             .await;
             assert!(after.stack_previews.journal_entries().is_empty());
         }
+    }
+    #[test]
+    fn only_a_color_stack_preview_goes_out_of_date_with_the_calibration() {
+        let current = || color_calibration::StackCalibrationSource {
+            reference_image_id: Some(1),
+            orientation: None,
+            solution: None,
+            catalog: Some(crate::astrometry::AstrometryCatalogFileSignature {
+                name: "gaia_photometry".into(),
+                path: "/catalogs/stars-gaia-photometry.bin".into(),
+                format: "SEIZAPH1".into(),
+                size_bytes: 1,
+                modified_unix_seconds: 1,
+                modified_subsec_nanos: 0,
+                sha256: None,
+            }),
+        };
+        let skipped = color_calibration::StackColorCalibrationOutcome::Skipped(
+            color_calibration::StackColorCalibrationSkip {
+                reason: color_calibration::StackColorCalibrationSkipReason::NoGaiaCatalog,
+                detail: "Gaia colors are not installed".into(),
+            },
+        );
+        let mut color = ready_group(42, "L", 1);
+        color.output_channels = 3;
+        color.color_calibration = Some(skipped.clone());
+        color.color_calibration_basis = Some(color_calibration::StackColorCalibrationBasis {
+            reference_image_id: Some(1),
+            solution_fingerprint: None,
+            catalog: None,
+        });
+        assert_eq!(
+            preview_calibration_outdated(&color, current).as_deref(),
+            Some("Out of date — Gaia colors were installed; rebuild the stack")
+        );
+
+        // A mono stack never is, and nothing is read for it.
+        let mut mono = color.clone();
+        mono.output_channels = 1;
+        assert_eq!(
+            preview_calibration_outdated(&mono, || panic!("a mono stack reads no solve")),
+            None
+        );
+        // Nor is a color stack whose build did not calibrate.
+        let mut uncalibrated = color;
+        uncalibrated.color_calibration = None;
+        assert_eq!(
+            preview_calibration_outdated(&uncalibrated, || panic!("nothing to compare")),
+            None
+        );
     }
 }

@@ -596,8 +596,9 @@ async fn restore_stack_job(
                 .get_database(&database_id)
                 .ok_or_else(|| NotRestored::Skip(format!("database {database_id} is gone")))?;
             let request_for_prepare = request.clone();
+            let astrometry = Arc::clone(&state.astrometry);
             let mut prepared = tokio::task::spawn_blocking(move || {
-                super::color::prepare_color_job(&ctx, project_id, &request_for_prepare)
+                super::color::prepare_color_job(&ctx, &astrometry, project_id, &request_for_prepare)
             })
             .await
             .map_err(|error| NotRestored::Retry(error.to_string()))?

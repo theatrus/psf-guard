@@ -13,6 +13,23 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+- Stacks offer a **Median anchor** stretch beside Auto MTF: it places the
+  background median exactly on a target from a robust black point, with
+  optional curves boost, highlight compression and normalization. Auto MTF
+  stays the default.
+- Stacks also offer a **Layered** stretch, which keeps local contrast on
+  bright structure, can compress star cores, and can lift saturation without
+  shifting hue.
+- RGB and LRGB color previews, and one-shot-color stacks, are color
+  calibrated against Gaia star colors, so a Sun-colored star comes out white
+  and the sky a neutral gray. The card shows the star count and gains, as
+  `Calibrated on 143 stars · R ×1.12, B ×0.87`, or the reason calibration was
+  skipped. A switch in the processing stack, or a one-shot-color stack's view
+  processing, turns calibration off. Install the optional **Gaia colors** catalog
+  in Settings › Catalogs, which shows it as its own item with its size,
+  whether it is installed, and an **Install** button.
+- Catalog installations show in the header's job line with their progress.
+  Settings and the color cards update when an installation finishes.
 - WBPP master copies show the current file and file counts in the dialog
   and background jobs list. Copy controls stay disabled while copying, and
   repeat copy requests cannot start a second copy. A run requested while a

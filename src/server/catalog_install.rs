@@ -20,6 +20,9 @@ pub enum CatalogInstallPreset {
     SolverGaia,
     BlindDeep,
     BlindDeepGaia20,
+    /// Gaia DR3 colors for color calibration; an addition to a solver
+    /// package, not a solver package itself.
+    GaiaPhotometry,
 }
 
 impl CatalogInstallPreset {
@@ -55,6 +58,7 @@ impl CatalogInstallPreset {
                 Dataset::BlindGaia16,
                 Dataset::StarsLiteTycho2Identifiers,
             ],
+            Self::GaiaPhotometry => &[Dataset::GaiaPhotometry],
         }
     }
 
@@ -156,12 +160,36 @@ impl CatalogInstallManager {
         }
     }
 
+    /// Start installing `preset` in the background and return at once. While
+    /// one installation runs, another start returns its status without
+    /// starting a second download.
     pub fn start(
         &self,
         preset: CatalogInstallPreset,
         output_dir: PathBuf,
         guard: InteractiveJobGuard,
     ) -> CatalogInstallStatus {
+        self.start_with(
+            preset,
+            output_dir,
+            guard,
+            |manager, preset, output_dir| async move { manager.install(preset, output_dir).await },
+        )
+    }
+
+    /// [`Self::start`], with the work that installs given.
+    fn start_with<G, F, Fut>(
+        &self,
+        preset: CatalogInstallPreset,
+        output_dir: PathBuf,
+        guard: G,
+        install: F,
+    ) -> CatalogInstallStatus
+    where
+        G: Send + 'static,
+        F: FnOnce(Self, CatalogInstallPreset, PathBuf) -> Fut,
+        Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+    {
         {
             let mut progress = self.progress.write().unwrap();
             if progress.running {
@@ -190,9 +218,10 @@ impl CatalogInstallManager {
         }
 
         let manager = self.clone();
+        let work = install(self.clone(), preset, output_dir);
         tokio::spawn(async move {
             let _guard = guard;
-            if let Err(error) = manager.install(preset, output_dir).await {
+            if let Err(error) = work.await {
                 manager.finish_with_error(error);
             }
         });
@@ -249,6 +278,11 @@ impl CatalogInstallManager {
                 )
             })?;
 
+        self.finish(&output_dir);
+        Ok(())
+    }
+
+    fn finish(&self, output_dir: &std::path::Path) {
         let mut progress = self.progress.write().unwrap();
         progress.running = false;
         progress.phase = CatalogInstallPhase::Complete;
@@ -259,7 +293,6 @@ impl CatalogInstallManager {
         progress.bytes_total = None;
         progress.written_bytes = None;
         progress.finished_at = Some(unix_now());
-        Ok(())
     }
 
     fn finish_with_error(&self, error: String) {
@@ -389,6 +422,7 @@ mod tests {
 
         for (preset, file_count) in presets {
             assert_eq!(preset.file_count(), file_count);
+            assert!(!preset.datasets().contains(&Dataset::GaiaPhotometry));
             assert!(
                 preset
                     .datasets()
@@ -396,6 +430,83 @@ mod tests {
                 "{preset:?} must install the star identifier catalog"
             );
         }
+    }
+
+    #[test]
+    fn gaia_colors_install_alone() {
+        assert_eq!(
+            CatalogInstallPreset::GaiaPhotometry.datasets(),
+            &[Dataset::GaiaPhotometry]
+        );
+        let preset: CatalogInstallPreset = serde_json::from_str("\"gaia_photometry\"").unwrap();
+        assert_eq!(preset, CatalogInstallPreset::GaiaPhotometry);
+    }
+
+    /// Starting returns at once, while the download runs in the background
+    /// and reports through the same status as every other package; a second
+    /// start does not begin a second download.
+    #[tokio::test]
+    async fn an_install_returns_at_once_and_reports_progress_while_it_runs() {
+        let manager = CatalogInstallManager::default();
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let status = manager.start_with(
+            CatalogInstallPreset::GaiaPhotometry,
+            PathBuf::from("/catalogs"),
+            (),
+            |manager, _, output_dir| async move {
+                report_download_event(
+                    &manager.progress,
+                    &AtomicUsize::new(0),
+                    DownloadEvent::DownloadProgress {
+                        name: "stars-gaia-photometry.bin".into(),
+                        downloaded: 100,
+                        total: 476,
+                        written: 100,
+                    },
+                );
+                released.await.map_err(|error| error.to_string())?;
+                manager.finish(&output_dir);
+                Ok(())
+            },
+        );
+        assert!(status.started);
+        assert!(status.progress.running);
+        assert_eq!(
+            status.progress.preset,
+            Some(CatalogInstallPreset::GaiaPhotometry)
+        );
+        assert_eq!(status.progress.files_total, 1);
+
+        let started_twice = manager.start_with(
+            CatalogInstallPreset::BlindDeep,
+            PathBuf::from("/catalogs"),
+            (),
+            |_, _, _| async { Err("a second download must not start".to_string()) },
+        );
+        assert!(!started_twice.started);
+        assert_eq!(
+            started_twice.progress.preset,
+            Some(CatalogInstallPreset::GaiaPhotometry)
+        );
+
+        while manager.status().progress.bytes_completed.is_none() {
+            tokio::task::yield_now().await;
+        }
+        let running = manager.status().progress;
+        assert_eq!(running.phase, CatalogInstallPhase::Downloading);
+        assert_eq!(
+            (running.bytes_completed, running.bytes_total),
+            (Some(100), Some(476))
+        );
+
+        release.send(()).unwrap();
+        while manager.status().progress.running {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            manager.status().progress.phase,
+            CatalogInstallPhase::Complete
+        );
     }
 
     #[test]

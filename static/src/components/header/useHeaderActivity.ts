@@ -3,6 +3,7 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type {
   CacheRefreshProgress,
+  CatalogInstallStatus,
   CalibrationDuplicateStatus,
   RejectRemovalStatus,
   FlatMeasureStatus,
@@ -24,6 +25,8 @@ import { activityItems, summarize, type DatabaseActivity, type ProjectOf } from 
 import { frameSitesKey } from '../calibration/frameSitesKey';
 
 export const WBPP_ACTIVITY_QUERY_KEY = ['wbpp-activity'] as const;
+/** Shared with Settings › Catalogs, which starts and follows installs. */
+export const CATALOG_INSTALL_QUERY_KEY = ['astrometry', 'catalog-install'] as const;
 
 /** How long the chip says "Done" after the last job finishes. */
 export const FINISHED_MS = 2500;
@@ -111,6 +114,30 @@ export function useHeaderActivity() {
     refetchIntervalInBackground: false,
     retry: false,
   });
+
+  // A catalog installation runs for minutes on the server; Settings ›
+  // Catalogs reads the same query. A person starts it, so a quiet server
+  // needs only a slow look for one another client started.
+  const catalogInstall = useQuery<CatalogInstallStatus>({
+    queryKey: CATALOG_INSTALL_QUERY_KEY,
+    queryFn: apiClient.getCatalogInstallStatus,
+    refetchInterval: (query) => (query.state.data?.progress.running ? 1000 : 30_000),
+    refetchIntervalInBackground: false,
+    retry: false,
+  });
+  // Once it finishes, what is installed has changed: Settings and the color
+  // cards read the capabilities again.
+  const installing = catalogInstall.data?.progress.running ?? false;
+  const wasInstalling = useRef(false);
+  useEffect(() => {
+    if (wasInstalling.current && !installing) {
+      queryClient.invalidateQueries({ queryKey: ['astrometry', 'capabilities'] });
+      queryClient.invalidateQueries({
+        predicate: (query) => query.queryKey[0] === 'db' && query.queryKey.includes('stack-color'),
+      });
+    }
+    wasInstalling.current = installing;
+  }, [installing, queryClient]);
 
   const refreshes = useQueries({
     queries: databases.map((db) => ({
@@ -209,7 +236,8 @@ export function useHeaderActivity() {
   const items = activityItems(perDb, stacks, wbpp.data, projectOf, {
     scheduled,
     reapplies: waitingReapplies,
-  }, transfers.data?.jobs, backupsAllowed ? backup.data?.job ?? null : null);
+  }, transfers.data?.jobs, backupsAllowed ? backup.data?.job ?? null : null,
+  catalogInstall.data?.progress ?? null);
   const summary = summarize(items);
 
   // A database whose work just finished has new images, metrics and grades

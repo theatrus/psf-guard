@@ -1162,9 +1162,32 @@ swept after two weeks. A selected view or current color preview keeps the
 RC-Astro artifacts it still needs.
 
 The controls expose Seiza's identity, explicit linear, asinh,
-percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), and Auto-MTF
-models. Auto-MTF with PSF Guard's established target median and shadow clipping
-is the default for linear mono-stack artifacts.
+percentile-asinh, MTF, Generalized Hyperbolic Stretch (GHS), Auto-MTF, median
+anchor, and layered models. Auto-MTF with PSF Guard's established target median and
+shadow clipping is the default for linear mono-stack artifacts.
+
+**Median anchor** places the background median exactly on **Target median**
+(0.25 by default) with one closed-form curve. Its black point sits
+**Black point σ** robust sigmas below the median, with the noise measured from
+the darker half of the image so stars do not move it; turn **Clip black** off to
+use the image minimum instead. **Curves boost** (0–0.9) lifts the tones above
+the target, **Highlight compression** (0–1) softly lowers the tones above its
+**Knee** to keep star cores and bright structure from saturating, and
+**Normalize** brings the brightest sample to white.
+
+**Layered** applies the median anchor curve to luminance and treats large
+structure and fine detail apart. **Target background** (0.15 by default) sets
+where the background median lands. **Aggressiveness** (0–1) moves the black
+point from 6 robust sigmas below the median at 0 to 1.5 at 1. **Contrast
+recovery** (0–1) keeps more local contrast on bright structure, which the
+global curve would otherwise flatten; **Scale (px)** sets the size, in stack
+pixels, that separates structure from detail. **Dynamic range compression**
+(0–1) lowers star cores without dimming broad nebulosity. Colour follows
+luminance, so the stage shows no **Color** choice and keeps the stack's colour
+balance: calibrate colour first, or a cast stays in the result. On colour
+stages, **Saturation** lifts colour without changing hue or brightness;
+**Saturation boost** favours weakly coloured pixels, and **Lightness mask**
+keeps dark background noise from gaining colour.
 Explicit black, white, shadow, and highlight points use normalized zero–one
 display units. PSF Guard maps a robust 0.1%–99.9% range from linear FITS into
 that domain before invoking Seiza. After an application, the card shows the raw
@@ -1418,11 +1441,12 @@ normalizes the result and applies that role's ordered stretch stages before
 composition. Deconvolution is independently opt-in for L/R/G/B or
 H-alpha/OIII/SII and is off for every role by default. Expand those input lanes
 or RGB output to add, edit, remove, and reorder Seiza
-identity, linear, asinh, percentile-asinh, MTF, GHS, and Auto-MTF stages.
+identity, linear, asinh, percentile-asinh, MTF, GHS, Auto-MTF, median anchor,
+and layered stages.
 **Apply processing stack** starts a new cached color job; **Revert edits**
 returns to the last rendered pipeline and **Reset defaults** restores additive
-background extraction, deconvolution and RC-Astro off, one Auto-MTF stage per
-input, and no post-composition stage.
+background extraction, deconvolution and RC-Astro off, color calibration on
+for RGB and LRGB, one Auto-MTF stage per input, and no post-composition stage.
 
 Each color input offers the same BlurXTerminator, NoiseXTerminator, and
 StarXTerminator controls as mono view processing. Tools run before that
@@ -1474,6 +1498,89 @@ output stretch edits reuse those FITS files, so they do not repeat source
 loading, background fits, registration, or deconvolution. Registered channels
 may contain `NaN` at uncovered borders; the processing pipeline preserves
 that mask through deconvolution and RC-Astro instead of treating gaps as data.
+
+### Color calibration
+
+RGB and LRGB previews, and one-shot-color stacks, are color calibrated
+against Gaia star colors by default. Narrowband palettes are false color and
+never are.
+
+Seiza does the calibration (`seiza_stacking::calibrate_and_stretch`). It
+measures each Gaia star in R, G and B, fits instrumental color against Gaia
+BP−RP, and finds the gains that make a star the Sun's color come out white.
+It also offsets each channel so the sky is one gray. PSF Guard gives Seiza
+the solution of the image it calibrates: the fresh pixel solve of the
+reference stack's reference frame, carried through the stack's saved
+source-to-output transform and, for a composition, its edge crop
+(`seiza_stacking::transform_wcs`). Every other channel was registered to
+that stack's grid (R for RGB, L for LRGB), so the stars land on all three
+channels.
+
+Where calibration runs depends on the stretches:
+
+- **The composed channels share their stretch stages**, as they do by
+  default. The channels are composed linear. For RGB, Seiza then calibrates
+  the composition and stretches it with those stages and the RGB output
+  stages, so one linked stretch keeps the calibrated balance. For LRGB, the
+  R, G and B channels are calibrated before luminance joins them, and the
+  composition is stretched the same way.
+- **The channels have stretches of their own.** R, G and B are calibrated
+  before anything stretches them. Each channel then gets its own stretch, as
+  configured, which pulls it toward its own median and undoes most of the
+  calibration. The card adds `channels stretched separately` to its
+  calibration line. Give the channels the same stretch to keep the balance.
+
+PSF Guard hands the shared stages to Seiza as per-channel stretches. Once
+Seiza has calibrated, it links them, so the balance survives. When
+calibration cannot run, Seiza keeps them per channel, so the preview looks as
+it would without calibration. One linked stretch of uncalibrated channels
+would show the camera's color cast.
+
+The card shows what happened, as `Calibrated on 143 stars · R ×1.12, B ×0.87`,
+or why it did not:
+
+- **Gaia colors not installed.** Install **Gaia colors** (about 480 MB) in
+  Settings › Catalogs. The card's **Install** opens Settings there.
+- **Reference frame not plate solved.** Solve that frame. Embedded FITS WCS
+  does not count.
+- **Too few Gaia stars.** The catalog stops at G 15. Seiza needs 20 clean,
+  uncrowded stars down to G 13 for each fit, which a narrow field can lack.
+- Anything else shows Seiza's reason.
+
+Turn calibration off with the **Color calibration** switch in the
+**Processing stack** editor.
+
+A one-shot-color stack is calibrated the same way, on its own linear RGB
+pixels, through the solve of its own reference frame carried through its
+layout. Its card preview is calibrated when the stack is built, and its
+**View processing** calibrates before the stretch unless its **Color
+calibration** switch is off. The stack's FITS stays as integrated. The
+default stretch is linked, so the balance survives it. A view whose stretch
+is set to unlinked stretches each channel on its own, and the card adds
+`channels stretched separately`. The calibration settings, the reference
+frame's solve and the Gaia catalog are part of the view's processing ID, so
+a mono stack's processing IDs do not change. The card preview and the
+processing each record the solve and catalog their calibration rested on.
+When either changes, as when Gaia colors are installed or the reference
+frame is solved again, the card shows `Out of date — Gaia colors were
+installed; rebuild the stack`, or `…; apply the processing again` for
+processing. A stack built before this release keeps its uncalibrated card
+preview until it is rebuilt or its view processing is applied.
+
+The request's `processing.color_calibration` takes `enabled`,
+`neutralize_background` (default true), and `white_reference`, either
+`"solar"` (the default) or a Gaia color such as `{"bp_rp": 0.65}`. An RGB or
+LRGB request without it is calibrated with the defaults. The manifest's
+`color_calibration` records the gains, offsets, sky levels, both color fits,
+and star counts, or the reason calibration was skipped. The FITS gets
+`COLORCAL`, `CCWHITE`, `CCGAINR`, `CCGAING`, `CCGAINB` and `CCSTARS` cards.
+The settings, the reference frame's solve, and the Gaia catalog file are part
+of the job ID and the stale check, so a new solve or a newly installed catalog
+makes a new preview and marks the old one out of date.
+
+Installing Gaia colors runs in the background, like every catalog
+installation, and shows in the header's job line with its progress. Settings
+and the color cards update when it finishes.
 
 ### Edge crop
 
@@ -1608,9 +1715,11 @@ immutable cached response for the rebuilt output.
   for forcing a different master set.
 - The retained FITS is a quick-look integration, whether calibrated or not. It
   is not a final science product.
-- Color is a visual channel combination, not photometric or
-  spectrophotometric calibration. There is no custom mixing matrix UI,
-  mosaic, or cross-target integration, and no drizzle beyond Bayer drizzle.
+- RGB and LRGB color is calibrated against Gaia broadband colors, not
+  spectrophotometrically; narrowband color is a visual channel combination.
+  One-shot-color stacks are not calibrated yet. There is no custom mixing
+  matrix UI, mosaic, or cross-target integration, and no drizzle beyond Bayer
+  drizzle.
 - Color frames are demosaiced with VNG. Seiza also offers MHC and bilinear,
   but PSF Guard's own replay cannot yet choose a demosaic, so the setting
   waits for Seiza to expose one. RC-Astro star removal runs on

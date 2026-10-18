@@ -16,6 +16,7 @@ import type {
 import StackPreviewInspector from './StackPreviewInspector';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackColorProcessingControls from './StackColorProcessingControls';
+import StackColorCalibrationLine from './StackColorCalibrationLine';
 import { appliedProcessingQueryKey, channelProcessingFrom } from './channelProcessing';
 import {
   processingForColorBuild,
@@ -364,6 +365,10 @@ function ColorCard({
             </strong>
           ))}
         </div>
+      )}
+
+      {artifact?.color_calibration && (
+        <StackColorCalibrationLine outcome={artifact.color_calibration} canInstall={canCompute} />
       )}
 
       <div
