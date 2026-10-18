@@ -255,6 +255,14 @@ server from that panel. **Automatic**, the default, chooses a free port at
 startup. A fixed-port conflict opens the Server controls so you can choose
 another port. Standalone servers use `--port` or `[server].port` instead.
 
+#### Resize the desktop UI
+
+Open the hamburger menu and choose **Zoom in**, **Zoom out** or **Reset to 100%**.
+Use Cmd on macOS or Ctrl on Windows and Linux with +, − or 0 for the same actions,
+including while Settings is open. The desktop app changes the whole UI in 10%
+steps from 50% to 200% and saves the scale on this device. Image zoom has separate
+controls. In a browser, use the browser's zoom controls.
+
 ### Docker (Linux servers / NAS)
 
 Create a persistent data volume and the first editor account before starting
