@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import releaseHighlights from './src/updates/highlights.json' with { type: 'json' };
 import * as os from 'os';
 import * as path from 'path';
 import { installAstrometryFixture } from './e2e/fixtures/astrometry';
@@ -88,6 +89,8 @@ export default defineConfig({
       origins: [PORT, TELESCOPE_PORT, REVIEW_PORT].map((port) => ({
         origin: `http://127.0.0.1:${port}`,
         localStorage: [
+          // Most specs test the app after its release notes were acknowledged.
+          { name: 'psf-guard.whats-new.acknowledged', value: releaseHighlights[0].version },
           { name: 'psf-guard.display-preferences', value: JSON.stringify({ libraryDensity: 'detailed' }) },
         ],
       })),
@@ -118,7 +121,7 @@ export default defineConfig({
     {
       name: 'webkit',
       use: { ...devices['Desktop Safari'], contextOptions: { reducedMotion: 'reduce' } },
-      testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts'],
+      testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts', 'whats-new.spec.ts'],
     },
   ],
 

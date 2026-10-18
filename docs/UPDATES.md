@@ -16,6 +16,35 @@ the cached result to every browser. Reloading the UI never fetches either public
 feed. Tauri uses GitHub when the website updater feed is unavailable.
 Browser/server mode never downloads or installs an executable.
 
+## Notes after an upgrade
+
+**Menu › What's new** opens the release highlights bundled with the app.
+Deprecations appear first, then upgrade notes and new features. Full release
+notes link to each version's GitHub release. Reading the highlights needs no
+network connection.
+
+The popup opens on the first visit to a version with bundled highlights.
+**Done**, Escape, the close button and a click outside close it for that page
+session. Tick **Don't show again for this version** before closing to keep it
+hidden after reloads. A later version opens it again. The menu always opens
+the notes, even after you hide the popup.
+
+The browser or desktop WebView stores the last acknowledged version locally;
+this choice does not follow an account to other browsers. Clearing site data
+resets it. A downgrade does not reopen the automatic popup. If you skip
+releases, the popup includes notes since the version you acknowledged, with
+all deprecations before any feature highlights. A first visit shows only the
+current version; the menu includes older bundled notes too.
+
+Builds without highlights for their exact version do not open the popup. This
+also keeps an old browser tab from announcing a server release whose notes it
+does not have. Reload to load the new bundle. The menu still offers a link to
+the version's full notes.
+
+Release authors maintain `static/src/updates/highlights.json`; see
+[Releasing](RELEASING.md). These installed-version notes are separate from the
+newer-version notice feed described above.
+
 ## Open browser tabs
 
 A browser tab can outlive the server build that served it. The Vite build

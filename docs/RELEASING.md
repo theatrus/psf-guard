@@ -45,6 +45,18 @@ them.
 The release workflow prepends the matching `docs/releases/vVERSION.md` file to
 GitHub's generated change list. A missing file makes the release job fail.
 
+Add an entry for the version at the start of
+`static/src/updates/highlights.json` too.
+The app uses it for **What's new** after an upgrade and from the menu. Keep
+older entries so people who skip releases still see their warnings. Each
+entry needs `version`, `deprecations`, `upgradeNotes` and `highlights`.
+Each item has a short `title` and plain-text `body`. Use an empty array when a
+section has nothing to say. Put removals and deprecated features in
+`deprecations`, with the replacement and any deadline. Put required steps and
+changed defaults in `upgradeNotes`. Choose a few main features for
+`highlights`; leave the full account in the Markdown release notes. The
+release version check rejects a tag without matching highlights.
+
 Open the notes with a plain sentence that says what the release does. That
 first sentence becomes the summary in `notice.json`, which is the single line
 every installed copy sees in its update banner, so write it for someone who

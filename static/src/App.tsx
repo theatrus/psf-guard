@@ -16,6 +16,7 @@ import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
 import ServerInfoPanel from './components/ServerInfoPanel';
 import SiteBanner from './components/SiteBanner';
 import UpdateNotice from './components/UpdateNotice';
+import WhatsNew from './components/WhatsNew';
 import BuildRefresh from './components/BuildRefresh';
 import TauriSettings from './components/TauriSettings';
 import { DesktopServerGate } from './components/DesktopServerSettings';
@@ -63,6 +64,7 @@ function AppContent() {
     return query ? `${path}?${query}` : path;
   };
   const [showHelp, setShowHelp] = useState(false);
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
   const [showServerInfo, setShowServerInfo] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   // Which form the settings modal should land on. Set by whoever asked for
@@ -263,6 +265,7 @@ function AppContent() {
           <LiveChip />
           <HeaderMenu
             onSettings={access.canWrite ? () => setShowSettings(true) : undefined}
+            onWhatsNew={() => setShowWhatsNew(true)}
             onShortcuts={() => setShowHelp(true)}
             onServerInfo={() => setShowServerInfo(true)}
             signedInAs={access.status.authentication_required ? access.status.username ?? 'user' : null}
@@ -274,6 +277,13 @@ function AppContent() {
       <SiteBanner banner={serverInfo?.banner} />
       <UpdateNotice installedVersion={serverInfo?.version} />
       <BuildRefresh />
+      <WhatsNew
+        key={serverInfo?.version ?? 'loading'}
+        version={serverInfo?.version}
+        requested={showWhatsNew}
+        blocked={showSettings || showHelp || showServerInfo}
+        onClose={() => setShowWhatsNew(false)}
+      />
 
       <main className="app-main">
         <Outlet />

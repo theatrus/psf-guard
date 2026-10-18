@@ -1,3 +1,4 @@
+import highlights from '../src/updates/highlights.json' with { type: 'json' };
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import Database from 'better-sqlite3';
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
@@ -84,7 +85,15 @@ test.afterAll(() => {
 /** A browser with nothing of its own yet, signed in as `name`. `before`
  *  runs on the new page before it first loads. */
 async function signIn(browser: Browser, name: string, before?: (page: Page) => Promise<void>): Promise<Page> {
-  const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const context = await browser.newContext({
+    storageState: {
+      cookies: [],
+      origins: [{
+        origin: BASE,
+        localStorage: [{ name: 'psf-guard.whats-new.acknowledged', value: highlights[0].version }],
+      }],
+    },
+  });
   const page = await context.newPage();
   await before?.(page);
   await page.goto(`${BASE}/`);

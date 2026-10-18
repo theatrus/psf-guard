@@ -1,5 +1,10 @@
 # Unreleased
 
+- **What's new** shows release highlights after an upgrade, with deprecations
+  and upgrade notes first. Close it for now, or tick **Don't show again for
+  this version** to hide it until the next upgrade. Open it again from the
+  hamburger menu at any time.
+
 > Add a line here as each user-visible change merges. At release time this
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
