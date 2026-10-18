@@ -5,6 +5,7 @@ Use this index for detailed behavior and engineering records.
 
 ## Catalog and review workflows
 
+- [Planning, framing, and activation](DIRECTOR.md#management-screen)
 - [Adding image folders](IMPORTING.md)
 - [Calibration libraries](CALIBRATION_LIBRARY.md)
 - [Project stack previews](STACKING_PREVIEWS.md)
