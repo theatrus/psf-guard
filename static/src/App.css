@@ -7607,3 +7607,11 @@
   color: var(--color-status-caution);
   font-size: 0.85rem;
 }
+
+.desktop-zoom-error {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-secondary);
+  border-bottom: 1px solid var(--color-border-primary);
+}

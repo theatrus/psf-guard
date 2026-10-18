@@ -33,4 +33,20 @@ describe('HeaderMenu', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Menu' })).toHaveFocus();
   });
+  it('shows desktop zoom and skips disabled limits during keyboard navigation', () => {
+    const zoomIn = vi.fn();
+    const zoomOut = vi.fn();
+    render(<HeaderMenu onWhatsNew={vi.fn()} onShortcuts={vi.fn()} onServerInfo={vi.fn()}
+      zoom={{ percent: 200, busy: false, zoomIn, zoomOut, reset: vi.fn() }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Menu' }));
+    expect(screen.getByText('UI zoom: 200%')).toBeVisible();
+    expect(screen.getByRole('menuitem', { name: 'Zoom in' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    fireEvent.keyDown(document, { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: 'Zoom out' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Zoom out' }));
+    expect(zoomOut).toHaveBeenCalledOnce();
+    expect(zoomIn).not.toHaveBeenCalled();
+  });
 });

@@ -1,3 +1,4 @@
+import { isTauriApp } from '../utils/tauri';
 import { useHotkeys } from 'react-hotkeys-hook';
 
 interface KeyboardShortcutHelpProps {
@@ -32,7 +33,12 @@ export default function KeyboardShortcutHelp({ onClose }: KeyboardShortcutHelpPr
       { key: 'G', description: 'Cycle grouping mode (Filter → Date → Both)' },
       { key: '?', description: 'Show this help' },
     ]},
-    { category: 'Zoom & Pan', items: [
+    ...(isTauriApp() ? [{ category: 'UI zoom (desktop)', items: [
+      { key: 'Cmd/Ctrl + +', description: 'Make the UI bigger' },
+      { key: 'Cmd/Ctrl + -', description: 'Make the UI smaller' },
+      { key: 'Cmd/Ctrl + 0', description: 'Reset the UI to 100%' },
+    ]}] : []),
+    { category: 'Image Zoom & Pan', items: [
       { key: '+ / =', description: 'Zoom in' },
       { key: '-', description: 'Zoom out' },
       { key: 'F', description: 'Fit to screen' },

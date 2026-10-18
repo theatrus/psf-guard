@@ -7,6 +7,7 @@ import RigTargetSelect from './components/header/RigTargetSelect';
 import { useCurrentPlan } from './components/header/useCurrentPlan';
 import ActivityChip from './components/header/ActivityChip';
 import LiveChip from './components/header/LiveChip';
+import { useDesktopZoom, type DesktopZoom } from './hooks/useDesktopZoom';
 import HeaderMenu from './components/header/HeaderMenu';
 import ViewTab from './components/header/ViewTab';
 import { ChartColumn, Crosshair, Images, LibraryBig, SquareStack, Telescope, TestTubeDiagonal } from 'lucide-react';
@@ -37,7 +38,7 @@ import { useAccess } from './auth/access';
 import { useAccountPreferences } from './hooks/useAccountPreferences';
 import './App.css';
 
-function AppContent() {
+function AppContent({ zoom }: { zoom?: DesktopZoom }) {
   const navigate = useNavigate();
   const location = useLocation();
   const isOnPlan = isPlanningPath(location.pathname);
@@ -264,6 +265,7 @@ function AppContent() {
           <ActivityChip />
           <LiveChip />
           <HeaderMenu
+            zoom={zoom}
             onSettings={access.canWrite ? () => setShowSettings(true) : undefined}
             onWhatsNew={() => setShowWhatsNew(true)}
             onShortcuts={() => setShowHelp(true)}
@@ -314,11 +316,15 @@ function AppContent() {
 }
 
 export default function App() {
+  const desktopZoom = useDesktopZoom();
   return (
-    <DesktopServerGate>
-      <AuthGate>
-        <AppContent />
-      </AuthGate>
-    </DesktopServerGate>
+    <>
+      {desktopZoom.error && <p role="alert" className="desktop-zoom-error">{desktopZoom.error}</p>}
+      <DesktopServerGate>
+        <AuthGate>
+          <AppContent zoom={desktopZoom.controls} />
+        </AuthGate>
+      </DesktopServerGate>
+    </>
   );
 }

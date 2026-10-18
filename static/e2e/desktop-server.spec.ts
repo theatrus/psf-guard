@@ -18,6 +18,7 @@ async function desktopBridge(page: Page, conflict = false) {
       error: preference.conflict ? 'Could not start the desktop server on 127.0.0.1:3030. The port is already in use.' : null,
     });
     Object.defineProperty(window, '__TAURI_INTERNALS__', { configurable: true, value: {
+      metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
       invoke: async (command: string, args?: { port?: number | null }) => {
         switch (command) {
           case 'get_desktop_server_settings': return status();
@@ -38,6 +39,7 @@ async function desktopBridge(page: Page, conflict = false) {
           case 'get_current_configuration': return { schema_version: 2, databases: [] };
           case 'get_log_folder': return null;
           case 'plugin:updater|check': return null;
+          case 'plugin:webview|set_webview_zoom': return;
           default: throw new Error(`Unmocked desktop command: ${command}`);
         }
       },

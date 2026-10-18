@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Info, Keyboard, LogOut, Menu, Settings, Sparkles } from 'lucide-react';
+import { Info, Keyboard, LogOut, Menu, Settings, Sparkles, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+
+import type { DesktopZoom } from '../../hooks/useDesktopZoom';
 
 interface HeaderMenuProps {
   /** Present when the person may open Settings. */
   onSettings?: () => void;
+  zoom?: DesktopZoom;
   onWhatsNew: () => void;
   onShortcuts: () => void;
   onServerInfo: () => void;
@@ -16,7 +19,7 @@ interface HeaderMenuProps {
 /**
  * App settings, release notes, help and account actions share one menu.
  */
-export default function HeaderMenu({ onSettings, onWhatsNew, onShortcuts, onServerInfo, signedInAs, onSignOut }: HeaderMenuProps) {
+export default function HeaderMenu({ onSettings, onWhatsNew, onShortcuts, onServerInfo, signedInAs, onSignOut, zoom }: HeaderMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -24,7 +27,7 @@ export default function HeaderMenu({ onSettings, onWhatsNew, onShortcuts, onServ
 
   useEffect(() => {
     if (!open) return;
-    listRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    listRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus();
     const onPointer = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
@@ -35,7 +38,7 @@ export default function HeaderMenu({ onSettings, onWhatsNew, onShortcuts, onServ
         return;
       }
       if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-      const items = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+      const items = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not([disabled])') ?? []);
       if (items.length === 0) return;
       event.preventDefault();
       const at = items.indexOf(document.activeElement as HTMLElement);
@@ -87,6 +90,18 @@ export default function HeaderMenu({ onSettings, onWhatsNew, onShortcuts, onServ
           <button type="button" role="menuitem" onClick={choose(onServerInfo)}>
             <Info size={15} aria-hidden="true" /> Server information
           </button>
+          {zoom && <>
+            <div className="header-menu-who">UI zoom: {zoom.percent}%</div>
+            <button type="button" role="menuitem" disabled={zoom.busy || zoom.percent >= 200} onClick={choose(zoom.zoomIn)}>
+              <ZoomIn size={15} aria-hidden="true" /> Zoom in
+            </button>
+            <button type="button" role="menuitem" disabled={zoom.busy || zoom.percent <= 50} onClick={choose(zoom.zoomOut)}>
+              <ZoomOut size={15} aria-hidden="true" /> Zoom out
+            </button>
+            <button type="button" role="menuitem" disabled={zoom.busy || zoom.percent === 100} onClick={choose(zoom.reset)}>
+              <RotateCcw size={15} aria-hidden="true" /> Reset to 100%
+            </button>
+          </>}
           {onSignOut && (
             <button type="button" role="menuitem" onClick={choose(onSignOut)}>
               <LogOut size={15} aria-hidden="true" /> Sign out

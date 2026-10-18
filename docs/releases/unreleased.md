@@ -1,5 +1,10 @@
 # Unreleased
 
+- The desktop app offers **Zoom in**, **Zoom out** and **Reset to 100%** in
+  the hamburger menu. Cmd/Ctrl with +, − or 0 changes the whole UI from 50%
+  to 200%, and the app remembers the scale on this device. Image zoom stays
+  separate. Browser users keep their browser's zoom controls.
+
 - Settings keeps the last backup result when you restart just after a backup
   finishes.
 
