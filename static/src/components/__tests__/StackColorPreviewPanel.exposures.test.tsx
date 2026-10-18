@@ -106,6 +106,37 @@ const selector = (role: StackColorRole) => screen.getByRole('combobox', {
   name: `M31 rgb ${role[0].toUpperCase()} source stack`,
 });
 
+const masters: StackColorSource[] = roles.map((role, index) => ({
+  role, filter_name: role, label: `${role} (WBPP)`, exposure_group: null, wbpp: true,
+  job_id: `wbpp-${role}`, group_index: index, artifact_revision: 'rev', accepted_frames: 1,
+  reference_image_id: null, sky_orientation: null, registration_transform: null,
+}));
+
+describe('WBPP masters beside exposure-split stacks', () => {
+  it('build from a WBPP card of their own, and no unknown-exposure card appears', async () => {
+    const { submissions } = mount({ sources: [...candidates, ...masters] });
+    const wbpp = await screen.findByRole('button', { name: 'Build RGB WBPP color preview' });
+    expect(wbpp).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Build RGB 30 s color preview' })).toBeEnabled();
+    expect(screen.queryByText('Unknown exposure')).not.toBeInTheDocument();
+    expect(screen.queryByText('Exposure duration unavailable')).not.toBeInTheDocument();
+    await userEvent.click(wbpp);
+    await waitFor(() => expect(submissions).toHaveLength(1));
+    expect(submissions[0].input_sources).toEqual(references(masters));
+  });
+
+  it('builds the target card from its own stacks when they are not split', async () => {
+    const unsplit = atSeconds(300).map((source) => ({ ...source, exposure_group: null }));
+    const { submissions } = mount({ sources: [...unsplit, ...masters] });
+    const own = await screen.findByRole('button', { name: 'Build RGB color preview' });
+    expect(own).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Build RGB WBPP color preview' })).toBeEnabled();
+    await userEvent.click(own);
+    await waitFor(() => expect(submissions).toHaveLength(1));
+    expect(submissions[0].input_sources).toEqual(references(unsplit));
+  });
+});
+
 describe('automatic color exposure cards', () => {
   it('offers independent short and long builds without manual source choices', async () => {
     mount();

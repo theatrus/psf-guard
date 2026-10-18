@@ -24,7 +24,7 @@ import {
 import { isColorStackSkyOriented } from './stackOrientation';
 import { cropLabels, cropOrder, describeCrop, offCenterChannels } from './stackColorCrop';
 import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
-import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily, type ColorExposureSet } from './stackColorSources';
+import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily, wbppColorSet, type ColorExposureSet } from './stackColorSources';
 import { withRetainedColorExposureSets } from './colorExposureCards';
 import './StackColorSources.css';
 
@@ -856,7 +856,10 @@ export default function StackColorPreviewPanel({
               buildColorExposureSets(candidates, roles),
               jobs.filter((job) => job.kind === kind), roles,
             ) : [];
-            for (const set of sets) cards.push(renderCard(target, kind, available, set));
+            const wbpp = wbppColorSet(candidates, roles);
+            for (const set of [...sets, ...(wbpp ? [{ ...wbpp, retained: false }] : [])]) {
+              cards.push(renderCard(target, kind, available, set));
+            }
             cards.push(renderCard(target, kind, available, undefined, undefined, [], undefined,
               exposureMode && (sets.length > 0 || jobs.some((job) => job.kind === kind))));
           }
@@ -874,7 +877,8 @@ export default function StackColorPreviewPanel({
           const sets = exposureMode ? withRetainedColorExposureSets(
             buildColorExposureSets(candidates, narrowbandRoles), narrowbandJobs, narrowbandRoles,
           ) : [];
-          for (const set of sets) {
+          const wbppNarrowband = wbppColorSet(candidates, narrowbandRoles);
+          for (const set of [...sets, ...(wbppNarrowband ? [{ ...wbppNarrowband, retained: false }] : [])]) {
             const paletteKey = target.target_id + ':narrowband:' + set.key;
             const localPalettes = paletteChoices.filter((choice) =>
               resolveColorSources(set.candidates, requiredRoles('narrowband', choice), {}).complete);

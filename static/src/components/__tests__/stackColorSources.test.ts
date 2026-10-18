@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { StackColorJob, StackColorRole, StackColorSource } from '../../api/types';
-import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily } from '../stackColorSources';
+import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily, wbppColorSet } from '../stackColorSources';
 
 const source = (key: string, revision = 'revision'): StackColorSource => ({
   role: 'red', filter_name: 'R', job_id: key, group_index: 0, artifact_revision: revision,
@@ -116,6 +116,45 @@ describe('automatic color exposure sets', () => {
     const expected = buildColorExposureSets(candidates, rgb);
     expect(buildColorExposureSets([...candidates].reverse(), [...rgb].reverse())).toEqual(expected);
     expect(candidates).toEqual(original);
+  });
+});
+
+const master = (role: StackColorRole): StackColorSource => ({
+  ...source(`wbpp-${role}`), role, filter_name: role, label: `${role} (WBPP)`,
+  exposure_group: null, wbpp: true,
+});
+
+describe('WBPP masters beside PSF Guard stacks', () => {
+  const own = rgb.map((role) => interval(role, 300));
+  const masters = rgb.map(master);
+
+  it('form no exposure set of their own, so no unknown-exposure card appears', () => {
+    const sets = buildColorExposureSets([...own, ...masters], rgb);
+    expect(sets).toHaveLength(1);
+    expect(sets[0].known).toBe(true);
+    expect(sets[0].candidates).toEqual(expect.not.arrayContaining(masters));
+  });
+
+  it('make one set from the masters, complete for the roles they cover', () => {
+    const set = wbppColorSet([...own, ...masters], rgb);
+    expect(set?.label).toBe('WBPP');
+    expect(set?.known).toBe(true);
+    expect(set?.candidates.map((candidate) => candidate.job_id).sort()).toEqual(['wbpp-blue', 'wbpp-green', 'wbpp-red']);
+    expect(resolveColorSources(set!.candidates, rgb, {}).complete).toBe(true);
+  });
+
+  it('make no separate set when the target has only masters, or none', () => {
+    expect(wbppColorSet(masters, rgb)).toBeUndefined();
+    expect(wbppColorSet(own, rgb)).toBeUndefined();
+  });
+
+  it('leave an unchosen role to its one PSF Guard stack', () => {
+    const resolved = resolveColorSources([...own, ...masters], rgb, {});
+    expect(resolved.complete).toBe(true);
+    expect(resolved.sources.every((chosen) => !chosen.wbpp)).toBe(true);
+    // Two PSF Guard stacks of a role are still a choice to make.
+    const twoReds = [...own, interval('red', 30), ...masters];
+    expect(resolveColorSources(twoReds, rgb, {}).complete).toBe(false);
   });
 });
 
