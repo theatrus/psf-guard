@@ -38,12 +38,23 @@ test('close for now, hide this version, then reopen from the menu', async ({ pag
   await expect(page.getByRole('button', { name: 'Menu', exact: true })).toBeFocused();
 });
 
-test('an earlier acknowledgment still shows the new version', async ({ page }) => {
-  await page.evaluate(key => localStorage.setItem(key, '0.1.0'), key);
+test('an upgrade shows the new notes in priority order', async ({ page }) => {
+  await page.evaluate(({ key, version }) => localStorage.setItem(key, version), { key, version: highlights[1].version });
   await page.reload();
   const dialog = page.getByRole('dialog', { name: `What's new in PSF Guard v${version}` });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole('heading', { name: 'Upgrade notes' })).toBeVisible();
+  const expectedSections = [
+    highlights[0].deprecations.length ? 'Deprecations' : null,
+    highlights[0].upgradeNotes.length ? 'Upgrade notes' : null,
+    highlights[0].highlights.length ? 'New features' : null,
+  ].filter(Boolean);
+  expect(await dialog.getByRole('heading', { level: 3 }).allTextContents()).toEqual(expectedSections);
+  for (const deprecation of highlights[0].deprecations) {
+    await expect(dialog.getByText(deprecation.title, { exact: true })).toBeVisible();
+  }
+  await expect(dialog.getByRole('link', {
+    name: `Full release notes for v${highlights[1].version}`,
+  })).toHaveCount(0);
   await expect(dialog.getByRole('link', { name: `Full release notes for v${version}` })).toHaveAttribute('href', `https://github.com/theatrus/psf-guard/releases/tag/v${version}`);
 });
 
