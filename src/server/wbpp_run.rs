@@ -1510,6 +1510,11 @@ pub struct WbppActivity {
 pub async fn get_wbpp_activity(
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<WbppActivity>> {
+    Json(ApiResponse::success(wbpp_activity(&state)))
+}
+
+/// The WBPP runs under way and queued, on every database.
+pub(crate) fn wbpp_activity(state: &AppState) -> WbppActivity {
     let databases = state.all_databases();
     let name_of = |db_id: &str| {
         databases
@@ -1568,7 +1573,7 @@ pub async fn get_wbpp_activity(
             run,
         })
         .collect();
-    Json(ApiResponse::success(WbppActivity { running, queued }))
+    WbppActivity { running, queued }
 }
 
 #[derive(Debug, Deserialize)]

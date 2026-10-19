@@ -141,6 +141,12 @@ pub async fn status_route(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<Job>>>, AppError> {
     require_database_management_allowed(&state)?;
+    Ok(Json(ApiResponse::success(listed_jobs(&state))))
+}
+
+/// The sync and import jobs the status route lists, by id: every running
+/// job, and finished jobs whose catalog is still registered.
+pub(crate) fn listed_jobs(state: &AppState) -> Vec<Job> {
     let mut jobs: Vec<_> = state
         .ts_sync
         .jobs
@@ -157,7 +163,7 @@ pub async fn status_route(
         .cloned()
         .collect();
     jobs.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(Json(ApiResponse::success(jobs)))
+    jobs
 }
 
 #[derive(Debug, Deserialize)]

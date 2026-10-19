@@ -58,7 +58,7 @@ or grades. A rig the catalog does not record is ignored.
 | The yield point | `AppState::wait_for_interactive_work(nap, note)` before each step: blocks while a person's work runs, and after `WAIT_NOTE_AFTER` (1 s) tells `note` what it waits for, so the job line lists the job as waiting |
 | A quiet moment | `AppState::interactive_quiet_for()`: how long no person's work has run, as automatic stack refreshes wait `RESUME_QUIET` (30 s) before they resume |
 | Holding a stop until a write commits | `state.shutdown.hold(what)` |
-| The job line | `static/src/components/header/activityItems.ts`, polled by `useHeaderActivity.ts` |
+| The job line | `GET /api/jobs` (`src/server/jobs.rs`) builds every row; `useHeaderActivity.ts` polls it and `activityItems.ts` maps each row to the header's item |
 
 ## The job line
 
@@ -82,11 +82,32 @@ Its list groups the rows by tier, each heading with its own counts:
   backups and transfers a connection's policy queued.
 
 Within each, rows that need attention come first, then running work, then
-queued rows, then waiting work. A row's tier comes from what its status
-route reports: `automatic` on a scan, a stack entry, a catalog refresh
-(`cache-progress`) or a transfer; `priority` on a duplicate check;
-`trigger` on a backup. Quality backfill, flat measuring and frame sites
-are always automatic.
+queued rows, then waiting work. A row's tier comes from the job's own
+status: `automatic` on a scan, a stack entry, a catalog refresh or a
+transfer; `priority` on a duplicate check; `trigger` on a backup. Quality
+backfill, flat measuring and frame sites are always automatic.
+
+### The jobs route
+
+`GET /api/jobs` lists every job the header shows as uniform rows, in the
+order above. The server reads each job's in-memory status, the same state
+the job's own status route reads, and builds the row's title, scope,
+progress text, percent, tier, place in its line, what it waits for, the
+control its Stop and move buttons call, and a structured link to the view
+of its work. The server resolves a target's project for the link, so the
+client needs no target list. The route runs no slow query: the duplicate
+check's `stale` test, for one, stays in its own route.
+
+The route also returns each database's `busy` and `scanning` state and its
+last scan's frame errors. The header uses them to read a database's views
+again when its work finishes, and to keep a scan's error note. Backups and
+Target Scheduler syncs are listed only for an editor on a server that
+allows database management, as their own status routes are.
+
+The header polls the route every second while it lists a job and every
+5 s otherwise. Code that starts, stops or moves a job invalidates the
+`['jobs']` query, and every mutation does so when it settles, so a new job
+shows at once.
 
 The stack line and the WBPP line are each one line, shared by both tiers:
 an automatic refresh's build can wait ahead of a person's. So a queued row
@@ -176,12 +197,11 @@ Then:
   steps. Stop pauses; it does not forget;
 - work a pass could not finish (files away, a busy catalog) goes back in
   line with a growing wait, not to the next restart;
-- a query in `useHeaderActivity.ts` that polls the status (fast while it
-  runs, slower while it only waits, a slow heartbeat at rest when the server
-  starts the job on its own), shared with any page that shows it, and an
-  item in `activityItems.ts` with a title, scope, progress, `automatic`,
-  `background` for its tier, `remaining` when the status says what is left,
-  and a `control` when it can be stopped;
+- a row builder in `src/server/jobs.rs` with a title, scope, progress,
+  `automatic`, `background` for its tier, `remaining` when the status says
+  what is left, and a `control` when it can be stopped, plus a matching
+  stop call in the header's `ActivityChip.tsx`. A page that shows the job
+  polls its status route on its own;
 - a status that says whether a person started the run, and what waits
   behind the step under way (see [The job line](#the-job-line));
 - a status that turns visible only once the job has found work, so a pass

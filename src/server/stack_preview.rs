@@ -2361,27 +2361,40 @@ pub async fn cancel_stack_preview_job(
 pub async fn get_stack_activity(
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<StackActivity>> {
+    // Names of scheduled refreshes come from the catalogs: a short read
+    // each, off the runtime.
+    let activity = tokio::task::spawn_blocking(move || stack_activity(&state))
+        .await
+        .unwrap_or_else(|_| StackActivity {
+            schema_version: 1,
+            active: Vec::new(),
+            scheduled: Vec::new(),
+            waiting_reapplies: Vec::new(),
+        });
+    Json(ApiResponse::success(activity))
+}
+
+/// The stack work queued, running or waiting on every database. Reads a
+/// short query per scheduled refresh to name its project, so call it off
+/// the async runtime.
+pub(crate) fn stack_activity(state: &Arc<AppState>) -> StackActivity {
     let scheduled = state.auto_stacks.scheduled();
     let scheduled = if scheduled.is_empty() {
         Vec::new()
     } else {
-        // Names come from the catalogs; a short read each, off the runtime.
-        let state = Arc::clone(&state);
-        tokio::task::spawn_blocking(move || name_scheduled(&state, scheduled))
-            .await
-            .unwrap_or_default()
+        name_scheduled(state, scheduled)
     };
-    let waiting_reapplies = waiting_reapplies(&state, &scheduled);
+    let waiting_reapplies = waiting_reapplies(state, &scheduled);
     // Read after the refreshes and re-applies, so one that started
     // meanwhile is in the line by now; it is listed once, as its build or
     // run.
     let active = state.stack_previews.active();
-    Json(ApiResponse::success(StackActivity {
+    StackActivity {
         schema_version: 1,
         scheduled: without_started(scheduled, &active),
         waiting_reapplies: reapplies_not_started(waiting_reapplies, &active),
         active,
-    }))
+    }
 }
 
 /// What automatic stack work waits for, in words that fit "Waiting for …":

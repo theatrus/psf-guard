@@ -1,29 +1,20 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { transferItem, summarize, activityItems } from '../activityItems';
+import { jobItem, summarize } from '../activityItems';
 import { TransferControls } from '../../director/CollaborationTransfers';
 import type { TransferJob } from '../../../api/transferTypes';
 
 const job: TransferJob = { id: 'one', connection_id: 'connection', revision: 3, state: 'uploading', catalog: 'redcat', label: 'M31', total_files: 4, completed_files: 1, total_bytes: 1000, completed_bytes: 200, sent_bytes: 100, current_file: 'frame.fits', error: null, next_attempt_ms: 0, warnings: null, manifest: null };
 describe('Transfers activity', () => {
-  it('reports byte progress and keeps source scope', () => {
-    expect(transferItem(job)).toMatchObject({ kind: 'transfer', title: 'Transfers', scope: 'redcat · M31', percent: 30, status: 'running', stateLabel: 'Uploading' });
-  });
-  it.each([
-    ['paused', 'waiting'], ['retry', 'waiting'], ['review', 'attention'], ['needs_review', 'attention'],
-  ] as const)('does not spin or average a %s job into running progress', (state, status) => {
-    const item = transferItem({ ...job, state });
-    expect(item.status).toBe(status); expect(item.percent).toBeNull();
-    expect(summarize([item]).percent).toBeNull();
-  });
-  it('keeps unfinished transfers visible, not completed history', () => {
-    expect(activityItems([], [], undefined, undefined, {}, [job, { ...job, id: 'done', state: 'complete' }])).toHaveLength(1);
-  });
-  it('keeps transfer progress separate from waiting automatic work', () => {
-    const items = activityItems([], [], undefined, undefined, { reapplies: [{ database_id: 'rig', project_id: 1, target_id: 2, label: 'M31 OIII', waiting_for: 'a stack build' }] }, [job, { ...job, id: 'paused', state: 'paused' }]);
-    expect(summarize(items)).toMatchObject({ count: 3, running: 1, waiting: 2, queued: 0, percent: 30 });
-    expect(items[0].kind).toBe('transfer');
-    expect(items.find(i => i.key === 'transfer:paused')?.stateLabel).toBe('Paused');
+  it('keeps the transfer on its row for the row controls', () => {
+    const item = jobItem({
+      key: 'transfer:one', kind: 'transfer', title: 'Transfers', scope: 'redcat · M31',
+      detail: '1/4 files · 0.0 MiB', status: 'running', background: false, automatic: false,
+      percent: 30, stoppable: false, state_label: 'Uploading', transfer: job,
+    });
+    expect(item).toMatchObject({ kind: 'transfer', scope: 'redcat · M31', percent: 30, stateLabel: 'Uploading' });
+    expect(item.transfer).toBe(job);
+    expect(summarize([item]).percent).toBe(30);
   });
   it('pauses running work and resumes a paused job', () => {
     const run = vi.fn(); const view = render(<TransferControls job={job} busy={false} run={run} />);

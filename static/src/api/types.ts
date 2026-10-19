@@ -2037,6 +2037,77 @@ export interface WbppActivity {
   queued: WbppQueuedActivity[];
 }
 
+/** The route a job row's Stop and move buttons call. Mirrors `RowControl`
+ *  in `src/server/jobs.rs`. */
+export type JobControl =
+  | { kind: 'stack'; job_id: string }
+  | { kind: 'flats'; db_id: string }
+  | { kind: 'sites'; db_id: string }
+  | { kind: 'duplicates'; db_id: string }
+  | { kind: 'rejects'; db_id: string }
+  | { kind: 'backup' }
+  | { kind: 'ts-sync'; job_id: string }
+  | { kind: 'wbpp-running'; db_id: string }
+  | { kind: 'wbpp-queued'; db_id: string; queue_id: string };
+
+/** The view that shows what a job works on: `/{view}?db=…&project=…&target=…`,
+ *  then `params` in order. */
+export interface JobLink {
+  view: 'grid' | 'sequence' | 'stacks' | 'calibration';
+  db: string;
+  project?: number;
+  target?: number;
+  params?: [string, string][];
+}
+
+/** One job in the header's list, as `GET /api/jobs` returns it. */
+export interface JobRow {
+  key: string;
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog';
+  title: string;
+  scope: string;
+  detail: string;
+  status: 'attention' | 'running' | 'queued' | 'waiting';
+  /** Automatic or database-wide work, listed after a person's work. */
+  background: boolean;
+  automatic: boolean;
+  waiting_for?: string;
+  percent: number | null;
+  remaining?: string;
+  hint?: string;
+  queue?: 'stack' | 'wbpp';
+  position?: number;
+  control?: JobControl;
+  stoppable: boolean;
+  state_label?: string;
+  transfer?: import('./transferTypes').TransferJob;
+  link?: JobLink;
+  /** When a running processing run started, Unix seconds. */
+  started_at?: number;
+}
+
+/** One database's state, for the header's effects. */
+export interface DatabaseJobs {
+  id: string;
+  name: string;
+  /** Whether work that changes the database's images, metrics or grades runs. */
+  busy: boolean;
+  /** Whether a quality scan or analysis runs. */
+  scanning: boolean;
+  /** The last quality scan's frame errors. */
+  scan: {
+    errors: number;
+    last_error: string | null;
+    target_id: number | null;
+    project_id: number | null;
+  };
+}
+
+export interface JobsResponse {
+  jobs: JobRow[];
+  databases: DatabaseJobs[];
+}
+
 export interface WbppRunStatus {
   /** POST: whether PixInsight started now. GET: whether a run is under way. */
   started: boolean;

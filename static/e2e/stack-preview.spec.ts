@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { StackCalibrationMasters } from '../src/api/types';
 import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
+import { jobRow, stubJobs } from './jobRows';
 
 let dbId: string;
 
@@ -1115,6 +1116,13 @@ test('keeps a running stack visible in the header and re-attaches the panel', as
     },
   }));
 
+  // The job list, as the server builds it from that build.
+  await stubJobs(page, () => [jobRow({
+    key: `stack:${jobId}`, kind: 'stack', title: 'Stacking', scope: 'Alpha M44 · B', detail: '1/3 frames',
+    percent: 100 / 3, queue: 'stack', stoppable: true, control: { kind: 'stack', job_id: jobId },
+    hint: 'Registering frames', link: { view: 'stacks', db: dbId, project: 1 },
+  })]);
+
   await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=1`);
 
   // The panel re-attaches to a build it did not start.
@@ -1247,6 +1255,22 @@ test('says what a processing run waits for, then its progress, and lists it in t
       error: null,
     },
   }));
+  // The job list, as the server builds it from the build and the run.
+  const buildRow = jobRow({
+    key: `stack:${build.job_id}`, kind: 'stack', title: 'Stacking', scope: 'Alpha M44 · B',
+    detail: '2/3 frames', percent: 200 / 3, queue: 'stack', stoppable: true,
+    control: { kind: 'stack', job_id: build.job_id }, hint: 'Registering frames',
+    link: { view: 'stacks', db: dbId, project: 1, target: 1 },
+  });
+  const runRow = (running: boolean) => jobRow({
+    key: `stack:${runId}`, kind: 'processing', title: 'BlurXTerminator', scope: 'Beta Field · R',
+    detail: running ? '' : 'Waiting for the stack build of Alpha M44 · B',
+    status: running ? 'running' : 'queued', percent: running ? 42 : null, queue: 'stack',
+    position: running ? undefined : 0, stoppable: true, control: { kind: 'stack', job_id: runId },
+    started_at: running ? 1_760_000_200 : undefined,
+    link: { view: 'stacks', db: dbId, project: 2, target: 2 },
+  });
+  await stubJobs(page, () => (phase === 'queued' ? [buildRow, runRow(false)] : phase === 'running' ? [runRow(true)] : []));
   const posts: Array<string | null> = [];
   await page.route(`**/stack-previews/${redJob}/0/stretch*`, async (route) => {
     if (route.request().method() !== 'POST') return route.continue();

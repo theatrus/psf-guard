@@ -29,6 +29,7 @@ pub mod frame_sites;
 pub mod handlers;
 pub mod import_job;
 pub mod job_line;
+pub mod jobs;
 pub mod master_cleanup;
 pub mod mcp;
 pub mod mosaic_scope;
@@ -663,6 +664,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
                 )),
         )
         .route("/info", get(handlers::get_server_info))
+        .route("/jobs", get(jobs::get_jobs))
         .route("/stack-activity", get(stack_preview::get_stack_activity))
         .route(
             "/stack-activity/scheduled/skip",

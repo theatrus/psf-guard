@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page, type Route } from '@pl
 import * as fs from 'fs';
 import * as path from 'path';
 import { openSettings, registerFixtureDb, resetDatabases, tmpBase } from './helpers';
+import { jobRow, stubJobs } from './jobRows';
 
 /**
  * Settings › Backups against the real server: a backup made now and
@@ -123,6 +124,13 @@ test('lists a scheduled backup in the job line and stops it from there', async (
     stopped = true;
     return fulfil(route, { job: null, last_run: null });
   });
+  // The job list, as the server builds it from that backup.
+  await stubJobs(page, () => [jobRow({
+    key: 'backup:1760000000', kind: 'backup', title: 'Scheduled backup', scope: 'Settings and catalogs',
+    detail: stopped ? 'Stopping…' : 'Copying catalog imaging-rig-e2e · 2/6 files', percent: 40,
+    automatic: true, background: true, stoppable: !stopped, control: { kind: 'backup' },
+    hint: '/mnt/nas/backups',
+  })]);
   await page.goto('/');
   const chip = page.getByRole('button', { name: /^Background jobs/ });
   await chip.click();

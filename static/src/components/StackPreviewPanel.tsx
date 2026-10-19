@@ -37,6 +37,7 @@ import { isSkyOriented } from './stackOrientation';
 import { carriedLabel } from './stackProcessingLabel';
 import { useAccess } from '../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
+import { JOBS_QUERY_KEY } from '../api/jobs';
 import {
   penaltyParamsOf,
   sameScoring,
@@ -529,6 +530,7 @@ export default function StackPreviewPanel({
         ...jobs.map((job) => job.job_id).filter((jobId) => !current.includes(jobId)),
       ]);
       queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
       if (jobs.some((job) => terminalStates.has(job.state))) {
         queryClient.invalidateQueries({ queryKey: latestStackQueryKey(dbId, projectId) });
       }
@@ -1389,6 +1391,7 @@ export default function StackPreviewPanel({
                                 if (!listed) {
                                   listed = true;
                                   queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
+                                  queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
                                 }
                                 onProgress?.(progress);
                               },

@@ -18,7 +18,7 @@ import {
   type ActivityStatus,
   type ActivitySummary,
 } from './activityItems';
-import { useHeaderActivity, WBPP_ACTIVITY_QUERY_KEY, type ScanErrorNote } from './useHeaderActivity';
+import { JOBS_QUERY_KEY, useHeaderActivity, type ScanErrorNote } from './useHeaderActivity';
 import './header.css';
 import { TransferControls } from '../director/CollaborationTransfers';
 import { TRANSFER_QUERY_KEY } from '../../api/transferTypes';
@@ -340,8 +340,8 @@ export default function ActivityChip() {
   const queryClient = useQueryClient();
   const action = useMutation({
     mutationFn: runAction,
-    // Every route answers with the line as it now stands; showing it at
-    // once keeps a second click from acting on the old positions.
+    // Each route returns its job's new status. The pages that show those
+    // jobs read it at once; the header reads the job list again.
     onSuccess: (result, variables) => {
       if (variables.type === 'transfer') return;
       if (!result || typeof result !== 'object') return;
@@ -351,13 +351,12 @@ export default function ActivityChip() {
         queryClient.setQueryData(duplicatesKey(variables.control.dbId), result);
       } else if (variables.control.kind === 'rejects') {
         queryClient.setQueryData(rejectRemovalKey(variables.control.dbId), result);
-      } else if (variables.type === 'move') {
-        queryClient.setQueryData(WBPP_ACTIVITY_QUERY_KEY, result);
       }
     },
     onSettled: () => {
+      // Read at once, so a second click does not act on the old positions.
+      queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: WBPP_ACTIVITY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TRANSFER_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: BACKUP_STATUS_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TS_SYNC_QUERY_KEY });

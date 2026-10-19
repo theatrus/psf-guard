@@ -83,8 +83,20 @@ async fn activity(State(state): State<Arc<AppState>>) -> Result<Json<ApiResponse
     let Some(service) = state.director.clone() else {
         return Ok(Json(ApiResponse::success(json!({"jobs":[]}))));
     };
-    let mut jobs = service.clone().query(|s| s.transfer_activity()).await?;
+    let jobs = jobs(&state).await?;
     let policies = service.clone().query(|s| s.transfer_policies()).await?;
+    Ok(Json(ApiResponse::success(
+        json!({"jobs":jobs,"policies":policies}),
+    )))
+}
+
+/// The transfer jobs as the transfers route lists them, with the upload in
+/// progress filled in. Empty when the server runs no Director service.
+pub(in crate::server::director) async fn jobs(state: &Arc<AppState>) -> Result<Vec<Value>, Error> {
+    let Some(service) = state.director.clone() else {
+        return Ok(Vec::new());
+    };
+    let mut jobs = service.clone().query(|s| s.transfer_activity()).await?;
     let progress = service
         .collaboration
         .transfers
@@ -101,9 +113,7 @@ async fn activity(State(state): State<Arc<AppState>>) -> Result<Json<ApiResponse
             job["sent_bytes"] = json!(progress.bytes);
         }
     }
-    Ok(Json(ApiResponse::success(
-        json!({"jobs":jobs,"policies":policies}),
-    )))
+    Ok(jobs)
 }
 
 fn view(job: &Job, progress: &Progress) -> Value {

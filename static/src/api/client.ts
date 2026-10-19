@@ -122,6 +122,7 @@ import type { GuidFillReport, GuidReport,
   StackFrameOrder,
   StackMethod,
   WbppActivity,
+  JobsResponse,
   WbppStackImport,
   StackMethodSettings,
   WorkerSettings,
@@ -2532,6 +2533,13 @@ export const apiClient = {
     );
     if (!data.data) throw new Error(data.error || 'Failed to stop the build');
     return data.data;
+  },
+
+  /** Every running, queued and waiting job on the server, as the header lists them. */
+  getJobs: async (): Promise<JobsResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<JobsResponse>>('/jobs');
+    return data.data ?? { jobs: [], databases: [] };
   },
 
   getWbppActivity: async (): Promise<WbppActivity> => {

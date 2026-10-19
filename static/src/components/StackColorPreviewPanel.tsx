@@ -25,6 +25,7 @@ import {
 import { isColorStackSkyOriented } from './stackOrientation';
 import { cropLabels, cropOrder, describeCrop, offCenterChannels } from './stackColorCrop';
 import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
+import { JOBS_QUERY_KEY } from '../api/jobs';
 import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily, wbppColorSet, type ColorExposureSet } from './stackColorSources';
 import { withRetainedColorExposureSets } from './colorExposureCards';
 import './StackColorSources.css';
@@ -533,6 +534,7 @@ export default function StackColorPreviewPanel({
     onSuccess: (job, operation) => {
       queryClient.setQueryData(jobQueryKey(operation.dbId, operation.projectId, job.job_id), job);
       queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
       if (terminalStates.has(job.state)) {
         queryClient.invalidateQueries({
           queryKey: ['db', operation.dbId, 'project', operation.projectId, 'stack-color', 'catalog'],

@@ -35,6 +35,14 @@ mod file_delivery;
 pub(crate) async fn retry_ts_planning(state: &Arc<AppState>, slug: &str) -> anyhow::Result<()> {
     file_delivery::retry_pending(state, slug).await
 }
+
+/// The collaboration transfer jobs, as `GET /director/v1/transfers` lists
+/// them. Empty when the Director service is not running or cannot answer.
+pub(crate) async fn transfer_jobs(state: &Arc<AppState>) -> Vec<serde_json::Value> {
+    collaboration_auth::transfers::jobs(state)
+        .await
+        .unwrap_or_default()
+}
 mod framing;
 mod import_drafts;
 #[cfg(test)]

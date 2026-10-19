@@ -1,6 +1,7 @@
 import TsSyncSettings from './TsSyncSettings';
 import { useTsSyncJobs } from '../hooks/useTsSyncJobs';
 import { TS_SYNC_QUERY_KEY } from '../api/tsSyncTypes';
+import { JOBS_QUERY_KEY } from '../api/jobs';
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
@@ -761,6 +762,7 @@ export default function TauriSettings({
           ...(destination ? { destination_path: destination } : {}),
         });
         queryClient.setQueryData<import('../api/tsSyncTypes').TsSyncJob[]>(TS_SYNC_QUERY_KEY, old => [...(old ?? []).filter(item => item.id !== job.id), job]);
+        void queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
         setStatusMessage(connectImportedSource ? 'Importing Target Scheduler into a PSF Guard catalog…' : 'Importing a standalone catalog copy…');
         return;
       }
