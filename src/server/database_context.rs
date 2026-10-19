@@ -531,7 +531,7 @@ pub struct DatabaseContext {
     reopen_lock: Arc<Mutex<()>>,
     pub(crate) organization_mutex: Arc<Mutex<()>>,
     pub file_check_cache: Arc<RwLock<FileCheckCache>>,
-    pub directory_tree_cache: Arc<RwLock<Option<DirectoryTree>>>,
+    pub directory_tree_cache: Arc<RwLock<Option<Arc<DirectoryTree>>>>,
     /// Files proven by requests since the current tree scan began. A rebuild
     /// merges these just before publishing so it cannot overwrite a late hit.
     directory_tree_additions: Arc<RwLock<HashSet<PathBuf>>>,
@@ -739,10 +739,10 @@ pub(crate) enum DelayedFileProbe {
 }
 
 fn publish_directory_tree_cache(
-    cache: &RwLock<Option<DirectoryTree>>,
+    cache: &RwLock<Option<Arc<DirectoryTree>>>,
     additions: &RwLock<HashSet<PathBuf>>,
     mut rebuilt: DirectoryTree,
-) -> DirectoryTree {
+) -> Arc<DirectoryTree> {
     // Lock order matches record_resolved_image_file. The filesystem scan is
     // already finished; only small in-memory merges happen while held.
     let mut additions = additions.write().unwrap();
@@ -758,7 +758,8 @@ fn publish_directory_tree_cache(
     for path in &live_additions {
         rebuilt.insert_file(path);
     }
-    *cache = Some(rebuilt.clone());
+    let rebuilt = Arc::new(rebuilt);
+    *cache = Some(Arc::clone(&rebuilt));
     additions.clear();
     rebuilt
 }
@@ -1135,7 +1136,7 @@ impl DatabaseContext {
             let cache = self.directory_tree_cache.read().unwrap();
             if let Some(ref tree) = *cache {
                 let stale = tree.is_older_than(Duration::from_secs(300));
-                let tree = Arc::new(tree.clone());
+                let tree = Arc::clone(tree);
                 if stale {
                     self.spawn_directory_tree_rebuild();
                 }
@@ -1148,7 +1149,7 @@ impl DatabaseContext {
         {
             let cache = self.directory_tree_cache.read().unwrap();
             if let Some(ref tree) = *cache {
-                return Ok(Arc::new(tree.clone()));
+                return Ok(Arc::clone(tree));
             }
         }
         self.rebuild_directory_tree_internal()
@@ -1225,7 +1226,6 @@ impl DatabaseContext {
             stats.format_age()
         );
 
-        let tree = Arc::new(tree);
         spawn_derivative_pairing(
             self.database_path.clone(),
             Arc::clone(&tree),
@@ -1245,7 +1245,7 @@ impl DatabaseContext {
                         "🌳 Directory tree cache is fresh for db={}, skipping rebuild",
                         self.id
                     );
-                    return Ok(Arc::new(tree.clone()));
+                    return Ok(Arc::clone(tree));
                 } else {
                     tracing::debug!(
                         "🌳 Directory tree cache is stale (>5min) for db={}, rebuilding",
@@ -1265,7 +1265,7 @@ impl DatabaseContext {
             if let Some(ref tree) = *cache
                 && !tree.is_older_than(Duration::from_secs(300))
             {
-                return Ok(Arc::new(tree.clone()));
+                return Ok(Arc::clone(tree));
             }
         }
         self.rebuild_directory_tree_internal()
@@ -1398,7 +1398,7 @@ impl DatabaseContext {
             }
             cache
                 .as_mut()
-                .is_some_and(|directory_tree| directory_tree.insert_file(path))
+                .is_some_and(|directory_tree| Arc::make_mut(directory_tree).insert_file(path))
         } else {
             false
         };
@@ -2041,7 +2041,7 @@ impl DatabaseContext {
                 && !tree.is_older_than(Duration::from_secs(300))
             {
                 tracing::debug!("🌳 Directory tree cache is fresh, skipping rebuild");
-                return Ok(Arc::new(tree.clone()));
+                return Ok(Arc::clone(tree));
             }
         }
 
@@ -2071,49 +2071,50 @@ impl DatabaseContext {
         let directory_tree_additions = Arc::clone(&self.directory_tree_additions);
         let tree_build_lock = Arc::clone(&self.tree_build_lock);
         let tree_rebuild_inflight = Arc::clone(&self.tree_rebuild_inflight);
-        let tree_result = tokio::task::spawn_blocking(move || -> Result<(DirectoryTree, bool)> {
-            let _build_guard = lock_recover(tree_build_lock.as_ref());
-            {
-                let cache = directory_tree_cache.read().unwrap();
-                if let Some(ref tree) = *cache
-                    && !tree.is_older_than(Duration::from_secs(300))
+        let tree_result =
+            tokio::task::spawn_blocking(move || -> Result<(Arc<DirectoryTree>, bool)> {
+                let _build_guard = lock_recover(tree_build_lock.as_ref());
                 {
-                    return Ok((tree.clone(), false));
+                    let cache = directory_tree_cache.read().unwrap();
+                    if let Some(ref tree) = *cache
+                        && !tree.is_older_than(Duration::from_secs(300))
+                    {
+                        return Ok((Arc::clone(tree), false));
+                    }
                 }
-            }
-            let _inflight = if tree_rebuild_inflight.swap(true, Ordering::SeqCst) {
-                None
-            } else {
-                Some(TreeRebuildInflight {
-                    flag: Arc::clone(&tree_rebuild_inflight),
-                })
-            };
-
-            let roots: Vec<&std::path::Path> =
-                image_dir_paths.iter().map(|p| p.as_path()).collect();
-
-            let mut progress_callback =
-                |dirs_processed: usize, files_processed: usize, current_directory: &str| {
-                    let _ = progress_tx.send((
-                        dirs_processed,
-                        files_processed,
-                        current_directory.to_string(),
-                    ));
+                let _inflight = if tree_rebuild_inflight.swap(true, Ordering::SeqCst) {
+                    None
+                } else {
+                    Some(TreeRebuildInflight {
+                        flag: Arc::clone(&tree_rebuild_inflight),
+                    })
                 };
 
-            let tree = crate::directory_tree::DirectoryTree::build_multiple_with_progress(
-                &roots,
-                &mut progress_callback,
-            )?;
-            let tree = publish_directory_tree_cache(
-                directory_tree_cache.as_ref(),
-                directory_tree_additions.as_ref(),
-                tree,
-            );
+                let roots: Vec<&std::path::Path> =
+                    image_dir_paths.iter().map(|p| p.as_path()).collect();
 
-            Ok((tree, true))
-        })
-        .await??;
+                let mut progress_callback =
+                    |dirs_processed: usize, files_processed: usize, current_directory: &str| {
+                        let _ = progress_tx.send((
+                            dirs_processed,
+                            files_processed,
+                            current_directory.to_string(),
+                        ));
+                    };
+
+                let tree = crate::directory_tree::DirectoryTree::build_multiple_with_progress(
+                    &roots,
+                    &mut progress_callback,
+                )?;
+                let tree = publish_directory_tree_cache(
+                    directory_tree_cache.as_ref(),
+                    directory_tree_additions.as_ref(),
+                    tree,
+                );
+
+                Ok((tree, true))
+            })
+            .await??;
 
         let (tree_result, built_tree) = tree_result;
 
@@ -2152,7 +2153,7 @@ impl DatabaseContext {
             );
         }
 
-        Ok(Arc::new(tree_result))
+        Ok(tree_result)
     }
 
     /// This database's per-image cache files.

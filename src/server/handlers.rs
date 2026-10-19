@@ -2401,7 +2401,7 @@ pub async fn export_archive_route(
     ctx: DbContext,
     Query(query): Query<ExportQuery>,
 ) -> Result<axum::response::Response, AppError> {
-    use crate::commands::export::{plan_export, ExportOptions};
+    use crate::commands::export::{plan_export_in, ExportOptions};
     use axum::body::Body;
     use axum::http::header;
 
@@ -2427,8 +2427,9 @@ pub async fn export_archive_route(
     )?;
     let wbpp_options = query.wbpp_options();
 
-    // Plan on a blocking thread: it queries the DB and walks the image dirs.
-    // Use a DEDICATED read-only connection — the walk can take tens of
+    // Plan on a blocking thread: it queries the DB and reads each light's
+    // header. Files resolve through the cached directory tree, not a fresh
+    // walk. Use a DEDICATED read-only connection — the header reads take
     // seconds on network storage, and holding the shared request-connection
     // mutex for that long would block every other API call on this DB
     // (same rule as the import job and the background file-check refresh).
@@ -2439,7 +2440,8 @@ pub async fn export_archive_route(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
         .map_err(|e| anyhow::anyhow!("opening {}: {e}", plan_ctx.database_path))?;
-        plan_export(&conn, &plan_ctx.image_dirs, &options)
+        let tree = plan_ctx.get_directory_tree()?;
+        plan_export_in(&conn, &tree, &options)
     })
     .await
     .map_err(|e| AppError::InternalError(format!("export planning task: {e}")))?
@@ -2619,7 +2621,7 @@ pub async fn export_local_route(
     ctx: DbContext,
     Json(req): Json<LocalExportRequest>,
 ) -> Result<Json<ApiResponse<crate::commands::export::ExportSummary>>, AppError> {
-    use crate::commands::export::{execute_plan_with, plan_export, ExportOptions, Placement};
+    use crate::commands::export::{execute_plan_with, plan_export_in, ExportOptions, Placement};
 
     require_database_management_allowed(&state)?;
     let dest = req.dest.trim().to_string();
@@ -2661,7 +2663,8 @@ pub async fn export_local_route(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )
         .map_err(|e| anyhow::anyhow!("opening {}: {e}", plan_ctx.database_path))?;
-        let plan = plan_export(&conn, &plan_ctx.image_dirs, &options)?;
+        let tree = plan_ctx.get_directory_tree()?;
+        let plan = plan_export_in(&conn, &tree, &options)?;
         let summary = execute_plan_with(
             &plan,
             std::path::Path::new(&dest),
@@ -2721,7 +2724,7 @@ pub async fn start_server_export_route(
     Json(req): Json<crate::server::api::ServerExportRequest>,
 ) -> Result<Json<ApiResponse<crate::server::api::ExportStatusResponse>>, AppError> {
     use crate::commands::export::{
-        execute_plan_with, plan_export, sanitize_component, ExportOptions, Placement,
+        execute_plan_with, plan_export_in, sanitize_component, ExportOptions, Placement,
     };
     use crate::server::export_job;
 
@@ -2781,7 +2784,8 @@ pub async fn start_server_export_route(
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
             )
             .map_err(|e| anyhow::anyhow!("opening {}: {e}", job_ctx.database_path))?;
-            let plan = plan_export(&conn, &job_ctx.image_dirs, &options)?;
+            let tree = job_ctx.get_directory_tree()?;
+            let plan = plan_export_in(&conn, &tree, &options)?;
             std::fs::create_dir_all(&dest)
                 .map_err(|e| anyhow::anyhow!("creating {}: {e}", dest.display()))?;
             export_job::set_stage(&job_store, "placing");

@@ -439,6 +439,18 @@ pub fn plan_export(
     image_dirs: &[String],
     options: &ExportOptions,
 ) -> Result<ExportPlan> {
+    let dir_paths: Vec<&Path> = image_dirs.iter().map(Path::new).collect();
+    let tree = DirectoryTree::build_multiple(&dir_paths).context("indexing image directories")?;
+    plan_export_in(conn, &tree, options)
+}
+
+/// [`plan_export`] against a directory tree already built, such as the
+/// server's cached one.
+pub fn plan_export_in(
+    conn: &Connection,
+    tree: &DirectoryTree,
+    options: &ExportOptions,
+) -> Result<ExportPlan> {
     let db = Database::new(conn);
 
     let mut rows = db
@@ -461,9 +473,6 @@ pub fn plan_export(
         );
     }
 
-    let dir_paths: Vec<&Path> = image_dirs.iter().map(Path::new).collect();
-    let tree = DirectoryTree::build_multiple(&dir_paths).context("indexing image directories")?;
-
     let mut plan = ExportPlan::default();
     // Guard against two source files mapping onto one destination name
     // (same basename for a target+filter, e.g. after a manual file copy).
@@ -479,6 +488,8 @@ pub fn plan_export(
     let mut flat_item_sets: Vec<(usize, FlatSetKey)> = Vec::new();
     let mut flat_changes = std::collections::BTreeSet::new();
     let nights = crate::calibration::Nights::load(conn);
+    // The library read once, and each calibration file checked once.
+    let mut matcher = crate::calibration::LightMatcher::load(conn, false)?;
     let mut notes = SettingsNotes::default();
 
     for (image, _project_name, target_name) in rows {
@@ -505,11 +516,11 @@ pub fn plan_export(
         let mut flat_session = None;
         let mut dark_set = None;
         if light_meta.readable {
-            let calibration = crate::calibration::export_destinations(
-                conn,
+            let calibration = crate::calibration::export_destinations_with(
+                &mut matcher,
                 &light_meta,
                 &target_name,
-                Some(&tree),
+                Some(tree),
                 options.layout,
                 &nights,
                 options.exclude_uncalibrated,

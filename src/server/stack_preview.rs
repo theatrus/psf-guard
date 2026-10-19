@@ -3498,6 +3498,7 @@ fn prepare_whole(
     let mut identities = Vec::new();
     // Read from the library once, for every group, when the first needs it.
     let mut matcher: Option<crate::calibration::LightMatcher> = None;
+    let exclude_uncalibrated = crate::calibration::exclude_uncalibrated_enabled();
     for (index, ((target_id, target_name, filter_name, exposure_group_key), mut entries)) in
         grouped.into_iter().enumerate()
     {
@@ -3620,16 +3621,13 @@ fn prepare_whole(
                 let conn = ctx.db();
                 let conn = conn.lock().map_err(AppError::db)?;
                 matcher = Some(
-                    crate::calibration::LightMatcher::load(
-                        &conn,
-                        crate::calibration::exclude_uncalibrated_enabled(),
-                    )
-                    .map_err(AppError::db)?,
+                    crate::calibration::LightMatcher::load(&conn, exclude_uncalibrated)
+                        .map_err(AppError::db)?,
                 );
             }
             let matcher = matcher.as_mut().expect("the library was read above");
             let gaps = group_calibration != crate::calibration::CalibrationMode::Off
-                && crate::calibration::exclude_uncalibrated_enabled();
+                && exclude_uncalibrated;
             for frame in &frames {
                 let (fingerprint, gap) = matcher
                     .light_calibration(&frame.path, Some(&directory_tree), flat_star_masking, gaps)

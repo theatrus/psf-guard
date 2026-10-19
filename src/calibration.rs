@@ -3179,32 +3179,31 @@ pub(crate) fn selection_fingerprint_with_masking(
 
 /// Many lights matched against the library, as a stack build prepares
 /// them: the library read once, and each calibration file's header read
-/// once however many lights it serves. Only loading reads the catalog, so
+/// and fingerprint taken once however many lights it serves. Only loading reads the catalog, so
 /// a caller can let the connection go before the file reads.
 pub(crate) struct LightMatcher {
     snapshot: LibrarySnapshot,
     flats: Vec<CalibrationFrame>,
     /// Loaded only for a stack that leaves out lights the library cannot
-    /// calibrate properly.
+    /// calibrate properly; a caller with its own passes them to `gap_in`.
     nights: Option<Nights>,
     /// Whether the file at a path is the frame of a row, by row and path.
     checked: HashMap<(i64, PathBuf), bool>,
+    /// Each file's fingerprint as it stands, by path.
+    fingerprints: HashMap<PathBuf, Option<String>>,
 }
 
 impl LightMatcher {
     /// `gaps`: also load what judging a gap needs (see [`calibration_gap`]).
     pub(crate) fn load(conn: &Connection, gaps: bool) -> Result<Self> {
         let snapshot = LibrarySnapshot::load(conn)?;
-        let flats = if gaps {
-            snapshot.of_kind(CalibrationKind::Flat).cloned().collect()
-        } else {
-            Vec::new()
-        };
+        let flats = snapshot.of_kind(CalibrationKind::Flat).cloned().collect();
         Ok(Self {
             snapshot,
             flats,
             nights: gaps.then(|| Nights::load(conn)),
             checked: HashMap::new(),
+            fingerprints: HashMap::new(),
         })
     }
 
@@ -3220,22 +3219,68 @@ impl LightMatcher {
     ) -> Result<(String, Option<String>)> {
         let light = crate::commands::import::headers::read_frame_meta(light_path);
         let mut selected = self.snapshot.select(&light);
-        let gap = match self.nights.as_ref().filter(|_| gaps) {
-            Some(nights) => {
-                calibration_gaps(&light, &selected, nights, || Ok(self.flats.as_slice()))?
-                    .into_iter()
-                    .find(|gap| gap.mode == CheckMode::Flag)
-                    .map(|gap| gap.reason)
-            }
-            None => None,
+        let gap = if gaps {
+            self.gap(&light, &selected)?
+        } else {
+            None
         };
+        self.verify(&mut selected, directory_tree);
+        let fingerprints = &mut self.fingerprints;
+        let hash = selection_hash_with(&selected, flat_star_masking, &mut |path| {
+            fingerprints
+                .entry(path.to_path_buf())
+                .or_insert_with(|| current_file_fingerprint(path))
+                .clone()
+        });
+        Ok((hash, gap))
+    }
+
+    /// [`calibration_gap`] from what the matcher loaded: `None` when it
+    /// loaded no gaps.
+    fn gap(&self, light: &FrameMeta, selected: &CalibrationSelection) -> Result<Option<String>> {
+        match &self.nights {
+            Some(nights) => self.gap_in(light, selected, nights),
+            None => Ok(None),
+        }
+    }
+
+    /// [`calibration_gap`] against the caller's `nights`.
+    fn gap_in(
+        &self,
+        light: &FrameMeta,
+        selected: &CalibrationSelection,
+        nights: &Nights,
+    ) -> Result<Option<String>> {
+        Ok(
+            calibration_gaps(light, selected, nights, || Ok(self.flats.as_slice()))?
+                .into_iter()
+                .find(|gap| gap.mode == CheckMode::Flag)
+                .map(|gap| gap.reason),
+        )
+    }
+
+    /// [`select_for_light`] and [`remap_missing_sources`] for one light.
+    pub(crate) fn select_verified(
+        &mut self,
+        light: &FrameMeta,
+        directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    ) -> CalibrationSelection {
+        let mut selected = self.snapshot.select(light);
+        self.verify(&mut selected, directory_tree);
+        selected
+    }
+
+    fn verify(
+        &mut self,
+        selected: &mut CalibrationSelection,
+        directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    ) {
         let checked = &mut self.checked;
-        remap_missing_sources_with(&mut selected, directory_tree, &mut |frame, path| {
+        remap_missing_sources_with(selected, directory_tree, &mut |frame, path| {
             *checked
                 .entry((frame.id, path.to_path_buf()))
                 .or_insert_with(|| calibration_file_matches(frame, path))
         });
-        Ok((selection_hash(&selected, flat_star_masking), gap))
     }
 }
 
@@ -3513,6 +3558,8 @@ pub fn project_calibration_gaps(
     // rig's local noon.
     let light_nights = LightNights::from_nights(conn, &nights, nights_view);
     let boundary = project_night_boundary(&rows, &light_nights);
+    // The library is read once, not once a light.
+    let judge = GapJudge::load(conn)?;
     let mut lights = Vec::new();
     let (mut checked, mut missing_files) = (0usize, 0usize);
     for (image, _project, _target) in &rows {
@@ -3527,8 +3574,7 @@ pub fn project_calibration_gaps(
         };
         checked += 1;
         let meta = crate::commands::import::headers::read_frame_meta(&path);
-        let selected = select_for_light(conn, &meta)?;
-        if let Some(reason) = calibration_gap(conn, &meta, &selected, &nights)? {
+        if let Some(reason) = judge.gap(&meta)? {
             lights.push(UncalibratedLight {
                 image_id: image.id,
                 filter: image.filter_name.clone(),
@@ -4296,23 +4342,9 @@ fn rotation_gap(left: f64, right: f64) -> f64 {
 }
 
 /// The flats a light would take if its rotator angle did not count: the
-/// nearest angle among them, and every flat from that session at it. None
-/// when the light records no angle, or no flat is refused for angle alone.
-fn flat_near_miss(
-    conn: &Connection,
-    light: &FrameMeta,
-    nights: &Nights,
-    rules: &Rules,
-) -> Result<Option<FlatNearMiss>> {
-    Ok(flat_near_miss_in(
-        &query_kind(conn, CalibrationKind::Flat)?,
-        light,
-        nights,
-        rules,
-    ))
-}
-
-/// [`flat_near_miss`] among `flats`, the library's flats.
+/// nearest angle among `flats`, the library's flats, and every flat from
+/// that session at it. None when the light records no angle, or no flat is
+/// refused for angle alone.
 fn flat_near_miss_in(
     flats: &[CalibrationFrame],
     light: &FrameMeta,
@@ -4496,6 +4528,9 @@ pub fn project_calibration_report(
 
     let mut keys: Vec<(String, String)> = buckets.keys().cloned().collect();
     keys.sort();
+    // The library is read once, not once a night and filter.
+    let library = LibrarySnapshot::load(conn)?;
+    let flats: Vec<CalibrationFrame> = library.of_kind(CalibrationKind::Flat).cloned().collect();
     for key in keys {
         let mut lights = buckets.remove(&key).unwrap_or_default();
         let (night, filter) = key;
@@ -4519,7 +4554,7 @@ pub fn project_calibration_report(
         };
 
         let meta = crate::commands::import::headers::read_frame_meta(&light_path);
-        let selected = select_for_light(conn, &meta)?;
+        let selected = library.select(&meta);
 
         let day_seconds = 86_400i64;
         let age_days = |captured: Option<i64>| {
@@ -4578,11 +4613,15 @@ pub fn project_calibration_report(
             .len();
         let external_masters = external_master_notes(conn, &meta, &selected)?;
         let flat_near_miss = if selected.flat.is_empty() {
-            flat_near_miss(conn, &meta, &rig_nights, &selected.rules)?
+            flat_near_miss_in(&flats, &meta, &rig_nights, &selected.rules)
         } else {
             None
         };
-        let cannot_calibrate = calibration_gap(conn, &meta, &selected, &rig_nights)?;
+        let cannot_calibrate =
+            calibration_gaps(&meta, &selected, &rig_nights, || Ok(flats.as_slice()))?
+                .into_iter()
+                .find(|gap| gap.mode == CheckMode::Flag)
+                .map(|gap| gap.reason);
 
         let mut missing = Vec::new();
         if selected.bias.is_empty() {
@@ -5809,10 +5848,12 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
     // shares it, since the key takes the rig's settings and any widening
     // for flats from another angle.
     let mut gates: Vec<seiza_calibration::MatchTolerances> = Vec::new();
+    // The library read once and each calibration file checked once, not
+    // once a light.
+    let mut matcher = LightMatcher::load(conn, false)?;
     for path in light_paths {
         let light = crate::commands::import::headers::read_frame_meta(path);
-        let mut selected = select_for_light(conn, &light)?;
-        remap_missing_sources(&mut selected, directory_tree);
+        let selected = matcher.select_verified(&light, directory_tree);
         let key = session_key(&selected);
         let index = match keys.iter().position(|existing| existing == &key) {
             Some(index) => index,
@@ -8032,6 +8073,20 @@ fn source_set_hash(
 }
 
 fn selection_hash(selection: &CalibrationSelection, flat_star_masking: bool) -> String {
+    selection_hash_with(selection, flat_star_masking, &mut current_file_fingerprint)
+}
+
+/// A file's fingerprint as it stands, or `None` when nothing is there.
+fn current_file_fingerprint(path: &Path) -> Option<String> {
+    path.is_file().then(|| file_fingerprint(path).0)
+}
+
+/// [`selection_hash`], asking `current` for each file's fingerprint.
+fn selection_hash_with(
+    selection: &CalibrationSelection,
+    flat_star_masking: bool,
+    current: &mut dyn FnMut(&Path) -> Option<String>,
+) -> String {
     let mut values = Vec::new();
     for (kind, frames) in [
         (CalibrationKind::Bias, &selection.bias),
@@ -8040,11 +8095,8 @@ fn selection_hash(selection: &CalibrationSelection, flat_star_masking: bool) -> 
         (CalibrationKind::Flat, &selection.flat),
     ] {
         for frame in frames {
-            let current_fingerprint = if frame.source_path.is_file() {
-                file_fingerprint(&frame.source_path).0
-            } else {
-                frame.source_fingerprint.clone()
-            };
+            let current_fingerprint =
+                current(&frame.source_path).unwrap_or_else(|| frame.source_fingerprint.clone());
             values.push(format!(
                 "{}:{}:{}",
                 kind.as_str(),
@@ -9066,8 +9118,9 @@ pub struct DarkSet {
 
 /// Lights are matched one at a time, so the caller reads the catalog's
 /// [`Nights`] once.
-/// `judge_gap` asks for [`ExportCalibration::gap`], which may read the flat
-/// library again; an export that keeps such lights passes `false`.
+/// `judge_gap` asks for [`ExportCalibration::gap`]; an export that keeps
+/// such lights passes `false`. An export of many lights matches them with
+/// one [`LightMatcher`] through [`export_destinations_with`].
 pub fn export_destinations(
     conn: &Connection,
     light: &FrameMeta,
@@ -9077,15 +9130,36 @@ pub fn export_destinations(
     nights: &Nights,
     judge_gap: bool,
 ) -> Result<ExportCalibration> {
+    export_destinations_with(
+        &mut LightMatcher::load(conn, false)?,
+        light,
+        target_name,
+        directory_tree,
+        layout,
+        nights,
+        judge_gap,
+    )
+}
+
+/// [`export_destinations`] with the library read once for many lights.
+pub(crate) fn export_destinations_with(
+    matcher: &mut LightMatcher,
+    light: &FrameMeta,
+    target_name: &str,
+    directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    layout: crate::commands::export::ExportLayout,
+    nights: &Nights,
+    judge_gap: bool,
+) -> Result<ExportCalibration> {
     use crate::commands::export::{session_component, ExportLayout};
-    let mut selected = select_for_light(conn, light)?;
+    let mut selected = matcher.snapshot.select(light);
     // Judged as a stack judges it, before missing files are followed.
     let gap = if judge_gap {
-        calibration_gap(conn, light, &selected, nights)?
+        matcher.gap_in(light, &selected, nights)?
     } else {
         None
     };
-    remap_missing_sources(&mut selected, directory_tree);
+    matcher.verify(&mut selected, directory_tree);
     // Only the frames a master would build from: the coherent set nearest
     // the light per kind, the same reduction a stack makes. Everything the
     // library matched would pool every session's flats into one folder, and
@@ -10913,6 +10987,39 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_light_matcher_judges_gaps_as_the_catalog_does() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let day = 86_400;
+        let light_at = 1_790_000_000i64;
+        let temp = tempfile::tempdir().unwrap();
+        let conn = gap_library(&temp, light_at - 2 * day, false);
+        let matcher = LightMatcher::load(&conn, true).unwrap();
+        let nights = Nights::load(&conn);
+        let mut light = test_light(&temp, light_at);
+        let mut seen = Vec::new();
+        for (rotation, at) in [
+            (94.7, light_at),
+            (120.0, light_at),
+            (94.7, light_at + 68 * day),
+        ] {
+            light.rotator_position = Some(rotation);
+            light.timestamp = Some(at);
+            let selected = select_for_light(&conn, &light).unwrap();
+            let expected = calibration_gap(&conn, &light, &selected, &nights).unwrap();
+            assert_eq!(matcher.gap(&light, &selected).unwrap(), expected);
+            seen.push(expected.is_some());
+        }
+        assert_eq!(
+            seen,
+            [false, true, true],
+            "calibrated, wrong angle, flats too old"
+        );
+        let unloaded = LightMatcher::load(&conn, false).unwrap();
+        let selected = select_for_light(&conn, &light).unwrap();
+        assert_eq!(unloaded.gap(&light, &selected).unwrap(), None);
+    }
+
+    #[test]
     fn a_rig_without_flats_is_not_short_of_one() {
         let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let light_at = 1_790_000_000i64;
@@ -11093,9 +11200,9 @@ pub(crate) mod tests {
         light.rotator_position = Some(92.6);
         let selected = select_for_light(&conn, &light).unwrap();
         assert!(selected.flat.is_empty());
-        let miss = flat_near_miss(&conn, &light, &Nights::fixed(12 * 3600), &global_rules())
-            .unwrap()
-            .unwrap();
+        let flats = query_kind(&conn, CalibrationKind::Flat).unwrap();
+        let miss =
+            flat_near_miss_in(&flats, &light, &Nights::fixed(12 * 3600), &global_rules()).unwrap();
         assert_eq!(miss.flat_rotation_deg, 94.7);
         assert!((miss.off_by_deg - 2.1).abs() < 1e-9, "{}", miss.off_by_deg);
         assert_eq!(miss.frames, 2);
@@ -14720,6 +14827,7 @@ pub(crate) mod tests {
             flats,
             "each flat checked once, not once a light"
         );
+        assert_eq!(matcher.fingerprints.len(), flats, "and fingerprinted once");
     }
 
     #[test]
