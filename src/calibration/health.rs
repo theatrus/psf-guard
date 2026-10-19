@@ -37,9 +37,8 @@ use seiza_calibration::{FlatMeasurement, Grade, FLAT_QUALITY_ALGORITHM_VERSION};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::UNIX_EPOCH;
 
 /// Bump when the rules or what a result keeps change, so every kept result
 /// is computed again. 2: each finding keeps its lights' ids. 3: measured
@@ -171,23 +170,11 @@ pub struct LightResult {
     pub findings: Option<Vec<LightFinding>>,
 }
 
-/// A light's header as a pass read it, kept so the next pass reads it again
-/// only when the file changed: another place, size or modification time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeptHeader {
-    pub path: PathBuf,
-    pub size: u64,
-    /// Nanoseconds since 1970.
-    pub modified_ns: u64,
-    pub meta: FrameMeta,
-}
-
-/// A file's size and modification time, or `None` when it cannot be read.
-fn file_stamp(path: &Path) -> Option<(u64, u64)> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some((metadata.len(), u64::try_from(modified.as_nanos()).ok()?))
-}
+use crate::light_headers::FileStamp;
+/// A light's header as a pass read it, kept in the catalog so the next pass
+/// reads it again only when the file changed: another place, size or
+/// modification time.
+pub use crate::light_headers::KeptHeader;
 
 /// What judging one light came to, with its header for the next pass.
 #[derive(Debug, Clone)]
@@ -441,9 +428,8 @@ impl HealthLibrary {
                 read: false,
             });
         }
-        let stamp = file_stamp(&light.path);
-        let unchanged = kept
-            .filter(|kept| kept.path == light.path && stamp == Some((kept.size, kept.modified_ns)));
+        let stamp = FileStamp::of(&light.path);
+        let unchanged = kept.filter(|kept| kept.holds(&light.path, stamp));
         let (meta, read) = match unchanged {
             Some(kept) => (kept.meta.clone(), false),
             None => (
@@ -461,12 +447,7 @@ impl HealthLibrary {
         let findings = self.findings(&meta)?;
         Ok(JudgedLight {
             result: result(Some(findings)),
-            header: stamp.map(|(size, modified_ns)| KeptHeader {
-                path: light.path.clone(),
-                size,
-                modified_ns,
-                meta,
-            }),
+            header: stamp.map(|stamp| KeptHeader::new(&light.path, stamp, meta)),
             read,
         })
     }
@@ -1126,6 +1107,7 @@ mod tests {
     use super::super::{configure_flat_max_age, import_calibration_frames};
     use super::*;
     use crate::commands::import::headers::read_frame_meta;
+    use std::path::Path;
 
     const SIZE: (usize, usize) = (128, 128);
 
@@ -1930,7 +1912,7 @@ mod tests {
             .expect("a readable light keeps its header");
         assert!(header.meta.readable);
 
-        // The header survives a trip through the cache file.
+        // The header survives a trip through JSON, as the catalog keeps it.
         let header: KeptHeader =
             serde_json::from_slice(&serde_json::to_vec(&header).unwrap()).unwrap();
         let again = library.judge_light_kept(&light, Some(&header)).unwrap();

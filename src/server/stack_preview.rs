@@ -15,6 +15,7 @@ mod execution;
 mod final_integration;
 mod janitor;
 pub mod journal;
+pub(crate) mod kept_lights;
 pub mod method;
 mod processing_queue;
 pub mod rc_astro;
@@ -3221,9 +3222,17 @@ fn excluded_decision_for(image_id: i32, reason: String) -> StackFrameDecision {
 }
 
 pub(crate) fn source_fingerprint(path: &FsPath) -> String {
+    source_fingerprint_from(path, path.metadata().ok().as_ref())
+}
+
+/// [`source_fingerprint`] from the file's metadata, when the caller has it.
+pub(crate) fn source_fingerprint_from(
+    path: &FsPath,
+    metadata: Option<&std::fs::Metadata>,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(path.to_string_lossy().as_bytes());
-    if let Ok(metadata) = path.metadata() {
+    if let Some(metadata) = metadata {
         hasher.update(metadata.len().to_le_bytes());
         if let Ok(modified) = metadata.modified()
             && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
@@ -5842,6 +5851,105 @@ mod tests {
         assert_eq!(off.public.groups[0].eligible_frames, 3);
         assert_eq!(off.public.groups[0].calibration_excluded, 0);
         assert_ne!(off.public.job_id, auto.public.job_id);
+    }
+
+    /// A stack keeps each light's header in the catalog, and where its own
+    /// lookup found the light. The next stack goes straight there and takes
+    /// the kept header while the file stands as it was, and makes the same
+    /// build as when it read everything; a file written again is read again.
+    #[test]
+    fn a_stack_reads_a_light_header_again_only_when_its_file_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let images = directory.path().join("images");
+        std::fs::create_dir(&images).unwrap();
+        let catalog = directory.path().join("catalog.sqlite");
+        let mut conn = rusqlite::Connection::open(&catalog).unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Project','profile','project-one');
+            INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid)
+                VALUES(1,'Target',1,1,10,20,0,0,100,'target-one');").unwrap();
+        for id in 1..=3 {
+            let name = format!("light-{id}.fits");
+            write_calibration_test_fits(&images.join(&name), "LIGHT", 94.7);
+            conn.execute(
+                "INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
+                 VALUES(?1,1,1,1,?2,?1,'Ha')",
+                rusqlite::params![
+                    id,
+                    serde_json::json!({"FileName": name, "ExposureDuration": 300.0}).to_string()
+                ],
+            )
+            .unwrap();
+        }
+        let mut flats = Vec::new();
+        for index in 0..3 {
+            let path = directory.path().join(format!("flat-{index}.fits"));
+            write_calibration_test_fits(&path, "FLAT", 94.7);
+            flats.push(crate::commands::import::headers::read_frame_meta(&path));
+        }
+        let tx = conn.transaction().unwrap();
+        crate::calibration::import_calibration_frames(&tx, &flats, Some("profile")).unwrap();
+        tx.commit().unwrap();
+
+        let mut ctx = DatabaseContext::new_for_test(conn);
+        ctx.database_path = catalog.to_string_lossy().into_owned();
+        ctx.use_storage_for_test(directory.path());
+        ctx.image_dir_paths = vec![images.clone()];
+        let ctx = Arc::new(ctx);
+        let request = serde_json::from_value::<StackPreviewRequest>(
+            serde_json::json!({"image_ids": [1, 2, 3], "calibration": "auto"}),
+        )
+        .unwrap();
+        let build = || {
+            let job = prepare_job(&ctx, 1, &request).unwrap();
+            crate::server::light_header_writes::wait_until_written(&ctx.database_path);
+            job.public.job_id
+        };
+        let kept = || {
+            let db = ctx.db();
+            let conn = db.lock().unwrap();
+            crate::light_headers::project_headers(&conn, 1).unwrap()
+        };
+        let sql = |statement: &str| {
+            let db = ctx.db();
+            let conn = db.lock().unwrap();
+            conn.execute(statement, []).unwrap();
+        };
+
+        let first = build();
+        let headers = kept();
+        assert_eq!(headers.len(), 3);
+        assert!(headers.values().all(|header| header.located));
+        assert_eq!(build(), first, "the same build from the kept headers");
+
+        // The kept header serves while the file stands: one that says the
+        // light was turned away from the flats changes what it matches.
+        sql("UPDATE psf_guard_light_header
+             SET meta_json = json_set(meta_json, '$.rotator_position', 120.0)
+             WHERE image_id = 1");
+        let turned = build();
+        assert_ne!(turned, first);
+
+        // Written again, the file is read again.
+        let light = images.join("light-1.fits");
+        let modified = std::fs::metadata(&light).unwrap().modified().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&light)
+            .unwrap()
+            .set_modified(modified + std::time::Duration::from_secs(5))
+            .unwrap();
+        let reread = build();
+        assert_eq!(kept()[&1].meta.rotator_position, Some(94.7));
+        assert_eq!(
+            kept()[&1].stamp(),
+            crate::light_headers::FileStamp::of(&light).unwrap()
+        );
+
+        // The same build as one that reads every header.
+        sql("DELETE FROM psf_guard_light_header");
+        assert_eq!(build(), reread);
+        assert_ne!(reread, turned);
     }
 
     #[test]

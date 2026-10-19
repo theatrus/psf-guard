@@ -40,9 +40,9 @@ use std::time::{Duration, Instant};
 /// The kept results, below the database's cache folder.
 const CACHE_FILE: &str = "calibration-health.json";
 
-/// The kept light headers, one file per project, below the database's cache
-/// folder. Apart from the results, which every view reads.
-const HEADERS_DIR: &str = "calibration-health-headers";
+/// Where builds before the catalog kept light headers wrote them, one file
+/// per project, below the database's cache folder. A pass removes it.
+const OLD_HEADERS_DIR: &str = "calibration-health-headers";
 
 /// How often a pass looks again while interactive work runs.
 const YIELD_POLL: Duration = Duration::from_millis(250);
@@ -72,79 +72,32 @@ struct CachedHealth {
     health: ProjectHealth,
 }
 
-/// One project's light headers, by light id.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct KeptHeaders {
-    /// The build that read them; another may read a header differently.
-    version: String,
-    lights: BTreeMap<i32, KeptHeader>,
-}
-
 fn cache_path(cache_dir: &FsPath) -> PathBuf {
     cache_dir.join(CACHE_FILE)
 }
 
-fn headers_path(cache_dir: &FsPath, project: i32) -> PathBuf {
-    cache_dir.join(HEADERS_DIR).join(format!("{project}.json"))
-}
-
-/// One project's kept headers, or none when the file is missing, unreadable
-/// or from another build.
-fn read_headers(cache_dir: &FsPath, project: i32) -> BTreeMap<i32, KeptHeader> {
-    std::fs::read(headers_path(cache_dir, project))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<KeptHeaders>(&bytes).ok())
-        .filter(|kept| kept.version == env!("CARGO_PKG_VERSION"))
-        .map(|kept| kept.lights)
-        .unwrap_or_default()
-}
-
-/// One project's kept headers, for the Calibration page's project scope.
-pub(crate) fn kept_headers(cache_dir: &FsPath, project: i32) -> BTreeMap<i32, KeptHeader> {
-    read_headers(cache_dir, project)
-}
-
-/// When a project's kept headers were last written, so a scope worked out
-/// from them is worked out again once a pass reads more.
-pub(crate) fn headers_stamp(cache_dir: &FsPath, project: i32) -> u128 {
-    crate::server::calibration_scope::file_stamp(&headers_path(cache_dir, project))
-}
-
-/// Remove the kept headers of projects the catalog no longer holds,
-/// whether or not the results file still lists them.
-fn remove_gone_headers(cache_dir: &FsPath, keys: &BTreeMap<i32, String>) {
-    let Ok(entries) = std::fs::read_dir(cache_dir.join(HEADERS_DIR)) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let project = name
-            .to_str()
-            .and_then(|name| name.strip_suffix(".json"))
-            .and_then(|stem| stem.parse::<i32>().ok());
-        if project.is_some_and(|project| !keys.contains_key(&project)) {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
-}
-
-pub(crate) fn write_headers(
-    cache_dir: &FsPath,
-    project: i32,
-    lights: BTreeMap<i32, KeptHeader>,
+/// Keep the headers a pass read in the catalog, on a writable connection
+/// opened for the first project that read any. The pass itself reads on a
+/// read-only one.
+fn keep_headers(
+    writer: &mut Option<Connection>,
+    path: &str,
+    headers: &BTreeMap<i32, KeptHeader>,
 ) -> anyhow::Result<()> {
-    let path = headers_path(cache_dir, project);
-    let bytes = serde_json::to_vec(&KeptHeaders {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        lights,
-    })?;
-    // Judging a project again, as after the library is graded again, reads
-    // back the same headers. Left as they are, they keep their stamp, which
-    // the project scope and what the flat groups feed are worked out from.
-    if std::fs::read(&path).is_ok_and(|kept| kept == bytes) {
+    if headers.is_empty() {
         return Ok(());
     }
-    write_bytes(&path, &bytes)
+    let conn = match writer {
+        Some(conn) => conn,
+        None => writer.insert(
+            crate::server::database_context::open_scheduler_connection_with_flags(
+                path,
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
+            )?,
+        ),
+    };
+    crate::light_headers::store(conn, headers.iter().map(|(id, header)| (*id, header)))?;
+    Ok(())
 }
 
 /// The kept results, or none when the file is missing, unreadable, or from
@@ -382,7 +335,8 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
     cache
         .projects
         .retain(|project, _| keys.contains_key(project));
-    remove_gone_headers(&ctx.cache_dir_path, &keys);
+    // Headers live in the catalog now; an older build's files go.
+    let _ = std::fs::remove_dir_all(ctx.cache_dir_path.join(OLD_HEADERS_DIR));
     let stale: Vec<(i32, String, String)> = keys
         .into_iter()
         .filter_map(|(project, key)| {
@@ -414,6 +368,7 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
         lease.summary()
     );
     let mut poor = 0;
+    let mut writer: Option<Connection> = None;
     for (index, (project, key, files)) in stale.into_iter().enumerate() {
         if state.shutdown.is_stopping() {
             break;
@@ -424,11 +379,15 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
             &tree,
             &library.light_nights(&conn),
         )?;
+        let kept = crate::light_headers::project_headers(&conn, project).unwrap_or_else(|error| {
+            tracing::debug!("kept headers of project {project} unavailable: {error:#}");
+            BTreeMap::new()
+        });
         let judged = judge_project(
             &pool,
             &library,
             &lights,
-            &read_headers(&ctx.cache_dir_path, project),
+            &kept,
             &|| state.shutdown.is_stopping(),
             &|| state.interactive_job_active(),
         )?;
@@ -436,7 +395,10 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
         let mut headers = BTreeMap::new();
         let mut results = Vec::with_capacity(judged.len());
         for light in judged {
-            if let Some(header) = light.header {
+            // Only what was read: a kept header stands as it is.
+            if light.read
+                && let Some(header) = light.header
+            {
                 headers.insert(light.result.image_id, header);
             }
             results.push(light.result);
@@ -456,7 +418,7 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
         );
         write_cache(&ctx.cache_dir_path, &cache)?;
         // Losing the headers costs only reading them again.
-        if let Err(error) = write_headers(&ctx.cache_dir_path, project, headers) {
+        if let Err(error) = keep_headers(&mut writer, path, &headers) {
             tracing::warn!("Could not keep the light headers of project {project}: {error:#}");
         }
         {
@@ -469,6 +431,11 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
     }
     if poor > 0 {
         tracing::info!("{poor} project(s) in {path} hold lights the library cannot calibrate");
+    }
+    if let Some(writer) = &writer
+        && let Err(error) = crate::light_headers::prune(writer)
+    {
+        tracing::debug!("Could not forget the headers of removed lights in {path}: {error:#}");
     }
     Ok(())
 }
@@ -788,41 +755,48 @@ mod tests {
     }
 
     /// Background grading moves every project's health key, so the pass
-    /// judges each project again and writes back the headers it read. The
-    /// same headers keep their stamp, which the project scope and what the
-    /// flat groups feed are worked out from; new ones move it.
+    /// judges each project again. It keeps only the headers it read, in the
+    /// catalog: the same headers kept again keep their stamp, which the
+    /// project scope and what the flat groups feed are worked out from; new
+    /// ones move it.
     #[test]
-    fn rewriting_unchanged_headers_keeps_their_stamp() {
+    fn a_pass_keeps_the_headers_it_read_in_the_catalog() {
         let temp = tempfile::tempdir().unwrap();
-        write_headers(temp.path(), 1, BTreeMap::new()).unwrap();
-        let before = headers_stamp(temp.path(), 1);
-        std::thread::sleep(Duration::from_millis(20));
-        write_headers(temp.path(), 1, BTreeMap::new()).unwrap();
-        assert_eq!(headers_stamp(temp.path(), 1), before);
+        let catalog = temp.path().join("catalog.sqlite");
+        let conn = Connection::open(&catalog).unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+                 gradingStatus, metadata)
+             VALUES (7, 1, 1, 0, 'Ha', 0, '{}')",
+            [],
+        )
+        .unwrap();
+        let path = catalog.to_string_lossy().into_owned();
+        let mut writer = None;
+        keep_headers(&mut writer, &path, &BTreeMap::new()).unwrap();
+        assert!(writer.is_none(), "nothing read, nothing opened");
+        assert_eq!(crate::light_headers::project_stamp(&conn, 1), 0);
 
-        let light = KeptHeader {
-            path: PathBuf::from("light.fits"),
-            size: 1,
-            modified_ns: 2,
-            meta: crate::commands::import::headers::FrameMeta::default(),
-        };
-        std::thread::sleep(Duration::from_millis(20));
-        write_headers(temp.path(), 1, BTreeMap::from([(7, light)])).unwrap();
-        assert_ne!(headers_stamp(temp.path(), 1), before);
-    }
-
-    #[test]
-    fn headers_of_projects_gone_from_the_catalog_are_removed() {
-        let temp = tempfile::tempdir().unwrap();
-        for project in [1, 2] {
-            write_headers(temp.path(), project, BTreeMap::new()).unwrap();
-        }
-        // Results from other rules are not even read; the headers of the
-        // project that went still go.
-        let keys = BTreeMap::from([(1, "k".to_string())]);
-        remove_gone_headers(temp.path(), &keys);
-        assert!(headers_path(temp.path(), 1).is_file());
-        assert!(!headers_path(temp.path(), 2).exists());
+        let light = temp.path().join("light.fits");
+        std::fs::write(&light, b"bytes").unwrap();
+        let header = KeptHeader::new(
+            &light,
+            crate::light_headers::FileStamp::of(&light).unwrap(),
+            crate::commands::import::headers::FrameMeta::default(),
+        );
+        keep_headers(&mut writer, &path, &BTreeMap::from([(7, header.clone())])).unwrap();
+        let before = crate::light_headers::project_stamp(&conn, 1);
+        assert_ne!(before, 0);
+        keep_headers(&mut writer, &path, &BTreeMap::from([(7, header)])).unwrap();
+        assert_eq!(crate::light_headers::project_stamp(&conn, 1), before);
+        assert_eq!(
+            crate::light_headers::project_headers(&conn, 1)
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            [&7]
+        );
     }
 
     #[test]

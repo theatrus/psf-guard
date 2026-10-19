@@ -22,3 +22,11 @@
   no longer shows the stack built from the frames you rejected, and a color
   composite stops offering that stack as a source. A channel whose files are
   missing, or that has no matching calibration, keeps its stack.
+- Preparing a stack build no longer opens every light and calibration file.
+  The catalog keeps each light's header and where the last build found it,
+  and trusts a calibration file whose size and modification time are those
+  it recorded, so files are read again only after they change. On a
+  1,263-light project on a network share, preparing took about 1.3 seconds
+  where it took about 2.3, and the calibration health pass, the
+  uncalibrated-lights check and Calibration's project scope share the same
+  kept headers.

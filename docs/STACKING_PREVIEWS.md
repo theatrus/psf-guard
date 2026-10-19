@@ -25,8 +25,11 @@ calibration, keeps its stack until the frames return.
 The jobs list shows **Preparing stack build** immediately, and the button
 shows **Preparing…**. Within each catalog, PSF Guard prepares requests in the
 order received: it reads and scores the frames, then matches calibration data.
-Each calibration file's header is read once per request, and other catalog
-requests can continue during preparation.
+A light or calibration file whose size and modification time have not
+changed is not opened: the catalog keeps its header
+([Headers read once](CALIBRATION_LIBRARY.md#headers-read-once)). Any other
+header is read once per request, and other catalog requests can continue
+during preparation.
 
 Once preparation finishes, the panel and jobs list show the individual
 channel builds. If a matching build is already queued, running or complete,

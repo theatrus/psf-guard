@@ -857,6 +857,13 @@ pub(super) fn prepare_whole(
         )?;
         (relevant, expected, mapped_sources, exposure_groups)
     };
+    // Where a build last found each light, and its header, so neither is
+    // looked up again while the file stands as it was.
+    let mut lights = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        crate::server::stack_preview::kept_lights::KeptLights::load(&conn, project_id)
+    };
 
     let quality = quality_results(
         ctx,
@@ -1020,23 +1027,17 @@ pub(super) fn prepare_whole(
                 ));
                 continue;
             };
-            let path =
-                match crate::server::handlers::find_fits_file(ctx, &image, &target_name, &filename)
-                {
-                    Ok(path) => path,
-                    Err(AppError::Conflict(message)) => return Err(AppError::Conflict(message)),
-                    Err(AppError::NotFound) => {
-                        missing_files += 1;
-                        decisions.push(excluded_decision(
-                            &image,
-                            &scored,
-                            "FITS file was not found".into(),
-                        ));
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
-            let source_fingerprint = source_fingerprint(&path);
+            let Some((path, source_fingerprint)) =
+                lights.locate(ctx, &image, &target_name, &filename, &mapped_sources)?
+            else {
+                missing_files += 1;
+                decisions.push(excluded_decision(
+                    &image,
+                    &scored,
+                    "FITS file was not found".into(),
+                ));
+                continue;
+            };
             hasher.update(source_fingerprint.as_bytes());
             group_hasher.update(source_fingerprint.as_bytes());
             let exposure_seconds = exposure_seconds_from_metadata(&image.metadata);
@@ -1081,8 +1082,9 @@ pub(super) fn prepare_whole(
             let gaps = group_calibration != crate::calibration::CalibrationMode::Off
                 && exclude_uncalibrated;
             for frame in &frames {
+                let light = lights.meta(frame.image_id, &frame.path);
                 let (fingerprint, gap) = matcher
-                    .light_calibration(&frame.path, Some(&directory_tree), flat_star_masking, gaps)
+                    .light_calibration_of(&light, Some(&directory_tree), flat_star_masking, gaps)
                     .map_err(AppError::db)?;
                 fingerprints.insert(frame.image_id, fingerprint);
                 if let Some(reason) = gap {
@@ -1209,6 +1211,8 @@ pub(super) fn prepare_whole(
             frames,
         });
     }
+
+    lights.keep(&ctx.database_path, matcher.as_mut());
 
     let digest = hasher.finalize();
     let mut job_id = String::with_capacity(digest.len() * 2);

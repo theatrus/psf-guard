@@ -4,6 +4,7 @@
 //! raw calibration frames and generated masters stay on disk.
 
 use crate::commands::import::headers::FrameMeta;
+use crate::light_headers::FileStamp;
 use anyhow::{Context, Result};
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
@@ -708,7 +709,29 @@ fn add_dark_level_columns_and_grades(conn: &Connection) -> Result<bool> {
     // Flat grouping's tables came later still, the same way, and each
     // rig's site after them.
     let flat_groups = flat_groups::store::add_tables(conn)?;
-    Ok(night::add_site_table(conn)? | flat_groups | grades | columns)
+    let sites = night::add_site_table(conn)?;
+    Ok(add_header_cache_tables(conn)? | sites | flat_groups | grades | columns)
+}
+
+/// What header reads found, kept so the next request need not read again:
+/// each light's header ([`crate::light_headers`]) and each calibration file
+/// a header read found to be its frame ([`FILE_CHECK_TABLE_SQL`]). Both came
+/// after rung 9 without a bump.
+fn add_header_cache_tables(conn: &Connection) -> Result<bool> {
+    if conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true) {
+        return Ok(false);
+    }
+    let mut changed = false;
+    if !crate::light_headers::table_exists(conn) {
+        crate::light_headers::ensure_table(conn)?;
+        changed = true;
+    }
+    if !file_check_table_exists(conn) {
+        conn.execute_batch(FILE_CHECK_TABLE_SQL)
+            .context("creating the calibration file check table")?;
+        changed = true;
+    }
+    Ok(changed)
 }
 
 fn add_dark_level_columns(conn: &Connection) -> Result<bool> {
@@ -1325,6 +1348,9 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         .context("creating PSF Guard calibration tables")?;
     conn.execute_batch(flat_groups::override_store::TABLES_SQL)
         .context("creating PSF Guard calibration tables")?;
+    conn.execute_batch(FILE_CHECK_TABLE_SQL)
+        .context("creating PSF Guard calibration tables")?;
+    crate::light_headers::ensure_table(conn)?;
     // A catalog that has just had its tables created is already at the
     // current version; one that had them from an older build is stamped with
     // whatever it was, and the ladder below carries it up.
@@ -1842,6 +1868,13 @@ pub fn forget_frames(
     twins::forget_twins_of(&transaction, frame_uuids)?;
     twins::forget_merges_of(&transaction, frame_uuids)?;
     flat_groups::store::forget_frames(&transaction, frame_uuids)?;
+    if file_check_table_exists(&transaction) {
+        let mut statement = transaction
+            .prepare("DELETE FROM psf_guard_calibration_file_check WHERE frame_uuid = ?1")?;
+        for frame_uuid in frame_uuids {
+            statement.execute([frame_uuid])?;
+        }
+    }
     transaction.commit()?;
     Ok(CalibrationMutationOutcome {
         frames_removed,
@@ -3178,19 +3211,19 @@ pub(crate) fn selection_fingerprint_with_masking(
 }
 
 /// Many lights matched against the library, as a stack build prepares
-/// them: the library read once, and each calibration file's header read
-/// and fingerprint taken once however many lights it serves. Only loading reads the catalog, so
-/// a caller can let the connection go before the file reads.
+/// them: the library read once, and each calibration file checked and
+/// fingerprinted once however many lights it serves. A file whose size and
+/// time are those the catalog recorded of it is its frame without a header
+/// read (see [`FileChecks`]). Only loading reads the catalog, so a caller can
+/// let the connection go before the file reads; what a header read found is
+/// handed back by [`Self::take_file_checks`] for [`record_file_checks`].
 pub(crate) struct LightMatcher {
     snapshot: LibrarySnapshot,
     flats: Vec<CalibrationFrame>,
     /// Loaded only for a stack that leaves out lights the library cannot
     /// calibrate properly; a caller with its own passes them to `gap_in`.
     nights: Option<Nights>,
-    /// Whether the file at a path is the frame of a row, by row and path.
-    checked: HashMap<(i64, PathBuf), bool>,
-    /// Each file's fingerprint as it stands, by path.
-    fingerprints: HashMap<PathBuf, Option<String>>,
+    files: FileChecks,
 }
 
 impl LightMatcher {
@@ -3198,18 +3231,19 @@ impl LightMatcher {
     pub(crate) fn load(conn: &Connection, gaps: bool) -> Result<Self> {
         let snapshot = LibrarySnapshot::load(conn)?;
         let flats = snapshot.of_kind(CalibrationKind::Flat).cloned().collect();
+        let files = FileChecks::load(conn, &snapshot);
         Ok(Self {
             snapshot,
             flats,
             nights: gaps.then(|| Nights::load(conn)),
-            checked: HashMap::new(),
-            fingerprints: HashMap::new(),
+            files,
         })
     }
 
     /// A light's selection fingerprint, and, when `gaps` asks and the
     /// matcher loaded them, why it cannot be calibrated properly when it
     /// cannot, from one header read.
+    #[cfg(test)]
     pub(crate) fn light_calibration(
         &mut self,
         light_path: &Path,
@@ -3218,21 +3252,37 @@ impl LightMatcher {
         gaps: bool,
     ) -> Result<(String, Option<String>)> {
         let light = crate::commands::import::headers::read_frame_meta(light_path);
-        let mut selected = self.snapshot.select(&light);
+        self.light_calibration_of(&light, directory_tree, flat_star_masking, gaps)
+    }
+
+    /// A light's selection fingerprint, and, when `gaps` asks and the
+    /// matcher loaded them, why it cannot be calibrated properly when it
+    /// cannot, from its header.
+    pub(crate) fn light_calibration_of(
+        &mut self,
+        light: &FrameMeta,
+        directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+        flat_star_masking: bool,
+        gaps: bool,
+    ) -> Result<(String, Option<String>)> {
+        let mut selected = self.snapshot.select(light);
         let gap = if gaps {
-            self.gap(&light, &selected)?
+            self.gap(light, &selected)?
         } else {
             None
         };
         self.verify(&mut selected, directory_tree);
-        let fingerprints = &mut self.fingerprints;
-        let hash = selection_hash_with(&selected, flat_star_masking, &mut |path| {
-            fingerprints
-                .entry(path.to_path_buf())
-                .or_insert_with(|| current_file_fingerprint(path))
-                .clone()
+        let files = &mut self.files;
+        let hash = selection_hash_with(&selected, flat_star_masking, &mut |frame| {
+            files.fingerprint(frame)
         });
         Ok((hash, gap))
+    }
+
+    /// The calibration files a header read found to be their frames since
+    /// the last call, for [`record_file_checks`] to keep.
+    pub(crate) fn take_file_checks(&mut self) -> Vec<FileCheck> {
+        std::mem::take(&mut self.files.confirmed_now)
     }
 
     /// [`calibration_gap`] from what the matcher loaded: `None` when it
@@ -3275,13 +3325,277 @@ impl LightMatcher {
         selected: &mut CalibrationSelection,
         directory_tree: Option<&crate::directory_tree::DirectoryTree>,
     ) {
-        let checked = &mut self.checked;
+        let files = &mut self.files;
         remap_missing_sources_with(selected, directory_tree, &mut |frame, path| {
-            *checked
-                .entry((frame.id, path.to_path_buf()))
-                .or_insert_with(|| calibration_file_matches(frame, path))
+            files.matches(frame, path)
         });
     }
+}
+
+/// Calibration files a header read found to be their frame though the
+/// catalog recorded them otherwise: the file at a row's own path written
+/// again, or one found by name after a move. Keyed by frame and path, with
+/// the file's size and time and the row's fingerprint then; a change to
+/// either means the header is read again. Machine-local, like the light
+/// headers: sync never carries it.
+pub(crate) const FILE_CHECK_TABLE_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS psf_guard_calibration_file_check (
+        frame_uuid      TEXT NOT NULL,
+        path            TEXT NOT NULL,
+        size            INTEGER NOT NULL,
+        mtime_ns        INTEGER NOT NULL,
+        row_fingerprint TEXT NOT NULL,
+        checked_at      INTEGER NOT NULL,
+        PRIMARY KEY (frame_uuid, path)
+    );
+"#;
+
+fn file_check_table_exists(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master
+         WHERE type = 'table' AND name = 'psf_guard_calibration_file_check'",
+        [],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .unwrap_or(false)
+}
+
+/// A calibration file a header read found to be its frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileCheck {
+    pub(crate) frame_uuid: String,
+    pub(crate) path: PathBuf,
+    pub(crate) stamp: FileStamp,
+    /// The row's fingerprint then. A row written again since, by an import
+    /// or a repair, may describe another file.
+    pub(crate) row_fingerprint: String,
+}
+
+/// Keep what header reads found, so the next request trusts those files
+/// while they stand as they were. Rows of frames the catalog no longer
+/// holds go.
+pub(crate) fn record_file_checks(conn: &Connection, checks: &[FileCheck]) -> Result<()> {
+    if checks.is_empty() || !schema_exists(conn) {
+        return Ok(());
+    }
+    conn.execute_batch(FILE_CHECK_TABLE_SQL)?;
+    let now = chrono::Utc::now().timestamp();
+    let mut statement = conn.prepare(
+        "INSERT INTO psf_guard_calibration_file_check
+            (frame_uuid, path, size, mtime_ns, row_fingerprint, checked_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(frame_uuid, path) DO UPDATE SET
+            size = excluded.size, mtime_ns = excluded.mtime_ns,
+            row_fingerprint = excluded.row_fingerprint, checked_at = excluded.checked_at",
+    )?;
+    for check in checks {
+        let (Ok(size), Ok(modified_ns)) = (
+            i64::try_from(check.stamp.size),
+            i64::try_from(check.stamp.modified_ns),
+        ) else {
+            continue;
+        };
+        statement.execute(params![
+            check.frame_uuid,
+            check.path.to_string_lossy(),
+            size,
+            modified_ns,
+            check.row_fingerprint,
+            now
+        ])?;
+    }
+    conn.execute(
+        "DELETE FROM psf_guard_calibration_file_check
+         WHERE frame_uuid NOT IN (SELECT frame_uuid FROM psf_guard_calibration_frame)",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Which files are which calibration frames, and their fingerprints, for
+/// one request: each file looked at once, and its header read only when the
+/// catalog cannot vouch for it.
+///
+/// A file at a row's own path with the size and time import recorded of it
+/// is the file import read the row from: it is the frame, and its
+/// fingerprint is the one import recorded. So is a file a header read found
+/// to be the frame before ([`FILE_CHECK_TABLE_SQL`]) while it stands as it
+/// was then. Any other file's header is read, as a frame's file always was.
+#[derive(Debug, Default)]
+struct FileChecks {
+    /// The size and time import recorded of each row's file, by row id.
+    recorded: HashMap<i64, FileStamp>,
+    /// Each row's own path, by row id: a selection may follow a moved file.
+    sources: HashMap<i64, PathBuf>,
+    /// Files header reads found to be frames, by frame and path, with the
+    /// file's stamp and the row's fingerprint then.
+    confirmed: HashMap<(String, PathBuf), (FileStamp, String)>,
+    /// What this request found that the catalog did not hold yet.
+    confirmed_now: Vec<FileCheck>,
+    /// Each path's stamp as it stands, taken once.
+    stamps: HashMap<PathBuf, Option<FileStamp>>,
+    /// Whether the file at a path is the frame of a row, by row and path.
+    checked: HashMap<(i64, PathBuf), bool>,
+    /// Each file's fingerprint as it stands, by path.
+    fingerprints: HashMap<PathBuf, Option<String>>,
+    /// Headers read to tell, for the tests.
+    header_reads: usize,
+}
+
+impl FileChecks {
+    fn load(conn: &Connection, snapshot: &LibrarySnapshot) -> Self {
+        let recorded = recorded_file_stamps(conn).unwrap_or_else(|error| {
+            tracing::debug!("recorded calibration file stamps unavailable: {error:#}");
+            HashMap::new()
+        });
+        let confirmed = confirmed_files(conn).unwrap_or_else(|error| {
+            tracing::debug!("calibration file checks unavailable: {error:#}");
+            HashMap::new()
+        });
+        Self {
+            recorded,
+            sources: snapshot
+                .frames()
+                .iter()
+                .map(|frame| (frame.id, frame.source_path.clone()))
+                .collect(),
+            confirmed,
+            ..Self::default()
+        }
+    }
+
+    fn stamp(&mut self, path: &Path) -> Option<FileStamp> {
+        *self
+            .stamps
+            .entry(path.to_path_buf())
+            .or_insert_with(|| FileStamp::of(path))
+    }
+
+    /// Whether the file at `path` is `frame`'s, as [`calibration_file_matches`]
+    /// tells, without reading a header the catalog vouches for.
+    fn matches(&mut self, frame: &CalibrationFrame, path: &Path) -> bool {
+        let key = (frame.id, path.to_path_buf());
+        if let Some(&known) = self.checked.get(&key) {
+            return known;
+        }
+        let found = match self.stamp(path) {
+            Some(stamp) if self.vouches(frame, path, stamp) => true,
+            Some(stamp) => {
+                self.header_reads += 1;
+                let found = calibration_file_matches(frame, path);
+                if found {
+                    self.confirmed_now.push(FileCheck {
+                        frame_uuid: frame.frame_uuid.clone(),
+                        path: path.to_path_buf(),
+                        stamp,
+                        row_fingerprint: frame.source_fingerprint.clone(),
+                    });
+                }
+                found
+            }
+            // No file there, or one without a time: as before.
+            None => calibration_file_matches(frame, path),
+        };
+        self.checked.insert(key, found);
+        found
+    }
+
+    fn vouches(&self, frame: &CalibrationFrame, path: &Path, stamp: FileStamp) -> bool {
+        let recorded = path == frame.source_path && self.recorded.get(&frame.id) == Some(&stamp);
+        recorded
+            || self
+                .confirmed
+                .get(&(frame.frame_uuid.clone(), path.to_path_buf()))
+                .is_some_and(|(confirmed, fingerprint)| {
+                    *confirmed == stamp && *fingerprint == frame.source_fingerprint
+                })
+    }
+
+    /// The fingerprint of `frame`'s file as it stands ([`file_fingerprint`]),
+    /// or `None` when no file is there. The file import recorded, unchanged
+    /// at the row's own path, has the fingerprint import took.
+    fn fingerprint(&mut self, frame: &CalibrationFrame) -> Option<String> {
+        let path = &frame.source_path;
+        if let Some(known) = self.fingerprints.get(path) {
+            return known.clone();
+        }
+        let fingerprint = match self.stamp(path) {
+            Some(stamp)
+                if self.sources.get(&frame.id) == Some(path)
+                    && self.recorded.get(&frame.id) == Some(&stamp) =>
+            {
+                Some(frame.source_fingerprint.clone())
+            }
+            _ => current_file_fingerprint(path),
+        };
+        self.fingerprints.insert(path.clone(), fingerprint.clone());
+        fingerprint
+    }
+}
+
+/// The size and time import recorded of each frame's file, by row id. A
+/// row without them, or with an unknown time, has none.
+fn recorded_file_stamps(conn: &Connection) -> Result<HashMap<i64, FileStamp>> {
+    if !schema_exists(conn) {
+        return Ok(HashMap::new());
+    }
+    let mut statement = conn.prepare(
+        "SELECT id, file_size, file_mtime_ns FROM psf_guard_calibration_frame
+         WHERE file_size IS NOT NULL AND file_mtime_ns IS NOT NULL",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut stamps = HashMap::new();
+    for row in rows {
+        let (id, size, modified_ns) = row?;
+        let (Ok(size), Ok(modified_ns)) = (u64::try_from(size), modified_ns.parse::<u64>()) else {
+            continue;
+        };
+        if modified_ns == 0 {
+            continue;
+        }
+        stamps.insert(id, FileStamp { size, modified_ns });
+    }
+    Ok(stamps)
+}
+
+/// What header reads found before ([`FILE_CHECK_TABLE_SQL`]).
+fn confirmed_files(conn: &Connection) -> Result<HashMap<(String, PathBuf), (FileStamp, String)>> {
+    if !file_check_table_exists(conn) {
+        return Ok(HashMap::new());
+    }
+    let mut statement = conn.prepare(
+        "SELECT frame_uuid, path, size, mtime_ns, row_fingerprint
+         FROM psf_guard_calibration_file_check",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut confirmed = HashMap::new();
+    for row in rows {
+        let (frame_uuid, path, size, modified_ns, fingerprint) = row?;
+        let (Ok(size), Ok(modified_ns)) = (u64::try_from(size), u64::try_from(modified_ns)) else {
+            continue;
+        };
+        confirmed.insert(
+            (frame_uuid, PathBuf::from(path)),
+            (FileStamp { size, modified_ns }, fingerprint),
+        );
+    }
+    Ok(confirmed)
 }
 
 /// Why a light cannot be calibrated properly, in a few words, or `None`.
@@ -3558,8 +3872,10 @@ pub fn project_calibration_gaps(
     // rig's local noon.
     let light_nights = LightNights::from_nights(conn, &nights, nights_view);
     let boundary = project_night_boundary(&rows, &light_nights);
-    // The library is read once, not once a light.
+    // The library is read once, not once a light, and a header the catalog
+    // keeps for an unchanged file is not read again.
     let judge = GapJudge::load(conn)?;
+    let kept = crate::light_headers::project_headers(conn, project_id).unwrap_or_default();
     let mut lights = Vec::new();
     let (mut checked, mut missing_files) = (0usize, 0usize);
     for (image, _project, _target) in &rows {
@@ -3573,7 +3889,13 @@ pub fn project_calibration_gaps(
             continue;
         };
         checked += 1;
-        let meta = crate::commands::import::headers::read_frame_meta(&path);
+        let meta = match kept
+            .get(&image.id)
+            .filter(|kept| kept.holds(&path, FileStamp::of(&path)))
+        {
+            Some(kept) => kept.meta.clone(),
+            None => crate::commands::import::headers::read_frame_meta(&path),
+        };
         if let Some(reason) = judge.gap(&meta)? {
             lights.push(UncalibratedLight {
                 image_id: image.id,
@@ -8073,7 +8395,9 @@ fn source_set_hash(
 }
 
 fn selection_hash(selection: &CalibrationSelection, flat_star_masking: bool) -> String {
-    selection_hash_with(selection, flat_star_masking, &mut current_file_fingerprint)
+    selection_hash_with(selection, flat_star_masking, &mut |frame| {
+        current_file_fingerprint(&frame.source_path)
+    })
 }
 
 /// A file's fingerprint as it stands, or `None` when nothing is there.
@@ -8081,11 +8405,11 @@ fn current_file_fingerprint(path: &Path) -> Option<String> {
     path.is_file().then(|| file_fingerprint(path).0)
 }
 
-/// [`selection_hash`], asking `current` for each file's fingerprint.
+/// [`selection_hash`], asking `current` for each frame's file's fingerprint.
 fn selection_hash_with(
     selection: &CalibrationSelection,
     flat_star_masking: bool,
-    current: &mut dyn FnMut(&Path) -> Option<String>,
+    current: &mut dyn FnMut(&CalibrationFrame) -> Option<String>,
 ) -> String {
     let mut values = Vec::new();
     for (kind, frames) in [
@@ -8096,7 +8420,7 @@ fn selection_hash_with(
     ] {
         for frame in frames {
             let current_fingerprint =
-                current(&frame.source_path).unwrap_or_else(|| frame.source_fingerprint.clone());
+                current(frame).unwrap_or_else(|| frame.source_fingerprint.clone());
             values.push(format!(
                 "{}:{}:{}",
                 kind.as_str(),
@@ -14826,11 +15150,110 @@ pub(crate) mod tests {
         assert_eq!(flats, 2);
         assert_eq!(lights.len(), 2);
         assert_eq!(
-            matcher.checked.len(),
+            matcher.files.checked.len(),
             flats,
             "each flat checked once, not once a light"
         );
-        assert_eq!(matcher.fingerprints.len(), flats, "and fingerprinted once");
+        assert_eq!(
+            matcher.files.fingerprints.len(),
+            flats,
+            "and fingerprinted once"
+        );
+        assert_eq!(
+            matcher.files.header_reads, 0,
+            "the files import recorded, unchanged, need no header read"
+        );
+        assert!(matcher.take_file_checks().is_empty());
+    }
+
+    /// Overwrite `path` with `bytes` and give it `modified` as its time.
+    fn rewrite_at(path: &Path, bytes: &[u8], modified: std::time::SystemTime) {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    }
+
+    #[test]
+    fn a_calibration_file_is_trusted_without_a_header_read_until_it_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut conn, _cache, lights) =
+            vignetted_flat_only_library(&temp, "ZWO ASI2600MM Pro", 30, 300.0);
+        let light = crate::commands::import::headers::read_frame_meta(&lights[0]);
+        let selected = select_for_light(&conn, &light).unwrap();
+        assert_eq!(selected.flat.len(), 2);
+        let frame = selected.flat[0].clone();
+        let path = frame.source_path.clone();
+        let fits = std::fs::read(&path).unwrap();
+        let imported_at = std::fs::metadata(&path).unwrap().modified().unwrap();
+        // Bytes of the same length that are no FITS file at all: a header
+        // read would refuse them, so a frame kept proves none was made.
+        let garbage = vec![b'x'; fits.len()];
+        let flats = |matcher: &mut LightMatcher| matcher.select_verified(&light, None).flat.len();
+
+        // As import recorded it: trusted, not read.
+        rewrite_at(&path, &garbage, imported_at);
+        assert!(!calibration_file_matches(&frame, &path));
+        let mut matcher = LightMatcher::load(&conn, false).unwrap();
+        assert_eq!(flats(&mut matcher), 2);
+        assert_eq!(matcher.files.header_reads, 0);
+
+        // Written again: read, and refused.
+        let later = imported_at + std::time::Duration::from_secs(5);
+        rewrite_at(&path, &garbage, later);
+        let mut matcher = LightMatcher::load(&conn, false).unwrap();
+        assert_eq!(flats(&mut matcher), 1);
+        assert_eq!(matcher.files.header_reads, 1);
+        assert!(matcher.take_file_checks().is_empty());
+
+        // Written again as the frame: read, kept, and fingerprinted as the
+        // uncached path does.
+        rewrite_at(&path, &fits, later);
+        let mut matcher = LightMatcher::load(&conn, false).unwrap();
+        let (fingerprint, _) = matcher
+            .light_calibration(&lights[0], None, false, false)
+            .unwrap();
+        assert_eq!(
+            fingerprint,
+            selection_fingerprint_with_masking(&conn, &lights[0], None, false).unwrap()
+        );
+        assert_eq!(matcher.files.header_reads, 1);
+        let checks = matcher.take_file_checks();
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].path, path);
+        assert_eq!(checks[0].stamp, FileStamp::of(&path).unwrap());
+        record_file_checks(&conn, &checks).unwrap();
+
+        // So the next request trusts it as it stands now.
+        rewrite_at(&path, &garbage, later);
+        let mut matcher = LightMatcher::load(&conn, false).unwrap();
+        assert_eq!(flats(&mut matcher), 2);
+        assert_eq!(matcher.files.header_reads, 0);
+
+        // Unless the row was written again since: it may describe another file.
+        conn.execute(
+            "UPDATE psf_guard_calibration_frame SET source_fingerprint = 'another'
+             WHERE frame_uuid = ?1",
+            [&frame.frame_uuid],
+        )
+        .unwrap();
+        let mut matcher = LightMatcher::load(&conn, false).unwrap();
+        assert_eq!(flats(&mut matcher), 1);
+        assert_eq!(matcher.files.header_reads, 1);
+
+        // A frame forgotten takes its checks along.
+        forget_frames(&mut conn, std::slice::from_ref(&frame.frame_uuid)).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM psf_guard_calibration_file_check",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0);
     }
 
     #[test]

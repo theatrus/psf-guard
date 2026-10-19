@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 /// headers. All fields except `path` are optional: frames with missing
 /// headers still import, they just group more coarsely.
 ///
-/// Calibration health keeps it between passes, so a light's header is read
-/// again only when its file changes.
+/// The catalog keeps each light's (see [`crate::light_headers`]), so a
+/// light's header is read again only when its file changes.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct FrameMeta {
@@ -115,6 +115,12 @@ impl FrameMeta {
             .unwrap_or_default()
     }
 }
+
+/// What [`read_frame_meta`] gives for a file. Bump it whenever that changes:
+/// a field added to [`FrameMeta`], a header read another way, a frame
+/// classified differently. Headers the catalog keeps from another version
+/// are read again ([`crate::light_headers`]).
+pub const FRAME_META_VERSION: i64 = 1;
 
 /// Read one frame's headers. Unreadable files yield a `FrameMeta` with only
 /// `path` set (the caller decides whether to skip or report them).
