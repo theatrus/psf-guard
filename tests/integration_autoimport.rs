@@ -143,6 +143,28 @@ async fn wait_for_import(state: &Arc<AppState>, slug: &str) -> Value {
     panic!("import job did not finish in time");
 }
 
+/// Tick at `now` until a run other than `before` has finished, and return
+/// its progress. A tick that lands while the last run still holds the
+/// import lock starts nothing, and a slow runner may not have started the
+/// run when the status is first read, so one tick and a short sleep can
+/// return the previous run.
+async fn tick_until_new_run(
+    state: &Arc<AppState>,
+    slug: &str,
+    now: Instant,
+    before: &Value,
+) -> Value {
+    for _ in 0..100 {
+        autoimport::tick(state, now).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let progress = wait_for_import(state, slug).await;
+        if progress != *before {
+            return progress;
+        }
+    }
+    panic!("no new automatic import run started");
+}
+
 fn state_with_management(dir: &std::path::Path) -> Arc<AppState> {
     let cache_dir = dir.join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
@@ -265,9 +287,13 @@ async fn on_open_then_schedule_imports_only_what_is_new() {
 
     // The schedule comes due; the two known frames are dropped before any
     // header read and only the new one is imported.
-    autoimport::tick(&state, opened + Duration::from_secs(31 * 60)).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let progress = wait_for_import(&state, &slug).await;
+    let progress = tick_until_new_run(
+        &state,
+        &slug,
+        opened + Duration::from_secs(31 * 60),
+        &progress,
+    )
+    .await;
     assert_eq!(progress["outcome"]["imported"], 1, "{progress}");
     assert_eq!(progress["outcome"]["skipped_existing"], 2, "{progress}");
     assert_eq!(progress["prefiltered"], 2, "{progress}");
@@ -277,9 +303,13 @@ async fn on_open_then_schedule_imports_only_what_is_new() {
     );
 
     // Nothing new: a run reads no headers and touches no table.
-    autoimport::tick(&state, opened + Duration::from_secs(62 * 60)).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    let progress = wait_for_import(&state, &slug).await;
+    let progress = tick_until_new_run(
+        &state,
+        &slug,
+        opened + Duration::from_secs(62 * 60),
+        &progress,
+    )
+    .await;
     assert_eq!(progress["outcome"]["imported"], 0, "{progress}");
     assert_eq!(progress["outcome"]["scanned"], 3, "{progress}");
     assert_eq!(progress["prefiltered"], 3, "{progress}");
