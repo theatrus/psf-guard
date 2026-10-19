@@ -1646,7 +1646,7 @@ installed; click Build current set to render the preview again`, or `…;
 apply the processing again` for processing. **Build current set** renders the
 card preview again from the stack's FITS without stacking again, unless the
 channel's frames or settings changed too, in which case it builds the stack
-again. A stack built before this release keeps its uncalibrated card
+again. A stack built before 0.12 keeps its uncalibrated card
 preview until **Build current set** refreshes it or its view processing is applied.
 
 The request's `processing.color_calibration` takes `enabled`,
@@ -1779,9 +1779,9 @@ Artifacts live below the database cache directory:
 The content-addressed job ID includes the database/project, exact ordered
 inputs and grouping, grades, quality scores and regrade reasons, source path
 fingerprints, matched calibration fingerprints, an explicit PSF Guard
-cache-policy version, Seiza stacking revision, processing parameters, and
-preview format. Seiza solver, FITS, satellite, stretch, and background versions
-come from the resolved Cargo lockfile at build time, so dependency updates also
+cache-policy version, Seiza stacking output version, processing parameters,
+and preview format. Seiza solver, FITS, satellite and background versions come
+from the resolved Cargo lockfile at build time, so dependency updates also
 refresh their cache provenance. Restoration and prepared
 color-input caches use narrower keys so display-only edits can reuse earlier
 linear work. Repeating an unchanged request loads the persistent result. A

@@ -21,7 +21,7 @@ Scheduler plans and reviewed grades.
 · **[Repository guides](docs/README.md)**
 · **[Report an issue](https://github.com/theatrus/psf-guard/issues)**
 
-> This README describes the source prepared for 0.12. Read the
+> This README describes PSF Guard 0.12. Read the
 > [0.12 changes and upgrade notes](docs/releases/v0.12.0.md), including the
 > Target Scheduler deprecation, and check the
 > [published releases](https://github.com/theatrus/psf-guard/releases) for the

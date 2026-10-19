@@ -2069,7 +2069,7 @@ Frame grades live in a table of their own,
 `psf_guard_calibration_frame_quality`, added without raising the schema
 version, because a build refuses to import into, sync into or record
 masters in a catalog whose version is newer than its own. PSF Guard 0.11
-therefore keeps working on a catalog this version has graded. It ignores
+therefore keeps working on a catalog 0.12 has graded. It ignores
 the table: it leaves out the darks the grade marks for stray light, which
 it reads from the frame's own stray-light mark, and uses frames graded poor
 for other reasons, or kept out by hand, as before.
