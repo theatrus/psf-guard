@@ -14627,6 +14627,9 @@ pub(crate) mod tests {
 
     #[test]
     fn builds_and_reuses_a_complete_master_set() {
+        // The fingerprints compared below take the server's calibration
+        // rules, which other tests change while they hold this lock.
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let mut calibration_meta = Vec::new();
         for (kind, stem, value) in [

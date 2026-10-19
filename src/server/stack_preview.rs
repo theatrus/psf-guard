@@ -2260,17 +2260,20 @@ fn render_stale_previews(
 /// render and still is, so the next Build reuses it. Color is not composed
 /// again: it never waited for the render, and its inputs did not change.
 fn finish_preview_render(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>, job_id: &str) {
-    state.stack_previews.update(job_id, |job| {
+    let settle = |job: &mut StackPreviewJob| {
         for group in &mut job.groups {
             if group.state == StackGroupState::Ready && group_in_flight(group) {
                 group.phase = "ready".into();
             }
         }
         job.state = StackJobState::Completed;
-    });
-    let Some(job) = state.stack_previews.get(job_id) else {
+    };
+    let Some(mut job) = state.stack_previews.get(job_id) else {
         return;
     };
+    settle(&mut job);
+    // On disk before it reads as finished: a client that sees it finished
+    // reads the latest index next, and must find the new preview there.
     if let Err(error) = persist_manifest(&ctx.stack_root, &job) {
         tracing::warn!("Failed to persist stack preview manifest: {error}");
     }
@@ -2279,6 +2282,7 @@ fn finish_preview_render(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>, job_
     if let Err(error) = persist_latest_and_reapply(state, ctx, &job, !job.automatic) {
         tracing::warn!("Failed to persist latest stack preview index: {error}");
     }
+    state.stack_previews.update(job_id, settle);
 }
 
 /// Point the cards at a finished build, and carry the processing each card
