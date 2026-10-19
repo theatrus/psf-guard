@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
 
+pub mod catalog;
 mod work;
 pub use work::{Ending, LineWork, Needs, Submission, Task, Worker};
 

@@ -35,10 +35,11 @@ use crate::calibration::flat_groups::{
     job::{PassOutcome, Progress, Rigs, Scope, Workers},
 };
 use crate::calibration::rules::RuleBook;
-use crate::concurrency::{ComputePool, Priority};
+use crate::concurrency::{ComputePool, Priority, Stop};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
+use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step as CatalogStep};
 use crate::server::state::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -47,8 +48,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// How long requests must pause before a pass starts, so a burst of
@@ -128,7 +128,7 @@ pub struct FlatMeasureStatus {
 
 /// Requests waiting for a pass.
 #[derive(Debug, Default)]
-struct Queue {
+pub(crate) struct Queue {
     pending: Scope,
     /// When the last request came.
     last: Option<Instant>,
@@ -140,8 +140,6 @@ struct Queue {
     attempts: BTreeMap<String, u32>,
     /// What Stop paused.
     stopped: Scope,
-    /// Whether a thread serves this catalog.
-    worker: bool,
 }
 
 /// What the waiting requests allow now.
@@ -281,34 +279,50 @@ impl Queue {
     }
 }
 
-#[derive(Default)]
-struct Job {
-    queue: Mutex<Queue>,
-    status: RwLock<FlatMeasureStatus>,
-    /// Set by [`cancel`]: the running pass stops at its next step.
-    cancelled: AtomicBool,
-}
+/// Flat measuring as a job with one runner per catalog.
+pub(crate) struct FlatMeasure;
 
-impl Job {
-    fn update(&self, edit: impl FnOnce(&mut FlatMeasureStatus)) {
-        edit(&mut self.status.write().unwrap_or_else(|p| p.into_inner()));
+type Job = CatalogJob<FlatMeasure>;
+
+impl CatalogWork for FlatMeasure {
+    type Queue = Queue;
+    type Status = FlatMeasureStatus;
+    type Item = Scope;
+    const RUNNER: &'static str = "flat-measure";
+
+    /// Grading first: it decides which flats are in use.
+    fn next(state: &AppState, path: &str, queue: &mut Queue, now: Instant) -> CatalogStep<Scope> {
+        let _ = state;
+        let grading = crate::server::calibration_quality::busy(path);
+        match next_step(queue, now, grading) {
+            Step::Exit => CatalogStep::Exit,
+            Step::Nap(wait) => CatalogStep::Nap(wait),
+            Step::Run(scope) => {
+                queue.running = Some(scope.clone());
+                CatalogStep::Run(scope)
+            }
+        }
     }
 
-    fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {
-        self.queue.lock().unwrap_or_else(|p| p.into_inner())
+    fn run(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope, stop: &Stop) {
+        run_logged(state, path, job, scope, stop);
+    }
+
+    fn runner_lost(queue: &mut Queue, status: &mut FlatMeasureStatus) {
+        queue.running = None;
+        status.active = false;
+        status.stage = None;
+        status.priority = None;
+        status.waiting_for = None;
+        status.last_error = Some("flat measuring stopped unexpectedly".into());
     }
 }
 
 /// One job per catalog file.
-static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
+static JOBS: CatalogJobs<FlatMeasure> = CatalogJobs::new();
 
 fn job(path: &str) -> Arc<Job> {
-    Arc::clone(
-        JOBS.lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .entry(path.to_string())
-            .or_default(),
-    )
+    JOBS.job(path)
 }
 
 fn rig_list(scope: &Scope) -> Vec<String> {
@@ -333,8 +347,8 @@ fn unix_at(at: Instant) -> i64 {
 /// Where flat measuring stands for the catalog at `path`.
 pub fn status(path: &str) -> FlatMeasureStatus {
     let job = job(path);
+    let mut status = job.status();
     let queue = job.queue();
-    let mut status = job.status.read().unwrap_or_else(|p| p.into_inner()).clone();
     // What the next pass takes: requests since this one began, and retries
     // due by now. A retry not yet due waits for its time, not this pass.
     let now = Instant::now();
@@ -391,27 +405,11 @@ fn enqueue(state: &Arc<AppState>, path: &str, scope: Scope, trigger: Trigger) {
     if scope.is_empty() || state.shutdown.is_stopping() {
         return;
     }
-    let job = job(path);
-    let spawn = {
-        let mut queue = job.queue();
-        queue.add(scope, Instant::now(), trigger);
-        !std::mem::replace(&mut queue.worker, true)
-    };
-    if !spawn {
-        return;
-    }
-    let state_for_runner = Arc::clone(state);
-    let path_for_runner = path.to_string();
-    let runner_job = Arc::clone(&job);
-    // The job's one runner per catalog: it naps while requests settle and
-    // holds the server's stop only while a pass writes.
-    let started = std::thread::Builder::new()
-        .name("flat-measure".into())
-        .spawn(move || serve(&state_for_runner, &path_for_runner, &runner_job));
-    if let Err(error) = started {
-        tracing::warn!("Could not start flat measuring: {error}");
-        job.queue().worker = false;
-    }
+    // The catalog's one runner naps while requests settle and holds the
+    // server's stop only while a pass writes.
+    JOBS.request(state, path, |queue| {
+        queue.add(scope, Instant::now(), trigger)
+    });
 }
 
 /// [`queue`] for every catalog the server holds.
@@ -426,11 +424,8 @@ pub fn queue_all(state: &Arc<AppState>, scope: Scope) {
 /// [`resume`], or the next start.
 pub fn cancel(path: &str) -> FlatMeasureStatus {
     let job = job(path);
-    {
-        let mut queue = job.queue();
-        queue.stop();
-        job.cancelled.store(true, Ordering::SeqCst);
-    }
+    job.queue().stop();
+    job.stop_running();
     status(path)
 }
 
@@ -439,70 +434,6 @@ pub fn resume(state: &Arc<AppState>, path: &str) -> FlatMeasureStatus {
     let stopped = std::mem::take(&mut job(path).queue().stopped);
     queue(state, path, stopped);
     status(path)
-}
-
-/// Resets the runner's claim if it ends without letting go, as on a panic,
-/// so the next request starts another.
-struct RunnerClaim<'a> {
-    job: &'a Job,
-    released: bool,
-}
-
-impl Drop for RunnerClaim<'_> {
-    fn drop(&mut self) {
-        if self.released {
-            return;
-        }
-        let mut queue = self.job.queue();
-        queue.worker = false;
-        queue.running = None;
-        drop(queue);
-        self.job.update(|status| {
-            status.active = false;
-            status.stage = None;
-            status.priority = None;
-            status.waiting_for = None;
-            status.last_error = Some("flat measuring stopped unexpectedly".into());
-        });
-    }
-}
-
-fn serve(state: &Arc<AppState>, path: &str, job: &Job) {
-    let mut claim = RunnerClaim {
-        job,
-        released: false,
-    };
-    loop {
-        if state.shutdown.is_stopping() {
-            job.queue().worker = false;
-            claim.released = true;
-            return;
-        }
-        // Grading first: it decides which flats are in use.
-        let grading = crate::server::calibration_quality::busy(path);
-        let scope = {
-            let mut queue = job.queue();
-            match next_step(&mut queue, Instant::now(), grading) {
-                Step::Exit => {
-                    queue.worker = false;
-                    claim.released = true;
-                    return;
-                }
-                Step::Nap(wait) => {
-                    drop(queue);
-                    std::thread::sleep(wait);
-                    continue;
-                }
-                Step::Run(scope) => {
-                    queue.running = Some(scope.clone());
-                    job.cancelled.store(false, Ordering::SeqCst);
-                    scope
-                }
-            }
-        };
-        let _work = state.shutdown.hold(format!("flat measuring ({path})"));
-        run_logged(state, path, job, scope);
-    }
 }
 
 /// What the runner does next.
@@ -531,7 +462,7 @@ fn next_step(queue: &mut Queue, now: Instant, grading: bool) -> Step {
     }
 }
 
-fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope) {
+fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope, stop: &Stop) {
     job.update(|status| {
         *status = FlatMeasureStatus {
             started_at: Some(chrono::Utc::now().timestamp()),
@@ -539,8 +470,8 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope) {
             ..Default::default()
         };
     });
-    let result = run(state, path, job, &scope);
-    let changed = settle_outcome(job, &scope, &result, Instant::now());
+    let result = run(state, path, job, &scope, stop);
+    let changed = settle_outcome(job, &scope, &result, Instant::now(), stop.requested());
     match &result {
         Ok(outcome) => {
             if outcome.frames_read > 0 || outcome.compared > 0 {
@@ -589,10 +520,10 @@ fn settle_outcome(
     scope: &Scope,
     result: &anyhow::Result<PassOutcome>,
     now: Instant,
+    cancelled: bool,
 ) -> bool {
     let mut queue = job.queue();
     queue.running = None;
-    let cancelled = job.cancelled.load(Ordering::SeqCst);
     let keys = || -> Vec<String> {
         let rigs = rig_list(scope);
         if rigs.is_empty() {
@@ -637,7 +568,13 @@ fn settle_outcome(
 }
 
 /// One pass over the rigs `scope` names, on the server's catalog context.
-fn run(state: &AppState, path: &str, job: &Job, scope: &Scope) -> anyhow::Result<PassOutcome> {
+fn run(
+    state: &AppState,
+    path: &str,
+    job: &Job,
+    scope: &Scope,
+    stop: &Stop,
+) -> anyhow::Result<PassOutcome> {
     let Some(ctx) = state
         .all_databases()
         .into_iter()
@@ -656,7 +593,7 @@ fn run(state: &AppState, path: &str, job: &Job, scope: &Scope) -> anyhow::Result
             .as_ref()
             .and_then(|tree| tree.find_file_first(name).cloned())
     };
-    run_with(state, path, job, scope, &dir, &find_light)
+    run_with(state, path, job, scope, stop, &dir, &find_light)
 }
 
 /// [`run`] with the response folder and the light lookup given: the
@@ -667,6 +604,7 @@ fn run_with(
     path: &str,
     job: &Job,
     scope: &Scope,
+    stop: &Stop,
     dir: &Path,
     find_light: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> anyhow::Result<PassOutcome> {
@@ -680,7 +618,7 @@ fn run_with(
     }
     let names: HashMap<String, String> = flat_rigs(&conn)?.into_iter().collect();
     let workers = PriorityWorkers::new(state, path, "", largest_flat_pixels(&conn), job);
-    let keep_going = || !state.shutdown.is_stopping() && !job.cancelled.load(Ordering::SeqCst);
+    let keep_going = || !state.shutdown.is_stopping() && !stop.requested();
     let yield_now = || workers.yield_now();
     let goes_first = |rig: &str| watched(path, rig);
     let mut progress = |at: &Progress<'_>| {

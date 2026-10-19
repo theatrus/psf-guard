@@ -112,7 +112,11 @@ fn library() -> Library {
 
 impl Library {
     fn pass(&self, state: &AppState, job: &Job, scope: Scope) -> PassOutcome {
-        run_with(state, &self.path, job, &scope, &self.dir, &|_| None).unwrap()
+        self.pass_until(state, job, scope, &Stop::new())
+    }
+
+    fn pass_until(&self, state: &AppState, job: &Job, scope: Scope, stop: &Stop) -> PassOutcome {
+        run_with(state, &self.path, job, &scope, stop, &self.dir, &|_| None).unwrap()
     }
 
     fn measured_rigs(&self) -> Vec<String> {
@@ -265,7 +269,7 @@ fn a_catalog_up_to_date_reads_no_pixels() {
         ),
         (0, 0, 0, 0)
     );
-    assert!(!job.status.read().unwrap().active, "never shown as work");
+    assert!(!job.status().active, "never shown as work");
 }
 
 #[test]
@@ -507,12 +511,13 @@ fn a_stopped_pass_resumes_when_its_flats_change() {
     // Stop arrives as the pass starts.
     job.queue().running = Some(scope.clone());
     job.queue().stop();
-    job.cancelled.store(true, Ordering::SeqCst);
-    let result = Ok(library.pass(&state, &job, scope.clone()));
+    let stop = Stop::new();
+    stop.request();
+    let result = Ok(library.pass_until(&state, &job, scope.clone(), &stop));
     let outcome = result.as_ref().unwrap();
     assert!(outcome.stopped);
     assert_eq!(outcome.frames_read, 0, "nothing read after Stop");
-    settle_outcome(&job, &scope, &result, Instant::now());
+    settle_outcome(&job, &scope, &result, Instant::now(), true);
     {
         let mut queue = job.queue();
         assert_eq!(queue.stopped, Scope::everything(), "paused, not forgotten");
@@ -547,32 +552,24 @@ fn a_stopped_pass_resumes_when_its_flats_change() {
         other => panic!("{other:?}"),
     };
     assert_eq!(resumed, Scope::everything());
-    job.cancelled.store(false, Ordering::SeqCst);
     let outcome = library.pass(&state, &job, resumed);
     assert_eq!((outcome.measured, outcome.stopped), (4, false));
 }
 
 #[test]
-fn a_runner_that_panics_lets_go_of_the_catalog() {
-    let job = Job::default();
-    {
-        let mut queue = job.queue();
-        queue.worker = true;
-        queue.running = Some(Scope::everything());
-    }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _claim = RunnerClaim {
-            job: &job,
-            released: false,
-        };
-        panic!("a pass blew up");
-    }));
-    assert!(result.is_err());
-    let queue = job.queue();
-    assert!(!queue.worker, "the next request starts a runner");
+fn a_runner_that_is_lost_lets_go_of_the_catalog() {
+    let mut queue = Queue {
+        running: Some(Scope::everything()),
+        ..Queue::default()
+    };
+    let mut status = FlatMeasureStatus {
+        active: true,
+        ..FlatMeasureStatus::default()
+    };
+    FlatMeasure::runner_lost(&mut queue, &mut status);
     assert!(queue.running.is_none());
-    drop(queue);
-    assert!(job.status.read().unwrap().last_error.is_some());
+    assert!(!status.active);
+    assert!(status.last_error.is_some());
 }
 
 /// A forget through its route queues the forgotten frame's rig alone.
@@ -644,10 +641,7 @@ fn a_viewed_pass_leaves_a_persons_stack_its_share() {
         Some((stack_share, false)),
         "the stack's whole share, and no guard"
     );
-    assert_eq!(
-        job.status.read().unwrap().priority.as_deref(),
-        Some("viewed")
-    );
+    assert_eq!(job.status().priority.as_deref(), Some("viewed"));
     // Between steps the pass holds nothing.
     assert_eq!(state.leased_workers(Priority::Viewed), 0);
 
@@ -659,10 +653,7 @@ fn a_viewed_pass_leaves_a_persons_stack_its_share() {
     );
     assert!(!watched(path, "rig-a"));
     workers.run(&mut || {});
-    assert_eq!(
-        job.status.read().unwrap().priority.as_deref(),
-        Some("background")
-    );
+    assert_eq!(job.status().priority.as_deref(), Some("background"));
 }
 
 /// Both tiers wait for interactive work a person started.
@@ -687,18 +678,15 @@ fn a_pass_waits_for_the_persons_work_at_either_tier() {
             })
         };
         let deadline = Instant::now() + Duration::from_secs(10);
-        while job.status.read().unwrap().waiting_for.is_none() {
+        while job.status().waiting_for.is_none() {
             assert!(Instant::now() < deadline, "the pass never waited");
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(!waiter.is_finished(), "the person's work comes first");
-        assert_eq!(
-            job.status.read().unwrap().waiting_for.as_deref(),
-            Some("a preview")
-        );
+        assert_eq!(job.status().waiting_for.as_deref(), Some("a preview"));
         drop(preview);
         waiter.join().unwrap();
-        assert_eq!(job.status.read().unwrap().waiting_for, None);
+        assert_eq!(job.status().waiting_for, None);
     }
 }
 
@@ -789,7 +777,6 @@ fn stop_pauses_waiting_work_and_resume_takes_it_up() {
     assert_eq!(stopped.state, "stopped");
     assert_eq!(stopped.stopped, ["a"]);
     assert!(stopped.rigs.is_empty());
-    assert!(job.cancelled.load(Ordering::SeqCst));
     let resumed = resume(&state, path);
     assert!(resumed.stopped.is_empty());
     assert_eq!(resumed.rigs, ["a"]);
@@ -844,14 +831,13 @@ fn a_change_after_stop_leaves_nothing_stopped() {
     let scope = Scope::flats(Rigs::of(["a"]));
     job.queue().running = Some(scope.clone());
     job.queue().stop();
-    job.cancelled.store(true, Ordering::SeqCst);
     job.queue()
         .add(scope.clone(), Instant::now(), Trigger::Change);
     let result = Ok(PassOutcome {
         stopped: true,
         ..Default::default()
     });
-    settle_outcome(&job, &scope, &result, Instant::now());
+    settle_outcome(&job, &scope, &result, Instant::now(), true);
     let queue = job.queue();
     assert!(!queue.pending.is_empty(), "the change queued it");
     assert!(
@@ -909,6 +895,7 @@ fn a_pass_that_fails_is_tried_again() {
         &scope,
         &Err(anyhow::anyhow!("database is locked")),
         now,
+        false,
     );
     {
         let queue = job.queue();
@@ -923,12 +910,12 @@ fn a_pass_that_fails_is_tried_again() {
         &Scope::everything(),
         &Err(anyhow::anyhow!("busy")),
         now,
+        false,
     );
     assert!(job.queue().due.contains_key(EVERY_RIG));
     // Stopped by Stop: paused, not retried.
     let job = Job::default();
-    job.cancelled.store(true, Ordering::SeqCst);
-    settle_outcome(&job, &scope, &Err(anyhow::anyhow!("busy")), now);
+    settle_outcome(&job, &scope, &Err(anyhow::anyhow!("busy")), now, true);
     assert!(job.queue().due.is_empty());
     assert_eq!(job.queue().stopped, scope);
 }
@@ -1175,6 +1162,7 @@ fn a_session_without_dust_is_not_read_every_pass() {
             &catalog,
             &Job::default(),
             &Scope::everything(),
+            &Stop::new(),
             &dir,
             &|_| None,
         )
