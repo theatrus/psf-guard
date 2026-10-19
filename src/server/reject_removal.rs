@@ -14,13 +14,7 @@
 //! between an image folder and its own trash, so the database-management
 //! gate, which guards client-named paths, does not apply.
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, LazyLock, Mutex, RwLock,
-    },
-};
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 use axum::{
     extract::{Query, State},
@@ -34,12 +28,13 @@ use crate::commands::reject_removal::{
     RemovedFrame, RestoreReport, RestoreSelection, Scope, Stage, StaleRemovalPlan, Stopped,
     TrashReport, Work,
 };
-use crate::concurrency::Priority;
+use crate::concurrency::{Priority, Stop};
 use crate::server::{
     api::ApiResponse,
     database_context::{open_scheduler_connection, DatabaseContext},
     extract::DbContext,
     handlers::AppError,
+    job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step},
     state::AppState,
 };
 
@@ -167,45 +162,74 @@ pub struct RemovalJobStatus {
     pub priority: Option<String>,
 }
 
+/// Reject removal as a job with one runner per catalog.
+pub(crate) struct RejectRemoval;
+
+type Job = CatalogJob<RejectRemoval>;
+
+/// One run at a time per catalog.
 #[derive(Default)]
-struct Job {
-    status: RwLock<RemovalJobStatus>,
-    stop: AtomicBool,
-    /// Whether the catalog's one runner is at work.
-    busy: Mutex<bool>,
+pub(crate) struct Queue {
+    /// The run asked for, before the runner takes it.
+    asked: Option<Asked>,
+    /// A run is asked for or under way: another is refused until it ends.
+    busy: bool,
 }
 
-impl Job {
-    fn status(&self) -> RemovalJobStatus {
-        self.status
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+/// A run a person asked for.
+pub(crate) struct Asked {
+    action: Action,
+    ctx: Arc<DatabaseContext>,
+    protected: BTreeSet<String>,
+    /// The refreshes a change starts run on the server's runtime.
+    runtime: tokio::runtime::Handle,
+}
+
+impl CatalogWork for RejectRemoval {
+    type Queue = Queue;
+    type Status = RemovalJobStatus;
+    type Item = Asked;
+    const RUNNER: &'static str = "reject-removal";
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Asked> {
+        queue.asked.take().map_or(Step::Exit, Step::Run)
     }
 
-    fn update(&self, change: impl FnOnce(&mut RemovalJobStatus)) {
-        change(
-            &mut self
-                .status
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    fn run(state: &Arc<AppState>, _: &str, job: &Job, asked: Asked, stop: &Stop) {
+        let _runtime = asked.runtime.enter();
+        run(
+            state,
+            &asked.ctx,
+            job,
+            stop,
+            &asked.action,
+            &asked.protected,
         );
     }
 
-    fn progress(&self, stage: Stage, done: usize, total: usize) {
-        self.update(|status| {
-            status.stage = Some(stage.name().into());
-            status.done = done;
-            status.total = total;
-        });
+    fn runner_lost(queue: &mut Queue, status: &mut RemovalJobStatus) {
+        queue.asked = None;
+        queue.busy = false;
+        if status.state == "running" {
+            status.state = "failed".into();
+            status.stage = None;
+            status.error = Some("the run ended unexpectedly".into());
+        }
     }
 }
 
-static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
+static JOBS: CatalogJobs<RejectRemoval> = CatalogJobs::new();
 
 fn job(path: &str) -> Arc<Job> {
-    let mut jobs = JOBS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    Arc::clone(jobs.entry(path.to_string()).or_default())
+    JOBS.job(path)
+}
+
+fn progress(job: &Job, stage: Stage, done: usize, total: usize) {
+    job.update(|status| {
+        status.stage = Some(stage.name().into());
+        status.done = done;
+        status.total = total;
+    });
 }
 
 /// Where the reject removal job stands for the catalog at `path`.
@@ -220,12 +244,18 @@ pub fn status(path: &str) -> RemovalJobStatus {
 /// Stop the run between frames: the frames done stay done.
 pub fn stop(path: &str) -> RemovalJobStatus {
     let job = job(path);
-    if *job
-        .busy
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-    {
-        job.stop.store(true, Ordering::SeqCst);
+    if !job.stop_running() {
+        // Asked for, and not yet taken by the runner: it never starts.
+        let mut queue = job.queue();
+        if queue.asked.take().is_some() {
+            queue.busy = false;
+            job.update(|status| {
+                status.state = "stopped".into();
+                status.stage = None;
+                status.priority = None;
+                status.finished_at = Some(now());
+            });
+        }
     }
     status(path)
 }
@@ -240,32 +270,6 @@ async fn protected(state: &AppState) -> Result<BTreeSet<String>, AppError> {
     }
 }
 
-/// Frees the runner if a run ends by a panic, or never starts.
-struct RunnerClaim(Option<Arc<Job>>);
-
-impl RunnerClaim {
-    fn disarm(mut self) {
-        self.0 = None;
-    }
-}
-
-impl Drop for RunnerClaim {
-    fn drop(&mut self) {
-        if let Some(job) = self.0.take() {
-            *job.busy
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = false;
-            job.update(|status| {
-                if status.state == "running" {
-                    status.state = "failed".into();
-                    status.stage = None;
-                    status.error = Some("the run ended unexpectedly".into());
-                }
-            });
-        }
-    }
-}
-
 /// Start a run on the catalog's runner, or refuse while one runs.
 fn start(
     state: &Arc<AppState>,
@@ -274,21 +278,14 @@ fn start(
     protected: BTreeSet<String>,
 ) -> Result<RemovalJobStatus, AppError> {
     let job = job(&ctx.database_path);
-    {
-        let mut busy = job
-            .busy
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if *busy {
+    JOBS.request(state, &ctx.database_path, |queue| {
+        if queue.busy {
             return Err(AppError::Conflict(
                 "Reject removal is already running on this catalog. Wait for it, or stop it."
                     .into(),
             ));
         }
-        // Cleared under the runner's lock, so a Stop that comes as the run
-        // starts is never lost.
-        job.stop.store(false, Ordering::SeqCst);
-        *busy = true;
+        queue.busy = true;
         job.update(|status| {
             status.run += 1;
             status.state = "running".into();
@@ -302,22 +299,14 @@ fn start(
             status.error = None;
             status.priority = Some(Priority::Interactive.label().into());
         });
-    }
-    let claim = RunnerClaim(Some(Arc::clone(&job)));
-    let (state, ctx, job_for_run) = (Arc::clone(state), Arc::clone(ctx), Arc::clone(&job));
-    // The refreshes a change starts run on the server's runtime.
-    let runtime = tokio::runtime::Handle::current();
-    let spawned = std::thread::Builder::new()
-        .name("reject-removal".into())
-        .spawn(move || {
-            let claim = claim;
-            let _runtime = runtime.enter();
-            run(&state, &ctx, &job_for_run, &action, &protected);
-            claim.disarm();
+        queue.asked = Some(Asked {
+            action,
+            ctx: Arc::clone(ctx),
+            protected,
+            runtime: tokio::runtime::Handle::current(),
         });
-    if let Err(error) = spawned {
-        tracing::warn!("could not start reject removal: {error}");
-    }
+        Ok(())
+    })?;
     Ok(job.status())
 }
 
@@ -344,6 +333,7 @@ fn run(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
     job: &Job,
+    stop: &Stop,
     action: &Action,
     protected: &BTreeSet<String>,
 ) {
@@ -353,8 +343,8 @@ fn run(
         // for. A server stop waits for the frame in hand, then the run ends.
         let _person = state.begin_named_interactive_job(action.waited_for());
         let _hold = state.shutdown.hold(action.waited_for());
-        let progress = |stage: Stage, done: usize, total: usize| job.progress(stage, done, total);
-        let stop = || job.stop.load(Ordering::SeqCst) || state.shutdown.is_stopping();
+        let progress = |stage: Stage, done: usize, total: usize| progress(job, stage, done, total);
+        let stop = || stop.requested() || state.shutdown.is_stopping();
         let work = Work {
             progress: &progress,
             stop: &stop,
@@ -368,11 +358,8 @@ fn run(
     };
     // The runner is free as the status says the run ended: a page that sees
     // the end may start the next run at once.
-    let mut busy = job
-        .busy
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *busy = false;
+    let mut queue = job.queue();
+    queue.busy = false;
     job.update(|status| {
         status.finished_at = Some(now());
         status.stage = None;
@@ -387,7 +374,7 @@ fn run(
         }
     });
     let status = job.status();
-    drop(busy);
+    drop(queue);
     tracing::info!(
         db = %ctx.id,
         "reject removal: {} {} in {:.2}s{}",
