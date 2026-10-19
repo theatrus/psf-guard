@@ -16,7 +16,10 @@ every target/channel group, or **Build channel** on one card to test only that
 group. **Build stacks** asks the server for one build per channel, so the
 header's queue lists each channel on its own, in channel order. A channel
 already built for the same inputs and settings comes back at once instead of
-stacking again; a channel with too few frames shows as skipped. Each channel
+stacking again; a channel with too few frames shows as skipped. Queueing
+matches each light to its calibration frames, reading each calibration
+file's header once for the whole request, with the catalog connection held
+only while the library is read. Each channel
 build still learns the pier-side mapping from its sibling channels' reference
 frames, so an unsolved channel faces the way the solved ones do, as it did
 when they shared one build. **Build channel** sends the same set and the

@@ -3496,6 +3496,8 @@ fn prepare_whole(
     // Each group's own identity starts from the same settings.
     let prefix = hasher.clone();
     let mut identities = Vec::new();
+    // Read from the library once, for every group, when the first needs it.
+    let mut matcher: Option<crate::calibration::LightMatcher> = None;
     for (index, ((target_id, target_name, filter_name, exposure_group_key), mut entries)) in
         grouped.into_iter().enumerate()
     {
@@ -3611,20 +3613,27 @@ fn prepare_whole(
         let mut uncalibrated: Vec<(i32, String)> = Vec::new();
         if !frames.is_empty() && fingerprinted {
             let directory_tree = ctx.get_directory_tree().map_err(AppError::db)?;
-            let conn = ctx.db();
-            let conn = conn.lock().map_err(AppError::db)?;
-            let nights = (group_calibration != crate::calibration::CalibrationMode::Off
-                && crate::calibration::exclude_uncalibrated_enabled())
-            .then(|| crate::calibration::Nights::load(&conn));
+            // The shared connection is held only to read the library: the
+            // header reads below go to storage, which a busy server makes
+            // slow, and every other request waits on that connection.
+            if matcher.is_none() {
+                let conn = ctx.db();
+                let conn = conn.lock().map_err(AppError::db)?;
+                matcher = Some(
+                    crate::calibration::LightMatcher::load(
+                        &conn,
+                        crate::calibration::exclude_uncalibrated_enabled(),
+                    )
+                    .map_err(AppError::db)?,
+                );
+            }
+            let matcher = matcher.as_mut().expect("the library was read above");
+            let gaps = group_calibration != crate::calibration::CalibrationMode::Off
+                && crate::calibration::exclude_uncalibrated_enabled();
             for frame in &frames {
-                let (fingerprint, gap) = crate::calibration::light_calibration(
-                    &conn,
-                    &frame.path,
-                    Some(&directory_tree),
-                    flat_star_masking,
-                    nights.as_ref(),
-                )
-                .map_err(AppError::db)?;
+                let (fingerprint, gap) = matcher
+                    .light_calibration(&frame.path, Some(&directory_tree), flat_star_masking, gaps)
+                    .map_err(AppError::db)?;
                 fingerprints.insert(frame.image_id, fingerprint);
                 if let Some(reason) = gap {
                     uncalibrated.push((frame.image_id, reason));

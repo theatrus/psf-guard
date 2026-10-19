@@ -3177,25 +3177,66 @@ pub(crate) fn selection_fingerprint_with_masking(
     Ok(selection_hash(&selected, flat_star_masking))
 }
 
-/// A light's selection fingerprint, and why it cannot be calibrated
-/// properly when it cannot (see [`calibration_gap`]), from one header read.
-/// Without the catalog's [`Nights`] the gap is not looked for: calibration
-/// is off, or stacks keep such lights.
-pub(crate) fn light_calibration(
-    conn: &Connection,
-    light_path: &Path,
-    directory_tree: Option<&crate::directory_tree::DirectoryTree>,
-    flat_star_masking: bool,
-    nights: Option<&Nights>,
-) -> Result<(String, Option<String>)> {
-    let light = crate::commands::import::headers::read_frame_meta(light_path);
-    let mut selected = select_for_light(conn, &light)?;
-    let gap = match nights {
-        Some(nights) => calibration_gap(conn, &light, &selected, nights)?,
-        None => None,
-    };
-    remap_missing_sources(&mut selected, directory_tree);
-    Ok((selection_hash(&selected, flat_star_masking), gap))
+/// Many lights matched against the library, as a stack build prepares
+/// them: the library read once, and each calibration file's header read
+/// once however many lights it serves. Only loading reads the catalog, so
+/// a caller can let the connection go before the file reads.
+pub(crate) struct LightMatcher {
+    snapshot: LibrarySnapshot,
+    flats: Vec<CalibrationFrame>,
+    /// Loaded only for a stack that leaves out lights the library cannot
+    /// calibrate properly.
+    nights: Option<Nights>,
+    /// Whether the file at a path is the frame of a row, by row and path.
+    checked: HashMap<(i64, PathBuf), bool>,
+}
+
+impl LightMatcher {
+    /// `gaps`: also load what judging a gap needs (see [`calibration_gap`]).
+    pub(crate) fn load(conn: &Connection, gaps: bool) -> Result<Self> {
+        let snapshot = LibrarySnapshot::load(conn)?;
+        let flats = if gaps {
+            snapshot.of_kind(CalibrationKind::Flat).cloned().collect()
+        } else {
+            Vec::new()
+        };
+        Ok(Self {
+            snapshot,
+            flats,
+            nights: gaps.then(|| Nights::load(conn)),
+            checked: HashMap::new(),
+        })
+    }
+
+    /// A light's selection fingerprint, and, when `gaps` asks and the
+    /// matcher loaded them, why it cannot be calibrated properly when it
+    /// cannot, from one header read.
+    pub(crate) fn light_calibration(
+        &mut self,
+        light_path: &Path,
+        directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+        flat_star_masking: bool,
+        gaps: bool,
+    ) -> Result<(String, Option<String>)> {
+        let light = crate::commands::import::headers::read_frame_meta(light_path);
+        let mut selected = self.snapshot.select(&light);
+        let gap = match self.nights.as_ref().filter(|_| gaps) {
+            Some(nights) => {
+                calibration_gaps(&light, &selected, nights, || Ok(self.flats.as_slice()))?
+                    .into_iter()
+                    .find(|gap| gap.mode == CheckMode::Flag)
+                    .map(|gap| gap.reason)
+            }
+            None => None,
+        };
+        let checked = &mut self.checked;
+        remap_missing_sources_with(&mut selected, directory_tree, &mut |frame, path| {
+            *checked
+                .entry((frame.id, path.to_path_buf()))
+                .or_insert_with(|| calibration_file_matches(frame, path))
+        });
+        Ok((selection_hash(&selected, flat_star_masking), gap))
+    }
 }
 
 /// Why a light cannot be calibrated properly, in a few words, or `None`.
@@ -9242,10 +9283,19 @@ pub(crate) fn remap_missing_sources(
     selection: &mut CalibrationSelection,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
 ) -> usize {
-    verify_sources(&mut selection.bias, directory_tree)
-        + verify_sources(&mut selection.dark, directory_tree)
-        + verify_sources(&mut selection.dark_flat, directory_tree)
-        + verify_sources(&mut selection.flat, directory_tree)
+    remap_missing_sources_with(selection, directory_tree, &mut calibration_file_matches)
+}
+
+/// [`remap_missing_sources`], asking `matches` whether a file is a frame.
+fn remap_missing_sources_with(
+    selection: &mut CalibrationSelection,
+    directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    matches: &mut dyn FnMut(&CalibrationFrame, &Path) -> bool,
+) -> usize {
+    verify_sources(&mut selection.bias, directory_tree, matches)
+        + verify_sources(&mut selection.dark, directory_tree, matches)
+        + verify_sources(&mut selection.dark_flat, directory_tree, matches)
+        + verify_sources(&mut selection.flat, directory_tree, matches)
 }
 
 /// Check each selected frame's file, following a file that moved, and hand
@@ -9262,12 +9312,13 @@ pub(crate) fn remap_missing_sources(
 fn verify_sources(
     frames: &mut Vec<CalibrationFrame>,
     directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    matches: &mut dyn FnMut(&CalibrationFrame, &Path) -> bool,
 ) -> usize {
     let mut missing = 0;
     // (index in the caller's order, resolved frame, found at its own path)
     let mut resolved: Vec<(usize, CalibrationFrame, bool)> = Vec::new();
     for (index, mut frame) in std::mem::take(frames).into_iter().enumerate() {
-        if calibration_file_matches(&frame, &frame.source_path) {
+        if matches(&frame, &frame.source_path) {
             frame.source_verified = true;
             resolved.push((index, frame, true));
             continue;
@@ -9284,10 +9335,7 @@ fn verify_sources(
             missing += 1;
             continue;
         };
-        if let Some(path) = paths
-            .iter()
-            .find(|path| calibration_file_matches(&frame, path))
-        {
+        if let Some(path) = paths.iter().find(|path| matches(&frame, path)) {
             frame.source_path = path.clone();
             frame.source_verified = true;
             resolved.push((index, frame, false));
@@ -11902,7 +11950,7 @@ pub(crate) mod tests {
         );
         let real = row(74, "real", filed.join(name));
         let mut frames = vec![stale, real];
-        let missing = verify_sources(&mut frames, Some(&tree));
+        let missing = verify_sources(&mut frames, Some(&tree), &mut calibration_file_matches);
         assert_eq!(missing, 0);
         assert_eq!(frames.len(), 1, "one file, one input");
         assert_eq!(
@@ -11917,7 +11965,10 @@ pub(crate) mod tests {
             "stale",
             temp.path().join("_Incoming").join("BIAS").join(name),
         )];
-        assert_eq!(verify_sources(&mut only_stale, Some(&tree)), 0);
+        assert_eq!(
+            verify_sources(&mut only_stale, Some(&tree), &mut calibration_file_matches),
+            0
+        );
         assert_eq!(only_stale.len(), 1);
         assert_eq!(only_stale[0].source_path, filed.join(name));
     }
@@ -14640,6 +14691,35 @@ pub(crate) mod tests {
             plan.applied.masters_signature
         );
         assert_eq!(reversed.assignments, vec![0, 1]);
+    }
+
+    #[test]
+    fn a_light_matcher_matches_as_each_light_alone_and_reads_each_file_once() {
+        // A stack build prepares every light in one request: re-reading
+        // each shared flat's header per light took it past a proxy timeout.
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, _cache, lights) =
+            vignetted_flat_only_library(&temp, "ZWO ASI2600MM Pro", 30, 300.0);
+        let mut matcher = LightMatcher::load(&conn, false).unwrap();
+        for light in &lights {
+            let (fingerprint, gap) = matcher
+                .light_calibration(light, None, false, false)
+                .unwrap();
+            assert_eq!(
+                fingerprint,
+                selection_fingerprint_with_masking(&conn, light, None, false).unwrap()
+            );
+            assert_eq!(gap, None);
+        }
+        let light = crate::commands::import::headers::read_frame_meta(&lights[0]);
+        let flats = select_for_light(&conn, &light).unwrap().flat.len();
+        assert_eq!(flats, 2);
+        assert_eq!(lights.len(), 2);
+        assert_eq!(
+            matcher.checked.len(),
+            flats,
+            "each flat checked once, not once a light"
+        );
     }
 
     #[test]
