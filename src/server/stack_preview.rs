@@ -8715,6 +8715,87 @@ mod tests {
         prepared(&state, &later.job_id).await;
     }
 
+    /// Keeping the headers preparation read waits for no catalog lock: an
+    /// import holding the catalog delays no person's next build, and what
+    /// was read is kept once the catalog is free.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_busy_catalog_holds_up_no_preparation_and_keeps_what_was_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let images = directory.path().join("images");
+        std::fs::create_dir(&images).unwrap();
+        let catalog = directory.path().join("catalog.sqlite");
+        let conn = rusqlite::Connection::open(&catalog).unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Project','profile','project-one');
+            INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid)
+                VALUES(1,'Target',1,1,10,20,0,0,100,'target-one');
+            CREATE TABLE psf_guard_project_processing(project_key TEXT PRIMARY KEY,split_exposure_groups INTEGER NOT NULL,split_chosen INTEGER);").unwrap();
+        crate::light_headers::ensure_table(&conn).unwrap();
+        for id in 1..=3 {
+            let name = format!("light-{id}.fits");
+            write_calibration_test_fits(&images.join(&name), "LIGHT", 94.7);
+            conn.execute(
+                "INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
+                 VALUES(?1,1,1,1,?2,?1,'Ha')",
+                rusqlite::params![
+                    id,
+                    serde_json::json!({"FileName": name, "ExposureDuration": 300.0}).to_string()
+                ],
+            )
+            .unwrap();
+        }
+        let mut ctx = DatabaseContext::new_for_test(conn);
+        ctx.database_path = catalog.to_string_lossy().into_owned();
+        ctx.use_storage_for_test(directory.path());
+        ctx.image_dir_paths = vec![images];
+        let ctx = Arc::new(ctx);
+        let state = test_state();
+        state
+            .databases
+            .write()
+            .unwrap()
+            .insert(ctx.id.clone(), Arc::clone(&ctx));
+
+        // An import holds the catalog's write lock throughout.
+        let importer = rusqlite::Connection::open(&catalog).unwrap();
+        importer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let began = std::time::Instant::now();
+        for ids in [vec![1, 2, 3], vec![1, 2]] {
+            let job =
+                build_set::queue_preparation(&state, &ctx, 1, build_request(ids), false).unwrap();
+            let done = prepared(&state, &job.job_id).await;
+            assert_eq!(done.state, StackJobState::Replaced);
+            for job_id in &done.replaced_by {
+                state.stack_previews.request_cancel(job_id);
+            }
+        }
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(10),
+            "two builds prepared in {:?}",
+            began.elapsed()
+        );
+        // The runner tried to keep what it read and gave up without waiting.
+        for _ in 0..500 {
+            if build_set::runner_idle(&state, &ctx.id) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(build_set::runner_idle(&state, &ctx.id));
+        importer.execute_batch("COMMIT").unwrap();
+
+        // What was read waited for a writer the lock did not stop.
+        crate::server::light_header_writes::write_pending(&ctx.database_path);
+        let db = ctx.db();
+        let conn = db.lock().unwrap();
+        assert_eq!(
+            crate::light_headers::project_headers(&conn, 1)
+                .unwrap()
+                .len(),
+            3
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_single_build_is_prepared_into_the_build_it_names() {
         let directory = tempfile::tempdir().unwrap();

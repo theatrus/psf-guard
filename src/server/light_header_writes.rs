@@ -6,20 +6,26 @@
 //! shared connection, so it only hands what it read here. Threads that run
 //! already write it, each on a connection of its own:
 //!
-//! - the preparation runner, once the build it prepared has taken its place
-//!   in the line, so a person never waits on the write;
+//! - the preparation runner, once its line is empty, so a person's next
+//!   build never waits on the write;
 //! - the calibration health pass, a background job, which takes what
 //!   automatic refreshes and restored builds prepared.
 //!
-//! No thread is started for the writes. A write that fails, as on a catalog
-//! that cannot be written, loses only a cache: the next preparation reads
-//! those files again.
+//! No thread is started for the writes, and a write waits at most
+//! [`BUSY_WAIT`] for a catalog another program is writing: an import, a sync
+//! or N.I.N.A. may hold it for long. Then what it would have written waits
+//! for the next writer. Any other failure, as on a catalog that cannot be
+//! written, loses only a cache: the next preparation reads those files again.
 
 use crate::calibration::FileCheck;
 use crate::light_headers::KeptHeader;
-use rusqlite::OpenFlags;
+use rusqlite::{ErrorCode, OpenFlags};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
+
+/// How long a write waits for a catalog another connection is writing.
+const BUSY_WAIT: Duration = Duration::from_millis(250);
 
 /// One catalog's headers and file checks waiting to be written.
 #[derive(Default)]
@@ -64,6 +70,16 @@ pub(crate) fn write_pending(database_path: &str) {
         return;
     };
     if let Err(error) = write(database_path, &headers, &file_checks) {
+        if is_busy(&error) {
+            // Kept for the next writer; anything queued since is newer.
+            let mut pending = PENDING.lock().unwrap_or_else(|p| p.into_inner());
+            let entry = pending.entry(database_path.to_string()).or_default();
+            for (image_id, header) in headers {
+                entry.headers.entry(image_id).or_insert(header);
+            }
+            entry.file_checks.extend(file_checks);
+            return;
+        }
         tracing::debug!(
             "Could not keep {} light header(s) and {} calibration file check(s) in \
              {database_path}: {error:#}. They are read again next time.",
@@ -82,6 +98,7 @@ fn write(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
+    conn.busy_timeout(BUSY_WAIT)?;
     if !headers.is_empty() {
         crate::light_headers::store(&conn, headers.iter().map(|(id, header)| (*id, header)))?;
     }
@@ -89,14 +106,24 @@ fn write(
     Ok(())
 }
 
+/// Whether a write failed only because another connection held the catalog.
+fn is_busy(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<rusqlite::Error>(),
+            Some(rusqlite::Error::SqliteFailure(failure, _))
+                if matches!(failure.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::light_headers::FileStamp;
 
-    #[test]
-    fn queued_headers_reach_the_catalog_when_written() {
-        let temp = tempfile::tempdir().unwrap();
+    /// A catalog file with light 7, and a header for it.
+    fn catalog_and_header(temp: &tempfile::TempDir) -> (rusqlite::Connection, String, KeptHeader) {
         let catalog = temp.path().join("catalog.sqlite");
         let conn = rusqlite::Connection::open(&catalog).unwrap();
         crate::ts_schema::apply_schema(&conn).unwrap();
@@ -122,7 +149,39 @@ mod tests {
                 },
             )
         };
-        let path = catalog.to_string_lossy().into_owned();
+        (conn, catalog.to_string_lossy().into_owned(), header)
+    }
+
+    #[test]
+    fn a_busy_catalog_does_not_hold_the_writer_and_keeps_the_batch() {
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, path, header) = catalog_and_header(&temp);
+        // Another program holds the catalog's write lock, as an import does.
+        let importer = rusqlite::Connection::open(&path).unwrap();
+        importer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        queue(&path, vec![(7, header)], Vec::new());
+        let began = std::time::Instant::now();
+        write_pending(&path);
+        assert!(
+            began.elapsed() < Duration::from_secs(2),
+            "the writer gave up at once: {:?}",
+            began.elapsed()
+        );
+        importer.execute_batch("COMMIT").unwrap();
+        assert!(crate::light_headers::project_headers(&conn, 1)
+            .unwrap()
+            .is_empty());
+
+        // The batch waited for the next writer.
+        write_pending(&path);
+        let kept = crate::light_headers::project_headers(&conn, 1).unwrap();
+        assert_eq!(kept[&7].meta.object.as_deref(), Some("M31"));
+    }
+
+    #[test]
+    fn queued_headers_reach_the_catalog_when_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let (conn, path, header) = catalog_and_header(&temp);
         queue(&path, vec![(7, header)], Vec::new());
         assert!(
             crate::light_headers::project_headers(&conn, 1)

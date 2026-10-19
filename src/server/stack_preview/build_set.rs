@@ -334,18 +334,29 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
         database_id,
         released: false,
     };
+    // The catalog the last preparation read, whose kept headers wait.
+    let mut unwritten: Option<String> = None;
     loop {
         let Some(preparation) = ({
             let mut line = state.stack_previews.preparing.lock().unwrap();
             let catalog = line.catalogs.entry(database_id.to_string()).or_default();
             let next = catalog.pending.pop_front();
-            if next.is_none() {
+            if next.is_none() && unwritten.is_none() {
                 catalog.running = false;
                 claim.released = true;
             }
             next
         }) else {
-            return;
+            // The line is empty: keep what preparing had to read, then look
+            // once more, since a click may have come meanwhile. The write
+            // gives up at once on a busy catalog, so it never holds a build.
+            match unwritten.take() {
+                Some(path) => {
+                    crate::server::light_header_writes::write_pending(&path);
+                    continue;
+                }
+                None => return,
+            }
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prepare_and_queue(state, &preparation)
@@ -362,8 +373,7 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
             continue;
         }
         end_preparation(state, &preparation, outcome);
-        // What preparing had to read, kept once the build has its place.
-        crate::server::light_header_writes::write_pending(&preparation.ctx.database_path);
+        unwritten = Some(preparation.ctx.database_path.clone());
     }
 }
 
@@ -376,6 +386,15 @@ fn retry_later(state: &Arc<AppState>, preparation: Preparation) {
             line_up(&state, preparation);
         }
     });
+}
+
+/// Whether a catalog's runner has finished, its line empty.
+#[cfg(test)]
+pub(super) fn runner_idle(state: &AppState, database_id: &str) -> bool {
+    let line = state.stack_previews.preparing.lock().unwrap();
+    line.catalogs
+        .get(database_id)
+        .is_none_or(|catalog| !catalog.running)
 }
 
 /// Whether a preparation was stopped, or the server is stopping.

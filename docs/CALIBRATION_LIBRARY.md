@@ -447,8 +447,10 @@ project queues without opening thousands of files:
   and change time, for that light only: its guid, or, in a catalog without
   guids, its capture time and file name. Import keeps it as it adds the
   light, the [calibration health](#calibration-health) pass keeps the ones it
-  reads, and a stack build keeps the ones it had to read once it is
-  prepared. The build also notes where its own file lookup found each light
+  reads, and a stack build keeps the ones it had to read once no other
+  build waits to be prepared. A catalog another program is writing, as an
+  import or N.I.N.A. may, holds up no build: those headers wait for the next
+  write. The build also notes where its own file lookup found each light
   and goes straight there next time. A header is read again when its file
   changes or moves, including an edit in place that puts the size and
   modification time back (the change time cannot be put back), when its

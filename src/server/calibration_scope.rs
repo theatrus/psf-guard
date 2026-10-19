@@ -424,6 +424,7 @@ mod tests {
     fn a_light_is_read_only_when_no_header_is_known_where_its_file_is() {
         let light = |image_id: i32, path: &str| ProjectLight {
             image_id,
+            image_key: None,
             path: PathBuf::from(path),
             night: "2026-09-10".into(),
             filter: "Ha".into(),

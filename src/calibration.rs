@@ -721,17 +721,8 @@ fn add_header_cache_tables(conn: &Connection) -> Result<bool> {
     if conn.is_readonly(rusqlite::MAIN_DB).unwrap_or(true) {
         return Ok(false);
     }
-    let mut changed = false;
-    if !crate::light_headers::table_exists(conn) {
-        crate::light_headers::ensure_table(conn)?;
-        changed = true;
-    }
-    if !file_check_table_exists(conn) {
-        conn.execute_batch(FILE_CHECK_TABLE_SQL)
-            .context("creating the calibration file check table")?;
-        changed = true;
-    }
-    Ok(changed)
+    // Each is created, or replaced when it lacks a column this build needs.
+    Ok(crate::light_headers::ensure_table(conn)? | ensure_file_check_table(conn)?)
 }
 
 fn add_dark_level_columns(conn: &Connection) -> Result<bool> {
@@ -1355,8 +1346,7 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
         .context("creating PSF Guard calibration tables")?;
     conn.execute_batch(flat_groups::override_store::TABLES_SQL)
         .context("creating PSF Guard calibration tables")?;
-    conn.execute_batch(FILE_CHECK_TABLE_SQL)
-        .context("creating PSF Guard calibration tables")?;
+    ensure_file_check_table(conn)?;
     crate::light_headers::ensure_table(conn)?;
     // A catalog that has just had its tables created is already at the
     // current version; one that had them from an older build is stamped with
@@ -3358,6 +3348,26 @@ pub(crate) const FILE_CHECK_TABLE_SQL: &str = r#"
     );
 "#;
 
+/// Create the file check table, or replace one an unreleased build left
+/// without a column this one needs. Returns whether it changed anything.
+fn ensure_file_check_table(conn: &Connection) -> Result<bool> {
+    crate::light_headers::replace_table_without(
+        conn,
+        "psf_guard_calibration_file_check",
+        &[
+            "frame_uuid",
+            "path",
+            "size",
+            "mtime_ns",
+            "ctime_ns",
+            "row_fingerprint",
+            "checked_at",
+        ],
+        FILE_CHECK_TABLE_SQL,
+    )
+    .context("creating the calibration file check table")
+}
+
 fn file_check_table_exists(conn: &Connection) -> bool {
     conn.query_row(
         "SELECT 1 FROM sqlite_master
@@ -3389,7 +3399,7 @@ pub(crate) fn record_file_checks(conn: &Connection, checks: &[FileCheck]) -> Res
     if checks.is_empty() || !schema_exists(conn) || schema_is_newer(conn) {
         return Ok(());
     }
-    conn.execute_batch(FILE_CHECK_TABLE_SQL)?;
+    ensure_file_check_table(conn)?;
     let now = chrono::Utc::now().timestamp();
     let mut statement = conn.prepare(
         "INSERT INTO psf_guard_calibration_file_check
@@ -15183,6 +15193,61 @@ pub(crate) mod tests {
             "the files import recorded, unchanged, need no header read"
         );
         assert!(matcher.take_file_checks().is_empty());
+    }
+
+    #[test]
+    fn header_cache_tables_in_an_earlier_shape_are_replaced() {
+        // Shapes an unreleased build of the header cache created.
+        let conn = Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE psf_guard_light_header (
+                 image_id INTEGER PRIMARY KEY, path TEXT NOT NULL, size INTEGER NOT NULL,
+                 mtime_ns INTEGER NOT NULL, reader_version INTEGER NOT NULL,
+                 located INTEGER NOT NULL DEFAULT 0, meta_json TEXT NOT NULL,
+                 written_ns INTEGER NOT NULL);
+             INSERT INTO psf_guard_light_header VALUES (1, '/old.fits', 1, 2, 1, 0, '{}', 3);
+             CREATE TABLE psf_guard_calibration_file_check (
+                 frame_uuid TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL,
+                 mtime_ns INTEGER NOT NULL, row_fingerprint TEXT NOT NULL,
+                 checked_at INTEGER NOT NULL, PRIMARY KEY (frame_uuid, path));
+             INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+                 gradingStatus, metadata, guid)
+                 VALUES (1, 1, 1, 0, 'Ha', 0, '{}', 'one');",
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let columns = |table: &str| table_column_names(&conn, table).unwrap();
+        assert!(columns("psf_guard_light_header").contains(&"image_key".to_string()));
+        assert!(columns("psf_guard_calibration_file_check").contains(&"ctime_ns".to_string()));
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM psf_guard_light_header", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 0, "the old rows were only a cache");
+
+        // And the cache works again.
+        let temp = tempfile::tempdir().unwrap();
+        let light = temp.path().join("light.fits");
+        std::fs::write(&light, b"a light").unwrap();
+        let header = crate::light_headers::KeptHeader::new(
+            &light,
+            FileStamp::of(&light).unwrap(),
+            FrameMeta::default(),
+        );
+        assert_eq!(
+            crate::light_headers::store(&conn, [(1, &header)]).unwrap(),
+            1
+        );
+        // Running the upgrade again changes nothing.
+        assert!(!add_header_cache_tables(&conn).unwrap());
+        assert_eq!(
+            crate::light_headers::project_headers(&conn, 1)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     /// Overwrite `path` with `bytes` and give it `modified` as its time.

@@ -752,6 +752,7 @@ mod tests {
         let lights: Vec<ProjectLight> = (0..200)
             .map(|image_id| ProjectLight {
                 image_id,
+                image_key: None,
                 path: PathBuf::from(format!("light-{image_id}.fits")),
                 night: "2026-09-09".into(),
                 filter: "Ha".into(),

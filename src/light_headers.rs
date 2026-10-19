@@ -158,9 +158,56 @@ impl KeptHeader {
     }
 }
 
-pub fn ensure_table(conn: &Connection) -> Result<()> {
-    conn.execute_batch(TABLE_SQL)
+/// The columns this build reads and writes.
+const COLUMNS: &[&str] = &[
+    "image_id",
+    "image_key",
+    "path",
+    "size",
+    "mtime_ns",
+    "ctime_ns",
+    "reader",
+    "located",
+    "meta_json",
+    "written_ns",
+];
+
+/// Create the table, or replace one that lacks a column this build needs,
+/// as builds of this cache before it was released left. The rows are only
+/// a cache. Returns whether it created or replaced the table.
+pub fn ensure_table(conn: &Connection) -> Result<bool> {
+    replace_table_without(conn, "psf_guard_light_header", COLUMNS, TABLE_SQL)
         .context("creating the PSF Guard light header table")
+}
+
+/// Create `table` from `create`, dropping a `table` that lacks one of
+/// `columns` first. A newer build's added columns are kept. Returns whether
+/// it created the table.
+pub(crate) fn replace_table_without(
+    conn: &Connection,
+    table: &str,
+    columns: &[&str],
+    create: &str,
+) -> Result<bool> {
+    let present: Vec<String> = conn
+        .prepare(&format!(
+            "SELECT lower(name) FROM pragma_table_info('{table}')"
+        ))?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    if !present.is_empty()
+        && columns
+            .iter()
+            .all(|column| present.iter().any(|name| name == column))
+    {
+        return Ok(false);
+    }
+    if !present.is_empty() {
+        tracing::info!("Replacing {table}, kept by an earlier build in another shape");
+        conn.execute_batch(&format!("DROP TABLE {table}"))?;
+    }
+    conn.execute_batch(create)?;
+    Ok(true)
 }
 
 /// Whether the catalog has the table. One that never had a header kept has
@@ -244,7 +291,7 @@ pub fn project_headers(conn: &Connection, project_id: i32) -> Result<BTreeMap<i3
 }
 
 /// What names each of a project's lights ([`image_key_sql`]), by light id.
-fn project_keys(conn: &Connection, project_id: i32) -> Result<HashMap<i32, String>> {
+pub fn project_keys(conn: &Connection, project_id: i32) -> Result<HashMap<i32, String>> {
     let mut statement = conn.prepare(&format!(
         "SELECT a.Id, {} FROM acquiredimage a WHERE a.projectId = ?1",
         image_key_sql(conn)
