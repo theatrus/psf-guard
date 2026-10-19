@@ -295,29 +295,28 @@ scatter, a session view, and an all-session stack comparison for each filter.
 In its score chart, a dot under each bar shows the frame's grade: green for
 accepted, red for rejected, faint grey for pending. The dots follow grading,
 undo and redo.
-Each suspect pill in its summary (cloud events, focus drift, tracking
-issues, off target and unsolved) opens a list of the frames it counts, in
-the strip's order, with each frame's time and score. A click on one moves
-the cursor to that frame and scrolls it into view; the selection stays as it
-is. A click on the pill again, or Escape, closes the list. Each filter's **All sessions**
-tab leads its row of session tabs and is marked in its own colour.
-The summary, an open suspect list and the score chart dock under the
-toolbar once the page scrolls to them, and stay there while the frames
-scroll under them; they scroll with the page again at the top. A suspect
-list lies over the score chart, its frames scrolling within it, so opening
-or closing one never moves the page or covers a frame. They dock only while they and
-the toolbar leave the frames about half of the window, measured with the
-header in sight; on a window too short for that, such as a phone on its
-side, they scroll with the page. On a phone the summary sets its counts
-and pills in smaller type and the chart is drawn shorter, so they dock
-with room to spare. A frame the cursor moves to always shows
-below them and an open list, never under them.
-The **Solved pointing** chart plots each solved frame's centre around the
-target, with the cursor's frame ringed. A click on a point, or Enter on it
-from the keyboard, moves the cursor to that frame as a suspect list does;
-the arrow keys then move on from there. The chart's title folds it to one
-line that counts the solved frames and those off target, jumped or
-drifting. This browser remembers whether it is folded.
+Click a suspect pill in the summary (cloud events, focus drift, tracking
+issues, off target or unsolved) to list its frames in strip order, with each
+frame's time and score. Click a frame to move the cursor to it without
+changing your selection. Click the pill again or press Escape to close the
+list. Each filter's **All sessions** tab starts its row and uses the filter's
+colour.
+
+The summary and score chart stay below the toolbar as you scroll through
+frames. An open suspect list overlays the chart and scrolls independently,
+so opening or closing it does not move the page. PSF Guard scrolls the
+current frame below the toolbar and open list to keep it visible.
+On a short window, such as a phone in landscape, the summary and chart
+scroll with the page if docking them would leave less than roughly half the
+window for frames. Phone layouts use smaller summary text and a shorter chart.
+
+The **Solved pointing** chart plots solved frame centres around the target
+and marks the current frame with a ring. Click a point, or focus it and
+press Enter, to move to that frame. Arrow-key navigation continues from
+that frame. Click the chart heading to collapse or expand it. The collapsed
+heading shows counts for solved frames and pointing issues. PSF Guard
+remembers the collapsed state in the current browser.
+
 When analysis finds a cause, the same reason and supporting evidence appear on
 the Sequence card, the matching Grid card, and the image detail panel.
 For a localized finding, image detail also offers **Show affected regions**.

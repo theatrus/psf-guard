@@ -1872,7 +1872,7 @@ describe('SequenceView: solved pointing and the docked chart', () => {
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('group', { name: 'Solved pointing offsets' })).not.toBeInTheDocument();
-    expect(screen.getByText('10 solved frames · 1 off target, jumped or drifting')).toBeInTheDocument();
+    expect(screen.getByText('10 solved frames · 1 with pointing issues')).toBeInTheDocument();
     expect(window.localStorage.getItem('psf-guard.sequence-pointing-collapsed')).toBe('true');
 
     // A fresh view opens folded.

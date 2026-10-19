@@ -12,29 +12,30 @@ than a final-processing workflow.
 ## Build a preview
 
 Open one project in **Stacks** and choose **Build stacks** to build
-every target/channel group, or **Build channel** on one card to test only that
+every target/channel group, or **Build** on one card to test only that
 group. **Build stacks** asks the server for one build per channel, so the
 header's queue lists each channel on its own, in channel order. A channel
-already built for the same inputs and settings comes back at once instead of
-stacking again; a channel with too few frames shows as skipped.
+already built for the same inputs and settings reuses its saved result; a
+channel with too few frames shows as skipped.
 
-The click puts the request in the line at once, as **Preparing stack
-build**, and the button reads **Preparing…**. A server thread then prepares
-requests in the order they were asked for, as a person's work: it reads the
-frames, scores them, and matches each light to its calibration frames,
-reading each calibration file's header once for the whole request. The
-catalog connection is held only while the library is read. The request then
-becomes its channel builds, or the same builds already queued, running or
-finished, and the panel and the header follow those (`replaced_by` on the
-request, whose state becomes `replaced`). A request that cannot be prepared
-fails with the reason; stopping one while it is prepared queues nothing. A
-request still being prepared does not survive a server restart. Each channel
-build still learns the pier-side mapping from its sibling channels' reference
-frames, so an unsolved channel faces the way the solved ones do, as it did
-when they shared one build. **Build channel** sends the same set and the
-channel, so it makes the same build and shares its cache. Once a result exists, the corresponding actions become
-**Rebuild current set** and **Rebuild channel**. An individual rebuild replaces
-only that channel's remembered result; the other channel cards remain intact.
+The jobs list shows **Preparing stack build** immediately, and the button
+shows **Preparing…**. Within each catalog, PSF Guard prepares requests in the
+order received: it reads and scores the frames, then matches calibration data.
+Each calibration file's header is read once per request, and other catalog
+requests can continue during preparation.
+
+Once preparation finishes, the panel and jobs list show the individual
+channel builds. If a matching build is already queued, running or complete,
+PSF Guard uses that build. A preparation failure shows the reason. You can
+stop preparation before channel builds are queued. Preparation does not
+survive a server restart; start the build again if the server restarts at
+this stage.
+
+Each channel uses the other channels' reference frames to determine pier-side
+orientation when its own reference is unsolved. **Build** on a channel card
+uses the same input set and cache as a full-set build. Once a result exists,
+**Rebuild current set** and the card’s **Rebuild** button force a new build. Rebuilding
+one channel replaces only that channel's saved result.
 
 - Every frame of the project, or of the target chosen in the header, is the
   input.
@@ -1306,57 +1307,47 @@ in a row is not started a third time, and the log says so.
 
 ### Re-apply processing when a stack refreshes
 
-Processing belongs to one revision of a stack. When the stack is rebuilt,
-by an automatic refresh or by **Rebuild**, the new revision would start
-with the default stretch. With **Re-apply processing when a stack
-refreshes** on (Settings → Stacking → Stack previews → Processing; on by
-default), PSF Guard runs the processing the card showed again on the new
-stack, on its own and with no page open:
+Processing applies to one revision of a stack. When a stack rebuilds,
+PSF Guard can apply the previous stretch, deconvolution and RC-Astro settings
+to the new revision. **Re-apply processing when a stack refreshes**, under
+Settings → Stacking → Stack previews → Processing, is on by default.
+Reprocessing runs even when no page is open.
 
-- After an automatic refresh it is queued as an automatic processing run,
-  marked `automatic` in the header's background jobs. It waits until no
-  refresh of its project is still settling, using the same debounce as
-  automatic refreshes, so a burst of frames does not start RC-Astro after
-  every build. It then waits for the worker to be free of everything else:
-  anything you start and every stack build go first. Like an automatic
-  build, it steps aside when you start work, and comes back once the worker
-  is free. Meanwhile the header lists it as **Re-applying processing**,
-  marked **waiting**, with what it waits for. A running re-apply
-  also steps aside for an automatic refresh that is due, since the refresh
-  may bring a newer stack anyway.
-- After a build you started, or an automatic one you took over, it is your
-  work. The moment the build finishes, the worker's next turn is held for
-  it, so it runs next, ahead of your other queued builds, and it steps aside
-  for nothing. The hold lasts only while it gets ready (seconds, while the
-  tools are checked) and never more than a minute, so the line cannot stall
-  on it. The header lists it with your work. Stopping one of your running
-  re-applies starts your next waiting one. A rebuild of R, G and B runs
-  R's build, R's processing, G's build, G's processing, and so on. A build
-  you stop leaves its finished channels to the automatic re-apply instead,
-  so stopping never starts RC-Astro.
-- Only the channel's newest stack is processed. A newer stack arriving while
-  a re-apply waits or runs drops it, and a running RC-Astro tool is killed;
-  RC-Astro steps cached for the old stack were made from other pixels, so
-  they are not reused.
-- Meanwhile the card shows the previous stack's processed result, marked
-  `From the previous stack · reprocessing`, with the run's status from the
-  queue. When the run lands, the new result replaces it and becomes the
-  card's processing, as if you had applied it; a reload shows it.
-- If it fails, the log says why, the card keeps the previous result and
-  says `reprocessing failed` with the reason, and that stack is not tried
-  again on its own.
-- Your own **Apply processing** or **Revert processing** on the new stack
-  replaces the re-apply. The same settings take the queued run over as
-  yours.
-- Turning the setting off drops re-applies that have not started; a running
-  one finishes, and one that steps aside after that is dropped too.
+- After a build you start, or an automatic build you take over, processing
+  appears under **Started by you** and runs next, ahead of other queued
+  builds. For an R, G and B rebuild, the order is R build, R processing,
+  G build, G processing, then B build and processing. PSF Guard reserves the
+  next queue position for up to one minute while it checks the tools.
+  Once this processing starts, new work does not interrupt it. Stopping a
+  processing run lets the next waiting run start. If you stop the build,
+  completed channels wait for automatic reprocessing; stopping does not
+  immediately start RC-Astro.
+- After an automatic refresh, processing appears under **Automatic** as
+  **Re-applying processing**. It waits for the project's refresh delay and
+  for other builds and work you start to finish. This avoids running
+  RC-Astro after every frame in a burst. The job shows what it is waiting
+  for. New work you start, or another automatic refresh that is due, can
+  interrupt automatic reprocessing. It resumes when the worker is free.
+- PSF Guard processes only the newest stack for a channel. A newer stack
+  cancels queued or running reprocessing for the old revision, including
+  any running RC-Astro tool. Tool results from the old pixels are not reused.
+- Until processing finishes, the card shows the previous processed result,
+  marked `From the previous stack · reprocessing`, with the current status.
+  The new result then replaces it and remains available after a reload.
+- If processing fails, the card keeps the previous result and shows
+  `reprocessing failed` with the reason. The log records the error, and
+  PSF Guard does not automatically retry that revision.
+- **Apply processing** or **Revert processing** on the new stack replaces
+  scheduled reprocessing. Applying the same settings promotes the queued
+  run to work started by you.
+- Turning the setting off cancels reprocessing that has not started. A
+  running job finishes, unless other work interrupts it; it then stays stopped.
 
-Re-applies survive a restart: queued and running ones are in the job
-journal like other processing runs, and one still waiting for its turn is
-remembered by the new stack's processing selection. Either way, one that
-followed your build stays yours. One cut off by two restarts in a row, or
-that cannot be put back, is given up for good: its card says why, as for a
-failure.
+Reprocessing survives a restart, including its priority as work started by
+you or automatic work. PSF Guard restores queued and running jobs from the
+job journal and schedules waiting jobs from the saved processing settings.
+A run interrupted by two consecutive restarts, or one that cannot be
+restored, stays stopped. The card shows the reason.
 
 ## Named processing setups
 
