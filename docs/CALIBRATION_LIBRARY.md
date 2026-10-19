@@ -192,7 +192,7 @@ stays open. The URL stores the project filter as `calProject=<id>`.
 **Scheduler flats** and **Duplicates** always use the whole library.
 
 The server calculates project scope on a separate database connection, using
-light headers saved by the calibration health pass. A background job reads any
+the light headers the catalog keeps (see [Headers read once](#headers-read-once)). A background job reads any
 remaining headers with the same worker limits as other interactive work. The
 page shows how many headers remain and adds calibration as it reads them. The
 job stops when no view has requested it for a minute.
@@ -427,6 +427,45 @@ records at another path:
 
 At stack time a row whose file has moved is followed by name, and a file is
 handed to the integrator once even when two rows point at it.
+
+### Headers read once
+
+Matching a light to the library needs the light's header and proof that
+each calibration file is still the frame its row describes. Both come from
+the catalog while the files stand as they were, so a stack build on a large
+project queues without opening thousands of files:
+
+- A calibration file at its row's own path, with the size and modification
+  time import recorded, is that frame without a header read. Import records
+  no change time, so this cannot tell a header edited in place with both put
+  back. A file written since, or one found by name after a move, has its
+  header read once; when it is the frame, the catalog remembers that file
+  with its size, modification time and change time, and the next request
+  trusts it while all three hold. A row written again, by an import or a
+  duplicate repair, is checked afresh.
+- Each light's header is kept with the light's guid and its file's path,
+  size, modification time and change time. Import keeps it as it adds the
+  light, the [calibration health](#calibration-health) pass keeps the ones it
+  reads, and a stack build keeps the ones it had to read once no other
+  build waits to be prepared. A catalog another program is writing, as an
+  import or N.I.N.A. may, holds up no build: those headers wait for the next
+  write. The build also notes where its own file lookup found each light
+  and goes straight there next time. A header is read again when its file
+  changes or moves, including an edit in place that puts the size and
+  modification time back (the change time cannot be put back), when its
+  light is deleted and its id given to another, and once with each release.
+- A light without a guid keeps no header, so a build reads its header every
+  time. Every light PSF Guard adds has a guid. Only a Target Scheduler
+  database opened directly can have lights without one: one from before
+  Target Scheduler's schema 22, or one whose upgrade skipped its older rows.
+  For the second, use **Fill in GUIDs** in Settings › Databases (see
+  [Rigs and plans appear on their own](DIRECTOR.md#rigs-and-plans-appear-on-their-own)).
+
+These records hold this machine's paths and file times. Transfers and
+`sync pull` never carry them, and a catalog a newer build has upgraded is
+not written. They are only a cache: deleting the rows of
+`psf_guard_light_header` and `psf_guard_calibration_file_check` costs one
+read of each file.
 
 ### Duplicates and their repair
 
@@ -1650,8 +1689,8 @@ key of the library and its grades, the project's lights, the calibration
 settings and the rules, and beside it where the project's lights were found
 in the image folders. A project is read again only when one of those
 changed, and then only the lights whose file changed are read: each light's
-header is kept, with its file's size and modification time, from the last
-read. Accepting a light, or setting it back to pending, changes no key;
+header is kept in the catalog, with its file's size and modification time,
+from the last read (see [Headers read once](#headers-read-once)). Accepting a light, or setting it back to pending, changes no key;
 rejecting one does. Until a project is read again, a result that no longer
 holds shows no pill. The image views keep showing its marks, so rejecting
 lights does not clear the rest until the pass ends; Sequence holds back
@@ -2116,6 +2155,7 @@ change or in a group, travel the same way, by flat and light GUID, the
 later choice or reset winning. They do not copy generated master rows or cached FITS files because
 those paths belong to the source machine. The destination
 resolves a stale raw path by basename in its configured image folders, then
-builds its own master.
+builds its own master. Kept light headers and calibration file checks stay
+behind for the same reason (see [Headers read once](#headers-read-once)).
 
 As with other transfer work, the UI requires a dry preview before apply.

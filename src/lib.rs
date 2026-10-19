@@ -24,6 +24,7 @@ pub mod grading;
 pub mod hocus_focus_star_detection;
 pub mod image_analysis;
 pub mod image_io;
+pub mod light_headers;
 pub mod models;
 pub mod nina_star_detection;
 pub mod photometry;

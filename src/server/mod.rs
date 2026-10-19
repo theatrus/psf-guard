@@ -28,6 +28,7 @@ pub mod frame_shapes;
 pub mod frame_sites;
 pub mod handlers;
 pub mod import_job;
+pub mod light_header_writes;
 pub mod master_cleanup;
 pub mod mcp;
 pub mod mosaic_scope;

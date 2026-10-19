@@ -334,18 +334,29 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
         database_id,
         released: false,
     };
+    // The catalog the last preparation read, whose kept headers wait.
+    let mut unwritten: Option<String> = None;
     loop {
         let Some(preparation) = ({
             let mut line = state.stack_previews.preparing.lock().unwrap();
             let catalog = line.catalogs.entry(database_id.to_string()).or_default();
             let next = catalog.pending.pop_front();
-            if next.is_none() {
+            if next.is_none() && unwritten.is_none() {
                 catalog.running = false;
                 claim.released = true;
             }
             next
         }) else {
-            return;
+            // The line is empty: keep what preparing had to read, then look
+            // once more, since a click may have come meanwhile. The write
+            // gives up at once on a busy catalog, so it never holds a build.
+            match unwritten.take() {
+                Some(path) => {
+                    crate::server::light_header_writes::write_pending(&path);
+                    continue;
+                }
+                None => return,
+            }
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prepare_and_queue(state, &preparation)
@@ -362,6 +373,7 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
             continue;
         }
         end_preparation(state, &preparation, outcome);
+        unwritten = Some(preparation.ctx.database_path.clone());
     }
 }
 
@@ -374,6 +386,15 @@ fn retry_later(state: &Arc<AppState>, preparation: Preparation) {
             line_up(&state, preparation);
         }
     });
+}
+
+/// Whether a catalog's runner has finished, its line empty.
+#[cfg(test)]
+pub(super) fn runner_idle(state: &AppState, database_id: &str) -> bool {
+    let line = state.stack_previews.preparing.lock().unwrap();
+    line.catalogs
+        .get(database_id)
+        .is_none_or(|catalog| !catalog.running)
 }
 
 /// Whether a preparation was stopped, or the server is stopping.
@@ -857,6 +878,9 @@ pub(super) fn prepare_whole(
         )?;
         (relevant, expected, mapped_sources, exposure_groups)
     };
+    // Where a build last found each light, and its header, so neither is
+    // looked up again while the file stands as it was.
+    let mut lights = crate::server::stack_preview::kept_lights::KeptLights::load(ctx, project_id);
 
     let quality = quality_results(
         ctx,
@@ -1020,23 +1044,17 @@ pub(super) fn prepare_whole(
                 ));
                 continue;
             };
-            let path =
-                match crate::server::handlers::find_fits_file(ctx, &image, &target_name, &filename)
-                {
-                    Ok(path) => path,
-                    Err(AppError::Conflict(message)) => return Err(AppError::Conflict(message)),
-                    Err(AppError::NotFound) => {
-                        missing_files += 1;
-                        decisions.push(excluded_decision(
-                            &image,
-                            &scored,
-                            "FITS file was not found".into(),
-                        ));
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
-            let source_fingerprint = source_fingerprint(&path);
+            let Some((path, source_fingerprint)) =
+                lights.locate(ctx, &image, &target_name, &filename, &mapped_sources)?
+            else {
+                missing_files += 1;
+                decisions.push(excluded_decision(
+                    &image,
+                    &scored,
+                    "FITS file was not found".into(),
+                ));
+                continue;
+            };
             hasher.update(source_fingerprint.as_bytes());
             group_hasher.update(source_fingerprint.as_bytes());
             let exposure_seconds = exposure_seconds_from_metadata(&image.metadata);
@@ -1081,8 +1099,9 @@ pub(super) fn prepare_whole(
             let gaps = group_calibration != crate::calibration::CalibrationMode::Off
                 && exclude_uncalibrated;
             for frame in &frames {
+                let light = lights.meta(frame.image_id, &frame.path);
                 let (fingerprint, gap) = matcher
-                    .light_calibration(&frame.path, Some(&directory_tree), flat_star_masking, gaps)
+                    .light_calibration_of(&light, Some(&directory_tree), flat_star_masking, gaps)
                     .map_err(AppError::db)?;
                 fingerprints.insert(frame.image_id, fingerprint);
                 if let Some(reason) = gap {
@@ -1209,6 +1228,8 @@ pub(super) fn prepare_whole(
             frames,
         });
     }
+
+    lights.keep(&ctx.database_path, matcher.as_mut());
 
     let digest = hasher.finalize();
     let mut job_id = String::with_capacity(digest.len() * 2);
