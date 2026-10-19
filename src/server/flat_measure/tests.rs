@@ -441,7 +441,7 @@ fn a_pass_waits_for_grading_without_pushing_its_settle_back() {
     let mut queue = Queue::default();
     queue.add(Scope::flats(Rigs::of(["a"])), start, Trigger::Change);
     let ready = start + FLAT_MEASURE_SETTLE;
-    assert_eq!(next_step(&mut queue, ready, true), Step::Nap(POLL));
+    assert_eq!(next_step(&mut queue, ready, true), Step::Sleep(POLL));
     assert!(!queue.pending.is_empty(), "back in line");
     // Grading done: it runs at once.
     assert_eq!(
@@ -451,7 +451,7 @@ fn a_pass_waits_for_grading_without_pushing_its_settle_back() {
     assert_eq!(next_step(&mut queue, ready + POLL, false), Step::Exit);
     // A retry not yet due naps, at most a second at a time.
     queue.retry("a", ready);
-    assert_eq!(next_step(&mut queue, ready, false), Step::Nap(NAP_MAX));
+    assert_eq!(next_step(&mut queue, ready, false), Step::Sleep(NAP_MAX));
 }
 
 /// Review of #870: flats that are away (an unmounted share) leave their
@@ -557,7 +557,7 @@ fn a_stopped_pass_resumes_when_its_flats_change() {
 }
 
 #[test]
-fn a_runner_that_is_lost_lets_go_of_the_catalog() {
+fn a_failed_runner_clears_the_running_pass() {
     let mut queue = Queue {
         running: Some(Scope::everything()),
         ..Queue::default()
@@ -566,7 +566,7 @@ fn a_runner_that_is_lost_lets_go_of_the_catalog() {
         active: true,
         ..FlatMeasureStatus::default()
     };
-    FlatMeasure::runner_lost(&mut queue, &mut status);
+    FlatMeasure::runner_failed(&mut queue, &mut status);
     assert!(queue.running.is_none());
     assert!(!status.active);
     assert!(status.last_error.is_some());

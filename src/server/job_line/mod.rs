@@ -21,24 +21,31 @@
 //! - Places and running work can hold keys, and other work can wait until
 //!   nothing holds the keys it names ([`JobLine::wait_clear`]): a color
 //!   composition waits so for the builds of its target's channels.
+//! - An entry can be blocked by keys ([`Entry::blocked_by`]). While running
+//!   work, or a hold from outside the line ([`JobLine::hold_key`]), has one
+//!   of those keys, the entry keeps its place and the entries behind it
+//!   run first. A queued WBPP run is blocked so while its database copies
+//!   masters.
 //!
 //! An entry stopped while it waits leaves at the next dispatch, with its
 //! [`Task::stopped`] run, whatever else is running. The line knows nothing
 //! of what its entries do. See `docs/design/job-line.md`.
 
 use crate::concurrency::Stop;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;
 
 pub mod catalog;
+mod dispatch;
 mod work;
+pub use dispatch::{DispatchRules, Turn};
 pub use work::{Ending, LineWork, Needs, Submission, Task, Worker};
 
 /// Where an entry runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lane {
     /// The shared worker, one entry at a time in the line's order.
     Worker,
@@ -54,6 +61,7 @@ pub struct Entry {
     stop: Stop,
     task: Box<dyn Task>,
     holds: Vec<String>,
+    blocked_by: Vec<String>,
 }
 
 impl Entry {
@@ -65,12 +73,21 @@ impl Entry {
             stop,
             task,
             holds: Vec::new(),
+            blocked_by: Vec::new(),
         }
     }
 
     /// The keys it holds while it waits and while it runs.
     pub fn holding(mut self, keys: Vec<String>) -> Self {
         self.holds = keys;
+        self
+    }
+
+    /// Block the entry while running work or a hold from outside the line
+    /// has one of `keys`. A blocked entry keeps its place, and the entries
+    /// behind it run first. Applies to the worker lane only.
+    pub fn blocked_by(mut self, keys: Vec<String>) -> Self {
+        self.blocked_by = keys;
         self
     }
 }
@@ -127,6 +144,8 @@ struct LineState {
     /// Work waiting to reserve the worker outside the line. It goes before
     /// the line's next entry, as a reservation always has.
     reservations: usize,
+    /// Keys held from outside the line, with the number of holds on each.
+    outside: HashMap<String, usize>,
 }
 
 impl LineState {
@@ -149,8 +168,16 @@ impl LineState {
         let held = |holds: &[String]| holds.iter().any(|key| keys.contains(key));
         self.order.iter().any(|place| held(place.holds()))
             || self.quick.iter().any(|entry| held(&entry.holds))
-            || held(&self.worker_holds)
+            || self.is_blocked(keys)
+    }
+
+    /// Whether running work or a hold from outside the line has one of
+    /// `keys`, which blocks an entry [`Entry::blocked_by`] them.
+    fn is_blocked(&self, keys: &[String]) -> bool {
+        let held = |holds: &[String]| holds.iter().any(|key| keys.contains(key));
+        held(&self.worker_holds)
             || held(&self.quick_holds)
+            || keys.iter().any(|key| self.outside.contains_key(key))
     }
 
     fn index_of(&self, id: &str) -> Option<usize> {
@@ -186,6 +213,12 @@ impl LineState {
         let now = Instant::now();
         let mut index = 0;
         while index < self.order.len() {
+            if let Place::Work(entry) = &self.order[index]
+                && self.is_blocked(&entry.blocked_by)
+            {
+                index += 1;
+                continue;
+            }
             match &mut self.order[index] {
                 Place::Held { .. } => index += 1,
                 Place::Reserved {
@@ -221,6 +254,33 @@ pub struct JobLine {
     /// Wakes the dispatchers when the line or a lane changes. Kept inside:
     /// callers say what changed, not how to wake anyone.
     wakeup: Arc<Notify>,
+    /// The dispatcher task of each lane, started when work first joins.
+    dispatchers: Mutex<HashMap<Lane, tokio::task::JoinHandle<()>>>,
+}
+
+/// A key held from outside the line, until it is dropped.
+#[must_use = "the key is let go as soon as the hold is dropped"]
+pub struct KeyHold {
+    state: Arc<Mutex<LineState>>,
+    wakeup: Arc<Notify>,
+    key: String,
+}
+
+impl Drop for KeyHold {
+    fn drop(&mut self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = state.outside.get_mut(&self.key) {
+            *count -= 1;
+            if *count == 0 {
+                state.outside.remove(&self.key);
+            }
+        }
+        drop(state);
+        self.wakeup.notify_waiters();
+    }
 }
 
 /// A turn on a lane. The lane is free again, and the next entry dispatched,
@@ -433,6 +493,29 @@ impl JobLine {
     /// Whether any place, waiting work or running work holds one of `keys`.
     pub fn holds_any(&self, keys: &[String]) -> bool {
         self.lock().holds_any(keys)
+    }
+
+    /// Hold `key` from outside the line until the returned hold is dropped.
+    /// Entries [`Entry::blocked_by`] the key stay in line meanwhile.
+    pub fn hold_key(&self, key: impl Into<String>) -> KeyHold {
+        let key = key.into();
+        *self.lock().outside.entry(key.clone()).or_default() += 1;
+        KeyHold {
+            state: Arc::clone(&self.state),
+            wakeup: Arc::clone(&self.wakeup),
+            key,
+        }
+    }
+
+    /// Reserve the worker lane when it is free and no work is queued on it,
+    /// so the caller can start work without going ahead of queued work.
+    pub fn try_reserve_idle_worker(&self) -> Option<Lease> {
+        let mut state = self.lock();
+        if state.worker_busy || state.reservations > 0 || state.order.iter().any(Place::is_work) {
+            return None;
+        }
+        state.worker_busy = true;
+        Some(self.lease(Lane::Worker))
     }
 
     /// Wait until nothing in the line, waiting or running, holds any of

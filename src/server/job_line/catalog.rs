@@ -1,14 +1,17 @@
-//! Jobs with one runner per catalog.
+//! Background jobs that run one thread per catalog.
 //!
-//! Flat measuring, frame sites, calibration grading and health, the
-//! duplicate check and reject removal each keep a queue per catalog: what
-//! was asked for, merged, and what waits for a retry or was paused. One
-//! runner thread per catalog takes what is due, one piece at a time, and
-//! lets go of the catalog when nothing is left. [`CatalogJobs`] holds that
-//! part once: the catalogs' jobs, starting a runner when one is needed,
-//! the stop flag of the piece running, and a runner that ends without
-//! letting go, as on a panic. What each job queues, when it runs, and what
-//! it does stay its own ([`CatalogWork`]).
+//! Flat measuring, frame sites, calibration grading, calibration health, the
+//! duplicate check and reject removal each keep a queue per catalog. The
+//! queue stores merged requests, retries that are due later, and work that
+//! Stop paused. While a catalog's queue has work, one runner thread
+//! processes it one item at a time; the thread exits when the queue is
+//! empty.
+//!
+//! [`CatalogJobs`] implements the shared parts: the job of each catalog,
+//! starting the runner thread, the stop flag of the item that is running,
+//! and recovery when a runner thread panics or cannot start. Each job
+//! implements [`CatalogWork`] to define its queue, when an item is due, and
+//! how to run it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, RwLock};
@@ -17,35 +20,36 @@ use std::time::{Duration, Instant};
 use crate::concurrency::Stop;
 use crate::server::state::AppState;
 
-/// What a catalog's runner does next.
+/// What a catalog's runner thread does next.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step<Item> {
-    /// Nothing waits: the runner lets go of the catalog.
+    /// The queue is empty: the runner thread exits.
     Exit,
-    /// Something waits, but not yet: look again after this long.
-    Nap(Duration),
-    /// Run this now.
+    /// Work is queued but not due yet: check again after this long.
+    Sleep(Duration),
+    /// Run this item now.
     Run(Item),
 }
 
-/// One kind of job with a runner per catalog.
+/// One kind of background job that runs one thread per catalog.
 pub trait CatalogWork: Sized + Send + Sync + 'static {
-    /// What waits: requests merged, retries, what Stop paused.
+    /// The pending work: merged requests, retries and work that Stop paused.
     type Queue: Default + Send;
-    /// What the job reports, beside what its queue says.
+    /// Progress and results for the status routes, apart from the queue.
     type Status: Default + Clone + Send + Sync;
-    /// One piece of work the runner takes.
+    /// One unit of work for the runner thread.
     type Item: Send;
-    /// The runner thread's name, as `flat-measure`.
+    /// The runner thread's name, such as `flat-measure`.
     const RUNNER: &'static str;
-    /// What a server stop waits for while a piece runs, as `flat
-    /// measuring`; `None` for a job that holds the stop itself, around
-    /// what must not be cut short.
-    const STOP_WAITS_FOR: Option<&'static str>;
+    /// The label that server shutdown shows while it waits for an item to
+    /// finish, such as `flat measuring`. `None` when shutdown does not wait:
+    /// the job then registers its own shutdown hold around any write that
+    /// must finish.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str>;
 
-    /// What the runner does next, read with the queue locked. `state` and
-    /// `catalog` are there for a job that waits on another, as flat
-    /// measuring waits for grading.
+    /// Choose the runner thread's next step. Called with the queue locked.
+    /// `state` and `catalog` let a job check another job, as flat measuring
+    /// checks whether grading is running.
     fn next(
         state: &AppState,
         catalog: &str,
@@ -53,9 +57,9 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
         now: Instant,
     ) -> Step<Self::Item>;
 
-    /// Run one piece, holding the server's stop until it ends when
-    /// [`Self::STOP_WAITS_FOR`] says so. `stop` is this piece's: the job's
-    /// Stop sets it.
+    /// Run one item. When [`Self::SHUTDOWN_WAITS_FOR`] is set, server
+    /// shutdown waits for this call to return. [`CatalogJob::stop_running`]
+    /// requests `stop`.
     fn run(
         state: &Arc<AppState>,
         catalog: &str,
@@ -64,15 +68,15 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
         stop: &Stop,
     );
 
-    /// Whether the queue has anything for a runner to do, now or later. A
-    /// request that leaves nothing starts no runner.
-    fn waiting(_queue: &Self::Queue) -> bool {
+    /// Whether the queue has work, due now or later. A request that leaves
+    /// the queue without work does not start a runner thread.
+    fn has_work(_queue: &Self::Queue) -> bool {
         true
     }
 
-    /// The runner ended without letting go, as on a panic, or could not
-    /// start: settle what the queue and the status say.
-    fn runner_lost(queue: &mut Self::Queue, status: &mut Self::Status);
+    /// The runner thread panicked or could not start. Clear the running
+    /// state from the queue and the status, and record the error.
+    fn runner_failed(queue: &mut Self::Queue, status: &mut Self::Status);
 }
 
 /// One catalog's job.
@@ -83,18 +87,18 @@ pub struct CatalogJob<W: CatalogWork> {
 
 struct Queued<Q> {
     queue: Q,
-    /// A runner serves the catalog.
-    runner: bool,
-    /// The stop of the piece running, if one is.
-    running: Option<Stop>,
+    /// Whether a runner thread exists for the catalog.
+    runner_active: bool,
+    /// The stop flag of the running item, when an item is running.
+    current_stop: Option<Stop>,
 }
 
 impl<Q: Default> Default for Queued<Q> {
     fn default() -> Self {
         Self {
             queue: Q::default(),
-            runner: false,
-            running: None,
+            runner_active: false,
+            current_stop: None,
         }
     }
 }
@@ -108,7 +112,7 @@ impl<W: CatalogWork> Default for CatalogJob<W> {
     }
 }
 
-/// The catalog's queue, held locked.
+/// The catalog's queue, locked.
 pub struct QueueGuard<'a, Q>(MutexGuard<'a, Queued<Q>>);
 
 impl<Q> std::ops::Deref for QueueGuard<'_, Q> {
@@ -125,14 +129,15 @@ impl<Q> std::ops::DerefMut for QueueGuard<'_, Q> {
 }
 
 impl<Q> QueueGuard<'_, Q> {
-    /// Whether a piece is running now.
+    /// Whether an item is running now.
     pub fn running(&self) -> bool {
-        self.0.running.is_some()
+        self.0.current_stop.is_some()
     }
 
-    /// Whether a runner serves the catalog, running or waiting.
+    /// Whether a runner thread exists for the catalog, running an item or
+    /// sleeping until one is due.
     pub fn has_runner(&self) -> bool {
-        self.0.runner
+        self.0.runner_active
     }
 }
 
@@ -148,7 +153,7 @@ impl<W: CatalogWork> CatalogJob<W> {
         QueueGuard(self.lock())
     }
 
-    /// What the job reports now.
+    /// A copy of the job's status.
     pub fn status(&self) -> W::Status {
         self.status
             .read()
@@ -156,7 +161,7 @@ impl<W: CatalogWork> CatalogJob<W> {
             .clone()
     }
 
-    /// Change what the job reports.
+    /// Change the job's status.
     pub fn update(&self, edit: impl FnOnce(&mut W::Status)) {
         edit(
             &mut self
@@ -166,23 +171,24 @@ impl<W: CatalogWork> CatalogJob<W> {
         );
     }
 
-    /// The runner ended without letting go, or never started.
-    fn lost(&self) {
+    /// Reset the runner state after the runner thread panicked or could
+    /// not start, so the next request starts a new thread.
+    fn runner_failed(&self) {
         let mut queued = self.lock();
-        queued.runner = false;
-        queued.running = None;
+        queued.runner_active = false;
+        queued.current_stop = None;
         let mut status = self
             .status
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        W::runner_lost(&mut queued.queue, &mut status);
+        W::runner_failed(&mut queued.queue, &mut status);
     }
 
-    /// Ask the piece running, if any, to stop at its next step. Returns
-    /// whether one was running.
+    /// Request a stop of the running item, which stops at its next check.
+    /// Returns false when no item is running.
     pub fn stop_running(&self) -> bool {
         let queued = self.lock();
-        if let Some(stop) = &queued.running {
+        if let Some(stop) = &queued.current_stop {
             stop.request();
             true
         } else {
@@ -191,7 +197,7 @@ impl<W: CatalogWork> CatalogJob<W> {
     }
 }
 
-/// Every catalog's job of one kind.
+/// The jobs of one kind, one per catalog.
 pub struct CatalogJobs<W: CatalogWork> {
     jobs: LazyLock<Mutex<HashMap<String, Arc<CatalogJob<W>>>>>,
 }
@@ -209,7 +215,7 @@ impl<W: CatalogWork> CatalogJobs<W> {
         }
     }
 
-    /// The job of the catalog at `catalog`.
+    /// The job of the catalog at path `catalog`, created when missing.
     pub fn job(&self, catalog: &str) -> Arc<CatalogJob<W>> {
         Arc::clone(
             self.jobs
@@ -220,9 +226,10 @@ impl<W: CatalogWork> CatalogJobs<W> {
         )
     }
 
-    /// Change the catalog's queue with `edit`, then start its runner unless
-    /// one serves it already, which sees the change, or nothing waits. Returns what `edit`
-    /// returned. Nothing starts while the server stops.
+    /// Change the catalog's queue with `edit` and return its result. Then
+    /// start a runner thread when none exists and the queue has work. An
+    /// existing runner thread reads the change at its next step. No thread
+    /// starts during server shutdown.
     pub fn request<R>(
         &self,
         state: &Arc<AppState>,
@@ -233,10 +240,11 @@ impl<W: CatalogWork> CatalogJobs<W> {
         let (result, start) = {
             let mut queued = job.lock();
             let result = edit(&mut queued.queue);
-            let start =
-                !queued.runner && !state.shutdown.is_stopping() && W::waiting(&queued.queue);
+            let start = !queued.runner_active
+                && !state.shutdown.is_stopping()
+                && W::has_work(&queued.queue);
             if start {
-                queued.runner = true;
+                queued.runner_active = true;
             }
             (result, start)
         };
@@ -245,16 +253,16 @@ impl<W: CatalogWork> CatalogJobs<W> {
                 (Arc::clone(state), catalog.to_string(), Arc::clone(&job));
             let started = std::thread::Builder::new()
                 .name(W::RUNNER.into())
-                .spawn(move || serve(&state, &catalog, &runner_job));
+                .spawn(move || run_queue(&state, &catalog, &runner_job));
             if let Err(error) = started {
                 tracing::warn!("Could not start {}: {error}", W::RUNNER);
-                job.lost();
+                job.runner_failed();
             }
         }
         result
     }
 
-    /// The job of the catalog at `catalog`, if something has asked for it.
+    /// The job of the catalog at path `catalog`, if one was created.
     pub fn existing(&self, catalog: &str) -> Option<Arc<CatalogJob<W>>> {
         self.jobs
             .lock()
@@ -263,7 +271,7 @@ impl<W: CatalogWork> CatalogJobs<W> {
             .cloned()
     }
 
-    /// Every catalog that has a job of this kind.
+    /// The paths of every catalog that has a job of this kind.
     pub fn catalogs(&self) -> Vec<String> {
         self.jobs
             .lock()
@@ -274,61 +282,57 @@ impl<W: CatalogWork> CatalogJobs<W> {
     }
 }
 
-/// Settles the runner's claim if it ends without letting go, as on a panic,
-/// so the next request starts another.
-struct RunnerClaim<'a, W: CatalogWork> {
+/// Resets the runner state when the runner thread unwinds from a panic.
+struct PanicGuard<'a, W: CatalogWork> {
     job: &'a CatalogJob<W>,
-    released: bool,
+    exited: bool,
 }
 
-impl<W: CatalogWork> Drop for RunnerClaim<'_, W> {
+impl<W: CatalogWork> Drop for PanicGuard<'_, W> {
     fn drop(&mut self) {
-        if self.released {
-            return;
+        if !self.exited {
+            self.job.runner_failed();
         }
-        self.job.lost();
     }
 }
 
-/// A catalog's one runner: it takes what is due, naps while nothing is, and
-/// lets go of the catalog when nothing waits or the server stops.
-fn serve<W: CatalogWork>(state: &Arc<AppState>, catalog: &str, job: &CatalogJob<W>) {
-    let mut claim = RunnerClaim {
-        job,
-        released: false,
-    };
+/// The runner thread of a catalog. It runs each item when it is due,
+/// sleeps while queued work is not due, and exits when the queue is empty
+/// or the server shuts down.
+fn run_queue<W: CatalogWork>(state: &Arc<AppState>, catalog: &str, job: &CatalogJob<W>) {
+    let mut guard = PanicGuard { job, exited: false };
     loop {
         let (item, stop) = {
             let mut queued = job.lock();
             if state.shutdown.is_stopping() {
-                queued.runner = false;
-                claim.released = true;
+                queued.runner_active = false;
+                guard.exited = true;
                 return;
             }
             match W::next(state, catalog, &mut queued.queue, Instant::now()) {
                 Step::Exit => {
-                    queued.runner = false;
-                    claim.released = true;
+                    queued.runner_active = false;
+                    guard.exited = true;
                     return;
                 }
-                Step::Nap(wait) => {
+                Step::Sleep(wait) => {
                     drop(queued);
                     std::thread::sleep(wait);
                     continue;
                 }
                 Step::Run(item) => {
                     let stop = Stop::new();
-                    queued.running = Some(stop.clone());
+                    queued.current_stop = Some(stop.clone());
                     (item, stop)
                 }
             }
         };
         {
-            let _work =
-                W::STOP_WAITS_FOR.map(|what| state.shutdown.hold(format!("{what} ({catalog})")));
+            let _shutdown_hold = W::SHUTDOWN_WAITS_FOR
+                .map(|what| state.shutdown.hold(format!("{what} ({catalog})")));
             W::run(state, catalog, job, item, &stop);
         }
-        job.lock().running = None;
+        job.lock().current_stop = None;
     }
 }
 
@@ -339,7 +343,7 @@ mod tests {
 
     static RUNS: AtomicUsize = AtomicUsize::new(0);
 
-    /// Counts what it is asked for, and runs each count once.
+    /// Queues numbers and records each one it runs.
     struct Counting;
 
     impl CatalogWork for Counting {
@@ -347,7 +351,7 @@ mod tests {
         type Status = Vec<u32>;
         type Item = u32;
         const RUNNER: &'static str = "counting";
-        const STOP_WAITS_FOR: Option<&'static str> = Some("counting");
+        const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("counting");
 
         fn next(_: &AppState, _: &str, queue: &mut Vec<u32>, _: Instant) -> Step<u32> {
             queue.pop().map_or(Step::Exit, Step::Run)
@@ -359,7 +363,7 @@ mod tests {
             job.update(|done| done.push(item));
         }
 
-        fn runner_lost(queue: &mut Vec<u32>, _: &mut Vec<u32>) {
+        fn runner_failed(queue: &mut Vec<u32>, _: &mut Vec<u32>) {
             queue.clear();
         }
     }
@@ -367,7 +371,7 @@ mod tests {
     static COUNTING: CatalogJobs<Counting> = CatalogJobs::new();
 
     #[test]
-    fn a_catalog_runner_takes_what_is_due_and_lets_go() {
+    fn a_catalog_runner_runs_each_item_then_exits() {
         let state = Arc::new(AppState::new_for_test(
             rusqlite::Connection::open_in_memory().unwrap(),
         ));
@@ -385,7 +389,7 @@ mod tests {
         done.sort_unstable();
         assert_eq!(done, [1, 2, 3]);
         assert!(!job.queue().running());
-        assert!(!job.stop_running(), "nothing runs");
+        assert!(!job.stop_running(), "no item is running");
         assert_eq!(COUNTING.catalogs(), ["catalog.sqlite"]);
     }
 }

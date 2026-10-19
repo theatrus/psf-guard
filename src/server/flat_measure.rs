@@ -39,7 +39,7 @@ use crate::concurrency::{ComputePool, Priority, Stop};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step as CatalogStep};
+use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -279,7 +279,7 @@ impl Queue {
     }
 }
 
-/// Flat measuring as a job with one runner per catalog.
+/// Flat measuring, run on one thread per catalog.
 pub(crate) struct FlatMeasure;
 
 type Job = CatalogJob<FlatMeasure>;
@@ -289,27 +289,24 @@ impl CatalogWork for FlatMeasure {
     type Status = FlatMeasureStatus;
     type Item = Scope;
     const RUNNER: &'static str = "flat-measure";
-    const STOP_WAITS_FOR: Option<&'static str> = Some("flat measuring");
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("flat measuring");
 
-    /// Grading first: it decides which flats are in use.
-    fn next(state: &AppState, path: &str, queue: &mut Queue, now: Instant) -> CatalogStep<Scope> {
-        let _ = state;
+    /// A pass waits while grading runs, because grades decide which flats
+    /// are in use.
+    fn next(_: &AppState, path: &str, queue: &mut Queue, now: Instant) -> Step<Scope> {
         let grading = crate::server::calibration_quality::busy(path);
-        match next_step(queue, now, grading) {
-            Step::Exit => CatalogStep::Exit,
-            Step::Nap(wait) => CatalogStep::Nap(wait),
-            Step::Run(scope) => {
-                queue.running = Some(scope.clone());
-                CatalogStep::Run(scope)
-            }
+        let step = next_step(queue, now, grading);
+        if let Step::Run(scope) = &step {
+            queue.running = Some(scope.clone());
         }
+        step
     }
 
     fn run(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope, stop: &Stop) {
         run_logged(state, path, job, scope, stop);
     }
 
-    fn runner_lost(queue: &mut Queue, status: &mut FlatMeasureStatus) {
+    fn runner_failed(queue: &mut Queue, status: &mut FlatMeasureStatus) {
         queue.running = None;
         status.active = false;
         status.stage = None;
@@ -406,8 +403,8 @@ fn enqueue(state: &Arc<AppState>, path: &str, scope: Scope, trigger: Trigger) {
     if scope.is_empty() || state.shutdown.is_stopping() {
         return;
     }
-    // The catalog's one runner naps while requests settle and holds the
-    // server's stop only while a pass writes.
+    // The runner thread sleeps until requests stop arriving. Shutdown waits
+    // only while a pass runs.
     JOBS.request(state, path, |queue| {
         queue.add(scope, Instant::now(), trigger)
     });
@@ -437,27 +434,16 @@ pub fn resume(state: &Arc<AppState>, path: &str) -> FlatMeasureStatus {
     status(path)
 }
 
-/// What the runner does next.
-#[derive(Debug, PartialEq)]
-enum Step {
-    /// Nothing waits: let go of the catalog.
-    Exit,
-    /// Look again after this.
-    Nap(Duration),
-    /// Run a pass over this.
-    Run(Scope),
-}
-
 /// The runner's choice, given the queue and whether grading is busy: a pass
 /// waits for grading, which decides the flats in use, without pushing back
 /// its settle.
-fn next_step(queue: &mut Queue, now: Instant, grading: bool) -> Step {
+fn next_step(queue: &mut Queue, now: Instant, grading: bool) -> Step<Scope> {
     match queue.take_ready(now) {
         Ready::Idle => Step::Exit,
-        Ready::Settle(wait) => Step::Nap(wait.clamp(POLL, NAP_MAX)),
+        Ready::Settle(wait) => Step::Sleep(wait.clamp(POLL, NAP_MAX)),
         Ready::Run(scope) if grading => {
             queue.pending.merge(scope);
-            Step::Nap(POLL)
+            Step::Sleep(POLL)
         }
         Ready::Run(scope) => Step::Run(scope),
     }

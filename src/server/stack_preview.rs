@@ -34,7 +34,7 @@ use build_set::{
 use build_set::{prepare_channels, validate_request};
 pub use build_set::{start_stack_preview_channels, start_stack_previews};
 
-use crate::server::job_line::{Dispatch, Entry, Lease};
+use crate::server::job_line::{DispatchRules, Entry, Lease, Turn};
 pub(super) use crate::server::job_line::{Lane, LineWork, Needs, Submission, Task, Worker};
 use axum::{
     body::Body,
@@ -1066,8 +1066,6 @@ pub struct StackPreviewManager {
     line: crate::server::job_line::JobLine,
     /// Compositions in the quick lane, which never hold the stack worker.
     quick_jobs: Mutex<HashSet<String>>,
-    /// The task dispatching each lane's line, started with its first entry.
-    dispatchers: Mutex<HashMap<&'static str, tokio::task::JoinHandle<()>>>,
     /// What each queued or running build was asked for, so the job journal
     /// can put it back after a restart. Kept as long as its stop flag.
     origins: Mutex<HashMap<String, journal::JournaledStackJob>>,
@@ -1103,7 +1101,6 @@ impl StackPreviewManager {
             latest_write: Mutex::new(()),
             line: crate::server::job_line::JobLine::new(),
             quick_jobs: Mutex::new(HashSet::new()),
-            dispatchers: Mutex::new(HashMap::new()),
             origins: Mutex::new(HashMap::new()),
             stopped_for_shutdown: Mutex::new(None),
             processing: Mutex::new(HashMap::new()),
@@ -1706,6 +1703,7 @@ impl StackPreviewManager {
     /// that runs, or one settled because it was stopped while it waited.
     /// The lane is free again as soon as this returns.
     pub(super) async fn dispatch_next(&self) -> (bool, String) {
+        use crate::server::job_line::Dispatch;
         match self.line.next(Lane::Worker).await {
             Dispatch::Run { id, .. } => (true, id),
             Dispatch::Stopped { id, .. } => (false, id),
@@ -3303,56 +3301,29 @@ pub(super) fn submit(
     }
 }
 
+/// How the stack line runs its entries. A person's work runs at a higher
+/// priority than pre-generation and quality scans, and pauses background
+/// work while it runs.
+static STACK_LINE: DispatchRules = DispatchRules {
+    name: "stack",
+    line: |state| &state.stack_previews.line,
+    lanes: &[Lane::Worker, Lane::Quick],
+    turn: |state, id| {
+        let automatic = state.stack_previews.is_automatic(id)
+            || state.stack_previews.is_automatic_processing(id);
+        Turn {
+            priority: job_priority(automatic),
+            pauses_background_work: !automatic,
+        }
+    },
+};
+
 /// Start each lane's dispatcher if it is not running.
 fn ensure_dispatching(state: &Arc<AppState>) {
-    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-        tracing::warn!("No runtime to dispatch the stack line on");
-        return;
-    };
-    let mut dispatchers = state.stack_previews.dispatchers.lock().unwrap();
-    for (name, lane) in [("worker", Lane::Worker), ("quick", Lane::Quick)] {
-        if dispatchers
-            .get(name)
-            .is_some_and(|dispatcher| !dispatcher.is_finished())
-        {
-            continue;
-        }
-        let state = Arc::clone(state);
-        dispatchers.insert(name, runtime.spawn(dispatch(state, lane)));
-    }
-}
-
-/// A lane's dispatcher: run each entry in its turn on this server's worker,
-/// and settle each one stopped while it waited.
-async fn dispatch(state: Arc<AppState>, lane: Lane) {
-    loop {
-        let next = state.stack_previews.line.next(lane).await;
-        let state = Arc::clone(&state);
-        match next {
-            Dispatch::Run {
-                id,
-                stop,
-                task,
-                lease,
-            } => {
-                // Read as the turn comes: a person can adopt automatic work
-                // while it waits. Only their work outranks pre-generation
-                // and quality scans.
-                let automatic = state.stack_previews.is_automatic(&id)
-                    || state.stack_previews.is_automatic_processing(&id);
-                let person = (!automatic).then(|| state.begin_named_interactive_job(task.what()));
-                tokio::task::spawn_blocking(move || {
-                    let worker = Worker::this_server(&state, &stop, job_priority(automatic));
-                    task.run(&state, &worker);
-                    drop(person);
-                    drop(lease);
-                });
-            }
-            Dispatch::Stopped { task, .. } => {
-                tokio::task::spawn_blocking(move || task.stopped(&state));
-            }
-        }
-    }
+    state
+        .stack_previews
+        .line
+        .ensure_dispatching(state, &STACK_LINE);
 }
 
 /// A stack build on the line.

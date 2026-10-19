@@ -132,19 +132,20 @@ pub struct PlanChange {
     pub altered_count: usize,
 }
 
-/// The duplicate check and repair as a job with one runner per catalog.
+/// The duplicate check and repair, run on one thread per catalog.
 pub(crate) struct Duplicates;
 
 type Job = CatalogJob<Duplicates>;
 
-/// One run at a time per catalog.
+/// The catalog's duplicate run. Only one run per catalog is active at a time.
 #[derive(Default)]
 pub(crate) struct Queue {
-    /// The run asked for, before the runner takes it.
-    asked: Option<(Action, Arc<DatabaseContext>)>,
-    /// A run is asked for or under way: another is refused until it ends.
-    busy: bool,
-    /// Whether a person asked for the run: it runs at `Interactive`. A
+    /// The requested run, until the runner thread starts it.
+    pending: Option<(Action, Arc<DatabaseContext>)>,
+    /// Whether a run is pending or running. A second request fails with a
+    /// conflict until the run ends.
+    run_active: bool,
+    /// Whether a person requested the run, which then runs at `Interactive`. A
     /// background check a person joins turns interactive at its next step.
     interactive: bool,
     /// Holds a run at its next step until released or stopped, so a test
@@ -158,20 +159,21 @@ impl CatalogWork for Duplicates {
     type Status = DuplicateJobStatus;
     type Item = (Action, Arc<DatabaseContext>);
     const RUNNER: &'static str = "calibration-duplicates";
-    /// A repair holds it around its write; a check stops at once.
-    const STOP_WAITS_FOR: Option<&'static str> = None;
+    /// Shutdown does not wait for a check, which stops at once. A repair
+    /// registers its own shutdown hold around its write.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
 
     fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Self::Item> {
-        queue.asked.take().map_or(Step::Exit, Step::Run)
+        queue.pending.take().map_or(Step::Exit, Step::Run)
     }
 
     fn run(state: &Arc<AppState>, _: &str, job: &Job, (action, ctx): Self::Item, stop: &Stop) {
-        run(state, &ctx, &Running { job, stop }, &action);
+        run(state, &ctx, &CurrentRun { job, stop }, &action);
     }
 
-    fn runner_lost(queue: &mut Queue, status: &mut DuplicateJobStatus) {
-        queue.asked = None;
-        queue.busy = false;
+    fn runner_failed(queue: &mut Queue, status: &mut DuplicateJobStatus) {
+        queue.pending = None;
+        queue.run_active = false;
         if status.state == "running" {
             status.state = "failed".into();
             status.stage = None;
@@ -186,13 +188,13 @@ fn job(path: &str) -> Arc<Job> {
     JOBS.job(path)
 }
 
-/// One run of the catalog's job, with its Stop.
-struct Running<'a> {
+/// The running check or repair, and its stop flag.
+struct CurrentRun<'a> {
     job: &'a Job,
     stop: &'a Stop,
 }
 
-impl Running<'_> {
+impl CurrentRun<'_> {
     fn status(&self) -> DuplicateJobStatus {
         self.job.status()
     }
@@ -241,10 +243,11 @@ pub fn status(path: &str) -> DuplicateJobStatus {
 pub fn stop(path: &str) -> DuplicateJobStatus {
     let job = job(path);
     if !job.stop_running() {
-        // Asked for, and not yet taken by the runner: it never starts.
+        // The run is pending and the runner thread has not started it:
+        // remove it, so it never starts.
         let mut queue = job.queue();
-        if queue.asked.take().is_some() {
-            queue.busy = false;
+        if queue.pending.take().is_some() {
+            queue.run_active = false;
             job.update(|status| {
                 status.state = "stopped".into();
                 status.stage = None;
@@ -317,8 +320,9 @@ fn open_read_only(path: &str) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-/// Start a run on the catalog's runner. A check asked for while a check
-/// runs joins it; anything else asked for while one runs is refused.
+/// Start a run on the catalog's runner thread. A check requested while a
+/// check runs joins that check. Any other request while a run is active
+/// fails with a conflict.
 fn start(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
@@ -326,7 +330,7 @@ fn start(
 ) -> Result<DuplicateJobStatus, AppError> {
     let job = job(&ctx.database_path);
     JOBS.request(state, &ctx.database_path, |queue| {
-        if queue.busy {
+        if queue.run_active {
             let running = job.status();
             if matches!(action, Action::Check { .. }) && running.action.as_deref() == Some("check")
             {
@@ -342,7 +346,7 @@ fn start(
             )));
         }
         queue.interactive = !action.automatic();
-        queue.busy = true;
+        queue.run_active = true;
         job.update(|status| {
             status.run += 1;
             status.state = "running".into();
@@ -365,7 +369,7 @@ fn start(
                 .into(),
             );
         });
-        queue.asked = Some((action, Arc::clone(ctx)));
+        queue.pending = Some((action, Arc::clone(ctx)));
         Ok(())
     })?;
     Ok(job.status())
@@ -389,7 +393,7 @@ impl From<anyhow::Error> for Ended {
     }
 }
 
-fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &Running, action: &Action) {
+fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &CurrentRun, action: &Action) {
     let began = std::time::Instant::now();
     // Let go of any guard before the status says the run is done.
     let ended = match action {
@@ -405,7 +409,7 @@ fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &Running, action: &Act
     // The runner is free as the status says the run ended, not after: a
     // page that sees the end may start the next run at once.
     let mut queue = job.job.queue();
-    queue.busy = false;
+    queue.run_active = false;
     job.update(|status| {
         status.finished_at = Some(now());
         status.stage = None;
@@ -442,7 +446,7 @@ const WAIT_NAP: Duration = Duration::from_millis(250);
 /// A background check waits while a person's work runs, saying what for,
 /// until it may go on, a person asks for it (it turns interactive), Stop,
 /// or the server stops.
-fn wait_for_people(state: &AppState, job: &Running) -> Result<(), Ended> {
+fn wait_for_people(state: &AppState, job: &CurrentRun) -> Result<(), Ended> {
     while let Some(name) = state.interactive_job_name() {
         if job.interactive() {
             break;
@@ -467,7 +471,7 @@ fn wait_for_people(state: &AppState, job: &Running) -> Result<(), Ended> {
 fn plan(
     state: &AppState,
     ctx: &DatabaseContext,
-    job: &Running,
+    job: &CurrentRun,
 ) -> Result<(DuplicateReport, String), Ended> {
     if !job.interactive() {
         wait_for_people(state, job)?;
@@ -478,7 +482,7 @@ fn plan(
         Priority::Background
     };
     job.update(|status| status.priority = Some(priority.label().into()));
-    // A check a person asked for holds the guard, so background work steps
+    // A check that a person requested holds the guard, so background work steps
     // aside for it. A repair holds its own as well.
     let _person = (priority == Priority::Interactive)
         .then(|| state.begin_named_interactive_job(waited_for("check")));
@@ -509,7 +513,7 @@ fn plan(
 }
 
 /// Keep `report` as the latest plan, made from `revision`.
-fn keep_plan(job: &Running, report: DuplicateReport, revision: String) {
+fn keep_plan(job: &CurrentRun, report: DuplicateReport, revision: String) {
     job.update(|status| {
         status.report = Some(report);
         status.revision = Some(revision);
@@ -517,7 +521,7 @@ fn keep_plan(job: &Running, report: DuplicateReport, revision: String) {
     });
 }
 
-fn check(state: &AppState, ctx: &DatabaseContext, job: &Running) -> Result<(), Ended> {
+fn check(state: &AppState, ctx: &DatabaseContext, job: &CurrentRun) -> Result<(), Ended> {
     let (report, revision) = plan(state, ctx, job)?;
     keep_plan(job, report, revision);
     Ok(())
@@ -526,7 +530,7 @@ fn check(state: &AppState, ctx: &DatabaseContext, job: &Running) -> Result<(), E
 fn repair(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
-    job: &Running,
+    job: &CurrentRun,
     token: &str,
 ) -> Result<(), Ended> {
     let _lock = calibration::repair_lock(std::path::Path::new(&ctx.database_path)).map_err(

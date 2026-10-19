@@ -12,13 +12,13 @@ fn requests_settle_and_unfinished_passes_wait_longer_each_time() {
     let mut queue = Queue::default();
     assert_eq!(queue.next_step(start), Step::Exit);
     queue.add(start);
-    assert!(matches!(queue.next_step(start), Step::Nap(_)), "settling");
-    assert_eq!(queue.next_step(start + SETTLE), Step::Run);
+    assert!(matches!(queue.next_step(start), Step::Sleep(_)), "settling");
+    assert_eq!(queue.next_step(start + SETTLE), Step::Run(()));
     // The volume was away: tried again a minute later, then two.
     let now = start + SETTLE;
     assert!(queue.retry(now));
-    assert!(matches!(queue.next_step(now), Step::Nap(_)));
-    assert_eq!(queue.next_step(now + RETRY_FIRST), Step::Run);
+    assert!(matches!(queue.next_step(now), Step::Sleep(_)));
+    assert_eq!(queue.next_step(now + RETRY_FIRST), Step::Run(()));
     assert!(queue.retry(now));
     assert_eq!(queue.due, Some(now + RETRY_FIRST * 2));
     for _ in 2..RETRY_LIMIT {
@@ -44,7 +44,7 @@ fn the_watch_respects_stop_and_a_waiting_retry() {
     // A retry waits after an unfinished pass: the watch leaves it be.
     let mut queue = Queue::default();
     queue.add(now);
-    assert_eq!(queue.next_step(now + SETTLE), Step::Run);
+    assert_eq!(queue.next_step(now + SETTLE), Step::Run(()));
     assert!(queue.retry(now));
     assert!(queue.retry(now));
     let due = queue.due;
@@ -54,7 +54,7 @@ fn the_watch_respects_stop_and_a_waiting_retry() {
     let mut queue = Queue::default();
     queue.nudge(now);
     assert!(queue.pending);
-    assert_eq!(queue.next_step(now + SETTLE), Step::Run);
+    assert_eq!(queue.next_step(now + SETTLE), Step::Run(()));
 }
 
 /// A stopped job is not started by the watch's request either.
@@ -251,9 +251,10 @@ fn the_runner_ends_with_the_server() {
     assert!(!job(&path).queue().has_runner());
 }
 
-/// A runner that is lost, as on a panic, says it stopped.
+/// When the runner thread fails, the status shows an error and no pass is
+/// running.
 #[test]
-fn a_lost_runner_says_it_stopped() {
+fn a_failed_runner_reports_an_error() {
     let mut queue = Queue {
         running: true,
         ..Queue::default()
@@ -262,7 +263,7 @@ fn a_lost_runner_says_it_stopped() {
         active: true,
         ..FrameSitesStatus::default()
     };
-    FrameSites::runner_lost(&mut queue, &mut status);
+    FrameSites::runner_failed(&mut queue, &mut status);
     assert!(!queue.running && !status.active);
     assert!(status.last_error.is_some());
 }

@@ -66,15 +66,15 @@ pub struct CalibrationQualityProgress {
     pub last_error: Option<String>,
 }
 
-/// Grading as a job with one runner per catalog.
+/// Calibration grading passes, run on one thread per catalog.
 pub(crate) struct CalibrationQuality;
 
 type Job = CatalogJob<CalibrationQuality>;
 
-/// Whether a pass was asked for since the last one began.
+/// Whether a pass was requested after the last pass started.
 #[derive(Debug, Default)]
 pub(crate) struct Queue {
-    asked: bool,
+    pass_requested: bool,
 }
 
 impl CatalogWork for CalibrationQuality {
@@ -82,13 +82,13 @@ impl CatalogWork for CalibrationQuality {
     type Status = CalibrationQualityProgress;
     type Item = ();
     const RUNNER: &'static str = "calibration-quality";
-    /// A stop waits for the batch being measured to be committed.
-    const STOP_WAITS_FOR: Option<&'static str> = Some("calibration grading");
+    /// Shutdown waits until the batch being measured is committed.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("calibration grading");
 
-    /// A pass measures only the frames it found when it began, so a request
-    /// while one runs makes it run once more.
+    /// A pass measures only the frames that existed when it started, so a
+    /// request during a pass starts one more pass after it ends.
     fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<()> {
-        if std::mem::take(&mut queue.asked) {
+        if std::mem::take(&mut queue.pass_requested) {
             Step::Run(())
         } else {
             Step::Exit
@@ -97,18 +97,18 @@ impl CatalogWork for CalibrationQuality {
 
     fn run(state: &Arc<AppState>, path: &str, job: &Job, (): (), _: &Stop) {
         run_logged(state, path, job);
-        // Grades decide what each project's lights get; judge them again
-        // once no other pass follows.
-        if !state.shutdown.is_stopping() && !job.queue().asked {
+        // Grades decide which calibration frames each project's lights use.
+        // When no other pass is pending, request a health pass.
+        if !state.shutdown.is_stopping() && !job.queue().pass_requested {
             crate::server::calibration_health::request(state, path);
         }
     }
 
-    fn waiting(queue: &Queue) -> bool {
-        queue.asked
+    fn has_work(queue: &Queue) -> bool {
+        queue.pass_requested
     }
 
-    fn runner_lost(_: &mut Queue, progress: &mut CalibrationQualityProgress) {
+    fn runner_failed(_: &mut Queue, progress: &mut CalibrationQualityProgress) {
         progress.running = false;
         progress.stage = None;
         progress.last_error = Some("calibration grading stopped unexpectedly".into());
@@ -150,7 +150,7 @@ pub fn progress(path: &str) -> CalibrationQualityProgress {
 /// Measure what is new in the catalog at `path` and grade it, on a thread
 /// of its own.
 pub fn request(state: &Arc<AppState>, path: &str) {
-    JOBS.request(state, path, |queue| queue.asked = true);
+    JOBS.request(state, path, |queue| queue.pass_requested = true);
 }
 
 /// Grade every database's library again, after a grade limit changed. A
@@ -454,12 +454,14 @@ mod tests {
     #[test]
     fn a_request_during_a_pass_runs_one_more() {
         let state = test_state();
-        let mut queue = Queue { asked: true };
+        let mut queue = Queue {
+            pass_requested: true,
+        };
         let next = |queue: &mut Queue| CalibrationQuality::next(&state, "c", queue, Instant::now());
         assert_eq!(next(&mut queue), Step::Run(()));
-        // Two requests while the pass runs.
-        queue.asked = true;
-        queue.asked = true;
+        // Two requests arrive during the pass.
+        queue.pass_requested = true;
+        queue.pass_requested = true;
         assert_eq!(next(&mut queue), Step::Run(()), "one more pass");
         assert_eq!(next(&mut queue), Step::Exit, "then it stops");
     }

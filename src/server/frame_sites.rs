@@ -26,7 +26,7 @@ use crate::calibration::{backfill_frame_sites, SiteBackfill, SiteBackfillOutcome
 use crate::concurrency::Stop;
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step as CatalogStep};
+use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -95,14 +95,6 @@ pub(crate) struct Queue {
     stopped: bool,
 }
 
-/// What the runner does next.
-#[derive(Debug, PartialEq)]
-enum Step {
-    Exit,
-    Nap(Duration),
-    Run,
-}
-
 fn backoff(attempt: u32) -> Duration {
     RETRY_FIRST
         .saturating_mul(1 << attempt.saturating_sub(1).min(16))
@@ -129,7 +121,7 @@ impl Queue {
         self.due = None;
     }
 
-    fn next_step(&mut self, now: Instant) -> Step {
+    fn next_step(&mut self, now: Instant) -> Step<()> {
         if let Some(due) = self.due
             && due <= now
         {
@@ -138,7 +130,7 @@ impl Queue {
         }
         if !self.pending {
             return match self.due {
-                Some(due) => Step::Nap(due.saturating_duration_since(now).clamp(POLL, NAP_MAX)),
+                Some(due) => Step::Sleep(due.saturating_duration_since(now).clamp(POLL, NAP_MAX)),
                 None => Step::Exit,
             };
         }
@@ -146,11 +138,11 @@ impl Queue {
             .last
             .map_or(SETTLE, |last| now.saturating_duration_since(last));
         if quiet < SETTLE {
-            return Step::Nap((SETTLE - quiet).clamp(POLL, NAP_MAX));
+            return Step::Sleep((SETTLE - quiet).clamp(POLL, NAP_MAX));
         }
         self.pending = false;
         self.last = None;
-        Step::Run
+        Step::Run(())
     }
 
     /// Try again later; false once the tries are spent.
@@ -173,7 +165,7 @@ impl Queue {
     }
 }
 
-/// Reading frame sites as a job with one runner per catalog.
+/// Frame site reads, run on one thread per catalog.
 pub(crate) struct FrameSites;
 
 type Job = CatalogJob<FrameSites>;
@@ -183,28 +175,25 @@ impl CatalogWork for FrameSites {
     type Status = FrameSitesStatus;
     type Item = ();
     const RUNNER: &'static str = "frame-sites";
-    const STOP_WAITS_FOR: Option<&'static str> = Some("frame sites");
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("frame sites");
 
-    fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> CatalogStep<()> {
-        match queue.next_step(now) {
-            Step::Exit => CatalogStep::Exit,
-            Step::Nap(wait) => CatalogStep::Nap(wait),
-            Step::Run => {
-                queue.running = true;
-                CatalogStep::Run(())
-            }
+    fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> Step<()> {
+        let step = queue.next_step(now);
+        if step == Step::Run(()) {
+            queue.running = true;
         }
+        step
     }
 
     fn run(state: &Arc<AppState>, path: &str, job: &Job, (): (), stop: &Stop) {
         run_logged(state, path, job, stop);
     }
 
-    fn waiting(queue: &Queue) -> bool {
+    fn has_work(queue: &Queue) -> bool {
         queue.pending || queue.due.is_some()
     }
 
-    fn runner_lost(queue: &mut Queue, status: &mut FrameSitesStatus) {
+    fn runner_failed(queue: &mut Queue, status: &mut FrameSitesStatus) {
         queue.running = false;
         status.active = false;
         status.waiting_for = None;

@@ -189,24 +189,25 @@ fn write_bytes(path: &FsPath, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Working out calibration health as a job with one runner per catalog.
+/// Calibration health passes, run on one thread per catalog.
 pub(crate) struct CalibrationHealth;
 
 type Job = CatalogJob<CalibrationHealth>;
 
 #[derive(Debug, Default)]
 pub(crate) struct Queue {
-    /// A pass was asked for since the last one began.
-    asked: bool,
-    /// The server that last asked, so a directory refresh can ask again.
-    server: Weak<AppState>,
+    /// Whether a pass was requested after the last pass started.
+    pass_requested: bool,
+    /// The server of the last request, so a finished directory refresh can
+    /// request another pass.
+    last_server: Weak<AppState>,
     views: ViewAsks,
 }
 
-/// How far the pass has got, and what the passes have done.
+/// The progress of the current pass, and totals since the server started.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct HealthStatus {
-    /// Projects judged so far this pass, and how many it set out to judge.
+    /// Projects judged so far in this pass, and the number it will judge.
     progress: (usize, usize),
     work: WorkDone,
 }
@@ -216,13 +217,13 @@ impl CatalogWork for CalibrationHealth {
     type Status = HealthStatus;
     type Item = ();
     const RUNNER: &'static str = "calibration-health";
-    /// A stop waits for the light being judged; the project it cut short is
-    /// judged whole by the next pass.
-    const STOP_WAITS_FOR: Option<&'static str> = Some("calibration health");
+    /// Shutdown waits for the light being judged. The next pass judges
+    /// again the whole project that shutdown interrupted.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("calibration health");
 
-    /// A request while a pass runs makes it run once more when it ends.
+    /// A request during a pass starts one more pass after it ends.
     fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<()> {
-        if std::mem::take(&mut queue.asked) {
+        if std::mem::take(&mut queue.pass_requested) {
             Step::Run(())
         } else {
             Step::Exit
@@ -241,17 +242,17 @@ impl CatalogWork for CalibrationHealth {
         job.queue().views.failed = failed.then(Instant::now);
     }
 
-    fn waiting(queue: &Queue) -> bool {
-        queue.asked
+    fn has_work(queue: &Queue) -> bool {
+        queue.pass_requested
     }
 
-    fn runner_lost(_: &mut Queue, _: &mut HealthStatus) {}
+    fn runner_failed(_: &mut Queue, _: &mut HealthStatus) {}
 }
 
-/// When the views last asked for a pass, and when a pass last failed.
+/// When a view last requested a pass, and when a pass last failed.
 #[derive(Debug, Default, Clone, Copy)]
 struct ViewAsks {
-    asked: Option<Instant>,
+    requested_at: Option<Instant>,
     failed: Option<Instant>,
 }
 
@@ -266,7 +267,7 @@ impl ViewAsks {
             at.is_none_or(|at| now.saturating_duration_since(at) >= wait)
         };
         !grading
-            && since(self.asked, VIEW_ASK_INTERVAL)
+            && since(self.requested_at, VIEW_ASK_INTERVAL)
             && since(self.failed, VIEW_ASK_AFTER_FAILURE)
     }
 }
@@ -303,8 +304,8 @@ fn running(path: &str) -> bool {
 /// run once more when it ends.
 pub fn request(state: &Arc<AppState>, path: &str) {
     JOBS.request(state, path, |queue| {
-        queue.server = Arc::downgrade(state);
-        queue.asked = true;
+        queue.last_server = Arc::downgrade(state);
+        queue.pass_requested = true;
     });
 }
 
@@ -321,7 +322,7 @@ pub fn request_all(state: &Arc<AppState>) {
 pub fn tree_published(path: &str) {
     let state = JOBS
         .existing(path)
-        .and_then(|job| job.queue().server.upgrade());
+        .and_then(|job| job.queue().last_server.upgrade());
     if let Some(state) = state {
         request(&state, path);
     }
@@ -507,7 +508,7 @@ fn catch_up(state: &Arc<AppState>, ctx: &DbContext, behind: bool) {
         if !queue.views.may_ask(grading, now) {
             return;
         }
-        queue.views.asked = Some(now);
+        queue.views.requested_at = Some(now);
     }
     request(state, path);
 }
@@ -805,8 +806,8 @@ mod tests {
         assert!(views.may_ask(false, start));
         assert!(!views.may_ask(true, start), "grading asks when it ends");
 
-        // Once asked, the views wait their interval.
-        views.asked = Some(start);
+        // After a request, the views wait their interval.
+        views.requested_at = Some(start);
         assert!(!views.may_ask(false, at(60)));
         assert!(views.may_ask(false, at(VIEW_ASK_INTERVAL.as_secs())));
 
@@ -820,12 +821,12 @@ mod tests {
     fn a_request_during_a_pass_runs_one_more() {
         let state = AppState::new_for_test(Connection::open_in_memory().unwrap());
         let mut queue = Queue {
-            asked: true,
+            pass_requested: true,
             ..Queue::default()
         };
         let next = |queue: &mut Queue| CalibrationHealth::next(&state, "c", queue, Instant::now());
         assert_eq!(next(&mut queue), Step::Run(()));
-        queue.asked = true;
+        queue.pass_requested = true;
         assert_eq!(next(&mut queue), Step::Run(()), "one more pass");
         assert_eq!(next(&mut queue), Step::Exit, "then it stops");
     }

@@ -79,7 +79,7 @@ pub struct RemovedQuery {
 #[derive(serde::Serialize)]
 pub struct RemovedView {
     pub batches: Vec<RemovedBatch>,
-    /// The frames of the batch asked for; empty without one.
+    /// The frames of the requested batch; empty when no batch was requested.
     pub frames: Vec<RemovedEntry>,
 }
 
@@ -162,56 +162,58 @@ pub struct RemovalJobStatus {
     pub priority: Option<String>,
 }
 
-/// Reject removal as a job with one runner per catalog.
+/// Reject removal, run on one thread per catalog.
 pub(crate) struct RejectRemoval;
 
 type Job = CatalogJob<RejectRemoval>;
 
-/// One run at a time per catalog.
+/// The catalog's removal run. Only one run per catalog is active at a time.
 #[derive(Default)]
 pub(crate) struct Queue {
-    /// The run asked for, before the runner takes it.
-    asked: Option<Asked>,
-    /// A run is asked for or under way: another is refused until it ends.
-    busy: bool,
+    /// The requested run, until the runner thread starts it.
+    pending: Option<PendingRun>,
+    /// Whether a run is pending or running. A second request fails with a
+    /// conflict until the run ends.
+    run_active: bool,
 }
 
-/// A run a person asked for.
-pub(crate) struct Asked {
+/// A run that a person requested.
+pub(crate) struct PendingRun {
     action: Action,
     ctx: Arc<DatabaseContext>,
     protected: BTreeSet<String>,
-    /// The refreshes a change starts run on the server's runtime.
+    /// The server's async runtime, which runs the refreshes that a change
+    /// starts.
     runtime: tokio::runtime::Handle,
 }
 
 impl CatalogWork for RejectRemoval {
     type Queue = Queue;
     type Status = RemovalJobStatus;
-    type Item = Asked;
+    type Item = PendingRun;
     const RUNNER: &'static str = "reject-removal";
-    /// A run holds it itself, with what it does.
-    const STOP_WAITS_FOR: Option<&'static str> = None;
+    /// Each run registers its own shutdown hold, labelled with its action.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
 
-    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Asked> {
-        queue.asked.take().map_or(Step::Exit, Step::Run)
+    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<PendingRun> {
+        queue.pending.take().map_or(Step::Exit, Step::Run)
     }
 
-    fn run(state: &Arc<AppState>, _: &str, job: &Job, asked: Asked, stop: &Stop) {
-        let _runtime = asked.runtime.enter();
+    fn run(state: &Arc<AppState>, _: &str, job: &Job, pending: PendingRun, stop: &Stop) {
+        let _runtime = pending.runtime.enter();
         run(
             state,
-            &asked.ctx,
+            &pending.ctx,
             job,
             stop,
-            &asked.action,
-            &asked.protected,
+            &pending.action,
+            &pending.protected,
         );
     }
 
-    fn runner_lost(queue: &mut Queue, status: &mut RemovalJobStatus) {
-        queue.asked = None;
-        queue.busy = false;
+    fn runner_failed(queue: &mut Queue, status: &mut RemovalJobStatus) {
+        queue.pending = None;
+        queue.run_active = false;
         if status.state == "running" {
             status.state = "failed".into();
             status.stage = None;
@@ -247,10 +249,11 @@ pub fn status(path: &str) -> RemovalJobStatus {
 pub fn stop(path: &str) -> RemovalJobStatus {
     let job = job(path);
     if !job.stop_running() {
-        // Asked for, and not yet taken by the runner: it never starts.
+        // The run is pending and the runner thread has not started it:
+        // remove it, so it never starts.
         let mut queue = job.queue();
-        if queue.asked.take().is_some() {
-            queue.busy = false;
+        if queue.pending.take().is_some() {
+            queue.run_active = false;
             job.update(|status| {
                 status.state = "stopped".into();
                 status.stage = None;
@@ -281,13 +284,13 @@ fn start(
 ) -> Result<RemovalJobStatus, AppError> {
     let job = job(&ctx.database_path);
     JOBS.request(state, &ctx.database_path, |queue| {
-        if queue.busy {
+        if queue.run_active {
             return Err(AppError::Conflict(
                 "Reject removal is already running on this catalog. Wait for it, or stop it."
                     .into(),
             ));
         }
-        queue.busy = true;
+        queue.run_active = true;
         job.update(|status| {
             status.run += 1;
             status.state = "running".into();
@@ -301,7 +304,7 @@ fn start(
             status.error = None;
             status.priority = Some(Priority::Interactive.label().into());
         });
-        queue.asked = Some(Asked {
+        queue.pending = Some(PendingRun {
             action,
             ctx: Arc::clone(ctx),
             protected,
@@ -361,7 +364,7 @@ fn run(
     // The runner is free as the status says the run ended: a page that sees
     // the end may start the next run at once.
     let mut queue = job.queue();
-    queue.busy = false;
+    queue.run_active = false;
     job.update(|status| {
         status.finished_at = Some(now());
         status.stage = None;
@@ -632,7 +635,7 @@ pub async fn stop_removal(ctx: DbContext) -> Json<ApiResponse<RemovalJobStatus>>
     Json(ApiResponse::success(stop(&ctx.database_path)))
 }
 
-/// Every removal batch, and the frames of one when asked.
+/// Every removal batch, and the frames of one when pending.
 pub async fn removed(
     ctx: DbContext,
     Query(query): Query<RemovedQuery>,
