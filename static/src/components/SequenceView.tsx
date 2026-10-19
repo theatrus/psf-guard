@@ -488,9 +488,8 @@ export default function SequenceView() {
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
   const sequenceStripRef = useRef<HTMLDivElement>(null);
-  // The docked chart changing size, as its line rewraps, docking again, or
-  // a suspect list opening below it, can cover the cursor's card: bring it
-  // back, if it was in the window.
+  // The docked chart changing size, as its line rewraps, or docking again
+  // can cover the cursor's card: bring it back, if it was in the window.
   const stopRevealRef = useRef<(() => void) | null>(null);
   const revealAfterCoverChange = useCallback(() => {
     const strip = sequenceStripRef.current;
@@ -499,10 +498,6 @@ export default function SequenceView() {
     stopRevealRef.current = revealCardUntilStill(strip, { onlyInWindow: true });
   }, []);
   useEffect(() => () => stopRevealRef.current?.(), []);
-  const openIssueKey = openIssue?.key ?? null;
-  useEffect(() => {
-    if (openIssueKey !== null) revealAfterCoverChange();
-  }, [openIssueKey, revealAfterCoverChange]);
   // Turning the order around. At rest, the page stays put and the cursor
   // moves to the new first card. Once the person has moved, the current
   // card keeps its place on screen.
@@ -1211,7 +1206,7 @@ export default function SequenceView() {
               {/* The summary, its suspect list and the chart stay under
                   the toolbar while the strip scrolls. */}
               <ToolbarDock onCoverChange={revealAfterCoverChange}>
-                <div className="sequence-summary-bar">
+                <div className="sequence-summary-bar" tabIndex={-1}>
                   <div className="summary-stats">
                     <span className="summary-item excellent">{activeSequence.summary.excellent_count} at 90–100</span>
                     <span className="summary-item good">{activeSequence.summary.good_count} at 70–89</span>
@@ -1230,31 +1225,34 @@ export default function SequenceView() {
                   </div>
                   <SequenceIssuePills issues={issues} open={openIssue?.key ?? null} onToggle={toggleIssue} />
                 </div>
-                {openIssue && (
-                  <SequenceIssueList
-                    issue={openIssue}
-                    imageMap={imageMap}
-                    currentImageId={activeImageId}
-                    onGo={goToImage}
-                    onClose={() => setOpenIssueState(null)}
-                  />
-                )}
+                {/* An open suspect list lies over the chart. */}
+                <div className="sequence-chart-area">
+                  {openIssue && (
+                    <SequenceIssueList
+                      issue={openIssue}
+                      imageMap={imageMap}
+                      currentImageId={activeImageId}
+                      onGo={goToImage}
+                      onClose={() => setOpenIssueState(null)}
+                    />
+                  )}
 
-                {/* Timeline chart */}
-                <SequenceTimeline
-                  key={`${activeChoice?.key}-timeline`}
-                  images={activeSequence.images}
-                  imageMap={imageMap}
-                  scoreScope={activeScoreScope}
-                  metric={cutoffMetric}
-                  metricValues={metricValues}
-                  scale={cutoffRange}
-                  threshold={threshold}
-                  pastCutoffIds={pastCutoffIds}
-                  currentImageId={activeImageId}
-                  selectedImages={selectedImages}
-                  onSelect={selectImage}
-                />
+                  {/* Timeline chart */}
+                  <SequenceTimeline
+                    key={`${activeChoice?.key}-timeline`}
+                    images={activeSequence.images}
+                    imageMap={imageMap}
+                    scoreScope={activeScoreScope}
+                    metric={cutoffMetric}
+                    metricValues={metricValues}
+                    scale={cutoffRange}
+                    threshold={threshold}
+                    pastCutoffIds={pastCutoffIds}
+                    currentImageId={activeImageId}
+                    selectedImages={selectedImages}
+                    onSelect={selectImage}
+                  />
+                </div>
               </ToolbarDock>
 
               <PointingScatter

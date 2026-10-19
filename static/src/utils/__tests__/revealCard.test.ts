@@ -79,20 +79,6 @@ describe('revealCard', () => {
     expect(revealCard(strip, { onlyInWindow: true })).toBe(true);
     expect(cardTop).toBe(308);
   });
-
-  it('counts a suspect list hanging below the docked chart as covering', () => {
-    const { strip } = setup();
-    const dock = document.querySelector('.toolbar-dock')!;
-    dock.innerHTML = '<section class="sequence-issue-list"></section>';
-    const list = dock.querySelector<HTMLElement>('.sequence-issue-list')!;
-    list.getBoundingClientRect = () => ({ top: 300, bottom: 500, height: 200 }) as DOMRect;
-    cardTop = 400;
-    // Not docked, the list moves with the page: no help in scrolling.
-    expect(revealCard(strip)).toBe(false);
-    dock.setAttribute('data-docked', 'true');
-    expect(revealCard(strip)).toBe(true);
-    expect(cardTop).toBe(508);
-  });
 });
 
 describe('revealCardUntilStill', () => {

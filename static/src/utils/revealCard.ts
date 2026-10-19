@@ -8,9 +8,7 @@ const MAX_CHECKS = 20;
 /**
  * Scrolls a Sequence strip's current card into sight, as scrollIntoView's
  * `nearest` does, but measured from below what covers the top of the page:
- * the sticky toolbar, the docked chart beside the strip, and a suspect list
- * hanging below the chart while it is docked. (Not docked, the list moves
- * with the page, and scrolling cannot clear a card under it.) True when it
+ * the sticky toolbar and the docked chart beside the strip. True when it
  * had to scroll.
  */
 export interface RevealOptions {
@@ -30,7 +28,7 @@ export function revealCard(strip: HTMLElement, { onlyInWindow = false }: RevealO
     return false;
   }
   const covers = strip.parentElement?.querySelectorAll<HTMLElement>(
-    ':scope > .view-toolbar.sticky, :scope > .toolbar-dock, :scope > .toolbar-dock[data-docked] .sequence-issue-list',
+    ':scope > .view-toolbar.sticky, :scope > .toolbar-dock',
   ) ?? [];
   const visibleTop = Math.max(
     scrollerRect.top,

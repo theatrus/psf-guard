@@ -97,10 +97,8 @@ function layout(page: Page, imageId: number) {
       toolbarBottom: document.querySelector<HTMLElement>('.sequence-view > .view-toolbar')!.getBoundingClientRect().bottom - origin,
       dockTop: dock.getBoundingClientRect().top - origin,
       dockBottom: dock.getBoundingClientRect().bottom - origin,
-      // A suspect list hangs below the docked block, over the strip.
-      listBottom: dock.hasAttribute('data-docked')
-        ? (dock.querySelector('.sequence-issue-list')?.getBoundingClientRect().bottom ?? origin) - origin
-        : 0,
+      // A suspect list lies over the chart; it must never reach past it.
+      listBottom: (dock.querySelector('.sequence-issue-list')?.getBoundingClientRect().bottom ?? origin) - origin,
       cardTop: card.getBoundingClientRect().top - origin,
       cardBottom: card.getBoundingClientRect().bottom - origin,
     };
@@ -147,6 +145,17 @@ function lowestCardInView(page: Page) {
       .filter((element) => element.getBoundingClientRect().bottom <= bottom);
     return Number(cards[cards.length - 1].dataset.cardImageId);
   });
+}
+
+/** Whether a click in the middle of a card lands on it, not on
+ *  something over it. */
+function cardClickable(page: Page, imageId: number) {
+  return page.evaluate((id) => {
+    const card = document.querySelector<HTMLElement>(`.sequence-image-card[data-card-image-id="${id}"]`)!;
+    const box = card.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return hit !== null && card.contains(hit);
+  }, imageId);
 }
 
 /** Scroll into the strip until the block docks. */
@@ -256,11 +265,11 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   });
 }
 
-// A suspect list opened from the docked summary hangs below the block, over
-// the strip, rather than growing it: the block stays docked and the page
-// stays put. A cursor's card it would cover moves out from under it.
+// A suspect list lies over the score chart rather than growing the block:
+// the block stays docked, the page stays put, and no frame is ever under
+// the list, docked or not.
 test.describe('with a suspect list open', () => {
-  test('a list keeps the block docked and moves the cursor\'s card out from under it', async ({ page, request }) => {
+  test('a list keeps the block docked and covers no frame', async ({ page, request }) => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await stubPixelWork(page);
@@ -275,7 +284,39 @@ test.describe('with a suspect list open', () => {
     await page.locator('.toolbar-dock .summary-issues [data-issue]').click();
     await expect(page.locator('.toolbar-dock .sequence-issue-list')).toBeVisible();
     await expect(page.locator('.toolbar-dock')).toHaveAttribute('data-docked', 'true');
+    const place = await layout(page, target);
+    expect(place.listBottom).toBeLessThanOrEqual(place.dockBottom);
     await expect.poll(() => clearOfDock(page, target)).toBe(true);
+    expect(await cardClickable(page, target)).toBe(true);
+  });
+
+  test('at the top of the page with the pointing chart folded, a frame from the list shows clear of it', async ({ page, request }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await stubPixelWork(page);
+    await withPointing(page, 30);
+    const dbId = await register(request, sessionCatalog());
+    await openSequence(page, dbId);
+    await page.getByRole('button', { name: 'Solved pointing' }).click();
+    await scrollAtRest(page);
+    await page.evaluate(() => { document.querySelector<HTMLElement>('.app-main')!.scrollTop = 0; });
+    await settle(page);
+    const dock = page.locator('.toolbar-dock');
+    await expect(dock).not.toHaveAttribute('data-docked');
+
+    await dock.locator('.summary-issues [data-issue]').click();
+    await page.locator('.sequence-issue-frame').first().click();
+    await expect(page).toHaveURL(/current=1000(&|$)/);
+    await expect.poll(() => clearOfDock(page, 1000)).toBe(true);
+    expect(await cardClickable(page, 1000)).toBe(true);
+
+    await page.keyboard.press('ArrowRight');
+    await expect(page).toHaveURL(/current=1001(&|$)/);
+    await expect.poll(() => clearOfDock(page, 1001)).toBe(true);
+    expect(await cardClickable(page, 1001)).toBe(true);
+    // And a click on it lands on the card.
+    await page.locator('.sequence-image-card[data-card-image-id="1001"]').click();
+    await expect(page.locator('.sequence-image-card[data-card-image-id="1001"]')).toHaveClass(/selected/);
   });
 
   for (const viewport of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }, { width: 390, height: 844 }]) {
