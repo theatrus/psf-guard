@@ -15218,7 +15218,7 @@ pub(crate) mod tests {
         .unwrap();
         ensure_schema(&conn).unwrap();
         let columns = |table: &str| table_column_names(&conn, table).unwrap();
-        assert!(columns("psf_guard_light_header").contains(&"image_key".to_string()));
+        assert!(columns("psf_guard_light_header").contains(&"image_guid".to_string()));
         assert!(columns("psf_guard_calibration_file_check").contains(&"ctime_ns".to_string()));
         let rows: i64 = conn
             .query_row("SELECT count(*) FROM psf_guard_light_header", [], |row| {

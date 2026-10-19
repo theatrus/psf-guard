@@ -7,9 +7,8 @@
 //! one row per light. A row stands while:
 //!
 //! - the light is the one the row was written for: its `acquiredimage` row
-//!   has the same guid, or, in a catalog without guids, the same capture
-//!   time and file name. An id SQLite hands out again after a delete names
-//!   another light;
+//!   has the same guid. SQLite can give a deleted light's id to the next
+//!   light, so the id alone is not enough;
 //! - the file at the row's path has the size, modification time and change
 //!   time it had then. The change time cannot be set back, so a header edited
 //!   in place is read again even when its size and modification time are
@@ -18,6 +17,12 @@
 //!   way.
 //!
 //! Otherwise the header is read again.
+//!
+//! A light without a guid has no kept header, and its header is read every
+//! time. PSF Guard gives every light it adds a guid. Only a Target Scheduler
+//! database opened directly can lack them: one from before schema 22 has no
+//! `guid` column, and one upgraded past schema 22 in one step left its older
+//! rows without one, which `fill-guids` repairs ([`crate::ts_guids`]).
 //!
 //! Import writes a light's row as it adds the light, the calibration health
 //! pass writes the ones it reads, and stack preparation hands the ones it
@@ -36,14 +41,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-/// One row per light, by `acquiredimage.Id`, for the light `image_key` names
-/// ([`image_key_sql`]). Times are nanoseconds since 1970; `written_ns` is
+/// One row per light, by `acquiredimage.Id`, for the light with the guid
+/// `image_guid`. Times are nanoseconds since 1970; `written_ns` is
 /// when what the row says of the file last changed, so a view worked out
 /// from a project's headers can tell when to work it out again.
 pub const TABLE_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS psf_guard_light_header (
         image_id   INTEGER PRIMARY KEY,
-        image_key  TEXT NOT NULL,
+        image_guid  TEXT NOT NULL,
         path       TEXT NOT NULL,
         size       INTEGER NOT NULL,
         mtime_ns   INTEGER NOT NULL,
@@ -123,11 +128,11 @@ pub struct KeptHeader {
     /// go straight there while the file stands as it was.
     #[serde(default)]
     pub located: bool,
-    /// The light this header is of ([`image_key_sql`]) when the reader knew
-    /// it; written only while the light's row still has it. `None` takes the
-    /// row as it is when the header is kept.
+    /// The guid of the light this header is of, when the reader knew it;
+    /// written only while the light's row still has it. `None` takes the
+    /// row's guid as it is when the header is kept.
     #[serde(default)]
-    pub image_key: Option<String>,
+    pub image_guid: Option<String>,
 }
 
 impl KeptHeader {
@@ -139,7 +144,7 @@ impl KeptHeader {
             changed_ns: stamp.changed_ns,
             meta,
             located: false,
-            image_key: None,
+            image_guid: None,
         }
     }
 
@@ -161,7 +166,7 @@ impl KeptHeader {
 /// The columns this build reads and writes.
 const COLUMNS: &[&str] = &[
     "image_id",
-    "image_key",
+    "image_guid",
     "path",
     "size",
     "mtime_ns",
@@ -223,32 +228,25 @@ pub fn table_exists(conn: &Connection) -> bool {
     .unwrap_or(false)
 }
 
-/// The SQL naming the light `acquiredimage a` is: its guid, or, in a
-/// catalog without guids or for a row without one, its capture time and
-/// file name. Never NULL.
-fn image_key_sql(conn: &Connection) -> String {
-    let fallback = "COALESCE(CAST(a.acquireddate AS TEXT), '') || '|' ||                     COALESCE(CASE WHEN json_valid(a.metadata)                              THEN json_extract(a.metadata, '$.FileName') END, '')";
-    if crate::frame_derivatives::catalog_has_guids(conn) {
-        format!("COALESCE(NULLIF(a.guid, ''), {fallback})")
-    } else {
-        fallback.to_string()
-    }
+/// Whether the catalog can keep headers: they are kept by guid, and a
+/// Target Scheduler database from before schema 22 has none.
+fn keeps_headers(conn: &Connection) -> bool {
+    table_exists(conn) && crate::frame_derivatives::catalog_has_guids(conn)
 }
 
 /// The kept headers of a project's lights, by light id: those of the
 /// lights the rows were written for, by this reader.
 pub fn project_headers(conn: &Connection, project_id: i32) -> Result<BTreeMap<i32, KeptHeader>> {
-    if !table_exists(conn) {
+    if !keeps_headers(conn) {
         return Ok(BTreeMap::new());
     }
-    let mut statement = conn.prepare(&format!(
+    let mut statement = conn.prepare(
         "SELECT h.image_id, h.path, h.size, h.mtime_ns, h.ctime_ns, h.located, h.meta_json,
-                h.image_key
+                h.image_guid
          FROM psf_guard_light_header h
          JOIN acquiredimage a ON a.Id = h.image_id
-         WHERE a.projectId = ?1 AND h.reader = ?2 AND h.image_key = {}",
-        image_key_sql(conn)
-    ))?;
+         WHERE a.projectId = ?1 AND h.reader = ?2 AND h.image_guid = a.guid",
+    )?;
     let rows = statement.query_map(params![project_id, reader()], |row| {
         Ok((
             row.get::<_, i32>(0)?,
@@ -265,7 +263,7 @@ pub fn project_headers(conn: &Connection, project_id: i32) -> Result<BTreeMap<i3
     })?;
     let mut headers = BTreeMap::new();
     for row in rows {
-        let (image_id, path, stamp, located, meta_json, image_key) = row?;
+        let (image_id, path, stamp, located, meta_json, image_guid) = row?;
         // A row that does not parse is read again, as a missing one is.
         let Ok(mut meta) = serde_json::from_str::<FrameMeta>(&meta_json) else {
             continue;
@@ -283,19 +281,21 @@ pub fn project_headers(conn: &Connection, project_id: i32) -> Result<BTreeMap<i3
                 changed_ns,
                 meta,
                 located,
-                image_key: Some(image_key),
+                image_guid: Some(image_guid),
             },
         );
     }
     Ok(headers)
 }
 
-/// What names each of a project's lights ([`image_key_sql`]), by light id.
-pub fn project_keys(conn: &Connection, project_id: i32) -> Result<HashMap<i32, String>> {
-    let mut statement = conn.prepare(&format!(
-        "SELECT a.Id, {} FROM acquiredimage a WHERE a.projectId = ?1",
-        image_key_sql(conn)
-    ))?;
+/// The guid of each of a project's lights that has one, by light id.
+pub fn project_guids(conn: &Connection, project_id: i32) -> Result<HashMap<i32, String>> {
+    if !crate::frame_derivatives::catalog_has_guids(conn) {
+        return Ok(HashMap::new());
+    }
+    let mut statement = conn.prepare(
+        "SELECT a.Id, a.guid FROM acquiredimage a WHERE a.projectId = ?1 AND a.guid <> ''",
+    )?;
     Ok(statement
         .query_map([project_id], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?)
@@ -305,17 +305,14 @@ pub fn project_keys(conn: &Connection, project_id: i32) -> Result<HashMap<i32, S
 /// was, or only marked located, leaves it, so what is worked out from the
 /// headers is not worked out again for nothing.
 pub fn project_stamp(conn: &Connection, project_id: i32) -> u128 {
-    if !table_exists(conn) {
+    if !keeps_headers(conn) {
         return 0;
     }
     conn.query_row(
-        &format!(
-            "SELECT count(*), coalesce(max(h.written_ns), 0)
-             FROM psf_guard_light_header h
-             JOIN acquiredimage a ON a.Id = h.image_id
-             WHERE a.projectId = ?1 AND h.reader = ?2 AND h.image_key = {}",
-            image_key_sql(conn)
-        ),
+        "SELECT count(*), coalesce(max(h.written_ns), 0)
+         FROM psf_guard_light_header h
+         JOIN acquiredimage a ON a.Id = h.image_id
+         WHERE a.projectId = ?1 AND h.reader = ?2 AND h.image_guid = a.guid",
         params![project_id, reader()],
         |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
     )
@@ -334,16 +331,16 @@ fn writable(conn: &Connection) -> bool {
 }
 
 /// Keep `headers`, by light id, in one transaction unless the caller holds
-/// one. A header is kept only for a light the catalog still holds, and one
-/// that names its light ([`KeptHeader::image_key`]) only while the light's row
-/// still does. A header written again as it was is left alone, and a row a
+/// one. A header is kept only for a light the catalog still holds that has a
+/// guid, and one that carries its light's guid ([`KeptHeader::image_guid`])
+/// only while the light's row still has it. A header written again as it was is left alone, and a row a
 /// stack located keeps that mark while its path stays. Returns the rows
 /// written.
 pub fn store<'a>(
     conn: &Connection,
     headers: impl IntoIterator<Item = (i32, &'a KeptHeader)>,
 ) -> Result<usize> {
-    if !writable(conn) {
+    if !writable(conn) || !crate::frame_derivatives::catalog_has_guids(conn) {
         return Ok(0);
     }
     ensure_table(conn)?;
@@ -354,23 +351,22 @@ pub fn store<'a>(
     };
     let now = now_ns();
     let reader = reader();
-    let key = image_key_sql(conn);
-    let same = "path = excluded.path AND image_key = excluded.image_key                 AND size = excluded.size AND mtime_ns = excluded.mtime_ns                 AND ctime_ns = excluded.ctime_ns AND reader = excluded.reader";
+    let same = "path = excluded.path AND image_guid = excluded.image_guid                 AND size = excluded.size AND mtime_ns = excluded.mtime_ns                 AND ctime_ns = excluded.ctime_ns AND reader = excluded.reader";
     let mut written = 0;
     {
         let mut statement = conn.prepare(&format!(
             "INSERT INTO psf_guard_light_header
-                (image_id, image_key, path, size, mtime_ns, ctime_ns, reader, located,
+                (image_id, image_guid, path, size, mtime_ns, ctime_ns, reader, located,
                  meta_json, written_ns)
-             SELECT a.Id, {key}, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+             SELECT a.Id, a.guid, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
              FROM acquiredimage a
-             WHERE a.Id = ?1 AND (?10 IS NULL OR {key} = ?10)
+             WHERE a.Id = ?1 AND a.guid <> '' AND (?10 IS NULL OR a.guid = ?10)
              ON CONFLICT(image_id) DO UPDATE SET
-                located = CASE WHEN path = excluded.path AND image_key = excluded.image_key
+                located = CASE WHEN path = excluded.path AND image_guid = excluded.image_guid
                                THEN max(located, excluded.located)
                                ELSE excluded.located END,
                 written_ns = CASE WHEN {same} THEN written_ns ELSE excluded.written_ns END,
-                image_key = excluded.image_key,
+                image_guid = excluded.image_guid,
                 path = excluded.path,
                 size = excluded.size,
                 mtime_ns = excluded.mtime_ns,
@@ -397,7 +393,7 @@ pub fn store<'a>(
                 header.located,
                 meta_json(&header.meta)?,
                 now,
-                header.image_key,
+                header.image_guid,
             ])?;
         }
     }
@@ -417,15 +413,16 @@ fn meta_json(meta: &FrameMeta) -> Result<String> {
     Ok(serde_json::to_string(&value)?)
 }
 
-/// The rows that name no light the catalog holds: its row deleted, or its
-/// id given to another light since.
-fn orphans_sql(conn: &Connection) -> String {
-    format!(
+/// The rows of no light the catalog holds: its row deleted, or its id given
+/// to another light since. Every row, in a catalog without guids.
+fn orphans_sql(conn: &Connection) -> &'static str {
+    if crate::frame_derivatives::catalog_has_guids(conn) {
         "NOT EXISTS (SELECT 1 FROM acquiredimage a
                      WHERE a.Id = psf_guard_light_header.image_id
-                       AND {} = psf_guard_light_header.image_key)",
-        image_key_sql(conn)
-    )
+                       AND a.guid = psf_guard_light_header.image_guid)"
+    } else {
+        "1"
+    }
 }
 
 /// Whether any kept header names a light the catalog no longer holds.
@@ -490,9 +487,9 @@ fn now_ns() -> i64 {
 #[derive(Debug, Default)]
 pub struct LightHeaders {
     kept: HashMap<i32, KeptHeader>,
-    /// What names each light as the request found it, so a header is kept
-    /// for that light only.
-    keys: HashMap<i32, String>,
+    /// Each light's guid as the request found it, so a header is kept for
+    /// that light only. A light without one is not kept.
+    guids: HashMap<i32, String>,
     fresh: Vec<(i32, KeptHeader)>,
     read: usize,
 }
@@ -505,13 +502,13 @@ impl LightHeaders {
             tracing::debug!("light headers of project {project_id} unavailable: {error:#}");
             BTreeMap::new()
         });
-        let keys = project_keys(conn, project_id).unwrap_or_else(|error| {
-            tracing::debug!("light names of project {project_id} unavailable: {error:#}");
+        let guids = project_guids(conn, project_id).unwrap_or_else(|error| {
+            tracing::debug!("light guids of project {project_id} unavailable: {error:#}");
             HashMap::new()
         });
         Self {
             kept: kept.into_iter().collect(),
-            keys,
+            guids,
             ..Self::default()
         }
     }
@@ -570,13 +567,13 @@ impl LightHeaders {
         self.read += 1;
         if meta.readable
             && let Some(stamp) = stamp
-            && let Some(key) = self.keys.get(&image_id)
+            && let Some(guid) = self.guids.get(&image_id)
         {
             self.fresh.push((
                 image_id,
                 KeptHeader {
                     located,
-                    image_key: Some(key.clone()),
+                    image_guid: Some(guid.clone()),
                     ..KeptHeader::new(path, stamp, meta.clone())
                 },
             ));
@@ -667,7 +664,7 @@ mod tests {
         );
         assert_eq!(first.read(), 1);
         let fresh = first.take_fresh();
-        assert_eq!(fresh[0].1.image_key.as_deref(), Some("light-1"));
+        assert_eq!(fresh[0].1.image_guid.as_deref(), Some("light-1"));
         store(&conn, fresh.iter().map(|(id, header)| (*id, header))).unwrap();
 
         // The file still as it was: the kept header serves, not the file.
@@ -734,57 +731,77 @@ mod tests {
 
     #[test]
     fn a_header_kept_for_a_deleted_light_is_not_another_lights() {
-        // SQLite hands the largest id out again after a delete, and N.I.N.A.
-        // file names repeat from one target's folder to the next.
+        // SQLite hands the largest id out again after a delete.
         let temp = tempfile::tempdir().unwrap();
         let conn = catalog();
         let path = light(temp.path(), "LIGHT_0001.fits", "M31");
         store(&conn, [(2, &header_of(&path))]).unwrap();
         assert_eq!(project_headers(&conn, 1).unwrap().len(), 1);
-        let reuse = |guid: Option<&str>| {
-            conn.execute("DELETE FROM acquiredimage WHERE Id = 2", [])
-                .unwrap();
-            conn.execute(
-                "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
-                     gradingStatus, metadata, guid)
-                 VALUES (2, 1, 1, 0, 'Ha', 0, '{\"FileName\":\"LIGHT_0001.fits\"}', ?1)",
-                [guid],
-            )
+        conn.execute("DELETE FROM acquiredimage WHERE Id = 2", [])
             .unwrap();
-        };
-        reuse(Some("another-light"));
+        conn.execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+                 gradingStatus, metadata, guid)
+             VALUES (2, 1, 1, 0, 'Ha', 0, '{\"FileName\":\"LIGHT_0001.fits\"}', 'another-light')",
+            [],
+        )
+        .unwrap();
         assert!(project_headers(&conn, 1).unwrap().is_empty());
         assert_eq!(project_stamp(&conn, 1), 0);
         assert!(has_orphans(&conn));
         assert_eq!(prune(&conn).unwrap(), 1);
 
-        // Without guids, the capture time and file name tell lights apart.
-        let mut stored = header_of(&path);
-        stored.image_key = None;
-        store(&conn, [(2, &stored)]).unwrap();
-        conn.execute("UPDATE acquiredimage SET guid = NULL", [])
-            .unwrap();
-        // The row was kept for the light by its guid; it now has none.
-        assert!(project_headers(&conn, 1).unwrap().is_empty());
-        prune(&conn).unwrap();
-        store(&conn, [(2, &stored)]).unwrap();
-        assert_eq!(project_headers(&conn, 1).unwrap().len(), 1);
-        conn.execute(
-            "UPDATE acquiredimage SET acquireddate = 60 WHERE Id = 2",
-            [],
-        )
-        .unwrap();
-        assert!(
-            project_headers(&conn, 1).unwrap().is_empty(),
-            "another capture under the same id and name"
-        );
-
         // A header read for one light is not kept for the next to take its id.
         let named = KeptHeader {
-            image_key: Some("light-1".into()),
+            image_guid: Some("light-1".into()),
             ..header_of(&path)
         };
         assert_eq!(store(&conn, [(2, &named)]).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_light_without_a_guid_keeps_no_header() {
+        // Target Scheduler's upgrade past schema 22 left older rows without
+        // one: their headers are read every time until `fill-guids` runs.
+        let temp = tempfile::tempdir().unwrap();
+        let conn = catalog();
+        let path = light(temp.path(), "a.fits", "M31");
+        let header = header_of(&path);
+        assert_eq!(store(&conn, [(1, &header)]).unwrap(), 1);
+        conn.execute("UPDATE acquiredimage SET guid = '' WHERE Id = 1", [])
+            .unwrap();
+        assert!(project_headers(&conn, 1).unwrap().is_empty());
+        assert!(has_orphans(&conn));
+        assert_eq!(prune(&conn).unwrap(), 1);
+        assert_eq!(store(&conn, [(1, &header)]).unwrap(), 0);
+        conn.execute("UPDATE acquiredimage SET guid = NULL WHERE Id = 1", [])
+            .unwrap();
+        assert_eq!(store(&conn, [(1, &header)]).unwrap(), 0);
+
+        let mut headers = LightHeaders::load(&conn, 1);
+        let meta = headers.meta(1, &path, FileStamp::of(&path), true);
+        assert_eq!(meta.object.as_deref(), Some("M31"));
+        assert_eq!(headers.read(), 1);
+        assert!(headers.take_fresh().is_empty(), "no guid to keep it by");
+    }
+
+    #[test]
+    fn a_catalog_without_guids_keeps_no_headers() {
+        // A Target Scheduler database from before schema 22.
+        let temp = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, projectId INTEGER,
+                 acquireddate INTEGER, metadata TEXT);
+             INSERT INTO acquiredimage VALUES (1, 1, 0, '{}');",
+        )
+        .unwrap();
+        let path = light(temp.path(), "a.fits", "M31");
+        assert_eq!(store(&conn, [(1, &header_of(&path))]).unwrap(), 0);
+        assert!(!table_exists(&conn), "nothing written");
+        assert!(project_headers(&conn, 1).unwrap().is_empty());
+        assert!(project_guids(&conn, 1).unwrap().is_empty());
+        assert_eq!(project_stamp(&conn, 1), 0);
     }
 
     #[test]

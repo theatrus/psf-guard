@@ -155,9 +155,9 @@ pub struct ProjectHealth {
 #[derive(Debug, Clone)]
 pub struct ProjectLight {
     pub image_id: i32,
-    /// What names the light, so its header is kept for it alone
-    /// ([`crate::light_headers`]).
-    pub image_key: Option<String>,
+    /// The light's guid, so its header is kept for it alone; a light
+    /// without one keeps none ([`crate::light_headers`]).
+    pub image_guid: Option<String>,
     pub path: PathBuf,
     pub night: String,
     pub filter: String,
@@ -451,7 +451,7 @@ impl HealthLibrary {
         Ok(JudgedLight {
             result: result(Some(findings)),
             header: stamp.map(|stamp| KeptHeader {
-                image_key: light.image_key.clone(),
+                image_guid: light.image_guid.clone(),
                 ..KeptHeader::new(&light.path, stamp, meta)
             }),
             read,
@@ -791,8 +791,8 @@ pub fn project_lights(
     let rows = crate::db::Database::new(conn)
         .query_images_scoped(None, Some(project_id), None, None, 0)
         .context("querying project lights")?;
-    // A catalog that cannot name its lights keeps no header for them.
-    let mut keys = crate::light_headers::project_keys(conn, project_id).unwrap_or_default();
+    // Headers are kept by guid; a light without one keeps none.
+    let mut guids = crate::light_headers::project_guids(conn, project_id).unwrap_or_default();
     let mut lights = Vec::new();
     let mut missing = 0;
     for (image, _project, _target) in rows {
@@ -807,7 +807,7 @@ pub fn project_lights(
         };
         lights.push(ProjectLight {
             image_id: image.id,
-            image_key: keys.remove(&image.id),
+            image_guid: guids.remove(&image.id),
             path,
             night: image
                 .acquired_date
@@ -1209,8 +1209,8 @@ mod tests {
                 .execute(
                     "INSERT INTO acquiredimage
                         (Id, projectId, targetId, acquireddate, filtername, gradingStatus,
-                         metadata, profileId)
-                     VALUES (?1, ?2, ?2, ?3, 'Ha', 0, ?4, 'p')",
+                         metadata, profileId, guid)
+                     VALUES (?1, ?2, ?2, ?3, 'Ha', 0, ?4, 'p', 'light-' || ?1)",
                     rusqlite::params![
                         id,
                         project,
@@ -1909,7 +1909,7 @@ mod tests {
         let library = HealthLibrary::load(&fixture.conn).unwrap();
         let light = ProjectLight {
             image_id: 1,
-            image_key: Some("light-1".into()),
+            image_guid: Some("light-1".into()),
             path: fixture.path("light-1.fits"),
             night: "2026-09-09".into(),
             filter: "Ha".into(),
@@ -1922,7 +1922,7 @@ mod tests {
             .expect("a readable light keeps its header");
         assert!(header.meta.readable);
         assert_eq!(
-            header.image_key.as_deref(),
+            header.image_guid.as_deref(),
             Some("light-1"),
             "for that light alone"
         );
@@ -1973,14 +1973,14 @@ mod tests {
             &library.light_nights(&fixture.conn),
         )
         .unwrap();
-        let keys = crate::light_headers::project_keys(&fixture.conn, 1).unwrap();
-        assert_eq!(lights[0].image_key.as_ref(), Some(&keys[&1]));
+        let guids = crate::light_headers::project_guids(&fixture.conn, 1).unwrap();
+        assert_eq!(lights[0].image_guid.as_ref(), Some(&guids[&1]));
         let header = library
             .judge_light_kept(&lights[0], None)
             .unwrap()
             .header
             .unwrap();
-        assert_eq!(header.image_key.as_ref(), Some(&keys[&1]));
+        assert_eq!(header.image_guid.as_ref(), Some(&guids[&1]));
     }
 
     #[test]

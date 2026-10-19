@@ -745,7 +745,7 @@ mod tests {
             epochcode INTEGER, projectId INTEGER, guid TEXT);
         CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, projectId INTEGER, targetId INTEGER,
             acquireddate INTEGER, filtername TEXT, gradingStatus INTEGER, metadata TEXT,
-            profileId TEXT);";
+            profileId TEXT, guid TEXT);";
 
     /// Review repro: a flat master recorded after a result was kept must
     /// move the revision, or "What it feeds" never lists it.
@@ -856,9 +856,9 @@ mod tests {
              INSERT INTO target (Id, name, active, epochcode, projectId, guid)
                  VALUES (1, 'M42', 1, 0, 1, 'tg');
              INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
-                 gradingStatus, metadata, profileId)
-                 VALUES (1, 1, 1, 1789000000, 'Ha', 0, '{\"FileName\":\"l.fits\"}', 'p'),
-                        (2, 1, 1, 1789000060, 'Ha', 0, '{\"FileName\":\"m.fits\"}', 'p');",
+                 gradingStatus, metadata, profileId, guid)
+                 VALUES (1, 1, 1, 1789000000, 'Ha', 0, '{\"FileName\":\"l.fits\"}', 'p', 'l'),
+                        (2, 1, 1, 1789000060, 'Ha', 0, '{\"FileName\":\"m.fits\"}', 'p', 'm');",
         )
         .unwrap();
         let quality = |grade: &str, at: i64| {
@@ -879,7 +879,7 @@ mod tests {
             changed_ns: 3,
             meta: FrameMeta::default(),
             located: false,
-            image_key: None,
+            image_guid: None,
         };
         let pass = |headers: BTreeMap<i32, crate::calibration::KeptHeader>| {
             crate::light_headers::store(&conn, headers.iter().map(|(id, header)| (*id, header)))

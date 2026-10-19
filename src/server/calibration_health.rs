@@ -752,7 +752,7 @@ mod tests {
         let lights: Vec<ProjectLight> = (0..200)
             .map(|image_id| ProjectLight {
                 image_id,
-                image_key: None,
+                image_guid: None,
                 path: PathBuf::from(format!("light-{image_id}.fits")),
                 night: "2026-09-09".into(),
                 filter: "Ha".into(),
@@ -784,8 +784,8 @@ mod tests {
         crate::ts_schema::apply_schema(&conn).unwrap();
         conn.execute(
             "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
-                 gradingStatus, metadata)
-             VALUES (7, 1, 1, 0, 'Ha', 0, '{}')",
+                 gradingStatus, metadata, guid)
+             VALUES (7, 1, 1, 0, 'Ha', 0, '{}', 'light-7')",
             [],
         )
         .unwrap();

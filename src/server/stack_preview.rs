@@ -5787,8 +5787,8 @@ mod tests {
             let name = format!("light-{id}.fits");
             write_calibration_test_fits(&images.join(&name), "LIGHT", rotation);
             conn.execute(
-                "INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
-                 VALUES(?1,1,1,1,?2,?1,'Ha')",
+                "INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername,guid)
+                 VALUES(?1,1,1,1,?2,?1,'Ha','light-' || ?1)",
                 rusqlite::params![
                     id,
                     serde_json::json!({"FileName": name, "ExposureDuration": 300.0}).to_string()
@@ -5872,8 +5872,8 @@ mod tests {
             let name = format!("light-{id}.fits");
             write_calibration_test_fits(&images.join(&name), "LIGHT", 94.7);
             conn.execute(
-                "INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
-                 VALUES(?1,1,1,1,?2,?1,'Ha')",
+                "INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername,guid)
+                 VALUES(?1,1,1,1,?2,?1,'Ha','light-' || ?1)",
                 rusqlite::params![
                     id,
                     serde_json::json!({"FileName": name, "ExposureDuration": 300.0}).to_string()
@@ -8735,8 +8735,8 @@ mod tests {
             let name = format!("light-{id}.fits");
             write_calibration_test_fits(&images.join(&name), "LIGHT", 94.7);
             conn.execute(
-                "INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
-                 VALUES(?1,1,1,1,?2,?1,'Ha')",
+                "INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername,guid)
+                 VALUES(?1,1,1,1,?2,?1,'Ha','light-' || ?1)",
                 rusqlite::params![
                     id,
                     serde_json::json!({"FileName": name, "ExposureDuration": 300.0}).to_string()

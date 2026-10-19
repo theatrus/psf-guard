@@ -443,9 +443,8 @@ project queues without opening thousands of files:
   with its size, modification time and change time, and the next request
   trusts it while all three hold. A row written again, by an import or a
   duplicate repair, is checked afresh.
-- Each light's header is kept with its file's path, size, modification time
-  and change time, for that light only: its guid, or, in a catalog without
-  guids, its capture time and file name. Import keeps it as it adds the
+- Each light's header is kept with the light's guid and its file's path,
+  size, modification time and change time. Import keeps it as it adds the
   light, the [calibration health](#calibration-health) pass keeps the ones it
   reads, and a stack build keeps the ones it had to read once no other
   build waits to be prepared. A catalog another program is writing, as an
@@ -455,6 +454,12 @@ project queues without opening thousands of files:
   changes or moves, including an edit in place that puts the size and
   modification time back (the change time cannot be put back), when its
   light is deleted and its id given to another, and once with each release.
+- A light without a guid keeps no header, so a build reads its header every
+  time. Every light PSF Guard adds has a guid. Only a Target Scheduler
+  database opened directly can have lights without one: one from before
+  Target Scheduler's schema 22, or one whose upgrade skipped its older rows.
+  For the second, use **Fill in GUIDs** in Settings › Databases (see
+  [Rigs and plans appear on their own](DIRECTOR.md#rigs-and-plans-appear-on-their-own)).
 
 These records hold this machine's paths and file times. Transfers and
 `sync pull` never carry them, and a catalog a newer build has upgraded is
