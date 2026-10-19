@@ -308,7 +308,9 @@ list lies over the score chart, its frames scrolling within it, so opening
 or closing one never moves the page or covers a frame. They dock only while they and
 the toolbar leave the frames about half of the window, measured with the
 header in sight; on a window too short for that, such as a phone on its
-side, they scroll with the page. A frame the cursor moves to always shows
+side, they scroll with the page. On a phone the summary sets its counts
+and pills in smaller type and the chart is drawn shorter, so they dock
+with room to spare. A frame the cursor moves to always shows
 below them and an open list, never under them.
 The **Solved pointing** chart plots each solved frame's centre around the
 target, with the cursor's frame ringed. A click on a point, or Enter on it

@@ -158,6 +158,28 @@ function cardClickable(page: Page, imageId: number) {
   }, imageId);
 }
 
+/** What ToolbarDock docks by: the toolbar's and the block's heights, the
+ *  header's, and the room for the page with the header in sight. */
+function dockSizes(page: Page) {
+  return page.evaluate(() => {
+    const scroller = document.querySelector<HTMLElement>('.app-main')!;
+    const app = scroller.parentElement!;
+    const header = app.querySelector<HTMLElement>(':scope > .app-header')!;
+    const shown = header.getBoundingClientRect().bottom - app.getBoundingClientRect().top;
+    const room = scroller.clientHeight - Math.max(0, header.offsetHeight - shown);
+    const toolbar = document.querySelector<HTMLElement>('.sequence-view > .view-toolbar')!.getBoundingClientRect().height;
+    const dock = document.querySelector<HTMLElement>('.toolbar-dock')!.offsetHeight;
+    return { covered: toolbar + dock, header: header.offsetHeight, room };
+  });
+}
+
+/** The block docks with room to spare under the 55% limit, not by a hair
+ *  that another platform's fonts could tip. */
+async function expectDockMargin(page: Page) {
+  const { covered, room } = await dockSizes(page);
+  expect(covered / room).toBeLessThanOrEqual(0.47);
+}
+
 /** Scroll into the strip until the block docks. */
 async function scrollToDock(page: Page) {
   await expect.poll(async () => {
@@ -183,6 +205,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       test.setTimeout(90_000);
       const dbId = await register(request, sessionCatalog());
       await openSequence(page, dbId);
+      await expectDockMargin(page);
       const dock = page.locator('.toolbar-dock');
       // The view may scroll its first card into sight as it opens; start
       // from the top.
@@ -225,6 +248,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       test.setTimeout(90_000);
       const dbId = await register(request, sessionCatalog());
       await openSequence(page, dbId);
+      await expectDockMargin(page);
 
       const target = 1000 + FRAMES - 4;
       await page.locator(`.pointing-dot[data-pointing-image-id="${target}"]`).click();
@@ -276,6 +300,7 @@ test.describe('with a suspect list open', () => {
     await withPointing(page, 2);
     const dbId = await register(request, sessionCatalog());
     await openSequence(page, dbId);
+    await expectDockMargin(page);
     await scrollToDock(page);
     const target = await cardUnderDock(page);
     await page.locator(`.sequence-image-card[data-card-image-id="${target}"]`).click();
@@ -327,6 +352,7 @@ test.describe('with a suspect list open', () => {
       await withPointing(page, 30);
       const dbId = await register(request, sessionCatalog());
       await openSequence(page, dbId);
+      await expectDockMargin(page);
       // Far down, once the view has brought its first card into sight.
       await scrollAtRest(page);
       await page.evaluate(() => {
@@ -365,16 +391,21 @@ test.describe('with a suspect list open', () => {
 
 test('on a phone, the header sliding away and back does not flip the block between docked and too tall', async ({ page, request }) => {
   test.setTimeout(90_000);
-  // A short phone, where the toolbar and the block (with a pill making
-  // the summary a line taller) cover more than 55% of the room with the
-  // header in sight, but less with it slid away: measured from the
-  // scrolling region as it is, the block flipped as the header moved.
-  await page.setViewportSize({ width: 390, height: 800 });
+  await page.setViewportSize({ width: 390, height: 844 });
   await stubPixelWork(page);
   await withPointing(page, 2);
   const dbId = await register(request, sessionCatalog());
   await openSequence(page, dbId);
   await scrollAtRest(page);
+  // A phone short enough that the toolbar and the block cover 57.5% of the
+  // room with the header in sight, past the limit, but under 50% with the
+  // header slid away. Measured from the scrolling region as it is, the
+  // block flipped as the header moved. Found from this platform's own
+  // sizes, so its fonts cannot move the test off that line.
+  const sizes = await dockSizes(page);
+  const room = sizes.covered / 0.575;
+  expect(sizes.covered / (room + sizes.header)).toBeLessThan(0.49);
+  await page.setViewportSize({ width: 390, height: Math.round(844 - (sizes.room - room)) });
   await page.evaluate(() => { document.querySelector<HTMLElement>('.app-main')!.scrollTop = 1500; });
   await scrollAtRest(page);
   await expect(page.locator('.toolbar-dock')).toHaveAttribute('data-too-tall', 'true');

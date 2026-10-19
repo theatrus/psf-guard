@@ -6839,6 +6839,51 @@
   display: block;
 }
 
+/* A phone keeps the docked summary and chart short, so with the toolbar
+   they leave the frames well over half the screen: the counts and pills
+   share smaller lines, the comparison note is left to screen readers, and
+   the chart is drawn shorter (SequenceTimeline). */
+@media (max-width: 760px) {
+  .sequence-summary-bar {
+    justify-content: flex-start;
+    gap: 0.3rem 0.6rem;
+    margin-inline: 0.25rem;
+    padding: 0.45rem 0.6rem;
+  }
+
+  .summary-stats {
+    gap: 0.15rem 0.6rem;
+    font-size: 0.75rem;
+  }
+
+  .sequence-score-context {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .summary-issues {
+    gap: 0.3rem;
+  }
+
+  .summary-issues .issue-badge {
+    padding: 0.05rem 0.5rem;
+    font-size: 0.72rem;
+  }
+
+  .sequence-timeline {
+    margin: 0.35rem 0.25rem;
+    padding: 0.35rem;
+  }
+
+  .sequence-chart-area > .sequence-issue-list {
+    inset: 0.35rem 0.25rem;
+  }
+}
+
 /* The summary, its suspect list and the score chart dock under the
    toolbar (ToolbarDock), and the strip passes under them. The block is
    opaque and holds its children's margins, so no card shows through. It

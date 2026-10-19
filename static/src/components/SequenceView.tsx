@@ -1554,7 +1554,9 @@ const SequenceTimeline = memo(function SequenceTimeline({
   if (images.length === 0) return null;
 
   const chartWidth = Math.max(400, viewportWidth);
-  const chartHeight = 120;
+  // A phone's chart is shorter, so the docked block leaves room for the
+  // frames (see App.css).
+  const chartHeight = viewportWidth > 0 && viewportWidth < 560 ? 84 : 120;
   const padding = { top: 10, right: 10, bottom: 20, left: 36 };
   const innerWidth = chartWidth - padding.left - padding.right;
   const innerHeight = chartHeight - padding.top - padding.bottom;
