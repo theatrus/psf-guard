@@ -455,7 +455,11 @@ function stackItem(entry: StackActivityEntry): ActivityItem {
     title: entry.kind === 'mono' ? 'Stacking' : 'Composing color',
     scope: entry.label,
     detail: queued
-      ? 'Waiting for the build ahead'
+      // A composition with no place in line waits in the quick lane, behind
+      // another composition rather than a build.
+      ? entry.kind === 'color' && entry.queue_position == null
+        ? 'Waiting for the composition ahead'
+        : 'Waiting for the build ahead'
       : entry.progress_label
         ?? (entry.total_units > 0
           ? `${entry.processed_units}/${entry.total_units} ${unit}`

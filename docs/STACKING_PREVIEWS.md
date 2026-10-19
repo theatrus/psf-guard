@@ -1403,19 +1403,30 @@ the display pipeline the color cards start from. A role with two of PSF
 Guard's own stacks, such as two exposure groups of R, is a choice left to
 you. Automatic refreshes compose only what was composed before.
 
-A composition you start does not wait behind queued stack builds when it
-prepares nothing at length: its channels were already registered, background
-corrected, deconvolved and run through RC-Astro for an earlier composition
-and are cached, or it asks for neither deconvolution nor RC-Astro. Changing a
-color card's stretch, color calibration or crop and pressing **Apply
-processing** is the usual case. So is the color that follows a **Build
-current set** or **Build channel** you start: once the target's own channels
-are built, its color composes without waiting for builds of other targets,
-unless its processing deconvolves or runs RC-Astro on the new stacks. Such a
-composition runs in a quick lane beside the build line, one at a time, and
-appears in the header's job list without a place in line. A composition that deconvolves or runs RC-Astro on
-channels not yet prepared joins the build line, as before, and so does every
-automatic composition.
+A composition you start does not wait behind stack builds, queued or
+running, when it prepares nothing at length: its channels were already
+registered, background corrected, deconvolved and run through RC-Astro for an
+earlier composition and are cached, or it asks for neither deconvolution nor
+RC-Astro. Changing a color card's stretch, color calibration or crop and
+pressing **Apply processing** is the usual case. So is the color that follows
+a **Build current set** or **Build channel** you start: once the target's own
+channels are built, its color composes without waiting for builds of other
+targets, unless its processing deconvolves or runs RC-Astro on the new
+stacks. Such a composition runs in a quick lane beside the build line, one at
+a time in the order asked for, and appears in the header's job list without a
+place in line.
+
+These still join the build line:
+
+- a composition that deconvolves or runs RC-Astro on channels not yet
+  prepared;
+- one whose channels another queued or running composition is preparing at
+  the time, so the two never write the same prepared inputs at once;
+- every automatic composition, which follows the builds it depends on. One
+  you ask for while it waits keeps its place in line.
+
+A composition that finishes after a build replaced one of its channels does
+not take the card back from the color that follows that build.
 
 - **RGB** requires one Red, Green, and Blue stack in its exposure band.
 - **LRGB** requires one Luminance, Red, Green, and Blue stack in its exposure band.

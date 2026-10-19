@@ -1143,11 +1143,15 @@ impl StackPreviewManager {
     }
 
     /// Wait for the quick lane. `None` when stopped while waiting. Stops wake
-    /// it through the line's notice, as they wake builds in the line.
+    /// it through the line's notice, as they wake builds in the line. The
+    /// request for the lane is held across those wakings, so compositions
+    /// take the lane in the order they asked for it.
     async fn wait_quick_turn(
         &self,
         cancel: &AtomicBool,
     ) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let acquire = Arc::clone(&self.quick_permit).acquire_owned();
+        tokio::pin!(acquire);
         loop {
             let notified = self.turn.notified();
             tokio::pin!(notified);
@@ -1156,7 +1160,7 @@ impl StackPreviewManager {
                 return None;
             }
             tokio::select! {
-                permit = Arc::clone(&self.quick_permit).acquire_owned() => return permit.ok(),
+                permit = &mut acquire => return permit.ok(),
                 _ = &mut notified => continue,
             }
         }
@@ -2509,6 +2513,7 @@ fn automatic_work_waits_for(state: &AppState, database_id: &str, reapply: bool) 
     let holder = held.then(|| {
         manager
             .worker_holder("")
+            .or_else(|| manager.quick_lane_holder())
             .unwrap_or_else(|| "the work in the stack line".to_string())
     });
     holder

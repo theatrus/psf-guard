@@ -573,26 +573,55 @@ pub(super) struct PreparedColorJob {
 }
 
 impl PreparedColorJob {
-    /// Whether the composition prepares nothing at length, so a person's
-    /// request runs in the quick lane rather than behind queued stack
-    /// builds: its prepared inputs (the registered, background-corrected
-    /// channels, with any deconvolution and RC-Astro results) are cached, or
-    /// it asks for neither deconvolution nor RC-Astro.
-    pub(super) fn runs_quickly(&self) -> bool {
-        let cached = self
-            .public
+    /// Whether its prepared inputs (the registered, background-corrected
+    /// channels, with any deconvolution and RC-Astro results) are cached
+    /// whole, so composing reuses them.
+    fn inputs_cached(&self) -> bool {
+        self.public
             .linear_input_id
             .as_deref()
             .is_some_and(|input_id| {
-                color_input_manifest_path(&self.stack_root, input_id).is_file()
-            });
+                cached_color_inputs(
+                    &self.stack_root,
+                    input_id,
+                    &self.public.sources,
+                    &self.public.input_rc_astro_ids,
+                )
+                .is_some()
+            })
+    }
+
+    /// Whether the composition prepares nothing at length: its inputs are
+    /// cached, or it asks for neither deconvolution nor RC-Astro.
+    pub(super) fn runs_quickly(&self) -> bool {
         let deconvolves = self
             .public
             .processing
             .as_ref()
             .is_some_and(|processing| !processing.input_deconvolutions.is_empty());
-        cached || (!deconvolves && self.rc_astro_chains.is_empty())
+        self.inputs_cached() || (!deconvolves && self.rc_astro_chains.is_empty())
     }
+}
+
+/// Whether a composition runs in the quick lane, beside the stack line: a
+/// person's, preparing nothing at length. One whose inputs another queued or
+/// running composition is preparing now waits in the line instead, so two
+/// never write the same cached inputs at once. Automatic compositions follow
+/// the builds they depend on in the line.
+fn takes_quick_lane(state: &AppState, prepared: &PreparedColorJob) -> bool {
+    if prepared.public.automatic || !prepared.runs_quickly() {
+        return false;
+    }
+    prepared.inputs_cached()
+        || !prepared
+            .public
+            .linear_input_id
+            .as_deref()
+            .is_some_and(|input_id| {
+                state
+                    .stack_previews
+                    .color_inputs_in_flight(input_id, &prepared.public.job_id)
+            })
 }
 
 fn color_progress(
@@ -889,6 +918,16 @@ impl ColorProgressTracker<'_> {
 }
 
 impl StackPreviewManager {
+    /// Whether another queued or running composition than `except` prepares
+    /// the inputs `input_id` names.
+    fn color_inputs_in_flight(&self, input_id: &str, except: &str) -> bool {
+        self.color_jobs.lock().unwrap().values().any(|job| {
+            job.job_id != except
+                && matches!(job.state, StackJobState::Queued | StackJobState::Running)
+                && job.linear_input_id.as_deref() == Some(input_id)
+        })
+    }
+
     pub(super) fn get_color(&self, job_id: &str) -> Option<StackColorJob> {
         self.color_jobs.lock().unwrap().get(job_id).cloned()
     }
@@ -1028,12 +1067,6 @@ pub async fn start_stack_color(
         return Ok(Json(ApiResponse::success(existing)));
     }
 
-    // Real work is about to queue. A composition that prepares nothing at
-    // length runs in the quick lane beside the builds; anything else takes
-    // the worker, and automatic work in the way yields.
-    if !prepared.runs_quickly() {
-        super::interrupt_automatic(&state);
-    }
     let response = prepared.public.clone();
     if !state.stack_previews.insert_color(response.clone()) {
         return Err(AppError::BadRequest(format!(
@@ -1041,7 +1074,11 @@ pub async fn start_stack_color(
         )));
     }
     let origin = super::journal::JournaledStackJob::color(&ctx.id, project_id, &request, false);
-    enqueue_color_job(Arc::clone(&state), prepared, origin);
+    // Real work is queued. A composition in the quick lane runs beside the
+    // builds; one in the line takes the worker, so automatic work yields.
+    if !enqueue_color_job(Arc::clone(&state), prepared, origin) {
+        super::interrupt_automatic(&state);
+    }
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -1946,16 +1983,15 @@ fn composition_label(
     }
 }
 
+/// Queue a composition: in the quick lane when [`takes_quick_lane`] says so,
+/// otherwise in the stack line. Returns whether it went to the quick lane.
 pub(super) fn enqueue_color_job(
     state: Arc<AppState>,
     prepared: PreparedColorJob,
     origin: super::journal::JournaledStackJob,
-) {
+) -> bool {
     let job_id = prepared.public.job_id.clone();
-    // A person's composition that prepares nothing at length runs in the
-    // quick lane, beside the stack line rather than behind it. An automatic
-    // one waits in the line with the builds it follows.
-    let quick = !prepared.public.automatic && prepared.runs_quickly();
+    let quick = takes_quick_lane(&state, &prepared);
     // A composition stops while it waits for the worker, and while it runs
     // at its next channel or step; a running RC-Astro tool is killed.
     let cancel = state.stack_previews.track_cancel(&job_id);
@@ -1974,10 +2010,10 @@ pub(super) fn enqueue_color_job(
     ));
     tokio::spawn(async move {
         let _work = work;
-        let _lane = QuickLaneEntry {
+        let _lane = quick.then(|| QuickLaneEntry {
             state: Arc::clone(&state),
             job_id: job_id.clone(),
-        };
+        });
         let permit = if quick {
             state.stack_previews.wait_quick_turn(&cancel).await
         } else {
@@ -2016,6 +2052,7 @@ pub(super) fn enqueue_color_job(
         }
         state.stack_previews.forget_cancel_of(&job_id, &cancel);
     });
+    quick
 }
 
 /// Takes a composition out of the quick lane's list however its task ends.
@@ -2103,11 +2140,31 @@ fn run_color_job(
             );
             if let Some(mut completed) = state.stack_previews.get_color(&job_id) {
                 finish_color_job(&mut completed);
+                // A composition that ran beside a build of its own target can
+                // finish after that build replaced one of its channels. The
+                // newer color follows that build, so this one is kept but
+                // does not take the card back.
+                let superseded = state
+                    .get_database(&completed.database_id)
+                    .and_then(|ctx| load_latest_stacks(&ctx, completed.project_id).ok())
+                    .is_some_and(|latest| {
+                        validate_current_color_sources(&completed, &latest).is_err()
+                    });
+                if superseded {
+                    tracing::info!(
+                        job_id,
+                        "Color composition finished after a newer channel stack; the card keeps the newer one"
+                    );
+                }
                 let persisted =
                     persist_color_manifest(&prepared.stack_root, &completed).and_then(|()| {
-                        state
-                            .stack_previews
-                            .persist_latest_color(&prepared.stack_root, &completed)
+                        if superseded {
+                            Ok(())
+                        } else {
+                            state
+                                .stack_previews
+                                .persist_latest_color(&prepared.stack_root, &completed)
+                        }
                     });
                 match persisted {
                     Ok(()) => {
@@ -3678,13 +3735,15 @@ fn load_source_frame(stack_root: &FsPath, source: &StackColorSource) -> Result<F
     Ok(frame)
 }
 
-fn load_cached_color_input_manifest(
+/// A composition's prepared inputs, when they are cached whole: the manifest
+/// reads, matches this version, these roles and RC-Astro results, and every
+/// channel's FITS is there. Reads no pixels.
+fn cached_color_inputs(
     stack_root: &FsPath,
     input_id: &str,
-    reference_role: StackColorRole,
     sources: &[StackColorSource],
     rc_astro_ids: &BTreeMap<StackColorRole, String>,
-) -> Option<(CachedColorInputs, FitsFrame)> {
+) -> Option<CachedColorInputs> {
     let bytes = std::fs::read(color_input_manifest_path(stack_root, input_id)).ok()?;
     let manifest = serde_json::from_slice::<CachedColorInputs>(&bytes).ok()?;
     let roles = sources.iter().map(|source| source.role).collect::<Vec<_>>();
@@ -3695,12 +3754,20 @@ fn load_cached_color_input_manifest(
     {
         return None;
     }
-    if !roles
+    roles
         .iter()
         .all(|role| color_input_fits_path(stack_root, input_id, *role).is_file())
-    {
-        return None;
-    }
+        .then_some(manifest)
+}
+
+fn load_cached_color_input_manifest(
+    stack_root: &FsPath,
+    input_id: &str,
+    reference_role: StackColorRole,
+    sources: &[StackColorSource],
+    rc_astro_ids: &BTreeMap<StackColorRole, String>,
+) -> Option<(CachedColorInputs, FitsFrame)> {
+    let manifest = cached_color_inputs(stack_root, input_id, sources, rc_astro_ids)?;
     let reference = crate::image_io::open_linear_frame(color_input_fits_path(
         stack_root,
         input_id,
@@ -3752,7 +3819,7 @@ fn store_cached_color_inputs(
             .parent()
             .ok_or_else(|| "Color input FITS path has no parent".to_string())?;
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let temporary = destination.with_extension(format!("{}.tmp.fits", std::process::id()));
+        let temporary = destination.with_extension(format!("{}.tmp.fits", temporary_tag()));
         write_processed_image_fits_f32(&temporary, image, reference_headers, &[])
             .map_err(|error| error.to_string())?;
         std::fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
@@ -4356,12 +4423,20 @@ fn current_latest_colors(mut latest: LatestStackColorPreviews) -> LatestStackCol
     latest
 }
 
+/// A temporary file's tag, unique to this write, so a composition in the
+/// quick lane and one in the line never write the same temporary file.
+fn temporary_tag() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{next}", std::process::id())
+}
+
 fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Color manifest path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    let temporary = path.with_extension(format!("{}.tmp", temporary_tag()));
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
     std::fs::rename(&temporary, path).map_err(|error| error.to_string())
@@ -4773,6 +4848,21 @@ mod tests {
         }
     }
 
+    /// A whole cache of prepared inputs for a composition with no channels.
+    fn write_cached_inputs(root: &FsPath, input_id: &str) {
+        let cached = CachedColorInputs {
+            schema_version: COLOR_INPUT_CACHE_VERSION,
+            input_id: input_id.into(),
+            roles: Vec::new(),
+            registered_transforms: BTreeMap::new(),
+            resolved_backgrounds: BTreeMap::new(),
+            background_protection_fallbacks: BTreeMap::new(),
+            resolved_deconvolutions: BTreeMap::new(),
+            resolved_rc_astro: BTreeMap::new(),
+        };
+        write_json_atomic(&color_input_manifest_path(root, input_id), &cached).unwrap();
+    }
+
     #[test]
     fn a_composition_runs_quickly_unless_it_prepares_inputs_at_length() {
         let cache = tempfile::tempdir().unwrap();
@@ -4781,10 +4871,13 @@ mod tests {
         assert!(prepared_color(root, "legacy", false, false, None).runs_quickly());
         assert!(!prepared_color(root, "deconvolve", true, false, Some("inputs")).runs_quickly());
         assert!(!prepared_color(root, "rc-astro", false, true, Some("inputs")).runs_quickly());
-        // Once those inputs are prepared and cached, reusing them is quick.
+        // A manifest that does not read as this version's cache is no cache.
         let manifest = color_input_manifest_path(root, "inputs");
         std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
         std::fs::write(&manifest, b"{}").unwrap();
+        assert!(!prepared_color(root, "deconvolve", true, false, Some("inputs")).runs_quickly());
+        // Once those inputs are prepared and cached whole, reusing them is quick.
+        write_cached_inputs(root, "inputs");
         assert!(prepared_color(root, "deconvolve", true, false, Some("inputs")).runs_quickly());
         assert!(prepared_color(root, "rc-astro", false, true, Some("inputs")).runs_quickly());
     }
@@ -4802,6 +4895,59 @@ mod tests {
         assert_eq!(manager.worker_holder("other"), None);
         manager.set_quick(&running.job_id, false);
         assert!(manager.worker_holder("other").is_some());
+    }
+
+    #[test]
+    fn the_quick_lane_is_for_a_persons_composition_whose_inputs_no_one_else_prepares() {
+        let cache = tempfile::tempdir().unwrap();
+        let state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+        let quick = prepared_color(cache.path(), &"a".repeat(64), false, false, Some("inputs"));
+        assert!(takes_quick_lane(&state, &quick));
+        // An automatic composition follows its builds in the line.
+        let mut automatic =
+            prepared_color(cache.path(), &"b".repeat(64), false, false, Some("inputs"));
+        automatic.public.automatic = true;
+        assert!(!takes_quick_lane(&state, &automatic));
+        // Another composition preparing the same inputs sends it to the line,
+        // so the two never write them at once.
+        assert!(state.stack_previews.insert_color(automatic.public.clone()));
+        assert!(!takes_quick_lane(&state, &quick));
+        // Once those inputs are cached, it only reads them.
+        write_cached_inputs(cache.path(), "inputs");
+        assert!(takes_quick_lane(&state, &quick));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_composition_stopped_while_it_waits_for_the_quick_lane_ends_there() {
+        let cache = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        // Another composition holds the quick lane.
+        let busy = Arc::clone(&state.stack_previews.quick_permit)
+            .try_acquire_owned()
+            .unwrap();
+        let waiting = prepared_color(cache.path(), &"d".repeat(64), false, false, Some("inputs"));
+        let job_id = waiting.public.job_id.clone();
+        assert!(state.stack_previews.insert_color(waiting.public.clone()));
+        let origin = super::super::processing_queue::test_origin("waiting");
+        assert!(enqueue_color_job(Arc::clone(&state), waiting, origin));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(
+            state.stack_previews.get_color(&job_id).unwrap().state,
+            StackJobState::Queued
+        );
+        assert!(state.stack_previews.request_cancel(&job_id));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while state.stack_previews.get_color(&job_id).unwrap().state != StackJobState::Cancelled {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the stop never reached it"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!state.stack_previews.is_quick(&job_id));
+        drop(busy);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
