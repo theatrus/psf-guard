@@ -11,10 +11,11 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
-- A color composition you start no longer waits behind stack builds when it
-  reuses channels already prepared, or needs no deconvolution or RC-Astro.
-  Changing a color card's stretch, color calibration or crop now runs while
-  builds are queued or running.
+- Short color compositions you start can run alongside stack builds when the
+  prepared channels are cached, or when they need no deconvolution or RC-Astro
+  and no other composition is preparing the same inputs. Color previews after
+  a build you start follow the same rule once their target's channels finish.
+  Other compositions keep their place in the build queue.
 
 - With **Snap** on, dragging a mosaic panel along its row no longer pulls it
   into the next row when a panel there shares only a corner with it.
