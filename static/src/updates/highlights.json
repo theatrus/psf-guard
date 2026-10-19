@@ -14,11 +14,15 @@
       },
       {
         "title": "Allow time for calibration checks and rebuilds",
-        "body": "The first start reads frame sites, grades calibration frames and measures flat groups in the background. Stacks and masters rebuild once when you next use them. Work you start takes priority over these checks."
+        "body": "The first start reads frame sites, grades calibration frames and measures flat groups in the background. Stacks and masters rebuild once when you next use them. PSF Guard does not reuse plate solves or satellite predictions made by 0.11, so it solves frames again. Work you start takes priority over these checks."
       },
       {
         "title": "Review new targets and planning changes",
         "body": "Automatic image-folder import now holds frames for unknown targets for Review. Change New targets in the database settings to create projects automatically. Before activating a plan, check its preview: activation turns off exposure plans the plan does not include. Take Target Scheduler’s values keeps plans made in N.I.N.A."
+      },
+      {
+        "title": "Keep a copy of settings before a downgrade",
+        "body": "PSF Guard 0.11 can open catalogs graded by 0.12, but it ignores the new calibration grades and choices apart from darks graded for stray light. Saving settings in an older version drops the new calibration settings and rig overrides."
       }
     ],
     "highlights": [
@@ -40,7 +44,7 @@
       },
       {
         "title": "Keep stacks through engine updates",
-        "body": "Engine updates reuse completed stacks and calibration masters when their output is unchanged. If only the display stretch or one-shot-color calibration is out of date, Build current set refreshes the card preview from the saved FITS. The stack, processing and downloads stay available. Queued previews show Waiting to render preview on the card and in the job list."
+        "body": "From 0.12 on, Seiza updates that leave stacking output unchanged reuse completed stacks and calibration masters. If only the display stretch or one-shot-color calibration is out of date, Build current set refreshes the card preview from the saved FITS. The stack, processing and downloads stay available. Queued previews show Waiting to render preview on the card and in the job list."
       },
       {
         "title": "Combine WBPP masters in color",
@@ -48,7 +52,7 @@
       },
       {
         "title": "Adjust color while stacks build",
-        "body": "Changes to a color card's stretch, calibration or crop can run alongside stack builds when they reuse prepared channels. Compositions that need no deconvolution or RC-Astro can also run this way, unless another composition is preparing the same uncached inputs. After a build you start, each target's color can compose once its own channels finish. Other color work stays in the build queue."
+        "body": "Changes to a color card's stretch, calibration or crop can run alongside stack builds when they reuse prepared channels. Compositions you start that need no deconvolution or RC-Astro can also run this way, unless another composition is preparing the same uncached inputs. After a build you start, each target's color can compose once its own channels finish. Other color work stays in the build queue."
       },
       {
         "title": "Plan mosaics across rigs",
