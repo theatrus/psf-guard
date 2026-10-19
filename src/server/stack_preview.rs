@@ -4969,6 +4969,7 @@ fn persist_latest_groups_with_exposures(
         });
     }
 
+    let before = latest.groups.len();
     latest.groups.retain(|entry| {
         !retired.iter().any(|group| {
             entry.group.target_id == group.target_id
@@ -4976,6 +4977,11 @@ fn persist_latest_groups_with_exposures(
                 && exposure_group_key(&entry.group) == exposure_group_key(group)
         })
     });
+    // An automatic refresh finds the same skipped channel each time; once
+    // its card is gone there is nothing to write.
+    if ready.is_empty() && latest.groups.len() == before {
+        return Ok(Vec::new());
+    }
 
     let mut moved = Vec::new();
     for group in ready {
@@ -6526,6 +6532,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(filters(), ["HA", "OIII"]);
+
+        // An automatic refresh finds the channel skipped again and leaves
+        // the index as it is.
+        let mut index: LatestStackPreviews =
+            serde_json::from_slice(&std::fs::read(latest_path(cache.path(), 7)).unwrap()).unwrap();
+        index.updated_unix_seconds = 1;
+        std::fs::write(
+            latest_path(cache.path(), 7),
+            serde_json::to_vec(&index).unwrap(),
+        )
+        .unwrap();
+        persist_latest_groups(cache.path(), &completed_job("again", vec![skipped("SII")])).unwrap();
+        let after: LatestStackPreviews =
+            serde_json::from_slice(&std::fs::read(latest_path(cache.path(), 7)).unwrap()).unwrap();
+        assert_eq!(after.updated_unix_seconds, 1, "nothing was written");
     }
 
     #[test]
