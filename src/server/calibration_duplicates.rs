@@ -242,10 +242,9 @@ pub fn status(path: &str) -> DuplicateJobStatus {
 /// rolled back whole.
 pub fn stop(path: &str) -> DuplicateJobStatus {
     let job = job(path);
-    if !job.stop_running() {
+    job.stop_running_or(|queue| {
         // The run is pending and the runner thread has not started it:
         // remove it, so it never starts.
-        let mut queue = job.queue();
         if queue.pending.take().is_some() {
             queue.run_active = false;
             job.update(|status| {
@@ -255,7 +254,7 @@ pub fn stop(path: &str) -> DuplicateJobStatus {
                 status.finished_at = Some(now());
             });
         }
-    }
+    });
     status(path)
 }
 

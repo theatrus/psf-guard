@@ -187,11 +187,20 @@ impl<W: CatalogWork> CatalogJob<W> {
     /// Request a stop of the running item, which stops at its next check.
     /// Returns false when no item is running.
     pub fn stop_running(&self) -> bool {
-        let queued = self.lock();
+        self.stop_running_or(|_| {})
+    }
+
+    /// Request a stop of the running item. When no item is running, call
+    /// `when_idle` with the queue instead, such as to remove a pending run.
+    /// Both happen under the queue lock, so the runner thread cannot start
+    /// an item in between. Returns false when no item was running.
+    pub fn stop_running_or(&self, when_idle: impl FnOnce(&mut W::Queue)) -> bool {
+        let mut queued = self.lock();
         if let Some(stop) = &queued.current_stop {
             stop.request();
             true
         } else {
+            when_idle(&mut queued.queue);
             false
         }
     }
@@ -391,5 +400,21 @@ mod tests {
         assert!(!job.queue().running());
         assert!(!job.stop_running(), "no item is running");
         assert_eq!(COUNTING.catalogs(), ["catalog.sqlite"]);
+    }
+
+    #[test]
+    fn stop_removes_pending_work_when_no_item_is_running() {
+        let job = CatalogJob::<Counting>::default();
+        job.queue().push(7);
+        assert!(!job.stop_running_or(|queue| queue.clear()));
+        assert!(job.queue().is_empty(), "the pending item was removed");
+
+        // While an item runs, its stop flag is requested instead.
+        let stop = Stop::new();
+        job.lock().current_stop = Some(stop.clone());
+        job.queue().push(8);
+        assert!(job.stop_running_or(|queue| queue.clear()));
+        assert!(stop.requested());
+        assert_eq!(*job.queue(), [8], "the queue is left alone");
     }
 }
