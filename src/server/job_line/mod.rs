@@ -12,20 +12,19 @@
 //! Three kinds of waiting are one rule each:
 //!
 //! - A request still being prepared holds a place before it has any work
-//!   ([`JobLine::hold_place`]). The place runs nothing and holds up nothing
-//!   behind it; the work it becomes takes it.
-//! - Work about to join can have the next turn kept for it
-//!   ([`JobLine::reserve_turn`]). A reserved turn holds up the worker lane,
-//!   but only for as long as it was given, counted from when it first holds
-//!   anything up; the work that fills it takes its place.
-//! - Places and running work can hold keys, and other work can wait until
-//!   nothing holds the keys it names ([`JobLine::wait_clear`]): a color
-//!   composition waits so for the builds of its target's channels.
-//! - An entry can be blocked by keys ([`Entry::blocked_by`]). While running
-//!   work, or a hold from outside the line ([`JobLine::hold_key`]), has one
-//!   of those keys, the entry keeps its place and the entries behind it
-//!   run first. A queued WBPP run is blocked so while its database copies
-//!   masters.
+//!   ([`JobLine::hold_place`]). The place runs nothing and does not block
+//!   the entries behind it; the work it becomes takes the place.
+//! - Work about to join can have the next turn reserved for it
+//!   ([`JobLine::reserve_turn`]). A reserved turn blocks the worker lane,
+//!   but only for the time it was given, counted from when it first blocks
+//!   anything; the work that fills it takes its place.
+//! - Places and entries hold keys ([`Entry::holding`]), and an entry can be
+//!   blocked by keys ([`Entry::blocked_by`]). While another place or entry,
+//!   queued or running, or a hold from outside the line
+//!   ([`JobLine::hold_key`]), has one of those keys, the blocked entry keeps
+//!   its place and the entries behind it run first. A color composition is
+//!   blocked so by the builds of its target's channels, and a queued WBPP
+//!   run while its database copies masters.
 //!
 //! An entry stopped while it waits leaves at the next dispatch, with its
 //! [`Task::stopped`] run, whatever else is running. The line knows nothing
@@ -77,15 +76,20 @@ impl Entry {
         }
     }
 
+    /// The id that pages follow.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     /// The keys it holds while it waits and while it runs.
     pub fn holding(mut self, keys: Vec<String>) -> Self {
         self.holds = keys;
         self
     }
 
-    /// Block the entry while running work or a hold from outside the line
-    /// has one of `keys`. A blocked entry keeps its place, and the entries
-    /// behind it run first. Applies to the worker lane only.
+    /// Block the entry while another place or entry, queued or running, or
+    /// a hold from outside the line, has one of `keys`. A blocked entry
+    /// keeps its place, and the entries behind it in its lane run first.
     pub fn blocked_by(mut self, keys: Vec<String>) -> Self {
         self.blocked_by = keys;
         self
@@ -163,21 +167,28 @@ impl LineState {
         }
     }
 
-    /// Whether any place, queued entry or running work holds one of `keys`.
-    fn holds_any(&self, keys: &[String]) -> bool {
+    /// Whether a place, a queued or running entry, or a hold from outside
+    /// the line has one of `keys`, leaving out the place or entry with id
+    /// `except`.
+    fn holds_any_except(&self, keys: &[String], except: Option<&str>) -> bool {
         let held = |holds: &[String]| holds.iter().any(|key| keys.contains(key));
-        self.order.iter().any(|place| held(place.holds()))
-            || self.quick.iter().any(|entry| held(&entry.holds))
-            || self.is_blocked(keys)
-    }
-
-    /// Whether running work or a hold from outside the line has one of
-    /// `keys`, which blocks an entry [`Entry::blocked_by`] them.
-    fn is_blocked(&self, keys: &[String]) -> bool {
-        let held = |holds: &[String]| holds.iter().any(|key| keys.contains(key));
-        held(&self.worker_holds)
+        let other = |id: &str| except != Some(id);
+        self.order
+            .iter()
+            .any(|place| other(place.id()) && held(place.holds()))
+            || self
+                .quick
+                .iter()
+                .any(|queued| other(&queued.id) && held(&queued.holds))
+            || held(&self.worker_holds)
             || held(&self.quick_holds)
             || keys.iter().any(|key| self.outside.contains_key(key))
+    }
+
+    /// Whether `entry` is blocked: whether anything other than the entry
+    /// itself has one of the keys it is [`Entry::blocked_by`].
+    fn is_blocked(&self, entry: &Entry) -> bool {
+        !entry.blocked_by.is_empty() && self.holds_any_except(&entry.blocked_by, Some(&entry.id))
     }
 
     fn index_of(&self, id: &str) -> Option<usize> {
@@ -208,13 +219,16 @@ impl LineState {
     /// turn that ran out leaves.
     fn take_next(&mut self, lane: Lane) -> Result<Entry, Option<Instant>> {
         if lane == Lane::Quick {
-            return self.quick.pop_front().ok_or(None);
+            let index = (0..self.quick.len())
+                .find(|&index| !self.is_blocked(&self.quick[index]))
+                .ok_or(None)?;
+            return self.quick.remove(index).ok_or(None);
         }
         let now = Instant::now();
         let mut index = 0;
         while index < self.order.len() {
             if let Place::Work(entry) = &self.order[index]
-                && self.is_blocked(&entry.blocked_by)
+                && self.is_blocked(entry)
             {
                 index += 1;
                 continue;
@@ -490,9 +504,10 @@ impl JobLine {
         self.wake();
     }
 
-    /// Whether any place, waiting work or running work holds one of `keys`.
+    /// Whether a place, a queued or running entry, or a hold from outside
+    /// the line has one of `keys`.
     pub fn holds_any(&self, keys: &[String]) -> bool {
-        self.lock().holds_any(keys)
+        self.lock().holds_any_except(keys, None)
     }
 
     /// Hold `key` from outside the line until the returned hold is dropped.
@@ -516,20 +531,6 @@ impl JobLine {
         }
         state.worker_busy = true;
         Some(self.lease(Lane::Worker))
-    }
-
-    /// Wait until nothing in the line, waiting or running, holds any of
-    /// `keys`.
-    pub async fn wait_clear(&self, keys: &[String]) {
-        loop {
-            let notified = self.wakeup.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if !self.holds_any(keys) {
-                return;
-            }
-            notified.await;
-        }
     }
 
     /// Put work in its lane's line. On the worker lane it takes the place
@@ -903,7 +904,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn work_waits_until_nothing_holds_its_keys() {
+    async fn a_blocked_entry_waits_until_nothing_holds_its_keys() {
         let (sender, _) = std::sync::mpsc::channel();
         let line = Arc::new(JobLine::new());
         let keys = vec!["target 7".to_string(), "project".to_string()];
@@ -916,18 +917,27 @@ mod tests {
         )
         .holding(vec!["target 7".into()]);
         line.submit(building, None).ok().unwrap();
-        assert!(line.holds_any(&keys));
+        let (composing, _) = entry("compose", Lane::Quick, &sender);
+        line.submit(composing.blocked_by(keys.clone()), None)
+            .ok()
+            .unwrap();
+        let (beside, _) = entry("beside", Lane::Quick, &sender);
+        line.submit(beside, None).ok().unwrap();
+        // The quick lane passes over the blocked composition.
+        let first = line.next(Lane::Quick).await;
+        assert_eq!(id_of(&first), ("run", "beside"));
+        drop(first);
         let waiting = {
-            let (line, keys) = (Arc::clone(&line), keys.clone());
-            tokio::spawn(async move { line.wait_clear(&keys).await })
+            let line = Arc::clone(&line);
+            tokio::spawn(async move { id_of(&line.next(Lane::Quick).await).1.to_string() })
         };
         line.release_place("preparing");
-        // The build still holds its key while it waits, and while it runs.
+        // The queued build holds its key, and holds it while it runs.
         let running = line.next(Lane::Worker).await;
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(!waiting.is_finished());
         drop(running);
-        waiting.await.unwrap();
+        assert_eq!(waiting.await.unwrap(), "compose");
         assert!(!line.holds_any(&keys));
     }
 

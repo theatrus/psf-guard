@@ -463,9 +463,10 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
 }
 
 /// Hold a composition back while builds of its target's channels are
-/// queued, running or being prepared, so it composes from their new stacks;
-/// `None` once it waits. The line wakes it when nothing holds its target's
-/// channels, and it is prepared again in its catalog's line.
+/// queued, running or being prepared, so it composes from their new stacks.
+/// Returns `None` when the composition waits: it joins the quick lane,
+/// blocked by its target's channel keys, and goes back to its catalog's
+/// preparation line when no build holds them.
 fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Option<Preparation> {
     let What::Color(request) = &preparation.what else {
         return Some(preparation);
@@ -490,13 +491,37 @@ fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Opt
     manager.update_color(&preparation.job_id, |job| {
         job.phase = "Waiting for the channel builds to finish".into();
     });
-    let state = Arc::clone(state);
-    tokio::spawn(async move {
-        state.stack_previews.line.wait_clear(&keys).await;
-        preparation.waited = true;
-        line_up(&state, preparation);
-    });
+    let entry = super::Entry::new(
+        preparation.job_id.clone(),
+        super::Lane::Quick,
+        preparation.cancel.clone(),
+        Box::new(ChannelsBuilt(preparation)),
+    )
+    .blocked_by(keys);
+    super::submit_entry(state, entry, None);
     None
+}
+
+/// A composition waiting in the quick lane for its target's channel builds.
+/// When the line runs it, no build holds the channels, and the composition
+/// goes back to its catalog's preparation line to be prepared from the new
+/// stacks. A stopped composition goes back too, and preparation ends it.
+struct ChannelsBuilt(Preparation);
+
+impl super::Task for ChannelsBuilt {
+    fn what(&self) -> &'static str {
+        "a color composition"
+    }
+
+    fn run(self: Box<Self>, state: &Arc<AppState>, _worker: &super::Worker<'_>) {
+        let mut preparation = self.0;
+        preparation.waited = true;
+        line_up(state, preparation);
+    }
+
+    fn stopped(self: Box<Self>, state: &Arc<AppState>) {
+        line_up(state, self.0);
+    }
 }
 
 /// Prepare it again in a minute, keeping its place and journal entry

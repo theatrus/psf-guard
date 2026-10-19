@@ -34,7 +34,8 @@ use build_set::{
 use build_set::{prepare_channels, validate_request};
 pub use build_set::{start_stack_preview_channels, start_stack_previews};
 
-use crate::server::job_line::{DispatchRules, Entry, Lease, Turn};
+pub(super) use crate::server::job_line::Entry;
+use crate::server::job_line::{DispatchRules, Lease, Turn};
 pub(super) use crate::server::job_line::{Lane, LineWork, Needs, Submission, Task, Worker};
 use axum::{
     body::Body,
@@ -3293,18 +3294,27 @@ pub(super) fn submit(
     holds: Vec<String>,
     task: Box<dyn Task>,
 ) {
+    submit_entry(
+        state,
+        Entry::new(job_id, lane, cancel, task).holding(holds),
+        before,
+    );
+}
+
+/// Put `entry` in the line, as [`submit`] does.
+pub(super) fn submit_entry(state: &Arc<AppState>, entry: Entry, before: Option<&str>) {
     ensure_dispatching(state);
-    let entry = Entry::new(job_id, lane, cancel, task).holding(holds);
+    let job_id = entry.id().to_string();
     if let Err(entry) = state.stack_previews.line.submit(entry, before) {
         // The copy's stop flag replaced the queued work's: put that back, so
         // a stop still reaches the work in line.
-        if let Some(stop) = state.stack_previews.line.stop_of(job_id) {
+        if let Some(stop) = state.stack_previews.line.stop_of(&job_id) {
             state
                 .stack_previews
                 .cancels
                 .lock()
                 .unwrap()
-                .insert(job_id.to_string(), stop);
+                .insert(job_id.clone(), stop);
         }
         tracing::warn!(
             job_id,

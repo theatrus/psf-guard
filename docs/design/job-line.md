@@ -46,12 +46,13 @@ The stack line:
   follows. The reservation blocks the worker lane only for the time it was
   given, counted from when it first blocks anything; the work that fills it
   takes its place.
-- **Keys.** Places and running work hold keys. `wait_clear` waits until
-  nothing in the line holds the keys it is given: a color composition waits
-  so for the builds of its target's channels before it joins. An entry
-  `blocked_by` keys keeps its place while running work, or a hold taken
-  from outside the line (`hold_key`), has one of them, and the entries
-  behind it run first.
+- **Keys.** Places and entries hold keys, and an entry can be
+  `blocked_by` keys. While another place or entry, queued or running, or a
+  hold taken from outside the line (`hold_key`), has one of them, the
+  blocked entry keeps its place and the entries behind it in its lane run
+  first. A color composition waits so in the quick lane for the builds of
+  its target's channels, then goes back to preparation, since its spec
+  depends on the stacks those builds make.
 - **A last step that always runs.** A submission's `finally` runs however
   the entry ends, even when publishing or settling it panicked, and is told
   which (`Ending`). It forgets the stop flag, releases compositions waiting
@@ -245,11 +246,12 @@ proposed:
   reserved right behind the build it follows, for a limited time, so no
   separate hold timer is needed.
 - **Keys** cover a target's channels. A build holds its targets' channel
-  keys while it is prepared, queued and run; a color composition waits
-  until no entry holds them. The line wakes waiters whenever an entry ends,
-  so nothing needs releasing by hand. Blocked entries (`blocked_by`) use the
-  same keys to keep their place while running work or an outside hold has
-  one, as a queued WBPP run does while its database copies masters.
+  keys while it is prepared, queued and run. A color composition joins the
+  quick lane blocked by those keys (`blocked_by`), and the dispatcher passes
+  over it until no other place or entry holds them. The line wakes its
+  dispatchers whenever an entry ends, so nothing needs releasing by hand. A
+  queued WBPP run is blocked the same way by its database's key, which the
+  masters copy holds from outside the line.
 
 Waiting entries keep their places. The header shows what each entry waits
 for, using the same text it showed before.
