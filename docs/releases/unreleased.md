@@ -15,6 +15,10 @@
   a frame must sit to count toward a group; the default is 1°. Stacks
   already built keep their reference until their frames change or you click
   **Rebuild**.
+- While a database copies WBPP masters to its process directory, queued WBPP
+  runs for other databases now start when PixInsight is free. Before, every
+  queued run waited for the copy to finish. Queued runs for the copying
+  database still wait, and keep their place in the queue.
 
 ## Fixes
 

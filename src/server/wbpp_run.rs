@@ -35,6 +35,7 @@ use crate::db_registry::{DbRegistry, PixInsightSettings};
 use crate::pixinsight::{
     self, detect, display_plan, Detection, DisplayPlan, OutputFile, PixInsightInstall,
 };
+use crate::server::wbpp_queue::QueuedRun;
 use crate::server::{
     api::ApiResponse,
     database_context::open_scheduler_connection_with_flags,
@@ -121,8 +122,8 @@ pub struct WbppRunProgress {
     /// asked for at the start, and how it went.
     pub publish: Option<PublishOutcome>,
     /// Taking the masters in as stacks for the Stacks view, once a project's
-    /// run completes. The run holds PixInsight's slot until this settles,
-    /// so a page that saw `importing` can refresh its stacks on `done`.
+    /// run completes. PixInsight stays reserved until this finishes, so a
+    /// page that showed `importing` can refresh its stacks on `done`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stacks: Option<StacksTakenIn>,
 }
@@ -641,13 +642,15 @@ fn status(
     }
 }
 
-/// Whether PixInsight is busy with any database's run.
-fn any_run_active(state: &AppState) -> bool {
-    state.all_databases().iter().any(|db| {
-        let store = db.wbpp_run.read().unwrap();
-        store.progress.running || publish_running(&store.progress)
-    })
+/// Whether the database has a run under way or is copying masters: a new
+/// run would replace that progress.
+fn database_busy(store: &RwLock<WbppRunStore>) -> bool {
+    let store = store.read().unwrap();
+    store.progress.running || publish_running(&store.progress)
 }
+
+/// A prepared run: the work from export to taking in the masters.
+type PreparedRun = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// A queued run that could not start: shown as a failed run of its
 /// database, so the reason is where the person will look.
@@ -822,19 +825,25 @@ pub async fn start_wbpp_run(
         publish_folder_name(req.publish_folder.as_deref().unwrap_or_default())?;
     }
 
-    // One PixInsight at a time, server-wide: a start while any run is under
-    // way joins the line and starts on its own when that run ends. The slot
-    // is claimed in one step, before anything awaits.
-    let claim = if any_run_active(&state) {
+    // One PixInsight at a time, server-wide. A start runs now only when
+    // PixInsight is free, no run is queued, and its database is not busy;
+    // otherwise it joins the line. PixInsight is reserved in one step,
+    // before anything awaits.
+    let pixinsight = if database_busy(&ctx.wbpp_run) {
         None
     } else {
-        SlotClaim::take(&state)
+        state.wbpp_queue.try_reserve_pixinsight()
     };
-    // Detection awaits a blocking task. A copy may claim this database
-    // meanwhile, so keep the request and queue it if launch cannot start.
-    if let Some(claim) = claim
-        && launch(Arc::clone(&state), ctx.0.clone(), req.clone(), claim).await?
+    // Detection awaits a blocking task. A copy may start on this database
+    // meanwhile; the request then joins the line.
+    if let Some(pixinsight) = pixinsight
+        && let Some(run) = prepare(Arc::clone(&state), ctx.0.clone(), req.clone()).await?
     {
+        tokio::spawn(async move {
+            run.await;
+            // PixInsight is free: the line's next run can start.
+            drop(pixinsight);
+        });
         return Ok(Json(ApiResponse::success(status(&state, &ctx, true, None))));
     }
 
@@ -847,19 +856,17 @@ pub async fn start_wbpp_run(
         ))));
     }
     let scope = scope_of(&req);
-    let (queue_id, position) =
-        state
-            .wbpp_queue
-            .push(&ctx.id, scope.clone(), req, chrono::Utc::now().timestamp());
+    let (queue_id, position) = state.wbpp_queue.push(
+        &state,
+        &ctx.id,
+        scope.clone(),
+        req,
+        chrono::Utc::now().timestamp(),
+    );
     tracing::info!(
         "🔭 WBPP run for db={} ({scope}) queued at position {position}",
         ctx.id
     );
-    // The run or copy may have finished before this request joined the
-    // queue. Drain again so it does not wait for another job to finish.
-    if !any_run_active(&state) {
-        tokio::spawn(drain_queue(Arc::clone(&state)));
-    }
     Ok(Json(ApiResponse::success(status(
         &state,
         &ctx,
@@ -887,8 +894,8 @@ fn group_alive(pid: u32) -> bool {
 /// would begin from nothing after every restart, and a deploy-on-merge host
 /// would never finish one. It shows on its database as stopped by the
 /// restart, to start again by hand. If its PixInsight outlived the server,
-/// the slot stays taken until that process ends, so nothing else starts
-/// beside it.
+/// PixInsight stays reserved until that process ends, so no other run
+/// starts beside it.
 pub(crate) fn record_cut_off(
     state: &Arc<AppState>,
     db_id: &str,
@@ -921,32 +928,28 @@ pub(crate) fn record_cut_off(
         }
     );
     if let (true, Some(pid)) = (still_running, pid)
-        && let Some(claim) = SlotClaim::take(state)
+        && let Some(pixinsight) = state.wbpp_queue.try_reserve_pixinsight_now()
     {
         tokio::spawn(async move {
             while group_alive(pid) {
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             }
-            drop(claim);
+            drop(pixinsight);
         });
     }
 }
 
-/// Put runs the job journal kept back in line, next first, and let the
-/// first of them start.
+/// Queue the runs that the job journal stored, next first. The line starts
+/// the first one when PixInsight is free.
 pub(crate) fn restore_queue(state: &Arc<AppState>, runs: Vec<(String, StartWbppRunRequest)>) {
-    if runs.is_empty() {
-        return;
-    }
     let now = chrono::Utc::now().timestamp();
     for (db_id, request) in runs {
         if state.get_database(&db_id).is_none() {
             continue;
         }
         let scope = scope_of(&request);
-        state.wbpp_queue.push(&db_id, scope, request, now);
+        state.wbpp_queue.push(state, &db_id, scope, request, now);
     }
-    tokio::spawn(drain_queue(Arc::clone(state)));
 }
 
 pub(crate) fn scope_of(req: &StartWbppRunRequest) -> String {
@@ -956,15 +959,15 @@ pub(crate) fn scope_of(req: &StartWbppRunRequest) -> String {
         .unwrap_or_else(|| "selection".into())
 }
 
-/// Resolve the install, claim the database's run slot, and start PixInsight
-/// in the background. `Ok(false)` means the database already has a run
-/// under way. When the run ends, the next queued run starts.
-async fn launch(
+/// Resolve the install, mark the run as started on its database, and return
+/// the run to await. The caller holds PixInsight's lease until the run
+/// ends. `Ok(None)` means the database already has a run or a copy under
+/// way.
+async fn prepare(
     state: Arc<AppState>,
     ctx: Arc<crate::server::database_context::DatabaseContext>,
     req: StartWbppRunRequest,
-    claim: SlotClaim,
-) -> Result<bool, AppError> {
+) -> Result<Option<PreparedRun>, AppError> {
     let (install, display, settings) = {
         let state = state.clone();
         tokio::task::spawn_blocking(move || resolve_install(&state))
@@ -993,7 +996,7 @@ async fn launch(
     };
     let store = ctx.wbpp_run.clone();
     let Some(cancel) = try_begin(&store, scope.clone(), req.options.clone()) else {
-        return Ok(false);
+        return Ok(None);
     };
     store.write().unwrap().request = Some(req.clone());
 
@@ -1024,7 +1027,7 @@ async fn launch(
     let wbpp_options = req.options.clone();
     let extra = req.extra_params.clone();
 
-    tokio::spawn(async move {
+    Ok(Some(Box::pin(async move {
         let import_output = output_dir.clone();
         let outcome = run(
             job_ctx.clone(),
@@ -1081,9 +1084,10 @@ async fn launch(
             }
         }
         // The masters become stacks in the Stacks view, where PSF Guard
-        // composes their color preview. The run already reads as finished;
-        // the slot stays held until the stacks settle, so the next run in
-        // line cannot replace this progress before the page sees them.
+        // composes their color preview. The progress already shows the run
+        // as finished. PixInsight stays reserved until the stacks are taken
+        // in, so the next run cannot replace this progress before the page
+        // shows them.
         if let (true, Some(project_id)) = (complete, project_id) {
             update(&job_store, |progress| {
                 progress.stacks = Some(StacksTakenIn {
@@ -1138,98 +1142,63 @@ async fn launch(
             };
             update(&job_store, |progress| progress.stacks = Some(stacks));
         }
-        // PixInsight is free: letting go of the slot hands it to the next
-        // run in line.
-        drop(claim);
-    });
-
-    Ok(true)
+    })))
 }
 
-/// PixInsight's slot, held. Dropping it gives the slot back and lets the
-/// next queued run take it, whichever way the holder ends: a run finishing,
-/// a launch that fails, or a request dropped while it waits.
-pub(crate) struct SlotClaim(Arc<AppState>);
-
-impl SlotClaim {
-    fn take(state: &Arc<AppState>) -> Option<Self> {
-        state
-            .wbpp_queue
-            .try_claim()
-            .then(|| SlotClaim(Arc::clone(state)))
-    }
-}
-
-impl Drop for SlotClaim {
-    fn drop(&mut self) {
-        self.0.wbpp_queue.release();
-        if !self.0.wbpp_queue.is_empty()
-            && let Ok(runtime) = tokio::runtime::Handle::try_current()
-        {
-            runtime.spawn(drain_queue(Arc::clone(&self.0)));
+/// Start a run that waited in the line, and return when it ends. A run that
+/// cannot start (its database removed, PixInsight missing) is recorded as a
+/// failed run on its database.
+pub(crate) async fn start_queued(state: Arc<AppState>, next: QueuedRun) {
+    let Some(ctx) = state.get_database(&next.db_id) else {
+        tracing::info!(
+            "🔭 Queued WBPP run {} dropped: database {} is gone",
+            next.scope,
+            next.db_id
+        );
+        return;
+    };
+    let scope = next.scope.clone();
+    let project_id = next.project_id;
+    match prepare(Arc::clone(&state), ctx.clone(), next.request.clone()).await {
+        Ok(Some(run)) => {
+            tracing::info!("🔭 Queued WBPP run for db={} ({scope}) started", ctx.id);
+            run.await;
         }
-    }
-}
-
-/// Start the next queued run. A run that cannot start (its database gone,
-/// PixInsight missing) is recorded on its database and dropped; letting go
-/// of the slot then drains again, so the line keeps moving. Boxed because a
-/// slot's release schedules this again.
-pub(crate) fn drain_queue(state: Arc<AppState>) -> Pin<Box<dyn Future<Output = ()> + Send>> {
-    Box::pin(async move {
-        // Another run holds PixInsight; its end drains again.
-        if state.wbpp_queue.is_empty() || any_run_active(&state) {
-            return;
-        }
-        let Some(claim) = SlotClaim::take(&state) else {
-            return;
-        };
-        let Some(next) = state.wbpp_queue.pop_front() else {
-            return;
-        };
-        let Some(ctx) = state.get_database(&next.db_id) else {
+        Ok(None) => {
+            // A copy started on the database after the line chose this run.
+            // The run goes back to the front of the line, blocked until the
+            // copy ends.
             tracing::info!(
-                "🔭 Queued WBPP run {} dropped: database {} is gone",
-                next.scope,
-                next.db_id
+                "🔭 Queued WBPP run for db={} ({scope}) waits: the database is busy",
+                ctx.id
             );
-            return;
-        };
-        let scope = next.scope.clone();
-        let project_id = next.project_id;
-        match launch(Arc::clone(&state), ctx.clone(), next.request.clone(), claim).await {
-            Ok(true) => {
-                tracing::info!("🔭 Queued WBPP run for db={} ({scope}) started", ctx.id);
-            }
-            Ok(false) => {
-                // The database already has a run under way. This one keeps
-                // its place at the head of the line, and that run's end
-                // drains again.
-                tracing::info!(
-                    "🔭 Queued WBPP run for db={} ({scope}) waits: the database is busy",
-                    ctx.id
-                );
-                state.wbpp_queue.push_front(next);
-            }
-            Err(error) => {
-                let message = match &error {
-                    AppError::BadRequest(message)
-                    | AppError::Conflict(message)
-                    | AppError::Forbidden(message)
-                    | AppError::InternalError(message)
-                    | AppError::NotFoundMessage(message)
-                    | AppError::DatabaseError(message) => message.clone(),
-                    AppError::NotFound => "not found".to_string(),
-                    AppError::NotImplemented => "not implemented".to_string(),
-                };
-                tracing::warn!(
-                    "🔭 Queued WBPP run for db={} ({scope}) could not start: {message}",
-                    ctx.id
-                );
-                record_failed_launch(&ctx.wbpp_run, scope, project_id, message);
-            }
+            let copying = state.wbpp_queue.hold_database(&ctx.id);
+            state.wbpp_queue.push_front(next);
+            tokio::spawn(async move {
+                while database_busy(&ctx.wbpp_run) {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                drop(copying);
+            });
         }
-    })
+        Err(error) => {
+            let message = match &error {
+                AppError::BadRequest(message)
+                | AppError::Conflict(message)
+                | AppError::Forbidden(message)
+                | AppError::InternalError(message)
+                | AppError::NotFoundMessage(message)
+                | AppError::DatabaseError(message) => message.clone(),
+                AppError::NotFound => "not found".to_string(),
+                AppError::NotImplemented => "not implemented".to_string(),
+            };
+            tracing::warn!(
+                "🔭 Queued WBPP run for db={} ({scope}) could not start: {message}",
+                ctx.id
+            );
+            record_failed_launch(&ctx.wbpp_run, scope, project_id, message);
+        }
+    }
 }
 
 /// What a run's plan holds, for its progress.
@@ -1658,11 +1627,13 @@ pub async fn publish_wbpp_run(
         ));
     };
     let folder = publish_folder_name(&request.folder)?;
+    // The database's queued runs wait until the copy ends: a run would
+    // replace the copy's progress.
+    let copying = state.wbpp_queue.hold_database(&ctx.id);
     let (output_dir, project_id) = begin_publish(&ctx.wbpp_run, &process_dir, &folder)?;
     let publish_ctx = ctx.0.clone();
     let publish_store = ctx.0.wbpp_run.clone();
     let failed_store = publish_store.clone();
-    let publish_state = Arc::clone(&state);
     let priority = state.begin_named_interactive_job("copying WBPP masters");
     tokio::spawn(async move {
         let result = tokio::task::spawn_blocking(move || {
@@ -1687,7 +1658,7 @@ pub async fn publish_wbpp_run(
                 }
             });
         }
-        drain_queue(publish_state).await;
+        drop(copying);
     });
     let running = ctx.wbpp_run.read().unwrap().progress.running;
     Ok(Json(ApiResponse::success(status(
@@ -1834,12 +1805,15 @@ mod tests {
             DbContext(ctx.0.clone()),
             Json(req),
         ));
+        let copying;
         {
-            // Poll through the slot claim, then block detection at the
-            // registry read while the copy claims the database.
+            // Poll through the PixInsight reservation, then block detection
+            // at the registry read while a copy starts on the database, as
+            // the publish route starts one.
             let _registry_lock = state.registry_path.write().unwrap();
             let mut context = std::task::Context::from_waker(std::task::Waker::noop());
             assert!(starting.as_mut().poll(&mut context).is_pending());
+            copying = state.wbpp_queue.hold_database(&ctx.id);
             begin_publish(&ctx.wbpp_run, dir.path(), "saved").unwrap();
         }
         let response = starting.await.unwrap().0.data.unwrap();
@@ -1851,17 +1825,19 @@ mod tests {
         );
         assert_eq!(response.queued[0].scope, "new run");
         assert_eq!(response.queued[0].project_id, Some(2));
-        drain_queue(state.clone()).await;
-        let queued = state.wbpp_queue.pop_front().unwrap();
+        let queued = state.wbpp_queue.journal_entries().remove(0);
         assert!(queued.request.include_pending);
         assert_eq!(queued.request.extra_params, vec!["maxStars=500"]);
         assert!(publish_running(&ctx.wbpp_run.read().unwrap().progress));
+        drop(copying);
     }
 
     #[tokio::test]
     async fn copying_appears_in_activity_and_holds_new_runs_in_the_queue() {
         let (state, ctx) = state_with_management();
         finish(&ctx.wbpp_run, "complete", None);
+        // As the publish route starts a copy.
+        let _copying = state.wbpp_queue.hold_database(&ctx.id);
         begin_publish(&ctx.wbpp_run, Path::new("/process"), "Iris").unwrap();
         update(&ctx.wbpp_run, |p| {
             let copy = p.publish.as_mut().unwrap();
@@ -1897,27 +1873,36 @@ mod tests {
         .unwrap();
         assert!(!queued.started);
         assert!(queued.queue_id.is_some());
-        drain_queue(state.clone()).await;
         assert_eq!(state.wbpp_queue.len(), 1);
         assert!(publish_running(&ctx.wbpp_run.read().unwrap().progress));
     }
 
     #[tokio::test]
-    async fn a_dropped_claim_frees_the_slot() {
+    async fn a_dropped_reservation_frees_pixinsight() {
         let (state, _ctx) = state_with_management();
-        let claim = SlotClaim::take(&state).expect("free at first");
-        assert!(SlotClaim::take(&state).is_none(), "one holder at a time");
-        // A request dropped while PixInsight is detected drops its claim.
-        drop(claim);
-        assert!(SlotClaim::take(&state).is_some(), "the slot is free again");
+        let pixinsight = state
+            .wbpp_queue
+            .try_reserve_pixinsight()
+            .expect("free at first");
+        assert!(
+            state.wbpp_queue.try_reserve_pixinsight().is_none(),
+            "one reservation at a time"
+        );
+        // A request dropped while PixInsight is detected drops its
+        // reservation.
+        drop(pixinsight);
+        assert!(
+            state.wbpp_queue.try_reserve_pixinsight().is_some(),
+            "PixInsight is free again"
+        );
     }
 
     #[tokio::test]
-    async fn a_start_racing_a_claimed_slot_queues_and_the_line_keeps_it() {
+    async fn a_start_while_pixinsight_is_reserved_queues_and_the_line_keeps_it() {
         let (state, ctx) = state_with_management();
-        // A run has claimed PixInsight but has not marked its database yet:
+        // A run has reserved PixInsight but has not marked its database yet:
         // the window two starts used to slip through together.
-        assert!(state.wbpp_queue.try_claim());
+        let _pixinsight = state.wbpp_queue.try_reserve_pixinsight().unwrap();
         let queued = start_wbpp_run(
             State(Arc::clone(&state)),
             DbContext(ctx.0.clone()),
@@ -1931,19 +1916,17 @@ mod tests {
         assert!(!queued.started);
         assert!(queued.queue_id.is_some(), "it waits rather than launching");
 
-        // While the slot is held, a drain leaves the line as it is.
-        drain_queue(Arc::clone(&state)).await;
+        // While PixInsight is reserved, the run stays in line.
+        tokio::task::yield_now().await;
         assert_eq!(state.wbpp_queue.len(), 1);
-        assert!(
-            !state.wbpp_queue.try_claim(),
-            "the drain did not take or drop the slot"
-        );
+        assert!(state.wbpp_queue.try_reserve_pixinsight().is_none());
     }
 
     #[tokio::test]
     async fn a_start_while_pixinsight_is_busy_joins_the_line_once_and_can_leave_it() {
         let (state, ctx) = state_with_management();
         // A run under way on this database, as PixInsight would leave it.
+        let _pixinsight = state.wbpp_queue.try_reserve_pixinsight().unwrap();
         try_begin(&ctx.wbpp_run, "Sh2 86".into(), WbppOptions::default()).unwrap();
         update(&ctx.wbpp_run, |progress| progress.project_id = Some(1));
 
@@ -2112,9 +2095,9 @@ mod tests {
         context.export_dir = Some(exports.path().to_path_buf());
         let ctx = DbContext(Arc::new(context));
         assert!(!state.database_management_allowed());
-        // Hold the slot, so an accepted start joins the line rather than
-        // looking for PixInsight.
-        assert!(state.wbpp_queue.try_claim());
+        // Reserve PixInsight, so an accepted start joins the line rather
+        // than looking for PixInsight.
+        let _pixinsight = state.wbpp_queue.try_reserve_pixinsight().unwrap();
         let runs = runs_folder(None, ctx.export_dir.as_deref(), &ctx.stack_root);
         let start = |work_root: Option<String>| {
             let state = Arc::clone(&state);

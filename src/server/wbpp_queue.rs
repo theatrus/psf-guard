@@ -1,22 +1,26 @@
-//! WBPP runs waiting their turn.
+//! WBPP runs queued for PixInsight.
 //!
-//! PixInsight takes every core it can get, so the server runs one WBPP job at
-//! a time across all databases. A start that arrives while one runs joins
-//! this queue in order and starts on its own when the running job ends,
-//! whatever its outcome. The queue lives in memory: a server restart drops
-//! it, as it drops the run under way.
+//! PixInsight uses every core it can get, so the server runs one WBPP run at
+//! a time across all databases. Queued runs share one job line, whose worker
+//! lane is PixInsight: the line's dispatcher starts the next run when
+//! PixInsight is free. While a database copies masters, its queued runs keep
+//! their place and runs of other databases start first. The job journal
+//! stores the queued runs, so a server restart restores the queue.
 
 use std::{
-    collections::VecDeque,
+    collections::HashMap,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Mutex,
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard,
     },
 };
 
 use serde::Serialize;
 
+use super::job_line::{DispatchRules, Entry, JobLine, KeyHold, Lane, Lease, Task, Turn, Worker};
+use super::state::AppState;
 use super::wbpp_run::StartWbppRunRequest;
+use crate::concurrency::{Priority, Stop};
 
 /// One run waiting to start.
 #[derive(Debug, Clone)]
@@ -44,69 +48,149 @@ pub struct QueuedRunSummary {
     pub queued_at: i64,
 }
 
-#[derive(Debug, Default)]
+impl QueuedRun {
+    fn summary(&self, position: usize) -> QueuedRunSummary {
+        QueuedRunSummary {
+            id: self.id.clone(),
+            scope: self.scope.clone(),
+            project_id: self.project_id,
+            target_id: self.target_id,
+            position,
+            queued_at: self.queued_at,
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct WbppQueue {
-    entries: Mutex<VecDeque<QueuedRun>>,
+    /// The order of the queued runs, and PixInsight as the worker lane.
+    line: JobLine,
+    /// The queued runs by id. The line stores their order.
+    runs: Mutex<HashMap<String, QueuedRun>>,
     next_id: AtomicU64,
-    /// PixInsight's one slot, server-wide. Claimed in one step before a run
-    /// starts and released when it ends, so two starts that arrive together,
-    /// or a start racing the line, cannot both launch PixInsight.
-    slot: AtomicBool,
+}
+
+/// How the WBPP line runs its entries. PixInsight runs as a separate
+/// process, so background work on this server keeps running beside it.
+static WBPP_LINE: DispatchRules = DispatchRules {
+    name: "WBPP",
+    line: |state| &state.wbpp_queue.line,
+    lanes: &[Lane::Worker],
+    turn: |_, _| Turn {
+        priority: Priority::Interactive,
+        pauses_background_work: false,
+    },
+};
+
+/// The key a database's masters copy holds: the database's queued runs are
+/// blocked by it.
+fn database_key(db_id: &str) -> String {
+    format!("wbpp-database:{db_id}")
 }
 
 impl WbppQueue {
+    fn runs(&self) -> MutexGuard<'_, HashMap<String, QueuedRun>> {
+        self.runs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Add a run to the back of the line. Returns its id and 1-based place.
     pub fn push(
         &self,
+        state: &Arc<AppState>,
         db_id: &str,
         scope: String,
         request: StartWbppRunRequest,
         now: i64,
     ) -> (String, usize) {
         let id = format!("q{}", self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
-        let mut entries = self.entries.lock().unwrap();
-        entries.push_back(QueuedRun {
-            id: id.clone(),
-            db_id: db_id.to_string(),
-            scope,
-            project_id: request.project_id,
-            target_id: request.target_id,
-            queued_at: now,
-            request,
-        });
-        (id, entries.len())
+        self.runs().insert(
+            id.clone(),
+            QueuedRun {
+                id: id.clone(),
+                db_id: db_id.to_string(),
+                scope,
+                project_id: request.project_id,
+                target_id: request.target_id,
+                queued_at: now,
+                request,
+            },
+        );
+        self.submit(&id, db_id, None);
+        self.line.ensure_dispatching(state, &WBPP_LINE);
+        let position = self.line.position(&id).map_or(1, |index| index + 1);
+        (id, position)
     }
 
-    /// The next run to start, removed from the line.
-    pub fn pop_front(&self) -> Option<QueuedRun> {
-        self.entries.lock().unwrap().pop_front()
+    fn submit(&self, id: &str, db_id: &str, before: Option<&str>) {
+        let task = Box::new(StartQueuedRun { id: id.to_string() });
+        let entry =
+            Entry::new(id, Lane::Worker, Stop::new(), task).blocked_by(vec![database_key(db_id)]);
+        if self.line.submit(entry, before).is_err() {
+            tracing::warn!(id, "A WBPP run with this id is already queued");
+        }
     }
 
-    /// Put a run that could not start yet back at the head of the line,
-    /// with its id and place unchanged.
+    /// Put a run that could not start yet back at the front of the line,
+    /// with its id unchanged.
     pub fn push_front(&self, run: QueuedRun) {
-        self.entries.lock().unwrap().push_front(run);
+        let (id, db_id) = (run.id.clone(), run.db_id.clone());
+        self.runs().insert(id.clone(), run);
+        let first = self.line.order().into_iter().next();
+        self.submit(&id, &db_id, first.as_deref());
     }
 
-    /// Claim PixInsight's slot. False when a run already holds it.
-    pub fn try_claim(&self) -> bool {
-        self.slot
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+    /// Reserve PixInsight when it is free and no run is queued, so a run
+    /// can start at once. PixInsight is free again when the lease is
+    /// dropped.
+    pub fn try_reserve_pixinsight(&self) -> Option<Lease> {
+        self.line.try_reserve_idle_worker()
     }
 
-    /// Give the slot back: the run ended, or a claimed start did not launch.
-    pub fn release(&self) {
-        self.slot.store(false, Ordering::Release);
+    /// Reserve PixInsight when it is free, even with runs queued: for a
+    /// PixInsight process that outlived a server restart.
+    pub fn try_reserve_pixinsight_now(&self) -> Option<Lease> {
+        self.line.try_reserve_worker()
+    }
+
+    /// Block the database's queued runs until the returned hold is dropped:
+    /// a run must not start while the database copies masters.
+    pub fn hold_database(&self, db_id: &str) -> KeyHold {
+        self.line.hold_key(database_key(db_id))
+    }
+
+    /// Take the run that the dispatcher starts out of the queue. `None`
+    /// when the run was removed meanwhile.
+    fn take(&self, id: &str) -> Option<QueuedRun> {
+        self.runs().remove(id)
     }
 
     /// Take one database's queued run out of the line.
     pub fn remove(&self, db_id: &str, id: &str) -> Option<QueuedRun> {
-        let mut entries = self.entries.lock().unwrap();
-        let index = entries
+        let removed = {
+            let mut runs = self.runs();
+            if runs.get(id).is_none_or(|run| run.db_id != db_id) {
+                return None;
+            }
+            runs.remove(id)
+        };
+        // The dispatcher removes the stopped entry from the line.
+        if let Some(stop) = self.line.stop_of(id) {
+            stop.request();
+            self.line.changed();
+        }
+        removed
+    }
+
+    /// The queued runs, next first.
+    fn ordered(&self) -> Vec<QueuedRun> {
+        let order = self.line.order();
+        let runs = self.runs();
+        order
             .iter()
-            .position(|entry| entry.db_id == db_id && entry.id == id)?;
-        entries.remove(index)
+            .filter_map(|id| runs.get(id).cloned())
+            .collect()
     }
 
     /// Whether a database already has a queued run for this project or
@@ -123,70 +207,64 @@ impl WbppQueue {
 
     /// One database's queued runs with their place in the whole line.
     pub fn summaries_for(&self, db_id: &str) -> Vec<QueuedRunSummary> {
-        self.entries
-            .lock()
-            .unwrap()
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.db_id == db_id)
-            .map(|(index, entry)| QueuedRunSummary {
-                id: entry.id.clone(),
-                scope: entry.scope.clone(),
-                project_id: entry.project_id,
-                target_id: entry.target_id,
-                position: index + 1,
-                queued_at: entry.queued_at,
-            })
+        self.all()
+            .into_iter()
+            .filter(|(run_db, _)| run_db == db_id)
+            .map(|(_, summary)| summary)
             .collect()
     }
 
     /// Move a queued run to `position` in the line (0 is next), clamped to
     /// the line. False when no such run is waiting.
     pub fn move_to(&self, id: &str, position: usize) -> bool {
-        let mut entries = self.entries.lock().unwrap();
-        let Some(index) = entries.iter().position(|entry| entry.id == id) else {
-            return false;
-        };
-        let entry = entries.remove(index).expect("index came from the line");
-        let position = position.min(entries.len());
-        entries.insert(position, entry);
-        true
+        self.runs().contains_key(id) && self.line.move_to(id, position)
     }
 
     /// Every queued run, with its database and place in the line.
     pub fn all(&self) -> Vec<(String, QueuedRunSummary)> {
-        self.entries
-            .lock()
-            .unwrap()
-            .iter()
+        self.ordered()
+            .into_iter()
             .enumerate()
-            .map(|(index, entry)| {
-                (
-                    entry.db_id.clone(),
-                    QueuedRunSummary {
-                        id: entry.id.clone(),
-                        scope: entry.scope.clone(),
-                        project_id: entry.project_id,
-                        target_id: entry.target_id,
-                        position: index + 1,
-                        queued_at: entry.queued_at,
-                    },
-                )
-            })
+            .map(|(index, run)| (run.db_id.clone(), run.summary(index + 1)))
             .collect()
     }
 
     /// Every queued run with its request, next first, for the job journal.
     pub fn journal_entries(&self) -> Vec<QueuedRun> {
-        self.entries.lock().unwrap().iter().cloned().collect()
+        self.ordered()
     }
 
     pub fn len(&self) -> usize {
-        self.entries.lock().unwrap().len()
+        self.runs().len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// A queued run's entry in the line: starts the run when PixInsight is free.
+struct StartQueuedRun {
+    id: String,
+}
+
+impl Task for StartQueuedRun {
+    fn what(&self) -> &'static str {
+        "a WBPP run"
+    }
+
+    /// Runs on a blocking thread, and returns when the WBPP run ends, so
+    /// PixInsight stays reserved for the whole run.
+    fn run(self: Box<Self>, state: &Arc<AppState>, _worker: &Worker<'_>) {
+        let Some(run) = state.wbpp_queue.take(&self.id) else {
+            return;
+        };
+        tokio::runtime::Handle::current()
+            .block_on(super::wbpp_run::start_queued(Arc::clone(state), run));
+    }
+
+    fn stopped(self: Box<Self>, state: &Arc<AppState>) {
+        state.wbpp_queue.take(&self.id);
     }
 }
 
@@ -201,12 +279,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_line_is_shared_across_databases_and_positions_are_global() {
-        let queue = WbppQueue::default();
-        let (a, first) = queue.push("alpha", "Sh2 86".into(), request(1), 10);
-        let (b, second) = queue.push("beta", "M31".into(), request(7), 11);
-        let (_c, third) = queue.push("alpha", "NGC 6820".into(), request(2), 12);
+    fn test_state() -> Arc<AppState> {
+        Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn the_line_is_shared_across_databases_and_positions_are_global() {
+        let state = test_state();
+        // PixInsight is busy, so nothing starts.
+        let _pixinsight = state.wbpp_queue.try_reserve_pixinsight().unwrap();
+        let queue = &state.wbpp_queue;
+        let (a, first) = queue.push(&state, "alpha", "Sh2 86".into(), request(1), 10);
+        let (b, second) = queue.push(&state, "beta", "M31".into(), request(7), 11);
+        let (_c, third) = queue.push(&state, "alpha", "NGC 6820".into(), request(2), 12);
         assert_eq!((first, second, third), (1, 2, 3));
         let alpha = queue.summaries_for("alpha");
         assert_eq!(alpha.len(), 2);
@@ -231,16 +318,18 @@ mod tests {
             2,
             "the line closes up"
         );
-        assert_eq!(queue.pop_front().map(|run| run.id), Some(a));
-        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.all()[0].1.id, a);
+        assert_eq!(queue.len(), 2);
     }
 
-    #[test]
-    fn a_queued_run_moves_within_the_line() {
-        let queue = WbppQueue::default();
-        let (first, _) = queue.push("a", "project 1".into(), request(1), 1);
-        let (second, _) = queue.push("b", "project 2".into(), request(2), 2);
-        let (third, _) = queue.push("a", "project 3".into(), request(3), 3);
+    #[tokio::test]
+    async fn a_queued_run_moves_within_the_line() {
+        let state = test_state();
+        let _pixinsight = state.wbpp_queue.try_reserve_pixinsight().unwrap();
+        let queue = &state.wbpp_queue;
+        let (first, _) = queue.push(&state, "a", "project 1".into(), request(1), 1);
+        let (second, _) = queue.push(&state, "b", "project 2".into(), request(2), 2);
+        let (third, _) = queue.push(&state, "a", "project 3".into(), request(3), 3);
         assert!(queue.move_to(&third, 0));
         let order = queue
             .all()
@@ -256,24 +345,51 @@ mod tests {
         assert_eq!(queue.all()[0].1.position, 1);
     }
 
-    #[test]
-    fn the_slot_is_claimed_once_and_a_run_goes_back_to_the_head() {
-        let queue = WbppQueue::default();
-        assert!(queue.try_claim());
-        assert!(!queue.try_claim(), "a second start waits");
-        queue.release();
-        assert!(queue.try_claim());
+    #[tokio::test]
+    async fn pixinsight_is_reserved_once_and_a_run_goes_back_to_the_front() {
+        let state = test_state();
+        let queue = &state.wbpp_queue;
+        let pixinsight = queue.try_reserve_pixinsight().unwrap();
+        assert!(
+            queue.try_reserve_pixinsight().is_none(),
+            "a second start waits"
+        );
+        drop(pixinsight);
+        let _pixinsight = queue.try_reserve_pixinsight().unwrap();
 
-        let (first, _) = queue.push("a", "project 1".into(), request(1), 1);
-        let (second, _) = queue.push("a", "project 2".into(), request(2), 2);
-        let popped = queue.pop_front().unwrap();
-        assert_eq!(popped.id, first);
-        queue.push_front(popped);
+        let (first, _) = queue.push(&state, "a", "project 1".into(), request(1), 1);
+        let (second, _) = queue.push(&state, "a", "project 2".into(), request(2), 2);
+        let taken = queue.take(&first).unwrap();
+        queue.line.remove(&first);
+        queue.push_front(taken);
         let order = queue
             .all()
             .into_iter()
             .map(|(_, run)| run.id)
             .collect::<Vec<_>>();
         assert_eq!(order, vec![first, second]);
+    }
+
+    #[tokio::test]
+    async fn a_database_copying_masters_blocks_only_its_own_runs() {
+        let state = test_state();
+        let queue = &state.wbpp_queue;
+        let copying = queue.hold_database("a");
+        let pixinsight = queue.try_reserve_pixinsight().unwrap();
+        let (blocked, _) = queue.push(&state, "a", "project 1".into(), request(1), 1);
+        let (other, _) = queue.push(&state, "b", "project 2".into(), request(2), 2);
+        drop(pixinsight);
+        // The dispatcher passes over a's run and starts b's, which fails at
+        // once: the test server has no PixInsight.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while queue.runs().contains_key(&other) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "b's run never started"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(queue.all()[0].1.id, blocked, "a's run keeps its place");
+        drop(copying);
     }
 }

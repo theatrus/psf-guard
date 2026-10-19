@@ -128,8 +128,10 @@ PixInsight takes every core it can get, so the server runs one WBPP job at
 a time across all databases. Starting a second project while one runs
 queues it: the dialog shows that project's name, identifies the running job,
 and offers **Queue stacking**. A queued run starts when the current run ends,
-using its queued settings, whether the current run succeeds or fails. The
-Library lists queued runs with their positions; **×** removes a queued run,
+using its queued settings, whether the current run succeeds or fails. While
+a database copies masters to its process directory, that database's queued
+runs keep their place and wait; queued runs of other databases start first.
+The Library lists queued runs with their positions; **×** removes a queued run,
 as does **Remove from queue** in its dialog. The header's background jobs
 chip lists the running job and queue across all databases. There **↑** and **↓**
 change the order one place at a time. The arrow-to-top button (**Move to top**)
