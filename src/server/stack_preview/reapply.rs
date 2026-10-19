@@ -263,7 +263,7 @@ impl StackPreviewManager {
     fn record_reapply(&self, channel: String, reapply: Reapply) {
         self.reapplies.lock().unwrap().insert(channel, reapply);
         // A build first in line looks again: the next turn may be held now.
-        self.turn.notify_waiters();
+        self.line.changed();
     }
 
     fn forget_reapply(&self, channel: &str) {
@@ -281,7 +281,7 @@ impl StackPreviewManager {
             }
         }
         // A build held up for it looks again.
-        self.turn.notify_waiters();
+        self.line.changed();
     }
 
     /// Re-applies the server is waiting to start or running.
@@ -595,7 +595,7 @@ async fn start_waiting(state: &Arc<AppState>) {
                 {
                     entry.run_id = Some(run_id.clone());
                 }
-                manager.turn.notify_waiters();
+                manager.line.changed();
                 // The run may have ended before it was recorded, too late for
                 // its end to find this re-apply: settle it here.
                 let ended = !matches!(
@@ -970,10 +970,15 @@ mod tests {
         manager: &Arc<StackPreviewManager>,
         job_id: &'static str,
     ) -> tokio::task::JoinHandle<bool> {
-        let cancel = manager.track_cancel(job_id);
-        manager.join_line(job_id);
+        manager.queue_test_build(job_id);
         let manager = Arc::clone(manager);
-        tokio::spawn(async move { manager.wait_turn(job_id, &cancel).await.is_some() })
+        tokio::spawn(async move {
+            loop {
+                if manager.dispatch_next().await == (true, job_id.to_string()) {
+                    return true;
+                }
+            }
+        })
     }
 
     #[tokio::test]
@@ -981,7 +986,7 @@ mod tests {
         let manager = Arc::new(StackPreviewManager::new());
         // B1 holds the worker. The person's re-apply run R waits in the
         // line, and they moved build B2 above it.
-        let busy = Arc::clone(&manager.permit).try_acquire_owned().unwrap();
+        let busy = manager.line.try_reserve_worker().unwrap();
         manager.queue_processing("r", scope("R"), "Stretch".into(), false, test_origin("r"));
         manager.record_reapply("R".into(), theirs("R", Some("r")));
         let b2 = waiting_build(&manager, "b2");
@@ -1022,7 +1027,7 @@ mod tests {
         // Their re-apply of R runs; G waits for it, and a build waits.
         let (cancel, _) =
             manager.queue_processing("r", scope("R"), "Stretch".into(), false, test_origin("r"));
-        manager.leave_line("r");
+        manager.release_place("r");
         assert!(manager.start_processing("r", &cancel));
         manager.record_reapply("R".into(), theirs("R", Some("r")));
         manager.record_reapply("G".into(), theirs("G", None));

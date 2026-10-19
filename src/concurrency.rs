@@ -47,7 +47,7 @@
 //! a cap there only made them slower.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Default fraction of cores interactive (user-triggered) work uses. Balanced:
 /// fast scans while leaving half the machine to serve the UI.
@@ -139,6 +139,48 @@ impl Priority {
 pub struct WorkerBudgets {
     /// Workers leased out, per priority.
     in_use: std::sync::Mutex<[usize; 2]>,
+}
+
+/// A request to stop a piece of work, shared by whoever may ask and the work
+/// that checks it at its stop points.
+#[derive(Debug, Clone, Default)]
+pub struct Stop(std::sync::Arc<AtomicBool>);
+
+impl Stop {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ask the work to stop.
+    pub fn request(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Ask the work to stop, and say whether this was the first to ask.
+    pub fn request_first(&self) -> bool {
+        !self.0.swap(true, Ordering::Relaxed)
+    }
+
+    /// Whether anyone asked the work to stop.
+    pub fn requested(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// Whether two handles ask the same work to stop.
+    pub fn same(&self, other: &Stop) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    /// The flag itself, for code that checks an `&AtomicBool`.
+    pub fn as_flag(&self) -> &AtomicBool {
+        &self.0
+    }
+}
+
+impl From<Stop> for seiza_stacking::CancelSignal {
+    fn from(stop: Stop) -> Self {
+        seiza_stacking::CancelSignal::from(stop.0)
+    }
 }
 
 /// Workers leased from [`WorkerBudgets`], returned when dropped.

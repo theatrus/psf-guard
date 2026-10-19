@@ -6,8 +6,7 @@
 //! waiting run there. While a run waits or runs, the header's activity list
 //! shows it with what holds the worker or how far it has got.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use crate::concurrency::Stop;
 
 use serde::{Deserialize, Serialize};
 
@@ -135,7 +134,7 @@ impl StackPreviewManager {
         operation: String,
         stoppable: bool,
         origin: super::journal::JournaledStackJob,
-    ) -> (Arc<AtomicBool>, bool) {
+    ) -> (Stop, bool) {
         let cancel = self.track_cancel(run_id);
         let automatic = origin.automatic();
         self.remember_origin(run_id, origin);
@@ -151,17 +150,18 @@ impl StackPreviewManager {
                 started_unix_seconds: None,
             },
         );
-        self.join_line(run_id);
-        let waits = self.line_position(run_id) != Some(0) || self.permit.available_permits() == 0;
+        // Its place in line until the run itself joins and takes it.
+        self.hold_place(run_id);
+        let waits = self.line_position(run_id) != Some(0) || self.line.worker_busy();
         (cancel, waits)
     }
 
     /// The run has the worker and starts, unless a stop reached it first.
     /// Read under the list's lock, so a run a stop flags as it takes the
     /// worker never starts.
-    pub(super) fn start_processing(&self, run_id: &str, cancel: &AtomicBool) -> bool {
+    pub(super) fn start_processing(&self, run_id: &str, cancel: &Stop) -> bool {
         let mut processing = self.processing.lock().unwrap();
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.requested() {
             return false;
         }
         if let Some(run) = processing.get_mut(run_id) {
@@ -175,7 +175,7 @@ impl StackPreviewManager {
     /// the journal.
     pub(super) fn finish_processing(&self, run_id: &str) {
         self.processing.lock().unwrap().remove(run_id);
-        self.leave_line(run_id);
+        self.release_place(run_id);
         self.forget_cancel(run_id);
     }
 
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn waiting_runs_are_listed_in_line_order_and_leave_when_done() {
         let manager = StackPreviewManager::new();
-        let busy = Arc::clone(&manager.permit).try_acquire_owned().unwrap();
+        let busy = manager.line.try_reserve_worker().unwrap();
         let (_, waits) = manager.queue_processing(
             &"a".repeat(64),
             scope("R"),
@@ -517,7 +517,7 @@ mod tests {
         manager.finish_processing(&"a".repeat(64));
         manager.finish_processing(&"b".repeat(64));
         assert!(manager.active().is_empty());
-        assert!(manager.waiting.lock().unwrap().is_empty());
+        assert!(manager.line.order().is_empty());
         assert!(!manager.request_cancel(&"a".repeat(64)));
     }
 
@@ -532,7 +532,7 @@ mod tests {
             true,
             test_origin(&run_id),
         );
-        manager.leave_line(&run_id);
+        manager.release_place(&run_id);
         assert!(manager.start_processing(&run_id, &cancel));
         super::super::stretch::report_progress(&run_id, "RC-Astro BlurXTerminator", 0.42);
         let entry = manager.active().remove(0);

@@ -186,15 +186,16 @@ pub enum StackColorCalibrationOutcome {
 
 /// How Gaia stars reach the composition grid: the reference frame's solve,
 /// that frame's size, and the reference stack's layout.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct StarPlacement {
+    #[serde(with = "wcs_form")]
     pub(super) wcs: seiza::Wcs,
     pub(super) orientation: StackSkyOrientation,
 }
 
 /// A prepared calibration: what it rests on, and either the way to place
 /// stars or the reason it cannot run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct ColorCalibrationPlan {
     pub(super) settings: StackColorCalibration,
     pub(super) basis: StackColorCalibrationBasis,
@@ -1036,5 +1037,65 @@ pub(super) mod tests {
             catalog_version: None,
             capture_time: None,
         }
+    }
+}
+
+/// A plate solve as a composition's spec writes it down: Seiza's `Wcs`
+/// field for field.
+mod wcs_form {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    struct SipForm {
+        order: u8,
+        a: Vec<f64>,
+        b: Vec<f64>,
+        ap: Vec<f64>,
+        bp: Vec<f64>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct WcsForm {
+        crval: (f64, f64),
+        crpix: (f64, f64),
+        cd: [[f64; 2]; 2],
+        sip: Option<SipForm>,
+    }
+
+    pub(super) fn serialize<S: Serializer>(
+        wcs: &seiza::Wcs,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        WcsForm {
+            crval: wcs.crval,
+            crpix: wcs.crpix,
+            cd: wcs.cd,
+            sip: wcs.sip.as_ref().map(|sip| SipForm {
+                order: sip.order,
+                a: sip.a.clone(),
+                b: sip.b.clone(),
+                ap: sip.ap.clone(),
+                bp: sip.bp.clone(),
+            }),
+        }
+        .serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<seiza::Wcs, D::Error> {
+        let form = WcsForm::deserialize(deserializer)?;
+        Ok(seiza::Wcs {
+            crval: form.crval,
+            crpix: form.crpix,
+            cd: form.cd,
+            sip: form.sip.map(|sip| seiza::Sip {
+                order: sip.order,
+                a: sip.a,
+                b: sip.b,
+                ap: sip.ap,
+                bp: sip.bp,
+            }),
+        })
     }
 }

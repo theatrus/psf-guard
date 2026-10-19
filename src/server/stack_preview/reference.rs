@@ -12,7 +12,6 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Seiza's rule: frames scoring within this share of the best are close
 /// enough that the flattest sky wins among them. Seiza keeps the constant
@@ -228,7 +227,7 @@ pub(super) fn scores(
     frames: &[PreparedFrame],
     stack_root: &Path,
     pool: &rayon::ThreadPool,
-    cancel: &AtomicBool,
+    cancel: &crate::concurrency::Stop,
     mut progress: impl FnMut(usize, usize),
 ) -> Option<Vec<Option<Score>>> {
     let mut scores = frames
@@ -245,7 +244,7 @@ pub(super) fn scores(
     progress(done, frames.len());
     // Each worker holds one frame, so a chunk is as wide as the pool.
     for chunk in missing.chunks(pool.current_num_threads().max(1)) {
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.requested() {
             return None;
         }
         let measured = pool.install(|| {
@@ -427,7 +426,7 @@ mod tests {
             std::slice::from_ref(&missing),
             cache.path(),
             &pool,
-            &AtomicBool::new(false),
+            &crate::concurrency::Stop::new(),
             |_, _| {},
         )
         .unwrap();

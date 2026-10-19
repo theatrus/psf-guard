@@ -162,7 +162,7 @@ struct Preparation {
     /// Until when a preparation that fails is tried again; see
     /// [`Asked::retry_until`].
     retry_until: Option<Instant>,
-    cancel: Arc<AtomicBool>,
+    cancel: Stop,
     /// The channel families of the stacks a composition names, read before
     /// it waited for its channels; see [`color::with_newest_sources`].
     families: Option<BTreeMap<color::StackColorRole, color::SourceFamily>>,
@@ -288,7 +288,7 @@ pub(super) fn queue(
             .what
             .origin(&ctx.id, asked.project_id, &job_id, asked.automatic),
     );
-    manager.join_line(&job_id);
+    manager.hold_place(&job_id);
     line.by_request.insert(request_key.clone(), job_id.clone());
     drop(line);
     line_up(
@@ -536,7 +536,7 @@ fn retry_later(state: &Arc<AppState>, preparation: Preparation) {
 
 /// Whether a preparation was stopped, or the server is stopping.
 fn preparation_stopped(state: &AppState, preparation: &Preparation) -> bool {
-    preparation.cancel.load(Ordering::Relaxed) || state.shutdown.is_stopping()
+    preparation.cancel.requested() || state.shutdown.is_stopping()
 }
 
 /// Prepare one request and queue what it became, or hand back the same
@@ -670,11 +670,9 @@ fn end_preparation(
             }),
         }
     }
-    // What it became holds its place now, unless it is one of them, queued
-    // in the line.
-    if manager.job_state(slot) != Some(StackJobState::Queued) || manager.is_quick(slot) {
-        manager.leave_line(slot);
-    }
+    // What it became holds its place now; one prepared under the slot's
+    // own id took it.
+    manager.release_place(slot);
     manager.forget_cancel_of(slot, &preparation.cancel);
     {
         let mut line = manager.preparing.lock().unwrap();

@@ -633,11 +633,11 @@ fn prepare_search(
 }
 
 fn enqueue_search(state: Arc<AppState>, prepared: PreparedSearch) {
-    let permit = Arc::clone(&state.stack_previews.permit);
     // A person is waiting on this: an automatic build in the way yields.
     super::interrupt_automatic(&state);
     tokio::spawn(async move {
-        let Ok(_permit) = permit.acquire_owned().await else {
+        // It holds the stack worker without a place in the line.
+        let Ok(_worker) = state.stack_previews.acquire_maintenance_permit().await else {
             return;
         };
         let guard = state.begin_named_interactive_job("an artifact search");

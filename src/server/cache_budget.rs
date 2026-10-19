@@ -278,7 +278,7 @@ fn run_pass(state: &AppState, masters: bool) -> Vec<VolumeReport> {
         .collect();
     *VOLUME_LIMITS.lock().unwrap() = limits.clone();
     // Masters only while no build runs, since a build may be reading one;
-    // the build permit is taken only when a volume needs masters removed.
+    // the stack worker is reserved only when a volume needs masters removed.
     let no_build = || {
         masters
             .then(|| state.stack_previews.try_maintenance_permit())
@@ -304,7 +304,7 @@ fn report_volume(
     device: u64,
     folders: &[Folder],
     limit: u8,
-    no_build: &dyn Fn() -> Option<tokio::sync::OwnedSemaphorePermit>,
+    no_build: &dyn Fn() -> Option<crate::server::job_line::Lease>,
 ) -> Option<VolumeReport> {
     let first = &folders.first()?.path;
     let mut usage = volume_usage(first)?;

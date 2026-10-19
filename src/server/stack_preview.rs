@@ -25,6 +25,7 @@ pub mod snr;
 pub mod stretch;
 pub mod wbpp_stacks;
 
+use crate::concurrency::Stop;
 #[cfg(test)]
 use build_set::{
     exclusion_reason, fallback_quality, prefer_target_filter_scores, prepare_job, start_prepared,
@@ -33,6 +34,8 @@ use build_set::{
 use build_set::{prepare_channels, validate_request};
 pub use build_set::{start_stack_preview_channels, start_stack_previews};
 
+use crate::server::job_line::{Dispatch, Entry, Lease};
+pub(super) use crate::server::job_line::{Lane, LineWork, Needs, Submission, Task, Worker};
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -48,10 +51,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path as FsPath, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
 
 use crate::acquisition_context::FramingResolver;
@@ -1056,21 +1057,17 @@ pub struct StackPreviewManager {
     /// Stop flags for stack jobs that are queued or running. The worker reads
     /// its own flag between frames and phases; the entry is dropped when the
     /// job leaves the queue.
-    cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    cancels: Mutex<HashMap<String, Stop>>,
     latest_write: Mutex<()>,
-    permit: Arc<Semaphore>,
-    /// The quick lane: a color composition a person asked for that prepares
-    /// nothing at length runs here, one at a time, beside the stack line
+    /// The line builds, compositions and processing runs wait in, and the
+    /// worker they share. A color composition a person asked for that
+    /// prepares nothing at length runs in its quick lane, beside the worker
     /// rather than behind it.
-    quick_permit: Arc<Semaphore>,
+    line: crate::server::job_line::JobLine,
     /// Compositions in the quick lane, which never hold the stack worker.
     quick_jobs: Mutex<HashSet<String>>,
-    /// Builds waiting for the worker, in the order they will get it. Only the
-    /// first one competes for the permit, so this order, not arrival, decides
-    /// what runs next, and a person can change it.
-    waiting: Mutex<Vec<String>>,
-    /// Wakes waiting builds when the line changes or one is stopped.
-    turn: tokio::sync::Notify,
+    /// The task dispatching each lane's line, started with its first entry.
+    dispatchers: Mutex<HashMap<&'static str, tokio::task::JoinHandle<()>>>,
     /// What each queued or running build was asked for, so the job journal
     /// can put it back after a restart. Kept as long as its stop flag.
     origins: Mutex<HashMap<String, journal::JournaledStackJob>>,
@@ -1104,11 +1101,9 @@ impl StackPreviewManager {
             artifact_jobs: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
-            permit: Arc::new(Semaphore::new(1)),
-            quick_permit: Arc::new(Semaphore::new(1)),
+            line: crate::server::job_line::JobLine::new(),
             quick_jobs: Mutex::new(HashSet::new()),
-            waiting: Mutex::new(Vec::new()),
-            turn: tokio::sync::Notify::new(),
+            dispatchers: Mutex::new(HashMap::new()),
             origins: Mutex::new(HashMap::new()),
             stopped_for_shutdown: Mutex::new(None),
             processing: Mutex::new(HashMap::new()),
@@ -1120,44 +1115,15 @@ impl StackPreviewManager {
         }
     }
 
-    /// Put a build at the back of the line. Called when it is queued, before
-    /// its task starts, so the line keeps the order builds were asked for.
-    fn join_line(&self, job_id: &str) {
-        self.join_line_before(job_id, None);
+    /// Hold a place in the line for a request still being prepared. The
+    /// work it becomes takes the place.
+    fn hold_place(&self, job_id: &str) {
+        self.line.hold_place(job_id);
     }
 
-    /// Put a build in the line just before `slot`, the place a request held
-    /// while it was prepared, or at the back when the slot is gone. A build
-    /// already in the line, as one prepared under its slot's own id is,
-    /// keeps its place.
-    fn join_line_before(&self, job_id: &str, slot: Option<&str>) {
-        let mut waiting = self.waiting.lock().unwrap();
-        if waiting.iter().any(|waiting| waiting == job_id) {
-            return;
-        }
-        let index = slot
-            .and_then(|slot| waiting.iter().position(|waiting| waiting == slot))
-            .unwrap_or(waiting.len());
-        waiting.insert(index, job_id.to_string());
-    }
-
-    /// The first build in the line that is ready to run. A request still
-    /// being prepared keeps its place without holding up the builds behind
-    /// it, and one that has ended holds up nothing while it leaves.
-    fn first_in_line(&self) -> Option<String> {
-        let waiting = self.waiting.lock().unwrap().clone();
-        waiting.into_iter().find(|waiting| {
-            !matches!(
-                self.job_state(waiting),
-                Some(
-                    StackJobState::Preparing
-                        | StackJobState::Completed
-                        | StackJobState::Failed
-                        | StackJobState::Cancelled
-                        | StackJobState::Replaced
-                )
-            )
-        })
+    /// Give up a place a request held, unless work took it.
+    fn release_place(&self, job_id: &str) {
+        self.line.release_place(job_id);
     }
 
     /// Whether a build of this project could still change a target's channel
@@ -1171,75 +1137,6 @@ impl StackPreviewManager {
                     || (matches!(job.state, StackJobState::Queued | StackJobState::Running)
                         && job.groups.iter().any(|group| group.target_id == target_id)))
         })
-    }
-
-    fn leave_line(&self, job_id: &str) {
-        self.waiting
-            .lock()
-            .unwrap()
-            .retain(|waiting| waiting != job_id);
-        self.turn.notify_waiters();
-    }
-
-    /// Wait until this build is first in line, the next turn is not held for
-    /// a person's re-apply, and the worker is free. `None` when it was
-    /// stopped while waiting, or the worker has shut down; either way it has
-    /// left the line.
-    async fn wait_turn(
-        &self,
-        job_id: &str,
-        cancel: &AtomicBool,
-    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
-        loop {
-            let notified = self.turn.notified();
-            tokio::pin!(notified);
-            // Registered before the line is read, so a change between the
-            // read and the wait still wakes this build.
-            notified.as_mut().enable();
-            if cancel.load(Ordering::Relaxed) {
-                self.leave_line(job_id);
-                return None;
-            }
-            let first = self.first_in_line();
-            if first.as_deref() != Some(job_id) {
-                notified.await;
-                continue;
-            }
-            // The next turn is a person's re-apply's: wait for its run to
-            // queue, or for the hold to run out.
-            if let Some(until) = self.turn_held_until() {
-                tokio::select! {
-                    _ = &mut notified => {}
-                    _ = tokio::time::sleep_until(until.into()) => {
-                        if self.turn_held_until().is_none() {
-                            tracing::warn!(
-                                "The next stack turn was held {} s for a re-apply that did \
-                                 not start; the line moves on",
-                                self.turn_held_for.as_secs()
-                            );
-                        }
-                    }
-                }
-                continue;
-            }
-            // First in line: take the worker, unless the line changes while
-            // it is busy, in which case look again. A change and a free
-            // worker can arrive together, so the line and the hold are read
-            // once more with the worker in hand: if something now comes
-            // first, the worker goes back to it.
-            tokio::select! {
-                permit = Arc::clone(&self.permit).acquire_owned() => {
-                    let still_first = self.first_in_line().as_deref() == Some(job_id);
-                    if !still_first || self.turn_held_until().is_some() {
-                        drop(permit);
-                        continue;
-                    }
-                    self.leave_line(job_id);
-                    return permit.ok();
-                }
-                _ = &mut notified => continue,
-            }
-        }
     }
 
     /// Note a composition joining or leaving the quick lane.
@@ -1256,52 +1153,14 @@ impl StackPreviewManager {
         self.quick_jobs.lock().unwrap().contains(job_id)
     }
 
-    /// Wait for the quick lane. `None` when stopped while waiting. Stops wake
-    /// it through the line's notice, as they wake builds in the line. The
-    /// request for the lane is held across those wakings, so compositions
-    /// take the lane in the order they asked for it.
-    async fn wait_quick_turn(
-        &self,
-        cancel: &AtomicBool,
-    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
-        let acquire = Arc::clone(&self.quick_permit).acquire_owned();
-        tokio::pin!(acquire);
-        loop {
-            let notified = self.turn.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if cancel.load(Ordering::Relaxed) {
-                return None;
-            }
-            tokio::select! {
-                permit = &mut acquire => return permit.ok(),
-                _ = &mut notified => continue,
-            }
-        }
-    }
-
     /// Move a waiting build to `position` in the line (0 is next), clamped to
     /// the line. False when the build is not waiting.
     pub fn move_in_line(&self, job_id: &str, position: usize) -> bool {
-        {
-            let mut waiting = self.waiting.lock().unwrap();
-            let Some(index) = waiting.iter().position(|waiting| waiting == job_id) else {
-                return false;
-            };
-            let entry = waiting.remove(index);
-            let position = position.min(waiting.len());
-            waiting.insert(position, entry);
-        }
-        self.turn.notify_waiters();
-        true
+        self.line.move_to(job_id, position)
     }
 
     fn line_position(&self, job_id: &str) -> Option<usize> {
-        self.waiting
-            .lock()
-            .unwrap()
-            .iter()
-            .position(|waiting| waiting == job_id)
+        self.line.position(job_id)
     }
 
     pub fn get(&self, job_id: &str) -> Option<StackPreviewJob> {
@@ -1309,12 +1168,12 @@ impl StackPreviewManager {
     }
 
     /// Register a stop flag for a job about to be queued.
-    fn track_cancel(&self, job_id: &str) -> Arc<AtomicBool> {
-        let flag = Arc::new(AtomicBool::new(false));
+    fn track_cancel(&self, job_id: &str) -> Stop {
+        let flag = Stop::new();
         self.cancels
             .lock()
             .unwrap()
-            .insert(job_id.to_string(), Arc::clone(&flag));
+            .insert(job_id.to_string(), flag.clone());
         flag
     }
 
@@ -1327,11 +1186,11 @@ impl StackPreviewManager {
     /// this task's. A refresh that resumes a stopped build asks for the same
     /// job id, so the stopped task, finishing late, must not clear the new
     /// one's flag.
-    fn forget_cancel_of(&self, job_id: &str, flag: &Arc<AtomicBool>) {
+    fn forget_cancel_of(&self, job_id: &str, flag: &Stop) {
         let mut cancels = self.cancels.lock().unwrap();
         if cancels
             .get(job_id)
-            .is_some_and(|current| Arc::ptr_eq(current, flag))
+            .is_some_and(|current| current.same(flag))
         {
             cancels.remove(job_id);
             self.origins.lock().unwrap().remove(job_id);
@@ -1446,8 +1305,8 @@ impl StackPreviewManager {
         let Some(flag) = self.cancels.lock().unwrap().get(job_id).cloned() else {
             return false;
         };
-        let first = !flag.swap(true, Ordering::Relaxed);
-        self.turn.notify_waiters();
+        let first = flag.request_first();
+        self.line.changed();
         first
     }
 
@@ -1468,7 +1327,7 @@ impl StackPreviewManager {
         let Some(flag) = self.cancels.lock().unwrap().get(job_id).cloned() else {
             return false;
         };
-        flag.store(true, Ordering::Relaxed);
+        flag.request();
         // A build still being prepared has nothing to stop: it ends now, and
         // what its preparation finds is dropped. A restart does not bring it
         // back; a server stop journaled it before asking it to stop.
@@ -1490,10 +1349,10 @@ impl StackPreviewManager {
         });
         if ended {
             self.origins.lock().unwrap().remove(job_id);
-            self.leave_line(job_id);
+            self.release_place(job_id);
         }
         // A build still waiting sees it at once and leaves the line.
-        self.turn.notify_waiters();
+        self.line.changed();
         true
     }
 
@@ -1714,19 +1573,15 @@ impl StackPreviewManager {
         rc_astro::prune_rc_astro_cache(stack_root, &active_sources);
     }
 
-    /// The build permit, when no stack build holds it: work that removes
-    /// files a build may read takes it so none runs meanwhile.
-    pub(crate) fn try_maintenance_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
-        Arc::clone(&self.permit).try_acquire_owned().ok()
+    /// The stack worker, when nothing holds it: work that removes files a
+    /// build may read takes it so none runs meanwhile.
+    pub(crate) fn try_maintenance_permit(&self) -> Option<Lease> {
+        self.line.try_reserve_worker()
     }
 
-    pub(crate) async fn acquire_maintenance_permit(
-        &self,
-    ) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
-        Arc::clone(&self.permit)
-            .acquire_owned()
-            .await
-            .map_err(|_| "stack preview worker has stopped".to_string())
+    /// [`Self::try_maintenance_permit`], waiting for the worker to come free.
+    pub(crate) async fn acquire_maintenance_permit(&self) -> Result<Lease, String> {
+        Ok(self.line.reserve_worker().await)
     }
 
     fn insert(&self, job: StackPreviewJob) -> bool {
@@ -1844,13 +1699,44 @@ impl StackPreviewManager {
     }
 }
 
+#[cfg(test)]
+impl StackPreviewManager {
+    /// Put a build that does nothing in line under `job_id`, stopped by its
+    /// own flag.
+    pub(super) fn queue_test_build(&self, job_id: &str) {
+        let known = self.cancels.lock().unwrap().get(job_id).cloned();
+        let stop = known.unwrap_or_else(|| self.track_cancel(job_id));
+        assert!(self
+            .line
+            .submit(
+                crate::server::job_line::testing::entry(job_id, Lane::Worker, stop),
+                None
+            )
+            .is_ok());
+    }
+
+    /// Dispatch the worker lane once, as its dispatcher would: the entry
+    /// that runs, or one settled because it was stopped while it waited.
+    /// The lane is free again as soon as this returns.
+    pub(super) async fn dispatch_next(&self) -> (bool, String) {
+        match self
+            .line
+            .next(Lane::Worker, || self.turn_held_until())
+            .await
+        {
+            Dispatch::Run { id, .. } => (true, id),
+            Dispatch::Stopped { id, .. } => (false, id),
+        }
+    }
+}
+
 impl Default for StackPreviewManager {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct PreparedFrame {
     image_id: i32,
     acquired_date: Option<i64>,
@@ -1899,7 +1785,7 @@ fn rejected_decision(frame: &PreparedFrame, reason: String) -> StackFrameDecisio
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct PreparedGroup {
     index: usize,
     /// The mode this channel calibrates under: its request override, or the
@@ -1910,6 +1796,7 @@ struct PreparedGroup {
     frames: Vec<PreparedFrame>,
 }
 
+#[derive(Serialize, Deserialize)]
 struct PreparedJob {
     public: StackPreviewJob,
     groups: Vec<PreparedGroup>,
@@ -2224,51 +2111,85 @@ fn queue_preview_render(
     }
     let job_id = finished.job_id.clone();
     let cancel = state.stack_previews.track_cancel(&job_id);
-    state.stack_previews.join_line(&job_id);
     let work = state.shutdown.hold(format!(
         "stack preview render for project {} (db={})",
         finished.project_id, finished.database_id
     ));
-    let task_state = Arc::clone(state);
-    let ctx = Arc::clone(ctx);
-    let task_job_id = job_id.clone();
-    tokio::spawn(async move {
-        let _work = work;
-        let state = task_state;
-        let job_id = task_job_id;
-        let permit = state.stack_previews.wait_turn(&job_id, &cancel).await;
-        let render = permit.is_some() && !cancel.load(Ordering::Relaxed);
-        let guard = (render && !state.stack_previews.is_automatic(&job_id))
-            .then(|| state.begin_named_interactive_job("a stack preview render"));
-        let state_for_job = Arc::clone(&state);
-        let cancel_for_job = Arc::clone(&cancel);
-        let job_for_render = job_id.clone();
-        let finished = tokio::task::spawn_blocking(move || {
-            if render {
-                let _guard = guard;
-                let _permit = permit;
-                let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    render_stale_previews(
-                        &state_for_job,
-                        &ctx,
-                        &job_for_render,
-                        &stale,
-                        &cancel_for_job,
-                    )
-                }));
-                if rendered.is_err() {
-                    tracing::warn!(job_id = job_for_render, "Stack preview render panicked");
-                }
+    // However it ends, the build settles as the finished build it was.
+    let (settle_ctx, settle_job) = (Arc::clone(ctx), job_id.clone());
+    let (unrun_ctx, unrun_job) = (Arc::clone(ctx), job_id.clone());
+    let failed_job = job_id.clone();
+    let spec = RenderSpec {
+        database_id: ctx.id.clone(),
+        job_id: job_id.clone(),
+        stale,
+    };
+    let submission = Submission::<RenderWork>::new(
+        "a stack preview render",
+        &spec,
+        move |state, rendered| {
+            if let Err(error) = rendered {
+                tracing::warn!(job_id = failed_job, "Stack preview render failed: {error}");
             }
-            finish_preview_render(&state_for_job, &ctx, &job_for_render);
+            finish_preview_render(state, &settle_ctx, &settle_job);
+        },
+        move |state| finish_preview_render(state, &unrun_ctx, &unrun_job),
+    )
+    .map(|submission| {
+        let (job_id, cancel) = (job_id.clone(), cancel.clone());
+        submission.finally(move |state, _| {
+            state.stack_previews.forget_cancel_of(&job_id, &cancel);
+            drop(work);
         })
-        .await;
-        if let Err(error) = finished {
-            tracing::warn!(job_id, "Stack preview render task failed: {error}");
-        }
-        state.stack_previews.forget_cancel_of(&job_id, &cancel);
     });
+    match submission {
+        Ok(submission) => submit(
+            state,
+            &job_id,
+            Lane::Worker,
+            None,
+            cancel,
+            Box::new(submission),
+        ),
+        Err(error) => {
+            tracing::warn!(job_id, "Stack preview render could not be queued: {error}");
+            finish_preview_render(state, ctx, &job_id);
+            state.stack_previews.forget_cancel_of(&job_id, &cancel);
+        }
+    }
     state.stack_previews.get(&job_id)
+}
+
+/// A finished build's card previews rendered again from its FITS.
+struct RenderWork;
+
+#[derive(Serialize, Deserialize)]
+struct RenderSpec {
+    database_id: String,
+    job_id: String,
+    /// The channels whose previews are out of date.
+    stale: Vec<usize>,
+}
+
+impl LineWork for RenderWork {
+    type Spec = RenderSpec;
+    type Output = ();
+    /// It reads the build's FITS from this server's stack cache and records
+    /// each channel's progress on the build.
+    const NEEDS: Needs = Needs::ThisServer;
+
+    fn execute(spec: RenderSpec, worker: &Worker<'_>) {
+        let state = worker.server();
+        let Some(ctx) = state.get_database(&spec.database_id) else {
+            return;
+        };
+        let rendered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_stale_previews(state, &ctx, &spec.job_id, &spec.stale, worker.stop_flag())
+        }));
+        if rendered.is_err() {
+            tracing::warn!(job_id = spec.job_id, "Stack preview render panicked");
+        }
+    }
 }
 
 /// Render each listed channel's card previews again from its FITS. A
@@ -2279,7 +2200,7 @@ fn render_stale_previews(
     ctx: &DatabaseContext,
     job_id: &str,
     stale: &[usize],
-    cancel: &AtomicBool,
+    cancel: &Stop,
 ) {
     state.stack_previews.update(job_id, |job| {
         job.state = StackJobState::Running;
@@ -2287,7 +2208,7 @@ fn render_stale_previews(
     let priority = job_priority(state.stack_previews.is_automatic(job_id));
     let worker_policy = state.worker_policy();
     for &index in stale {
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.requested() {
             return;
         }
         state.stack_previews.update(job_id, |job| {
@@ -3275,61 +3196,187 @@ fn enqueue_job(
     origin: journal::JournaledStackJob,
     slot: Option<&str>,
 ) {
-    let cancel = state.stack_previews.track_cancel(&prepared.public.job_id);
-    state
-        .stack_previews
-        .remember_origin(&prepared.public.job_id, origin);
-    state
-        .stack_previews
-        .join_line_before(&prepared.public.job_id, slot);
+    let job_id = prepared.public.job_id.clone();
+    let database_id = prepared.public.database_id.clone();
+    let cancel = state.stack_previews.track_cancel(&job_id);
+    state.stack_previews.remember_origin(&job_id, origin);
     // A stop waits for the build to checkpoint, or to leave the line.
     let work = state.shutdown.hold(format!(
         "stack build for project {} (db={})",
         prepared.public.project_id, prepared.public.database_id
     ));
-    let database_id = prepared.public.database_id.clone();
-    tokio::spawn(async move {
-        let _work = work;
-        let job_id = prepared.public.job_id.clone();
-        // Stack jobs run one at a time, so a job can wait here for minutes,
-        // in the line's order. A cancel during that wait means the work
-        // never starts.
-        let permit = state.stack_previews.wait_turn(&job_id, &cancel).await;
-        if permit.is_none() && !cancel.load(Ordering::Relaxed) {
-            state.stack_previews.forget_cancel_of(&job_id, &cancel);
-            return;
-        }
-        let _permit = permit;
-        if cancel.load(Ordering::Relaxed) {
-            state.stack_previews.update(&job_id, |job| {
+    let (stopped_job, failed_job) = (job_id.clone(), job_id.clone());
+    let submission = Submission::<BuildWork>::new(
+        "a stack build",
+        &prepared,
+        move |state, built| match built {
+            Ok(output) => publish_build(state, output),
+            Err(error) => state.stack_previews.update(&failed_job, |job| {
+                job.state = StackJobState::Failed;
+                job.error = Some(format!("Stack worker failed: {error}"));
+            }),
+        },
+        move |state| {
+            // Stopped while it waited: the work never starts.
+            state.stack_previews.update(&stopped_job, |job| {
                 cancel_unfinished_groups(job);
                 job.state = StackJobState::Cancelled;
             });
-            state.stack_previews.forget_cancel_of(&job_id, &cancel);
-            build_set::release_waiting_colors(&state, &database_id);
-            return;
-        }
-        // Only a build a person asked for outranks pre-generation and
-        // quality scans; an automatic refresh is background work like them.
-        let guard = (!state.stack_previews.is_automatic(&job_id))
-            .then(|| state.begin_named_interactive_job("a stack build"));
-        let state_for_job = Arc::clone(&state);
-        let cancel_for_job = Arc::clone(&cancel);
-        let result = tokio::task::spawn_blocking(move || {
-            let _guard = guard;
-            run_job(&state_for_job, prepared, &cancel_for_job)
-        })
-        .await;
-        if let Err(error) = result {
+        },
+    )
+    .map(|submission| {
+        let (job_id, database_id, cancel) = (job_id.clone(), database_id.clone(), cancel.clone());
+        // A stop that lands as its turn comes still keeps it from starting.
+        let start_stop = cancel.clone();
+        submission
+            .starting_with(move |_| !start_stop.requested())
+            .finally(move |state, ending| {
+                if let crate::server::job_line::Ending::Panicked(error) = ending {
+                    state.stack_previews.update(&job_id, |job| {
+                        job.state = StackJobState::Failed;
+                        job.error = Some(format!("Stack worker panicked: {error}"));
+                    });
+                }
+                state.stack_previews.forget_cancel_of(&job_id, &cancel);
+                // A composition may have waited for this build's channels.
+                build_set::release_waiting_colors(state, &database_id);
+                drop(work);
+            })
+    });
+    match submission {
+        Ok(submission) => submit(
+            &state,
+            &job_id,
+            Lane::Worker,
+            slot,
+            cancel,
+            Box::new(submission),
+        ),
+        Err(error) => {
             state.stack_previews.update(&job_id, |job| {
                 job.state = StackJobState::Failed;
-                job.error = Some(format!("Stack worker panicked: {error}"));
+                job.error = Some(error);
             });
+            state.stack_previews.forget_cancel_of(&job_id, &cancel);
+            build_set::release_waiting_colors(&state, &database_id);
         }
-        state.stack_previews.forget_cancel_of(&job_id, &cancel);
-        // A composition may have waited for this build's channels.
-        build_set::release_waiting_colors(&state, &database_id);
-    });
+    }
+}
+
+/// Put work in the line under `job_id`, stopped by `cancel`: on the worker
+/// lane in the place `before` held, or at the back. The lane's dispatcher
+/// runs it in its turn.
+pub(super) fn submit(
+    state: &Arc<AppState>,
+    job_id: &str,
+    lane: Lane,
+    before: Option<&str>,
+    cancel: Stop,
+    task: Box<dyn Task>,
+) {
+    ensure_dispatching(state);
+    if let Err(entry) = state
+        .stack_previews
+        .line
+        .submit(Entry::new(job_id, lane, cancel, task), before)
+    {
+        // The copy's stop flag replaced the queued work's: put that back, so
+        // a stop still reaches the work in line.
+        if let Some(stop) = state.stack_previews.line.stop_of(job_id) {
+            state
+                .stack_previews
+                .cancels
+                .lock()
+                .unwrap()
+                .insert(job_id.to_string(), stop);
+        }
+        tracing::warn!(
+            job_id,
+            "The same work is already in line; this copy is dropped"
+        );
+        drop(entry);
+    }
+}
+
+/// Start each lane's dispatcher if it is not running.
+fn ensure_dispatching(state: &Arc<AppState>) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        tracing::warn!("No runtime to dispatch the stack line on");
+        return;
+    };
+    let mut dispatchers = state.stack_previews.dispatchers.lock().unwrap();
+    for (name, lane) in [("worker", Lane::Worker), ("quick", Lane::Quick)] {
+        if dispatchers
+            .get(name)
+            .is_some_and(|dispatcher| !dispatcher.is_finished())
+        {
+            continue;
+        }
+        let state = Arc::clone(state);
+        dispatchers.insert(name, runtime.spawn(dispatch(state, lane)));
+    }
+}
+
+/// A lane's dispatcher: run each entry in its turn on this server's worker,
+/// and settle each one stopped while it waited.
+async fn dispatch(state: Arc<AppState>, lane: Lane) {
+    loop {
+        let next = state
+            .stack_previews
+            .line
+            .next(lane, || match lane {
+                Lane::Worker => state.stack_previews.turn_held_until(),
+                Lane::Quick => None,
+            })
+            .await;
+        let state = Arc::clone(&state);
+        match next {
+            Dispatch::Run {
+                id,
+                stop,
+                task,
+                lease,
+            } => {
+                // Read as the turn comes: a person can adopt automatic work
+                // while it waits. Only their work outranks pre-generation
+                // and quality scans.
+                let automatic = state.stack_previews.is_automatic(&id)
+                    || state.stack_previews.is_automatic_processing(&id);
+                let person = (!automatic).then(|| state.begin_named_interactive_job(task.what()));
+                tokio::task::spawn_blocking(move || {
+                    let worker = Worker::this_server(&state, &stop, job_priority(automatic));
+                    task.run(&state, &worker);
+                    drop(person);
+                    drop(lease);
+                });
+            }
+            Dispatch::Stopped { task, .. } => {
+                tokio::task::spawn_blocking(move || task.stopped(&state));
+            }
+        }
+    }
+}
+
+/// A stack build on the line.
+struct BuildWork;
+
+impl LineWork for BuildWork {
+    type Spec = PreparedJob;
+    type Output = BuildOutput;
+    /// It opens this server's calibration catalog to choose and build
+    /// masters while it runs, and reads its WCS and score caches.
+    const NEEDS: Needs = Needs::ThisServer;
+
+    fn execute(spec: PreparedJob, worker: &Worker<'_>) -> BuildOutput {
+        execute_build(spec, worker)
+    }
+}
+
+/// Where a finished build's outputs are, for publishing.
+struct BuildOutput {
+    job_id: String,
+    database_id: String,
+    stack_root: PathBuf,
 }
 
 /// Whether every channel reached a state the job cannot improve on. A channel
@@ -3433,11 +3480,11 @@ fn choose_references(
     order: snr::StackFrameOrder,
     rotation_margin_degrees: f64,
     worker_policy: &crate::concurrency::WorkerPolicy,
-    cancel: &Arc<AtomicBool>,
+    cancel: &Stop,
 ) {
     let ctx = state.get_database(database_id);
     for group in groups.iter_mut().filter(|group| group.frames.len() >= 2) {
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.requested() {
             return;
         }
         let priority = job_priority(state.stack_previews.is_automatic(job_id));
@@ -3527,7 +3574,10 @@ pub(super) fn job_priority(automatic: bool) -> crate::concurrency::Priority {
     }
 }
 
-fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool>) {
+/// Stack each channel of a prepared build, recording how each one went.
+fn execute_build(prepared: PreparedJob, worker: &Worker<'_>) -> BuildOutput {
+    let state = worker.server();
+    let cancel = worker.stop_flag();
     let job_id = prepared.public.job_id.clone();
     let database_id = prepared.public.database_id.clone();
     let accepted_only = prepared.public.accepted_only;
@@ -3585,7 +3635,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
             if group.frames.len() < 2 {
                 continue;
             }
-            if cancel.load(Ordering::Relaxed) {
+            if cancel.requested() {
                 return;
             }
             state.stack_previews.update(&job_id, |job| {
@@ -3615,7 +3665,7 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
             });
         }
     }));
-    let cancelled = cancel.load(Ordering::Relaxed);
+    let cancelled = cancel.requested();
     state.stack_previews.update(&job_id, |job| match run {
         // A stop that lands after the last channel finished took nothing away,
         // so the job completed. Calling it cancelled would also stop the next
@@ -3630,6 +3680,21 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
             job.error = Some("Stack worker panicked".into());
         }
     });
+    BuildOutput {
+        job_id,
+        database_id,
+        stack_root,
+    }
+}
+
+/// Take a finished build in: record it, point the cards at what it built,
+/// and start what follows it.
+fn publish_build(state: &Arc<AppState>, output: BuildOutput) {
+    let BuildOutput {
+        job_id,
+        database_id,
+        stack_root,
+    } = output;
     if let Some(job) = state.stack_previews.get(&job_id)
         && let Err(error) = persist_manifest(&stack_root, &job)
     {
@@ -3690,7 +3755,7 @@ struct GroupJob<'a> {
     method: StackMethod,
     order: snr::StackFrameOrder,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
-    cancel: &'a Arc<AtomicBool>,
+    cancel: &'a Stop,
 }
 
 fn run_group(
@@ -3785,7 +3850,7 @@ fn run_group(
                     job.groups[index].calibration_progress = Some(progress);
                 });
             })),
-            stop: Some(Arc::clone(cancel)),
+            stop: Some(cancel.clone()),
             ..Default::default()
         }
     };
@@ -3796,7 +3861,7 @@ fn run_group(
             calibration_root,
             &light_paths,
             Some(&directory_tree),
-            Some(cancel.as_ref()),
+            Some(cancel.as_flag()),
             crate::calibration::CalibrationPlanOptions {
                 mode: calibration_mode,
                 pinned: &[],
@@ -3811,7 +3876,7 @@ fn run_group(
         elapsed_seconds = calibration_started.elapsed().as_secs_f64(),
         "Stack calibration plan finished"
     );
-    if cancel.load(Ordering::Relaxed) {
+    if cancel.requested() {
         return Ok(GroupOutcome::Cancelled);
     }
     // `{:#}` keeps the whole anyhow chain: "building master flat: <why>".
@@ -4431,7 +4496,7 @@ fn run_group(
 
                 // Integrating one frame is the unit of work, so this is where
                 // a stop takes effect. Frames already prepared are discarded.
-                if cancel.load(Ordering::Relaxed) {
+                if cancel.requested() {
                     cancelled = true;
                     seiza_stacking::Continue::No
                 } else {
@@ -4522,7 +4587,7 @@ fn run_group(
     // Last exit before the job writes anything. Orienting and rendering
     // follow, and a stop after this point would have to clean up published
     // artifacts.
-    if cancel.load(Ordering::Relaxed) {
+    if cancel.requested() {
         return Ok(GroupOutcome::Cancelled);
     }
     pool.install(|| {
@@ -4626,7 +4691,7 @@ fn run_group(
                 .map_err(|error| error.to_string())?
                 .image
         };
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.requested() {
             return Ok(GroupOutcome::Cancelled);
         }
         if north_up {
@@ -6118,41 +6183,27 @@ mod tests {
 
     #[tokio::test]
     async fn the_line_decides_which_waiting_build_runs_next() {
-        let manager = Arc::new(StackPreviewManager::new());
+        let manager = StackPreviewManager::new();
         // Something holds the worker while three builds line up.
-        let busy = Arc::clone(&manager.permit).acquire_owned().await.unwrap();
-        let started = Arc::new(Mutex::new(Vec::new()));
-        let mut tasks = Vec::new();
+        let busy = manager.line.reserve_worker().await;
         for job in ["a", "b", "c"] {
-            let cancel = manager.track_cancel(job);
-            manager.join_line(job);
-            let manager = Arc::clone(&manager);
-            let started = Arc::clone(&started);
-            tasks.push(tokio::spawn(async move {
-                if let Some(permit) = manager.wait_turn(job, &cancel).await {
-                    started.lock().unwrap().push(job);
-                    drop(permit);
-                }
-            }));
+            manager.queue_test_build(job);
         }
-        tokio::task::yield_now().await;
         assert_eq!(manager.line_position("c"), Some(2));
         // The person moves c to the front and stops a.
         assert!(manager.move_in_line("c", 0));
         assert!(manager.request_cancel("a"));
         assert!(!manager.move_in_line("never-queued", 0));
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(
-            manager.line_position("a"),
-            None,
-            "a stopped build leaves the line"
+            manager.dispatch_next().await,
+            (false, "a".to_string()),
+            "a stopped build leaves the line though the worker is busy"
         );
+        assert_eq!(manager.line_position("a"), None);
         drop(busy);
-        for task in tasks {
-            task.await.unwrap();
-        }
-        assert_eq!(*started.lock().unwrap(), vec!["c", "b"]);
-        assert!(manager.waiting.lock().unwrap().is_empty());
+        assert_eq!(manager.dispatch_next().await, (true, "c".to_string()));
+        assert_eq!(manager.dispatch_next().await, (true, "b".to_string()));
+        assert!(manager.line.order().is_empty());
     }
 
     #[test]
@@ -6184,7 +6235,7 @@ mod tests {
             manager.track_cancel(job_id);
             manager.remember_origin(job_id, origin(project_id, false));
         }
-        manager.join_line("waiting");
+        manager.queue_test_build("waiting");
 
         manager.stop_for_shutdown();
         assert!(
@@ -6193,7 +6244,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .values()
-                .all(|flag| flag.load(Ordering::Relaxed)),
+                .all(|flag| flag.requested()),
             "every build is asked to stop"
         );
         // Killed now, the builds still running would count as cut off.
@@ -6210,7 +6261,7 @@ mod tests {
             ("finishing", StackJobState::Completed),
         ] {
             manager.update(job_id, |job| job.state = state);
-            manager.leave_line(job_id);
+            manager.line.remove(job_id);
             manager.forget_cancel(job_id);
         }
         assert_eq!(
@@ -6226,9 +6277,9 @@ mod tests {
         assert!(!manager.request_cancel("never-queued"));
 
         let flag = manager.track_cancel("queued");
-        assert!(!flag.load(Ordering::Relaxed));
+        assert!(!flag.requested());
         assert!(manager.request_cancel("queued"));
-        assert!(flag.load(Ordering::Relaxed));
+        assert!(flag.requested());
 
         // A job that has left the queue cannot be cancelled again, so the
         // handler can answer "too late" instead of pretending it stopped.
@@ -7255,9 +7306,7 @@ mod tests {
     fn the_activity_endpoint_lists_a_processing_run_beside_builds() {
         let state = test_state();
         assert!(state.stack_previews.insert(running_build("held")));
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.try_reserve_worker().unwrap();
         let run_id = "f".repeat(64);
         state.stack_previews.queue_processing(
             &run_id,
@@ -7456,12 +7505,19 @@ mod tests {
         moved
     }
 
-    /// A build a person queued, waiting in the line.
+    /// Put a test entry in the line, dispatched like any other.
+    fn submit_test_entry(state: &Arc<AppState>, entry: crate::server::job_line::Entry) {
+        ensure_dispatching(state);
+        assert!(state.stack_previews.line.submit(entry, None).is_ok());
+    }
+
+    /// A build a person queued, waiting in the line. It never runs: the
+    /// test ends it.
     fn queued_build(state: &AppState, job_id: &str) {
         let mut job = completed_job(job_id, vec![]);
         job.state = StackJobState::Queued;
         assert!(state.stack_previews.insert(job));
-        state.stack_previews.join_line(job_id);
+        state.stack_previews.hold_place(job_id);
     }
 
     /// The re-apply's run in the activity list, once it is queued.
@@ -7552,9 +7608,7 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let (state, applied) = processed_card(cache.path()).await;
         // A build holds the worker, so the re-apply waits in the line.
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         let second = "2".repeat(64);
         refresh(&state, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -7627,9 +7681,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         let second = "2".repeat(64);
         refresh(&state, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -7687,9 +7739,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         let second = "2".repeat(64);
         refresh(&state, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -7767,9 +7817,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         let second = "2".repeat(64);
         refresh(&state, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -7801,9 +7849,7 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
         // The person's next build holds the worker, and one more waits.
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         let person = state.begin_interactive_job();
         queued_build(&state, "later");
         let second = "2".repeat(64);
@@ -7838,7 +7884,7 @@ mod tests {
         })
         .await;
         assert_eq!(state.stack_previews.line_position("later"), Some(0));
-        state.stack_previews.leave_line("later");
+        state.stack_previews.release_place("later");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -7848,22 +7894,24 @@ mod tests {
         let (state, _) = processed_card(cache.path()).await;
         // The person's build holds the worker, and their next one waits for
         // its turn.
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         let cancel = state.stack_previews.track_cancel("later");
-        state.stack_previews.join_line("later");
         let (took, took_worker) = tokio::sync::oneshot::channel();
-        let (release, released) = tokio::sync::oneshot::channel::<()>();
-        let later = {
-            let state = Arc::clone(&state);
-            tokio::spawn(async move {
-                let permit = state.stack_previews.wait_turn("later", &cancel).await;
-                let _ = took.send(());
-                let _ = released.await;
-                drop(permit);
-            })
-        };
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let (done, later) = tokio::sync::oneshot::channel::<()>();
+        submit_test_entry(
+            &state,
+            crate::server::job_line::testing::entry_running(
+                "later",
+                Lane::Worker,
+                cancel,
+                move || {
+                    let _ = took.send(());
+                    let _ = released.recv();
+                    let _ = done.send(());
+                },
+            ),
+        );
         tokio::task::yield_now().await;
 
         // The build publishes and lets go of the worker at once.
@@ -7878,7 +7926,7 @@ mod tests {
         .await;
         release.send(()).unwrap();
         later.await.unwrap();
-        assert!(state.stack_previews.waiting.lock().unwrap().is_empty());
+        assert!(state.stack_previews.line.order().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -7899,7 +7947,7 @@ mod tests {
         state
             .stack_previews
             .update("later", |job| job.state = StackJobState::Cancelled);
-        state.stack_previews.leave_line("later");
+        state.stack_previews.release_place("later");
         reapply::start_due(Arc::clone(&state)).await;
         let run = the_reapply_run(&state).unwrap();
         assert!(run.automatic, "it is still background work");
@@ -7914,9 +7962,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (before, _) = processed_card(cache.path()).await;
-        let busy = Arc::clone(&before.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = before.stack_previews.line.reserve_worker().await;
         let second = "2".repeat(64);
         rebuild(&before, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -8192,8 +8238,8 @@ mod tests {
         let resumed = manager.track_cancel("same");
         manager.forget_cancel_of("same", &stopped);
         assert!(manager.request_cancel("same"), "the new flag was forgotten");
-        assert!(resumed.load(Ordering::Relaxed));
-        assert!(!stopped.load(Ordering::Relaxed));
+        assert!(resumed.requested());
+        assert!(!stopped.requested());
         manager.forget_cancel_of("same", &resumed);
         assert!(!manager.request_cancel("same"));
     }
@@ -8398,9 +8444,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         refresh(&state, cache.path(), &"2".repeat(64), "rev-2");
         eventually("the re-apply is queued", || {
             the_automatic_run(&state).is_some()
@@ -8436,9 +8480,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         refresh(&state, cache.path(), &"2".repeat(64), "rev-2");
         eventually("the re-apply is queued", || {
             the_automatic_run(&state).is_some()
@@ -8706,37 +8748,39 @@ mod tests {
         assert!(state.stack_previews.active().is_empty());
     }
 
-    #[test]
-    fn a_build_being_prepared_holds_its_place_without_holding_up_the_line() {
+    #[tokio::test]
+    async fn a_build_being_prepared_holds_its_place_without_holding_up_the_line() {
         let manager = StackPreviewManager::new();
-        for (job_id, state) in [
-            ("ahead", StackJobState::Queued),
-            ("slot", StackJobState::Preparing),
-            ("behind", StackJobState::Queued),
-        ] {
-            let mut job = completed_job(job_id, vec![]);
-            job.state = state;
-            assert!(manager.insert(job));
-            manager.join_line(job_id);
-        }
-        assert_eq!(manager.first_in_line().as_deref(), Some("ahead"));
-        manager.leave_line("ahead");
+        manager.queue_test_build("ahead");
+        manager.hold_place("slot");
+        manager.queue_test_build("behind");
+        assert_eq!(manager.line.order(), ["ahead", "slot", "behind"]);
+        assert_eq!(manager.dispatch_next().await, (true, "ahead".to_string()));
+        // The held place keeps its position but holds up nothing behind it.
+        manager.queue_test_build("last");
         assert_eq!(
-            manager.first_in_line().as_deref(),
-            Some("behind"),
+            manager.dispatch_next().await,
+            (true, "behind".to_string()),
             "a build still being prepared does not hold up the one behind it"
         );
         // The builds it becomes take its place, ahead of the one queued
-        // after it.
+        // after it, and the place goes once it is prepared.
         for job_id in ["red", "green"] {
-            manager.join_line_before(job_id, Some("slot"));
+            let stop = manager.track_cancel(job_id);
+            assert!(manager
+                .line
+                .submit(
+                    crate::server::job_line::testing::entry(job_id, Lane::Worker, stop),
+                    Some("slot")
+                )
+                .is_ok());
         }
-        manager.leave_line("slot");
-        assert_eq!(*manager.waiting.lock().unwrap(), ["red", "green", "behind"]);
-        // A build already in the line, as one prepared under its slot's own
-        // id is, keeps its place.
-        manager.join_line_before("behind", Some("red"));
-        assert_eq!(*manager.waiting.lock().unwrap(), ["red", "green", "behind"]);
+        manager.release_place("slot");
+        assert_eq!(manager.line.order(), ["red", "green", "last"]);
+        // Work already in the line keeps its place.
+        let again = crate::server::job_line::testing::entry("last", Lane::Worker, Stop::new());
+        assert!(manager.line.submit(again, Some("red")).is_err());
+        assert_eq!(manager.line.order(), ["red", "green", "last"]);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -8808,7 +8852,7 @@ mod tests {
             .await
             .expect("the restore prepares nothing itself");
         assert_eq!(
-            *after.stack_previews.waiting.lock().unwrap(),
+            after.stack_previews.line.order(),
             [
                 queued_id.clone(),
                 split.job_id.clone(),
@@ -8888,7 +8932,7 @@ mod tests {
         let waiting = state.stack_previews.get("restored").unwrap();
         assert_eq!(waiting.state, StackJobState::Preparing);
         assert!(waiting.error.is_none());
-        assert_eq!(*state.stack_previews.waiting.lock().unwrap(), ["restored"]);
+        assert_eq!(state.stack_previews.line.order(), ["restored"]);
         assert_eq!(
             state.stack_previews.journal_entries(),
             vec![journal::JournaledStackJob::requested(
@@ -8940,7 +8984,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert!(state.stack_previews.journal_entries().is_empty());
-        assert!(state.stack_previews.waiting.lock().unwrap().is_empty());
+        assert!(state.stack_previews.line.order().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -8997,7 +9041,7 @@ mod tests {
             StackJobState::Cancelled
         );
         assert_eq!(
-            *state.stack_previews.waiting.lock().unwrap(),
+            state.stack_previews.line.order(),
             std::slice::from_ref(&waiting.job_id)
         );
         assert_eq!(
@@ -9030,7 +9074,7 @@ mod tests {
             done.error.as_deref(),
             Some("No completed channel stacks are available for that target")
         );
-        assert!(state.stack_previews.waiting.lock().unwrap().is_empty());
+        assert!(state.stack_previews.line.order().is_empty());
         for _ in 0..100 {
             if state.stack_previews.journal_entries().is_empty() {
                 break;
@@ -9084,7 +9128,7 @@ mod tests {
         // restart does not bring it back.
         assert!(state.stack_previews.request_cancel(&cancelled.job_id));
         assert_eq!(
-            *state.stack_previews.waiting.lock().unwrap(),
+            state.stack_previews.line.order(),
             std::slice::from_ref(&kept.job_id)
         );
         let entry =
@@ -9107,7 +9151,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert_eq!(state.stack_previews.journal_entries(), vec![entry]);
-        assert!(state.stack_previews.waiting.lock().unwrap().is_empty());
+        assert!(state.stack_previews.line.order().is_empty());
     }
 
     /// A Build of the stack `job_id`, as the request's preparation hands it
@@ -9164,9 +9208,7 @@ mod tests {
         stretch::write_json_atomic(&manifest_path(cache.path(), &job_id), &job).unwrap();
 
         // Another build holds the worker, so the render waits in line.
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         let first = build_again(&state, cache.path(), &job_id);
         assert_eq!(first.job.state, StackJobState::Queued);
         assert_eq!(first.job.groups[0].phase, PHASE_RENDER_QUEUED);
@@ -9231,9 +9273,7 @@ mod tests {
         let mut job = stack_on_disk(cache.path(), &job_id, "rev-1");
         job.groups[0].preview_stretch_version = Some("0.2.2".into());
         stretch::write_json_atomic(&manifest_path(cache.path(), &job_id), &job).unwrap();
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         build_again(&state, cache.path(), &job_id);
         assert!(state.stack_previews.request_cancel(&job_id));
         eventually("the render stops", || {
@@ -9295,9 +9335,7 @@ mod tests {
         let mut job = stack_on_disk(cache.path(), &job_id, "rev-1");
         job.groups[0].preview_stretch_version = Some("0.2.2".into());
         job.color_defaults = Some(color::StackColorProcessing::default());
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_worker().await;
         let queued = queue_preview_render(&state, &ctx, &job, true, None).unwrap();
         assert!(!queued.automatic, "a person's build stays theirs");
         assert_eq!(
@@ -9405,9 +9443,7 @@ mod tests {
             let state = test_state();
             // A build holds the worker.
             assert!(state.stack_previews.insert(running_build("held")));
-            let busy = Arc::clone(&state.stack_previews.permit)
-                .try_acquire_owned()
-                .unwrap();
+            let busy = state.stack_previews.line.reserve_worker().await;
 
             let source = processing_source(cache.path(), "queued-run");
             let outcome = stretch::apply_to_fits(
@@ -9511,9 +9547,7 @@ mod tests {
             let state = test_state();
             // Held at first, so the request answers at once instead of waiting
             // for the result.
-            let busy = Arc::clone(&state.stack_previews.permit)
-                .try_acquire_owned()
-                .unwrap();
+            let busy = state.stack_previews.line.reserve_worker().await;
             let source = processing_source(cache.path(), "stopped-run");
             let outcome = stretch::apply_to_fits(
                 Arc::clone(&state),
@@ -9567,9 +9601,7 @@ mod tests {
             let cache = tempfile::tempdir().unwrap();
             let state = test_state();
             // Held at first, so both requests answer at once.
-            let busy = Arc::clone(&state.stack_previews.permit)
-                .try_acquire_owned()
-                .unwrap();
+            let busy = state.stack_previews.line.reserve_worker().await;
             let start = |tools: &'static [&'static str], revision: &'static str, select| {
                 let state = Arc::clone(&state);
                 let root = cache.path().to_path_buf();
@@ -9698,9 +9730,7 @@ mod tests {
             let registry_dir = tempfile::tempdir().unwrap();
             let registry = registry_dir.path().join("reg.json");
             let (before, job_id) = state_with_stack_on_disk(cache.path(), &registry);
-            let busy = Arc::clone(&before.stack_previews.permit)
-                .try_acquire_owned()
-                .unwrap();
+            let busy = before.stack_previews.line.reserve_worker().await;
             let stretch::StretchApplyOutcome::Pending { stretch_id } =
                 apply_on_disk(&before, &job_id, &["bxt", "nxt"], true)
                     .await
