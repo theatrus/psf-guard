@@ -16,6 +16,7 @@ const recommended: StackMethod = {
   bayer_drizzle: false,
   reference: 'auto',
   final_pass: 'reintegrate',
+  reference_rotation_margin_degrees: 1,
 };
 
 const classic: StackMethod = {
@@ -26,6 +27,7 @@ const classic: StackMethod = {
   bayer_drizzle: false,
   reference: 'best_graded',
   final_pass: 'reintegrate',
+  reference_rotation_margin_degrees: 1,
 };
 
 function ok(data: unknown) {
@@ -36,11 +38,11 @@ function mockServer(initial: StackMethod) {
   let stored = initial;
   const saved: StackMethod[] = [];
   server.use(
-    http.get('/api/settings/stacking/method', () => ok({ method: stored, recommended, classic })),
+    http.get('/api/settings/stacking/method', () => ok({ method: stored, recommended, classic, max_reference_rotation_margin_degrees: 5 })),
     http.put('/api/settings/stacking/method', async ({ request }) => {
       stored = (await request.json()) as StackMethod;
       saved.push(stored);
-      return ok({ method: stored, recommended, classic });
+      return ok({ method: stored, recommended, classic, max_reference_rotation_margin_degrees: 5 });
     })
   );
   return saved;
@@ -89,5 +91,31 @@ describe('StackMethodSettings', () => {
     await userEvent.click(await screen.findByRole('checkbox', { name: /Bayer drizzle/ }));
     await waitFor(() => expect(saved).toHaveLength(1));
     expect(saved[0].bayer_drizzle).toBe(true);
+  });
+
+  it('saves the orientation group margin when the field loses focus, and refuses one past the limit', async () => {
+    const saved = mockServer(recommended);
+    renderSettings();
+    const margin = await screen.findByRole('spinbutton', { name: /Degrees, 0 to 5/ });
+    expect(margin).toHaveValue(1);
+
+    await userEvent.clear(margin);
+    await userEvent.type(margin, '2.5');
+    expect(saved).toHaveLength(0);
+    await userEvent.tab();
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toEqual({ ...recommended, reference_rotation_margin_degrees: 2.5 });
+    expect(await screen.findByText('Now: Custom')).toBeInTheDocument();
+
+    await userEvent.clear(margin);
+    await userEvent.type(margin, '7{Enter}');
+    expect(saved).toHaveLength(1);
+    expect(margin).toHaveValue(2.5);
+  });
+
+  it('turns the margin off while the best-graded frame is the reference', async () => {
+    mockServer(classic);
+    renderSettings();
+    expect(await screen.findByRole('spinbutton', { name: /Degrees, 0 to 5/ })).toBeDisabled();
   });
 });

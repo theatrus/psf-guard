@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { StackMethod } from '../api/types';
@@ -68,7 +69,8 @@ const REFERENCE: Choice<'reference'>[] = [
     help:
       "Seiza scores each frame's stars and sky noise, then selects the most even " +
       'background among the highest-scoring frames. This requires an extra read before stacking. ' +
-      'Saved scores are reused, so rebuilds only score new frames.',
+      'Saved scores are reused, so rebuilds only score new frames. When plate solves show ' +
+      'frames at more than one rotator angle, the reference comes from the largest group.',
   },
   {
     value: 'best_graded',
@@ -127,6 +129,62 @@ function ChoiceGroup<K extends keyof StackMethod>({
           </span>
         </label>
       ))}
+    </fieldset>
+  );
+}
+
+/**
+ * How far inside Seiza's rotation limit a plate-solved frame must sit to
+ * count toward the reference's orientation group. Saved when the field loses
+ * focus or Enter is pressed, not on every keystroke.
+ */
+function RotationMarginField({
+  method,
+  maximum,
+  onChange,
+}: {
+  method: StackMethod;
+  maximum: number;
+  onChange: (next: StackMethod) => void;
+}) {
+  const saved = method.reference_rotation_margin_degrees;
+  const [draft, setDraft] = useState(String(saved));
+  useEffect(() => setDraft(String(saved)), [saved]);
+  const value = Number(draft);
+  const valid = draft.trim() !== '' && Number.isFinite(value) && value >= 0 && value <= maximum;
+  const commit = () => {
+    if (valid && value !== saved) onChange({ ...method, reference_rotation_margin_degrees: value });
+    else if (!valid) setDraft(String(saved));
+  };
+  const automatic = method.reference === 'auto';
+  return (
+    <fieldset className="calibration-settings-group stack-method-group" disabled={!automatic}>
+      <legend>Orientation group margin</legend>
+      <label className="review-preference">
+        <input
+          type="number"
+          min={0}
+          max={maximum}
+          step={0.1}
+          value={draft}
+          aria-invalid={!valid}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') commit();
+          }}
+        />
+        <span>
+          Degrees, 0 to {maximum}
+          <small>
+            Seiza rejects a frame rotated more than 10° from the reference. A plate-solved frame
+            joins the reference&apos;s orientation group only when its rotation is at least this
+            many degrees inside that limit, because registration measures rotation separately
+            from the plate solve. Raise the margin if frames near the edge of the group are still
+            rejected for rotation. Used only when Seiza chooses the reference.
+          </small>
+        </span>
+      </label>
     </fieldset>
   );
 }
@@ -207,6 +265,11 @@ export default function StackMethodSettings() {
         <ChoiceGroup name="normalization" legend="Normalization" choices={NORMALIZATION} method={method} onChange={choose} />
         <ChoiceGroup name="weighting" legend="Frame weights" choices={WEIGHTING} method={method} onChange={choose} />
         <ChoiceGroup name="reference" legend="Reference frame" choices={REFERENCE} method={method} onChange={choose} />
+        <RotationMarginField
+          method={method}
+          maximum={current.max_reference_rotation_margin_degrees}
+          onChange={choose}
+        />
         <ChoiceGroup name="registration" legend="Registration" choices={REGISTRATION} method={method} onChange={choose} />
         <ChoiceGroup name="interpolation" legend="Resampling" choices={INTERPOLATION} method={method} onChange={choose} />
         <fieldset className="calibration-settings-group stack-method-group">

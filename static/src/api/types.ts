@@ -746,6 +746,11 @@ export interface StackMethod {
   reference: 'auto' | 'best_graded';
   /** `draft` publishes the live stack without the final rejection pass. */
   final_pass: 'reintegrate' | 'draft';
+  /**
+   * With an automatic reference, degrees a frame's plate-solved rotation
+   * must sit inside Seiza's 10° limit to count toward an orientation group.
+   */
+  reference_rotation_margin_degrees: number;
 }
 
 export interface StackMethodSettings {
@@ -754,6 +759,7 @@ export interface StackMethodSettings {
   recommended: StackMethod;
   /** What PSF Guard did before the method could be chosen. */
   classic: StackMethod;
+  max_reference_rotation_margin_degrees: number;
 }
 
 /** One depth on a progressive signal-to-noise curve. */

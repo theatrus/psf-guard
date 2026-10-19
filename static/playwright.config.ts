@@ -122,7 +122,7 @@ export default defineConfig({
     {
       name: 'webkit',
       use: { ...devices['Desktop Safari'], contextOptions: { reducedMotion: 'reduce' } },
-      testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts', 'whats-new.spec.ts', 'server-info.spec.ts', 'auth.spec.ts', 'desktop-zoom.spec.ts', 'job-queue.spec.ts', 'sequence-dock.spec.ts'],
+      testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts', 'whats-new.spec.ts', 'server-info.spec.ts', 'auth.spec.ts', 'desktop-zoom.spec.ts', 'job-queue.spec.ts', 'sequence-dock.spec.ts', 'stack-method-settings.spec.ts'],
     },
   ],
 
