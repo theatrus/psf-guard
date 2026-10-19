@@ -72,14 +72,14 @@ itself for a screen reader and in its tooltip, and shows only above zero.
 Its list groups the rows by tier, each heading with its own counts:
 
 - **Started by you**: `Interactive` work. Stack builds and processing runs,
-  scans and duplicate checks a person asked for, WBPP runs, a catalog
-  refresh asked for with Refresh, and backups and transfers started by
-  hand.
+  with the re-applies that follow a person's build, scans and duplicate
+  checks a person asked for, WBPP runs, a catalog refresh asked for with
+  Refresh, and backups and transfers started by hand.
 - **Automatic**: `Viewed` and `Background` work. Quality backfill and the
   analysis of new frames, automatic scans, flat measuring and frame sites,
   catalog refreshes the cache's expiry or the server's start began,
-  automatic stack refreshes and re-applies, scheduled backups and
-  transfers a connection's policy queued.
+  automatic stack refreshes and the re-applies they bring, scheduled
+  backups and transfers a connection's policy queued.
 
 Within each, rows that need attention come first, then running work, then
 queued rows, then waiting work. A row's tier comes from what its status

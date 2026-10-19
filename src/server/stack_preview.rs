@@ -888,6 +888,9 @@ pub struct WaitingReapplyView {
     pub target_id: Option<i32>,
     /// The channel, such as `M44 · R`.
     pub label: String,
+    /// Following a build a person started: their work, not automatic.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub personal: bool,
     /// What it waits for, in words that fit "Waiting for …".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_for: Option<String>,
@@ -1084,6 +1087,9 @@ pub struct StackPreviewManager {
     yielded: Mutex<HashSet<String>>,
     /// Builds a person asked for that wait to be prepared, in click order.
     preparing: Mutex<build_set::PreparationLine>,
+    /// The longest the next turn is held for a person's re-apply; see
+    /// [`StackPreviewManager::turn_held_until`].
+    turn_held_for: std::time::Duration,
 }
 
 impl StackPreviewManager {
@@ -1106,6 +1112,7 @@ impl StackPreviewManager {
             reapplies: Mutex::new(HashMap::new()),
             yielded: Mutex::new(HashSet::new()),
             preparing: Mutex::new(build_set::PreparationLine::default()),
+            turn_held_for: reapply::TURN_HELD_FOR,
         }
     }
 
@@ -1123,9 +1130,10 @@ impl StackPreviewManager {
         self.turn.notify_waiters();
     }
 
-    /// Wait until this build is first in line and the worker is free. `None`
-    /// when it was stopped while waiting, or the worker has shut down; either
-    /// way it has left the line.
+    /// Wait until this build is first in line, the next turn is not held for
+    /// a person's re-apply, and the worker is free. `None` when it was
+    /// stopped while waiting, or the worker has shut down; either way it has
+    /// left the line.
     async fn wait_turn(
         &self,
         job_id: &str,
@@ -1146,10 +1154,36 @@ impl StackPreviewManager {
                 notified.await;
                 continue;
             }
+            // The next turn is a person's re-apply's: wait for its run to
+            // queue, or for the hold to run out.
+            if let Some(until) = self.turn_held_until() {
+                tokio::select! {
+                    _ = &mut notified => {}
+                    _ = tokio::time::sleep_until(until.into()) => {
+                        if self.turn_held_until().is_none() {
+                            tracing::warn!(
+                                "The next stack turn was held {} s for a re-apply that did \
+                                 not start; the line moves on",
+                                self.turn_held_for.as_secs()
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
             // First in line: take the worker, unless the line changes while
-            // it is busy, in which case look again.
+            // it is busy, in which case look again. A change and a free
+            // worker can arrive together, so the line and the hold are read
+            // once more with the worker in hand: if something now comes
+            // first, the worker goes back to it.
             tokio::select! {
                 permit = Arc::clone(&self.permit).acquire_owned() => {
+                    let still_first =
+                        self.waiting.lock().unwrap().first().map(String::as_str) == Some(job_id);
+                    if !still_first || self.turn_held_until().is_some() {
+                        drop(permit);
+                        continue;
+                    }
                     self.leave_line(job_id);
                     return permit.ok();
                 }
@@ -2242,21 +2276,23 @@ fn finish_preview_render(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>, job_
     }
     // The artifact revision is unchanged, so no card moves and no processing
     // is applied again; the cards only take the new preview revision.
-    if let Err(error) = persist_latest_and_reapply(state, ctx, &job) {
+    if let Err(error) = persist_latest_and_reapply(state, ctx, &job, !job.automatic) {
         tracing::warn!("Failed to persist latest stack preview index: {error}");
     }
 }
 
 /// Point the cards at a finished build, and carry the processing each card
-/// showed to the new stack it shows.
+/// showed to the new stack it shows. `personal` when a person asked for the
+/// build, so the processing is theirs to run next.
 pub(super) fn persist_latest_and_reapply(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
     job: &StackPreviewJob,
+    personal: bool,
 ) -> Result<(), String> {
     let moved = state.stack_previews.persist_latest(ctx, job)?;
     if !moved.is_empty() {
-        reapply::after_build(state, ctx, job.project_id, moved);
+        reapply::after_build(state, ctx, job.project_id, moved, personal);
     }
     Ok(())
 }
@@ -2407,7 +2443,7 @@ fn reapplies_not_started(
         .into_iter()
         .filter(|reapply| {
             !active.iter().any(|entry| {
-                entry.automatic
+                entry.automatic != reapply.personal
                     && entry.kind == StackActivityKind::Processing
                     && entry.database_id == reapply.database_id
                     && entry.project_id == reapply.project_id
@@ -2449,6 +2485,14 @@ fn waiting_reapplies(
     waiting
         .into_iter()
         .map(|(_, mut view)| {
+            if view.personal {
+                // A person's waits only for their re-apply ahead of it.
+                view.waiting_for = state
+                    .stack_previews
+                    .personal_reapply_in_line()
+                    .map(|label| format!("the processing of {label}"));
+                return view;
+            }
             view.waiting_for =
                 automatic_work_waits_for(state, &view.database_id, true).or_else(|| {
                     // A refresh of its project may bring a newer stack first.
@@ -3462,7 +3506,14 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         && (job.state == StackJobState::Completed
             || (job.state == StackJobState::Cancelled && !job.automatic))
         && let Some(ctx) = state.get_database(&database_id)
-        && let Err(error) = persist_latest_and_reapply(state, &ctx, &job)
+        // A stopped build's finished channels are not the person's to
+        // process now: Stop all must not start RC-Astro.
+        && let Err(error) = persist_latest_and_reapply(
+            state,
+            &ctx,
+            &job,
+            job.state == StackJobState::Completed && !job.automatic,
+        )
     {
         tracing::warn!("Failed to persist latest stack preview index: {error}");
     }
@@ -7136,11 +7187,50 @@ mod tests {
     /// A build publishes a new revision of the R stack over the card's old
     /// one.
     fn refresh(state: &Arc<AppState>, cache: &FsPath, job_id: &str, revision: &str) -> MovedCards {
+        publish(state, cache, job_id, revision, false)
+    }
+
+    /// As [`refresh`], from a build a person asked for.
+    fn rebuild(state: &Arc<AppState>, cache: &FsPath, job_id: &str, revision: &str) -> MovedCards {
+        publish(state, cache, job_id, revision, true)
+    }
+
+    fn publish(
+        state: &Arc<AppState>,
+        cache: &FsPath,
+        job_id: &str,
+        revision: &str,
+        personal: bool,
+    ) -> MovedCards {
         let job = stack_on_disk(cache, job_id, revision);
         let moved = persist_latest_groups(cache, &job).unwrap();
         let ctx = state.get_database("test").unwrap();
-        reapply::after_build(state, &ctx, 7, moved.clone());
+        reapply::after_build(state, &ctx, 7, moved.clone(), personal);
         moved
+    }
+
+    /// A build a person queued, waiting in the line.
+    fn queued_build(state: &AppState, job_id: &str) {
+        let mut job = completed_job(job_id, vec![]);
+        job.state = StackJobState::Queued;
+        assert!(state.stack_previews.insert(job));
+        state.stack_previews.join_line(job_id);
+    }
+
+    /// The re-apply's run in the activity list, once it is queued.
+    fn the_reapply_run(state: &AppState) -> Option<StackActivityEntry> {
+        let run_id = state
+            .stack_previews
+            .reapplies
+            .lock()
+            .unwrap()
+            .values()
+            .find_map(|reapply| reapply.run_id.clone())?;
+        state
+            .stack_previews
+            .active()
+            .into_iter()
+            .find(|entry| entry.job_id == run_id)
     }
 
     /// A server whose R card shows `1…` with a person's processing.
@@ -7419,7 +7509,7 @@ mod tests {
 
         // The card moving to that stack again starts nothing.
         let ctx = state.get_database("test").unwrap();
-        reapply::after_build(&state, &ctx, 7, moved);
+        reapply::after_build(&state, &ctx, 7, moved, false);
         assert_eq!(state.stack_previews.reapply_count(), 0);
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         assert!(the_automatic_run(&state).is_none());
@@ -7456,6 +7546,229 @@ mod tests {
             shown(&state, &second).is_some_and(|shown| shown.reprocessing.is_none())
         })
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_persons_rebuild_reapplies_next_ahead_of_their_other_builds() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (state, _) = processed_card(cache.path()).await;
+        // The person's next build holds the worker, and one more waits.
+        let busy = Arc::clone(&state.stack_previews.permit)
+            .try_acquire_owned()
+            .unwrap();
+        let person = state.begin_interactive_job();
+        queued_build(&state, "later");
+        let second = "2".repeat(64);
+        rebuild(&state, cache.path(), &second, "rev-2");
+
+        eventually("the re-apply is queued", || {
+            the_reapply_run(&state).is_some()
+        })
+        .await;
+        let run = the_reapply_run(&state).unwrap();
+        assert!(!run.automatic, "it is the person's work");
+        assert_eq!(run.state, StackJobState::Queued);
+        assert_eq!(run.queue_position, Some(0), "it runs next");
+        assert_eq!(state.stack_previews.line_position("later"), Some(1));
+        assert!(state.stack_previews.journal_entries().iter().any(|origin| {
+            matches!(origin, journal::JournaledStackJob::Processing { run_id, automatic: false, .. }
+                if run_id == &run.job_id)
+        }));
+        // Work a person starts does not push it aside.
+        interrupt_automatic(&state);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(
+            the_reapply_run(&state).map(|entry| entry.job_id),
+            Some(run.job_id.clone())
+        );
+
+        // The build in hand ends: the re-apply runs before the one waiting.
+        drop(person);
+        drop(busy);
+        eventually("the re-apply lands", || {
+            shown(&state, &second).is_some_and(|shown| shown.reprocessing.is_none())
+        })
+        .await;
+        assert_eq!(state.stack_previews.line_position("later"), Some(0));
+        state.stack_previews.leave_line("later");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_persons_reapply_takes_the_worker_before_their_next_build() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (state, _) = processed_card(cache.path()).await;
+        // The person's build holds the worker, and their next one waits for
+        // its turn.
+        let busy = Arc::clone(&state.stack_previews.permit)
+            .try_acquire_owned()
+            .unwrap();
+        let cancel = state.stack_previews.track_cancel("later");
+        state.stack_previews.join_line("later");
+        let (took, took_worker) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let later = {
+            let state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let permit = state.stack_previews.wait_turn("later", &cancel).await;
+                let _ = took.send(());
+                let _ = released.await;
+                drop(permit);
+            })
+        };
+        tokio::task::yield_now().await;
+
+        // The build publishes and lets go of the worker at once.
+        let second = "2".repeat(64);
+        rebuild(&state, cache.path(), &second, "rev-2");
+        drop(busy);
+        took_worker.await.unwrap();
+        // The next build holds the worker now, so the re-apply had it first.
+        eventually("the re-apply lands before the next build", || {
+            shown(&state, &second).is_some_and(|shown| shown.reprocessing.is_none())
+        })
+        .await;
+        release.send(()).unwrap();
+        later.await.unwrap();
+        assert!(state.stack_previews.waiting.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_automatic_refresh_reapplies_only_after_the_queued_builds() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (state, _) = processed_card(cache.path()).await;
+        queued_build(&state, "later");
+        let second = "2".repeat(64);
+        refresh(&state, cache.path(), &second, "rev-2");
+        // Past the moment it looks for its turn: it keeps waiting.
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        reapply::start_due(Arc::clone(&state)).await;
+        assert_eq!(state.stack_previews.reapply_count(), 1);
+        assert!(the_reapply_run(&state).is_none());
+        assert_eq!(state.stack_previews.waiting_reapplies().len(), 1);
+
+        state
+            .stack_previews
+            .update("later", |job| job.state = StackJobState::Cancelled);
+        state.stack_previews.leave_line("later");
+        reapply::start_due(Arc::clone(&state)).await;
+        let run = the_reapply_run(&state).unwrap();
+        assert!(run.automatic, "it is still background work");
+        eventually("it runs once the line is empty", || {
+            shown(&state, &second).is_some_and(|shown| shown.reprocessing.is_none())
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_persons_reapply_stays_theirs_after_a_restart() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (before, _) = processed_card(cache.path()).await;
+        let busy = Arc::clone(&before.stack_previews.permit)
+            .try_acquire_owned()
+            .unwrap();
+        let second = "2".repeat(64);
+        rebuild(&before, cache.path(), &second, "rev-2");
+        eventually("the re-apply is queued", || {
+            the_reapply_run(&before).is_some()
+        })
+        .await;
+        let queued = the_reapply_run(&before).unwrap().job_id;
+        let origin = before
+            .stack_previews
+            .journal_entries()
+            .into_iter()
+            .find(|origin| {
+                matches!(origin, journal::JournaledStackJob::Processing { run_id, .. }
+                    if run_id == &queued)
+            })
+            .unwrap();
+        assert!(!origin.automatic(), "it is journaled as the person's");
+        // The server stops while it waits.
+        before.shutdown.begin();
+        before.stack_previews.stop_for_shutdown();
+        tokio::time::timeout(std::time::Duration::from_secs(5), before.shutdown.drained())
+            .await
+            .unwrap();
+        drop(busy);
+
+        // The journal brings the run back, still theirs and still the
+        // re-apply.
+        let after = state_on_disk(cache.path(), None);
+        assert!(stretch::restore_run(&after, origin).await.is_ok());
+        let reapply = after
+            .stack_previews
+            .reapplies
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .cloned()
+            .unwrap();
+        assert!(reapply.personal);
+        let run_id = reapply.run_id.unwrap();
+        assert!(!after.stack_previews.is_automatic_processing(&run_id));
+        eventually("it lands", || {
+            shown(&after, &second).is_some_and(|shown| shown.reprocessing.is_none())
+        })
+        .await;
+        eventually("the re-apply ledger empties", || {
+            after.stack_previews.reapply_count() == 0
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_persons_waiting_reapply_stays_theirs_after_a_restart() {
+        let _policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (before, _) = processed_card(cache.path()).await;
+        // The server is stopping as the build lands, so its turn never comes.
+        before.shutdown.begin();
+        let second = "2".repeat(64);
+        rebuild(&before, cache.path(), &second, "rev-2");
+        assert_eq!(before.stack_previews.reapply_count(), 1);
+
+        let after = state_on_disk(cache.path(), None);
+        reapply::recover(&after);
+        let reapply = after
+            .stack_previews
+            .reapplies
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .cloned()
+            .unwrap();
+        assert!(reapply.personal, "the selection remembers whose it is");
+        eventually("it runs on the restarted server", || {
+            shown(&after, &second).is_some_and(|shown| shown.reprocessing.is_none())
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reapply_turned_off_while_the_server_was_down_does_not_come_back() {
+        let policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (before, applied) = processed_card(cache.path()).await;
+        // The server is stopping as the build lands, so its turn never comes.
+        before.shutdown.begin();
+        let second = "2".repeat(64);
+        rebuild(&before, cache.path(), &second, "rev-2");
+        assert_eq!(shown(&before, &second).unwrap().stretch_id, applied);
+
+        // It starts again with re-applying off.
+        reapply::configure(false);
+        let after = state_on_disk(cache.path(), None);
+        reapply::recover(&after);
+        assert_eq!(after.stack_previews.reapply_count(), 0);
+        assert_eq!(after.stack_previews.turn_held_until(), None);
+        assert!(shown(&after, &second).is_none(), "nothing carried shows");
+        drop(policy);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -7640,11 +7953,12 @@ mod tests {
 
     #[test]
     fn a_reapply_whose_run_joined_the_line_is_listed_once() {
-        let waiting = |label: &str| WaitingReapplyView {
+        let waiting = |label: &str, personal: bool| WaitingReapplyView {
             database_id: "db".into(),
             project_id: 1,
             target_id: Some(42),
             label: label.into(),
+            personal,
             waiting_for: None,
         };
         let mut run = mono_activity(&running_build("run"));
@@ -7653,17 +7967,24 @@ mod tests {
         run.project_id = 1;
         run.label = "M44 · R".into();
         run.automatic = true;
+        let labels = |listed: Vec<WaitingReapplyView>| {
+            listed
+                .into_iter()
+                .map(|view| view.label)
+                .collect::<Vec<_>>()
+        };
         let listed = reapplies_not_started(
-            vec![waiting("M44 · R"), waiting("M44 · G")],
+            vec![waiting("M44 · R", false), waiting("M44 · G", false)],
             std::slice::from_ref(&run),
         );
-        assert_eq!(
-            listed
-                .iter()
-                .map(|view| view.label.as_str())
-                .collect::<Vec<_>>(),
-            ["M44 · G"]
+        assert_eq!(labels(listed), ["M44 · G"]);
+        // A person's re-apply runs as their work, not automatic.
+        run.automatic = false;
+        let listed = reapplies_not_started(
+            vec![waiting("M44 · R", true), waiting("M44 · G", true)],
+            std::slice::from_ref(&run),
         );
+        assert_eq!(labels(listed), ["M44 · G"]);
     }
 
     #[test]
@@ -7716,6 +8037,7 @@ mod tests {
             0,
             "rev-2",
             request,
+            false,
             &move || still_wanted,
         )
         .await

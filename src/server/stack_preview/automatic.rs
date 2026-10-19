@@ -565,7 +565,7 @@ pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
             }
             // Re-applying processing follows a person's rebuilds too, so it
             // looks whether automatic refreshes are on or not.
-            super::reapply::start_due(Arc::clone(&state)).await;
+            super::reapply::look_unless_busy(Arc::clone(&state)).await;
         }
     })
 }
@@ -871,7 +871,9 @@ async fn refresh_project(
             let state = Arc::clone(state);
             let ctx = Arc::clone(ctx);
             let _ = tokio::task::spawn_blocking(move || {
-                if let Err(error) = super::persist_latest_and_reapply(&state, &ctx, &existing) {
+                if let Err(error) =
+                    super::persist_latest_and_reapply(&state, &ctx, &existing, false)
+                {
                     tracing::warn!("could not point the card back at a finished build: {error}");
                 }
                 compose_colors_after(&state, &ctx, &existing);

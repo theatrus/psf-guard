@@ -1313,17 +1313,27 @@ refreshes** on (Settings → Stacking → Stack previews → Processing; on by
 default), PSF Guard runs the processing the card showed again on the new
 stack, on its own and with no page open:
 
-- It is queued as an automatic processing run, marked `automatic` in the
-  header's background jobs. It waits until no refresh of its project is
-  still settling, using the same debounce as automatic refreshes, so a burst
-  of frames does not start RC-Astro after every build. It then waits for
-  the worker to be free of everything else: anything you start and every
-  stack build go first. Like an automatic build, it steps aside when you
-  start work, and comes back once the worker is free. Meanwhile the header
-  lists it as **Re-applying processing**, marked **waiting**, with what it
-  waits for. A running re-apply
+- After an automatic refresh it is queued as an automatic processing run,
+  marked `automatic` in the header's background jobs. It waits until no
+  refresh of its project is still settling, using the same debounce as
+  automatic refreshes, so a burst of frames does not start RC-Astro after
+  every build. It then waits for the worker to be free of everything else:
+  anything you start and every stack build go first. Like an automatic
+  build, it steps aside when you start work, and comes back once the worker
+  is free. Meanwhile the header lists it as **Re-applying processing**,
+  marked **waiting**, with what it waits for. A running re-apply
   also steps aside for an automatic refresh that is due, since the refresh
   may bring a newer stack anyway.
+- After a build you started, or an automatic one you took over, it is your
+  work. The moment the build finishes, the worker's next turn is held for
+  it, so it runs next, ahead of your other queued builds, and it steps aside
+  for nothing. The hold lasts only while it gets ready (seconds, while the
+  tools are checked) and never more than a minute, so the line cannot stall
+  on it. The header lists it with your work. Stopping one of your running
+  re-applies starts your next waiting one. A rebuild of R, G and B runs
+  R's build, R's processing, G's build, G's processing, and so on. A build
+  you stop leaves its finished channels to the automatic re-apply instead,
+  so stopping never starts RC-Astro.
 - Only the channel's newest stack is processed. A newer stack arriving while
   a re-apply waits or runs drops it, and a running RC-Astro tool is killed;
   RC-Astro steps cached for the old stack were made from other pixels, so
@@ -1342,10 +1352,11 @@ stack, on its own and with no page open:
   one finishes, and one that steps aside after that is dropped too.
 
 Re-applies survive a restart: queued and running ones are in the job
-journal like other processing runs, and one still waiting for its project to
-settle is remembered by the new stack's processing selection. One cut off by
-two restarts in a row, or that cannot be put back, is given up for good: its
-card says why, as for a failure.
+journal like other processing runs, and one still waiting for its turn is
+remembered by the new stack's processing selection. Either way, one that
+followed your build stays yours. One cut off by two restarts in a row, or
+that cannot be put back, is given up for good: its card says why, as for a
+failure.
 
 ## Named processing setups
 

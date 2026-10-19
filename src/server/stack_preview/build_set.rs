@@ -392,7 +392,7 @@ pub(super) fn start_prepared(
         ) || (!request.force && existing.state == StackJobState::Completed))
     {
         if existing.state == StackJobState::Completed
-            && let Err(error) = persist_latest_and_reapply(state, ctx, &existing)
+            && let Err(error) = persist_latest_and_reapply(state, ctx, &existing, true)
         {
             tracing::warn!("Failed to refresh latest stack preview index: {error}");
         }
@@ -441,7 +441,7 @@ pub(super) fn start_prepared(
         && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
         && existing.state == StackJobState::Completed
     {
-        if let Err(error) = persist_latest_and_reapply(state, ctx, &existing) {
+        if let Err(error) = persist_latest_and_reapply(state, ctx, &existing, true) {
             tracing::warn!("Failed to refresh latest stack preview index: {error}");
         }
         let _ = state.stack_previews.insert(existing.clone());
