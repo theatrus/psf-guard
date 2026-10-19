@@ -16,10 +16,19 @@ every target/channel group, or **Build channel** on one card to test only that
 group. **Build stacks** asks the server for one build per channel, so the
 header's queue lists each channel on its own, in channel order. A channel
 already built for the same inputs and settings comes back at once instead of
-stacking again; a channel with too few frames shows as skipped. Queueing
-matches each light to its calibration frames, reading each calibration
-file's header once for the whole request, with the catalog connection held
-only while the library is read. Each channel
+stacking again; a channel with too few frames shows as skipped.
+
+The click puts the request in the line at once, as **Preparing stack
+build**, and the button reads **Preparing…**. A server thread then prepares
+requests in the order they were asked for, as a person's work: it reads the
+frames, scores them, and matches each light to its calibration frames,
+reading each calibration file's header once for the whole request. The
+catalog connection is held only while the library is read. The request then
+becomes its channel builds, or the same builds already queued, running or
+finished, and the panel and the header follow those (`replaced_by` on the
+request, whose state becomes `replaced`). A request that cannot be prepared
+fails with the reason; stopping one while it is prepared queues nothing. A
+request still being prepared does not survive a server restart. Each channel
 build still learns the pier-side mapping from its sibling channels' reference
 frames, so an unsolved channel faces the way the solved ones do, as it did
 when they shared one build. **Build channel** sends the same set and the

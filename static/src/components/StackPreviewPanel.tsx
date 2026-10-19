@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -221,7 +221,9 @@ function readCalibrationOverrides(): Record<string, CalibrationMode> {
   }
 }
 
-const terminalStates = new Set(['completed', 'failed', 'cancelled']);
+// `replaced`: a build that was being prepared became the builds it names,
+// which are followed instead.
+const terminalStates = new Set(['completed', 'failed', 'cancelled', 'replaced']);
 
 function stackJobQueryKey(dbId: string, projectId: number, jobId: string | null) {
   return ['db', dbId, 'project', projectId, 'stack-preview', jobId] as const;
@@ -428,6 +430,8 @@ export default function StackPreviewPanel({
   const effectiveCalibration = (channel: string): CalibrationMode =>
     channelOverride(channel) ?? calibrationMode;
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
+  // The Build button each build being prepared came from, by build.
+  const preparingOperations = useRef(new Map<string, string>());
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
   // Which channels currently show the stars image instead of the starless
   // one, keyed like `stretches`. Only meaningful while star removal is
@@ -514,9 +518,10 @@ export default function StackPreviewPanel({
         ? apiClient.startStackPreviewChannels(dbId, projectId, request)
         : [await apiClient.startStackPreviews(dbId, projectId, request)];
     },
-    onSuccess: (jobs) => {
+    onSuccess: (jobs, variables) => {
       for (const job of jobs) {
         queryClient.setQueryData(stackJobQueryKey(dbId, projectId, job.job_id), job);
+        if (job.state === 'preparing') preparingOperations.current.set(job.job_id, variables.operationKey);
       }
       setWatchedJobIds((current) => [
         ...current,
@@ -553,10 +558,44 @@ export default function StackPreviewPanel({
     () =>
       statuses
         .map((status) => status.data)
-        .filter((job): job is StackPreviewJob => job !== undefined)
+        .filter((job): job is StackPreviewJob => job !== undefined && job.state !== 'replaced')
         .sort((left, right) => left.created_unix_seconds - right.created_unix_seconds),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- useQueries returns a new array each render; the join tracks content.
     [statuses.map((status) => status.dataUpdatedAt).join('|')]
+  );
+  // A build being prepared becomes the builds it was prepared into, which
+  // may already be queued, running or finished: follow those instead.
+  const replacements = statuses
+    .map((status) => status.data)
+    .filter((job): job is StackPreviewJob => job?.state === 'replaced');
+  const replacementKey = replacements
+    .map((job) => `${job.job_id}>${(job.replaced_by ?? []).join(',')}`)
+    .join('|');
+  useEffect(() => {
+    if (replacements.length === 0) return;
+    for (const job of replacements) {
+      preparingOperations.current.delete(job.job_id);
+      for (const jobId of job.replaced_by ?? []) {
+        queryClient.invalidateQueries({ queryKey: stackJobQueryKey(dbId, projectId, jobId) });
+      }
+    }
+    setWatchedJobIds((current) => {
+      const next = current.filter((jobId) => !replacements.some((job) => job.job_id === jobId));
+      for (const job of replacements) {
+        for (const jobId of job.replaced_by ?? []) {
+          if (!next.includes(jobId)) next.push(jobId);
+        }
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the key tracks which builds were replaced and by what.
+  }, [replacementKey, dbId, projectId, queryClient]);
+  // Which Build button each build still being prepared came from.
+  const preparingKeys = new Set(
+    watchedJobs
+      .filter((job) => job.state === 'preparing')
+      .map((job) => preparingOperations.current.get(job.job_id))
+      .filter((key): key is string => key !== undefined)
   );
   const unfinishedJobs = watchedJobs.filter((job) => !terminalStates.has(job.state));
   const statusError = statuses.find((status) => status.error)?.error;
@@ -970,7 +1009,7 @@ export default function StackPreviewPanel({
             <button
               className="stack-preview-build"
               type="button"
-              disabled={!canCompute || startPending || stableImageIds.length < 2}
+              disabled={!canCompute || startPending || preparingKeys.has('all') || stableImageIds.length < 2}
               title={
                 canCompute
                   ? 'Queues one build per channel; a channel already built as it is comes back at once, and color follows each target’s last channel.'
@@ -978,7 +1017,11 @@ export default function StackPreviewPanel({
               }
               onClick={() => beginAll(false)}
             >
-              {startPending && startVariables?.operationKey === 'all' ? 'Queueing…' : buildLabel}
+              {startPending && startVariables?.operationKey === 'all'
+                ? 'Queueing…'
+                : preparingKeys.has('all')
+                  ? 'Preparing…'
+                  : buildLabel}
             </button>
             {!!latest.data?.groups.length && !running && (
               <button
@@ -1221,14 +1264,16 @@ export default function StackPreviewPanel({
                           <button
                             className="stack-preview-card-action"
                             type="button"
-                            disabled={!canCompute || groupBusy || startPending || !canBuildChannel}
+                            disabled={!canCompute || groupBusy || startPending || preparingKeys.has(key) || !canBuildChannel}
                             aria-label={artifact ? 'Rebuild channel' : 'Build channel'}
                             title={!canCompute
                               ? 'This account can view cached stacks but cannot build them.'
                               : artifact ? 'Rebuild channel' : 'Build channel'}
                             onClick={() => beginChannel(current, Boolean(artifact))}
                           >
-                            {groupBusy || (startPending && startVariables?.operationKey === key)
+                            {preparingKeys.has(key) && !groupBusy
+                              ? 'Preparing…'
+                              : groupBusy || (startPending && startVariables?.operationKey === key)
                               ? 'Building…'
                               : artifact
                                 ? 'Rebuild'

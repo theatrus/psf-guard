@@ -209,6 +209,8 @@ impl Fixture {
             groups: vec![group],
             error: None,
             color_defaults: None,
+            preparing: None,
+            replaced_by: Vec::new(),
         };
         let source = MasterSource {
             kind: SourceKind::Mono,

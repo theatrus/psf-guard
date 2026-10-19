@@ -3,31 +3,26 @@
 //! matches each light to the calibration library, then queues each build,
 //! or hands back the same build already queued, running or finished.
 
+use std::collections::VecDeque;
+
 use super::*;
 
+/// `POST /api/db/{db}/projects/{project}/stack-previews` — one build of
+/// the request's images, or of the one `channel` it names. It joins the
+/// line at once, as a build being prepared: `202` and that build, which a
+/// client follows through `replaced_by` once it is prepared.
 pub async fn start_stack_previews(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(request): Json<StackPreviewRequest>,
-) -> Result<Json<ApiResponse<StackPreviewJob>>, AppError> {
+) -> Result<(StatusCode, Json<ApiResponse<StackPreviewJob>>), AppError> {
     validate_request(&request)?;
-
-    let ctx_arc = Arc::clone(&ctx.0);
-    let request_for_prepare = request.clone();
-    let prepared = tokio::task::spawn_blocking(move || {
-        prepare_job(&ctx_arc, project_id, &request_for_prepare)
-    })
-    .await
-    .map_err(|error| {
-        AppError::InternalError(format!("Stack preparation task failed: {error}"))
-    })??;
-
-    let started = start_prepared(&state, &ctx.0, project_id, &request, prepared)?;
-    if let Some(cached) = started.cached {
-        compose_after_cache_hits(&state, &ctx.0, vec![cached]).await;
-    }
-    Ok(Json(ApiResponse::success(started.job.for_client())))
+    let job = queue_preparation(&state, &ctx.0, project_id, request, false)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ApiResponse::success(job.for_client())),
+    ))
 }
 
 /// `POST /api/db/{db}/projects/{project}/stack-previews/channels` — the
@@ -38,35 +33,278 @@ pub async fn start_stack_previews(
 /// route makes the same build, so the two share a cache. Channels with too
 /// few frames come back together as one build that settles at once, and a
 /// channel already built for this request comes back as it is.
+///
+/// The split happens as the request is prepared, off the request: `202` and
+/// one build being prepared, whose `replaced_by` names the channel builds.
 pub async fn start_stack_preview_channels(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(request): Json<StackPreviewRequest>,
-) -> Result<Json<ApiResponse<Vec<StackPreviewJob>>>, AppError> {
+) -> Result<(StatusCode, Json<ApiResponse<Vec<StackPreviewJob>>>), AppError> {
     validate_request(&request)?;
-    let ctx_arc = Arc::clone(&ctx.0);
-    let request_for_prepare = request.clone();
-    let channels = tokio::task::spawn_blocking(move || {
-        prepare_channels(&ctx_arc, project_id, &request_for_prepare, None)
-    })
-    .await
-    .map_err(|error| {
-        AppError::InternalError(format!("Stack preparation task failed: {error}"))
-    })??;
-    let mut jobs = Vec::with_capacity(channels.len());
+    let job = queue_preparation(&state, &ctx.0, project_id, request, true)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ApiResponse::success(vec![job.for_client()])),
+    ))
+}
+
+/// Builds a person asked for that wait to be prepared, in click order, and
+/// whether a runner is preparing them.
+#[derive(Default)]
+pub(super) struct PreparationLine {
+    pending: VecDeque<Preparation>,
+    running: bool,
+    /// The build each request waiting or being prepared became, by
+    /// request, so the same click twice joins one build.
+    by_request: HashMap<String, String>,
+}
+
+struct Preparation {
+    job_id: String,
+    request_key: String,
+    ctx: Arc<DatabaseContext>,
+    project_id: i32,
+    request: StackPreviewRequest,
+    /// One build per channel (Build stacks), or one build.
+    split: bool,
+    cancel: Arc<AtomicBool>,
+}
+
+/// Put a person's build in the line as being prepared, and see that a
+/// runner prepares it. Nothing is read from the catalog or storage here.
+pub(super) fn queue_preparation(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    project_id: i32,
+    request: StackPreviewRequest,
+    split: bool,
+) -> Result<StackPreviewJob, AppError> {
+    let manager = &state.stack_previews;
+    let request_key = preparation_key(&ctx.id, project_id, &request, split);
+    let mut line = manager.preparing.lock().unwrap();
+    if let Some(job) = line
+        .by_request
+        .get(&request_key)
+        .and_then(|job_id| manager.get(job_id))
+        .filter(|job| job.state == StackJobState::Preparing)
+    {
+        return Ok(job);
+    }
+    let job = preparing_job(&ctx.id, project_id, &request, &request_key);
+    if !manager.insert(job.clone()) {
+        return Err(AppError::BadRequest(format!(
+            "At most {MAX_QUEUED_JOBS} stack builds may wait at once, and \
+             {MAX_REMEMBERED_JOBS} may be running or kept"
+        )));
+    }
+    let cancel = manager.track_cancel(&job.job_id);
+    line.by_request
+        .insert(request_key.clone(), job.job_id.clone());
+    line.pending.push_back(Preparation {
+        job_id: job.job_id.clone(),
+        request_key,
+        ctx: Arc::clone(ctx),
+        project_id,
+        request,
+        split,
+        cancel,
+    });
+    if !line.running {
+        line.running = true;
+        drop(line);
+        start_preparing(state);
+    }
+    Ok(job)
+}
+
+/// What identifies a request: the same click twice is one build.
+fn preparation_key(
+    database_id: &str,
+    project_id: i32,
+    request: &StackPreviewRequest,
+    split: bool,
+) -> String {
+    let mut request = request.clone();
+    request.image_ids.sort_unstable();
+    let mut hasher = Sha256::new();
+    hasher.update(database_id.as_bytes());
+    hasher.update(project_id.to_le_bytes());
+    hasher.update([u8::from(split)]);
+    hasher.update(serde_json::to_vec(&request).unwrap_or_default());
+    hex_digest(hasher)
+}
+
+/// The build a request is while it is prepared. Its id is its own, not the
+/// id the prepared build gets: that one depends on what preparing reads.
+fn preparing_job(
+    database_id: &str,
+    project_id: i32,
+    request: &StackPreviewRequest,
+    request_key: &str,
+) -> StackPreviewJob {
+    let mut hasher = Sha256::new();
+    hasher.update(request_key.as_bytes());
+    hasher.update(new_artifact_revision().as_bytes());
+    let frames = format!("{} frames", request.image_ids.len());
+    let label = match &request.channel {
+        Some(channel) if !channel.filter_name.is_empty() => {
+            format!("{} · {frames}", channel.filter_name)
+        }
+        _ => frames,
+    };
+    StackPreviewJob {
+        schema_version: 2,
+        job_id: hex_digest(hasher),
+        database_id: database_id.to_string(),
+        project_id,
+        state: StackJobState::Preparing,
+        accepted_only: request.accepted_only,
+        created_unix_seconds: chrono::Utc::now().timestamp(),
+        artifact_revision: String::new(),
+        cache_version: STACK_PREVIEW_CACHE_VERSION,
+        stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
+        order: request.order,
+        scoring: StackScoringSettings::from_overrides(&request.scoring),
+        method: None,
+        groups: Vec::new(),
+        error: None,
+        color_defaults: request.color_defaults.clone(),
+        automatic: false,
+        preparing: Some(label),
+        replaced_by: Vec::new(),
+    }
+}
+
+/// One runner thread prepares the line, in click order, until it is empty.
+/// It runs on the async runtime's handle: queueing a prepared build spawns
+/// its task there.
+fn start_preparing(state: &Arc<AppState>) {
+    let runner_state = Arc::clone(state);
+    let handle = tokio::runtime::Handle::current();
+    let spawned = std::thread::Builder::new()
+        .name("stack-preparation".into())
+        .spawn(move || {
+            let _runtime = handle.enter();
+            serve_preparations(&runner_state);
+        });
+    if let Err(error) = spawned {
+        tracing::warn!("could not start preparing stack builds: {error}");
+        let pending = {
+            let mut line = state.stack_previews.preparing.lock().unwrap();
+            line.running = false;
+            line.by_request.clear();
+            std::mem::take(&mut line.pending)
+        };
+        for preparation in pending {
+            end_preparation(
+                state,
+                &preparation,
+                Err(format!("Could not start preparing the build: {error}")),
+            );
+        }
+    }
+}
+
+fn serve_preparations(state: &Arc<AppState>) {
+    loop {
+        let Some(preparation) = ({
+            let mut line = state.stack_previews.preparing.lock().unwrap();
+            let next = line.pending.pop_front();
+            if next.is_none() {
+                line.running = false;
+            }
+            next
+        }) else {
+            return;
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prepare_and_queue(state, &preparation)
+        }))
+        .unwrap_or_else(|_| Err("Preparing the build failed unexpectedly".into()));
+        end_preparation(state, &preparation, outcome);
+    }
+}
+
+/// Whether a preparation was stopped, or the server is stopping.
+fn preparation_stopped(state: &AppState, preparation: &Preparation) -> bool {
+    preparation.cancel.load(Ordering::Relaxed) || state.shutdown.is_stopping()
+}
+
+/// Prepare one request and queue what it became, or hand back the same
+/// builds already queued, running or finished. `None` when it was stopped.
+fn prepare_and_queue(
+    state: &Arc<AppState>,
+    preparation: &Preparation,
+) -> Result<Option<Vec<String>>, String> {
+    if preparation_stopped(state, preparation) {
+        return Ok(None);
+    }
+    // A person is waiting on it, and the server's stop waits for it.
+    let _person = state.begin_named_interactive_job("preparing a stack build");
+    let _hold = state.shutdown.hold("preparing a stack build");
+    let Preparation {
+        ctx,
+        project_id,
+        request,
+        ..
+    } = preparation;
+    let parts = if preparation.split {
+        prepare_channels(ctx, *project_id, request, None)
+    } else {
+        prepare_job(ctx, *project_id, request).map(|prepared| vec![(request.clone(), prepared)])
+    }
+    .map_err(|error| error.message())?;
+    if preparation_stopped(state, preparation) {
+        return Ok(None);
+    }
+    let mut job_ids = Vec::with_capacity(parts.len());
     let mut cached = Vec::new();
-    for (channel_request, prepared) in channels {
-        let started = start_prepared(&state, &ctx.0, project_id, &channel_request, prepared)?;
+    for (part_request, prepared) in parts {
+        let started = start_prepared(state, ctx, *project_id, &part_request, prepared)
+            .map_err(|error| error.message())?;
+        job_ids.push(started.job.job_id);
         cached.extend(started.cached);
-        jobs.push(started.job);
     }
     // Once every channel is in line, so color waits for the ones still to
     // build rather than composing from a half-queued set.
-    compose_after_cache_hits(&state, &ctx.0, cached).await;
-    Ok(Json(ApiResponse::success(
-        jobs.into_iter().map(StackPreviewJob::for_client).collect(),
-    )))
+    for job in cached {
+        automatic::compose_colors_after(state, ctx, &job);
+    }
+    Ok(Some(job_ids))
+}
+
+/// Settle the build a request was while it was prepared: replaced by what it
+/// became, failed with why, or stopped.
+fn end_preparation(
+    state: &Arc<AppState>,
+    preparation: &Preparation,
+    outcome: Result<Option<Vec<String>>, String>,
+) {
+    let manager = &state.stack_previews;
+    manager.update(&preparation.job_id, |job| {
+        job.preparing = None;
+        match outcome {
+            // Builds already queued are the person's to follow or stop, even
+            // when the stop came as they were queued.
+            Ok(Some(job_ids)) => {
+                job.state = StackJobState::Replaced;
+                job.replaced_by = job_ids;
+            }
+            _ if job.state == StackJobState::Cancelled => {}
+            Ok(None) => job.state = StackJobState::Cancelled,
+            Err(error) => {
+                job.state = StackJobState::Failed;
+                job.error = Some(error);
+            }
+        }
+    });
+    manager.forget_cancel_of(&preparation.job_id, &preparation.cancel);
+    let mut line = manager.preparing.lock().unwrap();
+    if line.by_request.get(&preparation.request_key) == Some(&preparation.job_id) {
+        line.by_request.remove(&preparation.request_key);
+    }
 }
 
 pub(super) struct Started {
@@ -177,26 +415,6 @@ pub(super) fn start_prepared(
         job: response,
         cached: None,
     })
-}
-
-/// Let color follow builds a request matched rather than ran, carrying the
-/// request's color defaults, off the async runtime.
-pub(super) async fn compose_after_cache_hits(
-    state: &Arc<AppState>,
-    ctx: &Arc<DatabaseContext>,
-    jobs: Vec<StackPreviewJob>,
-) {
-    if jobs.is_empty() {
-        return;
-    }
-    let state = Arc::clone(state);
-    let ctx = Arc::clone(ctx);
-    let _ = tokio::task::spawn_blocking(move || {
-        for job in jobs {
-            automatic::compose_colors_after(&state, &ctx, &job);
-        }
-    })
-    .await;
 }
 
 pub(super) fn validate_request(request: &StackPreviewRequest) -> Result<(), AppError> {
@@ -811,6 +1029,8 @@ pub(super) fn prepare_whole(
                 groups: public_groups,
                 error: None,
                 color_defaults: request.color_defaults.clone(),
+                preparing: None,
+                replaced_by: Vec::new(),
             },
             groups: prepared_groups,
             stack_root: ctx.stack_root.clone(),

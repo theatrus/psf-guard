@@ -1664,7 +1664,7 @@ impl PsfGuardMcp {
     // ---------- Catalog: changes ----------
 
     #[tool(
-        description = "Build stack previews for a project, or one target or filter of it: the server groups the frames by target, filter and exposure and stacks each channel. Returns the job; list_stacks and get_stack follow it. Needs write access."
+        description = "Build stack previews for a project, or one target or filter of it: the server groups the frames by target, filter and exposure and stacks each channel. Returns at once with the job in state preparing; get_stack follows it, and once prepared it is replaced, with replaced_by naming the build to follow (already queued, running or finished). Needs write access."
     )]
     async fn start_stack(
         &self,

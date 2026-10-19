@@ -18,3 +18,8 @@
   light or night. The check takes about a second on a large project, where
   it took about twenty, and Export no longer rescans every image folder
   before it starts.
+- **Build stacks**, **Build current set** and **Build channel** join the
+  queue the moment you click, as **Preparing stack build**, instead of
+  waiting while the server reads every frame and matches calibration. The
+  build then takes its place as one build per channel, and you can stop it
+  while it is prepared.

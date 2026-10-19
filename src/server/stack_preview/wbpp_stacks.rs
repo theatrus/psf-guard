@@ -333,6 +333,8 @@ pub fn import_masters(
             error: None,
             automatic: false,
             color_defaults: None,
+            preparing: None,
+            replaced_by: Vec::new(),
         };
         if let Err(error) =
             super::stretch::write_json_atomic(&super::manifest_path(stack_root, &job_id), &job)

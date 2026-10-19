@@ -302,6 +302,11 @@ pub enum StackJobState {
     /// Stopped on request. Whatever the job had built is discarded; the
     /// project's last successful previews are left alone.
     Cancelled,
+    /// Asked for and in the line, but not yet read: its frames, scores and
+    /// calibration are being worked out off the request that queued it.
+    Preparing,
+    /// Prepared into the builds `replaced_by` names, which a client follows.
+    Replaced,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -530,6 +535,13 @@ pub struct StackPreviewJob {
     /// steps aside for one the user starts.
     #[serde(default)]
     pub automatic: bool,
+    /// While preparing: what was asked for, in a few words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparing: Option<String>,
+    /// Once prepared: the builds this request became, already queued,
+    /// running or finished.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced_by: Vec<String>,
 }
 
 /// A concrete scoring-policy snapshot attached to every stack artifact.
@@ -892,6 +904,10 @@ fn channel_label(target_name: &str, filter_name: &str) -> String {
 fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
     let pending = job.groups.iter().find(|group| group_in_flight(group));
     let label = match pending {
+        _ if job.state == StackJobState::Preparing => job
+            .preparing
+            .clone()
+            .unwrap_or_else(|| "Stack build".into()),
         Some(group) => {
             let mut base = channel_label(&group.target_name, &group.filter_name);
             if let Some(exposure_group) = &group.exposure_group {
@@ -912,6 +928,9 @@ fn mono_activity(job: &StackPreviewJob) -> StackActivityEntry {
         None => format!("{} channels", job.groups.len()),
     };
     let detail = match pending {
+        _ if job.state == StackJobState::Preparing => {
+            "Reading frames and matching calibration".to_string()
+        }
         Some(group) if group.phase == PHASE_RENDER_QUEUED => {
             "Waiting to render preview".to_string()
         }
@@ -1063,6 +1082,8 @@ pub struct StackPreviewManager {
     reapplies: Mutex<HashMap<String, reapply::Reapply>>,
     /// Re-applies stopped to make way for a person's work, which wait again.
     yielded: Mutex<HashSet<String>>,
+    /// Builds a person asked for that wait to be prepared, in click order.
+    preparing: Mutex<build_set::PreparationLine>,
 }
 
 impl StackPreviewManager {
@@ -1084,6 +1105,7 @@ impl StackPreviewManager {
             completed_during_stop: Mutex::new(HashSet::new()),
             reapplies: Mutex::new(HashMap::new()),
             yielded: Mutex::new(HashSet::new()),
+            preparing: Mutex::new(build_set::PreparationLine::default()),
         }
     }
 
@@ -1348,6 +1370,14 @@ impl StackPreviewManager {
             return false;
         };
         flag.store(true, Ordering::Relaxed);
+        // A build still being prepared has nothing to stop: it ends now, and
+        // what its preparation finds is dropped.
+        self.update(job_id, |job| {
+            if job.state == StackJobState::Preparing {
+                job.state = StackJobState::Cancelled;
+                job.preparing = None;
+            }
+        });
         // A build still waiting sees it at once and leaves the line.
         self.turn.notify_waiters();
         true
@@ -1435,7 +1465,12 @@ impl StackPreviewManager {
         let mut active: Vec<StackActivityEntry> = {
             let jobs = self.jobs.lock().unwrap();
             jobs.values()
-                .filter(|job| matches!(job.state, StackJobState::Queued | StackJobState::Running))
+                .filter(|job| {
+                    matches!(
+                        job.state,
+                        StackJobState::Preparing | StackJobState::Queued | StackJobState::Running
+                    )
+                })
                 .map(mono_activity)
                 .collect()
         };
@@ -1578,13 +1613,18 @@ impl StackPreviewManager {
                 .filter(|entry| {
                     matches!(
                         entry.state,
-                        StackJobState::Completed | StackJobState::Failed | StackJobState::Cancelled
+                        StackJobState::Completed
+                            | StackJobState::Failed
+                            | StackJobState::Cancelled
+                            | StackJobState::Replaced
                     )
                 })
                 .min_by_key(|entry| entry.created_unix_seconds)
                 .map(|entry| entry.job_id.clone())
             else {
-                if job.state == StackJobState::Queued && jobs.len() < MAX_QUEUED_JOBS {
+                if matches!(job.state, StackJobState::Queued | StackJobState::Preparing)
+                    && jobs.len() < MAX_QUEUED_JOBS
+                {
                     jobs.insert(job.job_id.clone(), job);
                     return true;
                 }
@@ -5289,6 +5329,8 @@ mod tests {
             groups,
             error: None,
             color_defaults: None,
+            preparing: None,
+            replaced_by: Vec::new(),
         }
     }
 
@@ -7919,6 +7961,152 @@ mod tests {
         assert!(!preview_needs_render(&state, &ctx, &job_id, &group));
         group.state = StackGroupState::Ready;
         assert!(!preview_needs_render(&state, &ctx, &"4".repeat(64), &group));
+    }
+
+    /// Project 1 of a catalog with four Ha frames in two exposure groups,
+    /// registered on a fresh server state.
+    fn state_with_frames(directory: &FsPath) -> (Arc<AppState>, Arc<DatabaseContext>) {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Project','profile','project-one');
+            INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid)
+                VALUES(1,'Target',1,1,10,20,0,0,100,'target-one');
+            CREATE TABLE psf_guard_project_processing(project_key TEXT PRIMARY KEY,split_exposure_groups INTEGER NOT NULL,split_chosen INTEGER);
+            INSERT INTO psf_guard_project_processing VALUES('guid:project-one',1,1);").unwrap();
+        for (id, exposure) in [(1, 10.0), (2, 11.0), (3, 300.0), (4, 310.0)] {
+            conn.execute("INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,acquireddate,filtername)
+                VALUES(?1,1,1,1,?2,?1,'Ha')", rusqlite::params![id, serde_json::json!({"ExposureDuration":exposure}).to_string()]).unwrap();
+        }
+        let mut ctx = DatabaseContext::new_for_test(conn);
+        ctx.use_storage_for_test(directory);
+        let ctx = Arc::new(ctx);
+        let state = test_state();
+        state
+            .databases
+            .write()
+            .unwrap()
+            .insert(ctx.id.clone(), Arc::clone(&ctx));
+        (state, ctx)
+    }
+
+    fn build_request(image_ids: Vec<i32>) -> StackPreviewRequest {
+        serde_json::from_value(serde_json::json!({"image_ids": image_ids, "calibration": "off"}))
+            .unwrap()
+    }
+
+    /// The build once its preparation has ended.
+    async fn prepared(state: &AppState, job_id: &str) -> StackPreviewJob {
+        for _ in 0..500 {
+            if let Some(job) = state.stack_previews.get(job_id)
+                && job.state != StackJobState::Preparing
+            {
+                return job;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the build was never prepared");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_build_joins_the_line_before_it_is_prepared_then_becomes_its_channels() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        // The catalog is busy, so preparing cannot read it yet: queueing
+        // still answers at once.
+        let db = ctx.db();
+        let busy = db.lock().unwrap();
+        let job =
+            build_set::queue_preparation(&state, &ctx, 1, build_request(vec![1, 2, 3, 4]), true)
+                .unwrap();
+        assert_eq!(job.state, StackJobState::Preparing);
+        assert_eq!(job.preparing.as_deref(), Some("4 frames"));
+        let listed = state.stack_previews.active();
+        let entry = listed
+            .iter()
+            .find(|entry| entry.job_id == job.job_id)
+            .unwrap();
+        assert_eq!(entry.label, "4 frames");
+        assert_eq!(entry.detail, "Reading frames and matching calibration");
+        assert!(automatic::holds_off_refreshes(&state.stack_previews));
+        // The same click again is the same build.
+        let again =
+            build_set::queue_preparation(&state, &ctx, 1, build_request(vec![4, 3, 2, 1]), true)
+                .unwrap();
+        assert_eq!(again.job_id, job.job_id);
+        drop(busy);
+
+        let done = prepared(&state, &job.job_id).await;
+        assert_eq!(done.state, StackJobState::Replaced);
+        assert!(done.preparing.is_none());
+        let channels = prepare_channels(&ctx, 1, &build_request(vec![1, 2, 3, 4]), None)
+            .unwrap()
+            .into_iter()
+            .map(|(_, prepared)| prepared.public.job_id)
+            .collect::<Vec<_>>();
+        assert!(!channels.is_empty());
+        assert_eq!(done.replaced_by, channels);
+        for job_id in &done.replaced_by {
+            assert!(state.stack_previews.get(job_id).is_some());
+            state.stack_previews.request_cancel(job_id);
+        }
+        // Once prepared, the next click is a new request.
+        let later =
+            build_set::queue_preparation(&state, &ctx, 1, build_request(vec![1, 2, 3, 4]), true)
+                .unwrap();
+        assert_ne!(later.job_id, job.job_id);
+        prepared(&state, &later.job_id).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_build_that_cannot_be_prepared_fails_with_why() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        let job = build_set::queue_preparation(&state, &ctx, 1, build_request(vec![1, 99]), false)
+            .unwrap();
+        assert_eq!(job.state, StackJobState::Preparing);
+        let done = prepared(&state, &job.job_id).await;
+        assert_eq!(done.state, StackJobState::Failed);
+        assert_eq!(
+            done.error.as_deref(),
+            Some("Every requested image must belong to the selected project")
+        );
+        assert!(done.replaced_by.is_empty());
+        assert!(state.stack_previews.active().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_build_stopped_while_it_is_prepared_queues_nothing() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        let db = ctx.db();
+        let busy = db.lock().unwrap();
+        let job =
+            build_set::queue_preparation(&state, &ctx, 1, build_request(vec![1, 2, 3, 4]), true)
+                .unwrap();
+        assert!(state.stack_previews.request_cancel(&job.job_id));
+        assert_eq!(
+            state.stack_previews.get(&job.job_id).unwrap().state,
+            StackJobState::Cancelled,
+            "it ends at once"
+        );
+        drop(busy);
+        // Its preparation finishes and is dropped.
+        for _ in 0..100 {
+            if !state
+                .stack_previews
+                .cancels
+                .lock()
+                .unwrap()
+                .contains_key(&job.job_id)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let done = state.stack_previews.get(&job.job_id).unwrap();
+        assert_eq!(done.state, StackJobState::Cancelled);
+        assert!(done.replaced_by.is_empty());
+        assert!(state.stack_previews.active().is_empty());
     }
 
     /// A Build of the stack `job_id`, as the request's preparation hands it
