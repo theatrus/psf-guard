@@ -27,3 +27,7 @@
   refreshes** runs each channel's processing right after its build, ahead of
   your other queued builds. It used to wait at the back of the queue until
   every other build was done, and stepped aside whenever you started work.
+- A stack card refreshed after an engine update shows its new preview as
+  soon as the refresh finishes. The finished build used to read as done a
+  moment before its new preview was recorded, so a card could keep the old
+  one until the next refresh.
