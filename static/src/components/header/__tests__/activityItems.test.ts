@@ -92,6 +92,26 @@ describe('header activity items', () => {
     });
   });
 
+  it('shows a color composition being prepared as waiting for its channel builds', () => {
+    const [item] = activityItems(
+      [],
+      [{
+        ...stack('composition', 'preparing'), kind: 'color', label: 'RGB',
+        detail: 'Waiting for the channel builds to finish',
+      }],
+      undefined,
+      () => undefined,
+      {},
+      []
+    );
+    expect(item).toMatchObject({
+      title: 'Preparing color preview',
+      scope: 'RGB',
+      detail: 'Waiting for the channel builds to finish',
+      stoppable: true,
+    });
+  });
+
   it('links each job to the view showing what it works on', () => {
     const projectOf = (dbId: string, targetId: number) =>
       dbId === 'db-a' && targetId === 42 ? 4 : dbId === 'db-a' && targetId === 9 ? 2 : undefined;

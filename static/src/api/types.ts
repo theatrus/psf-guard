@@ -1611,6 +1611,10 @@ export interface StackColorJob {
   error: string | null;
   outdated: boolean;
   outdated_reason: string | null;
+  /** While its request is prepared: what was asked for, in a few words. */
+  preparing?: string;
+  /** The composition a request being prepared became. */
+  replaced_by?: string[];
 }
 
 export interface StackColorAvailableRole {

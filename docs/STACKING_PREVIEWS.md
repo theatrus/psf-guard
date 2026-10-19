@@ -801,8 +801,9 @@ RC-Astro tool is killed rather than waited for; see
 On start PSF Guard puts them back before the automatic scheduler may start
 anything:
 
-- Each stack build, including one still being prepared when the server
-  stopped, goes back in its place in the queue under the ID it had, so a page
+- Each stack build and color composition, including one still being
+  prepared when the server stopped, goes back in its place in the queue
+  under the ID it had, so a page
   left open finds it on its next poll. The server does not wait to prepare
   them before it starts: each is prepared again from the catalog as it is
   now, in the background, as a build you start is. One whose database is
@@ -810,8 +811,6 @@ anything:
   restart shows its finished stack; a forced rebuild still runs. One that
   cannot be prepared yet, because its disk is not mounted, is retried every
   minute for half an hour and keeps its place meanwhile.
-- A color build is prepared again before the server starts the automatic
-  scheduler, and retried the same way.
 - A build cut off part way resumes from its checkpoint where it can. A build
   cut off by two crashes or killed processes in a row is not started a third
   time, since it is the likelier cause of them. A clean stop does not count.
@@ -1442,6 +1441,16 @@ and B, else RGB, else the first narrowband palette its channels allow, with
 the display pipeline the color cards start from. A role with two of PSF
 Guard's own stacks, such as two exposure groups of R, is a choice left to
 you. Automatic refreshes compose only what was composed before.
+
+When you click **Build** or **Apply processing stack** on a color card, the
+composition joins the queue at once, as **Preparing color preview**, and the
+button reads **Preparing…**. If any of the target's channels is still queued,
+building, or being prepared, the composition waits for those builds to finish
+and the card shows **Waiting for the channel builds to finish**. It then uses
+the newest stack of each channel: a channel stack you picked is replaced by
+the newest stack of the same filter and exposure group. If a build leaves a
+channel with no stack, the composition fails and the card explains which
+channel is missing. You can stop a composition while it waits.
 
 A color composition you start can run alongside queued or running stack builds
 when either condition holds:

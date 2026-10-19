@@ -22,3 +22,9 @@
   no longer shows the stack built from the frames you rejected, and a color
   composite stops offering that stack as a source. A channel whose files are
   missing, or that has no matching calibration, keeps its stack.
+- A color preview you build while its target's channels are still queued or
+  building now waits for those builds and uses their new stacks. It used to
+  fail because no stacks were finished yet, or start from the old stacks and
+  then fail when a channel was rebuilt before it ran. The color card shows
+  **Waiting for the channel builds to finish** meanwhile, and the
+  composition survives a server restart.

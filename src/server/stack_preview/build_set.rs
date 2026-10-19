@@ -3,7 +3,7 @@
 //! matches each light to the calibration library, then queues each build,
 //! or hands back the same build already queued, running or finished.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
 use super::*;
@@ -60,6 +60,9 @@ pub(super) struct PreparationLine {
     /// The build each request waiting or being prepared became, by
     /// request, so the same click twice joins one build.
     by_request: HashMap<String, String>,
+    /// Compositions waiting for their target's channels to build, by
+    /// catalog. A build that ends puts them back in the line to look again.
+    waiting_for_channels: HashMap<String, Vec<Preparation>>,
 }
 
 impl PreparationLine {
@@ -69,6 +72,14 @@ impl PreparationLine {
         self.catalogs
             .get(database_id)
             .is_none_or(|catalog| !catalog.running && catalog.pending.is_empty())
+    }
+
+    /// How many compositions of a catalog wait for their channels.
+    #[cfg(test)]
+    pub(super) fn waiting_for_channels(&self, database_id: &str) -> usize {
+        self.waiting_for_channels
+            .get(database_id)
+            .map_or(0, Vec::len)
     }
 }
 
@@ -80,35 +91,97 @@ struct CatalogLine {
     running: bool,
 }
 
+/// What a request asks for.
+pub(super) enum What {
+    /// Stack builds: one per channel (Build stacks), or one.
+    Mono {
+        request: Box<StackPreviewRequest>,
+        split: bool,
+    },
+    /// A color composition of a target's channel stacks.
+    Color(Box<color::StackColorRequest>),
+}
+
+impl What {
+    /// What identifies a request: the same click twice is one build.
+    fn key(&self, database_id: &str, project_id: i32) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(database_id.as_bytes());
+        hasher.update(project_id.to_le_bytes());
+        match self {
+            Self::Mono { request, split } => {
+                let mut request = request.clone();
+                request.image_ids.sort_unstable();
+                hasher.update([u8::from(*split)]);
+                hasher.update(serde_json::to_vec(&request).unwrap_or_default());
+            }
+            Self::Color(request) => {
+                hasher.update(b"color");
+                hasher.update(serde_json::to_vec(request).unwrap_or_default());
+            }
+        }
+        hex_digest(hasher)
+    }
+
+    /// Its journal entry, under the id the browser follows.
+    fn origin(
+        &self,
+        database_id: &str,
+        project_id: i32,
+        job_id: &str,
+        automatic: bool,
+    ) -> journal::JournaledStackJob {
+        match self {
+            Self::Mono { request, split } => journal::JournaledStackJob::requested(
+                database_id,
+                project_id,
+                request,
+                *split,
+                job_id,
+                automatic,
+            ),
+            Self::Color(request) => journal::JournaledStackJob::color(
+                database_id,
+                project_id,
+                request,
+                Some(job_id),
+                automatic,
+            ),
+        }
+    }
+}
+
 struct Preparation {
     job_id: String,
     request_key: String,
     ctx: Arc<DatabaseContext>,
     project_id: i32,
-    request: StackPreviewRequest,
-    /// One build per channel (Build stacks), or one build.
-    split: bool,
+    what: What,
     /// Asked for by the automatic refresh, not a person.
     automatic: bool,
     /// Until when a preparation that fails is tried again; see
     /// [`Asked::retry_until`].
     retry_until: Option<Instant>,
     cancel: Arc<AtomicBool>,
+    /// The channel families of the stacks a composition names, read before
+    /// it waited for its channels; see [`color::with_newest_sources`].
+    families: Option<BTreeMap<color::StackColorRole, color::SourceFamily>>,
+    /// It waited for its target's channels to build.
+    waited: bool,
 }
 
-/// A build asked for: by a click, or by the job journal after a restart.
+/// A build or composition asked for: by a click, or by the job journal after
+/// a restart.
 pub(super) struct Asked {
     pub(super) project_id: i32,
-    pub(super) request: StackPreviewRequest,
-    /// One build per channel (Build stacks), or one build.
-    pub(super) split: bool,
+    pub(super) what: What,
     /// Asked for by the automatic refresh, not a person.
     pub(super) automatic: bool,
-    /// The id the browser follows, for a build the journal puts back.
+    /// The id the browser follows, for one the journal puts back.
     pub(super) job_id: Option<String>,
-    /// Until when a preparation that fails is tried again. A build the
-    /// journal puts back may find its storage not mounted yet; a click
-    /// fails at once and says why.
+    /// Until when a preparation that fails is tried again. One the journal
+    /// puts back may find its storage not mounted yet; a click fails at
+    /// once and says why.
     pub(super) retry_until: Option<Instant>,
 }
 
@@ -121,81 +194,119 @@ pub(super) fn queue_preparation(
     request: StackPreviewRequest,
     split: bool,
 ) -> Result<StackPreviewJob, AppError> {
-    queue(
+    let job_id = queue(
         state,
         ctx,
         Asked {
             project_id,
-            request,
-            split,
+            what: What::Mono {
+                request: Box::new(request),
+                split,
+            },
             automatic: false,
             job_id: None,
             retry_until: None,
         },
-    )
+    )?;
+    state
+        .stack_previews
+        .get(&job_id)
+        .ok_or_else(|| AppError::InternalError("the queued build is gone".into()))
 }
 
-/// Put a build in the line as being prepared: its place in the line and
-/// its journal entry are kept from now on, so a restart puts it back where
-/// it was. A runner prepares it, and the builds it becomes take its place.
+/// Put a person's color composition in the line as being prepared, as
+/// [`queue_preparation`] does a build.
+pub(super) fn queue_color_preparation(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    project_id: i32,
+    request: color::StackColorRequest,
+) -> Result<color::StackColorJob, AppError> {
+    let job_id = queue(
+        state,
+        ctx,
+        Asked {
+            project_id,
+            what: What::Color(Box::new(request)),
+            automatic: false,
+            job_id: None,
+            retry_until: None,
+        },
+    )?;
+    state
+        .stack_previews
+        .get_color(&job_id)
+        .ok_or_else(|| AppError::InternalError("the queued composition is gone".into()))
+}
+
+/// Put a build or composition in the line as being prepared: its place in
+/// the line and its journal entry are kept from now on, so a restart puts
+/// it back where it was. A runner prepares it, and what it becomes takes
+/// its place. Returns its id.
 pub(super) fn queue(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
     asked: Asked,
-) -> Result<StackPreviewJob, AppError> {
+) -> Result<String, AppError> {
     let manager = &state.stack_previews;
-    let request_key = preparation_key(&ctx.id, asked.project_id, &asked.request, asked.split);
+    let request_key = asked.what.key(&ctx.id, asked.project_id);
     let mut line = manager.preparing.lock().unwrap();
-    if let Some(job) = line
+    if let Some(job_id) = line
         .by_request
         .get(&request_key)
-        .and_then(|job_id| manager.get(job_id))
-        .filter(|job| job.state == StackJobState::Preparing)
+        .filter(|job_id| manager.job_state(job_id) == Some(StackJobState::Preparing))
     {
-        return Ok(job);
+        return Ok(job_id.clone());
     }
-    let mut job = preparing_job(&ctx.id, asked.project_id, &asked.request, &request_key);
-    if let Some(job_id) = asked.job_id {
-        job.job_id = job_id;
-    }
-    job.automatic = asked.automatic;
-    if !manager.insert(job.clone()) {
+    let job_id = asked
+        .job_id
+        .clone()
+        .unwrap_or_else(|| slot_id(&request_key));
+    let inserted = match &asked.what {
+        What::Mono { request, .. } => {
+            let mut job = preparing_job(&ctx.id, asked.project_id, request, job_id.clone());
+            job.automatic = asked.automatic;
+            manager.insert(job)
+        }
+        What::Color(request) => {
+            let mut job =
+                color::preparing_color_job(&ctx.id, asked.project_id, request, job_id.clone());
+            job.automatic = asked.automatic;
+            manager.insert_color(job)
+        }
+    };
+    if !inserted {
         return Err(AppError::BadRequest(format!(
             "At most {MAX_QUEUED_JOBS} stack builds may wait at once, and \
              {MAX_REMEMBERED_JOBS} may be running or kept"
         )));
     }
-    let cancel = manager.track_cancel(&job.job_id);
+    let cancel = manager.track_cancel(&job_id);
     manager.remember_origin(
-        &job.job_id,
-        journal::JournaledStackJob::requested(
-            &ctx.id,
-            asked.project_id,
-            &asked.request,
-            asked.split,
-            &job.job_id,
-            asked.automatic,
-        ),
+        &job_id,
+        asked
+            .what
+            .origin(&ctx.id, asked.project_id, &job_id, asked.automatic),
     );
-    manager.join_line(&job.job_id);
-    line.by_request
-        .insert(request_key.clone(), job.job_id.clone());
+    manager.join_line(&job_id);
+    line.by_request.insert(request_key.clone(), job_id.clone());
     drop(line);
     line_up(
         state,
         Preparation {
-            job_id: job.job_id.clone(),
+            job_id: job_id.clone(),
             request_key,
             ctx: Arc::clone(ctx),
             project_id: asked.project_id,
-            request: asked.request,
-            split: asked.split,
+            what: asked.what,
             automatic: asked.automatic,
             retry_until: asked.retry_until,
             cancel,
+            families: None,
+            waited: false,
         },
     );
-    Ok(job)
+    Ok(job_id)
 }
 
 /// Put a preparation at the back of its catalog's line, and start the
@@ -212,34 +323,40 @@ fn line_up(state: &Arc<AppState>, preparation: Preparation) {
     }
 }
 
-/// What identifies a request: the same click twice is one build.
-fn preparation_key(
-    database_id: &str,
-    project_id: i32,
-    request: &StackPreviewRequest,
-    split: bool,
-) -> String {
-    let mut request = request.clone();
-    request.image_ids.sort_unstable();
+/// Put the compositions waiting on a catalog's channels back in its line,
+/// to look again. Called whenever a build of the catalog ends and whenever
+/// one of its requests has been prepared.
+pub(super) fn release_waiting_colors(state: &Arc<AppState>, database_id: &str) {
+    let waiting = state
+        .stack_previews
+        .preparing
+        .lock()
+        .unwrap()
+        .waiting_for_channels
+        .remove(database_id)
+        .unwrap_or_default();
+    for mut preparation in waiting {
+        preparation.waited = true;
+        line_up(state, preparation);
+    }
+}
+
+/// A request's own id while it is prepared: not the id what it becomes
+/// gets, which depends on what preparing reads.
+fn slot_id(request_key: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(database_id.as_bytes());
-    hasher.update(project_id.to_le_bytes());
-    hasher.update([u8::from(split)]);
-    hasher.update(serde_json::to_vec(&request).unwrap_or_default());
+    hasher.update(request_key.as_bytes());
+    hasher.update(new_artifact_revision().as_bytes());
     hex_digest(hasher)
 }
 
-/// The build a request is while it is prepared. Its id is its own, not the
-/// id the prepared build gets: that one depends on what preparing reads.
+/// The build a request is while it is prepared, under `job_id`.
 fn preparing_job(
     database_id: &str,
     project_id: i32,
     request: &StackPreviewRequest,
-    request_key: &str,
+    job_id: String,
 ) -> StackPreviewJob {
-    let mut hasher = Sha256::new();
-    hasher.update(request_key.as_bytes());
-    hasher.update(new_artifact_revision().as_bytes());
     let frames = format!("{} frames", request.image_ids.len());
     let label = match &request.channel {
         Some(channel) if !channel.filter_name.is_empty() => {
@@ -249,7 +366,7 @@ fn preparing_job(
     };
     StackPreviewJob {
         schema_version: 2,
-        job_id: hex_digest(hasher),
+        job_id,
         database_id: database_id.to_string(),
         project_id,
         state: StackJobState::Preparing,
@@ -347,6 +464,9 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
         }) else {
             return;
         };
+        let Some(preparation) = wait_for_channels(state, preparation) else {
+            continue;
+        };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prepare_and_queue(state, &preparation)
         }))
@@ -363,6 +483,44 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
         }
         end_preparation(state, &preparation, outcome);
     }
+}
+
+/// Hold a composition back while its target's channels are queued, building
+/// or being prepared, so it composes from their new stacks; `None` once it
+/// waits. The check and the wait happen under the line's lock, which a
+/// build that ends takes to put it back, so no ending is missed.
+fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Option<Preparation> {
+    let What::Color(request) = &preparation.what else {
+        return Some(preparation);
+    };
+    let manager = &state.stack_previews;
+    let database_id = preparation.ctx.id.clone();
+    let target_id = request.target_id;
+    if preparation_stopped(state, &preparation)
+        || !manager.channels_pending(&database_id, preparation.project_id, target_id)
+    {
+        return Some(preparation);
+    }
+    // The stacks it names, as they stand before their channels rebuild.
+    if preparation.families.is_none() {
+        preparation.families = Some(color::named_families(
+            &preparation.ctx,
+            preparation.project_id,
+            request,
+        ));
+    }
+    let mut line = manager.preparing.lock().unwrap();
+    if !manager.channels_pending(&database_id, preparation.project_id, target_id) {
+        return Some(preparation);
+    }
+    manager.update_color(&preparation.job_id, |job| {
+        job.phase = "Waiting for the channel builds to finish".into();
+    });
+    line.waiting_for_channels
+        .entry(database_id)
+        .or_default()
+        .push(preparation);
+    None
 }
 
 /// Prepare it again in a minute, keeping its place and journal entry
@@ -394,16 +552,36 @@ fn prepare_and_queue(
     let _person = (!preparation.automatic)
         .then(|| state.begin_named_interactive_job("preparing a stack build"));
     let _hold = state.shutdown.hold("preparing a stack build");
-    let Preparation {
-        ctx,
-        project_id,
-        request,
-        ..
-    } = preparation;
-    let parts = if preparation.split {
-        prepare_channels(ctx, *project_id, request, None)
+    let placement = Placement {
+        automatic: preparation.automatic,
+        slot: Some(&preparation.job_id),
+    };
+    let (ctx, project_id) = (&preparation.ctx, preparation.project_id);
+    let (request, split) = match &preparation.what {
+        What::Mono { request, split } => (request, *split),
+        What::Color(request) => {
+            // One that waited for its channels takes the stacks they made.
+            let request = match &preparation.families {
+                Some(families) if preparation.waited => {
+                    color::with_newest_sources(ctx, project_id, request, families)
+                }
+                _ => (**request).clone(),
+            };
+            let prepared = color::prepare_color_job(ctx, &state.astrometry, project_id, &request)
+                .map_err(|error| error.message())?;
+            if preparation_stopped(state, preparation) {
+                return Ok(None);
+            }
+            let job =
+                color::start_prepared_color(state, ctx, project_id, &request, prepared, placement)
+                    .map_err(|error| error.message())?;
+            return Ok(Some(vec![job.job_id]));
+        }
+    };
+    let parts = if split {
+        prepare_channels(ctx, project_id, request, None)
     } else {
-        prepare_job(ctx, *project_id, request).map(|prepared| vec![(request.clone(), prepared)])
+        prepare_job(ctx, project_id, request).map(|prepared| vec![((**request).clone(), prepared)])
     }
     .map_err(|error| error.message())?;
     if preparation_stopped(state, preparation) {
@@ -422,11 +600,7 @@ fn prepare_and_queue(
             .stack_previews
             .get(&prepared.public.job_id)
             .is_none_or(|job| job.state == StackJobState::Preparing);
-        let placement = Placement {
-            automatic: preparation.automatic,
-            slot: Some(&preparation.job_id),
-        };
-        let started = start_prepared(state, ctx, *project_id, &part_request, prepared, placement)
+        let started = start_prepared(state, ctx, project_id, &part_request, prepared, placement)
             .map_err(|error| error.message())?;
         if new {
             queued.push(started.job.job_id.clone());
@@ -450,7 +624,7 @@ fn prepare_and_queue(
     Ok(Some(job_ids))
 }
 
-/// Settle the build a request was while it was prepared: replaced by what it
+/// Settle what a request was while it was prepared: replaced by what it
 /// became, failed with why, or stopped.
 fn end_preparation(
     state: &Arc<AppState>,
@@ -459,39 +633,58 @@ fn end_preparation(
 ) {
     let manager = &state.stack_previews;
     let slot = &preparation.job_id;
-    // A build the journal put back under its own id is that build again.
+    // One the journal put back under its own id is that one again.
     let became_itself = matches!(&outcome, Ok(Some(job_ids)) if job_ids.contains(slot));
-    manager.update(slot, |job| {
-        if became_itself {
-            return;
-        }
-        job.preparing = None;
-        match outcome {
-            // Builds already queued are the person's to follow or stop, even
-            // when the stop came as they were queued.
-            Ok(Some(job_ids)) => {
-                job.state = StackJobState::Replaced;
-                job.replaced_by = job_ids;
+    if !became_itself {
+        let settled = |state: &mut StackJobState,
+                       replaced_by: &mut Vec<String>,
+                       error: &mut Option<String>| {
+            match &outcome {
+                // Builds already queued are the person's to follow or stop,
+                // even when the stop came as they were queued.
+                Ok(Some(job_ids)) => {
+                    *state = StackJobState::Replaced;
+                    *replaced_by = job_ids.clone();
+                }
+                _ if *state == StackJobState::Cancelled => {}
+                Ok(None) => *state = StackJobState::Cancelled,
+                Err(why) => {
+                    *state = StackJobState::Failed;
+                    *error = Some(why.clone());
+                }
             }
-            _ if job.state == StackJobState::Cancelled => {}
-            Ok(None) => job.state = StackJobState::Cancelled,
-            Err(error) => {
-                job.state = StackJobState::Failed;
-                job.error = Some(error);
-            }
+        };
+        match preparation.what {
+            What::Mono { .. } => manager.update(slot, |job| {
+                job.preparing = None;
+                settled(&mut job.state, &mut job.replaced_by, &mut job.error);
+            }),
+            What::Color(_) => manager.update_color(slot, |job| {
+                job.preparing = None;
+                settled(&mut job.state, &mut job.replaced_by, &mut job.error);
+                job.phase = match job.state {
+                    StackJobState::Replaced => "Queued".into(),
+                    StackJobState::Failed => "Could not be prepared".into(),
+                    _ => "Stopped before composing".into(),
+                };
+            }),
         }
-    });
-    // Its builds hold its place now, unless it is one of them, queued.
-    if manager
-        .get(slot)
-        .is_none_or(|job| job.state != StackJobState::Queued)
-    {
+    }
+    // What it became holds its place now, unless it is one of them, queued
+    // in the line.
+    if manager.job_state(slot) != Some(StackJobState::Queued) || manager.is_quick(slot) {
         manager.leave_line(slot);
     }
     manager.forget_cancel_of(slot, &preparation.cancel);
-    let mut line = manager.preparing.lock().unwrap();
-    if line.by_request.get(&preparation.request_key) == Some(&preparation.job_id) {
-        line.by_request.remove(&preparation.request_key);
+    {
+        let mut line = manager.preparing.lock().unwrap();
+        if line.by_request.get(&preparation.request_key) == Some(&preparation.job_id) {
+            line.by_request.remove(&preparation.request_key);
+        }
+    }
+    // A build's preparation may have been what a composition waited on.
+    if matches!(preparation.what, What::Mono { .. }) {
+        release_waiting_colors(state, &preparation.ctx.id);
     }
 }
 

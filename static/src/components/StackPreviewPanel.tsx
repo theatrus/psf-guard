@@ -1,10 +1,10 @@
-import { isAxiosError } from 'axios';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { openSettings } from '../utils/settingsIntent';
+import { httpStatus } from '../utils/httpStatus';
 import { masterBuildLabel, stackGroupPercent } from '../utils/stackProgress';
 import { STACK_METHOD_QUERY_KEY, methodName, sameMethod } from '../utils/stackMethod';
 import type {
@@ -221,11 +221,6 @@ function readCalibrationOverrides(): Record<string, CalibrationMode> {
     return {};
   }
 }
-
-/** The HTTP status a request failed with, through the client's wrapping. */
-const httpStatus = (error: unknown) => isAxiosError(error)
-  ? error.response?.status
-  : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
 
 // `replaced`: a build that was being prepared became the builds it names,
 // which are followed instead.
