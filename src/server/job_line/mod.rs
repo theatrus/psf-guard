@@ -39,6 +39,7 @@ use tokio::sync::Notify;
 
 pub mod catalog;
 mod dispatch;
+mod tracked;
 mod work;
 pub use dispatch::{DispatchRules, Turn};
 pub use work::{Ending, LineWork, Needs, Submission, Task, Worker};
@@ -145,6 +146,9 @@ struct LineState {
     /// The keys the work running on each lane holds.
     worker_holds: Vec<String>,
     quick_holds: Vec<String>,
+    /// The id of the entry running on each lane.
+    worker_running: Option<String>,
+    quick_running: Option<String>,
     /// Work waiting to reserve the worker outside the line. It goes before
     /// the line's next entry, as a reservation always has.
     reservations: usize,
@@ -157,6 +161,13 @@ impl LineState {
         match lane {
             Lane::Worker => &mut self.worker_busy,
             Lane::Quick => &mut self.quick_busy,
+        }
+    }
+
+    fn running_id(&mut self, lane: Lane) -> &mut Option<String> {
+        match lane {
+            Lane::Worker => &mut self.worker_running,
+            Lane::Quick => &mut self.quick_running,
         }
     }
 
@@ -268,6 +279,8 @@ pub struct JobLine {
     /// Wakes the dispatchers when the line or a lane changes. Kept inside:
     /// callers say what changed, not how to wake anyone.
     wakeup: Arc<Notify>,
+    /// The stop flags and journal records of the jobs this line tracks.
+    tracked: tracked::Tracked,
     /// The dispatcher task of each lane, started when work first joins.
     dispatchers: Mutex<HashMap<Lane, tokio::task::JoinHandle<()>>>,
 }
@@ -314,6 +327,7 @@ impl Drop for Lease {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *state.busy(self.lane) = false;
         state.running_holds(self.lane).clear();
+        *state.running_id(self.lane) = None;
         drop(state);
         self.wakeup.notify_waiters();
     }
@@ -536,14 +550,19 @@ impl JobLine {
     /// Put work in its lane's line. On the worker lane it takes the place
     /// held under its own id, or goes just before `before`, a place held
     /// for the request it came from, or at the back. Work already in line
-    /// under the same id stays as it is, and this entry is handed back.
+    /// under the same id stays as it is, and this entry is handed back; the
+    /// tracked stop flag of that id is set back to the queued work's, so a
+    /// stop still reaches it.
     pub fn submit(&self, entry: Entry, before: Option<&str>) -> Result<(), Entry> {
         {
             let mut state = self.lock();
             match entry.lane {
                 Lane::Worker => match state.index_of(&entry.id) {
                     Some(index) => match &state.order[index] {
-                        Place::Work(_) => return Err(entry),
+                        Place::Work(queued) => {
+                            self.tracked.restore_stop(&entry.id, queued.stop.clone());
+                            return Err(entry);
+                        }
                         _ => state.order[index] = Place::Work(entry),
                     },
                     None => {
@@ -554,7 +573,8 @@ impl JobLine {
                     }
                 },
                 Lane::Quick => {
-                    if state.quick.iter().any(|queued| queued.id == entry.id) {
+                    if let Some(queued) = state.quick.iter().find(|queued| queued.id == entry.id) {
+                        self.tracked.restore_stop(&entry.id, queued.stop.clone());
                         return Err(entry);
                     }
                     state.quick.push_back(entry);
@@ -579,6 +599,82 @@ impl JobLine {
         }
         self.wake();
         true
+    }
+
+    /// Track the job `id` from its request until it ends, with a new stop
+    /// flag, which this returns. A job tracked under the same id before is
+    /// replaced.
+    pub fn track(&self, id: &str) -> Stop {
+        self.tracked.track(id)
+    }
+
+    /// The stop flag of the tracked job `id`.
+    pub fn stop_flag(&self, id: &str) -> Option<Stop> {
+        self.tracked.stop_flag(id)
+    }
+
+    /// Stop tracking the job `id`.
+    pub fn forget(&self, id: &str) {
+        self.tracked.forget(id);
+    }
+
+    /// Stop tracking the job `id` when `stop` is still its flag. A job
+    /// requested again under the same id has a new flag, which a task of
+    /// the earlier job, ending late, must not forget. Returns whether the
+    /// job was forgotten.
+    pub fn forget_if_current(&self, id: &str, stop: &Stop) -> bool {
+        self.tracked.forget_if_current(id, stop)
+    }
+
+    /// The ids of every tracked job.
+    pub fn tracked_ids(&self) -> Vec<String> {
+        self.tracked.ids()
+    }
+
+    /// Remove the journal record of the tracked job `id`, keeping its stop
+    /// flag: a restart does not bring the job back.
+    pub fn clear_journal(&self, id: &str) {
+        self.tracked.clear_journal(id);
+    }
+
+    /// Store the journal record of the tracked job `id`.
+    pub fn set_journal<T: serde::Serialize>(&self, id: &str, record: &T) {
+        self.tracked.set_journal(id, record);
+    }
+
+    /// Change the journal record of the tracked job `id`, when it has one.
+    pub fn update_journal<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        id: &str,
+        edit: impl FnOnce(&mut T),
+    ) {
+        self.tracked.update_journal(id, edit);
+    }
+
+    /// The journal records of every tracked job that has one, by id.
+    pub fn journals<T: serde::de::DeserializeOwned>(&self) -> Vec<(String, T)> {
+        self.tracked.journals()
+    }
+
+    /// The id of the entry running on `lane`.
+    pub fn running_on(&self, lane: Lane) -> Option<String> {
+        self.lock().running_id(lane).clone()
+    }
+
+    /// The lane of the entry `id`, queued or running.
+    pub fn lane_of(&self, id: &str) -> Option<Lane> {
+        let mut state = self.lock();
+        if state.quick.iter().any(|entry| entry.id == id)
+            || state.running_id(Lane::Quick).as_deref() == Some(id)
+        {
+            Some(Lane::Quick)
+        } else if state.index_of(id).is_some()
+            || state.running_id(Lane::Worker).as_deref() == Some(id)
+        {
+            Some(Lane::Worker)
+        } else {
+            None
+        }
     }
 
     /// The stop of the work in line under `id`.
@@ -675,6 +771,7 @@ impl JobLine {
         let entry = state.take_next(lane)?;
         *state.busy(lane) = true;
         *state.running_holds(lane) = entry.holds.clone();
+        *state.running_id(lane) = Some(entry.id.clone());
         drop(state);
         Ok(Dispatch::Run {
             id: entry.id,
@@ -901,6 +998,77 @@ mod tests {
         );
         line.release_place("first");
         assert_eq!(line.order(), ["a", "theirs", "next of theirs", "b"]);
+    }
+
+    #[test]
+    fn a_tracked_job_keeps_its_stop_flag_and_journal_record() {
+        let (sender, _) = std::sync::mpsc::channel();
+        let line = JobLine::new();
+        let queued = line.track("build");
+        line.set_journal("build", &serde_json::json!({"project": 1}));
+        line.submit(
+            Entry::new(
+                "build",
+                Lane::Worker,
+                queued.clone(),
+                Box::new(Probe(sender.clone(), "build".into())),
+            ),
+            None,
+        )
+        .ok()
+        .unwrap();
+        // A second request under the same id gets a new flag, but its
+        // entry is a duplicate: the queued work's flag is tracked again.
+        let copy = line.track("build");
+        assert!(line
+            .submit(
+                Entry::new(
+                    "build",
+                    Lane::Worker,
+                    copy.clone(),
+                    Box::new(Probe(sender, "build".into()))
+                ),
+                None,
+            )
+            .is_err());
+        assert!(line.stop_flag("build").unwrap().same(&queued));
+        // Tracking the id again cleared its journal record; the new request
+        // stores its own.
+        line.set_journal("build", &serde_json::json!({"project": 2}));
+        line.update_journal("build", |record: &mut serde_json::Value| {
+            record["running"] = true.into();
+        });
+        assert_eq!(
+            line.journals::<serde_json::Value>(),
+            [(
+                "build".to_string(),
+                serde_json::json!({"project": 2, "running": true})
+            )]
+        );
+        // A late task of another request does not forget the job.
+        assert!(!line.forget_if_current("build", &copy));
+        assert!(line.forget_if_current("build", &queued));
+        assert!(line.stop_flag("build").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_line_reports_the_lane_of_queued_and_running_entries() {
+        let (sender, _) = std::sync::mpsc::channel();
+        let line = JobLine::new();
+        line.submit(entry("quick", Lane::Quick, &sender).0, None)
+            .ok()
+            .unwrap();
+        line.submit(entry("worker", Lane::Worker, &sender).0, None)
+            .ok()
+            .unwrap();
+        assert_eq!(line.lane_of("quick"), Some(Lane::Quick));
+        let running = line.next(Lane::Quick).await;
+        assert_eq!(line.running_on(Lane::Quick).as_deref(), Some("quick"));
+        assert_eq!(line.lane_of("quick"), Some(Lane::Quick));
+        assert_eq!(line.lane_of("worker"), Some(Lane::Worker));
+        drop(running);
+        assert_eq!(line.lane_of("quick"), None);
+        assert_eq!(line.running_on(Lane::Quick), None);
     }
 
     #[tokio::test]

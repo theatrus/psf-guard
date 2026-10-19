@@ -1055,27 +1055,19 @@ pub struct StackPreviewManager {
     jobs: Mutex<HashMap<String, StackPreviewJob>>,
     color_jobs: Mutex<HashMap<String, color::StackColorJob>>,
     artifact_jobs: Mutex<HashMap<String, artifact::ArtifactSearchJob>>,
-    /// Stop flags for stack jobs that are queued or running. The worker reads
-    /// its own flag between frames and phases; the entry is dropped when the
-    /// job leaves the queue.
-    cancels: Mutex<HashMap<String, Stop>>,
     latest_write: Mutex<()>,
     /// The line builds, compositions and processing runs wait in, and the
     /// worker they share. A color composition a person asked for that
     /// prepares nothing at length runs in its quick lane, beside the worker
     /// rather than behind it.
     line: crate::server::job_line::JobLine,
-    /// Compositions in the quick lane, which never hold the stack worker.
-    quick_jobs: Mutex<HashSet<String>>,
-    /// What each queued or running build was asked for, so the job journal
-    /// can put it back after a restart. Kept as long as its stop flag.
-    origins: Mutex<HashMap<String, journal::JournaledStackJob>>,
     /// Every build a server stop interrupted, in the order they would have
-    /// run. A stopped build drops its own entry from `origins`; this keeps it
-    /// for the journal's last write.
+    /// run. A stopped build is no longer tracked by the line; this keeps its
+    /// journal record for the journal's last write.
     stopped_for_shutdown: Mutex<Option<Vec<(String, journal::JournaledStackJob)>>>,
     /// Stretch, deconvolution and RC-Astro runs waiting in the line or
-    /// running, by run id. The journal keeps them, through `origins`.
+    /// running, by run id. The journal keeps them through the line's
+    /// journal records.
     processing: Mutex<HashMap<String, processing_queue::ProcessingRun>>,
     /// Processing runs that published their result after a server stop
     /// began, so its last journal write leaves them out.
@@ -1098,11 +1090,8 @@ impl StackPreviewManager {
             jobs: Mutex::new(HashMap::new()),
             color_jobs: Mutex::new(HashMap::new()),
             artifact_jobs: Mutex::new(HashMap::new()),
-            cancels: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
             line: crate::server::job_line::JobLine::new(),
-            quick_jobs: Mutex::new(HashSet::new()),
-            origins: Mutex::new(HashMap::new()),
             stopped_for_shutdown: Mutex::new(None),
             processing: Mutex::new(HashMap::new()),
             completed_during_stop: Mutex::new(HashSet::new()),
@@ -1124,18 +1113,9 @@ impl StackPreviewManager {
         self.line.release_place(job_id);
     }
 
-    /// Note a composition joining or leaving the quick lane.
-    fn set_quick(&self, job_id: &str, quick: bool) {
-        let mut jobs = self.quick_jobs.lock().unwrap();
-        if quick {
-            jobs.insert(job_id.to_string());
-        } else {
-            jobs.remove(job_id);
-        }
-    }
-
+    /// Whether the job runs, or waits to run, in the quick lane.
     fn is_quick(&self, job_id: &str) -> bool {
-        self.quick_jobs.lock().unwrap().contains(job_id)
+        self.line.lane_of(job_id) == Some(Lane::Quick)
     }
 
     /// Move a waiting build to `position` in the line (0 is next), clamped to
@@ -1152,41 +1132,25 @@ impl StackPreviewManager {
         self.jobs.lock().unwrap().get(job_id).cloned()
     }
 
-    /// Register a stop flag for a job about to be queued.
+    /// Track a job about to be queued, with a new stop flag.
     fn track_cancel(&self, job_id: &str) -> Stop {
-        let flag = Stop::new();
-        self.cancels
-            .lock()
-            .unwrap()
-            .insert(job_id.to_string(), flag.clone());
-        flag
+        self.line.track(job_id)
     }
 
     fn forget_cancel(&self, job_id: &str) {
-        self.cancels.lock().unwrap().remove(job_id);
-        self.origins.lock().unwrap().remove(job_id);
+        self.line.forget(job_id);
     }
 
-    /// Forget a job's stop flag and origin, but only while they are still
-    /// this task's. A refresh that resumes a stopped build asks for the same
-    /// job id, so the stopped task, finishing late, must not clear the new
-    /// one's flag.
+    /// Forget a job's stop flag and journal record, but only while the flag
+    /// is still this task's. A refresh that resumes a stopped build asks for
+    /// the same job id, so the stopped task, finishing late, must not clear
+    /// the new one's flag.
     fn forget_cancel_of(&self, job_id: &str, flag: &Stop) {
-        let mut cancels = self.cancels.lock().unwrap();
-        if cancels
-            .get(job_id)
-            .is_some_and(|current| current.same(flag))
-        {
-            cancels.remove(job_id);
-            self.origins.lock().unwrap().remove(job_id);
-        }
+        self.line.forget_if_current(job_id, flag);
     }
 
     fn remember_origin(&self, job_id: &str, origin: journal::JournaledStackJob) {
-        self.origins
-            .lock()
-            .unwrap()
-            .insert(job_id.to_string(), origin);
+        self.line.set_journal(job_id, &origin);
     }
 
     fn job_state(&self, job_id: &str) -> Option<StackJobState> {
@@ -1239,7 +1203,7 @@ impl StackPreviewManager {
     }
 
     fn ordered_origins(&self) -> Vec<(String, journal::JournaledStackJob)> {
-        let origins = self.origins.lock().unwrap().clone();
+        let origins = self.line.journals::<journal::JournaledStackJob>();
         let running = |job_id: &str| self.job_state(job_id) == Some(StackJobState::Running);
         let mut entries = origins
             .into_iter()
@@ -1270,14 +1234,7 @@ impl StackPreviewManager {
     pub fn stop_for_shutdown(&self) {
         let interrupted = self.ordered_origins();
         *self.stopped_for_shutdown.lock().unwrap() = Some(interrupted);
-        let job_ids = self
-            .cancels
-            .lock()
-            .unwrap()
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        for job_id in job_ids {
+        for job_id in self.line.tracked_ids() {
             self.request_cancel(&job_id);
         }
     }
@@ -1287,7 +1244,7 @@ impl StackPreviewManager {
     /// Ask a job to stop, and say whether this asked first: false when it
     /// was already asked, or has no stop flag.
     fn newly_cancel(&self, job_id: &str) -> bool {
-        let Some(flag) = self.cancels.lock().unwrap().get(job_id).cloned() else {
+        let Some(flag) = self.line.stop_flag(job_id) else {
             return false;
         };
         let first = flag.request_first();
@@ -1309,7 +1266,7 @@ impl StackPreviewManager {
         ) {
             return false;
         }
-        let Some(flag) = self.cancels.lock().unwrap().get(job_id).cloned() else {
+        let Some(flag) = self.line.stop_flag(job_id) else {
             return false;
         };
         flag.request();
@@ -1333,7 +1290,7 @@ impl StackPreviewManager {
             }
         });
         if ended {
-            self.origins.lock().unwrap().remove(job_id);
+            self.line.clear_journal(job_id);
             self.release_place(job_id);
         }
         // A build still waiting sees it at once and leaves the line.
@@ -1355,9 +1312,10 @@ impl StackPreviewManager {
         }
         self.adopt_processing(job_id);
         // A restart brings it back as the person's too.
-        if let Some(origin) = self.origins.lock().unwrap().get_mut(job_id) {
-            origin.set_automatic(false);
-        }
+        self.line
+            .update_journal(job_id, |origin: &mut journal::JournaledStackJob| {
+                origin.set_automatic(false)
+            });
     }
 
     /// Whether a build is the automatic refresh's, read now: a person can
@@ -1689,7 +1647,7 @@ impl StackPreviewManager {
     /// Put a build that does nothing in line under `job_id`, stopped by its
     /// own flag.
     pub(super) fn queue_test_build(&self, job_id: &str) {
-        let known = self.cancels.lock().unwrap().get(job_id).cloned();
+        let known = self.line.stop_flag(job_id);
         let stop = known.unwrap_or_else(|| self.track_cancel(job_id));
         assert!(self
             .line
@@ -3306,16 +3264,6 @@ pub(super) fn submit_entry(state: &Arc<AppState>, entry: Entry, before: Option<&
     ensure_dispatching(state);
     let job_id = entry.id().to_string();
     if let Err(entry) = state.stack_previews.line.submit(entry, before) {
-        // The copy's stop flag replaced the queued work's: put that back, so
-        // a stop still reaches the work in line.
-        if let Some(stop) = state.stack_previews.line.stop_of(&job_id) {
-            state
-                .stack_previews
-                .cancels
-                .lock()
-                .unwrap()
-                .insert(job_id.clone(), stop);
-        }
         tracing::warn!(
             job_id,
             "The same work is already in line; this copy is dropped"
@@ -6231,12 +6179,11 @@ mod tests {
 
         manager.stop_for_shutdown();
         assert!(
-            manager
-                .cancels
-                .lock()
+            manager.line.tracked_ids().iter().all(|id| manager
+                .line
+                .stop_flag(id)
                 .unwrap()
-                .values()
-                .all(|flag| flag.requested()),
+                .requested()),
             "every build is asked to stop"
         );
         // Killed now, the builds still running would count as cut off.
@@ -8723,13 +8670,7 @@ mod tests {
         drop(busy);
         // Its preparation finishes and is dropped.
         for _ in 0..100 {
-            if !state
-                .stack_previews
-                .cancels
-                .lock()
-                .unwrap()
-                .contains_key(&job.job_id)
-            {
+            if state.stack_previews.line.stop_flag(&job.job_id).is_none() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -9125,13 +9066,7 @@ mod tests {
         drop(busy);
         prepared(&state, &kept.job_id).await;
         for _ in 0..100 {
-            if !state
-                .stack_previews
-                .cancels
-                .lock()
-                .unwrap()
-                .contains_key(&kept.job_id)
-            {
+            if state.stack_previews.line.stop_flag(&kept.job_id).is_none() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;

@@ -509,7 +509,7 @@ mod tests {
         // A server stop flags the waiting runs; one flagged as the worker
         // frees up never starts.
         manager.stop_for_shutdown();
-        let flag = manager.cancels.lock().unwrap()[&"a".repeat(64)].clone();
+        let flag = manager.line.stop_flag(&"a".repeat(64)).unwrap();
         assert!(!manager.start_processing(&"a".repeat(64), &flag));
         assert_eq!(manager.active()[1].state, StackJobState::Queued);
 

@@ -2083,9 +2083,6 @@ pub(super) fn enqueue_color_job(
     // at its next channel or step; a running RC-Astro tool is killed.
     let cancel = state.stack_previews.track_cancel(&job_id);
     state.stack_previews.remember_origin(&job_id, origin);
-    if quick {
-        state.stack_previews.set_quick(&job_id, true);
-    }
     // A server stop waits for a running composition to reach its next stop
     // point; the journal brings it back, and its finished RC-Astro steps
     // stay cached.
@@ -2127,9 +2124,6 @@ pub(super) fn enqueue_color_job(
                         job.error = Some(format!("Color worker panicked: {error}"));
                     });
                 }
-                if quick {
-                    state.stack_previews.set_quick(&job_id, false);
-                }
                 state.stack_previews.forget_cancel_of(&job_id, &cancel);
                 drop(work);
             })
@@ -2156,9 +2150,6 @@ pub(super) fn enqueue_color_job(
                 job.state = StackJobState::Failed;
                 job.error = Some(error);
             });
-            if quick {
-                state.stack_previews.set_quick(&job_id, false);
-            }
             state.stack_previews.forget_cancel_of(&job_id, &cancel);
         }
     }
@@ -5122,9 +5113,15 @@ mod tests {
             manager.worker_holder("other").as_deref(),
             Some("the color composition of Color target · SHO")
         );
-        manager.set_quick(&running.job_id, true);
+        // In the quick lane's line, it does not hold the worker.
+        let quick = crate::server::job_line::testing::entry(
+            &running.job_id,
+            super::super::Lane::Quick,
+            crate::concurrency::Stop::new(),
+        );
+        assert!(manager.line.submit(quick, None).is_ok());
         assert_eq!(manager.worker_holder("other"), None);
-        manager.set_quick(&running.job_id, false);
+        manager.line.remove(&running.job_id);
         assert!(manager.worker_holder("other").is_some());
     }
 
