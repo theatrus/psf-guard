@@ -544,7 +544,13 @@ fn source_base(ctx: &DatabaseContext, source: &MasterSource) -> String {
     }
 }
 
-fn supplement_entry(ctx: &DatabaseContext, entry: &mut MasterEntry) {
+/// `nights`: the catalog's nights, read by the first entry that needs them
+/// and kept for the rest.
+fn supplement_entry(
+    ctx: &DatabaseContext,
+    entry: &mut MasterEntry,
+    nights: &mut Option<crate::calibration::Nights>,
+) {
     // Catalog provenance is optional: forgotten inputs can remove this row
     // while the historical master remains on disk. Never rebuild or re-record it.
     let conn = ctx.db();
@@ -562,7 +568,7 @@ fn supplement_entry(ctx: &DatabaseContext, entry: &mut MasterEntry) {
     };
     entry.library_id = Some(master_uuid);
     entry.source_count = usize::try_from(count).ok();
-    entry.sources = master_sources(&conn, &path);
+    entry.sources = master_sources(&conn, &path, nights);
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) {
         entry.rejection_method = value
             .get("rejection_method")
@@ -584,6 +590,7 @@ fn supplement_entry(ctx: &DatabaseContext, entry: &mut MasterEntry) {
 fn master_sources(
     conn: &rusqlite::Connection,
     path: &std::path::Path,
+    nights: &mut Option<crate::calibration::Nights>,
 ) -> Option<crate::calibration::FrameSpan> {
     let mut statement = conn
         .prepare(
@@ -610,7 +617,7 @@ fn master_sources(
         return None;
     }
     // Each frame's night as its rig splits them.
-    let nights = crate::calibration::Nights::load(conn);
+    let nights = nights.get_or_insert_with(|| crate::calibration::Nights::load(conn));
     Some(crate::calibration::FrameSpan::of(frames.into_iter().map(
         |(temp, at, rig, frame)| (temp, at.map(|at| nights.night_of_frame(&rig, &frame, at))),
     )))
@@ -623,6 +630,7 @@ fn catalog(
 ) -> Result<MasterCatalog, AppError> {
     let (recorded, notes) = recorded_masters(state, ctx, source)?;
     let base = source_base(ctx, source);
+    let mut nights = None;
     let masters = recorded
         .into_iter()
         .map(|master| {
@@ -657,7 +665,7 @@ fn catalog(
                 sources: None,
                 library_id: None,
             };
-            supplement_entry(ctx, &mut entry);
+            supplement_entry(ctx, &mut entry, &mut nights);
             entry
         })
         .collect();
