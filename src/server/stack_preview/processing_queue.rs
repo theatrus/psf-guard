@@ -269,6 +269,21 @@ impl StackPreviewManager {
             .map(|run| format!("{} on {}", run.operation, run.scope.label()))
     }
 
+    /// The composition running in the quick lane, beside the stack worker,
+    /// in words that fit "Waiting for … to finish".
+    pub(super) fn quick_lane_holder(&self) -> Option<String> {
+        let color_jobs = self.color_jobs.lock().unwrap();
+        color_jobs
+            .values()
+            .find(|job| job.state == StackJobState::Running && self.is_quick(&job.job_id))
+            .map(|job| {
+                format!(
+                    "the color composition of {}",
+                    channel_label(&job.target_name, &job.label)
+                )
+            })
+    }
+
     /// What holds the stack worker now, in words that fit "Waiting for …
     /// to finish": a running build, color composition, artifact search or
     /// another processing run. `None` when nothing the manager tracks does.
@@ -288,11 +303,13 @@ impl StackPreviewManager {
             }
         }
         {
+            // A composition in the quick lane runs beside the worker, not on it.
             let color_jobs = self.color_jobs.lock().unwrap();
-            if let Some(job) = color_jobs
-                .values()
-                .find(|job| job.state == StackJobState::Running && job.job_id != except)
-            {
+            if let Some(job) = color_jobs.values().find(|job| {
+                job.state == StackJobState::Running
+                    && job.job_id != except
+                    && !self.is_quick(&job.job_id)
+            }) {
                 return Some(format!(
                     "the color composition of {}",
                     channel_label(&job.target_name, &job.label)

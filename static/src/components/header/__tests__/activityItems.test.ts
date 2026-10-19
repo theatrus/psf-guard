@@ -142,6 +142,14 @@ describe('header activity items', () => {
       .toEqual([]);
   });
 
+  it('says a composition in the quick lane waits for a composition, not a build', () => {
+    const color = (queuePosition: number | null): StackActivityEntry => ({
+      ...stack('RGB', 'queued', 0, 0, false, queuePosition), kind: 'color',
+    });
+    expect(activityItems([], [color(null)])[0]).toMatchObject({ detail: 'Waiting for the composition ahead' });
+    expect(activityItems([], [color(0)])[0]).toMatchObject({ detail: 'Waiting for the build ahead' });
+  });
+
   it('lists running builds before queued ones, and a queued build has no progress', () => {
     const items = activityItems([], [
       stack('B', 'queued'),

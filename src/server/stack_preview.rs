@@ -1025,6 +1025,12 @@ pub struct StackPreviewManager {
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     latest_write: Mutex<()>,
     permit: Arc<Semaphore>,
+    /// The quick lane: a color composition a person asked for that prepares
+    /// nothing at length runs here, one at a time, beside the stack line
+    /// rather than behind it.
+    quick_permit: Arc<Semaphore>,
+    /// Compositions in the quick lane, which never hold the stack worker.
+    quick_jobs: Mutex<HashSet<String>>,
     /// Builds waiting for the worker, in the order they will get it. Only the
     /// first one competes for the permit, so this order, not arrival, decides
     /// what runs next, and a person can change it.
@@ -1060,6 +1066,8 @@ impl StackPreviewManager {
             cancels: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
             permit: Arc::new(Semaphore::new(1)),
+            quick_permit: Arc::new(Semaphore::new(1)),
+            quick_jobs: Mutex::new(HashSet::new()),
             waiting: Mutex::new(Vec::new()),
             turn: tokio::sync::Notify::new(),
             origins: Mutex::new(HashMap::new()),
@@ -1115,6 +1123,44 @@ impl StackPreviewManager {
                     self.leave_line(job_id);
                     return permit.ok();
                 }
+                _ = &mut notified => continue,
+            }
+        }
+    }
+
+    /// Note a composition joining or leaving the quick lane.
+    fn set_quick(&self, job_id: &str, quick: bool) {
+        let mut jobs = self.quick_jobs.lock().unwrap();
+        if quick {
+            jobs.insert(job_id.to_string());
+        } else {
+            jobs.remove(job_id);
+        }
+    }
+
+    fn is_quick(&self, job_id: &str) -> bool {
+        self.quick_jobs.lock().unwrap().contains(job_id)
+    }
+
+    /// Wait for the quick lane. `None` when stopped while waiting. Stops wake
+    /// it through the line's notice, as they wake builds in the line. The
+    /// request for the lane is held across those wakings, so compositions
+    /// take the lane in the order they asked for it.
+    async fn wait_quick_turn(
+        &self,
+        cancel: &AtomicBool,
+    ) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        let acquire = Arc::clone(&self.quick_permit).acquire_owned();
+        tokio::pin!(acquire);
+        loop {
+            let notified = self.turn.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            tokio::select! {
+                permit = &mut acquire => return permit.ok(),
                 _ = &mut notified => continue,
             }
         }
@@ -2467,6 +2513,7 @@ fn automatic_work_waits_for(state: &AppState, database_id: &str, reapply: bool) 
     let holder = held.then(|| {
         manager
             .worker_holder("")
+            .or_else(|| manager.quick_lane_holder())
             .unwrap_or_else(|| "the work in the stack line".to_string())
     });
     holder
