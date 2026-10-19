@@ -1366,6 +1366,19 @@ impl StackPreviewManager {
     }
 
     pub fn request_cancel(&self, job_id: &str) -> bool {
+        // A build that has ended has nothing to stop, though its flag may
+        // not be forgotten yet.
+        if self.get(job_id).is_some_and(|job| {
+            matches!(
+                job.state,
+                StackJobState::Completed
+                    | StackJobState::Failed
+                    | StackJobState::Cancelled
+                    | StackJobState::Replaced
+            )
+        }) {
+            return false;
+        }
         let Some(flag) = self.cancels.lock().unwrap().get(job_id).cloned() else {
             return false;
         };
@@ -8055,6 +8068,21 @@ mod tests {
                 .unwrap();
         assert_ne!(later.job_id, job.job_id);
         prepared(&state, &later.job_id).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_single_build_is_prepared_into_the_build_it_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        let request = build_request(vec![1, 2, 3, 4]);
+        let job = build_set::queue_preparation(&state, &ctx, 1, request.clone(), false).unwrap();
+        let done = prepared(&state, &job.job_id).await;
+        assert_eq!(done.state, StackJobState::Replaced);
+        let expected = prepare_job(&ctx, 1, &request).unwrap().public.job_id;
+        assert_eq!(done.replaced_by, vec![expected.clone()]);
+        assert!(state.stack_previews.get(&expected).is_some());
+        // Stopping the stand-in now stops nothing; the build is the one to stop.
+        assert!(!state.stack_previews.request_cancel(&job.job_id));
     }
 
     #[tokio::test(flavor = "multi_thread")]

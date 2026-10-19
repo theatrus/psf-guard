@@ -50,15 +50,23 @@ pub async fn start_stack_preview_channels(
     ))
 }
 
-/// Builds a person asked for that wait to be prepared, in click order, and
-/// whether a runner is preparing them.
+/// Builds a person asked for that wait to be prepared: one line and one
+/// runner per catalog, so a long preparation in one catalog never holds up
+/// another's.
 #[derive(Default)]
 pub(super) struct PreparationLine {
-    pending: VecDeque<Preparation>,
-    running: bool,
+    catalogs: HashMap<String, CatalogLine>,
     /// The build each request waiting or being prepared became, by
     /// request, so the same click twice joins one build.
     by_request: HashMap<String, String>,
+}
+
+/// One catalog's requests, in click order, and whether its runner is
+/// preparing them.
+#[derive(Default)]
+struct CatalogLine {
+    pending: VecDeque<Preparation>,
+    running: bool,
 }
 
 struct Preparation {
@@ -102,7 +110,8 @@ pub(super) fn queue_preparation(
     let cancel = manager.track_cancel(&job.job_id);
     line.by_request
         .insert(request_key.clone(), job.job_id.clone());
-    line.pending.push_back(Preparation {
+    let catalog = line.catalogs.entry(ctx.id.clone()).or_default();
+    catalog.pending.push_back(Preparation {
         job_id: job.job_id.clone(),
         request_key,
         ctx: Arc::clone(ctx),
@@ -111,10 +120,10 @@ pub(super) fn queue_preparation(
         split,
         cancel,
     });
-    if !line.running {
-        line.running = true;
+    if !catalog.running {
+        catalog.running = true;
         drop(line);
-        start_preparing(state);
+        start_preparing(state, &ctx.id);
     }
     Ok(job)
 }
@@ -177,25 +186,27 @@ fn preparing_job(
     }
 }
 
-/// One runner thread prepares the line, in click order, until it is empty.
-/// It runs on the async runtime's handle: queueing a prepared build spawns
-/// its task there.
-fn start_preparing(state: &Arc<AppState>) {
+/// A catalog's runner thread prepares its line, in click order, until it
+/// is empty. It runs on the async runtime's handle: queueing a prepared
+/// build spawns its task there.
+fn start_preparing(state: &Arc<AppState>, database_id: &str) {
     let runner_state = Arc::clone(state);
+    let runner_database = database_id.to_string();
     let handle = tokio::runtime::Handle::current();
     let spawned = std::thread::Builder::new()
         .name("stack-preparation".into())
         .spawn(move || {
             let _runtime = handle.enter();
-            serve_preparations(&runner_state);
+            serve_preparations(&runner_state, &runner_database);
         });
     if let Err(error) = spawned {
         tracing::warn!("could not start preparing stack builds: {error}");
         let pending = {
             let mut line = state.stack_previews.preparing.lock().unwrap();
-            line.running = false;
-            line.by_request.clear();
-            std::mem::take(&mut line.pending)
+            line.catalogs
+                .remove(database_id)
+                .map(|catalog| catalog.pending)
+                .unwrap_or_default()
         };
         for preparation in pending {
             end_preparation(
@@ -207,13 +218,46 @@ fn start_preparing(state: &Arc<AppState>) {
     }
 }
 
-fn serve_preparations(state: &Arc<AppState>) {
+/// Frees a catalog's line if its runner ends any way but an empty line, so
+/// the next click starts another rather than waiting on a runner that is
+/// gone. What waits stays in the line for it.
+struct RunnerClaim<'a> {
+    state: &'a AppState,
+    database_id: &'a str,
+    released: bool,
+}
+
+impl Drop for RunnerClaim<'_> {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        let mut line = self
+            .state
+            .stack_previews
+            .preparing
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(catalog) = line.catalogs.get_mut(self.database_id) {
+            catalog.running = false;
+        }
+    }
+}
+
+fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
+    let mut claim = RunnerClaim {
+        state,
+        database_id,
+        released: false,
+    };
     loop {
         let Some(preparation) = ({
             let mut line = state.stack_previews.preparing.lock().unwrap();
-            let next = line.pending.pop_front();
+            let catalog = line.catalogs.entry(database_id.to_string()).or_default();
+            let next = catalog.pending.pop_front();
             if next.is_none() {
-                line.running = false;
+                catalog.running = false;
+                claim.released = true;
             }
             next
         }) else {
@@ -260,12 +304,29 @@ fn prepare_and_queue(
         return Ok(None);
     }
     let mut job_ids = Vec::with_capacity(parts.len());
+    // The builds this request put in the line itself, not ones already there.
+    let mut queued = Vec::new();
     let mut cached = Vec::new();
     for (part_request, prepared) in parts {
+        if preparation_stopped(state, preparation) {
+            break;
+        }
+        let new = state.stack_previews.get(&prepared.public.job_id).is_none();
         let started = start_prepared(state, ctx, *project_id, &part_request, prepared)
             .map_err(|error| error.message())?;
+        if new {
+            queued.push(started.job.job_id.clone());
+        }
         job_ids.push(started.job.job_id);
         cached.extend(started.cached);
+    }
+    // A stop that came while the builds were queued stops the ones this
+    // request queued; builds that were already in the line keep going.
+    if preparation_stopped(state, preparation) {
+        for job_id in &queued {
+            state.stack_previews.request_cancel(job_id);
+        }
+        return Ok(None);
     }
     // Once every channel is in line, so color waits for the ones still to
     // build rather than composing from a half-queued set.

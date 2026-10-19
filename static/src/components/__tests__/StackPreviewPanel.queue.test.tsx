@@ -185,6 +185,30 @@ describe('StackPreviewPanel manual queue', () => {
     expect(view.container.querySelector('.stack-preview-state')).toHaveTextContent('running');
   });
 
+  it('lets go of a build the server no longer keeps, without an error', async () => {
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({ groups: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.post('/api/db/:dbId/projects/:projectId/stack-previews/channels', () =>
+        HttpResponse.json(
+          { success: true, data: [{ ...job('gone', 100, 'preparing', []), preparing: '4 frames' }], error: null, status: 'ready' },
+          { status: 202 }
+        )
+      ),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/:jobId', () =>
+        HttpResponse.json({ success: false, data: null, error: 'Resource not found' }, { status: 404 })
+      ),
+    );
+    render(<StackPreviewPanel dbId="test" projectId={1} images={images}
+      selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
+    await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
+    expect(await screen.findByRole('button', { name: 'Preparing…' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Build stacks' }, { timeout: 4000 })).toBeEnabled();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('Resource not found')).toBeNull();
+  });
+
   it('keeps other channels buildable and shows both queued builds', async () => {
     const jobs: Record<string, unknown> = {};
     server.use(

@@ -1,3 +1,4 @@
+import { isAxiosError } from 'axios';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
@@ -220,6 +221,11 @@ function readCalibrationOverrides(): Record<string, CalibrationMode> {
     return {};
   }
 }
+
+/** The HTTP status a request failed with, through the client's wrapping. */
+const httpStatus = (error: unknown) => isAxiosError(error)
+  ? error.response?.status
+  : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
 
 // `replaced`: a build that was being prepared became the builds it names,
 // which are followed instead.
@@ -590,6 +596,18 @@ export default function StackPreviewPanel({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the key tracks which builds were replaced and by what.
   }, [replacementKey, dbId, projectId, queryClient]);
+  // A build the server no longer keeps, such as a stand-in replaced long
+  // ago, leaves the watch rather than showing as an error: the activity line
+  // still brings back anything running.
+  const goneKey = statuses
+    .map((status, index) => (httpStatus(status.error) === 404 ? watchedJobIds[index] : ''))
+    .filter(Boolean)
+    .join('|');
+  useEffect(() => {
+    if (!goneKey) return;
+    const gone = goneKey.split('|');
+    setWatchedJobIds((current) => current.filter((jobId) => !gone.includes(jobId)));
+  }, [goneKey]);
   // Which Build button each build still being prepared came from.
   const preparingKeys = new Set(
     watchedJobs
@@ -598,7 +616,7 @@ export default function StackPreviewPanel({
       .filter((key): key is string => key !== undefined)
   );
   const unfinishedJobs = watchedJobs.filter((job) => !terminalStates.has(job.state));
-  const statusError = statuses.find((status) => status.error)?.error;
+  const statusError = statuses.find((status) => status.error && httpStatus(status.error) !== 404)?.error;
   // The job a shared status line describes: running work first, then the
   // newest of whatever remains.
   const activeJob: StackPreviewJob | undefined =
