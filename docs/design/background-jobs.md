@@ -221,3 +221,6 @@ Then:
   (`spatial_scan.rs`), preview pre-generation (`preview_queue.rs`), stack
   builds (`stack_preview.rs`) and WBPP runs (`wbpp_queue.rs`) predate this
   record; check each before copying its shape.
+
+[One job line (proposed)](job-line.md) proposes a shared runner for these
+jobs and a single line for stack and WBPP work.
