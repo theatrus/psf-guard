@@ -158,6 +158,8 @@ impl CatalogWork for Duplicates {
     type Status = DuplicateJobStatus;
     type Item = (Action, Arc<DatabaseContext>);
     const RUNNER: &'static str = "calibration-duplicates";
+    /// A repair holds it around its write; a check stops at once.
+    const STOP_WAITS_FOR: Option<&'static str> = None;
 
     fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Self::Item> {
         queue.asked.take().map_or(Step::Exit, Step::Run)

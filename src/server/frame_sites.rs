@@ -183,6 +183,7 @@ impl CatalogWork for FrameSites {
     type Status = FrameSitesStatus;
     type Item = ();
     const RUNNER: &'static str = "frame-sites";
+    const STOP_WAITS_FOR: Option<&'static str> = Some("frame sites");
 
     fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> CatalogStep<()> {
         match queue.next_step(now) {

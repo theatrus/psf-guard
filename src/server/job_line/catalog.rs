@@ -38,6 +38,10 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
     type Item: Send;
     /// The runner thread's name, as `flat-measure`.
     const RUNNER: &'static str;
+    /// What a server stop waits for while a piece runs, as `flat
+    /// measuring`; `None` for a job that holds the stop itself, around
+    /// what must not be cut short.
+    const STOP_WAITS_FOR: Option<&'static str>;
 
     /// What the runner does next, read with the queue locked. `state` and
     /// `catalog` are there for a job that waits on another, as flat
@@ -49,8 +53,9 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
         now: Instant,
     ) -> Step<Self::Item>;
 
-    /// Run one piece, holding the server's stop until it ends. `stop` is
-    /// this piece's: the job's Stop sets it.
+    /// Run one piece, holding the server's stop until it ends when
+    /// [`Self::STOP_WAITS_FOR`] says so. `stop` is this piece's: the job's
+    /// Stop sets it.
     fn run(
         state: &Arc<AppState>,
         catalog: &str,
@@ -310,7 +315,8 @@ fn serve<W: CatalogWork>(state: &Arc<AppState>, catalog: &str, job: &CatalogJob<
             }
         };
         {
-            let _work = state.shutdown.hold(format!("{} ({catalog})", W::RUNNER));
+            let _work =
+                W::STOP_WAITS_FOR.map(|what| state.shutdown.hold(format!("{what} ({catalog})")));
             W::run(state, catalog, job, item, &stop);
         }
         job.lock().running = None;
@@ -332,6 +338,7 @@ mod tests {
         type Status = Vec<u32>;
         type Item = u32;
         const RUNNER: &'static str = "counting";
+        const STOP_WAITS_FOR: Option<&'static str> = Some("counting");
 
         fn next(_: &AppState, _: &str, queue: &mut Vec<u32>, _: Instant) -> Step<u32> {
             queue.pop().map_or(Step::Exit, Step::Run)

@@ -289,6 +289,7 @@ impl CatalogWork for FlatMeasure {
     type Status = FlatMeasureStatus;
     type Item = Scope;
     const RUNNER: &'static str = "flat-measure";
+    const STOP_WAITS_FOR: Option<&'static str> = Some("flat measuring");
 
     /// Grading first: it decides which flats are in use.
     fn next(state: &AppState, path: &str, queue: &mut Queue, now: Instant) -> CatalogStep<Scope> {

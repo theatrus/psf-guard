@@ -190,6 +190,8 @@ impl CatalogWork for RejectRemoval {
     type Status = RemovalJobStatus;
     type Item = Asked;
     const RUNNER: &'static str = "reject-removal";
+    /// A run holds it itself, with what it does.
+    const STOP_WAITS_FOR: Option<&'static str> = None;
 
     fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Asked> {
         queue.asked.take().map_or(Step::Exit, Step::Run)
