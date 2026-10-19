@@ -4,6 +4,13 @@
 > file becomes `vVERSION.md`; rewrite the opening sentence for the version
 > being shipped and delete this note. See [the release guide](../RELEASING.md).
 
+## Changes
+
+- In the Sequence view, the summary, its suspect pills and the score chart
+  stay docked under the toolbar while you scroll through the frames. A
+  point on the **Solved pointing** chart goes to its frame, and the chart
+  folds away from its title; the view remembers that choice.
+
 ## Fixes
 
 - **Build stacks** and **Build current set** queue promptly on large

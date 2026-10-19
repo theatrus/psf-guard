@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -1744,5 +1744,179 @@ describe('SequenceView: batch operations', () => {
 
     await user.click(analyzeQuality);
     await waitFor(() => expect(scanRequests).toBe(1));
+  });
+});
+
+describe('SequenceView: solved pointing and the docked chart', () => {
+  // Every frame of the normal fixture with a solved centre; the third is
+  // off target, so its point is drawn large.
+  const pointingFixture = {
+    ...normalFixture,
+    data: {
+      sequences: normalFixture.data.sequences.map(sequence => ({
+        ...sequence,
+        images: sequence.images.map((image, index) => ({
+          ...image,
+          flags: index === 2 ? ['off_target'] : [],
+          pointing: {
+            pixel_solved: true,
+            solve_failed: false,
+            image_quality_evidence: true,
+            expected_target: true,
+            flags: index === 2 ? ['off_target'] : [],
+            east_offset_arcsec: index === 2 ? 240 : index * 3 - 12,
+            north_offset_arcsec: index === 2 ? -180 : 8 - index * 2,
+          },
+        })),
+      })),
+    },
+  };
+
+  function renderPointing(route = '/sequence?db=test&project=1&target=1') {
+    setupDefaultHandlers();
+    server.use(http.get('/api/db/:dbId/analysis/sequence', () => HttpResponse.json(pointingFixture)));
+    const location = { search: '' };
+    function LocationProbe() {
+      location.search = useLocation().search;
+      return null;
+    }
+    const Wrapper = createWrapper(route);
+    render(
+      <Wrapper>
+        <SequenceView />
+        <LocationProbe />
+      </Wrapper>
+    );
+    return () => new URLSearchParams(location.search);
+  }
+
+  afterEach(() => {
+    window.localStorage.removeItem('psf-guard.sequence-pointing-collapsed');
+    vi.unstubAllGlobals();
+  });
+
+  it('goes to a frame from its pointing dot, by click or by key', async () => {
+    const user = userEvent.setup();
+    const params = renderPointing();
+
+    const chart = await screen.findByRole('group', { name: 'Solved pointing offsets' });
+    const dots = within(chart).getAllByRole('button');
+    expect(dots).toHaveLength(10);
+    // Each dot names its frame's time and offset.
+    const third = within(chart).getByRole('button', { name: /: 240 arcsec east, 180 arcsec south$/ });
+    expect(third).toHaveAttribute('data-pointing-image-id', '3');
+    // The chart is one tab stop, on the cursor's frame.
+    await waitFor(() => expect(params().get('current')).toBe('1'));
+    expect(dots.filter(dot => dot.getAttribute('tabindex') === '0')).toHaveLength(1);
+    expect(chart.querySelector('[data-pointing-image-id="1"]')).toHaveAttribute('aria-current', 'true');
+
+    await user.click(third);
+    await waitFor(() => expect(params().get('current')).toBe('3'));
+    expect(document.querySelector('[data-card-image-id="3"]')!.closest('.sequence-image-card'))
+      .toHaveClass('current-selection');
+    expect(third).toHaveAttribute('aria-current', 'true');
+    expect(third).toHaveAttribute('tabindex', '0');
+    // Going to a frame leaves the selection as it was.
+    expect(document.querySelectorAll('.sequence-image-card.selected')).toHaveLength(0);
+
+    // Enter on a focused dot goes to its frame; Space does too, without
+    // selecting the frame under the cursor.
+    const fifth = chart.querySelector<SVGGElement>('[data-pointing-image-id="5"]')!;
+    fifth.focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(params().get('current')).toBe('5'));
+    const seventh = chart.querySelector<SVGGElement>('[data-pointing-image-id="7"]')!;
+    seventh.focus();
+    await user.keyboard(' ');
+    await waitFor(() => expect(params().get('current')).toBe('7'));
+    expect(document.querySelectorAll('.sequence-image-card.selected')).toHaveLength(0);
+  });
+
+  it('folds the pointing chart and remembers the choice', async () => {
+    const user = userEvent.setup();
+    renderPointing();
+
+    const toggle = await screen.findByRole('button', { name: 'Solved pointing' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('group', { name: 'Solved pointing offsets' })).toBeInTheDocument();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('group', { name: 'Solved pointing offsets' })).not.toBeInTheDocument();
+    expect(screen.getByText('10 solved frames · 1 off target, jumped or drifting')).toBeInTheDocument();
+    expect(window.localStorage.getItem('psf-guard.sequence-pointing-collapsed')).toBe('true');
+
+    // A fresh view opens folded.
+    cleanup();
+    renderPointing();
+    const again = await screen.findByRole('button', { name: 'Solved pointing' });
+    expect(again).toHaveAttribute('aria-expanded', 'false');
+    await user.click(again);
+    expect(again).toHaveAttribute('aria-expanded', 'true');
+    expect(window.localStorage.getItem('psf-guard.sequence-pointing-collapsed')).toBe('false');
+  });
+
+  it('starts open when storage refuses to be read', async () => {
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('denied');
+    });
+    try {
+      renderPointing();
+      const toggle = await screen.findByRole('button', { name: 'Solved pointing' });
+      expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    } finally {
+      getItem.mockRestore();
+    }
+  });
+
+  it('docks the summary and the chart under the toolbar while the strip scrolls', async () => {
+    const observers: Array<{ callback: IntersectionObserverCallback; options?: IntersectionObserverInit; target?: Element }> = [];
+    vi.stubGlobal('IntersectionObserver', class {
+      record: (typeof observers)[number];
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        this.record = { callback, options };
+        observers.push(this.record);
+      }
+      observe(target: Element) { this.record.target = target; }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+    });
+    renderPointing();
+
+    await screen.findByText('3 at 90–100');
+    const dock = document.querySelector<HTMLElement>('.toolbar-dock')!;
+    // The summary, its pills and the chart are in the dock; the pointing
+    // chart and the strip pass under it.
+    expect(dock.querySelector('.sequence-summary-bar')).not.toBeNull();
+    expect(dock.querySelector('.sequence-timeline')).not.toBeNull();
+    expect(dock.querySelector('.pointing-scatter')).toBeNull();
+    expect(dock.querySelector('.sequence-strip')).toBeNull();
+    expect(dock.previousElementSibling).toHaveClass('toolbar-dock-sentinel');
+    expect(dock).not.toHaveAttribute('data-docked');
+
+    const observer = observers.at(-1)!;
+    expect(observer.target).toBe(dock.previousElementSibling);
+    const report = (top: number, isIntersecting: boolean) => act(() => {
+      observer.callback([{
+        isIntersecting,
+        boundingClientRect: { top } as DOMRectReadOnly,
+        rootBounds: { top: 0 } as DOMRectReadOnly,
+      } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+    // jsdom lays nothing out, so the dock is sticky only by its class here.
+    const position = vi.spyOn(window, 'getComputedStyle').mockReturnValue({ position: 'sticky' } as CSSStyleDeclaration);
+    try {
+      report(-40, false);
+      expect(dock).toHaveAttribute('data-docked', 'true');
+      report(20, true);
+      expect(dock).not.toHaveAttribute('data-docked');
+      // Not docked when a short window lets the block scroll away.
+      position.mockReturnValue({ position: 'static' } as CSSStyleDeclaration);
+      report(-40, false);
+      expect(dock).not.toHaveAttribute('data-docked');
+    } finally {
+      position.mockRestore();
+    }
   });
 });

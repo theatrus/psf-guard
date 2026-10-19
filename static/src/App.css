@@ -133,10 +133,12 @@
   --color-button-disabled-text: #8d929a;
 
   /* Shadows: a popover or menu, a card lifted on hover, a panel resting
-     on the page, and a dialog. */
+     on the page, a block docked under a toolbar with the page passing
+     under it, and a dialog. */
   --shadow-popover: 0 8px 22px rgb(0 0 0 / 35%);
   --shadow-raised: 0 4px 12px rgb(0 0 0 / 30%);
   --shadow-panel: 0 8px 24px rgb(0 0 0 / 18%);
+  --shadow-docked: 0 8px 10px -6px rgb(0 0 0 / 55%);
   --shadow-dialog: 0 12px 40px rgb(0 0 0 / 50%);
 
   /* Labels and controls drawn over an image or a chart of the sky, and the
@@ -6829,6 +6831,132 @@
 
 .sequence-timeline svg {
   display: block;
+}
+
+/* The summary, its suspect list and the score chart dock under the
+   toolbar (ToolbarDock), and the strip passes under them. The block is
+   opaque and holds its children's margins, so no card shows through. */
+.toolbar-dock-sentinel {
+  height: 1px;
+  margin-bottom: -1px;
+}
+
+.toolbar-dock {
+  position: sticky;
+  top: var(--toolbar-dock-top, 0px);
+  z-index: 90;
+  display: flow-root;
+  background: var(--color-bg-primary);
+  transition: box-shadow 0.15s;
+}
+
+.toolbar-dock[data-docked] {
+  box-shadow: var(--shadow-docked);
+}
+
+/* A window too short to keep both the toolbar and the chart in sight, such
+   as a phone on its side, lets the chart scroll away. */
+@media (max-height: 560px) {
+  .toolbar-dock {
+    position: static;
+  }
+}
+
+/* Solved pointing: each frame's solved centre around the target. A point
+   goes to its frame; the title folds the chart away. */
+.pointing-scatter {
+  margin: 0.25rem 1rem 0.75rem;
+}
+
+.pointing-scatter h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.6rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+}
+
+.pointing-scatter h3 small {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+
+.pointing-scatter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 1.75rem;
+  padding: 0 0.25rem 0 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pointing-scatter-toggle svg {
+  transition: transform 0.15s;
+}
+
+.pointing-scatter-toggle[aria-expanded='true'] svg {
+  transform: rotate(90deg);
+}
+
+.pointing-scatter-toggle:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
+}
+
+.pointing-scatter-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+}
+
+.pointing-scatter-body svg {
+  display: block;
+  flex: none;
+}
+
+.pointing-scatter-legend {
+  flex: 1 1 10rem;
+  max-width: 24rem;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.pointing-dot {
+  cursor: pointer;
+}
+
+.pointing-dot:focus {
+  outline: none;
+}
+
+.pointing-dot-hit {
+  fill: none;
+  pointer-events: all;
+}
+
+.pointing-dot[aria-current='true'] .pointing-dot-mark {
+  stroke: var(--state-on-border);
+  stroke-width: 2;
+}
+
+.pointing-dot:hover .pointing-dot-mark {
+  stroke: var(--color-text-primary);
+  stroke-width: 1.5;
+}
+
+.pointing-dot:focus-visible .pointing-dot-mark {
+  stroke: var(--state-focus-border);
+  stroke-width: 2.5;
 }
 
 /* Time-ordered image gallery */

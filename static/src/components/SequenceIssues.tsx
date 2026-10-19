@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import type { Image } from '../api/types';
 import type { SequenceIssue } from '../utils/sequenceIssues';
+import { frameTime } from '../utils/frameTime';
 
 const SEQUENCE_ISSUE_LIST_ID = 'sequence-issue-list';
 
@@ -30,16 +31,6 @@ export function SequenceIssuePills({ issues, open, onToggle }: {
       ))}
     </div>
   );
-}
-
-function frameTime(image: Image | undefined): string {
-  if (!image?.acquired_date) return 'No time';
-  return new Date(image.acquired_date * 1000).toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 /** An open pill's frames, in the strip's order. A click goes to one. */
