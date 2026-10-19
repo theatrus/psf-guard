@@ -1087,6 +1087,9 @@ pub struct StackPreviewManager {
     yielded: Mutex<HashSet<String>>,
     /// Builds a person asked for that wait to be prepared, in click order.
     preparing: Mutex<build_set::PreparationLine>,
+    /// The longest the next turn is held for a person's re-apply; see
+    /// [`StackPreviewManager::turn_held_until`].
+    turn_held_for: std::time::Duration,
 }
 
 impl StackPreviewManager {
@@ -1109,6 +1112,7 @@ impl StackPreviewManager {
             reapplies: Mutex::new(HashMap::new()),
             yielded: Mutex::new(HashSet::new()),
             preparing: Mutex::new(build_set::PreparationLine::default()),
+            turn_held_for: reapply::TURN_HELD_FOR,
         }
     }
 
@@ -1126,9 +1130,10 @@ impl StackPreviewManager {
         self.turn.notify_waiters();
     }
 
-    /// Wait until this build is first in line and the worker is free. `None`
-    /// when it was stopped while waiting, or the worker has shut down; either
-    /// way it has left the line.
+    /// Wait until this build is first in line, the next turn is not held for
+    /// a person's re-apply, and the worker is free. `None` when it was
+    /// stopped while waiting, or the worker has shut down; either way it has
+    /// left the line.
     async fn wait_turn(
         &self,
         job_id: &str,
@@ -1149,14 +1154,33 @@ impl StackPreviewManager {
                 notified.await;
                 continue;
             }
+            // The next turn is a person's re-apply's: wait for its run to
+            // queue, or for the hold to run out.
+            if let Some(until) = self.turn_held_until() {
+                tokio::select! {
+                    _ = &mut notified => {}
+                    _ = tokio::time::sleep_until(until.into()) => {
+                        if self.turn_held_until().is_none() {
+                            tracing::warn!(
+                                "The next stack turn was held {} s for a re-apply that did \
+                                 not start; the line moves on",
+                                self.turn_held_for.as_secs()
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
             // First in line: take the worker, unless the line changes while
             // it is busy, in which case look again. A change and a free
-            // worker can arrive together, so the line is read once more
-            // with the worker in hand: if something now holds the front,
-            // the worker goes back to it.
+            // worker can arrive together, so the line and the hold are read
+            // once more with the worker in hand: if something now comes
+            // first, the worker goes back to it.
             tokio::select! {
                 permit = Arc::clone(&self.permit).acquire_owned() => {
-                    if self.waiting.lock().unwrap().first().map(String::as_str) != Some(job_id) {
+                    let still_first =
+                        self.waiting.lock().unwrap().first().map(String::as_str) == Some(job_id);
+                    if !still_first || self.turn_held_until().is_some() {
                         drop(permit);
                         continue;
                     }
@@ -7724,6 +7748,27 @@ mod tests {
             shown(&after, &second).is_some_and(|shown| shown.reprocessing.is_none())
         })
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_reapply_turned_off_while_the_server_was_down_does_not_come_back() {
+        let policy = reapply_policy(true);
+        let cache = tempfile::tempdir().unwrap();
+        let (before, applied) = processed_card(cache.path()).await;
+        // The server is stopping as the build lands, so its turn never comes.
+        before.shutdown.begin();
+        let second = "2".repeat(64);
+        rebuild(&before, cache.path(), &second, "rev-2");
+        assert_eq!(shown(&before, &second).unwrap().stretch_id, applied);
+
+        // It starts again with re-applying off.
+        reapply::configure(false);
+        let after = state_on_disk(cache.path(), None);
+        reapply::recover(&after);
+        assert_eq!(after.stack_previews.reapply_count(), 0);
+        assert_eq!(after.stack_previews.turn_held_until(), None);
+        assert!(shown(&after, &second).is_none(), "nothing carried shows");
+        drop(policy);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

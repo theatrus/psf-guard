@@ -565,7 +565,7 @@ pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
             }
             // Re-applying processing follows a person's rebuilds too, so it
             // looks whether automatic refreshes are on or not.
-            super::reapply::start_due(Arc::clone(&state)).await;
+            super::reapply::look_unless_busy(Arc::clone(&state)).await;
         }
     })
 }

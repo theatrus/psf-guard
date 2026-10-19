@@ -1325,9 +1325,11 @@ stack, on its own and with no page open:
   also steps aside for an automatic refresh that is due, since the refresh
   may bring a newer stack anyway.
 - After a build you started, or an automatic one you took over, it is your
-  work. It takes the front of the line the moment the build finishes, so it
-  runs next, ahead of your other queued builds, and it steps aside for
-  nothing. The header lists it with your work. A rebuild of R, G and B runs
+  work. The moment the build finishes, the worker's next turn is held for
+  it, so it runs next, ahead of your other queued builds, and it steps aside
+  for nothing. The hold lasts only while it gets ready (seconds, while the
+  tools are checked) and never more than a minute, so the line cannot stall
+  on it. The header lists it with your work. A rebuild of R, G and B runs
   R's build, R's processing, G's build, G's processing, and so on. A build
   you stop leaves its finished channels to the automatic re-apply instead,
   so stopping never starts RC-Astro.
