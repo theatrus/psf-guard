@@ -1329,7 +1329,8 @@ stack, on its own and with no page open:
   it, so it runs next, ahead of your other queued builds, and it steps aside
   for nothing. The hold lasts only while it gets ready (seconds, while the
   tools are checked) and never more than a minute, so the line cannot stall
-  on it. The header lists it with your work. A rebuild of R, G and B runs
+  on it. The header lists it with your work. Stopping one of your running
+  re-applies starts your next waiting one. A rebuild of R, G and B runs
   R's build, R's processing, G's build, G's processing, and so on. A build
   you stop leaves its finished channels to the automatic re-apply instead,
   so stopping never starts RC-Astro.

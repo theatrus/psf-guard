@@ -485,6 +485,15 @@ async fn start_waiting(state: &Arc<AppState>) {
         .collect::<Vec<_>>();
     waiting.sort_by_key(|(_, reapply)| (!reapply.personal, reapply.since));
     for (channel, reapply) in waiting {
+        // Each automatic one takes seconds to probe. Once other work or a
+        // person's re-apply is waiting, this look gives way to it.
+        if !reapply.personal
+            && (state.stack_previews.personal_reapply_waiting()
+                || state.interactive_job_active()
+                || !state.stack_previews.active().is_empty())
+        {
+            return;
+        }
         // A refresh still settling may bring a newer stack within minutes:
         // starting RC-Astro now would only be thrown away. A person's
         // rebuild has already brought the stack they asked for.
@@ -574,11 +583,7 @@ async fn start_waiting(state: &Arc<AppState>) {
                 );
                 if !alive {
                     manager.forget_reapply(&channel);
-                    let _ = stretch::carry_published(
-                        &ctx.stack_root,
-                        &reapply.source_key,
-                        &reapply.revision,
-                    );
+                    settle_ended_run(&ctx, &reapply);
                     continue;
                 }
                 // A person's goes first, before the held turn is let go.
@@ -588,9 +593,26 @@ async fn start_waiting(state: &Arc<AppState>) {
                 if let Some(entry) = manager.reapplies.lock().unwrap().get_mut(&channel)
                     && entry.revision == reapply.revision
                 {
-                    entry.run_id = Some(run_id);
+                    entry.run_id = Some(run_id.clone());
                 }
                 manager.turn.notify_waiters();
+                // The run may have ended before it was recorded, too late for
+                // its end to find this re-apply: settle it here.
+                let ended = !matches!(
+                    manager.processing_state(&run_id),
+                    Some(StackJobState::Queued | StackJobState::Running)
+                );
+                let unsettled = manager
+                    .reapplies
+                    .lock()
+                    .unwrap()
+                    .get(&channel)
+                    .is_some_and(|entry| entry.run_id.as_deref() == Some(run_id.as_str()));
+                if ended && unsettled {
+                    manager.forget_reapply(&channel);
+                    settle_ended_run(&ctx, &reapply);
+                    kick(state);
+                }
                 return;
             }
             Ok(stretch::ReapplyStart::Done) => {
@@ -618,6 +640,19 @@ async fn start_waiting(state: &Arc<AppState>) {
             }
         }
     }
+}
+
+/// A run a re-apply joined ended before the re-apply could hear how. Its
+/// result shows if it published; otherwise nothing carried is left.
+fn settle_ended_run(ctx: &DatabaseContext, reapply: &Reapply) {
+    let _ = stretch::carry_published(&ctx.stack_root, &reapply.source_key, &reapply.revision);
+    let _ = stretch::end_carry(
+        &ctx.stack_root,
+        &reapply.source_key,
+        &reapply.revision,
+        CarryState::Stopped,
+        None,
+    );
 }
 
 /// A processing run ended. If it was a re-apply, settle what its card shows:
