@@ -1088,8 +1088,8 @@ pub struct StackPreviewManager {
     yielded: Mutex<HashSet<String>>,
     /// Builds a person asked for that wait to be prepared, in click order.
     preparing: Mutex<build_set::PreparationLine>,
-    /// The longest the next turn is held for a person's re-apply; see
-    /// [`StackPreviewManager::turn_held_until`].
+    /// The longest the next turn is kept for a person's re-apply that has
+    /// not joined the line yet, once that turn holds anything up.
     turn_held_for: std::time::Duration,
 }
 
@@ -1117,26 +1117,13 @@ impl StackPreviewManager {
 
     /// Hold a place in the line for a request still being prepared. The
     /// work it becomes takes the place.
-    fn hold_place(&self, job_id: &str) {
-        self.line.hold_place(job_id);
+    fn hold_place(&self, job_id: &str, holds: Vec<String>) {
+        self.line.hold_place(job_id, holds);
     }
 
     /// Give up a place a request held, unless work took it.
     fn release_place(&self, job_id: &str) {
         self.line.release_place(job_id);
-    }
-
-    /// Whether a build of this project could still change a target's channel
-    /// stacks: one queued or running with a channel of the target, or one
-    /// still being prepared, whose channels are not known yet.
-    fn channels_pending(&self, database_id: &str, project_id: i32, target_id: i32) -> bool {
-        self.jobs.lock().unwrap().values().any(|job| {
-            job.database_id == database_id
-                && job.project_id == project_id
-                && (job.state == StackJobState::Preparing
-                    || (matches!(job.state, StackJobState::Queued | StackJobState::Running)
-                        && job.groups.iter().any(|group| group.target_id == target_id)))
-        })
     }
 
     /// Note a composition joining or leaving the quick lane.
@@ -1719,11 +1706,7 @@ impl StackPreviewManager {
     /// that runs, or one settled because it was stopped while it waited.
     /// The lane is free again as soon as this returns.
     pub(super) async fn dispatch_next(&self) -> (bool, String) {
-        match self
-            .line
-            .next(Lane::Worker, || self.turn_held_until())
-            .await
-        {
+        match self.line.next(Lane::Worker).await {
             Dispatch::Run { id, .. } => (true, id),
             Dispatch::Stopped { id, .. } => (false, id),
         }
@@ -2149,6 +2132,7 @@ fn queue_preview_render(
             Lane::Worker,
             None,
             cancel,
+            Vec::new(),
             Box::new(submission),
         ),
         Err(error) => {
@@ -3225,7 +3209,7 @@ fn enqueue_job(
         },
     )
     .map(|submission| {
-        let (job_id, database_id, cancel) = (job_id.clone(), database_id.clone(), cancel.clone());
+        let (job_id, cancel) = (job_id.clone(), cancel.clone());
         // A stop that lands as its turn comes still keeps it from starting.
         let start_stop = cancel.clone();
         submission
@@ -3238,11 +3222,22 @@ fn enqueue_job(
                     });
                 }
                 state.stack_previews.forget_cancel_of(&job_id, &cancel);
-                // A composition may have waited for this build's channels.
-                build_set::release_waiting_colors(state, &database_id);
                 drop(work);
             })
     });
+    // While it waits and while it runs, compositions of its targets wait.
+    let mut targets = prepared
+        .public
+        .groups
+        .iter()
+        .map(|group| group.target_id)
+        .collect::<Vec<_>>();
+    targets.sort_unstable();
+    targets.dedup();
+    let holds = targets
+        .into_iter()
+        .map(|target_id| channel_key(&database_id, prepared.public.project_id, target_id))
+        .collect();
     match submission {
         Ok(submission) => submit(
             &state,
@@ -3250,6 +3245,7 @@ fn enqueue_job(
             Lane::Worker,
             slot,
             cancel,
+            holds,
             Box::new(submission),
         ),
         Err(error) => {
@@ -3258,9 +3254,20 @@ fn enqueue_job(
                 job.error = Some(error);
             });
             state.stack_previews.forget_cancel_of(&job_id, &cancel);
-            build_set::release_waiting_colors(&state, &database_id);
         }
     }
+}
+
+/// What a build holds in the line, waiting or running, for each target it
+/// stacks: a color composition of that target waits until nothing does.
+pub(super) fn channel_key(database_id: &str, project_id: i32, target_id: i32) -> String {
+    format!("channels:{database_id}:{project_id}:{target_id}")
+}
+
+/// What a build still being prepared holds: its targets are not known
+/// yet, so it holds every target of its project.
+pub(super) fn project_channels_key(database_id: &str, project_id: i32) -> String {
+    format!("channels:{database_id}:{project_id}:*")
 }
 
 /// Put work in the line under `job_id`, stopped by `cancel`: on the worker
@@ -3272,14 +3279,12 @@ pub(super) fn submit(
     lane: Lane,
     before: Option<&str>,
     cancel: Stop,
+    holds: Vec<String>,
     task: Box<dyn Task>,
 ) {
     ensure_dispatching(state);
-    if let Err(entry) = state
-        .stack_previews
-        .line
-        .submit(Entry::new(job_id, lane, cancel, task), before)
-    {
+    let entry = Entry::new(job_id, lane, cancel, task).holding(holds);
+    if let Err(entry) = state.stack_previews.line.submit(entry, before) {
         // The copy's stop flag replaced the queued work's: put that back, so
         // a stop still reaches the work in line.
         if let Some(stop) = state.stack_previews.line.stop_of(job_id) {
@@ -3321,14 +3326,7 @@ fn ensure_dispatching(state: &Arc<AppState>) {
 /// and settle each one stopped while it waited.
 async fn dispatch(state: Arc<AppState>, lane: Lane) {
     loop {
-        let next = state
-            .stack_previews
-            .line
-            .next(lane, || match lane {
-                Lane::Worker => state.stack_previews.turn_held_until(),
-                Lane::Quick => None,
-            })
-            .await;
+        let next = state.stack_previews.line.next(lane).await;
         let state = Arc::clone(&state);
         match next {
             Dispatch::Run {
@@ -7517,7 +7515,7 @@ mod tests {
         let mut job = completed_job(job_id, vec![]);
         job.state = StackJobState::Queued;
         assert!(state.stack_previews.insert(job));
-        state.stack_previews.hold_place(job_id);
+        state.stack_previews.hold_place(job_id, Vec::new());
     }
 
     /// The re-apply's run in the activity list, once it is queued.
@@ -8059,7 +8057,7 @@ mod tests {
         let after = state_on_disk(cache.path(), None);
         reapply::recover(&after);
         assert_eq!(after.stack_previews.reapply_count(), 0);
-        assert_eq!(after.stack_previews.turn_held_until(), None);
+        assert!(after.stack_previews.line.order().is_empty());
         assert!(shown(&after, &second).is_none(), "nothing carried shows");
         drop(policy);
     }
@@ -8752,7 +8750,7 @@ mod tests {
     async fn a_build_being_prepared_holds_its_place_without_holding_up_the_line() {
         let manager = StackPreviewManager::new();
         manager.queue_test_build("ahead");
-        manager.hold_place("slot");
+        manager.hold_place("slot", Vec::new());
         manager.queue_test_build("behind");
         assert_eq!(manager.line.order(), ["ahead", "slot", "behind"]);
         assert_eq!(manager.dispatch_next().await, (true, "ahead".to_string()));
@@ -8991,12 +8989,10 @@ mod tests {
     async fn a_composition_asked_for_while_its_channels_build_waits_for_them() {
         let directory = tempfile::tempdir().unwrap();
         let (state, ctx) = state_with_frames(directory.path());
-        // A build of target 7's red channel is queued.
-        let mut building = completed_job(&"b".repeat(64), vec![ready_group(7, "R", 1)]);
-        building.database_id = ctx.id.clone();
-        building.project_id = 1;
-        building.state = StackJobState::Queued;
-        assert!(state.stack_previews.insert(building.clone()));
+        // A build of target 7's channels waits in the line.
+        state
+            .stack_previews
+            .hold_place("building", vec![channel_key(&ctx.id, 1, 7)]);
         let rgb: color::StackColorRequest =
             serde_json::from_value(serde_json::json!({"target_id": 7, "kind": "rgb"})).unwrap();
         let lrgb: color::StackColorRequest =
@@ -9005,15 +9001,14 @@ mod tests {
         let stopped = build_set::queue_color_preparation(&state, &ctx, 1, lrgb).unwrap();
         assert_eq!(waiting.state, StackJobState::Preparing);
         assert_eq!(waiting.preparing.as_deref(), Some("RGB"));
-        for _ in 0..500 {
-            if state
+        let waits = |job_id: &str| {
+            state
                 .stack_previews
-                .preparing
-                .lock()
-                .unwrap()
-                .waiting_for_channels(&ctx.id)
-                == 2
-            {
+                .get_color(job_id)
+                .is_some_and(|job| job.phase == "Waiting for the channel builds to finish")
+        };
+        for _ in 0..500 {
+            if waits(&waiting.job_id) && waits(&stopped.job_id) {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -9042,7 +9037,7 @@ mod tests {
         );
         assert_eq!(
             state.stack_previews.line.order(),
-            std::slice::from_ref(&waiting.job_id)
+            ["building".to_string(), waiting.job_id.clone()]
         );
         assert_eq!(
             state.stack_previews.journal_entries(),
@@ -9057,10 +9052,7 @@ mod tests {
 
         // The build ends: the composition is prepared from the stacks there
         // are now. This catalog has none, so it says so.
-        state
-            .stack_previews
-            .update(&building.job_id, |job| job.state = StackJobState::Completed);
-        build_set::release_waiting_colors(&state, &ctx.id);
+        state.stack_previews.release_place("building");
         let mut done = held;
         for _ in 0..500 {
             done = state.stack_previews.get_color(&waiting.job_id).unwrap();

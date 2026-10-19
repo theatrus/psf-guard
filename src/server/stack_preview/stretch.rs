@@ -2007,6 +2007,7 @@ fn submit_stretch_variant(
             super::Lane::Worker,
             None,
             cancel,
+            Vec::new(),
             Box::new(submission),
         ),
         Err(message) => {

@@ -60,9 +60,6 @@ pub(super) struct PreparationLine {
     /// The build each request waiting or being prepared became, by
     /// request, so the same click twice joins one build.
     by_request: HashMap<String, String>,
-    /// Compositions waiting for their target's channels to build, by
-    /// catalog. A build that ends puts them back in the line to look again.
-    waiting_for_channels: HashMap<String, Vec<Preparation>>,
 }
 
 impl PreparationLine {
@@ -72,14 +69,6 @@ impl PreparationLine {
         self.catalogs
             .get(database_id)
             .is_none_or(|catalog| !catalog.running && catalog.pending.is_empty())
-    }
-
-    /// How many compositions of a catalog wait for their channels.
-    #[cfg(test)]
-    pub(super) fn waiting_for_channels(&self, database_id: &str) -> usize {
-        self.waiting_for_channels
-            .get(database_id)
-            .map_or(0, Vec::len)
     }
 }
 
@@ -288,7 +277,13 @@ pub(super) fn queue(
             .what
             .origin(&ctx.id, asked.project_id, &job_id, asked.automatic),
     );
-    manager.hold_place(&job_id);
+    // A build being prepared holds every target of its project: which
+    // channels it stacks is not known yet.
+    let holds = match &asked.what {
+        What::Mono { .. } => vec![project_channels_key(&ctx.id, asked.project_id)],
+        What::Color(_) => Vec::new(),
+    };
+    manager.hold_place(&job_id, holds);
     line.by_request.insert(request_key.clone(), job_id.clone());
     drop(line);
     line_up(
@@ -320,24 +315,6 @@ fn line_up(state: &Arc<AppState>, preparation: Preparation) {
         catalog.running = true;
         drop(line);
         start_preparing(state, &database_id);
-    }
-}
-
-/// Put the compositions waiting on a catalog's channels back in its line,
-/// to look again. Called whenever a build of the catalog ends and whenever
-/// one of its requests has been prepared.
-pub(super) fn release_waiting_colors(state: &Arc<AppState>, database_id: &str) {
-    let waiting = state
-        .stack_previews
-        .preparing
-        .lock()
-        .unwrap()
-        .waiting_for_channels
-        .remove(database_id)
-        .unwrap_or_default();
-    for mut preparation in waiting {
-        preparation.waited = true;
-        line_up(state, preparation);
     }
 }
 
@@ -485,20 +462,21 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
     }
 }
 
-/// Hold a composition back while its target's channels are queued, building
-/// or being prepared, so it composes from their new stacks; `None` once it
-/// waits. The check and the wait happen under the line's lock, which a
-/// build that ends takes to put it back, so no ending is missed.
+/// Hold a composition back while builds of its target's channels are
+/// queued, running or being prepared, so it composes from their new stacks;
+/// `None` once it waits. The line wakes it when nothing holds its target's
+/// channels, and it is prepared again in its catalog's line.
 fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Option<Preparation> {
     let What::Color(request) = &preparation.what else {
         return Some(preparation);
     };
     let manager = &state.stack_previews;
     let database_id = preparation.ctx.id.clone();
-    let target_id = request.target_id;
-    if preparation_stopped(state, &preparation)
-        || !manager.channels_pending(&database_id, preparation.project_id, target_id)
-    {
+    let keys = vec![
+        channel_key(&database_id, preparation.project_id, request.target_id),
+        project_channels_key(&database_id, preparation.project_id),
+    ];
+    if preparation_stopped(state, &preparation) || !manager.line.holds_any(&keys) {
         return Some(preparation);
     }
     // The stacks it names, as they stand before their channels rebuild.
@@ -509,17 +487,15 @@ fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Opt
             request,
         ));
     }
-    let mut line = manager.preparing.lock().unwrap();
-    if !manager.channels_pending(&database_id, preparation.project_id, target_id) {
-        return Some(preparation);
-    }
     manager.update_color(&preparation.job_id, |job| {
         job.phase = "Waiting for the channel builds to finish".into();
     });
-    line.waiting_for_channels
-        .entry(database_id)
-        .or_default()
-        .push(preparation);
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        state.stack_previews.line.wait_clear(&keys).await;
+        preparation.waited = true;
+        line_up(&state, preparation);
+    });
     None
 }
 
@@ -679,10 +655,6 @@ fn end_preparation(
         if line.by_request.get(&preparation.request_key) == Some(&preparation.job_id) {
             line.by_request.remove(&preparation.request_key);
         }
-    }
-    // A build's preparation may have been what a composition waited on.
-    if matches!(preparation.what, What::Mono { .. }) {
-        release_waiting_colors(state, &preparation.ctx.id);
     }
 }
 

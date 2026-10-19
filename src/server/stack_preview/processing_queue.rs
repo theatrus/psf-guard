@@ -151,7 +151,7 @@ impl StackPreviewManager {
             },
         );
         // Its place in line until the run itself joins and takes it.
-        self.hold_place(run_id);
+        self.hold_place(run_id, Vec::new());
         let waits = self.line_position(run_id) != Some(0) || self.line.worker_busy();
         (cancel, waits)
     }

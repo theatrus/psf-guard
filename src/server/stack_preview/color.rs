@@ -2141,7 +2141,15 @@ pub(super) fn enqueue_color_job(
             } else {
                 super::Lane::Worker
             };
-            super::submit(&state, &job_id, lane, slot, cancel, Box::new(submission));
+            super::submit(
+                &state,
+                &job_id,
+                lane,
+                slot,
+                cancel,
+                Vec::new(),
+                Box::new(submission),
+            );
         }
         Err(error) => {
             state.stack_previews.update_color(&job_id, |job| {
