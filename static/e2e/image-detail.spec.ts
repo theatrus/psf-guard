@@ -88,7 +88,7 @@ test('preview images load with per-DB-nested URLs and render pixels', async ({
 }) => {
   // Each card's preview may still be generating on a cold cache; give every
   // card its own wait rather than one for the lot.
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
 
   const cards = page.locator('.image-card');
@@ -120,14 +120,16 @@ test('preview images load with per-DB-nested URLs and render pixels', async ({
     const img = card.locator('img').first();
     await expect(img).toBeAttached({ timeout: 15_000 });
     // Found afresh on every poll: a card can swap its <img> once the
-    // preview is ready, and a handle to the old one never loads.
+    // preview is ready, and a handle to the old one never loads. On a busy
+    // CI runner the screen previews can queue behind a large preview of a
+    // 9,576 px frame that takes 30 s on its own.
     await expect
       .poll(
         () =>
           img.evaluate((el) =>
             (el as HTMLImageElement).complete ? (el as HTMLImageElement).naturalWidth : 0
           ),
-        { timeout: 30_000 }
+        { timeout: 90_000 }
       )
       .toBeGreaterThan(0);
     const dims = await img.evaluate((el) => ({
