@@ -562,7 +562,16 @@ export interface StackCalibrationMasters {
   notes: string[];
 }
 
-export type StackJobState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+/** `preparing`: asked for and in the line while its frames and calibration
+ *  are read; `replaced`: prepared into the builds `replaced_by` names. */
+export type StackJobState =
+  | 'preparing'
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'replaced';
 export type StackGroupState =
   | 'queued'
   | 'running'
@@ -938,6 +947,10 @@ export interface StackPreviewJob {
   method?: StackMethod;
   groups: StackGroupStatus[];
   error: string | null;
+  /** While preparing: what was asked for, in a few words. */
+  preparing?: string;
+  /** Once prepared: the builds this request became. */
+  replaced_by?: string[];
 }
 
 export interface StackScoringSettings {

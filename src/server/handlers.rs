@@ -8934,6 +8934,20 @@ impl AppError {
     pub(crate) fn db(err: impl std::fmt::Display) -> Self {
         AppError::DatabaseError(err.to_string())
     }
+
+    /// What a person reads, for an error a job records rather than answers.
+    pub(crate) fn message(&self) -> String {
+        match self {
+            AppError::NotFound => "Resource not found".into(),
+            AppError::NotImplemented => "Not implemented".into(),
+            AppError::DatabaseError(message) => format!("Database error: {message}"),
+            AppError::NotFoundMessage(message)
+            | AppError::BadRequest(message)
+            | AppError::Conflict(message)
+            | AppError::Forbidden(message)
+            | AppError::InternalError(message) => message.clone(),
+        }
+    }
 }
 
 impl IntoResponse for AppError {

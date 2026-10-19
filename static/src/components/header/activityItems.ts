@@ -452,7 +452,11 @@ function stackItem(entry: StackActivityEntry): ActivityItem {
     kind: 'stack',
     // A color composition stops at its next channel or step.
     stoppable: queued || entry.kind === 'mono' || entry.kind === 'color',
-    title: entry.kind === 'mono' ? 'Stacking' : 'Composing color',
+    // A build being prepared is in line while its frames and calibration
+    // are read; it becomes the builds it was prepared into.
+    title: entry.state === 'preparing'
+      ? 'Preparing stack build'
+      : entry.kind === 'mono' ? 'Stacking' : 'Composing color',
     scope: entry.label,
     detail: queued
       // A composition with no place in line waits in the quick lane, behind

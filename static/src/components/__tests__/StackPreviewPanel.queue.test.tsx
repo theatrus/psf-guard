@@ -148,6 +148,67 @@ describe('StackPreviewPanel manual queue', () => {
     expect(view.container.querySelectorAll('.stack-group-state.queued')).toHaveLength(1);
   });
 
+  it('shows a build being prepared at once, then follows the builds it became', async () => {
+    const jobs: Record<string, unknown> = {
+      asked: { ...job('asked', 100, 'preparing', []), preparing: '4 frames' },
+      'job-ha': job('job-ha', 101, 'running', [group(0, 'Ha', 'running', [1, 2])]),
+      'job-oiii': job('job-oiii', 102, 'queued', [group(0, 'OIII', 'queued', [3, 4])]),
+    };
+    let prepared = false;
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({ groups: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.post('/api/db/:dbId/projects/:projectId/stack-previews/channels', () =>
+        HttpResponse.json({ success: true, data: [jobs.asked], error: null, status: 'ready' }, { status: 202 })
+      ),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/:jobId', ({ params }) => {
+        if (params.jobId === 'asked' && prepared) {
+          return ok({ ...job('asked', 100, 'replaced', []), replaced_by: ['job-ha', 'job-oiii'] });
+        }
+        return ok(jobs[params.jobId as string]);
+      }),
+    );
+    const view = render(<StackPreviewPanel dbId="test" projectId={1} images={images}
+      selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
+    await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
+    // In line at once, while the server reads its frames.
+    expect(await screen.findByRole('button', { name: 'Preparing…' })).toBeDisabled();
+    expect(view.container.querySelector('.stack-preview-state')).toHaveTextContent('preparing');
+    prepared = true;
+    // Prepared into one build per channel: both are followed.
+    await waitFor(() => expect(view.container.querySelectorAll('.stack-group-state.running')).toHaveLength(1), {
+      timeout: 4000,
+    });
+    expect(view.container.querySelectorAll('.stack-group-state.queued')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Preparing…' })).toBeNull();
+    expect(view.container.querySelector('.stack-preview-state')).toHaveTextContent('running');
+  });
+
+  it('lets go of a build the server no longer keeps, without an error', async () => {
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/latest', () => ok({ groups: [] })),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.post('/api/db/:dbId/projects/:projectId/stack-previews/channels', () =>
+        HttpResponse.json(
+          { success: true, data: [{ ...job('gone', 100, 'preparing', []), preparing: '4 frames' }], error: null, status: 'ready' },
+          { status: 202 }
+        )
+      ),
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/:jobId', () =>
+        HttpResponse.json({ success: false, data: null, error: 'Resource not found' }, { status: 404 })
+      ),
+    );
+    render(<StackPreviewPanel dbId="test" projectId={1} images={images}
+      selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
+    await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
+    expect(await screen.findByRole('button', { name: 'Preparing…' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Build stacks' }, { timeout: 4000 })).toBeEnabled();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('Resource not found')).toBeNull();
+  });
+
   it('keeps other channels buildable and shows both queued builds', async () => {
     const jobs: Record<string, unknown> = {};
     server.use(

@@ -58,7 +58,7 @@ function refresh(overrides: Partial<CacheRefreshProgress>): CacheRefreshProgress
 
 function stack(
   jobId: string,
-  state: 'running' | 'queued',
+  state: 'running' | 'queued' | 'preparing',
   processed = 0,
   total = 0,
   automatic = false,
@@ -72,6 +72,26 @@ function stack(
 }
 
 describe('header activity items', () => {
+  it('shows a build being prepared as running, stoppable, with what it reads', () => {
+    const [item] = activityItems(
+      [],
+      [{ ...stack('asked', 'preparing'), label: '1263 frames', detail: 'Reading frames and matching calibration' }],
+      undefined,
+      () => undefined,
+      {},
+      []
+    );
+    expect(item).toMatchObject({
+      title: 'Preparing stack build',
+      scope: '1263 frames',
+      detail: 'Reading frames and matching calibration',
+      status: 'running',
+      percent: null,
+      stoppable: true,
+      position: undefined,
+    });
+  });
+
   it('links each job to the view showing what it works on', () => {
     const projectOf = (dbId: string, targetId: number) =>
       dbId === 'db-a' && targetId === 42 ? 4 : dbId === 'db-a' && targetId === 9 ? 2 : undefined;

@@ -20,9 +20,22 @@ async function rebuildChannel(page: Page, panel: Locator): Promise<void> {
   const body = await (await started).json();
   const [job] = Array.isArray(body.data) ? body.data : [body.data];
   expect(job?.job_id, JSON.stringify(body)).toBeTruthy();
-  const url = `/api/db/${encodeURIComponent(dbId)}/projects/${job.project_id}/stack-previews/${encodeURIComponent(job.job_id)}`;
+  // The click queues the build as being prepared; once prepared it names
+  // the build it became, which is the one to follow.
+  const jobUrl = (jobId: string) =>
+    `/api/db/${encodeURIComponent(dbId)}/projects/${job.project_id}/stack-previews/${encodeURIComponent(jobId)}`;
+  expect(job.state).toBe('preparing');
+  let built = '';
   await expect
-    .poll(async () => (await (await page.request.get(url)).json()).data?.state, {
+    .poll(async () => {
+      const prepared = (await (await page.request.get(jobUrl(job.job_id))).json()).data;
+      built = prepared?.replaced_by?.[0] ?? '';
+      return prepared?.state;
+    }, { timeout: 60_000, intervals: [100, 250, 500] })
+    .toBe('replaced');
+  expect(built).toBeTruthy();
+  await expect
+    .poll(async () => (await (await page.request.get(jobUrl(built))).json()).data?.state, {
       timeout: 210_000,
       intervals: [250, 500, 1_000, 2_000],
     })
