@@ -1,6 +1,8 @@
 # One job line
 
-Status: **Steps 1 to 3 built** for the stack line; the rest is proposed.
+Status: **Steps 1 to 6 built**: the stack line, the per-catalog jobs and the
+WBPP line. The header route (step 7) is in progress; remote work is
+proposed.
 Last updated: 2026-10-19
 
 This record proposes one shared shape for the server's queued work. It
@@ -18,8 +20,12 @@ an entry is. See [Remote work](#remote-work).
 
 ## What is built
 
-`src/server/job_line/` holds the stack line. Stack builds, preview
-re-renders, color compositions and processing runs all go through it:
+`src/server/job_line/` holds the job line, its dispatchers and the
+per-catalog job runner. Stack builds, preview re-renders, color
+compositions and processing runs go through the stack line; WBPP runs go
+through a second line; six per-catalog jobs run on `CatalogJobs`.
+
+The stack line:
 
 - **The line owns the work.** An entry is its id, its lane, its `Stop`, and
   a `Submission`: the work's spec, serialized to JSON when it joins, with
@@ -33,8 +39,19 @@ re-renders, color compositions and processing runs all go through it:
   worker in a blocking task and does not wait for it, so an entry stopped
   while a long build runs is settled at once.
 - **Held places.** A request still being prepared holds a place
-  (`hold_place`) that runs nothing and holds up nothing behind it. The work
-  it becomes takes the place, or goes just before it.
+  (`hold_place`) that runs nothing and does not block the entries behind
+  it. The work it becomes takes the place, or goes just before it.
+- **Reserved turns.** `reserve_turn` keeps the next turn on the worker for
+  work about to join, such as a person's re-apply after the build it
+  follows. The reservation blocks the worker lane only for the time it was
+  given, counted from when it first blocks anything; the work that fills it
+  takes its place.
+- **Keys.** Places and running work hold keys. `wait_clear` waits until
+  nothing in the line holds the keys it is given: a color composition waits
+  so for the builds of its target's channels before it joins. An entry
+  `blocked_by` keys keeps its place while running work, or a hold taken
+  from outside the line (`hold_key`), has one of them, and the entries
+  behind it run first.
 - **A last step that always runs.** A submission's `finally` runs however
   the entry ends, even when publishing or settling it panicked, and is told
   which (`Ending`). It forgets the stop flag, releases compositions waiting
@@ -45,6 +62,10 @@ re-renders, color compositions and processing runs all go through it:
   such as an artifact search or removing calibration masters, is counted
   while it waits, and the dispatcher leaves the lane to it, as the old
   semaphore's first-come order did.
+- **One dispatcher per lane, for every line.** `DispatchRules` names a
+  line, its lanes and how each entry runs (its priority, and whether
+  background work pauses for it). `JobLine::ensure_dispatching` starts the
+  lanes' dispatchers when work first joins.
 - **Nothing hands out a bare `Arc`.** Stop flags are `concurrency::Stop`;
   an answer to whoever awaits a piece of work is a `job_line::Reply`, staged
   while the work's last steps run and delivered after them; the line's
@@ -52,7 +73,19 @@ re-renders, color compositions and processing runs all go through it:
   (`JobLine::changed`).
 
 The queue a person sees is unchanged: the same order, positions, **Move to
-top**, Stop, quick lane, and held turn for a person's re-apply.
+top**, Stop, quick lane, and the turn kept for a person's re-apply.
+
+The WBPP line (`src/server/wbpp_queue.rs`) is a second `JobLine`. Its one
+lane is PixInsight, which runs one WBPP run at a time across all
+databases. A start runs at once when PixInsight is free and no run is
+queued, holding the lane's lease until the run ends; otherwise it joins
+the line, and the line's dispatcher starts it. A database's queued runs
+are blocked by its key while it copies masters, so runs of other databases
+go first. PixInsight runs as its own process, so a WBPP run does not pause
+background work.
+
+The per-catalog jobs (`job_line::catalog`) are described under
+[Per-catalog jobs](#per-catalog-jobs).
 
 ## Why
 
@@ -129,7 +162,7 @@ Each entry has:
 | `tier` | `Interactive` when a person asked for it, otherwise `Viewed` or `Background`. |
 | `lane` | `Worker` for the shared stacking worker, or `Quick` for a composition that runs beside it. |
 | `state` | See [States](#states). |
-| `waits_on` | What must happen first. See [Waiting](#waiting). |
+| holds and blocks | The keys it holds, and the keys that block it. See [Waiting](#waiting). |
 | `needs` | What a worker must offer to run it: cores and memory, a GPU, PixInsight or an RC-Astro licence, and read access to its inputs. |
 | `assigned_to` | The worker running it and its lease, while it runs. |
 | `stop` | Its stop flag. |
@@ -202,21 +235,24 @@ That is left open.
 
 ### Waiting
 
-`waits_on` replaces the rules in the table under [Why](#why):
+Step 4 replaced the rules in the table under [Why](#why) with three
+mechanisms of the line, rather than the single `waits_on` field first
+proposed:
 
-- `Entries(ids)`: the entries named have ended. A person's re-apply is queued
-  with the build it follows and waits on that build. It sits right behind
-  the build, so no hold timer is needed.
-- `Target { database, project, target }`: no entry of that target's channels
-  is preparing, queued or running. A color composition waits on this. The
-  line evaluates it whenever an entry ends, so nothing needs releasing by
-  hand.
-- `Preparation`: the entry is still being prepared. This is the current
-  `Preparing` slot, as one case of the same rule.
+- **Held places** cover preparation. A request being prepared holds its
+  place; the entries behind it may run.
+- **Reserved turns** cover a person's re-apply. The re-apply's turn is
+  reserved right behind the build it follows, for a limited time, so no
+  separate hold timer is needed.
+- **Keys** cover a target's channels. A build holds its targets' channel
+  keys while it is prepared, queued and run; a color composition waits
+  until no entry holds them. The line wakes waiters whenever an entry ends,
+  so nothing needs releasing by hand. Blocked entries (`blocked_by`) use the
+  same keys to keep their place while running work or an outside hold has
+  one, as a queued WBPP run does while its database copies masters.
 
-The runner takes the first entry in its lane that waits on nothing. Waiting
-entries keep their places. The header shows what each entry waits for,
-using the same text it shows now.
+Waiting entries keep their places. The header shows what each entry waits
+for, using the same text it showed before.
 
 ### Coordinator and workers
 
@@ -300,25 +336,38 @@ this server may not have.
 
 ## Per-catalog jobs
 
-The per-catalog jobs get a small runner of their own instead of the copied
-template:
+Flat measuring, frame sites, calibration grading, calibration health, the
+duplicate check and reject removal run on `CatalogJobs<W>`. Each job
+implements `CatalogWork`:
 
 ```rust
-struct CatalogJobs<Q: Merge, S> { /* one entry per catalog */ }
-
-impl<Q: Merge, S> CatalogJobs<Q, S> {
-    /// Merge `scope` into the catalog's queue; start its runner if idle.
-    fn queue(&self, state: &Arc<AppState>, catalog: &str, scope: Q, serve: ServeFn<Q, S>);
-    fn status(&self, catalog: &str) -> Option<S>;
-    fn stop(&self, catalog: &str);
-    fn resume(&self, catalog: &str);
+trait CatalogWork {
+    type Queue: Default + Send;     // merged requests, retries, paused work
+    type Status: Default + Clone;   // progress for the status route
+    type Item: Send;                // one unit of work
+    const RUNNER: &'static str;     // the thread's name
+    const SHUTDOWN_WAITS_FOR: Option<&'static str>;
+    fn next(state, catalog, &mut Queue, now) -> Step<Item>;   // Exit, Sleep, Run
+    fn run(state, catalog, &CatalogJob<Self>, Item, &Stop);
+    fn has_work(&Queue) -> bool;    // whether a request starts a thread
+    fn runner_failed(&mut Queue, &mut Status);
 }
 ```
 
-It holds the runner claim, the stop flag, and the "visible only once it found
-work" rule. It also holds the retry with a growing wait. Flat measuring,
-which follows the template exactly, moves first. Duplicates, reject
-removal, frame sites, calibration quality and calibration health follow.
+`CatalogJobs` stores one job per catalog. `request` edits a catalog's
+queue and starts its runner thread when none exists and the queue has
+work. The runner thread runs each item when `next` returns it, sleeps while
+queued work is not due, and exits when the queue is empty or the server
+shuts down. Each item gets a fresh `Stop`; `CatalogJob::stop_running`
+requests it. When the runner thread panics or cannot start,
+`runner_failed` clears the running state and records the error, so the
+next request starts a new thread. Shutdown waits for an item only when
+`SHUTDOWN_WAITS_FOR` is set: the duplicate check stops at once, and the
+duplicate repair and reject removal register their own shutdown holds
+around their writes.
+
+What each job queues, when an item is due, and what it does stay in its
+own module.
 
 ## The header
 
@@ -329,7 +378,8 @@ is the largest frontend change, so it comes last and is optional.
 
 ## Migration
 
-Each step is its own PR. Each keeps behavior unless it says otherwise.
+Steps 1 to 7 ship together in one PR. Each keeps behavior unless it says
+otherwise.
 
 1. **Move the line out of `stack_preview`.** *Built.*
 2. **The coordinator and one local worker.** *Built:* the line owns its
@@ -341,14 +391,13 @@ Each step is its own PR. Each keeps behavior unless it says otherwise.
    record, move the color index and the processing selection writes into
    publishing, and, for builds, choose calibration masters while preparing
    rather than while running.
-4. **`waits_on`.** Fold the held turn, the preparation slot and the color
-   wait into it, and remove `turn_held_until` and `release_waiting_colors`.
-   A person's re-apply is queued with its build.
-5. **`CatalogJobs`.** Add it, then move flat measuring onto it, then the
-   other five, one PR each.
-6. **WBPP as a second line.** Its queue and journal entries move onto the
-   same machinery, with PixInsight as its single lane.
-7. **The header route** (optional).
+4. **Waiting rules.** *Built* as held places, reserved turns and keys
+   rather than one `waits_on` field: `turn_held_until` and
+   `release_waiting_colors` are gone.
+5. **`CatalogJobs`.** *Built*, with all six per-catalog jobs on it.
+6. **WBPP as a second line.** *Built*, with PixInsight as its single lane
+   and the dispatcher shared with the stack line.
+7. **The header route.** In progress.
 8. **Remote workers** (later, its own design record): registration,
    scoped input access, upload by digest, and assignment by `needs`.
 
@@ -362,8 +411,6 @@ work never comes. Step 4 depends on step 2.
   short tasks, not a line. It stays as it is.
 - The automatic refresh scheduler decides *what* to queue and when. It
   stays separate and queues entries like any other caller.
-- WBPP's module notes say a restart drops its queue, but the journal now
-  keeps it. Step 5 corrects the notes.
 
 ## Open questions
 
