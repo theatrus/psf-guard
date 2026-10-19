@@ -820,13 +820,25 @@ async fn refresh_project(
     };
     let mut started = 0;
     for (request, mut prepared) in channels {
-        // A channel with too few frames has nothing to stack yet.
+        // A channel with too few frames has nothing to stack yet. When
+        // grades left it that way, its card no longer shows a stack, as
+        // after a person's build of the same frames.
         if prepared
             .public
             .groups
             .iter()
             .all(|group| group.state == StackGroupState::Skipped)
         {
+            let state = Arc::clone(state);
+            let ctx = Arc::clone(ctx);
+            let skipped = prepared.public;
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Err(error) = super::persist_latest_and_reapply(&state, &ctx, &skipped, false)
+                {
+                    tracing::warn!("could not remove a channel with too few frames: {error}");
+                }
+            })
+            .await;
             continue;
         }
         let job_id = prepared.public.job_id.clone();

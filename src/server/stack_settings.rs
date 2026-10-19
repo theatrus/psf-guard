@@ -178,7 +178,7 @@ pub async fn update_stack_settings(
     Ok(Json(ApiResponse::success(response(policy))))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StackMethodResponse {
     /// What new stacks use now.
     pub method: StackMethod,
@@ -186,6 +186,8 @@ pub struct StackMethodResponse {
     pub recommended: StackMethod,
     /// What PSF Guard did before the method could be chosen.
     pub classic: StackMethod,
+    /// The largest reference rotation margin a method may have, in degrees.
+    pub max_reference_rotation_margin_degrees: f64,
 }
 
 fn method_response(method: StackMethod) -> StackMethodResponse {
@@ -193,6 +195,7 @@ fn method_response(method: StackMethod) -> StackMethodResponse {
         method,
         recommended: StackMethod::default(),
         classic: StackMethod::classic(),
+        max_reference_rotation_margin_degrees: method::MAX_REFERENCE_ROTATION_MARGIN_DEGREES,
     }
 }
 

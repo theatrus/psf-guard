@@ -3373,18 +3373,37 @@ fn reference_anchors(
         .collect()
 }
 
+/// A frame's field rotation, from its cached plate solve or, failing that,
+/// the WCS in its header. Only the reference choice reads it; registration
+/// still measures every frame from its pixels.
+fn solved_orientation(
+    ctx: &DatabaseContext,
+    frame: &PreparedFrame,
+) -> Option<reference::Orientation> {
+    let (wcs, _) = cached_or_embedded_wcs(ctx, frame, &[]).or_else(|| {
+        let headers = crate::image_io::read_header(&frame.path).ok()?;
+        cached_or_embedded_wcs(ctx, frame, &headers)
+    })?;
+    crate::sequence_analysis::field_rotation_from_cd(wcs.cd)
+}
+
 /// Put Seiza's choice of reference at the front of every group that will
-/// stack. Scores come from the cache where they can; a group where no frame
-/// scores keeps its best-graded reference and says so.
+/// stack, taken from the largest orientation group when the frames' plate
+/// solves show more than one. Scores come from the cache where they can; a
+/// group where no frame scores keeps its best-graded reference and says so.
+#[allow(clippy::too_many_arguments)]
 fn choose_references(
     state: &Arc<AppState>,
+    database_id: &str,
     job_id: &str,
     stack_root: &FsPath,
     groups: &mut [PreparedGroup],
     order: snr::StackFrameOrder,
+    rotation_margin_degrees: f64,
     worker_policy: &crate::concurrency::WorkerPolicy,
     cancel: &Arc<AtomicBool>,
 ) {
+    let ctx = state.get_database(database_id);
     for group in groups.iter_mut().filter(|group| group.frames.len() >= 2) {
         if cancel.load(Ordering::Relaxed) {
             return;
@@ -3414,12 +3433,36 @@ fn choose_references(
         else {
             return;
         };
-        match reference::choose(&scores) {
+        let oriented = ctx.as_deref().and_then(|ctx| {
+            let orientations = group
+                .frames
+                .iter()
+                .map(|frame| solved_orientation(ctx, frame))
+                .collect::<Vec<_>>();
+            let solved = orientations.iter().flatten().count();
+            reference::orientation_candidates(&orientations, rotation_margin_degrees)
+                .map(|(candidates, kept)| (candidates, kept, solved))
+        });
+        let chosen = match &oriented {
+            Some((candidates, _, _)) => reference::choose_among(&scores, candidates),
+            None => reference::choose(&scores),
+        };
+        match chosen {
             Some(chosen) => {
                 let image_id = group.frames[chosen].image_id;
+                let narrowed = oriented
+                    .filter(|(candidates, _, _)| candidates[chosen])
+                    .map(|(_, kept, solved)| {
+                        format!(
+                            "The reference comes from the largest orientation group, which keeps {kept} of {solved} plate-solved frames within the rotation limit"
+                        )
+                    });
                 reference::reorder(&mut group.frames, chosen, order);
                 state.stack_previews.update(job_id, |job| {
                     job.groups[index].reference_image_id = Some(image_id);
+                    if let Some(narrowed) = &narrowed {
+                        add_note(&mut job.groups[index].resume_note, narrowed);
+                    }
                 });
             }
             None => state.stack_previews.update(job_id, |job| {
@@ -3491,10 +3534,12 @@ fn run_job(state: &Arc<AppState>, prepared: PreparedJob, cancel: &Arc<AtomicBool
         if method.reference == StackReference::Auto {
             choose_references(
                 state,
+                &database_id,
                 &job_id,
                 &stack_root,
                 &mut groups,
                 order,
+                method.reference_rotation_margin_degrees,
                 &worker_policy,
                 cancel,
             );
@@ -4854,23 +4899,44 @@ fn persist_latest_groups(stack_root: &FsPath, job: &StackPreviewJob) -> Result<M
     persist_latest_groups_with_exposures(stack_root, job, None)
 }
 
-/// Point the cards at a build's ready channels. Returns each card that now
-/// shows another stack, with the entry it showed before.
+/// Whether a skipped channel can no longer be stacked from its frames, so
+/// the stack its card shows was built from frames the build now leaves out.
+///
+/// Only the build's own rules count: grades, quality regrades and the
+/// accepted-only choice. A frame whose file is missing or that has no
+/// matching calibration may come back, so the card keeps its stack then.
+fn skipped_for_grades(group: &StackGroupStatus) -> bool {
+    group.state == StackGroupState::Skipped
+        && group.missing_files == 0
+        && group.calibration_excluded == 0
+}
+
+/// Point the cards at a build's ready channels, and remove the card of a
+/// channel the build skipped because fewer than two of its frames are still
+/// eligible. Returns each card that now shows another stack, with the entry
+/// it showed before.
 fn persist_latest_groups_with_exposures(
     stack_root: &FsPath,
     job: &StackPreviewJob,
     current: Option<&ProjectExposureGroups>,
 ) -> Result<MovedCards, String> {
+    let in_project = |group: &&StackGroupStatus| {
+        current.is_none_or(|current| group_matches_project_exposures(group, current))
+    };
     let ready = job
         .groups
         .iter()
         .filter(|group| group.state == StackGroupState::Ready)
-        .filter(|group| {
-            current.is_none_or(|current| group_matches_project_exposures(group, current))
-        })
+        .filter(in_project)
         .cloned()
         .collect::<Vec<_>>();
-    if ready.is_empty() {
+    let retired = job
+        .groups
+        .iter()
+        .filter(|group| skipped_for_grades(group))
+        .filter(in_project)
+        .collect::<Vec<_>>();
+    if ready.is_empty() && retired.is_empty() {
         return Ok(Vec::new());
     }
 
@@ -4901,6 +4967,20 @@ fn persist_latest_groups_with_exposures(
             entry.group.exposure_group.is_none()
                 || group_matches_project_exposures(&entry.group, current)
         });
+    }
+
+    let before = latest.groups.len();
+    latest.groups.retain(|entry| {
+        !retired.iter().any(|group| {
+            entry.group.target_id == group.target_id
+                && entry.group.filter_name == group.filter_name
+                && exposure_group_key(&entry.group) == exposure_group_key(group)
+        })
+    });
+    // An automatic refresh finds the same skipped channel each time; once
+    // its card is gone there is nothing to write.
+    if ready.is_empty() && latest.groups.len() == before {
+        return Ok(Vec::new());
     }
 
     let mut moved = Vec::new();
@@ -6396,6 +6476,77 @@ mod tests {
         );
 
         assert!(url.is_none());
+    }
+
+    #[test]
+    fn a_channel_whose_frames_are_now_rejected_loses_its_card() {
+        let cache = tempfile::tempdir().unwrap();
+        let built = completed_job(
+            "built",
+            vec![
+                ready_group(10, "SII", 1),
+                ready_group(10, "OIII", 2),
+                ready_group(10, "HA", 3),
+            ],
+        );
+        persist_latest_groups(cache.path(), &built).unwrap();
+        let skipped = |filter_name: &str| StackGroupStatus {
+            state: StackGroupState::Skipped,
+            phase: "skipped".into(),
+            eligible_frames: 1,
+            quality_excluded: 102,
+            reference_image_id: None,
+            ..ready_group(10, filter_name, 4)
+        };
+        let filters = || {
+            let bytes = std::fs::read(latest_path(cache.path(), 7)).unwrap();
+            let latest: LatestStackPreviews = serde_json::from_slice(&bytes).unwrap();
+            latest
+                .groups
+                .into_iter()
+                .map(|entry| entry.group.filter_name)
+                .collect::<Vec<_>>()
+        };
+
+        // A file that went missing may come back, and so may a calibration
+        // match: the card keeps the stack it has.
+        let missing = StackGroupStatus {
+            missing_files: 3,
+            ..skipped("OIII")
+        };
+        let uncalibrated = StackGroupStatus {
+            calibration_excluded: 3,
+            ..skipped("HA")
+        };
+        persist_latest_groups(
+            cache.path(),
+            &completed_job("unavailable", vec![missing, uncalibrated]),
+        )
+        .unwrap();
+        assert_eq!(filters(), ["HA", "OIII", "SII"]);
+
+        // Grades left too few frames: the card no longer shows the stack.
+        persist_latest_groups(
+            cache.path(),
+            &completed_job("rejected", vec![skipped("SII")]),
+        )
+        .unwrap();
+        assert_eq!(filters(), ["HA", "OIII"]);
+
+        // An automatic refresh finds the channel skipped again and leaves
+        // the index as it is.
+        let mut index: LatestStackPreviews =
+            serde_json::from_slice(&std::fs::read(latest_path(cache.path(), 7)).unwrap()).unwrap();
+        index.updated_unix_seconds = 1;
+        std::fs::write(
+            latest_path(cache.path(), 7),
+            serde_json::to_vec(&index).unwrap(),
+        )
+        .unwrap();
+        persist_latest_groups(cache.path(), &completed_job("again", vec![skipped("SII")])).unwrap();
+        let after: LatestStackPreviews =
+            serde_json::from_slice(&std::fs::read(latest_path(cache.path(), 7)).unwrap()).unwrap();
+        assert_eq!(after.updated_unix_seconds, 1, "nothing was written");
     }
 
     #[test]

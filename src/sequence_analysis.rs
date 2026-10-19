@@ -310,7 +310,7 @@ pub fn field_rotation_from_cd(cd: [[f64; 2]; 2]) -> Option<(f64, bool)> {
 
 /// Wrap a rotation difference into (-90, 90]: a half turn is the same
 /// framing, since a meridian flip turns the field by exactly that.
-fn wrap_half_turn(degrees: f64) -> f64 {
+pub(crate) fn wrap_half_turn(degrees: f64) -> f64 {
     let wrapped = (degrees + 90.0).rem_euclid(180.0) - 90.0;
     if wrapped <= -90.0 {
         wrapped + 180.0

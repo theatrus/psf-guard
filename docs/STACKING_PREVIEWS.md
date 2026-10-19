@@ -16,7 +16,11 @@ every target/channel group, or **Build** on one card to test only that
 group. **Build stacks** asks the server for one build per channel, so the
 header's queue lists each channel on its own, in channel order. A channel
 already built for the same inputs and settings reuses its saved result; a
-channel with too few frames shows as skipped.
+channel with too few frames shows as skipped. When grades, quality regrades or
+**Accepted only** leave a channel with fewer than two frames, the card stops
+showing the stack built before, and color composites stop offering it as a
+source. A channel whose files are missing, or that has no matching
+calibration, keeps its stack until the frames return.
 
 The jobs list shows **Preparing stack build** immediately, and the button
 shows **Preparing…**. Within each catalog, PSF Guard prepares requests in the
@@ -108,6 +112,7 @@ chosen. Any single choice can also be changed on its own.
 | Normalization | Local background | Global, Local |
 | Frame weights | By noise | Equal |
 | Reference frame | Chosen by Seiza | Best graded |
+| Orientation group margin | 1° | 0°–5° |
 | Registration | Quadratic | Affine, Similarity |
 | Resampling | Lanczos-3 | Bilinear |
 | Bayer drizzle | Off | On |
@@ -142,6 +147,18 @@ chosen. Any single choice can also be changed on its own.
   fingerprint, so a rebuild reads only new frames, and the same frames always
   choose the same reference. Best graded uses PSF Guard's quality grade, as
   before. A group where no frame can be scored falls back to it and says so.
+- **Orientation group margin.** Seiza rejects a frame rotated more than 10°
+  from the reference, allowing for a meridian flip. When frames were captured
+  at more than one rotator angle, Chosen by Seiza first finds the frames that
+  would keep the most others within that limit, measured from each frame's
+  cached plate solve or, failing that, the WCS in its header. Seiza's score
+  then chooses among those frames. A frame counts toward a group only when its
+  rotation is at least the margin inside the limit, because registration
+  measures rotation separately from the plate solve. The default is 1°, and
+  the setting accepts 0° to 5°. The card notes when the orientation group
+  decided the reference. Frames without a solve are never the reference while
+  groups are compared. A changed margin marks stacks with a chosen reference
+  out of date; it does not affect Best graded.
 - **Registration.** Quadratic and Affine fit a polynomial through up to 2 000
   paired stars after the similarity fit. Quadratic follows a wide field's lens
   distortion, which turns against the sky after a meridian flip. A frame with

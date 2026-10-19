@@ -114,6 +114,73 @@ pub(super) fn prune(stack_root: &Path) -> usize {
     removed
 }
 
+/// A frame's field rotation from its plate solve, in degrees, and whether the
+/// field is mirrored.
+pub(super) type Orientation = (f64, bool);
+
+/// Which frames may be the reference so that the stack keeps the most frames,
+/// and how many plate-solved frames that reference keeps.
+///
+/// Seiza refuses a frame turned further than its rotation limit from the
+/// reference, allowing for a meridian flip. Nights captured at another
+/// rotator angle form their own orientation group, and a reference from a
+/// small group refuses every frame of a large one. Each frame counts the
+/// frames it would keep as the reference; the frames that keep the most are
+/// the candidates. A frame counts only when it sits `margin_degrees` inside
+/// the limit, since registration measures rotation apart from the solve.
+///
+/// `None` when the orientation does not narrow the choice: every solved
+/// frame keeps every other, or fewer than two frames are solved. When the
+/// choice is narrowed, a frame without a solve is not a candidate.
+pub(super) fn orientation_candidates(
+    orientations: &[Option<Orientation>],
+    margin_degrees: f64,
+) -> Option<(Vec<bool>, usize)> {
+    let limit = seiza_stacking::FrameAcceptanceCriteria::default().maximum_rotation_degrees
+        - margin_degrees;
+    let keeps = |(left, left_mirrored): Orientation, (right, right_mirrored): Orientation| {
+        left_mirrored == right_mirrored
+            && crate::sequence_analysis::wrap_half_turn(left - right).abs() <= limit
+    };
+    let solved = orientations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, orientation)| orientation.map(|orientation| (index, orientation)))
+        .collect::<Vec<_>>();
+    if solved.len() < 2 {
+        return None;
+    }
+    let kept = solved
+        .iter()
+        .map(|&(_, reference)| {
+            solved
+                .iter()
+                .filter(|&&(_, frame)| keeps(reference, frame))
+                .count()
+        })
+        .collect::<Vec<_>>();
+    if kept.iter().all(|&count| count == solved.len()) {
+        return None;
+    }
+    let most = kept.iter().copied().max()?;
+    let mut candidates = vec![false; orientations.len()];
+    for (&(index, _), &count) in solved.iter().zip(&kept) {
+        candidates[index] = count == most;
+    }
+    Some((candidates, most))
+}
+
+/// Seiza's choice among the candidate frames, or among every frame when no
+/// candidate scored.
+pub(super) fn choose_among(scores: &[Option<Score>], candidates: &[bool]) -> Option<usize> {
+    let narrowed = scores
+        .iter()
+        .zip(candidates)
+        .map(|(score, &candidate)| score.filter(|_| candidate))
+        .collect::<Vec<_>>();
+    choose(&narrowed).or_else(|| choose(scores))
+}
+
 /// The index of the chosen frame, or `None` when no frame scored.
 pub(super) fn choose(scores: &[Option<Score>]) -> Option<usize> {
     let top = scores
@@ -210,6 +277,78 @@ mod tests {
             score,
             background_variation,
         })
+    }
+
+    fn solved(degrees: f64) -> Option<Orientation> {
+        Some((degrees, false))
+    }
+
+    #[test]
+    fn the_reference_comes_from_the_largest_orientation_group() {
+        // One night at the rotator's usual angle, a second about 10° off,
+        // as on a target whose SII stack kept only the small group. A
+        // meridian flip turns the field by half a turn and stays in the group.
+        let orientations = [
+            solved(10.9),
+            solved(0.4),
+            solved(-179.6),
+            solved(0.6),
+            solved(10.45),
+            None,
+            solved(0.5),
+        ];
+        let (candidates, kept) = orientation_candidates(&orientations, 1.0).unwrap();
+        assert_eq!(
+            candidates,
+            [false, true, true, true, false, false, true],
+            "the frames near 0°, not the small group or the unsolved frame"
+        );
+        assert_eq!(kept, 4);
+
+        // Without a margin the frames at 0.5° and 0.6° also reach the one at
+        // 10.45°, so they keep the most.
+        let (loose, kept) = orientation_candidates(&orientations, 0.0).unwrap();
+        assert_eq!(loose, [false, false, false, true, false, false, true]);
+        assert_eq!(kept, 5);
+    }
+
+    #[test]
+    fn a_frame_between_two_groups_is_the_reference_that_keeps_both() {
+        let orientations = [
+            solved(0.0),
+            solved(0.2),
+            solved(4.5),
+            solved(9.3),
+            solved(9.5),
+        ];
+        let (candidates, kept) = orientation_candidates(&orientations, 1.0).unwrap();
+        assert_eq!(candidates, [false, false, true, false, false]);
+        assert_eq!(kept, 5);
+    }
+
+    #[test]
+    fn orientation_leaves_the_choice_alone_when_it_cannot_help() {
+        // Every solved frame keeps every other.
+        assert_eq!(
+            orientation_candidates(&[solved(0.0), None, solved(3.0), solved(-179.0)], 1.0),
+            None
+        );
+        // Too few solves to compare.
+        assert_eq!(
+            orientation_candidates(&[solved(0.0), None, None], 1.0),
+            None
+        );
+        // A mirrored field never registers onto an unmirrored one.
+        let mirrored =
+            orientation_candidates(&[solved(0.0), solved(0.1), Some((0.0, true))], 1.0).unwrap();
+        assert_eq!(mirrored, (vec![true, true, false], 2));
+    }
+
+    #[test]
+    fn seiza_chooses_among_the_candidates_or_every_frame_when_none_scored() {
+        let scores = [score(10.0, 1.0), score(9.0, 2.0), None];
+        assert_eq!(choose_among(&scores, &[false, true, true]), Some(1));
+        assert_eq!(choose_among(&scores, &[false, false, true]), Some(0));
     }
 
     #[test]

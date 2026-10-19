@@ -18,6 +18,7 @@ const recommended: StackMethod = {
   bayer_drizzle: false,
   reference: 'auto',
   final_pass: 'reintegrate',
+  reference_rotation_margin_degrees: 1,
 };
 
 const classic: StackMethod = {
@@ -28,6 +29,7 @@ const classic: StackMethod = {
   bayer_drizzle: false,
   reference: 'best_graded',
   final_pass: 'reintegrate',
+  reference_rotation_margin_degrees: 1,
 };
 
 const images = [

@@ -94,7 +94,16 @@ pub enum StackFinalPass {
     Draft,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Degrees a frame must sit inside Seiza's rotation limit to count toward
+/// an orientation group when the reference is chosen automatically. A plate
+/// solve and registration measure rotation separately, so a frame just inside
+/// the limit by one can be just outside it by the other.
+pub const DEFAULT_REFERENCE_ROTATION_MARGIN_DEGREES: f64 = 1.0;
+
+/// The largest margin the settings accept, half of Seiza's 10° limit.
+pub const MAX_REFERENCE_ROTATION_MARGIN_DEGREES: f64 = 5.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct StackMethod {
     pub normalization: StackNormalization,
@@ -106,9 +115,41 @@ pub struct StackMethod {
     pub bayer_drizzle: bool,
     pub reference: StackReference,
     pub final_pass: StackFinalPass,
+    /// With an automatic reference, how far inside Seiza's rotation limit a
+    /// frame must sit to count toward the reference's orientation group.
+    pub reference_rotation_margin_degrees: f64,
 }
 
+impl Default for StackMethod {
+    fn default() -> Self {
+        Self {
+            normalization: StackNormalization::default(),
+            weighting: StackWeighting::default(),
+            registration: StackRegistration::default(),
+            interpolation: StackInterpolation::default(),
+            bayer_drizzle: false,
+            reference: StackReference::default(),
+            final_pass: StackFinalPass::default(),
+            reference_rotation_margin_degrees: DEFAULT_REFERENCE_ROTATION_MARGIN_DEGREES,
+        }
+    }
+}
+
+/// [`StackMethod::validate`] keeps the margin finite, so equality is total.
+impl Eq for StackMethod {}
+
 impl StackMethod {
+    /// Refuse a margin the reference choice cannot use.
+    pub fn validate(&self) -> Result<(), String> {
+        let margin = self.reference_rotation_margin_degrees;
+        if !margin.is_finite() || !(0.0..=MAX_REFERENCE_ROTATION_MARGIN_DEGREES).contains(&margin) {
+            return Err(format!(
+                "the reference rotation margin must be between 0° and {MAX_REFERENCE_ROTATION_MARGIN_DEGREES}°"
+            ));
+        }
+        Ok(())
+    }
+
     /// What PSF Guard did before the method could be chosen. Records written
     /// before it existed read as this, apart from their weighting.
     pub fn classic() -> Self {
@@ -120,6 +161,7 @@ impl StackMethod {
             bayer_drizzle: false,
             reference: StackReference::BestGraded,
             final_pass: StackFinalPass::Reintegrate,
+            reference_rotation_margin_degrees: DEFAULT_REFERENCE_ROTATION_MARGIN_DEGREES,
         }
     }
 
@@ -127,12 +169,21 @@ impl StackMethod {
     /// so a checkpoint from one can be extended by the other. Only the final
     /// pass runs after the accumulator is complete.
     pub fn same_accumulator(&self, other: &Self) -> bool {
+        self.stack_relevant() == other.stack_relevant()
+    }
+
+    /// This method with the choices that cannot change the live pass set to
+    /// their defaults: the final pass, and the rotation margin when the
+    /// reference is not chosen automatically.
+    fn stack_relevant(&self) -> Self {
         Self {
             final_pass: StackFinalPass::default(),
+            reference_rotation_margin_degrees: if self.reference == StackReference::Auto {
+                self.reference_rotation_margin_degrees
+            } else {
+                DEFAULT_REFERENCE_ROTATION_MARGIN_DEGREES
+            },
             ..*self
-        } == Self {
-            final_pass: StackFinalPass::default(),
-            ..*other
         }
     }
 
@@ -180,8 +231,38 @@ impl StackMethod {
     }
 
     /// Stable bytes for job ids.
+    ///
+    /// The margin appears only when it can change the stack: with an
+    /// automatic reference and a margin other than the default. Every other
+    /// method keeps the bytes it had before the margin existed, so its stacks
+    /// still match.
     pub fn fingerprint(&self) -> String {
-        serde_json::to_string(self).expect("a stacking method serializes")
+        #[derive(Serialize)]
+        struct Fingerprint<'a> {
+            normalization: &'a StackNormalization,
+            weighting: &'a StackWeighting,
+            registration: &'a StackRegistration,
+            interpolation: &'a StackInterpolation,
+            bayer_drizzle: bool,
+            reference: &'a StackReference,
+            final_pass: &'a StackFinalPass,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            reference_rotation_margin_degrees: Option<f64>,
+        }
+        let margin = self.reference_rotation_margin_degrees;
+        serde_json::to_string(&Fingerprint {
+            normalization: &self.normalization,
+            weighting: &self.weighting,
+            registration: &self.registration,
+            interpolation: &self.interpolation,
+            bayer_drizzle: self.bayer_drizzle,
+            reference: &self.reference,
+            final_pass: &self.final_pass,
+            reference_rotation_margin_degrees: (self.reference == StackReference::Auto
+                && margin != DEFAULT_REFERENCE_ROTATION_MARGIN_DEGREES)
+                .then_some(margin),
+        })
+        .expect("a stacking method serializes")
     }
 }
 
@@ -245,6 +326,51 @@ mod tests {
             StackMethod::default().final_pass,
             StackFinalPass::Reintegrate
         );
+    }
+
+    #[test]
+    fn the_rotation_margin_changes_job_ids_only_when_it_can_change_the_stack() {
+        // The bytes every stack before the margin was recorded with.
+        assert_eq!(
+            StackMethod::default().fingerprint(),
+            r#"{"normalization":"local_background","weighting":"noise","registration":"quadratic","interpolation":"lanczos3","bayer_drizzle":false,"reference":"auto","final_pass":"reintegrate"}"#
+        );
+        let wider = StackMethod {
+            reference_rotation_margin_degrees: 2.5,
+            ..StackMethod::default()
+        };
+        assert!(wider
+            .fingerprint()
+            .ends_with(r#""reference_rotation_margin_degrees":2.5}"#));
+        assert!(!wider.same_accumulator(&StackMethod::default()));
+
+        // A best-graded reference ignores the margin.
+        let classic = StackMethod::classic();
+        let classic_wider = StackMethod {
+            reference_rotation_margin_degrees: 2.5,
+            ..classic
+        };
+        assert_eq!(classic_wider.fingerprint(), classic.fingerprint());
+        assert!(classic_wider.same_accumulator(&classic));
+
+        // A method saved before the margin existed reads with the default.
+        let saved: StackMethod = serde_json::from_str(r#"{"reference":"auto"}"#).unwrap();
+        assert_eq!(saved, StackMethod::default());
+    }
+
+    #[test]
+    fn a_margin_outside_the_limit_is_refused() {
+        let with = |margin| StackMethod {
+            reference_rotation_margin_degrees: margin,
+            ..StackMethod::default()
+        };
+        assert!(with(0.0).validate().is_ok());
+        assert!(with(MAX_REFERENCE_ROTATION_MARGIN_DEGREES)
+            .validate()
+            .is_ok());
+        assert!(with(-0.1).validate().is_err());
+        assert!(with(5.1).validate().is_err());
+        assert!(with(f64::NAN).validate().is_err());
     }
 
     #[test]
