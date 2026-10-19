@@ -59,8 +59,8 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
         stop: &Stop,
     );
 
-    /// The runner ended without letting go, as on a panic: settle what the
-    /// queue and the status say.
+    /// The runner ended without letting go, as on a panic, or could not
+    /// start: settle what the queue and the status say.
     fn runner_lost(queue: &mut Self::Queue, status: &mut Self::Status);
 }
 
@@ -155,6 +155,18 @@ impl<W: CatalogWork> CatalogJob<W> {
         );
     }
 
+    /// The runner ended without letting go, or never started.
+    fn lost(&self) {
+        let mut queued = self.lock();
+        queued.runner = false;
+        queued.running = None;
+        let mut status = self
+            .status
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        W::runner_lost(&mut queued.queue, &mut status);
+    }
+
     /// Ask the piece running, if any, to stop at its next step. Returns
     /// whether one was running.
     pub fn stop_running(&self) -> bool {
@@ -224,7 +236,7 @@ impl<W: CatalogWork> CatalogJobs<W> {
                 .spawn(move || serve(&state, &catalog, &runner_job));
             if let Err(error) = started {
                 tracing::warn!("Could not start {}: {error}", W::RUNNER);
-                job.lock().runner = false;
+                job.lost();
             }
         }
         result
@@ -253,15 +265,7 @@ impl<W: CatalogWork> Drop for RunnerClaim<'_, W> {
         if self.released {
             return;
         }
-        let mut queued = self.job.lock();
-        queued.runner = false;
-        queued.running = None;
-        let mut status = self
-            .job
-            .status
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        W::runner_lost(&mut queued.queue, &mut status);
+        self.job.lost();
     }
 }
 

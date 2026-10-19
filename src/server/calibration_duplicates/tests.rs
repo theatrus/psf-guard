@@ -223,7 +223,7 @@ async fn stop_ends_a_check_and_one_run_at_a_time() {
     let fixture = Fixture::new();
     fixture.state.set_allow_database_management(true);
     let job = job(fixture.path());
-    job.hold.store(true, Ordering::SeqCst);
+    job.queue().hold = true;
     let started = fixture.check().await;
     // A second check joins the first; a repair waits its turn.
     assert_eq!(fixture.check().await.run, started.run);
@@ -236,7 +236,7 @@ async fn stop_ends_a_check_and_one_run_at_a_time() {
     let stopped = fixture.finished(started.run).await;
     assert_eq!(stopped.state, "stopped");
     assert!(stopped.report.is_none());
-    job.hold.store(false, Ordering::SeqCst);
+    job.queue().hold = false;
 
     // The next check starts afresh.
     let next = fixture.check().await;
@@ -251,12 +251,12 @@ async fn a_stopped_repair_rolls_back() {
     let checked = fixture.check().await;
     let report = fixture.finished(checked.run).await.report.unwrap();
     let job = job(fixture.path());
-    job.hold.store(true, Ordering::SeqCst);
+    job.queue().hold = true;
     let started = fixture.repair(&report.token).await.unwrap();
     // Held at its first step; Stop takes effect before the first merge.
     stop(fixture.path());
     let stopped = fixture.finished(started.run).await;
-    job.hold.store(false, Ordering::SeqCst);
+    job.queue().hold = false;
     assert_eq!(stopped.state, "stopped");
     assert!(stopped.repaired.is_none());
     assert_eq!(fixture.rows(), 2);
