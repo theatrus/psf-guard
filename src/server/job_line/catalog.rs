@@ -254,6 +254,15 @@ impl<W: CatalogWork> CatalogJobs<W> {
         result
     }
 
+    /// The job of the catalog at `catalog`, if something has asked for it.
+    pub fn existing(&self, catalog: &str) -> Option<Arc<CatalogJob<W>>> {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(catalog)
+            .cloned()
+    }
+
     /// Every catalog that has a job of this kind.
     pub fn catalogs(&self) -> Vec<String> {
         self.jobs

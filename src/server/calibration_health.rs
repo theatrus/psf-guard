@@ -21,20 +21,21 @@
 use crate::calibration::{
     HealthCode, HealthLevel, HealthLibrary, JudgedLight, KeptHeader, ProjectHealth, ProjectLight,
 };
-use crate::concurrency::{ComputePool, Priority};
+use crate::concurrency::{ComputePool, Priority, Stop};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
+use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, RwLock, Weak};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 /// The kept results, below the database's cache folder.
@@ -188,42 +189,63 @@ fn write_bytes(path: &FsPath, bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Whether a pass runs, and whether another was asked for meanwhile.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct Flags {
-    running: bool,
-    again: bool,
-}
+/// Working out calibration health as a job with one runner per catalog.
+pub(crate) struct CalibrationHealth;
 
-fn claim(flags: &mut Flags) -> bool {
-    if flags.running {
-        flags.again = true;
-        false
-    } else {
-        flags.running = true;
-        true
-    }
-}
+type Job = CatalogJob<CalibrationHealth>;
 
-fn finish(flags: &mut Flags) -> bool {
-    if flags.again {
-        flags.again = false;
-        true
-    } else {
-        flags.running = false;
-        false
-    }
-}
-
-#[derive(Default)]
-struct Job {
-    flags: Mutex<Flags>,
-    /// Projects judged so far this pass, and how many it set out to judge.
-    progress: RwLock<(usize, usize)>,
+#[derive(Debug, Default)]
+pub(crate) struct Queue {
+    /// A pass was asked for since the last one began.
+    asked: bool,
     /// The server that last asked, so a directory refresh can ask again.
-    state: Mutex<Weak<AppState>>,
-    work: Mutex<WorkDone>,
-    views: Mutex<ViewAsks>,
+    server: Weak<AppState>,
+    views: ViewAsks,
+}
+
+/// How far the pass has got, and what the passes have done.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct HealthStatus {
+    /// Projects judged so far this pass, and how many it set out to judge.
+    progress: (usize, usize),
+    work: WorkDone,
+}
+
+impl CatalogWork for CalibrationHealth {
+    type Queue = Queue;
+    type Status = HealthStatus;
+    type Item = ();
+    const RUNNER: &'static str = "calibration-health";
+    /// A stop waits for the light being judged; the project it cut short is
+    /// judged whole by the next pass.
+    const STOP_WAITS_FOR: Option<&'static str> = Some("calibration health");
+
+    /// A request while a pass runs makes it run once more when it ends.
+    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<()> {
+        if std::mem::take(&mut queue.asked) {
+            Step::Run(())
+        } else {
+            Step::Exit
+        }
+    }
+
+    fn run(state: &Arc<AppState>, path: &str, job: &Job, (): (), _: &Stop) {
+        let failed = run_pass(state, path, job)
+            .inspect_err(|error| {
+                tracing::info!(
+                    "Paused working out calibration health in {path}: {error:#}. \
+                     The next pass picks it up."
+                );
+            })
+            .is_err();
+        job.queue().views.failed = failed.then(Instant::now);
+    }
+
+    fn waiting(queue: &Queue) -> bool {
+        queue.asked
+    }
+
+    fn runner_lost(_: &mut Queue, _: &mut HealthStatus) {}
 }
 
 /// When the views last asked for a pass, and when a pass last failed.
@@ -262,69 +284,27 @@ pub struct WorkDone {
 /// What the passes over the catalog at `path` have done since the server
 /// started: the work a pass skipped shows here.
 pub fn work_done(path: &str) -> WorkDone {
-    *job(path).work.lock().unwrap_or_else(|p| p.into_inner())
+    job(path).status().work
 }
 
 /// One job per catalog file, whichever database context asks.
-static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
+static JOBS: CatalogJobs<CalibrationHealth> = CatalogJobs::new();
 
 fn job(path: &str) -> Arc<Job> {
-    Arc::clone(
-        JOBS.lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .entry(path.to_string())
-            .or_default(),
-    )
+    JOBS.job(path)
 }
 
 fn running(path: &str) -> bool {
-    job(path)
-        .flags
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .running
+    job(path).queue().has_runner()
 }
 
 /// Work out the health of every project in the catalog at `path` whose key
 /// changed, on a thread of its own. A request while a pass runs makes it
 /// run once more when it ends.
 pub fn request(state: &Arc<AppState>, path: &str) {
-    if state.shutdown.is_stopping() {
-        return;
-    }
-    let job = job(path);
-    *job.state.lock().unwrap_or_else(|p| p.into_inner()) = Arc::downgrade(state);
-    if !claim(&mut job.flags.lock().unwrap_or_else(|p| p.into_inner())) {
-        return;
-    }
-    let state = Arc::clone(state);
-    let path = path.to_string();
-    // A stop waits for the light being judged; the project it cut short is
-    // judged whole by the next pass.
-    let work = state.shutdown.hold(format!("calibration health ({path})"));
-    std::thread::spawn(move || {
-        let _work = work;
-        loop {
-            let failed = run_pass(&state, &path, &job)
-                .inspect_err(|error| {
-                    tracing::info!(
-                        "Paused working out calibration health in {path}: {error:#}. \
-                         The next pass picks it up."
-                    );
-                })
-                .is_err();
-            job.views.lock().unwrap_or_else(|p| p.into_inner()).failed = failed.then(Instant::now);
-            let mut flags = job.flags.lock().unwrap_or_else(|p| p.into_inner());
-            if state.shutdown.is_stopping() {
-                // Let go of the catalog: the next start judges the rest.
-                flags.running = false;
-                flags.again = false;
-                break;
-            }
-            if !finish(&mut flags) {
-                break;
-            }
-        }
+    JOBS.request(state, path, |queue| {
+        queue.server = Arc::downgrade(state);
+        queue.asked = true;
     });
 }
 
@@ -340,15 +320,8 @@ pub fn request_all(state: &Arc<AppState>) {
 /// about is looked at again; the server start asks about each anyway.
 pub fn tree_published(path: &str) {
     let state = JOBS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get(path)
-        .and_then(|job| {
-            job.state
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .upgrade()
-        });
+        .existing(path)
+        .and_then(|job| job.queue().server.upgrade());
     if let Some(state) = state {
         request(&state, path);
     }
@@ -401,7 +374,7 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    *job.progress.write().unwrap_or_else(|p| p.into_inner()) = (0, stale.len());
+    job.update(|status| status.progress = (0, stale.len()));
     let library = HealthLibrary::load(&conn)?;
     // Header reads, mostly: little memory, so the core budget decides.
     let budget =
@@ -459,13 +432,12 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
         if let Err(error) = write_headers(&ctx.cache_dir_path, project, headers) {
             tracing::warn!("Could not keep the light headers of project {project}: {error:#}");
         }
-        {
-            let mut work = job.work.lock().unwrap_or_else(|p| p.into_inner());
-            work.projects += 1;
-            work.lights += lights.len();
-            work.headers_read += headers_read;
-        }
-        job.progress.write().unwrap_or_else(|p| p.into_inner()).0 = index + 1;
+        job.update(|status| {
+            status.work.projects += 1;
+            status.work.lights += lights.len();
+            status.work.headers_read += headers_read;
+            status.progress.0 = index + 1;
+        });
     }
     if poor > 0 {
         tracing::info!("{poor} project(s) in {path} hold lights the library cannot calibrate");
@@ -530,12 +502,12 @@ fn catch_up(state: &Arc<AppState>, ctx: &DbContext, behind: bool) {
     let grading = crate::server::calibration_quality::running(path);
     {
         let job = job(path);
-        let mut views = job.views.lock().unwrap_or_else(|p| p.into_inner());
+        let mut queue = job.queue();
         let now = Instant::now();
-        if !views.may_ask(grading, now) {
+        if !queue.views.may_ask(grading, now) {
             return;
         }
-        views.asked = Some(now);
+        queue.views.asked = Some(now);
     }
     request(state, path);
 }
@@ -846,12 +818,16 @@ mod tests {
 
     #[test]
     fn a_request_during_a_pass_runs_one_more() {
-        let mut flags = Flags::default();
-        assert!(claim(&mut flags));
-        assert!(!claim(&mut flags));
-        assert!(finish(&mut flags));
-        assert!(!finish(&mut flags));
-        assert_eq!(flags, Flags::default());
+        let state = AppState::new_for_test(Connection::open_in_memory().unwrap());
+        let mut queue = Queue {
+            asked: true,
+            ..Queue::default()
+        };
+        let next = |queue: &mut Queue| CalibrationHealth::next(&state, "c", queue, Instant::now());
+        assert_eq!(next(&mut queue), Step::Run(()));
+        queue.asked = true;
+        assert_eq!(next(&mut queue), Step::Run(()), "one more pass");
+        assert_eq!(next(&mut queue), Step::Exit, "then it stops");
     }
 
     #[test]
