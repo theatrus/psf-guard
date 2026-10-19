@@ -27,9 +27,10 @@ pub mod wbpp_stacks;
 
 #[cfg(test)]
 use build_set::{
-    exclusion_reason, fallback_quality, prefer_target_filter_scores, start_prepared, Started,
+    exclusion_reason, fallback_quality, prefer_target_filter_scores, prepare_job, start_prepared,
+    Placement, Started,
 };
-use build_set::{prepare_channels, prepare_job, validate_request};
+use build_set::{prepare_channels, validate_request};
 pub use build_set::{start_stack_preview_channels, start_stack_previews};
 
 use axum::{
@@ -1119,7 +1120,42 @@ impl StackPreviewManager {
     /// Put a build at the back of the line. Called when it is queued, before
     /// its task starts, so the line keeps the order builds were asked for.
     fn join_line(&self, job_id: &str) {
-        self.waiting.lock().unwrap().push(job_id.to_string());
+        self.join_line_before(job_id, None);
+    }
+
+    /// Put a build in the line just before `slot`, the place a request held
+    /// while it was prepared, or at the back when the slot is gone. A build
+    /// already in the line, as one prepared under its slot's own id is,
+    /// keeps its place.
+    fn join_line_before(&self, job_id: &str, slot: Option<&str>) {
+        let mut waiting = self.waiting.lock().unwrap();
+        if waiting.iter().any(|waiting| waiting == job_id) {
+            return;
+        }
+        let index = slot
+            .and_then(|slot| waiting.iter().position(|waiting| waiting == slot))
+            .unwrap_or(waiting.len());
+        waiting.insert(index, job_id.to_string());
+    }
+
+    /// The first build in the line that is ready to run. A request still
+    /// being prepared keeps its place without holding up the builds behind
+    /// it, and one that has ended holds up nothing while it leaves.
+    fn first_in_line(&self) -> Option<String> {
+        let waiting = self.waiting.lock().unwrap().clone();
+        let jobs = self.jobs.lock().unwrap();
+        waiting.into_iter().find(|waiting| {
+            jobs.get(waiting).is_none_or(|job| {
+                !matches!(
+                    job.state,
+                    StackJobState::Preparing
+                        | StackJobState::Completed
+                        | StackJobState::Failed
+                        | StackJobState::Cancelled
+                        | StackJobState::Replaced
+                )
+            })
+        })
     }
 
     fn leave_line(&self, job_id: &str) {
@@ -1149,7 +1185,7 @@ impl StackPreviewManager {
                 self.leave_line(job_id);
                 return None;
             }
-            let first = self.waiting.lock().unwrap().first().cloned();
+            let first = self.first_in_line();
             if first.as_deref() != Some(job_id) {
                 notified.await;
                 continue;
@@ -1178,8 +1214,7 @@ impl StackPreviewManager {
             // first, the worker goes back to it.
             tokio::select! {
                 permit = Arc::clone(&self.permit).acquire_owned() => {
-                    let still_first =
-                        self.waiting.lock().unwrap().first().map(String::as_str) == Some(job_id);
+                    let still_first = self.first_in_line().as_deref() == Some(job_id);
                     if !still_first || self.turn_held_until().is_some() {
                         drop(permit);
                         continue;
@@ -1322,13 +1357,15 @@ impl StackPreviewManager {
         // One that stopped at its checkpoint was not cut off, so it does not
         // count against its attempts; one still running would be. A
         // processing run has no checkpoint: one the stop found running lost
-        // the step in hand, so it keeps the running mark the stop wrote.
+        // the step in hand, so it keeps the running mark the stop wrote. A
+        // request prepared before the stop reached it comes back as the
+        // builds it became, which are journaled themselves.
         let mut kept = Vec::with_capacity(stopped.len() + entries.len());
         for (job_id, mut origin) in stopped {
             let state = self.job_state(&job_id);
             if matches!(
                 state,
-                Some(StackJobState::Completed | StackJobState::Failed)
+                Some(StackJobState::Completed | StackJobState::Failed | StackJobState::Replaced)
             ) {
                 continue;
             }
@@ -1418,13 +1455,20 @@ impl StackPreviewManager {
         };
         flag.store(true, Ordering::Relaxed);
         // A build still being prepared has nothing to stop: it ends now, and
-        // what its preparation finds is dropped.
+        // what its preparation finds is dropped. A restart does not bring it
+        // back; a server stop journaled it before asking it to stop.
+        let mut ended = false;
         self.update(job_id, |job| {
             if job.state == StackJobState::Preparing {
                 job.state = StackJobState::Cancelled;
                 job.preparing = None;
+                ended = true;
             }
         });
+        if ended {
+            self.origins.lock().unwrap().remove(job_id);
+            self.leave_line(job_id);
+        }
         // A build still waiting sees it at once and leaves the line.
         self.turn.notify_waiters();
         true
@@ -1474,7 +1518,12 @@ impl StackPreviewManager {
     pub fn cancel_automatic(&self) -> Vec<automatic::InterruptedBuild> {
         let mut stopped: Vec<StackActivityEntry> = Vec::new();
         for job in self.jobs.lock().unwrap().values() {
-            if job.automatic && matches!(job.state, StackJobState::Queued | StackJobState::Running)
+            // One still being prepared, as a restart puts back, yields too.
+            if job.automatic
+                && matches!(
+                    job.state,
+                    StackJobState::Preparing | StackJobState::Queued | StackJobState::Running
+                )
             {
                 stopped.push(mono_activity(job));
             }
@@ -3190,12 +3239,21 @@ pub(crate) fn source_fingerprint(path: &FsPath) -> String {
     output
 }
 
-fn enqueue_job(state: Arc<AppState>, prepared: PreparedJob, origin: journal::JournaledStackJob) {
+/// Queue a prepared build: at the back of the line, or in the place `slot`
+/// held while the request it came from was prepared.
+fn enqueue_job(
+    state: Arc<AppState>,
+    prepared: PreparedJob,
+    origin: journal::JournaledStackJob,
+    slot: Option<&str>,
+) {
     let cancel = state.stack_previews.track_cancel(&prepared.public.job_id);
     state
         .stack_previews
         .remember_origin(&prepared.public.job_id, origin);
-    state.stack_previews.join_line(&prepared.public.job_id);
+    state
+        .stack_previews
+        .join_line_before(&prepared.public.job_id, slot);
     // A stop waits for the build to checkpoint, or to leave the line.
     let work = state.shutdown.hold(format!(
         "stack build for project {} (db={})",
@@ -5996,6 +6054,8 @@ mod tests {
                 "method": {"final_pass": "draft"}
             }))
             .unwrap(),
+            split: false,
+            job_id: None,
             attempts: 0,
             running,
         };
@@ -8463,6 +8523,280 @@ mod tests {
         assert!(state.stack_previews.active().is_empty());
     }
 
+    #[test]
+    fn a_build_being_prepared_holds_its_place_without_holding_up_the_line() {
+        let manager = StackPreviewManager::new();
+        for (job_id, state) in [
+            ("ahead", StackJobState::Queued),
+            ("slot", StackJobState::Preparing),
+            ("behind", StackJobState::Queued),
+        ] {
+            let mut job = completed_job(job_id, vec![]);
+            job.state = state;
+            assert!(manager.insert(job));
+            manager.join_line(job_id);
+        }
+        assert_eq!(manager.first_in_line().as_deref(), Some("ahead"));
+        manager.leave_line("ahead");
+        assert_eq!(
+            manager.first_in_line().as_deref(),
+            Some("behind"),
+            "a build still being prepared does not hold up the one behind it"
+        );
+        // The builds it becomes take its place, ahead of the one queued
+        // after it.
+        for job_id in ["red", "green"] {
+            manager.join_line_before(job_id, Some("slot"));
+        }
+        manager.leave_line("slot");
+        assert_eq!(*manager.waiting.lock().unwrap(), ["red", "green", "behind"]);
+        // A build already in the line, as one prepared under its slot's own
+        // id is, keeps its place.
+        manager.join_line_before("behind", Some("red"));
+        assert_eq!(*manager.waiting.lock().unwrap(), ["red", "green", "behind"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_build_being_prepared_comes_back_after_a_restart_under_its_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry_dir = tempfile::tempdir().unwrap();
+        let registry = registry_dir.path().join("reg.json");
+        let (before, ctx) = state_with_frames(directory.path());
+        // The catalog is busy, so both clicks are still being prepared.
+        let db = ctx.db();
+        let busy = db.lock().unwrap();
+        let channels_request = build_request(vec![1, 2, 3, 4]);
+        let single_request = build_request(vec![1, 2]);
+        let split =
+            build_set::queue_preparation(&before, &ctx, 1, channels_request.clone(), true).unwrap();
+        let single =
+            build_set::queue_preparation(&before, &ctx, 1, single_request.clone(), false).unwrap();
+        assert_eq!(
+            before.stack_previews.journal_entries(),
+            vec![
+                journal::JournaledStackJob::requested(
+                    &ctx.id,
+                    1,
+                    &channels_request,
+                    true,
+                    &split.job_id,
+                    false
+                ),
+                journal::JournaledStackJob::requested(
+                    &ctx.id,
+                    1,
+                    &single_request,
+                    false,
+                    &single.job_id,
+                    false
+                ),
+            ],
+            "journaled in click order as soon as they are asked for"
+        );
+        // A build prepared before the restart comes first in the line.
+        let (after, after_ctx) = state_with_frames(directory.path());
+        let queued_request = build_request(vec![3, 4]);
+        let queued_id = prepare_job(&after_ctx, 1, &queued_request).unwrap().public;
+        let mut journal = journal::snapshot(&before);
+        journal.stack.insert(
+            0,
+            journal::JournaledStackJob::mono(&ctx.id, 1, &queued_request, &queued_id, false),
+        );
+        let queued_id = queued_id.job_id;
+        stretch::write_json_atomic(&journal::journal_path(&registry), &journal).unwrap();
+        for job_id in [&split.job_id, &single.job_id] {
+            before.stack_previews.request_cancel(job_id);
+        }
+        drop(busy);
+
+        // The restart reads nothing: it puts each build back in its place,
+        // under the id a page left open follows, while the catalog is busy.
+        *after.registry_path.write().unwrap() = Some(registry.clone());
+        let after_db = after_ctx.db();
+        let (held, holding) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _busy = after_db.lock().unwrap();
+            held.send(()).unwrap();
+            let _ = released.recv();
+        });
+        holding.recv().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), journal::restore(&after))
+            .await
+            .expect("the restore prepares nothing itself");
+        assert_eq!(
+            *after.stack_previews.waiting.lock().unwrap(),
+            [
+                queued_id.clone(),
+                split.job_id.clone(),
+                single.job_id.clone()
+            ]
+        );
+        for job_id in [&queued_id, &split.job_id, &single.job_id] {
+            assert_eq!(
+                after.stack_previews.get(job_id).unwrap().state,
+                StackJobState::Preparing
+            );
+        }
+        release.send(()).unwrap();
+        holder.join().unwrap();
+
+        // Prepared under its own id, the queued build is itself again.
+        let queued = prepared(&after, &queued_id).await;
+        assert_ne!(queued.state, StackJobState::Replaced);
+        assert!(queued.replaced_by.is_empty());
+        let channels = prepare_channels(&after_ctx, 1, &channels_request, None)
+            .unwrap()
+            .into_iter()
+            .map(|(_, prepared)| prepared.public.job_id)
+            .collect::<Vec<_>>();
+        assert_eq!(prepared(&after, &split.job_id).await.replaced_by, channels);
+        let expected = prepare_job(&after_ctx, 1, &single_request)
+            .unwrap()
+            .public
+            .job_id;
+        assert_eq!(
+            prepared(&after, &single.job_id).await.replaced_by,
+            vec![expected.clone()]
+        );
+        for job_id in std::iter::once(&queued_id)
+            .chain(&channels)
+            .chain(std::iter::once(&expected))
+        {
+            after.stack_previews.request_cancel(job_id);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_build_put_back_that_cannot_be_prepared_yet_waits_to_try_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        // After a restart, a frame it names cannot be found yet, as on a disk
+        // still being mounted: it keeps its place and its journal entry.
+        let request = build_request(vec![1, 99]);
+        let job = build_set::queue(
+            &state,
+            &ctx,
+            build_set::Asked {
+                project_id: 1,
+                request: request.clone(),
+                split: false,
+                automatic: false,
+                job_id: Some("restored".into()),
+                retry_until: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
+            },
+        )
+        .unwrap();
+        assert_eq!(job.job_id, "restored");
+        for _ in 0..500 {
+            let idle = state
+                .stack_previews
+                .preparing
+                .lock()
+                .unwrap()
+                .is_idle(&ctx.id);
+            if idle {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let waiting = state.stack_previews.get("restored").unwrap();
+        assert_eq!(waiting.state, StackJobState::Preparing);
+        assert!(waiting.error.is_none());
+        assert_eq!(*state.stack_previews.waiting.lock().unwrap(), ["restored"]);
+        assert_eq!(
+            state.stack_previews.journal_entries(),
+            vec![journal::JournaledStackJob::requested(
+                &ctx.id, 1, &request, false, "restored", false
+            )]
+        );
+        assert!(state.stack_previews.request_cancel("restored"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_automatic_build_still_being_prepared_yields_to_a_persons_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        let db = ctx.db();
+        let busy = db.lock().unwrap();
+        // An automatic refresh's build the journal put back, not yet prepared.
+        let automatic = build_set::queue(
+            &state,
+            &ctx,
+            build_set::Asked {
+                project_id: 1,
+                request: build_request(vec![1, 2, 3, 4]),
+                split: false,
+                automatic: true,
+                job_id: None,
+                retry_until: None,
+            },
+        )
+        .unwrap();
+        assert!(automatic.automatic);
+        let stopped = state.stack_previews.cancel_automatic();
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(
+            (stopped[0].database_id.as_str(), stopped[0].project_id),
+            (ctx.id.as_str(), 1),
+            "its refresh is told it was interrupted"
+        );
+        drop(busy);
+        assert_eq!(
+            prepared(&state, &automatic.job_id).await.state,
+            StackJobState::Cancelled
+        );
+        for _ in 0..100 {
+            if state.stack_previews.journal_entries().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(state.stack_previews.journal_entries().is_empty());
+        assert!(state.stack_previews.waiting.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stop_keeps_a_build_being_prepared_and_a_cancel_drops_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        let db = ctx.db();
+        let busy = db.lock().unwrap();
+        let request = build_request(vec![1, 2, 3, 4]);
+        let cancelled =
+            build_set::queue_preparation(&state, &ctx, 1, build_request(vec![1, 2]), false)
+                .unwrap();
+        let kept = build_set::queue_preparation(&state, &ctx, 1, request.clone(), true).unwrap();
+        // A person's cancel ends it and frees its place at once, and a
+        // restart does not bring it back.
+        assert!(state.stack_previews.request_cancel(&cancelled.job_id));
+        assert_eq!(
+            *state.stack_previews.waiting.lock().unwrap(),
+            std::slice::from_ref(&kept.job_id)
+        );
+        let entry =
+            journal::JournaledStackJob::requested(&ctx.id, 1, &request, true, &kept.job_id, false);
+        assert_eq!(state.stack_previews.journal_entries(), vec![entry.clone()]);
+        // A server stop asks it to stop, and the journal keeps it.
+        state.stack_previews.stop_for_shutdown();
+        drop(busy);
+        prepared(&state, &kept.job_id).await;
+        for _ in 0..100 {
+            if !state
+                .stack_previews
+                .cancels
+                .lock()
+                .unwrap()
+                .contains_key(&kept.job_id)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(state.stack_previews.journal_entries(), vec![entry]);
+        assert!(state.stack_previews.waiting.lock().unwrap().is_empty());
+    }
+
     /// A Build of the stack `job_id`, as the request's preparation hands it
     /// over before the cache is consulted.
     fn build_again(state: &Arc<AppState>, cache: &FsPath, job_id: &str) -> Started {
@@ -8481,7 +8815,7 @@ mod tests {
         };
         let request: StackPreviewRequest =
             serde_json::from_value(serde_json::json!({"image_ids": [1, 2]})).unwrap();
-        start_prepared(state, &ctx, 7, &request, prepared).unwrap()
+        start_prepared(state, &ctx, 7, &request, prepared, Placement::default()).unwrap()
     }
 
     /// [`state_on_disk`] with a catalog holding project 7, whose exposures
