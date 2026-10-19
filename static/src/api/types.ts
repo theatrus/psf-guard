@@ -1078,6 +1078,8 @@ export interface WaitingReapply {
   target_id?: number | null;
   /** The channel, such as `M44 · R`. */
   label: string;
+  /** Following a build a person started: their work, not automatic. */
+  personal?: boolean;
   /** What it waits for, in words that fit "Waiting for …". */
   waiting_for?: string | null;
 }

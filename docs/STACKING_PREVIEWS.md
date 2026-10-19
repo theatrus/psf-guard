@@ -1325,10 +1325,12 @@ stack, on its own and with no page open:
   also steps aside for an automatic refresh that is due, since the refresh
   may bring a newer stack anyway.
 - After a build you started, or an automatic one you took over, it is your
-  work. It goes to the front of the line, so it runs as soon as the build in
-  hand finishes, ahead of your other queued builds, and it steps aside for
-  nothing. When several of your channels finish, their re-applies join the
-  front one at a time, in the order the channels finished.
+  work. It takes the front of the line the moment the build finishes, so it
+  runs next, ahead of your other queued builds, and it steps aside for
+  nothing. The header lists it with your work. A rebuild of R, G and B runs
+  R's build, R's processing, G's build, G's processing, and so on. A build
+  you stop leaves its finished channels to the automatic re-apply instead,
+  so stopping never starts RC-Astro.
 - Only the channel's newest stack is processed. A newer stack arriving while
   a re-apply waits or runs drops it, and a running RC-Astro tool is killed;
   RC-Astro steps cached for the old stack were made from other pixels, so

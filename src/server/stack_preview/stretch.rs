@@ -1432,9 +1432,9 @@ pub(super) enum ReapplyStart {
 }
 
 /// Queue a re-apply: the request the previous revision showed, run on the
-/// new revision in the build line. An automatic one joins the back as
-/// automatic work; a `personal` one, carried from a person's build, is
-/// theirs and goes to the front. `still_wanted` is asked again once the
+/// new revision in the build line. An automatic one is automatic work; a
+/// `personal` one, carried from a person's build, is theirs, and the caller
+/// moves it up to the place it held. `still_wanted` is asked again once the
 /// tools are probed, under the selection lock, together with whether the
 /// revision's carry still waits: whatever a person did meanwhile wins.
 #[allow(clippy::too_many_arguments)]
@@ -1522,10 +1522,6 @@ pub(super) async fn start_reapply(
         token,
         origin,
     );
-    // Next after the work in hand, ahead of the person's other builds.
-    if personal {
-        state.stack_previews.move_in_line(&stretch_id, 0);
-    }
     Ok(ReapplyStart::Queued(stretch_id))
 }
 

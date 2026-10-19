@@ -560,8 +560,11 @@ function waitingRefreshItem(refresh: ScheduledRefresh): ActivityItem {
   };
 }
 
+/** A re-apply waiting for its turn: automatic after a refresh, the
+ *  person's own after a build they started. */
 function waitingReapplyItem(reapply: WaitingReapply): ActivityItem {
   const waitingFor = reapply.waiting_for ?? undefined;
+  const automatic = !reapply.personal;
   return {
     key: `reapply-waiting:${reapply.database_id}:${reapply.project_id}:${reapply.label}`,
     kind: 'processing',
@@ -571,8 +574,8 @@ function waitingReapplyItem(reapply: WaitingReapply): ActivityItem {
     status: 'waiting',
     waitingFor,
     percent: null,
-    automatic: true,
-    background: true,
+    automatic,
+    background: automatic,
     href: viewPath('stacks', {
       db: reapply.database_id,
       project: reapply.project_id,

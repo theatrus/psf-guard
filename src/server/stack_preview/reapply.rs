@@ -6,12 +6,13 @@
 //! against the new revision, with no browser needed. After an automatic
 //! refresh it is automatic work: it waits until no refresh of its project is
 //! still settling and nothing else wants the worker, and steps aside for
-//! work a person starts. After a build a person started it is their work: it
-//! goes to the front of the line, runs as soon as the build in hand is done,
-//! and steps aside for nothing. Either way one re-apply joins the line at a
-//! time, and it only ever runs on the channel's newest revision. Meanwhile
-//! the card shows the previous result, marked as such. Each revision carries
-//! once: a re-apply that fails is not tried again.
+//! work a person starts. After a build a person started it is their work: the
+//! moment the build publishes, it holds the front of the line, so it runs as
+//! soon as that build lets go of the worker, and it steps aside for nothing.
+//! One re-apply of each kind joins the line at a time, and it only ever runs
+//! on the channel's newest revision. Meanwhile the card shows the previous
+//! result, marked as such. Each revision carries once: a re-apply that fails
+//! is not tried again.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,8 +39,14 @@ pub fn enabled() -> bool {
 }
 
 /// How long a re-apply waits after the work that freed the worker ends,
-/// so that work's own bookkeeping is done before it looks.
+/// so that work's own bookkeeping is done before it looks. A person's
+/// re-apply holds its place in the line instead, and looks at once.
 const SETTLE: Duration = Duration::from_secs(3);
+
+/// One look for a re-apply to start at a time. A look asked for while
+/// another is under way runs after it rather than not at all: a person's
+/// re-apply holds the front of the line until a look starts it.
+static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A re-apply waiting for its turn, or queued as a run.
 #[derive(Debug, Clone)]
@@ -60,6 +67,14 @@ pub(super) struct Reapply {
     /// The run, once queued.
     pub run_id: Option<String>,
     pub since: Instant,
+}
+
+impl Reapply {
+    /// The place a person's re-apply holds in the line until its run
+    /// takes it.
+    fn place(&self) -> String {
+        format!("reapply:{}:{}", self.source_key, self.revision)
+    }
 }
 
 /// How a processing run ended, for the re-apply it may be.
@@ -149,6 +164,7 @@ impl StackPreviewManager {
                         project_id: reapply.project_id,
                         target_id: reapply.target_id,
                         label: reapply.label.clone(),
+                        personal: reapply.personal,
                         waiting_for: None,
                     },
                 )
@@ -174,20 +190,91 @@ impl StackPreviewManager {
             .map(|(channel, reapply)| (channel.clone(), reapply.clone()))
     }
 
-    /// Whether a re-apply's run is in the line or running, and not stepping
-    /// aside.
-    fn reapply_in_line(&self) -> bool {
-        let yielded = self.yielded.lock().unwrap().clone();
-        self.reapplies.lock().unwrap().values().any(|reapply| {
-            reapply
-                .run_id
-                .as_ref()
-                .is_some_and(|run_id| !yielded.contains(run_id))
-        })
+    /// The label of a person's re-apply whose run is in the line or
+    /// running: the one the next of theirs waits for.
+    pub(super) fn personal_reapply_in_line(&self) -> Option<String> {
+        self.reapplies
+            .lock()
+            .unwrap()
+            .values()
+            .find(|reapply| reapply.personal && reapply.run_id.is_some())
+            .map(|reapply| reapply.label.clone())
+    }
+
+    /// Whether a person's re-apply waits for its run.
+    fn personal_reapply_waiting(&self) -> bool {
+        self.reapplies
+            .lock()
+            .unwrap()
+            .values()
+            .any(|reapply| reapply.personal && reapply.run_id.is_none())
+    }
+
+    /// Note a re-apply waiting for its turn, in place of any other for its
+    /// channel. A person's holds the front of the line at once, behind only
+    /// their re-applies already there, so no build takes the worker first.
+    fn record_reapply(&self, channel: String, reapply: Reapply) {
+        let place = (reapply.personal && reapply.run_id.is_none()).then(|| reapply.place());
+        let previous = self.reapplies.lock().unwrap().insert(channel, reapply);
+        if let Some(previous) = previous {
+            self.leave_line(&previous.place());
+        }
+        let Some(place) = place else {
+            return;
+        };
+        let ahead = self
+            .reapplies
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|reapply| reapply.personal)
+            .flat_map(|reapply| [Some(reapply.place()), reapply.run_id.clone()])
+            .flatten()
+            .filter(|entry| entry != &place)
+            .collect::<HashSet<_>>();
+        {
+            let mut waiting = self.waiting.lock().unwrap();
+            if waiting.contains(&place) {
+                return;
+            }
+            let at = waiting
+                .iter()
+                .take_while(|entry| ahead.contains(*entry))
+                .count();
+            waiting.insert(at, place);
+        }
+        // A build first in line looks again rather than take the worker.
+        self.turn.notify_waiters();
+    }
+
+    /// A person's re-apply queued its run: the run takes the place it held.
+    fn take_place(&self, reapply: &Reapply, run_id: &str) {
+        let place = reapply.place();
+        {
+            let mut waiting = self.waiting.lock().unwrap();
+            let Some(held) = waiting.iter().position(|entry| entry == &place) else {
+                return;
+            };
+            // The run joined the back of the line; it moves up to the place.
+            match waiting.iter().position(|entry| entry == run_id) {
+                Some(joined) => {
+                    waiting.remove(joined);
+                    let held = if joined < held { held - 1 } else { held };
+                    waiting[held] = run_id.to_string();
+                }
+                None => {
+                    waiting.remove(held);
+                }
+            }
+        }
+        self.turn.notify_waiters();
     }
 
     fn forget_reapply(&self, channel: &str) {
-        self.reapplies.lock().unwrap().remove(channel);
+        let forgotten = self.reapplies.lock().unwrap().remove(channel);
+        if let Some(forgotten) = forgotten {
+            self.leave_line(&forgotten.place());
+        }
     }
 
     /// Re-applies the server is waiting to start or running.
@@ -257,7 +344,7 @@ pub(super) fn after_build(
                     "{} refreshed; its processing will run again on the new stack",
                     super::channel_label(&current.group.target_name, &current.group.filter_name)
                 );
-                manager.reapplies.lock().unwrap().insert(
+                manager.record_reapply(
                     channel,
                     Reapply {
                         database_id: ctx.id.clone(),
@@ -331,42 +418,33 @@ fn drop_stale(
 }
 
 /// Look for a re-apply to start once whatever just ended has let go of the
-/// worker.
+/// worker; at once while a person's holds its place in the line.
 pub(super) fn kick(state: &Arc<AppState>) {
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         return;
     };
+    let settle = !state.stack_previews.personal_reapply_waiting();
     let state = Arc::clone(state);
     handle.spawn(async move {
-        tokio::time::sleep(SETTLE).await;
+        if settle {
+            tokio::time::sleep(SETTLE).await;
+        }
         start_due(state).await;
     });
 }
 
-/// Start the oldest waiting re-apply: a person's as soon as no other
-/// re-apply is in the line, an automatic one once the worker has nothing
-/// else to do and no refresh of its project is still settling. One at a
-/// time: the run it queues keeps the next one waiting.
+/// Start the oldest waiting re-apply: a person's as soon as no other of
+/// theirs is in the line, an automatic one once the worker has nothing else
+/// to do and no refresh of its project is still settling. One at a time:
+/// the run it queues keeps the next one waiting.
 pub(super) async fn start_due(state: Arc<AppState>) {
-    static STARTING: AtomicBool = AtomicBool::new(false);
-    if STARTING.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    struct Release;
-    impl Drop for Release {
-        fn drop(&mut self) {
-            STARTING.store(false, Ordering::Release);
-        }
-    }
-    let _release = Release;
+    let _starting = STARTING.lock().await;
     if !enabled() || !super::journal::restored() || state.shutdown.is_stopping() {
-        return;
-    }
-    if state.stack_previews.reapply_in_line() {
         return;
     }
     // An automatic one waits behind anything a person started and every
     // build. A person's own is theirs: it goes next.
+    let personal_turn = state.stack_previews.personal_reapply_in_line().is_none();
     let busy = state.interactive_job_active() || !state.stack_previews.active().is_empty();
     let scheduled = state.auto_stacks.scheduled();
     let mut waiting = state
@@ -375,7 +453,14 @@ pub(super) async fn start_due(state: Arc<AppState>) {
         .lock()
         .unwrap()
         .iter()
-        .filter(|(_, reapply)| reapply.run_id.is_none() && (reapply.personal || !busy))
+        .filter(|(_, reapply)| {
+            reapply.run_id.is_none()
+                && if reapply.personal {
+                    personal_turn
+                } else {
+                    !busy
+                }
+        })
         .map(|(channel, reapply)| (channel.clone(), reapply.clone()))
         .collect::<Vec<_>>();
     waiting.sort_by_key(|(_, reapply)| (!reapply.personal, reapply.since));
@@ -447,18 +532,29 @@ pub(super) async fn start_due(state: Arc<AppState>) {
         {
             Ok(stretch::ReapplyStart::Withdrawn) => {
                 // Its own record already went with whatever replaced it.
-                let mut reapplies = manager.reapplies.lock().unwrap();
-                if reapplies.get(&channel).is_some_and(|entry| {
-                    entry.revision == reapply.revision && entry.run_id.is_none()
-                }) {
-                    reapplies.remove(&channel);
+                let unchanged =
+                    manager
+                        .reapplies
+                        .lock()
+                        .unwrap()
+                        .get(&channel)
+                        .is_some_and(|entry| {
+                            entry.revision == reapply.revision && entry.run_id.is_none()
+                        });
+                if unchanged {
+                    manager.forget_reapply(&channel);
                 }
             }
             Ok(stretch::ReapplyStart::Queued(run_id)) => {
+                let mut taken = false;
                 if let Some(entry) = manager.reapplies.lock().unwrap().get_mut(&channel)
                     && entry.revision == reapply.revision
                 {
-                    entry.run_id = Some(run_id);
+                    entry.run_id = Some(run_id.clone());
+                    taken = true;
+                }
+                if taken {
+                    manager.take_place(&reapply, &run_id);
                 }
                 return;
             }
@@ -673,7 +769,7 @@ pub(super) fn restored(
     personal: bool,
     run_id: &str,
 ) {
-    state.stack_previews.reapplies.lock().unwrap().insert(
+    state.stack_previews.record_reapply(
         scope_channel(&source.scope),
         Reapply {
             database_id: database_id.into(),
@@ -732,7 +828,7 @@ pub(super) fn recover(state: &Arc<AppState>) {
                 );
                 continue;
             };
-            state.stack_previews.reapplies.lock().unwrap().insert(
+            state.stack_previews.record_reapply(
                 scope_channel(&source.scope),
                 Reapply {
                     database_id: ctx.id.clone(),

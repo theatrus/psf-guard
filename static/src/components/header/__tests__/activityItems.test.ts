@@ -395,6 +395,27 @@ describe('header activity items', () => {
     expect(lineLengths(items)).toEqual({ stack: 0, wbpp: 0 });
   });
 
+  it("lists a re-apply that follows a person's build as their work", () => {
+    const items = activityItems([], [], undefined, undefined, {
+      reapplies: [
+        { database_id: 'db-a', project_id: 3, target_id: 9, label: 'M44 · G', personal: true,
+          waiting_for: 'the processing of M44 · R' },
+        { database_id: 'db-a', project_id: 3, target_id: 9, label: 'M44 · B', waiting_for: 'a stack build' },
+      ],
+    });
+    expect(items).toMatchObject([
+      {
+        scope: 'M44 · G',
+        status: 'waiting',
+        detail: 'Waiting for the processing of M44 · R',
+        automatic: false,
+        background: false,
+      },
+      { scope: 'M44 · B', automatic: true, background: true },
+    ]);
+    expect(items.map(tierOf)).toEqual(['person', 'automatic']);
+  });
+
   it("lists a person's scan apart from the database analysis waiting for it", () => {
     const items = activityItems(
       [{
