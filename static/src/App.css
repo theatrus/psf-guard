@@ -6835,7 +6835,10 @@
 
 /* The summary, its suspect list and the score chart dock under the
    toolbar (ToolbarDock), and the strip passes under them. The block is
-   opaque and holds its children's margins, so no card shows through. */
+   opaque and holds its children's margins, so no card shows through. It
+   is never a scroll anchor: as it changes size, Chrome and Safari both
+   leave the page under it alone, and the strip brings the cursor's card
+   back into sight. */
 .toolbar-dock-sentinel {
   height: 1px;
   margin-bottom: -1px;
@@ -6847,6 +6850,7 @@
   z-index: 90;
   display: flow-root;
   background: var(--color-bg-primary);
+  overflow-anchor: none;
   transition: box-shadow 0.15s;
 }
 
@@ -6854,12 +6858,10 @@
   box-shadow: var(--shadow-docked);
 }
 
-/* A window too short to keep both the toolbar and the chart in sight, such
-   as a phone on its side, lets the chart scroll away. */
-@media (max-height: 560px) {
-  .toolbar-dock {
-    position: static;
-  }
+/* Too tall to dock beside the window's share for the page, such as with a
+   long list open on a laptop or on a phone on its side: it scrolls away. */
+.toolbar-dock[data-too-tall] {
+  position: static;
 }
 
 /* Solved pointing: each frame's solved centre around the target. A point

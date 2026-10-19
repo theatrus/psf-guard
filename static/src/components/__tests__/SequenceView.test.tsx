@@ -1832,6 +1832,35 @@ describe('SequenceView: solved pointing and the docked chart', () => {
     expect(document.querySelectorAll('.sequence-image-card.selected')).toHaveLength(0);
   });
 
+  it('moves focus to the tab stop when the cursor reaches a frame with no solve', async () => {
+    const user = userEvent.setup();
+    const params = renderPointing();
+    // The second frame has no solved centre, so no dot.
+    server.use(http.get('/api/db/:dbId/analysis/sequence', () => HttpResponse.json({
+      ...pointingFixture,
+      data: {
+        sequences: pointingFixture.data.sequences.map(sequence => ({
+          ...sequence,
+          images: sequence.images.map(image => (image.image_id === 2 ? { ...image, pointing: undefined } : image)),
+        })),
+      },
+    })));
+    const chart = await screen.findByRole('group', { name: 'Solved pointing offsets' });
+    await waitFor(() => expect(within(chart).getAllByRole('button')).toHaveLength(9));
+    await waitFor(() => expect(params().get('current')).toBe('1'));
+    const first = chart.querySelector<SVGGElement>('[data-pointing-image-id="1"]')!;
+    const third = chart.querySelector<SVGGElement>('[data-pointing-image-id="3"]')!;
+
+    await user.click(third);
+    await waitFor(() => expect(params().get('current')).toBe('3'));
+    expect(third).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft', code: 'ArrowLeft' });
+    await waitFor(() => expect(params().get('current')).toBe('2'));
+    // Not left on the third frame's dot, where Enter would go back to it.
+    await waitFor(() => expect(first).toHaveFocus());
+    expect(first).toHaveAttribute('tabindex', '0');
+  });
+
   it('folds the pointing chart and remembers the choice', async () => {
     const user = userEvent.setup();
     renderPointing();
@@ -1904,19 +1933,9 @@ describe('SequenceView: solved pointing and the docked chart', () => {
         rootBounds: { top: 0 } as DOMRectReadOnly,
       } as IntersectionObserverEntry], {} as IntersectionObserver);
     });
-    // jsdom lays nothing out, so the dock is sticky only by its class here.
-    const position = vi.spyOn(window, 'getComputedStyle').mockReturnValue({ position: 'sticky' } as CSSStyleDeclaration);
-    try {
-      report(-40, false);
-      expect(dock).toHaveAttribute('data-docked', 'true');
-      report(20, true);
-      expect(dock).not.toHaveAttribute('data-docked');
-      // Not docked when a short window lets the block scroll away.
-      position.mockReturnValue({ position: 'static' } as CSSStyleDeclaration);
-      report(-40, false);
-      expect(dock).not.toHaveAttribute('data-docked');
-    } finally {
-      position.mockRestore();
-    }
+    report(-40, false);
+    expect(dock).toHaveAttribute('data-docked', 'true');
+    report(20, true);
+    expect(dock).not.toHaveAttribute('data-docked');
   });
 });

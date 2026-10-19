@@ -63,6 +63,7 @@ import { CalendarRange, ChevronRight, ScanSearch, X } from 'lucide-react';
 import { SequenceIssueList, SequenceIssuePills } from './SequenceIssues';
 import { frameTime } from '../utils/frameTime';
 import ToolbarDock from './ToolbarDock';
+import { revealCardUntilStill } from '../utils/revealCard';
 import { sequenceIssues, type SequenceIssue } from '../utils/sequenceIssues';
 import { GradingStatus } from '../api/types';
 import type { CalibrationLightMark, Image, ScoredSequence, ImageQualityResult } from '../api/types';
@@ -487,6 +488,16 @@ export default function SequenceView() {
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
   const sequenceStripRef = useRef<HTMLDivElement>(null);
+  // The docked chart changing size, as a suspect list opens or its line
+  // rewraps, moves the strip under it: bring the cursor's card back.
+  const stopRevealRef = useRef<(() => void) | null>(null);
+  const revealAfterDockResize = useCallback(() => {
+    const strip = sequenceStripRef.current;
+    if (!strip) return;
+    stopRevealRef.current?.();
+    stopRevealRef.current = revealCardUntilStill(strip);
+  }, []);
+  useEffect(() => () => stopRevealRef.current?.(), []);
   // Turning the order around. At rest, the page stays put and the cursor
   // moves to the new first card. Once the person has moved, the current
   // card keeps its place on screen.
@@ -1194,7 +1205,7 @@ export default function SequenceView() {
             <>
               {/* The summary, its suspect list and the chart stay under
                   the toolbar while the strip scrolls. */}
-              <ToolbarDock>
+              <ToolbarDock onDockedResize={revealAfterDockResize}>
                 <div className="sequence-summary-bar">
                   <div className="summary-stats">
                     <span className="summary-item excellent">{activeSequence.summary.excellent_count} at 90–100</span>
@@ -1374,11 +1385,13 @@ const PointingScatter = memo(function PointingScatter({
   const chartRef = useRef<SVGSVGElement>(null);
 
   // A dot with focus follows the cursor as the arrows move it, so the
-  // next Enter goes on from there.
+  // next Enter goes on from there. A frame with no solve has no dot: focus
+  // goes to the chart's tab stop, never stays on the last frame's dot.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !chart.contains(document.activeElement)) return;
-    chart.querySelector<SVGGElement>(`[data-pointing-image-id="${currentImageId}"]`)
+    (chart.querySelector<SVGGElement>(`[data-pointing-image-id="${currentImageId}"]`)
+      ?? chart.querySelector<SVGGElement>('.pointing-dot[tabindex="0"]'))
       ?.focus({ preventScroll: true });
   }, [currentImageId]);
 
@@ -1714,54 +1727,9 @@ const SequenceStrip = memo(function SequenceStrip({
   onOpen: (id: number, calibrationFocus?: string) => void;
 }) {
   useEffect(() => {
-    if (currentImageId === null) return;
-    // Brings the cursor's card into sight; true when it had to scroll.
-    const reveal = () => {
-      const currentCard = stripRef.current?.querySelector<HTMLElement>(
-        '.sequence-image-card.current-selection',
-      );
-      const scroller = stripRef.current?.closest<HTMLElement>('.app-main');
-      if (!currentCard || !scroller) return false;
-      const cardRect = currentCard.getBoundingClientRect();
-      const scrollerRect = scroller.getBoundingClientRect();
-      // The toolbar and the docked chart cover the top of the page: a card
-      // under them is out of sight, and one brought back stops below them.
-      const covers = stripRef.current?.parentElement?.querySelectorAll<HTMLElement>(
-        ':scope > .view-toolbar.sticky, :scope > .toolbar-dock',
-      ) ?? [];
-      const visibleTop = Math.max(
-        scrollerRect.top,
-        ...Array.from(covers, cover => cover.getBoundingClientRect().bottom),
-      );
-      const isClipped =
-        cardRect.top < visibleTop - 1 || cardRect.bottom > scrollerRect.bottom + 1;
-      const isOutsideViewport =
-        cardRect.bottom <= visibleTop || cardRect.top >= scrollerRect.bottom;
-      const fitsViewport = cardRect.height <= scrollerRect.bottom - visibleTop;
-      if (!isOutsideViewport && !(fitsViewport && isClipped)) return false;
-      // As scrollIntoView's nearest, measured from below the covers.
-      const gap = 8;
-      scroller.scrollTop += cardRect.top < visibleTop || !fitsViewport
-        ? cardRect.top - visibleTop - gap
-        : cardRect.bottom - scrollerRect.bottom + gap;
-      return true;
-    };
-    // Cards lay themselves out as they come into sight (content-visibility),
-    // a frame or two after the scroll that brought them, and Safari has no
-    // scroll anchoring to make up for it: they can move this card again.
-    // After a scroll, look again until it has held still for a few frames.
-    let frame = 0;
-    let checks = 0;
-    let still = 0;
-    const check = () => {
-      checks += 1;
-      still = reveal() ? 0 : still + 1;
-      if (still < 4 && checks < 20) frame = requestAnimationFrame(check);
-    };
-    frame = requestAnimationFrame(() => {
-      if (reveal()) frame = requestAnimationFrame(check);
-    });
-    return () => cancelAnimationFrame(frame);
+    const strip = stripRef.current;
+    if (currentImageId === null || !strip) return;
+    return revealCardUntilStill(strip);
   }, [currentImageId, imageSize, stripRef]);
 
   const { timeMarks: marksChoice = 'nights-hours' } = useDisplayPreferences();
