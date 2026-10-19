@@ -1353,8 +1353,14 @@ fn enqueue_color_after(
         "Composing the {} color preview after its channels were stacked",
         prepared.public.label
     );
-    let origin = super::journal::JournaledStackJob::color(&ctx.id, project_id, request, automatic);
-    color::enqueue_color_job(Arc::clone(state), prepared, origin);
+    let origin = super::journal::JournaledStackJob::color(
+        &ctx.id,
+        project_id,
+        request,
+        Some(&prepared.public.job_id),
+        automatic,
+    );
+    color::enqueue_color_job(Arc::clone(state), prepared, origin, None);
 }
 
 #[cfg(test)]

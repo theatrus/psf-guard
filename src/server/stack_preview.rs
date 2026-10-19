@@ -900,6 +900,9 @@ pub struct WaitingReapplyView {
 fn channel_label(target_name: &str, filter_name: &str) -> String {
     if filter_name.is_empty() {
         target_name.to_string()
+    } else if target_name.is_empty() {
+        // A composition still being prepared has not read its target yet.
+        filter_name.to_string()
     } else {
         format!("{target_name} · {filter_name}")
     }
@@ -1143,18 +1146,30 @@ impl StackPreviewManager {
     /// it, and one that has ended holds up nothing while it leaves.
     fn first_in_line(&self) -> Option<String> {
         let waiting = self.waiting.lock().unwrap().clone();
-        let jobs = self.jobs.lock().unwrap();
         waiting.into_iter().find(|waiting| {
-            jobs.get(waiting).is_none_or(|job| {
-                !matches!(
-                    job.state,
+            !matches!(
+                self.job_state(waiting),
+                Some(
                     StackJobState::Preparing
                         | StackJobState::Completed
                         | StackJobState::Failed
                         | StackJobState::Cancelled
                         | StackJobState::Replaced
                 )
-            })
+            )
+        })
+    }
+
+    /// Whether a build of this project could still change a target's channel
+    /// stacks: one queued or running with a channel of the target, or one
+    /// still being prepared, whose channels are not known yet.
+    fn channels_pending(&self, database_id: &str, project_id: i32, target_id: i32) -> bool {
+        self.jobs.lock().unwrap().values().any(|job| {
+            job.database_id == database_id
+                && job.project_id == project_id
+                && (job.state == StackJobState::Preparing
+                    || (matches!(job.state, StackJobState::Queued | StackJobState::Running)
+                        && job.groups.iter().any(|group| group.target_id == target_id)))
         })
     }
 
@@ -1439,15 +1454,15 @@ impl StackPreviewManager {
     pub fn request_cancel(&self, job_id: &str) -> bool {
         // A build that has ended has nothing to stop, though its flag may
         // not be forgotten yet.
-        if self.get(job_id).is_some_and(|job| {
-            matches!(
-                job.state,
+        if matches!(
+            self.job_state(job_id),
+            Some(
                 StackJobState::Completed
                     | StackJobState::Failed
                     | StackJobState::Cancelled
                     | StackJobState::Replaced
             )
-        }) {
+        ) {
             return false;
         }
         let Some(flag) = self.cancels.lock().unwrap().get(job_id).cloned() else {
@@ -1462,6 +1477,14 @@ impl StackPreviewManager {
             if job.state == StackJobState::Preparing {
                 job.state = StackJobState::Cancelled;
                 job.preparing = None;
+                ended = true;
+            }
+        });
+        self.update_color(job_id, |job| {
+            if job.state == StackJobState::Preparing {
+                job.state = StackJobState::Cancelled;
+                job.preparing = None;
+                job.phase = "Stopped before composing".into();
                 ended = true;
             }
         });
@@ -1576,7 +1599,12 @@ impl StackPreviewManager {
                 color_jobs
                     .values()
                     .filter(|job| {
-                        matches!(job.state, StackJobState::Queued | StackJobState::Running)
+                        matches!(
+                            job.state,
+                            StackJobState::Preparing
+                                | StackJobState::Queued
+                                | StackJobState::Running
+                        )
                     })
                     .map(color_activity),
             );
@@ -3259,6 +3287,7 @@ fn enqueue_job(
         "stack build for project {} (db={})",
         prepared.public.project_id, prepared.public.database_id
     ));
+    let database_id = prepared.public.database_id.clone();
     tokio::spawn(async move {
         let _work = work;
         let job_id = prepared.public.job_id.clone();
@@ -3277,6 +3306,7 @@ fn enqueue_job(
                 job.state = StackJobState::Cancelled;
             });
             state.stack_previews.forget_cancel_of(&job_id, &cancel);
+            build_set::release_waiting_colors(&state, &database_id);
             return;
         }
         // Only a build a person asked for outranks pre-generation and
@@ -3297,6 +3327,8 @@ fn enqueue_job(
             });
         }
         state.stack_previews.forget_cancel_of(&job_id, &cancel);
+        // A composition may have waited for this build's channels.
+        build_set::release_waiting_colors(&state, &database_id);
     });
 }
 
@@ -8830,15 +8862,17 @@ mod tests {
             &ctx,
             build_set::Asked {
                 project_id: 1,
-                request: request.clone(),
-                split: false,
+                what: build_set::What::Mono {
+                    request: Box::new(request.clone()),
+                    split: false,
+                },
                 automatic: false,
                 job_id: Some("restored".into()),
                 retry_until: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
             },
         )
         .unwrap();
-        assert_eq!(job.job_id, "restored");
+        assert_eq!(job, "restored");
         for _ in 0..500 {
             let idle = state
                 .stack_previews
@@ -8876,15 +8910,17 @@ mod tests {
             &ctx,
             build_set::Asked {
                 project_id: 1,
-                request: build_request(vec![1, 2, 3, 4]),
-                split: false,
+                what: build_set::What::Mono {
+                    request: Box::new(build_request(vec![1, 2, 3, 4])),
+                    split: false,
+                },
                 automatic: true,
                 job_id: None,
                 retry_until: None,
             },
         )
         .unwrap();
-        assert!(automatic.automatic);
+        assert!(state.stack_previews.get(&automatic).unwrap().automatic);
         let stopped = state.stack_previews.cancel_automatic();
         assert_eq!(stopped.len(), 1);
         assert_eq!(
@@ -8894,7 +8930,7 @@ mod tests {
         );
         drop(busy);
         assert_eq!(
-            prepared(&state, &automatic.job_id).await.state,
+            prepared(&state, &automatic).await.state,
             StackJobState::Cancelled
         );
         for _ in 0..100 {
@@ -8905,6 +8941,132 @@ mod tests {
         }
         assert!(state.stack_previews.journal_entries().is_empty());
         assert!(state.stack_previews.waiting.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_composition_asked_for_while_its_channels_build_waits_for_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        // A build of target 7's red channel is queued.
+        let mut building = completed_job(&"b".repeat(64), vec![ready_group(7, "R", 1)]);
+        building.database_id = ctx.id.clone();
+        building.project_id = 1;
+        building.state = StackJobState::Queued;
+        assert!(state.stack_previews.insert(building.clone()));
+        let rgb: color::StackColorRequest =
+            serde_json::from_value(serde_json::json!({"target_id": 7, "kind": "rgb"})).unwrap();
+        let lrgb: color::StackColorRequest =
+            serde_json::from_value(serde_json::json!({"target_id": 7, "kind": "lrgb"})).unwrap();
+        let waiting = build_set::queue_color_preparation(&state, &ctx, 1, rgb.clone()).unwrap();
+        let stopped = build_set::queue_color_preparation(&state, &ctx, 1, lrgb).unwrap();
+        assert_eq!(waiting.state, StackJobState::Preparing);
+        assert_eq!(waiting.preparing.as_deref(), Some("RGB"));
+        for _ in 0..500 {
+            if state
+                .stack_previews
+                .preparing
+                .lock()
+                .unwrap()
+                .waiting_for_channels(&ctx.id)
+                == 2
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let held = state.stack_previews.get_color(&waiting.job_id).unwrap();
+        assert_eq!(held.state, StackJobState::Preparing);
+        assert_eq!(held.phase, "Waiting for the channel builds to finish");
+        assert!(
+            state
+                .stack_previews
+                .active()
+                .iter()
+                .any(|entry| entry.job_id == waiting.job_id && entry.label == "RGB"),
+            "the header lists it"
+        );
+        // A person's cancel ends one at once; the other keeps its place and
+        // its journal entry.
+        assert!(state.stack_previews.request_cancel(&stopped.job_id));
+        assert_eq!(
+            state
+                .stack_previews
+                .get_color(&stopped.job_id)
+                .unwrap()
+                .state,
+            StackJobState::Cancelled
+        );
+        assert_eq!(
+            *state.stack_previews.waiting.lock().unwrap(),
+            std::slice::from_ref(&waiting.job_id)
+        );
+        assert_eq!(
+            state.stack_previews.journal_entries(),
+            vec![journal::JournaledStackJob::color(
+                &ctx.id,
+                1,
+                &rgb,
+                Some(&waiting.job_id),
+                false
+            )]
+        );
+
+        // The build ends: the composition is prepared from the stacks there
+        // are now. This catalog has none, so it says so.
+        state
+            .stack_previews
+            .update(&building.job_id, |job| job.state = StackJobState::Completed);
+        build_set::release_waiting_colors(&state, &ctx.id);
+        let mut done = held;
+        for _ in 0..500 {
+            done = state.stack_previews.get_color(&waiting.job_id).unwrap();
+            if done.state != StackJobState::Preparing {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(done.state, StackJobState::Failed);
+        assert_eq!(
+            done.error.as_deref(),
+            Some("No completed channel stacks are available for that target")
+        );
+        assert!(state.stack_previews.waiting.lock().unwrap().is_empty());
+        for _ in 0..100 {
+            if state.stack_previews.journal_entries().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(state.stack_previews.journal_entries().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_composition_put_back_by_the_journal_keeps_its_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        let request: color::StackColorRequest =
+            serde_json::from_value(serde_json::json!({"target_id": 7, "kind": "rgb"})).unwrap();
+        let job_id = build_set::queue(
+            &state,
+            &ctx,
+            build_set::Asked {
+                project_id: 1,
+                what: build_set::What::Color(Box::new(request)),
+                automatic: false,
+                job_id: Some("restored-color".into()),
+                retry_until: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(job_id, "restored-color");
+        let done = loop {
+            let job = state.stack_previews.get_color("restored-color").unwrap();
+            if job.state != StackJobState::Preparing {
+                break job;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        assert_eq!(done.state, StackJobState::Failed, "nothing to compose here");
     }
 
     #[tokio::test(flavor = "multi_thread")]

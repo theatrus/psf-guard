@@ -62,7 +62,11 @@ pub enum JournaledStackJob {
         database_id: String,
         project_id: i32,
         automatic: bool,
-        request: StackColorRequest,
+        request: Box<StackColorRequest>,
+        /// The id the browser follows: the composition's, or the one a
+        /// request still being prepared has. It comes back under this id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        job_id: Option<String>,
         #[serde(default)]
         attempts: u32,
         #[serde(default)]
@@ -162,13 +166,15 @@ impl JournaledStackJob {
         database_id: &str,
         project_id: i32,
         request: &StackColorRequest,
+        job_id: Option<&str>,
         automatic: bool,
     ) -> Self {
         Self::Color {
             database_id: database_id.to_string(),
             project_id,
             automatic,
-            request: request.clone(),
+            request: Box::new(request.clone()),
+            job_id: job_id.map(str::to_string),
             attempts: 0,
             running: false,
         }
@@ -601,8 +607,7 @@ async fn restore_stack_job(
                 &ctx,
                 super::build_set::Asked {
                     project_id,
-                    request: *request,
-                    split,
+                    what: super::build_set::What::Mono { request, split },
                     automatic,
                     job_id,
                     retry_until: Some(Instant::now() + RETRY_FOR),
@@ -616,40 +621,30 @@ async fn restore_stack_job(
             project_id,
             automatic,
             request,
+            job_id,
             ..
         } => {
             let ctx = state
                 .get_database(&database_id)
                 .ok_or_else(|| NotRestored::Skip(format!("database {database_id} is gone")))?;
-            let request_for_prepare = request.clone();
-            let astrometry = Arc::clone(&state.astrometry);
-            let mut prepared = tokio::task::spawn_blocking(move || {
-                super::color::prepare_color_job(&ctx, &astrometry, project_id, &request_for_prepare)
-            })
-            .await
-            .map_err(|error| NotRestored::Retry(error.to_string()))?
-            .map_err(|error| NotRestored::Retry(format!("{error:?}")))?;
-            let job_id = prepared.public.job_id.clone();
-            if state.stack_previews.get_color(&job_id).is_some() {
+            if let Some(job_id) = &job_id
+                && state.stack_previews.get_color(job_id).is_some()
+            {
                 return Err(NotRestored::Skip(format!("{job_id} is already known")));
             }
-            let manifest = super::color::color_manifest_path(&prepared.stack_root, &job_id);
-            if !request.force
-                && let Ok(bytes) = std::fs::read(&manifest)
-                && let Ok(existing) = serde_json::from_slice::<super::color::StackColorJob>(&bytes)
-                && existing.state == super::StackJobState::Completed
-                && super::color::color_job_artifacts_exist(&prepared.stack_root, &existing)
-            {
-                return Err(NotRestored::Skip(format!(
-                    "{job_id} finished before the restart"
-                )));
-            }
-            prepared.public.automatic = automatic;
-            if !state.stack_previews.insert_color(prepared.public.clone()) {
-                return Err(NotRestored::Retry("too many color jobs are active".into()));
-            }
-            super::color::enqueue_color_job(Arc::clone(state), prepared, origin);
-            Ok(())
+            super::build_set::queue(
+                state,
+                &ctx,
+                super::build_set::Asked {
+                    project_id,
+                    what: super::build_set::What::Color(request),
+                    automatic,
+                    job_id,
+                    retry_until: Some(Instant::now() + RETRY_FOR),
+                },
+            )
+            .map(|_| ())
+            .map_err(|error| NotRestored::Retry(error.message()))
         }
         JournaledStackJob::Processing { .. } => super::stretch::restore_run(state, origin).await,
     }

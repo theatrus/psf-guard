@@ -494,6 +494,12 @@ pub struct StackColorJob {
     pub outdated: bool,
     #[serde(default)]
     pub outdated_reason: Option<String>,
+    /// While its request is prepared: what was asked for, in a few words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparing: Option<String>,
+    /// The composition a request being prepared became.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced_by: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -940,7 +946,10 @@ impl StackPreviewManager {
                 .filter(|entry| {
                     matches!(
                         entry.state,
-                        StackJobState::Completed | StackJobState::Failed
+                        StackJobState::Completed
+                            | StackJobState::Failed
+                            | StackJobState::Cancelled
+                            | StackJobState::Replaced
                     )
                 })
                 .min_by_key(|entry| entry.created_unix_seconds)
@@ -954,7 +963,7 @@ impl StackPreviewManager {
         true
     }
 
-    fn update_color(&self, job_id: &str, update: impl FnOnce(&mut StackColorJob)) {
+    pub(super) fn update_color(&self, job_id: &str, update: impl FnOnce(&mut StackColorJob)) {
         if let Some(job) = self.color_jobs.lock().unwrap().get_mut(job_id) {
             update(job);
         }
@@ -1003,24 +1012,91 @@ pub async fn get_stack_color_catalog(
     })))
 }
 
+/// `POST /api/db/{db}/projects/{project}/stack-previews/color` — a color
+/// composition. It joins the line at once, as a composition being prepared:
+/// `202` and that composition, which a client follows through `replaced_by`
+/// once it is prepared. While the target's channels are still building it
+/// waits for them, then composes from their new stacks.
 pub async fn start_stack_color(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(request): Json<StackColorRequest>,
-) -> Result<Json<ApiResponse<StackColorJob>>, AppError> {
+) -> Result<(StatusCode, Json<ApiResponse<StackColorJob>>), AppError> {
     validate_request(&request)?;
-    let ctx_arc = Arc::clone(&ctx.0);
-    let request_for_prepare = request.clone();
-    let astrometry = Arc::clone(&state.astrometry);
-    let prepared = tokio::task::spawn_blocking(move || {
-        prepare_color_job(&ctx_arc, &astrometry, project_id, &request_for_prepare)
-    })
-    .await
-    .map_err(|error| {
-        AppError::InternalError(format!("Color preparation task failed: {error}"))
-    })??;
+    let job = super::build_set::queue_color_preparation(&state, &ctx.0, project_id, request)?;
+    Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(job))))
+}
 
+/// The composition a request is while it is prepared, under `job_id`.
+pub(super) fn preparing_color_job(
+    database_id: &str,
+    project_id: i32,
+    request: &StackColorRequest,
+    job_id: String,
+) -> StackColorJob {
+    let label = composition_label(request.kind, request.palette).to_string();
+    let channels = required_roles(request.kind, request.palette).len();
+    StackColorJob {
+        automatic: false,
+        schema_version: 1,
+        job_id,
+        database_id: database_id.to_string(),
+        project_id,
+        target_id: request.target_id,
+        target_name: String::new(),
+        kind: request.kind,
+        palette: request.palette,
+        preparing: Some(label.clone()),
+        label,
+        source_family_key: String::new(),
+        state: StackJobState::Preparing,
+        phase: "Preparing".into(),
+        processed_channels: 0,
+        total_channels: channels,
+        progress: StackColorProgress::default(),
+        created_unix_seconds: chrono::Utc::now().timestamp(),
+        artifact_revision: String::new(),
+        cache_version: STACK_COLOR_CACHE_VERSION,
+        stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
+        background_version: SEIZA_BACKGROUND_VERSION.into(),
+        deconvolution_version: String::new(),
+        linear_input_id: None,
+        sources: Vec::new(),
+        crop: request.crop,
+        crop_report: None,
+        processing: request.processing.clone(),
+        resolved_input_stretches: BTreeMap::new(),
+        resolved_input_deconvolutions: BTreeMap::new(),
+        resolved_input_rc_astro: BTreeMap::new(),
+        input_rc_astro_ids: BTreeMap::new(),
+        resolved_output_stretches: Vec::new(),
+        resolved_backgrounds: BTreeMap::new(),
+        resolved_background_protection: BTreeMap::new(),
+        background_protection_fallbacks: BTreeMap::new(),
+        color_calibration_basis: None,
+        color_calibration: None,
+        preview_url: String::new(),
+        fits_url: String::new(),
+        error: None,
+        outdated: false,
+        outdated_reason: None,
+        replaced_by: Vec::new(),
+    }
+}
+
+/// Queue a prepared composition, or hand back the same one already queued,
+/// running, or finished. A person's composition that takes the worker makes
+/// automatic work yield; one in the quick lane runs beside the builds.
+pub(super) fn start_prepared_color(
+    state: &Arc<AppState>,
+    ctx: &Arc<crate::server::database_context::DatabaseContext>,
+    project_id: i32,
+    request: &StackColorRequest,
+    mut prepared: PreparedColorJob,
+    placement: super::build_set::Placement,
+) -> Result<StackColorJob, AppError> {
+    let person = !placement.automatic;
     if let Some(existing) = state.stack_previews.get_color(&prepared.public.job_id) {
         if matches!(
             existing.state,
@@ -1028,15 +1104,14 @@ pub async fn start_stack_color(
         ) {
             // The same composition is already under way for the automatic
             // refresh: it is now the user's, and other automatic work yields.
-            if existing.automatic {
+            if existing.automatic && person {
                 state.stack_previews.adopt(&existing.job_id);
-                super::interrupt_automatic(&state);
+                super::interrupt_automatic(state);
             }
-            let existing = state
+            return Ok(state
                 .stack_previews
                 .get_color(&existing.job_id)
-                .unwrap_or(existing);
-            return Ok(Json(ApiResponse::success(existing)));
+                .unwrap_or(existing));
         }
         if !request.force
             && existing.state == StackJobState::Completed
@@ -1048,7 +1123,7 @@ pub async fn start_stack_color(
                 .persist_latest_color(&prepared.stack_root, &existing)
                 .map_err(AppError::InternalError)?;
             let _ = state.stack_previews.insert_color(existing.clone());
-            return Ok(Json(ApiResponse::success(existing)));
+            return Ok(existing);
         }
     }
     let manifest = color_manifest_path(&prepared.stack_root, &prepared.public.job_id);
@@ -1064,22 +1139,29 @@ pub async fn start_stack_color(
             .persist_latest_color(&prepared.stack_root, &existing)
             .map_err(AppError::InternalError)?;
         let _ = state.stack_previews.insert_color(existing.clone());
-        return Ok(Json(ApiResponse::success(existing)));
+        return Ok(existing);
     }
 
+    prepared.public.automatic = placement.automatic;
     let response = prepared.public.clone();
     if !state.stack_previews.insert_color(response.clone()) {
         return Err(AppError::BadRequest(format!(
             "At most {MAX_REMEMBERED_JOBS} color preview jobs may be active at once"
         )));
     }
-    let origin = super::journal::JournaledStackJob::color(&ctx.id, project_id, &request, false);
+    let origin = super::journal::JournaledStackJob::color(
+        &ctx.id,
+        project_id,
+        request,
+        Some(&response.job_id),
+        placement.automatic,
+    );
     // Real work is queued. A composition in the quick lane runs beside the
     // builds; one in the line takes the worker, so automatic work yields.
-    if !enqueue_color_job(Arc::clone(&state), prepared, origin) {
-        super::interrupt_automatic(&state);
+    if !enqueue_color_job(Arc::clone(state), prepared, origin, placement.slot) && person {
+        super::interrupt_automatic(state);
     }
-    Ok(Json(ApiResponse::success(response)))
+    Ok(response)
 }
 
 fn mark_color_reused(mut job: StackColorJob) -> StackColorJob {
@@ -1448,6 +1530,8 @@ pub(super) fn prepare_color_job(
             error: None,
             outdated: false,
             outdated_reason: None,
+            preparing: None,
+            replaced_by: Vec::new(),
         },
         stack_root: ctx.stack_root.clone(),
         background_regions,
@@ -1989,6 +2073,7 @@ pub(super) fn enqueue_color_job(
     state: Arc<AppState>,
     prepared: PreparedColorJob,
     origin: super::journal::JournaledStackJob,
+    slot: Option<&str>,
 ) -> bool {
     let job_id = prepared.public.job_id.clone();
     let quick = takes_quick_lane(&state, &prepared);
@@ -1999,7 +2084,7 @@ pub(super) fn enqueue_color_job(
     if quick {
         state.stack_previews.set_quick(&job_id, true);
     } else {
-        state.stack_previews.join_line(&job_id);
+        state.stack_previews.join_line_before(&job_id, slot);
     }
     // A server stop waits for a running composition to reach its next stop
     // point; the journal brings it back, and its finished RC-Astro steps
@@ -3966,6 +4051,129 @@ pub(super) fn requests_after_build(
     Ok(plan_after_build(target_id, target, &remembered, defaults))
 }
 
+/// What makes two channel stacks the same channel of a composition: the
+/// filter, whether WBPP made it, and the exposure group. A rebuild of a
+/// channel is a newer stack of the same family.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SourceFamily {
+    filter_name: String,
+    wbpp: bool,
+    exposure_group: Option<String>,
+}
+
+impl SourceFamily {
+    fn of(source: &StackColorSource) -> Self {
+        Self {
+            filter_name: source.filter_name.clone(),
+            wbpp: source.wbpp,
+            exposure_group: source
+                .exposure_group
+                .as_ref()
+                .map(|group| group.key.clone()),
+        }
+    }
+
+    fn holds(&self, source: &StackColorSource) -> bool {
+        *self == Self::of(source)
+    }
+}
+
+/// The family of each stack a request names, as the target lists them now.
+/// A request that names none, or a stack the target no longer lists, has no
+/// family for that role.
+pub(super) fn named_families(
+    ctx: &crate::server::database_context::DatabaseContext,
+    project_id: i32,
+    request: &StackColorRequest,
+) -> BTreeMap<StackColorRole, SourceFamily> {
+    if request.input_sources.is_empty() {
+        return BTreeMap::new();
+    }
+    let Ok(latest) = load_latest_stacks(ctx, project_id) else {
+        return BTreeMap::new();
+    };
+    families_in(&ctx.stack_root, &latest, request)
+}
+
+/// [`named_families`] in a latest index already read.
+fn families_in(
+    stack_root: &FsPath,
+    latest: &LatestStackPreviews,
+    request: &StackColorRequest,
+) -> BTreeMap<StackColorRole, SourceFamily> {
+    let sources = collect_sources(stack_root, latest);
+    let Some(target) = sources.get(&request.target_id) else {
+        return BTreeMap::new();
+    };
+    request
+        .input_sources
+        .iter()
+        .filter_map(|(role, named)| {
+            target
+                .by_role
+                .get(role)?
+                .iter()
+                .find(|source| {
+                    source.job_id == named.job_id
+                        && source.group_index == named.group_index
+                        && source.artifact_revision == named.artifact_revision
+                })
+                .map(|source| (*role, SourceFamily::of(source)))
+        })
+        .collect()
+}
+
+/// The request with each stack it names moved to the newest stack of the
+/// same family, as [`plan_after_build`] moves a finished composition: a
+/// composition asked for while its channels were building means the stacks
+/// those builds made. A role whose family has no stack now keeps what it
+/// named, and preparing it says that stack is no longer current.
+pub(super) fn with_newest_sources(
+    ctx: &crate::server::database_context::DatabaseContext,
+    project_id: i32,
+    request: &StackColorRequest,
+    families: &BTreeMap<StackColorRole, SourceFamily>,
+) -> StackColorRequest {
+    if families.is_empty() {
+        return request.clone();
+    }
+    let Ok(latest) = load_latest_stacks(ctx, project_id) else {
+        return request.clone();
+    };
+    newest_sources_in(&ctx.stack_root, &latest, request, families)
+}
+
+/// [`with_newest_sources`] in a latest index already read.
+fn newest_sources_in(
+    stack_root: &FsPath,
+    latest: &LatestStackPreviews,
+    request: &StackColorRequest,
+    families: &BTreeMap<StackColorRole, SourceFamily>,
+) -> StackColorRequest {
+    let mut request = request.clone();
+    let sources = collect_sources(stack_root, latest);
+    let Some(target) = sources.get(&request.target_id) else {
+        return request;
+    };
+    for (role, family) in families {
+        if let Some(newest) = target
+            .by_role
+            .get(role)
+            .and_then(|candidates| candidates.iter().find(|source| family.holds(source)))
+        {
+            request.input_sources.insert(
+                *role,
+                StackColorSourceRef {
+                    job_id: newest.job_id.clone(),
+                    group_index: newest.group_index,
+                    artifact_revision: newest.artifact_revision.clone(),
+                },
+            );
+        }
+    }
+    request
+}
+
 /// [`requests_after_build`] once the target's channel stacks and its
 /// remembered color previews are in hand.
 fn plan_after_build(
@@ -4931,7 +5139,7 @@ mod tests {
         let job_id = waiting.public.job_id.clone();
         assert!(state.stack_previews.insert_color(waiting.public.clone()));
         let origin = super::super::processing_queue::test_origin("waiting");
-        assert!(enqueue_color_job(Arc::clone(&state), waiting, origin));
+        assert!(enqueue_color_job(Arc::clone(&state), waiting, origin, None));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert_eq!(
             state.stack_previews.get_color(&job_id).unwrap().state,
@@ -4966,8 +5174,8 @@ mod tests {
             assert!(state.stack_previews.insert_color(prepared.public.clone()));
         }
         let origin = |id: &str| super::super::processing_queue::test_origin(id);
-        enqueue_color_job(Arc::clone(&state), quick, origin("quick"));
-        enqueue_color_job(Arc::clone(&state), slow, origin("slow"));
+        enqueue_color_job(Arc::clone(&state), quick, origin("quick"), None);
+        enqueue_color_job(Arc::clone(&state), slow, origin("slow"), None);
         // The quick one starts at once. Its database is not configured, so it
         // ends there; what matters is that it did not wait for the build.
         let quick_id = "a".repeat(64);
@@ -5039,6 +5247,8 @@ mod tests {
             error: None,
             outdated: false,
             outdated_reason: None,
+            preparing: None,
+            replaced_by: Vec::new(),
             color_calibration_basis: None,
             color_calibration: None,
         }
@@ -5558,6 +5768,84 @@ mod tests {
             source.group_index += 3;
         }
         assert_eq!(original_key, source_family_key(&variant));
+    }
+
+    #[test]
+    fn a_composition_that_waited_takes_the_newest_stack_of_each_family() {
+        let cache = tempfile::tempdir().unwrap();
+        let exposed = |filter: &str, index: usize, seconds: f64| {
+            let mut group = source_group(filter, index);
+            group.group.exposure_group = Some(crate::server::exposure_groups::ExposureGroup {
+                key: format!("{seconds}"),
+                label: format!("{seconds} s"),
+                min_seconds: Some(seconds),
+                max_seconds: Some(seconds),
+            });
+            let path = super::super::fits_path(cache.path(), &group.job_id, group.group.index);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"fixture").unwrap();
+            group
+        };
+        let latest = LatestStackPreviews {
+            schema_version: 1,
+            database_id: "db".into(),
+            project_id: 1,
+            updated_unix_seconds: 1,
+            groups: vec![
+                exposed("R", 0, 30.0),
+                exposed("R", 1, 300.0),
+                exposed("G", 2, 300.0),
+                exposed("B", 3, 300.0),
+            ],
+        };
+        // A person picked the 300 s stacks while their channels were queued
+        // to rebuild.
+        let mut request: StackColorRequest = serde_json::from_value(serde_json::json!({
+            "target_id": 7, "kind": "rgb"
+        }))
+        .unwrap();
+        for (role, index) in [
+            (StackColorRole::Red, 1),
+            (StackColorRole::Green, 2),
+            (StackColorRole::Blue, 3),
+        ] {
+            let group = &latest.groups[index];
+            request.input_sources.insert(
+                role,
+                StackColorSourceRef {
+                    job_id: group.job_id.clone(),
+                    group_index: group.group.index,
+                    artifact_revision: group.artifact_revision.clone(),
+                },
+            );
+        }
+        let families = families_in(cache.path(), &latest, &request);
+        assert_eq!(families.len(), 3);
+
+        // The 300 s red stack was rebuilt, and green's build left it with no
+        // stack at all.
+        let mut rebuilt = latest.clone();
+        rebuilt.groups[1] = exposed("R", 9, 300.0);
+        rebuilt.groups.remove(2);
+        let moved = newest_sources_in(cache.path(), &rebuilt, &request, &families);
+        let red = &moved.input_sources[&StackColorRole::Red];
+        assert_eq!(
+            (red.job_id.as_str(), red.artifact_revision.as_str()),
+            (rebuilt.groups[1].job_id.as_str(), "rev-9"),
+            "the newest stack of the same filter and exposure, not the 30 s one"
+        );
+        assert_eq!(
+            moved.input_sources[&StackColorRole::Blue].job_id,
+            latest.groups[3].job_id,
+            "a stack still current stays"
+        );
+        assert_eq!(
+            moved.input_sources[&StackColorRole::Green].job_id,
+            latest.groups[2].job_id,
+            "a family with no stack keeps what it named, and preparing says so"
+        );
+        let targets = collect_sources(cache.path(), &rebuilt);
+        assert!(select_sources(&targets[&7], &moved).is_err());
     }
 
     #[test]

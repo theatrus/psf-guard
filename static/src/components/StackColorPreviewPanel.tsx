@@ -1,7 +1,8 @@
-import { isValidElement, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { formatIntegration, totalIntegration } from '../utils/integrationTime';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import { httpStatus } from '../utils/httpStatus';
 import type {
   StackColorSource,
   StackColorCrop,
@@ -69,8 +70,9 @@ interface CardStartError {
 }
 
 // A stopped composition is over too: its card frees its buttons and stops
-// asking after it.
-const terminalStates = new Set(['completed', 'failed', 'cancelled']);
+// asking after it. `replaced`: a composition that was being prepared became
+// the one it names, which is followed instead.
+const terminalStates = new Set(['completed', 'failed', 'cancelled', 'replaced']);
 const paletteOrder: StackNarrowbandPalette[] = [
   'sho', 'soh', 'hso', 'hos', 'osh', 'ohs', 'hoo', 'foraxx-sho', 'foraxx-hoo',
 ];
@@ -233,6 +235,7 @@ function ColorCard({
   const sourceFrames = artifact?.sources.reduce((sum, source) => sum + source.accepted_frames, 0) ?? 0;
   const sourceSeconds = totalIntegration((artifact?.sources ?? []).map((source) => source.total_exposure_seconds));
   const stateLabel =
+    state === 'preparing' ? activeJob?.phase || 'Preparing' :
     state === 'queued' ? 'Waiting for color processor' :
       state === 'running' ? activeJob?.phase ?? 'Building color preview' :
         state === 'completed' ? current?.phase ?? 'Color preview ready' :
@@ -313,7 +316,7 @@ function ColorCard({
             aria-label={artifact ? `Rebuild ${label} color preview` : `Build ${label} color preview`}
             onClick={onBuild}
           >
-            {operationPending ? 'Building…' : artifact ? 'Rebuild' : 'Build'}
+            {operationPending ? 'Building…' : state === 'preparing' ? 'Preparing…' : artifact ? 'Rebuild' : 'Build'}
           </button>
         </div>
       </header>
@@ -475,6 +478,9 @@ export default function StackColorPreviewPanel({
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
+  // The card that asked for each composition still being prepared, which
+  // names no channel stacks yet to match a card by.
+  const preparingCards = useRef(new Map<string, string>());
   const [paletteByCard, setPaletteByCard] = useState<Record<string, StackNarrowbandPalette>>({});
   const [cropByCard, setCropByCard] = useState<Record<string, StackColorCrop>>({});
   const [sourcesByCard, setSourcesByCard] = useState<Record<string, Partial<Record<StackColorRole, string>>>>({});
@@ -533,6 +539,7 @@ export default function StackColorPreviewPanel({
         });
       }
       if (operation.dbId !== dbId || operation.projectId !== projectId) return;
+      if (job.state === 'preparing') preparingCards.current.set(job.job_id, operation.cardKey);
       setSavedByCard((current) => {
         const next = { ...current };
         delete next[operation.cardKey];
@@ -556,12 +563,45 @@ export default function StackColorPreviewPanel({
     () =>
       statuses
         .map((status) => status.data)
-        .filter((job): job is StackColorJob => job !== undefined)
+        .filter((job): job is StackColorJob => job !== undefined && job.state !== 'replaced')
         .sort((left, right) => left.created_unix_seconds - right.created_unix_seconds),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- useQueries returns a new array each render; the join tracks content.
     [statuses.map((status) => status.dataUpdatedAt).join('|')]
   );
-  const statusError = statuses.find((status) => status.error)?.error;
+  // A composition that was prepared is followed as the one it became.
+  const replacements = statuses
+    .map((status) => status.data)
+    .filter((job): job is StackColorJob => job?.state === 'replaced');
+  const replacementKey = replacements
+    .map((job) => `${job.job_id}>${(job.replaced_by ?? []).join(',')}`)
+    .join('|');
+  useEffect(() => {
+    if (replacements.length === 0) return;
+    const replacedBy = new Map(replacements.map((job) => [job.job_id, job.replaced_by ?? []]));
+    for (const job of replacements) {
+      preparingCards.current.delete(job.job_id);
+      for (const next of job.replaced_by ?? []) {
+        queryClient.invalidateQueries({ queryKey: jobQueryKey(dbId, projectId, next) });
+      }
+    }
+    setWatchedJobIds((current) => {
+      const next = current.flatMap((jobId) => replacedBy.get(jobId) ?? [jobId]);
+      return [...new Set(next)];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the key tracks the replacements' content.
+  }, [replacementKey, dbId, projectId, queryClient]);
+  // One the server no longer keeps, as after a restart, is let go quietly.
+  const goneKey = statuses
+    .map((status, index) => (httpStatus(status.error) === 404 ? watchedJobIds[index] : ''))
+    .filter(Boolean)
+    .join('|');
+  useEffect(() => {
+    if (!goneKey) return;
+    const gone = new Set(goneKey.split('|'));
+    for (const jobId of gone) preparingCards.current.delete(jobId);
+    setWatchedJobIds((current) => current.filter((jobId) => !gone.has(jobId)));
+  }, [goneKey]);
+  const statusError = statuses.find((status) => status.error && httpStatus(status.error) !== 404)?.error;
   const settledCount = watchedJobs.filter((job) => terminalStates.has(job.state)).length;
   useEffect(() => {
     if (settledCount > 0) {
@@ -666,7 +706,13 @@ export default function StackColorPreviewPanel({
     const family = exposureSet ? resolveColorSources(exposureSet.candidates, roles, {}) : resolved;
     const saved = (catalog.data?.jobs ?? []).filter((job) => jobMatches(job, target.target_id, kind, palette));
     const selectedSaved = exposureSet ? undefined : saved.find((job) => job.job_id === savedByCard[key]);
-    const matchesFamily = (job: StackColorJob) => (!exposureSet && (!aware
+    // One still being prepared names no stacks yet: it shows on the card
+    // that asked for it, or, picked up from the header, on the plain card.
+    const preparingMatches = (job: StackColorJob) => {
+      const asked = preparingCards.current.get(job.job_id);
+      return asked === undefined ? !exposureSet : asked === key;
+    };
+    const matchesFamily = (job: StackColorJob) => job.state === 'preparing' ? preparingMatches(job) : (!exposureSet && (!aware
       || (candidates.length === 0 && (!selectedSaved || selectedSaved.job_id === job.job_id)))) || (family.complete
       && job.sources.length === roles.length
       && family.sources.every((source) => job.sources.some((previous) => sameColorSourceFamily(source, previous))));
