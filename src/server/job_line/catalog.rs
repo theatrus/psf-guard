@@ -59,6 +59,12 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
         stop: &Stop,
     );
 
+    /// Whether the queue has anything for a runner to do, now or later. A
+    /// request that leaves nothing starts no runner.
+    fn waiting(_queue: &Self::Queue) -> bool {
+        true
+    }
+
     /// The runner ended without letting go, as on a panic, or could not
     /// start: settle what the queue and the status say.
     fn runner_lost(queue: &mut Self::Queue, status: &mut Self::Status);
@@ -210,7 +216,7 @@ impl<W: CatalogWork> CatalogJobs<W> {
     }
 
     /// Change the catalog's queue with `edit`, then start its runner unless
-    /// one serves it already, which sees the change. Returns what `edit`
+    /// one serves it already, which sees the change, or nothing waits. Returns what `edit`
     /// returned. Nothing starts while the server stops.
     pub fn request<R>(
         &self,
@@ -222,7 +228,8 @@ impl<W: CatalogWork> CatalogJobs<W> {
         let (result, start) = {
             let mut queued = job.lock();
             let result = edit(&mut queued.queue);
-            let start = !queued.runner && !state.shutdown.is_stopping();
+            let start =
+                !queued.runner && !state.shutdown.is_stopping() && W::waiting(&queued.queue);
             if start {
                 queued.runner = true;
             }

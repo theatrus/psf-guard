@@ -71,7 +71,7 @@ fn the_watch_starts_no_runner_for_a_stopped_job() {
     nudge(&state, &path);
     let job = job(&path);
     let queue = job.queue();
-    assert!(!queue.worker && !queue.pending && queue.stopped);
+    assert!(!queue.has_runner() && !queue.pending && queue.stopped);
 }
 
 #[test]
@@ -165,8 +165,8 @@ fn a_volume_away_is_tried_again_and_its_frames_read_once_back() {
         std::fs::rename(file, away.join(file.file_name().unwrap())).unwrap();
     }
     job.queue().running = true;
-    run_logged(&state, &path, &job);
-    let last = job.status.read().unwrap().clone();
+    run_logged(&state, &path, &job, &Stop::new());
+    let last = job.status().clone();
     assert!(last.last.as_ref().unwrap().volume_away);
     assert!(last.last_error.is_some());
     assert_eq!(job.queue().attempts, 1);
@@ -189,8 +189,8 @@ fn a_volume_away_is_tried_again_and_its_frames_read_once_back() {
         std::fs::rename(away.join(file.file_name().unwrap()), file).unwrap();
     }
     job.queue().running = true;
-    run_logged(&state, &path, &job);
-    let done = job.status.read().unwrap().clone();
+    run_logged(&state, &path, &job, &Stop::new());
+    let done = job.status().clone();
     let outcome = done.last.unwrap();
     assert_eq!((outcome.clocked, outcome.volume_away), (3, false));
     assert_eq!((done.done, done.total), (3, 3));
@@ -219,15 +219,20 @@ fn the_runner_exits_when_idle_and_starts_again_on_request() {
     let (path, _files) = library(temp.path(), 2);
     let state = test_state();
     queue(&state, &path);
-    assert!(job(&path).queue().worker);
-    wait_until("the runner never let go", || !job(&path).queue().worker);
+    assert!(job(&path).queue().has_runner());
+    wait_until("the runner never let go", || {
+        !job(&path).queue().has_runner()
+    });
     let done = status(&path);
     assert_eq!(done.state, "idle");
     assert_eq!(done.last.unwrap().clocked, 2);
     queue(&state, &path);
-    assert!(job(&path).queue().worker, "a new request starts a runner");
+    assert!(
+        job(&path).queue().has_runner(),
+        "a new request starts a runner"
+    );
     wait_until("the second runner never let go", || {
-        !job(&path).queue().worker
+        !job(&path).queue().has_runner()
     });
 }
 
@@ -240,30 +245,26 @@ fn the_runner_ends_with_the_server() {
     queue(&state, &path);
     state.shutdown.begin();
     wait_until("the runner outlived the server", || {
-        !job(&path).queue().worker
+        !job(&path).queue().has_runner()
     });
     queue(&state, &path);
-    assert!(!job(&path).queue().worker);
+    assert!(!job(&path).queue().has_runner());
 }
 
-/// A runner that panics lets go of its claim, so the next request starts
-/// another, and says it stopped.
+/// A runner that is lost, as on a panic, says it stopped.
 #[test]
-fn a_runner_that_panics_lets_go() {
-    let job = Job::default();
-    {
-        let mut queue = job.queue();
-        queue.worker = true;
-        queue.running = true;
-    }
-    drop(RunnerClaim {
-        job: &job,
-        released: false,
-    });
-    let queue = job.queue();
-    assert!(!queue.worker && !queue.running);
-    drop(queue);
-    assert!(job.status.read().unwrap().last_error.is_some());
+fn a_lost_runner_says_it_stopped() {
+    let mut queue = Queue {
+        running: true,
+        ..Queue::default()
+    };
+    let mut status = FrameSitesStatus {
+        active: true,
+        ..FrameSitesStatus::default()
+    };
+    FrameSites::runner_lost(&mut queue, &mut status);
+    assert!(!queue.running && !status.active);
+    assert!(status.last_error.is_some());
 }
 
 /// Stop during a pass ends it at its next chunk and pauses it, unless a
@@ -278,10 +279,11 @@ fn stop_during_a_pass_pauses_it_unless_a_change_came_after() {
     let state = test_state();
     let job = Job::default();
     job.queue().running = true;
-    job.cancelled.store(true, Ordering::SeqCst);
-    run_logged(&state, &path, &job);
+    let stopped = Stop::new();
+    stopped.request();
+    run_logged(&state, &path, &job, &stopped);
     assert!(job.queue().stopped);
-    assert_eq!(job.status.read().unwrap().last.as_ref().unwrap().done, 0);
+    assert_eq!(job.status().last.as_ref().unwrap().done, 0);
     // Stopped, then an import: the import's request runs.
     let job = Job::default();
     {
@@ -289,8 +291,7 @@ fn stop_during_a_pass_pauses_it_unless_a_change_came_after() {
         queue.running = true;
         queue.pending = true;
     }
-    job.cancelled.store(true, Ordering::SeqCst);
-    run_logged(&state, &path, &job);
+    run_logged(&state, &path, &job, &stopped);
     let queue = job.queue();
     assert!(!queue.stopped && queue.pending);
 }
