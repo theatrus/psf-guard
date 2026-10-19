@@ -170,10 +170,11 @@ channel.
 
 ### Queue builds by hand
 
-Build buttons stay available while a build runs. Clicking **Build channel** on
-another card — or a color build, or **Build stacks** for the whole set
-— queues that job behind the running one on the same single-job worker, so
-memory use does not grow with the queue. Each card shows its own state:
+Build buttons stay available while a build runs. **Build channel** and **Build
+stacks** queue work behind the running build. Stack builds and channel-processing
+runs share one worker across databases. Short color compositions can run
+alongside it; see [Color previews](#color-previews-from-channel-stacks).
+Each card shows its own state:
 `queued` cards wait, the `running` card shows live progress, and the status
 line counts the builds in the queue. The header's background jobs chip lists
 the same queue in every view. **Stop** becomes **Stop all** when more than one
@@ -1253,9 +1254,11 @@ selection; it never silently applies the old result to changed pixels.
 
 ### Processing runs wait in the build line
 
-A processing run needs the same single stack worker as builds and color
-compositions, so it joins the same line at the back, as a build does. While
-it waits, **Apply processing** says what holds the worker — `Waiting for the
+A channel card's **Apply processing** starts a processing run on the same
+worker as stack builds, so it joins the build queue. Color compositions that
+need new deconvolution or RC-Astro results also use this worker; short color
+compositions can run alongside it. While a channel-processing run waits,
+**Apply processing** shows which job is using the worker — `Waiting for the
 stack build of M44 · Ha to finish`, `Waiting for the color composition of M44
 · RGB to finish`, or `Waiting for BlurXTerminator on M44 · G to finish` — and
 how many runs are ahead of it. Once it runs, the button shows the step under
@@ -1403,30 +1406,36 @@ the display pipeline the color cards start from. A role with two of PSF
 Guard's own stacks, such as two exposure groups of R, is a choice left to
 you. Automatic refreshes compose only what was composed before.
 
-A composition you start does not wait behind stack builds, queued or
-running, when it prepares nothing at length: its channels were already
-registered, background corrected, deconvolved and run through RC-Astro for an
-earlier composition and are cached, or it asks for neither deconvolution nor
-RC-Astro. Changing a color card's stretch, color calibration or crop and
-pressing **Apply processing** is the usual case. So is the color that follows
-a **Build current set** or **Build channel** you start: once the target's own
-channels are built, its color composes without waiting for builds of other
-targets, unless its processing deconvolves or runs RC-Astro on the new
-stacks. Such a composition runs in a quick lane beside the build line, one at
-a time in the order asked for, and appears in the header's job list without a
-place in line.
+A color composition you start can run alongside queued or running stack builds
+when either condition holds:
 
-These still join the build line:
+- PSF Guard has cached the prepared channels, including any deconvolution and
+  RC-Astro results, with the same inputs and preparation settings.
+- The composition needs no deconvolution or RC-Astro, and no other queued or
+  running composition is preparing the same inputs.
 
-- a composition that deconvolves or runs RC-Astro on channels not yet
-  prepared;
-- one whose channels another queued or running composition is preparing at
-  the time, so the two never write the same prepared inputs at once;
-- every automatic composition, which follows the builds it depends on. One
-  you ask for while it waits keeps its place in line.
+For example, change a color card's stretch, color calibration or crop and click
+**Apply processing stack**. PSF Guard reuses compatible prepared channels.
+The same rule applies to color previews after **Build current set** or **Build
+channel**: once that target's channels finish, its color can compose while
+other targets' stacks build.
 
-A composition that finishes after a build replaced one of its channels does
-not take the card back from the color that follows that build.
+Only one such composition runs at a time. Further compositions in this separate
+queue run in request order. The header's jobs list shows **Composing color**
+without a position in the build queue. While queued, the row shows **Waiting
+for the composition ahead**. The composition and stack build share CPU and memory.
+
+These compositions still use the build queue:
+
+- Compositions that need new deconvolution or RC-Astro results.
+- Compositions whose prepared inputs are not cached when another queued or
+  running composition is preparing those same inputs.
+- Automatic compositions after automatic stack refreshes. Starting one of
+  these yourself while it is queued keeps its existing place.
+
+After a server restart, PSF Guard applies the same rules to restored color
+jobs. If a source channel rebuilds while a composition runs, that composition
+keeps its saved result but does not replace the latest color preview.
 
 - **RGB** requires one Red, Green, and Blue stack in its exposure band.
 - **LRGB** requires one Luminance, Red, Green, and Blue stack in its exposure band.

@@ -64,7 +64,7 @@ or grades. A rig the catalog does not record is ignored.
 
 The header's background jobs chip is the job line, kept small: a progress
 ring, the overall percent and up to four icon counts, **running** (▷),
-**queued** (a numbered list: in a line a person can reorder), **waiting**
+**queued** (a numbered list: waiting for a turn), **waiting**
 (an hourglass: work stepped aside for other work) and **needs attention**
 (a warning triangle: work stopped until a person acts). Each count names
 itself for a screen reader and in its tooltip, and shows only above zero.
@@ -98,6 +98,17 @@ straight to the front of its stack/processing or WBPP queue, past both manual
 and automatic tasks. The task runs after the current one finishes. The button
 is disabled when the task is already next or a queue change is in progress;
 read-only users cannot change the queue.
+
+Short color compositions started by a person use a separate queue and can run
+alongside the stack worker, one composition at a time in request order.
+`enqueue_color_job` selects that queue when the prepared inputs are cached, or
+when it needs no deconvolution or RC-Astro and no other composition is
+preparing the same inputs. Automatic compositions and those that need new
+deconvolution or RC-Astro results use the stack queue. A
+**Composing color** row in the separate queue has no build-queue position or
+reorder controls; while queued, it shows **Waiting for the composition ahead**.
+It does not count as the job holding the stack worker. Restored color jobs use
+the same selection rule. See [Color previews](../STACKING_PREVIEWS.md#color-previews-from-channel-stacks).
 
 A row adds what waits behind the step under way when the server knows it
 and the detail does not already say it: `1 more rig to check · 2 rigs

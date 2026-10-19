@@ -574,6 +574,12 @@ both the stars and starless results. Processing runs show queue position and
 progress, support Stop, and can resume after a restart. Saved processing
 choices remain available when a stack rebuilds.
 
+Short color compositions you start can run alongside stack builds. They reuse
+prepared channels, or need no deconvolution or RC-Astro and no other composition
+is preparing the same inputs. After a build you start, each target's color can
+compose once its own channels finish. Channel processing and other color work
+still use the build queue. See [color previews](docs/STACKING_PREVIEWS.md#color-previews-from-channel-stacks).
+
 Engine updates reuse stacks and calibration masters when their output has not
 changed. If only the display stretch or an OSC stack's color calibration needs
 an update, **Build current set** refreshes the card preview from the saved FITS.
