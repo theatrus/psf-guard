@@ -112,7 +112,8 @@ export default defineConfig({
     // browser share. It has no CSS scroll anchoring, lays out phones its
     // own way and draws native form fields itself, so the detail's scroll
     // and phone specs, the View choices' long-page flip, form fields and
-    // compact job-queue controls run here too; the rest stay Chromium-only.
+    // compact job-queue controls and the Sequence chart's dock run here
+    // too; the rest stay Chromium-only.
     //
     // It asks for reduced motion. CI's WebKit draws in software, and while
     // a dozen preview spinners turn it can go seconds without drawing a
@@ -121,7 +122,7 @@ export default defineConfig({
     {
       name: 'webkit',
       use: { ...devices['Desktop Safari'], contextOptions: { reducedMotion: 'reduce' } },
-      testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts', 'whats-new.spec.ts', 'server-info.spec.ts', 'auth.spec.ts', 'desktop-zoom.spec.ts', 'job-queue.spec.ts'],
+      testMatch: ['detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts', 'whats-new.spec.ts', 'server-info.spec.ts', 'auth.spec.ts', 'desktop-zoom.spec.ts', 'job-queue.spec.ts', 'sequence-dock.spec.ts'],
     },
   ],
 

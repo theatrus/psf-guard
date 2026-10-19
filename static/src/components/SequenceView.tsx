@@ -4,6 +4,7 @@ import {
   useMemo,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
 } from 'react';
@@ -58,8 +59,11 @@ import PillSelect from './toolbar/PillSelect';
 import ImageOrderToggle from './toolbar/ImageOrderToggle';
 import ThumbnailSizeControl from './ThumbnailSizeControl';
 import { QualityScanButton } from './QualityScanControl';
-import { CalendarRange, ScanSearch, X } from 'lucide-react';
+import { CalendarRange, ChevronRight, ScanSearch, X } from 'lucide-react';
 import { SequenceIssueList, SequenceIssuePills } from './SequenceIssues';
+import { frameTime } from '../utils/frameTime';
+import ToolbarDock from './ToolbarDock';
+import { revealCardUntilStill } from '../utils/revealCard';
 import { sequenceIssues, type SequenceIssue } from '../utils/sequenceIssues';
 import { GradingStatus } from '../api/types';
 import type { CalibrationLightMark, Image, ScoredSequence, ImageQualityResult } from '../api/types';
@@ -484,6 +488,16 @@ export default function SequenceView() {
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
   const sequenceStripRef = useRef<HTMLDivElement>(null);
+  // The docked chart changing size, as its line rewraps, or docking again
+  // can cover the cursor's card: bring it back, if it was in the window.
+  const stopRevealRef = useRef<(() => void) | null>(null);
+  const revealAfterCoverChange = useCallback(() => {
+    const strip = sequenceStripRef.current;
+    if (!strip) return;
+    stopRevealRef.current?.();
+    stopRevealRef.current = revealCardUntilStill(strip, { onlyInWindow: true });
+  }, []);
+  useEffect(() => () => stopRevealRef.current?.(), []);
   // Turning the order around. At rest, the page stays put and the cursor
   // moves to the new first card. Once the person has moved, the current
   // card keeps its place on screen.
@@ -835,8 +849,8 @@ export default function SequenceView() {
     setCurrentImageId(nextImageId);
   }, [orderedImages, setCurrentImageId]);
 
-  // From an issue's list: the cursor moves to the frame, which scrolls
-  // into view; the selection stays as it is.
+  // From an issue's list or a pointing dot: the cursor moves to the frame,
+  // which scrolls into view; the selection stays as it is.
   const goToImage = useCallback((imageId: number) => {
     touchedRef.current = true;
     activeImageIdRef.current = imageId;
@@ -1189,53 +1203,64 @@ export default function SequenceView() {
 
           {activeSequence && (
             <>
-              {/* Summary bar */}
-              <div className="sequence-summary-bar">
-                <div className="summary-stats">
-                  <span className="summary-item excellent">{activeSequence.summary.excellent_count} at 90–100</span>
-                  <span className="summary-item good">{activeSequence.summary.good_count} at 70–89</span>
-                  <span className="summary-item fair">{activeSequence.summary.fair_count} at 50–69</span>
-                  <span className="summary-item poor">{activeSequence.summary.poor_count} at 30–49</span>
-                  <span className="summary-item bad">{activeSequence.summary.bad_count} below 30</span>
+              {/* The summary, its suspect list and the chart stay under
+                  the toolbar while the strip scrolls. */}
+              <ToolbarDock onCoverChange={revealAfterCoverChange}>
+                <div className="sequence-summary-bar" tabIndex={-1}>
+                  <div className="summary-stats">
+                    <span className="summary-item excellent">{activeSequence.summary.excellent_count} at 90–100</span>
+                    <span className="summary-item good">{activeSequence.summary.good_count} at 70–89</span>
+                    <span className="summary-item fair">{activeSequence.summary.fair_count} at 50–69</span>
+                    <span className="summary-item poor">{activeSequence.summary.poor_count} at 30–49</span>
+                    <span className="summary-item bad">{activeSequence.summary.bad_count} below 30</span>
+                  </div>
+                  <div className="sequence-score-context">
+                    {activeScoreScope === 'target_filter'
+                      ? `Stack comparison · matching capture settings across all sessions${
+                        unavailableImageCount > 0
+                          ? ` · ${unavailableImageCount} not comparable across sessions`
+                          : ''
+                      }`
+                      : 'Session comparison · one capture run'}
+                  </div>
+                  <SequenceIssuePills issues={issues} open={openIssue?.key ?? null} onToggle={toggleIssue} />
                 </div>
-                <div className="sequence-score-context">
-                  {activeScoreScope === 'target_filter'
-                    ? `Stack comparison · matching capture settings across all sessions${
-                      unavailableImageCount > 0
-                        ? ` · ${unavailableImageCount} not comparable across sessions`
-                        : ''
-                    }`
-                    : 'Session comparison · one capture run'}
-                </div>
-                <SequenceIssuePills issues={issues} open={openIssue?.key ?? null} onToggle={toggleIssue} />
-              </div>
-              {openIssue && (
-                <SequenceIssueList
-                  issue={openIssue}
-                  imageMap={imageMap}
-                  currentImageId={activeImageId}
-                  onGo={goToImage}
-                  onClose={() => setOpenIssueState(null)}
-                />
-              )}
+                {/* An open suspect list lies over the chart. */}
+                <div className="sequence-chart-area">
+                  {openIssue && (
+                    <SequenceIssueList
+                      issue={openIssue}
+                      imageMap={imageMap}
+                      currentImageId={activeImageId}
+                      onGo={goToImage}
+                      onClose={() => setOpenIssueState(null)}
+                    />
+                  )}
 
-              {/* Timeline chart */}
-              <SequenceTimeline
-                key={`${activeChoice?.key}-timeline`}
+                  {/* Timeline chart */}
+                  <SequenceTimeline
+                    key={`${activeChoice?.key}-timeline`}
+                    images={activeSequence.images}
+                    imageMap={imageMap}
+                    scoreScope={activeScoreScope}
+                    metric={cutoffMetric}
+                    metricValues={metricValues}
+                    scale={cutoffRange}
+                    threshold={threshold}
+                    pastCutoffIds={pastCutoffIds}
+                    currentImageId={activeImageId}
+                    selectedImages={selectedImages}
+                    onSelect={selectImage}
+                  />
+                </div>
+              </ToolbarDock>
+
+              <PointingScatter
                 images={activeSequence.images}
                 imageMap={imageMap}
-                scoreScope={activeScoreScope}
-                metric={cutoffMetric}
-                metricValues={metricValues}
-                scale={cutoffRange}
-                threshold={threshold}
-                pastCutoffIds={pastCutoffIds}
                 currentImageId={activeImageId}
-                selectedImages={selectedImages}
-                onSelect={selectImage}
+                onGo={goToImage}
               />
-
-              <PointingScatter images={activeSequence.images} />
 
               {/* Image strip */}
               <SequenceStrip
@@ -1312,16 +1337,77 @@ export default function SequenceView() {
   );
 }
 
-const PointingScatter = memo(function PointingScatter({ images }: { images: ImageQualityResult[] }) {
+/**
+ * Whether the solved pointing chart starts folded. Like the stack panel's,
+ * this is how someone reads the view rather than anything about a frame, so
+ * it survives reloads. Storage can be unavailable (private browsing); the
+ * chart then starts open.
+ */
+const POINTING_COLLAPSED_KEY = 'psf-guard.sequence-pointing-collapsed';
+
+function readPointingCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(POINTING_COLLAPSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+const POINTING_FLAGS = new Set(['off_target', 'pointing_jump', 'pointing_drift', 'rotation_skew']);
+
+/** An offset as a screen reader says it: "12 arcsec east". */
+function offsetWords(value: number, positive: string, negative: string): string {
+  return `${Math.abs(value).toFixed(0)} arcsec ${value < 0 ? negative : positive}`;
+}
+
+const PointingScatter = memo(function PointingScatter({
+  images,
+  imageMap,
+  currentImageId,
+  onGo,
+}: {
+  images: ImageQualityResult[];
+  /** The catalog rows, for each frame's capture time. */
+  imageMap: ReadonlyMap<number, Image>;
+  currentImageId: number | null;
+  /** Move the cursor to a frame, as a suspect list's frame does. */
+  onGo: (imageId: number) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(readPointingCollapsed);
+  const toggleCollapsed = () => setCollapsed((current) => {
+    const next = !current;
+    try {
+      window.localStorage.setItem(POINTING_COLLAPSED_KEY, String(next));
+    } catch {
+      // Keep the in-memory choice even when it cannot be persisted.
+    }
+    return next;
+  });
+  const titleId = useId();
+  const bodyId = useId();
+  const chartRef = useRef<SVGSVGElement>(null);
+
+  // A dot with focus follows the cursor as the arrows move it, so the
+  // next Enter goes on from there. A frame with no solve has no dot: focus
+  // goes to the chart's tab stop, never stays on the last frame's dot.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chart.contains(document.activeElement)) return;
+    (chart.querySelector<SVGGElement>(`[data-pointing-image-id="${currentImageId}"]`)
+      ?? chart.querySelector<SVGGElement>('.pointing-dot[tabindex="0"]'))
+      ?.focus({ preventScroll: true });
+  }, [currentImageId]);
+
   const points = images.flatMap(image => {
     const east = image.pointing?.east_offset_arcsec;
     const north = image.pointing?.north_offset_arcsec;
     return east != null && north != null
-      ? [{ image, east, north }]
+      ? [{ image, east, north, flagged: (image.flags ?? []).some(flag => POINTING_FLAGS.has(flag)) }]
       : [];
   });
   if (points.length < 2) return null;
   const expectedTarget = points.some(point => point.image.pointing?.expected_target);
+  const flaggedCount = points.filter(point => point.flagged).length;
 
   const extent = Math.max(
     30,
@@ -1330,33 +1416,88 @@ const PointingScatter = memo(function PointingScatter({ images }: { images: Imag
   const size = 180;
   const center = size / 2;
   const project = (value: number) => center + (value / extent) * (center - 15);
+  // The cursor's dot is drawn last, over its neighbours, and takes the
+  // chart's one tab stop; without one, the first dot does.
+  const current = points.find(point => point.image.image_id === currentImageId);
+  const drawn = current ? [...points.filter(point => point !== current), current] : points;
+  const tabStopId = current?.image.image_id ?? points[0].image.image_id;
 
   return (
-    <div className="pointing-scatter" style={{ display: 'flex', gap: '1rem', alignItems: 'center', margin: '0.75rem 0' }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Solved pointing offsets">
-        <rect x="0" y="0" width={size} height={size} fill="var(--color-bg-secondary)" rx="6" />
-        <line x1={center} y1="10" x2={center} y2={size - 10} stroke="var(--color-text-muted)" opacity="0.45" />
-        <line x1="10" y1={center} x2={size - 10} y2={center} stroke="var(--color-text-muted)" opacity="0.45" />
-        {points.map(({ image, east, north }) => (
-          <circle
-            key={image.image_id}
-            cx={project(east)}
-            cy={project(-north)}
-            r={(image.flags ?? []).some(flag => flag === 'off_target' || flag === 'pointing_jump' || flag === 'pointing_drift' || flag === 'rotation_skew') ? 5 : 3}
-            fill={qualityColor(image.quality_score)}
+    <section className="pointing-scatter" aria-labelledby={titleId}>
+      <h3 id={titleId}>
+        <button
+          type="button"
+          className="pointing-scatter-toggle"
+          aria-expanded={!collapsed}
+          aria-controls={collapsed ? undefined : bodyId}
+          onClick={toggleCollapsed}
+        >
+          <ChevronRight size={14} aria-hidden="true" />
+          Solved pointing
+        </button>
+        {collapsed && (
+          <small>
+            {points.length} solved frames
+            {flaggedCount > 0 && ` · ${flaggedCount} off target, jumped or drifting`}
+          </small>
+        )}
+      </h3>
+      {!collapsed && (
+        <div id={bodyId} className="pointing-scatter-body">
+          <svg
+            ref={chartRef}
+            width={size}
+            height={size}
+            viewBox={`0 0 ${size} ${size}`}
+            role="group"
+            aria-label="Solved pointing offsets"
           >
-            <title>Image {image.image_id}: E {east.toFixed(0)}″, N {north.toFixed(0)}″</title>
-          </circle>
-        ))}
-        <text x={size - 12} y={center - 4} textAnchor="end" fontSize="9" fill="var(--color-text-muted)">E</text>
-        <text x={center + 4} y="12" fontSize="9" fill="var(--color-text-muted)">N</text>
-      </svg>
-      <div style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
-        <strong style={{ color: 'var(--color-text-primary)' }}>Solved pointing</strong><br />
-        {expectedTarget ? 'Target' : 'First solved center'} is the crosshair. Range ±{extent.toFixed(0)}″.<br />
-        Large points are off-target, jumps, or drift.
-      </div>
-    </div>
+            <rect x="0" y="0" width={size} height={size} fill="var(--color-bg-secondary)" rx="6" />
+            <line x1={center} y1="10" x2={center} y2={size - 10} stroke="var(--color-text-muted)" opacity="0.45" />
+            <line x1="10" y1={center} x2={size - 10} y2={center} stroke="var(--color-text-muted)" opacity="0.45" />
+            {drawn.map(({ image, east, north, flagged }) => {
+              const label = `${frameTime(imageMap.get(image.image_id))}: ${
+                offsetWords(east, 'east', 'west')}, ${offsetWords(north, 'north', 'south')}`;
+              const go = () => onGo(image.image_id);
+              return (
+                <g
+                  key={image.image_id}
+                  className="pointing-dot"
+                  data-pointing-image-id={image.image_id}
+                  role="button"
+                  tabIndex={image.image_id === tabStopId ? 0 : -1}
+                  aria-label={label}
+                  aria-current={image === current?.image ? 'true' : undefined}
+                  onClick={go}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    go();
+                  }}
+                >
+                  <title>{label}</title>
+                  {/* A larger target than the dot, so a small one is easy to hit. */}
+                  <circle className="pointing-dot-hit" cx={project(east)} cy={project(-north)} r={9} />
+                  <circle
+                    className="pointing-dot-mark"
+                    cx={project(east)}
+                    cy={project(-north)}
+                    r={flagged ? 5 : 3}
+                    fill={qualityColor(image.quality_score)}
+                  />
+                </g>
+              );
+            })}
+            <text x={size - 12} y={center - 4} textAnchor="end" fontSize="9" fill="var(--color-text-muted)">E</text>
+            <text x={center + 4} y="12" fontSize="9" fill="var(--color-text-muted)">N</text>
+          </svg>
+          <p className="pointing-scatter-legend">
+            {expectedTarget ? 'Target' : 'First solved center'} is the crosshair. Range ±{extent.toFixed(0)}″.<br />
+            Large points are off-target, jumps, or drift. Click a point to go to its frame.
+          </p>
+        </div>
+      )}
+    </section>
   );
 });
 
@@ -1413,7 +1554,9 @@ const SequenceTimeline = memo(function SequenceTimeline({
   if (images.length === 0) return null;
 
   const chartWidth = Math.max(400, viewportWidth);
-  const chartHeight = 120;
+  // A phone's chart is shorter, so the docked block leaves room for the
+  // frames (see App.css).
+  const chartHeight = viewportWidth > 0 && viewportWidth < 560 ? 84 : 120;
   const padding = { top: 10, right: 10, bottom: 20, left: 36 };
   const innerWidth = chartWidth - padding.left - padding.right;
   const innerHeight = chartHeight - padding.top - padding.bottom;
@@ -1589,24 +1732,9 @@ const SequenceStrip = memo(function SequenceStrip({
   onOpen: (id: number, calibrationFocus?: string) => void;
 }) {
   useEffect(() => {
-    if (currentImageId === null) return;
-    requestAnimationFrame(() => {
-      const currentCard = stripRef.current?.querySelector<HTMLElement>(
-        '.sequence-image-card.current-selection',
-      );
-      const scroller = stripRef.current?.closest<HTMLElement>('.app-main');
-      if (!currentCard || !scroller) return;
-      const cardRect = currentCard.getBoundingClientRect();
-      const scrollerRect = scroller.getBoundingClientRect();
-      const isClipped =
-        cardRect.top < scrollerRect.top || cardRect.bottom > scrollerRect.bottom;
-      const isOutsideViewport =
-        cardRect.bottom <= scrollerRect.top || cardRect.top >= scrollerRect.bottom;
-      const fitsViewport = cardRect.height <= scrollerRect.height;
-      if (isOutsideViewport || (fitsViewport && isClipped)) {
-        currentCard.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      }
-    });
+    const strip = stripRef.current;
+    if (currentImageId === null || !strip) return;
+    return revealCardUntilStill(strip);
   }, [currentImageId, imageSize, stripRef]);
 
   const { timeMarks: marksChoice = 'nights-hours' } = useDisplayPreferences();
