@@ -8535,11 +8535,18 @@ mod tests {
         assert_eq!(second.job.state, StackJobState::Queued);
         assert_eq!(state.stack_previews.line_position(&job_id), Some(0));
         drop(busy);
+        // The job shows Completed before its manifest and the latest index
+        // are written, so wait for the index, which is written last.
         eventually("the preview renders", || {
-            state
-                .stack_previews
-                .get(&job_id)
-                .is_some_and(|job| job.state == StackJobState::Completed)
+            std::fs::read(latest_path(cache.path(), 7))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<LatestStackPreviews>(&bytes).ok())
+                .is_some_and(|latest| {
+                    latest
+                        .groups
+                        .first()
+                        .is_some_and(|entry| entry.group.preview_revision.is_some())
+                })
         })
         .await;
 
