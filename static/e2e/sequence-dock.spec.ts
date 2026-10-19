@@ -97,6 +97,10 @@ function layout(page: Page, imageId: number) {
       toolbarBottom: document.querySelector<HTMLElement>('.sequence-view > .view-toolbar')!.getBoundingClientRect().bottom - origin,
       dockTop: dock.getBoundingClientRect().top - origin,
       dockBottom: dock.getBoundingClientRect().bottom - origin,
+      // A suspect list hangs below the docked block, over the strip.
+      listBottom: dock.hasAttribute('data-docked')
+        ? (dock.querySelector('.sequence-issue-list')?.getBoundingClientRect().bottom ?? origin) - origin
+        : 0,
       cardTop: card.getBoundingClientRect().top - origin,
       cardBottom: card.getBoundingClientRect().bottom - origin,
     };
@@ -121,8 +125,28 @@ const scrollAtRest = (page: Page) => page.evaluate(() => new Promise<void>((reso
 /** Whether a card shows whole between the docked chart and the bottom. */
 async function clearOfDock(page: Page, imageId: number) {
   const place = await layout(page, imageId);
-  const covered = Math.max(place.toolbarBottom, place.dockBottom);
+  const covered = Math.max(place.toolbarBottom, place.dockBottom, place.listBottom);
   return place.cardTop >= covered - 1 && place.cardBottom <= place.viewportBottom + 1;
+}
+
+/** The first card wholly below the docked block. */
+function cardUnderDock(page: Page) {
+  return page.evaluate(() => {
+    const dock = document.querySelector('.toolbar-dock')!.getBoundingClientRect().bottom;
+    const card = Array.from(document.querySelectorAll<HTMLElement>('.sequence-image-card'))
+      .find((element) => element.getBoundingClientRect().top >= dock + 10)!;
+    return Number(card.dataset.cardImageId);
+  });
+}
+
+/** The lowest card wholly in the window. */
+function lowestCardInView(page: Page) {
+  return page.evaluate(() => {
+    const bottom = document.querySelector('.app-main')!.getBoundingClientRect().bottom;
+    const cards = Array.from(document.querySelectorAll<HTMLElement>('.sequence-image-card'))
+      .filter((element) => element.getBoundingClientRect().bottom <= bottom);
+    return Number(cards[cards.length - 1].dataset.cardImageId);
+  });
 }
 
 /** Scroll into the strip until the block docks. */
@@ -232,12 +256,11 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   });
 }
 
-// A suspect list open in the docked summary: the block grows. Where it
-// still fits, it stays docked and the cursor's card moves out from under
-// it; where it would leave the strip too little of the window, it stops
-// docking and keeps its place, so the list just opened stays in sight.
+// A suspect list opened from the docked summary hangs below the block, over
+// the strip, rather than growing it: the block stays docked and the page
+// stays put. A cursor's card it would cover moves out from under it.
 test.describe('with a suspect list open', () => {
-  test('a short list keeps the block docked and the cursor\'s card clear of it', async ({ page, request }) => {
+  test('a list keeps the block docked and moves the cursor\'s card out from under it', async ({ page, request }) => {
     test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     await stubPixelWork(page);
@@ -245,13 +268,7 @@ test.describe('with a suspect list open', () => {
     const dbId = await register(request, sessionCatalog());
     await openSequence(page, dbId);
     await scrollToDock(page);
-    // The cursor on a card just under the block.
-    const target = await page.evaluate(() => {
-      const dock = document.querySelector('.toolbar-dock')!.getBoundingClientRect().bottom;
-      const card = Array.from(document.querySelectorAll<HTMLElement>('.sequence-image-card'))
-        .find((element) => element.getBoundingClientRect().top >= dock + 10)!;
-      return Number(card.dataset.cardImageId);
-    });
+    const target = await cardUnderDock(page);
     await page.locator(`.sequence-image-card[data-card-image-id="${target}"]`).click();
     await expect(page).toHaveURL(new RegExp(`current=${target}(&|$)`));
 
@@ -261,47 +278,78 @@ test.describe('with a suspect list open', () => {
     await expect.poll(() => clearOfDock(page, target)).toBe(true);
   });
 
-  for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
-    test(`at ${viewport.width}×${viewport.height} a long list stops the block docking`, async ({ page, request }) => {
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 1366, height: 768 }, { width: 390, height: 844 }]) {
+    test(`deep in the strip at ${viewport.width}×${viewport.height}, a long list opens and closes in place`, async ({ page, request }) => {
       test.setTimeout(90_000);
       await page.setViewportSize(viewport);
       await stubPixelWork(page);
       await withPointing(page, 30);
       const dbId = await register(request, sessionCatalog());
       await openSequence(page, dbId);
-      await scrollToDock(page);
-
-      const pill = page.locator('.toolbar-dock .summary-issues [data-issue]');
-      // From the top of the scrolling region, which a phone's header moves
-      // as it slides back in on a scroll up.
-      const pillTop = () => page.evaluate(() =>
-        document.querySelector('.toolbar-dock .summary-issues [data-issue]')!.getBoundingClientRect().top
-        - document.querySelector('.app-main')!.getBoundingClientRect().top);
-      const before = await pillTop();
-      await pill.click();
+      // Far down, once the view has brought its first card into sight.
+      await scrollAtRest(page);
+      await page.evaluate(() => {
+        const scroller = document.querySelector<HTMLElement>('.app-main')!;
+        scroller.scrollTop = scroller.scrollHeight;
+      });
+      await scrollAtRest(page);
       const dock = page.locator('.toolbar-dock');
-      await expect(dock).toHaveAttribute('data-too-tall', 'true');
-      await expect(dock).not.toHaveAttribute('data-docked');
-      // It stays where it was, with the list under the pill.
-      expect(await pillTop()).toBeCloseTo(before, 0);
-      await expect(page.locator('.sequence-issue-list')).toBeInViewport();
+      await expect(dock).toHaveAttribute('data-docked', 'true');
+      const pill = dock.locator('.summary-issues [data-issue]');
+      await pill.click();
+      await expect(dock.locator('.sequence-issue-list')).toBeVisible();
+      await expect(dock).toHaveAttribute('data-docked', 'true');
 
-      // A frame from the list, then the arrows: each card shows whole.
-      const frames = page.locator('.sequence-issue-frame');
-      await frames.nth(25).click();
-      let current = Number(new URL(page.url().replace('/#/', '/')).searchParams.get('current'));
-      await expect.poll(() => clearOfDock(page, current)).toBe(true);
-      for (let press = 0; press < 3; press += 1) {
-        await page.keyboard.press('ArrowDown');
-        await expect(page).not.toHaveURL(new RegExp(`current=${current}(&|$)`));
-        current = Number(new URL(page.url().replace('/#/', '/')).searchParams.get('current'));
-        await expect.poll(() => clearOfDock(page, current)).toBe(true);
+      // The cursor on a card low in the window, below the list.
+      const target = await lowestCardInView(page);
+      await page.locator(`.sequence-image-card[data-card-image-id="${target}"]`).click();
+      await expect(page).toHaveURL(new RegExp(`current=${target}(&|$)`));
+      await scrollAtRest(page);
+      await expect.poll(() => clearOfDock(page, target)).toBe(true);
+      const start = (await layout(page, target)).scrollTop;
+
+      // Closing and opening the list moves neither the page nor the card
+      // out of sight.
+      for (const open of [false, true]) {
+        await pill.click();
+        await expect(dock.locator('.sequence-issue-list')).toHaveCount(open ? 1 : 0);
+        await expect(dock).toHaveAttribute('data-docked', 'true');
+        await scrollAtRest(page);
+        await expect.poll(() => clearOfDock(page, target)).toBe(true);
+        expect(Math.abs((await layout(page, target)).scrollTop - start)).toBeLessThanOrEqual(2);
       }
-      // Scrolled on, the block scrolls away rather than covering the strip.
-      await page.evaluate(() => { document.querySelector<HTMLElement>('.app-main')!.scrollTop += 400; });
-      await settle(page);
-      const place = await layout(page, current);
-      expect(place.dockBottom).toBeLessThanOrEqual(place.toolbarBottom + 1);
     });
   }
+});
+
+test('on a phone, the header sliding away and back does not flip the block between docked and too tall', async ({ page, request }) => {
+  test.setTimeout(90_000);
+  // A short phone, where the toolbar and the block (with a pill making
+  // the summary a line taller) cover more than 55% of the room with the
+  // header in sight, but less with it slid away: measured from the
+  // scrolling region as it is, the block flipped as the header moved.
+  await page.setViewportSize({ width: 390, height: 800 });
+  await stubPixelWork(page);
+  await withPointing(page, 2);
+  const dbId = await register(request, sessionCatalog());
+  await openSequence(page, dbId);
+  await scrollAtRest(page);
+  await page.evaluate(() => { document.querySelector<HTMLElement>('.app-main')!.scrollTop = 1500; });
+  await scrollAtRest(page);
+  await expect(page.locator('.toolbar-dock')).toHaveAttribute('data-too-tall', 'true');
+  await page.evaluate(() => {
+    const w = window as unknown as { flips: number };
+    w.flips = 0;
+    new MutationObserver(() => { w.flips += 1; })
+      .observe(document.querySelector('.toolbar-dock')!, { attributes: true, attributeFilter: ['data-too-tall'] });
+  });
+  // Down far enough for the header to slide away, then back up for it
+  // to return, a step at a time.
+  for (const step of [...Array(8).fill(60), ...Array(8).fill(-60)]) {
+    await page.mouse.wheel(0, step);
+    await page.waitForTimeout(60);
+  }
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => (window as unknown as { flips: number }).flips)).toBe(0);
+  await expect(page.locator('.toolbar-dock')).toHaveAttribute('data-too-tall', 'true');
 });

@@ -303,12 +303,13 @@ is. A click on the pill again closes the list. Each filter's **All sessions**
 tab leads its row of session tabs and is marked in its own colour.
 The summary, an open suspect list and the score chart dock under the
 toolbar once the page scrolls to them, and stay there while the frames
-scroll under them; they scroll with the page again at the top. They dock
-only while they and the toolbar leave the frames at least 45% of the
-window. A long suspect list on a laptop, or a phone on its side, makes them
-scroll with the page instead; a list opened from the docked summary then
-stays where it opened. A frame the cursor moves to always shows below them,
-never under them, also after they grow or shrink.
+scroll under them; they scroll with the page again at the top. A suspect
+list hangs below them, over the frames (on a phone, over the chart), so
+opening or closing one never moves the page. They dock only while they and
+the toolbar leave the frames about half of the window, measured with the
+header in sight; on a window too short for that, such as a phone on its
+side, they scroll with the page. A frame the cursor moves to always shows
+below them and an open list, never under them.
 The **Solved pointing** chart plots each solved frame's centre around the
 target, with the cursor's frame ringed. A click on a point, or Enter on it
 from the keyboard, moves the cursor to that frame as a suspect list does;

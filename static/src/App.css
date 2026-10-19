@@ -6836,9 +6836,8 @@
 /* The summary, its suspect list and the score chart dock under the
    toolbar (ToolbarDock), and the strip passes under them. The block is
    opaque and holds its children's margins, so no card shows through. It
-   is never a scroll anchor: as it changes size, Chrome and Safari both
-   leave the page under it alone, and the strip brings the cursor's card
-   back into sight. */
+   is never a scroll anchor itself; when it changes size, the strip brings
+   the cursor's card back into sight. */
 .toolbar-dock-sentinel {
   height: 1px;
   margin-bottom: -1px;
@@ -6858,10 +6857,35 @@
   box-shadow: var(--shadow-docked);
 }
 
-/* Too tall to dock beside the window's share for the page, such as with a
-   long list open on a laptop or on a phone on its side: it scrolls away. */
+/* A suspect list hangs below the block, over the page, instead of growing
+   it: opening or closing one never moves the page or makes the block too
+   tall to dock. */
+.toolbar-dock .sequence-issue-list {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  margin-top: 0;
+  box-shadow: var(--shadow-popover);
+}
+
+/* Kept short, so a card still fits whole below it on a laptop. */
+.toolbar-dock .sequence-issue-list ol {
+  max-height: min(9rem, 14vh);
+}
+
+/* A phone has no room below the block for it: it hangs over the score
+   chart instead, from just below the summary. */
+@media (max-width: 760px) {
+  .toolbar-dock .sequence-issue-list {
+    top: auto;
+  }
+}
+
+/* Too tall to dock, such as on a phone on its side: it scrolls with the
+   page, and still holds the list that hangs below it. */
 .toolbar-dock[data-too-tall] {
-  position: static;
+  position: relative;
 }
 
 /* Solved pointing: each frame's solved centre around the target. A point

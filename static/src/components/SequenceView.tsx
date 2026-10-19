@@ -488,16 +488,21 @@ export default function SequenceView() {
   const activeImageIdRef = useRef(activeImageId);
   activeImageIdRef.current = activeImageId;
   const sequenceStripRef = useRef<HTMLDivElement>(null);
-  // The docked chart changing size, as a suspect list opens or its line
-  // rewraps, moves the strip under it: bring the cursor's card back.
+  // The docked chart changing size, as its line rewraps, docking again, or
+  // a suspect list opening below it, can cover the cursor's card: bring it
+  // back, if it was in the window.
   const stopRevealRef = useRef<(() => void) | null>(null);
-  const revealAfterDockResize = useCallback(() => {
+  const revealAfterCoverChange = useCallback(() => {
     const strip = sequenceStripRef.current;
     if (!strip) return;
     stopRevealRef.current?.();
-    stopRevealRef.current = revealCardUntilStill(strip);
+    stopRevealRef.current = revealCardUntilStill(strip, { onlyInWindow: true });
   }, []);
   useEffect(() => () => stopRevealRef.current?.(), []);
+  const openIssueKey = openIssue?.key ?? null;
+  useEffect(() => {
+    if (openIssueKey !== null) revealAfterCoverChange();
+  }, [openIssueKey, revealAfterCoverChange]);
   // Turning the order around. At rest, the page stays put and the cursor
   // moves to the new first card. Once the person has moved, the current
   // card keeps its place on screen.
@@ -1205,7 +1210,7 @@ export default function SequenceView() {
             <>
               {/* The summary, its suspect list and the chart stay under
                   the toolbar while the strip scrolls. */}
-              <ToolbarDock onDockedResize={revealAfterDockResize}>
+              <ToolbarDock onCoverChange={revealAfterCoverChange}>
                 <div className="sequence-summary-bar">
                   <div className="summary-stats">
                     <span className="summary-item excellent">{activeSequence.summary.excellent_count} at 90–100</span>

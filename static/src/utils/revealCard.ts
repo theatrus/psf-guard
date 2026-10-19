@@ -8,17 +8,29 @@ const MAX_CHECKS = 20;
 /**
  * Scrolls a Sequence strip's current card into sight, as scrollIntoView's
  * `nearest` does, but measured from below what covers the top of the page:
- * the sticky toolbar and the docked chart beside the strip. True when it
+ * the sticky toolbar, the docked chart beside the strip, and a suspect list
+ * hanging below the chart while it is docked. (Not docked, the list moves
+ * with the page, and scrolling cannot clear a card under it.) True when it
  * had to scroll.
  */
-export function revealCard(strip: HTMLElement): boolean {
+export interface RevealOptions {
+  /** Leave a card wholly outside the scrolling region where it is: after
+   *  the covers change, only a card that was in the window is kept there,
+   *  and one the person scrolled away from stays away. */
+  onlyInWindow?: boolean;
+}
+
+export function revealCard(strip: HTMLElement, { onlyInWindow = false }: RevealOptions = {}): boolean {
   const card = strip.querySelector<HTMLElement>('.sequence-image-card.current-selection');
   const scroller = strip.closest<HTMLElement>('.app-main');
   if (!card || !scroller) return false;
   const cardRect = card.getBoundingClientRect();
   const scrollerRect = scroller.getBoundingClientRect();
+  if (onlyInWindow && (cardRect.bottom <= scrollerRect.top || cardRect.top >= scrollerRect.bottom)) {
+    return false;
+  }
   const covers = strip.parentElement?.querySelectorAll<HTMLElement>(
-    ':scope > .view-toolbar.sticky, :scope > .toolbar-dock',
+    ':scope > .view-toolbar.sticky, :scope > .toolbar-dock, :scope > .toolbar-dock[data-docked] .sequence-issue-list',
   ) ?? [];
   const visibleTop = Math.max(
     scrollerRect.top,
@@ -45,7 +57,7 @@ export function revealCard(strip: HTMLElement): boolean {
  * The person's own scroll, by wheel, touch, scrollbar or key, ends it, so
  * it never pulls the page back from them.
  */
-export function revealCardUntilStill(strip: HTMLElement): () => void {
+export function revealCardUntilStill(strip: HTMLElement, options: RevealOptions = {}): () => void {
   const scroller = strip.closest<HTMLElement>('.app-main');
   let frame = 0;
   let checks = 0;
@@ -59,12 +71,12 @@ export function revealCardUntilStill(strip: HTMLElement): () => void {
   };
   const check = () => {
     checks += 1;
-    still = revealCard(strip) ? 0 : still + 1;
+    still = revealCard(strip, options) ? 0 : still + 1;
     if (still < STILL_FRAMES && checks < MAX_CHECKS) frame = requestAnimationFrame(check);
     else stop();
   };
   frame = requestAnimationFrame(() => {
-    if (revealCard(strip)) frame = requestAnimationFrame(check);
+    if (revealCard(strip, options)) frame = requestAnimationFrame(check);
     else stop();
   });
   scroller?.addEventListener('wheel', stop, { passive: true });

@@ -1,8 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-
-/** The most of the scrolling region the toolbar and the docked block may
- *  cover together; the page under them keeps the rest. */
-export const DOCK_MAX_SHARE = 0.55;
+import { nextTooTall, pageRoom } from '../utils/toolbarDock';
 
 /**
  * Keeps its children in sight under the view's sticky toolbar. They scroll
@@ -16,19 +13,21 @@ export const DOCK_MAX_SHARE = 0.55;
  * sentinel just above it tells when: once the sentinel passes under the
  * toolbar, the block has stuck.
  *
- * A block that would cover more than DOCK_MAX_SHARE of the window with the
- * toolbar, such as one holding a long list on a laptop or a phone on its
- * side, does not dock: it is marked `data-too-tall` and scrolls with the
- * page. When it grows too tall while docked, the page scrolls to keep it
- * where it was on screen, so what grew it, such as a list opening, stays in
- * sight. `onDockedResize` hears when it changes size while docked, which
- * moves the page under it.
+ * The toolbar and the block leave the page about half the window. A block
+ * too tall for that, such as on a phone on its side, is marked
+ * `data-too-tall` and scrolls with the page (see DOCK_SHARE). Its height is
+ * measured with the header in sight, so a phone's header sliding away as
+ * the page scrolls down does not change the answer. A list that opens from
+ * the block hangs below it rather than growing it (App.css).
+ *
+ * `onCoverChange` hears when the block changes size while the page is
+ * scrolled past its place, or docks again: either moves what it covers.
  *
  * It belongs beside a `.view-toolbar.sticky` with the same parent.
  */
-export default function ToolbarDock({ children, onDockedResize }: {
+export default function ToolbarDock({ children, onCoverChange }: {
   children: ReactNode;
-  onDockedResize?: () => void;
+  onCoverChange?: () => void;
 }) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
@@ -37,13 +36,11 @@ export default function ToolbarDock({ children, onDockedResize }: {
   const [tooTall, setTooTall] = useState(false);
   const docked = passed && !tooTall;
   // For the observers, which outlive a render.
-  const dockedRef = useRef(docked);
-  dockedRef.current = docked;
+  const passedRef = useRef(passed);
+  passedRef.current = passed;
   const tooTallRef = useRef(tooTall);
-  const onResizeRef = useRef(onDockedResize);
-  onResizeRef.current = onDockedResize;
-  // Where the block was on screen as it grew too tall to dock.
-  const placeRef = useRef<number | null>(null);
+  const onCoverChangeRef = useRef(onCoverChange);
+  onCoverChangeRef.current = onCoverChange;
 
   useLayoutEffect(() => {
     const dock = dockRef.current;
@@ -55,16 +52,16 @@ export default function ToolbarDock({ children, onDockedResize }: {
       const height = toolbar.getBoundingClientRect().height;
       dock.style.setProperty('--toolbar-dock-top', `${height}px`);
       setToolbarHeight(Math.round(height));
-      const room = scroller?.clientHeight ?? window.innerHeight;
-      const nextTooTall = room > 0 && height + dock.offsetHeight > room * DOCK_MAX_SHARE;
-      if (nextTooTall !== tooTallRef.current) {
-        tooTallRef.current = nextTooTall;
-        placeRef.current = nextTooTall && dockedRef.current ? dock.getBoundingClientRect().top : null;
-        setTooTall(nextTooTall);
+      const room = pageRoom(scroller);
+      if (room <= 0) return;
+      const next = nextTooTall(tooTallRef.current, (height + dock.offsetHeight) / room);
+      if (next !== tooTallRef.current) {
+        tooTallRef.current = next;
+        setTooTall(next);
       }
       const resized = dockHeight !== null && dockHeight !== dock.offsetHeight;
       dockHeight = dock.offsetHeight;
-      if (resized && !nextTooTall && dockedRef.current) onResizeRef.current?.();
+      if (resized && passedRef.current) onCoverChangeRef.current?.();
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
@@ -75,15 +72,12 @@ export default function ToolbarDock({ children, onDockedResize }: {
     return () => observer.disconnect();
   }, []);
 
-  // Grown too tall while docked: it now sits where the page puts it, so
-  // scroll the page to bring it back to where it was.
-  useLayoutEffect(() => {
-    const place = placeRef.current;
-    placeRef.current = null;
-    const dock = dockRef.current;
-    const scroller = dock?.closest<HTMLElement>('.app-main');
-    if (place === null || !dock || !scroller) return;
-    scroller.scrollTop += dock.getBoundingClientRect().top - place;
+  // Docking again once it fits, it covers the top of the page again.
+  // Reaching the toolbar by scrolling covers nothing that was in sight.
+  const wasTooTall = useRef(tooTall);
+  useEffect(() => {
+    if (wasTooTall.current && !tooTall && passedRef.current) onCoverChangeRef.current?.();
+    wasTooTall.current = tooTall;
   }, [tooTall]);
 
   useEffect(() => {
