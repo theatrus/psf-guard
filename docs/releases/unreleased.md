@@ -23,3 +23,7 @@
   waiting while the server reads every frame and matches calibration. The
   build then takes its place as one build per channel, and you can stop it
   while it is prepared.
+- After a rebuild you ask for, **Re-apply processing when a stack
+  refreshes** runs each channel's processing right after its build, ahead of
+  your other queued builds. It used to wait at the back of the queue until
+  every other build was done, and stepped aside whenever you started work.

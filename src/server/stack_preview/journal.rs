@@ -462,13 +462,11 @@ pub async fn restore(state: &Arc<AppState>) {
                 );
                 // A re-apply given up on here must not come back through
                 // the carry its stack's selection remembers.
-                if job.automatic() {
-                    super::reapply::give_up(
-                        state,
-                        &job,
-                        &format!("it was cut off by {MAX_ATTEMPTS} restarts in a row"),
-                    );
-                }
+                super::reapply::give_up(
+                    state,
+                    &job,
+                    &format!("it was cut off by {MAX_ATTEMPTS} restarts in a row"),
+                );
                 continue;
             };
             let automatic = job.automatic();

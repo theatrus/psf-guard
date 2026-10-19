@@ -2,13 +2,16 @@
 //!
 //! Processing (a stretch, deconvolution or RC-Astro chain) belongs to one
 //! revision of a stack. When a build publishes a new revision of a channel
-//! whose previous revision showed processing, whether an automatic refresh or
-//! a person's rebuild, the same request is queued against the new revision as
-//! automatic work, with no browser needed. It waits until no refresh of its
-//! project is still settling and nothing else wants the worker, steps aside
-//! for work a person starts, and only ever runs on the channel's newest
-//! revision. Meanwhile the card shows the previous result, marked as such.
-//! Each revision carries once: a re-apply that fails is not tried again.
+//! whose previous revision showed processing, the same request is queued
+//! against the new revision, with no browser needed. After an automatic
+//! refresh it is automatic work: it waits until no refresh of its project is
+//! still settling and nothing else wants the worker, and steps aside for
+//! work a person starts. After a build a person started it is their work: it
+//! goes to the front of the line, runs as soon as the build in hand is done,
+//! and steps aside for nothing. Either way one re-apply joins the line at a
+//! time, and it only ever runs on the channel's newest revision. Meanwhile
+//! the card shows the previous result, marked as such. Each revision carries
+//! once: a re-apply that fails is not tried again.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,6 +55,8 @@ pub(super) struct Reapply {
     pub revision: String,
     pub source_key: String,
     pub request: StackViewProcessingRequest,
+    /// Carried from a build a person started, so it is their work.
+    pub personal: bool,
     /// The run, once queued.
     pub run_id: Option<String>,
     pub since: Instant,
@@ -169,6 +174,18 @@ impl StackPreviewManager {
             .map(|(channel, reapply)| (channel.clone(), reapply.clone()))
     }
 
+    /// Whether a re-apply's run is in the line or running, and not stepping
+    /// aside.
+    fn reapply_in_line(&self) -> bool {
+        let yielded = self.yielded.lock().unwrap().clone();
+        self.reapplies.lock().unwrap().values().any(|reapply| {
+            reapply
+                .run_id
+                .as_ref()
+                .is_some_and(|run_id| !yielded.contains(run_id))
+        })
+    }
+
     fn forget_reapply(&self, channel: &str) {
         self.reapplies.lock().unwrap().remove(channel);
     }
@@ -197,11 +214,13 @@ pub(super) fn is_latest(ctx: &DatabaseContext, project_id: i32, source: &Stretch
 /// A build published new revisions of these channels, each over the one the
 /// card showed before. Carry each previous revision's processing over and
 /// queue it again; drop a re-apply still waiting on an older revision.
+/// `personal` when a person started the build, or took it over.
 pub(super) fn after_build(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
     project_id: i32,
     replaced: Vec<(LatestStackPreviewGroup, LatestStackPreviewGroup)>,
+    personal: bool,
 ) {
     let manager = &state.stack_previews;
     let mut added = false;
@@ -218,6 +237,7 @@ pub(super) fn after_build(
                 &previous.artifact_revision,
                 &current_key,
                 &current.artifact_revision,
+                personal,
             )
         } else {
             Ok(None)
@@ -249,6 +269,7 @@ pub(super) fn after_build(
                         revision: current.artifact_revision.clone(),
                         source_key: current_key,
                         request,
+                        personal,
                         run_id: None,
                         since: Instant::now(),
                     },
@@ -322,9 +343,10 @@ pub(super) fn kick(state: &Arc<AppState>) {
     });
 }
 
-/// Start the oldest waiting re-apply, if the worker has nothing else to do
-/// and no refresh of its project is still settling. One at a time: the run
-/// it queues keeps the next one waiting.
+/// Start the oldest waiting re-apply: a person's as soon as no other
+/// re-apply is in the line, an automatic one once the worker has nothing
+/// else to do and no refresh of its project is still settling. One at a
+/// time: the run it queues keeps the next one waiting.
 pub(super) async fn start_due(state: Arc<AppState>) {
     static STARTING: AtomicBool = AtomicBool::new(false);
     if STARTING.swap(true, Ordering::AcqRel) {
@@ -340,10 +362,12 @@ pub(super) async fn start_due(state: Arc<AppState>) {
     if !enabled() || !super::journal::restored() || state.shutdown.is_stopping() {
         return;
     }
-    // Behind anything a person started and every build.
-    if state.interactive_job_active() || !state.stack_previews.active().is_empty() {
+    if state.stack_previews.reapply_in_line() {
         return;
     }
+    // An automatic one waits behind anything a person started and every
+    // build. A person's own is theirs: it goes next.
+    let busy = state.interactive_job_active() || !state.stack_previews.active().is_empty();
     let scheduled = state.auto_stacks.scheduled();
     let mut waiting = state
         .stack_previews
@@ -351,19 +375,22 @@ pub(super) async fn start_due(state: Arc<AppState>) {
         .lock()
         .unwrap()
         .iter()
-        .filter(|(_, reapply)| reapply.run_id.is_none())
+        .filter(|(_, reapply)| reapply.run_id.is_none() && (reapply.personal || !busy))
         .map(|(channel, reapply)| (channel.clone(), reapply.clone()))
         .collect::<Vec<_>>();
-    waiting.sort_by_key(|(_, reapply)| reapply.since);
+    waiting.sort_by_key(|(_, reapply)| (!reapply.personal, reapply.since));
     for (channel, reapply) in waiting {
         // A refresh still settling may bring a newer stack within minutes:
-        // starting RC-Astro now would only be thrown away.
-        if scheduled.iter().any(|refresh| {
-            refresh.database_id == reapply.database_id
-                && refresh
-                    .project_id
-                    .is_none_or(|project_id| project_id == reapply.project_id)
-        }) {
+        // starting RC-Astro now would only be thrown away. A person's
+        // rebuild has already brought the stack they asked for.
+        if !reapply.personal
+            && scheduled.iter().any(|refresh| {
+                refresh.database_id == reapply.database_id
+                    && refresh
+                        .project_id
+                        .is_none_or(|project_id| project_id == reapply.project_id)
+            })
+        {
             continue;
         }
         let manager = &state.stack_previews;
@@ -413,6 +440,7 @@ pub(super) async fn start_due(state: Arc<AppState>) {
             reapply.group_index,
             &reapply.revision,
             reapply.request.clone(),
+            reapply.personal,
             &still_wanted,
         )
         .await
@@ -558,7 +586,7 @@ pub(super) fn replaced_by_person(
 /// too many restarts in a row, or no longer restorable. Its carry is
 /// settled as failed with the reason, so its card stops waiting and
 /// [`recover`] never brings it back with its attempts reset. Anything other
-/// than a processing run is left alone.
+/// than a re-apply's run is left alone.
 pub(super) fn give_up(
     state: &Arc<AppState>,
     job: &super::journal::JournaledStackJob,
@@ -569,6 +597,8 @@ pub(super) fn give_up(
         job_id,
         group_index,
         revision,
+        run_id,
+        automatic,
         ..
     } = job
     else {
@@ -578,6 +608,10 @@ pub(super) fn give_up(
         return;
     };
     let key = source_key(job_id, *group_index);
+    // A person's re-apply is journaled as theirs; its carry knows the run.
+    if !automatic && !stretch::carries_run(&ctx.stack_root, &key, revision, run_id) {
+        return;
+    }
     tracing::warn!(
         db = %database_id,
         "A re-apply of processing to a refreshed stack is given up: {reason}"
@@ -636,6 +670,7 @@ pub(super) fn restored(
     project_id: i32,
     source: &StretchSource,
     request: StackViewProcessingRequest,
+    personal: bool,
     run_id: &str,
 ) {
     state.stack_previews.reapplies.lock().unwrap().insert(
@@ -650,6 +685,7 @@ pub(super) fn restored(
             revision: source.revision.clone(),
             source_key: source.key.clone(),
             request,
+            personal,
             run_id: Some(run_id.into()),
             since: Instant::now(),
         },
@@ -708,6 +744,7 @@ pub(super) fn recover(state: &Arc<AppState>) {
                     revision: waiting.revision,
                     source_key: waiting.key,
                     request: waiting.request,
+                    personal: waiting.personal,
                     run_id: None,
                     since: Instant::now(),
                 },

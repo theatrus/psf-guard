@@ -871,7 +871,9 @@ async fn refresh_project(
             let state = Arc::clone(state);
             let ctx = Arc::clone(ctx);
             let _ = tokio::task::spawn_blocking(move || {
-                if let Err(error) = super::persist_latest_and_reapply(&state, &ctx, &existing) {
+                if let Err(error) =
+                    super::persist_latest_and_reapply(&state, &ctx, &existing, false)
+                {
                     tracing::warn!("could not point the card back at a finished build: {error}");
                 }
                 compose_colors_after(&state, &ctx, &existing);

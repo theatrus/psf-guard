@@ -587,6 +587,9 @@ struct CarriedProcessing {
     from_stretch_id: String,
     from_revision: String,
     state: CarryState,
+    /// Carried from a build a person started: the re-apply is theirs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    personal: bool,
     /// The re-apply's run, once it is queued.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     run_id: Option<String>,
@@ -1283,9 +1286,7 @@ pub(super) async fn restore_run(
     let result = restore_processing(state, origin.clone()).await;
     // A re-apply that does not come back is settled as failed, so its
     // card stops waiting and no recovery revives it.
-    if origin.automatic()
-        && let Err(super::journal::NotRestored::Skip(reason)) = &result
-    {
+    if let Err(super::journal::NotRestored::Skip(reason)) = &result {
         super::reapply::give_up(state, &origin, reason);
     }
     result
@@ -1336,8 +1337,10 @@ async fn restore_processing(
             short_id(&job_id)
         )));
     }
+    // A person's re-apply is journaled as theirs; its carry knows the run.
+    let reapply = automatic || carries_run(&ctx.stack_root, &source.key, &source.revision, &run_id);
     // A re-apply only ever runs on the newest revision of its channel.
-    if automatic && !super::reapply::is_latest(&ctx, project_id, &source) {
+    if reapply && !super::reapply::is_latest(&ctx, project_id, &source) {
         return Err(NotRestored::Skip(format!(
             "a newer stack replaced {}",
             short_id(&job_id)
@@ -1384,13 +1387,14 @@ async fn restore_processing(
         attempts,
         running,
     };
-    if automatic {
+    if reapply {
         super::reapply::restored(
             state,
             &ctx.id,
             project_id,
             &source,
             prepared.request(),
+            !automatic,
             &stretch_id,
         );
     }
@@ -1428,10 +1432,12 @@ pub(super) enum ReapplyStart {
 }
 
 /// Queue a re-apply: the request the previous revision showed, run on the
-/// new revision as automatic work in the build line. `still_wanted` is asked
-/// again once the tools are probed, under the selection lock, together with
-/// whether the revision's carry still waits: whatever a person did
-/// meanwhile wins.
+/// new revision in the build line. An automatic one joins the back as
+/// automatic work; a `personal` one, carried from a person's build, is
+/// theirs and goes to the front. `still_wanted` is asked again once the
+/// tools are probed, under the selection lock, together with whether the
+/// revision's carry still waits: whatever a person did meanwhile wins.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn start_reapply(
     state: &Arc<AppState>,
     ctx: &super::DatabaseContext,
@@ -1439,6 +1445,7 @@ pub(super) async fn start_reapply(
     group_index: usize,
     revision: &str,
     request: StackViewProcessingRequest,
+    personal: bool,
     still_wanted: &(dyn Fn() -> bool + Send + Sync),
 ) -> Result<ReapplyStart, String> {
     let source = super::stack_processing_source(state, ctx, job_id, group_index)
@@ -1494,7 +1501,7 @@ pub(super) async fn start_reapply(
         revision: source.revision.clone(),
         run_id: stretch_id.clone(),
         request: Box::new(prepared.request()),
-        automatic: true,
+        automatic: !personal,
         attempts: 0,
         running: false,
     };
@@ -1515,6 +1522,10 @@ pub(super) async fn start_reapply(
         token,
         origin,
     );
+    // Next after the work in hand, ahead of the person's other builds.
+    if personal {
+        state.stack_previews.move_in_line(&stretch_id, 0);
+    }
     Ok(ReapplyStart::Queued(stretch_id))
 }
 
@@ -1561,6 +1572,7 @@ pub(super) fn carry_processing(
     previous_revision: &str,
     current_key: &str,
     current_revision: &str,
+    personal: bool,
 ) -> Result<Option<(StackViewProcessingRequest, String)>, String> {
     let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
     let current_path = selection_path(stack_root, current_key, current_revision);
@@ -1605,6 +1617,7 @@ pub(super) fn carry_processing(
                 from_stretch_id: shown.clone(),
                 from_revision: previous_revision.into(),
                 state: CarryState::Waiting,
+                personal,
                 run_id: None,
                 error: None,
             }),
@@ -1681,6 +1694,7 @@ pub(super) struct WaitingCarry {
     pub key: String,
     pub revision: String,
     pub request: StackViewProcessingRequest,
+    pub personal: bool,
 }
 
 pub(super) fn waiting_carries(stack_root: &FsPath) -> Vec<WaitingCarry> {
@@ -1704,9 +1718,28 @@ pub(super) fn waiting_carries(stack_root: &FsPath) -> Vec<WaitingCarry> {
                 key: source.key,
                 revision: source.revision,
                 request,
+                personal: carried.personal,
             })
         })
         .collect()
+}
+
+/// Whether a revision's carried processing still waits on this run: the run
+/// is its re-apply.
+pub(super) fn carries_run(
+    stack_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+    run_id: &str,
+) -> bool {
+    let Ok(_guard) = SELECTION_LOCK.lock() else {
+        return false;
+    };
+    read_selection(&selection_path(stack_root, source_key, source_revision))
+        .and_then(|selection| selection.carried)
+        .is_some_and(|carried| {
+            carried.state == CarryState::Waiting && carried.run_id.as_deref() == Some(run_id)
+        })
 }
 
 /// The processing a revision shows: its own, or the previous revision's
