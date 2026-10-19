@@ -27,9 +27,9 @@ requests can continue during preparation.
 Once preparation finishes, the panel and jobs list show the individual
 channel builds. If a matching build is already queued, running or complete,
 PSF Guard uses that build. A preparation failure shows the reason. You can
-stop preparation before channel builds are queued. Preparation does not
-survive a server restart; start the build again if the server restarts at
-this stage.
+stop preparation before channel builds are queued. A build still being
+prepared survives a server restart: it comes back in its place in the queue
+and is prepared again (see [After a restart](#after-a-restart)).
 
 Each channel uses the other channels' reference frames to determine pier-side
 orientation when its own reference is unsolved. **Build** on a channel card
@@ -784,11 +784,17 @@ RC-Astro tool is killed rather than waited for; see
 On start PSF Guard puts them back before the automatic scheduler may start
 anything:
 
-- Each build is prepared again from the catalog as it is now. One whose
-  database is gone, or that finished before the restart, is skipped with a
-  note in the log; a forced rebuild still runs. One that cannot be prepared
-  yet, because its disk is not mounted, is retried every minute for half an
-  hour and stays in the journal meanwhile.
+- Each stack build, including one still being prepared when the server
+  stopped, goes back in its place in the queue under the ID it had, so a page
+  left open finds it on its next poll. The server does not wait to prepare
+  them before it starts: each is prepared again from the catalog as it is
+  now, in the background, as a build you start is. One whose database is
+  gone is skipped with a note in the log. One that finished before the
+  restart shows its finished stack; a forced rebuild still runs. One that
+  cannot be prepared yet, because its disk is not mounted, is retried every
+  minute for half an hour and keeps its place meanwhile.
+- A color build is prepared again before the server starts the automatic
+  scheduler, and retried the same way.
 - A build cut off part way resumes from its checkpoint where it can. A build
   cut off by two crashes or killed processes in a row is not started a third
   time, since it is the likelier cause of them. A clean stop does not count.

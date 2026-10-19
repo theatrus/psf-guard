@@ -4,6 +4,7 @@
 //! or hands back the same build already queued, running or finished.
 
 use std::collections::VecDeque;
+use std::time::Instant;
 
 use super::*;
 
@@ -61,6 +62,16 @@ pub(super) struct PreparationLine {
     by_request: HashMap<String, String>,
 }
 
+impl PreparationLine {
+    /// Whether a catalog's runner has nothing in hand or waiting.
+    #[cfg(test)]
+    pub(super) fn is_idle(&self, database_id: &str) -> bool {
+        self.catalogs
+            .get(database_id)
+            .is_none_or(|catalog| !catalog.running && catalog.pending.is_empty())
+    }
+}
+
 /// One catalog's requests, in click order, and whether its runner is
 /// preparing them.
 #[derive(Default)]
@@ -77,7 +88,28 @@ struct Preparation {
     request: StackPreviewRequest,
     /// One build per channel (Build stacks), or one build.
     split: bool,
+    /// Asked for by the automatic refresh, not a person.
+    automatic: bool,
+    /// Until when a preparation that fails is tried again; see
+    /// [`Asked::retry_until`].
+    retry_until: Option<Instant>,
     cancel: Arc<AtomicBool>,
+}
+
+/// A build asked for: by a click, or by the job journal after a restart.
+pub(super) struct Asked {
+    pub(super) project_id: i32,
+    pub(super) request: StackPreviewRequest,
+    /// One build per channel (Build stacks), or one build.
+    pub(super) split: bool,
+    /// Asked for by the automatic refresh, not a person.
+    pub(super) automatic: bool,
+    /// The id the browser follows, for a build the journal puts back.
+    pub(super) job_id: Option<String>,
+    /// Until when a preparation that fails is tried again. A build the
+    /// journal puts back may find its storage not mounted yet; a click
+    /// fails at once and says why.
+    pub(super) retry_until: Option<Instant>,
 }
 
 /// Put a person's build in the line as being prepared, and see that a
@@ -89,8 +121,30 @@ pub(super) fn queue_preparation(
     request: StackPreviewRequest,
     split: bool,
 ) -> Result<StackPreviewJob, AppError> {
+    queue(
+        state,
+        ctx,
+        Asked {
+            project_id,
+            request,
+            split,
+            automatic: false,
+            job_id: None,
+            retry_until: None,
+        },
+    )
+}
+
+/// Put a build in the line as being prepared: its place in the line and
+/// its journal entry are kept from now on, so a restart puts it back where
+/// it was. A runner prepares it, and the builds it becomes take its place.
+pub(super) fn queue(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    asked: Asked,
+) -> Result<StackPreviewJob, AppError> {
     let manager = &state.stack_previews;
-    let request_key = preparation_key(&ctx.id, project_id, &request, split);
+    let request_key = preparation_key(&ctx.id, asked.project_id, &asked.request, asked.split);
     let mut line = manager.preparing.lock().unwrap();
     if let Some(job) = line
         .by_request
@@ -100,7 +154,11 @@ pub(super) fn queue_preparation(
     {
         return Ok(job);
     }
-    let job = preparing_job(&ctx.id, project_id, &request, &request_key);
+    let mut job = preparing_job(&ctx.id, asked.project_id, &asked.request, &request_key);
+    if let Some(job_id) = asked.job_id {
+        job.job_id = job_id;
+    }
+    job.automatic = asked.automatic;
     if !manager.insert(job.clone()) {
         return Err(AppError::BadRequest(format!(
             "At most {MAX_QUEUED_JOBS} stack builds may wait at once, and \
@@ -108,24 +166,50 @@ pub(super) fn queue_preparation(
         )));
     }
     let cancel = manager.track_cancel(&job.job_id);
+    manager.remember_origin(
+        &job.job_id,
+        journal::JournaledStackJob::requested(
+            &ctx.id,
+            asked.project_id,
+            &asked.request,
+            asked.split,
+            &job.job_id,
+            asked.automatic,
+        ),
+    );
+    manager.join_line(&job.job_id);
     line.by_request
         .insert(request_key.clone(), job.job_id.clone());
-    let catalog = line.catalogs.entry(ctx.id.clone()).or_default();
-    catalog.pending.push_back(Preparation {
-        job_id: job.job_id.clone(),
-        request_key,
-        ctx: Arc::clone(ctx),
-        project_id,
-        request,
-        split,
-        cancel,
-    });
+    drop(line);
+    line_up(
+        state,
+        Preparation {
+            job_id: job.job_id.clone(),
+            request_key,
+            ctx: Arc::clone(ctx),
+            project_id: asked.project_id,
+            request: asked.request,
+            split: asked.split,
+            automatic: asked.automatic,
+            retry_until: asked.retry_until,
+            cancel,
+        },
+    );
+    Ok(job)
+}
+
+/// Put a preparation at the back of its catalog's line, and start the
+/// catalog's runner if it is idle.
+fn line_up(state: &Arc<AppState>, preparation: Preparation) {
+    let database_id = preparation.ctx.id.clone();
+    let mut line = state.stack_previews.preparing.lock().unwrap();
+    let catalog = line.catalogs.entry(database_id.clone()).or_default();
+    catalog.pending.push_back(preparation);
     if !catalog.running {
         catalog.running = true;
         drop(line);
-        start_preparing(state, &ctx.id);
+        start_preparing(state, &database_id);
     }
-    Ok(job)
 }
 
 /// What identifies a request: the same click twice is one build.
@@ -267,8 +351,29 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
             prepare_and_queue(state, &preparation)
         }))
         .unwrap_or_else(|_| Err("Preparing the build failed unexpectedly".into()));
+        if let Err(error) = &outcome
+            && preparation
+                .retry_until
+                .is_some_and(|until| Instant::now() < until)
+            && !preparation_stopped(state, &preparation)
+        {
+            tracing::info!("A queued stack build will be prepared again: {error}");
+            retry_later(state, preparation);
+            continue;
+        }
         end_preparation(state, &preparation, outcome);
     }
+}
+
+/// Prepare it again in a minute, keeping its place and journal entry
+/// meanwhile. A stop leaves it in the journal for the next start.
+fn retry_later(state: &Arc<AppState>, preparation: Preparation) {
+    let state = Arc::clone(state);
+    tokio::spawn(async move {
+        if state.shutdown.sleep(journal::RETRY_EVERY).await {
+            line_up(&state, preparation);
+        }
+    });
 }
 
 /// Whether a preparation was stopped, or the server is stopping.
@@ -286,7 +391,8 @@ fn prepare_and_queue(
         return Ok(None);
     }
     // A person is waiting on it, and the server's stop waits for it.
-    let _person = state.begin_named_interactive_job("preparing a stack build");
+    let _person = (!preparation.automatic)
+        .then(|| state.begin_named_interactive_job("preparing a stack build"));
     let _hold = state.shutdown.hold("preparing a stack build");
     let Preparation {
         ctx,
@@ -311,8 +417,16 @@ fn prepare_and_queue(
         if preparation_stopped(state, preparation) {
             break;
         }
-        let new = state.stack_previews.get(&prepared.public.job_id).is_none();
-        let started = start_prepared(state, ctx, *project_id, &part_request, prepared)
+        // A build prepared under the id its request held is new too.
+        let new = state
+            .stack_previews
+            .get(&prepared.public.job_id)
+            .is_none_or(|job| job.state == StackJobState::Preparing);
+        let placement = Placement {
+            automatic: preparation.automatic,
+            slot: Some(&preparation.job_id),
+        };
+        let started = start_prepared(state, ctx, *project_id, &part_request, prepared, placement)
             .map_err(|error| error.message())?;
         if new {
             queued.push(started.job.job_id.clone());
@@ -344,7 +458,13 @@ fn end_preparation(
     outcome: Result<Option<Vec<String>>, String>,
 ) {
     let manager = &state.stack_previews;
-    manager.update(&preparation.job_id, |job| {
+    let slot = &preparation.job_id;
+    // A build the journal put back under its own id is that build again.
+    let became_itself = matches!(&outcome, Ok(Some(job_ids)) if job_ids.contains(slot));
+    manager.update(slot, |job| {
+        if became_itself {
+            return;
+        }
         job.preparing = None;
         match outcome {
             // Builds already queued are the person's to follow or stop, even
@@ -361,7 +481,14 @@ fn end_preparation(
             }
         }
     });
-    manager.forget_cancel_of(&preparation.job_id, &preparation.cancel);
+    // Its builds hold its place now, unless it is one of them, queued.
+    if manager
+        .get(slot)
+        .is_none_or(|job| job.state != StackJobState::Queued)
+    {
+        manager.leave_line(slot);
+    }
+    manager.forget_cancel_of(slot, &preparation.cancel);
     let mut line = manager.preparing.lock().unwrap();
     if line.by_request.get(&preparation.request_key) == Some(&preparation.job_id) {
         line.by_request.remove(&preparation.request_key);
@@ -375,6 +502,17 @@ pub(super) struct Started {
     pub(super) cached: Option<StackPreviewJob>,
 }
 
+/// Who a prepared build is for, and where it goes in the line.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Placement<'a> {
+    /// The automatic refresh's, not a person's: it takes no build from
+    /// the refresh and stops none.
+    pub(super) automatic: bool,
+    /// The place its request held while it was prepared; `None` joins the
+    /// back of the line.
+    pub(super) slot: Option<&'a str>,
+}
+
 /// Queue a prepared build, or hand back the same build already queued,
 /// running, or finished.
 pub(super) fn start_prepared(
@@ -382,8 +520,10 @@ pub(super) fn start_prepared(
     ctx: &Arc<DatabaseContext>,
     project_id: i32,
     request: &StackPreviewRequest,
-    prepared: PreparedJob,
+    mut prepared: PreparedJob,
+    placement: Placement,
 ) -> Result<Started, AppError> {
+    let person = !placement.automatic;
     let manifest_path = manifest_path(&prepared.stack_root, &prepared.public.job_id);
     if let Some(existing) = state.stack_previews.get(&prepared.public.job_id)
         && (matches!(
@@ -392,14 +532,14 @@ pub(super) fn start_prepared(
         ) || (!request.force && existing.state == StackJobState::Completed))
     {
         if existing.state == StackJobState::Completed
-            && let Err(error) = persist_latest_and_reapply(state, ctx, &existing, true)
+            && let Err(error) = persist_latest_and_reapply(state, ctx, &existing, person)
         {
             tracing::warn!("Failed to refresh latest stack preview index: {error}");
         }
         // The same build is already under way for the automatic refresh:
         // it is now the user's, and every other automatic build yields. It
         // takes the person's color defaults with it.
-        let existing = if existing.automatic {
+        let existing = if existing.automatic && person {
             state.stack_previews.adopt(&existing.job_id);
             if request.color_defaults.is_some() {
                 let defaults = request.color_defaults.clone();
@@ -418,8 +558,13 @@ pub(super) fn start_prepared(
         // A finished build whose previews are out of date renders them
         // again from its FITS rather than stacking again.
         if existing.state == StackJobState::Completed
-            && let Some(rendering) =
-                queue_preview_render(state, ctx, &existing, false, request.color_defaults.clone())
+            && let Some(rendering) = queue_preview_render(
+                state,
+                ctx,
+                &existing,
+                placement.automatic,
+                request.color_defaults.clone(),
+            )
         {
             return Ok(Started {
                 job: rendering,
@@ -441,13 +586,17 @@ pub(super) fn start_prepared(
         && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
         && existing.state == StackJobState::Completed
     {
-        if let Err(error) = persist_latest_and_reapply(state, ctx, &existing, true) {
+        if let Err(error) = persist_latest_and_reapply(state, ctx, &existing, person) {
             tracing::warn!("Failed to refresh latest stack preview index: {error}");
         }
         let _ = state.stack_previews.insert(existing.clone());
-        if let Some(rendering) =
-            queue_preview_render(state, ctx, &existing, false, request.color_defaults.clone())
-        {
+        if let Some(rendering) = queue_preview_render(
+            state,
+            ctx,
+            &existing,
+            placement.automatic,
+            request.color_defaults.clone(),
+        ) {
             return Ok(Started {
                 job: rendering,
                 cached: None,
@@ -462,7 +611,10 @@ pub(super) fn start_prepared(
     }
 
     // Real work is about to queue: the user's build takes the worker.
-    interrupt_automatic(state);
+    if person {
+        interrupt_automatic(state);
+    }
+    prepared.public.automatic = placement.automatic;
     let response = prepared.public.clone();
     if !state.stack_previews.insert(response.clone()) {
         return Err(AppError::BadRequest(format!(
@@ -470,8 +622,14 @@ pub(super) fn start_prepared(
              {MAX_REMEMBERED_JOBS} may be running or kept"
         )));
     }
-    let origin = journal::JournaledStackJob::mono(&ctx.id, project_id, request, &response, false);
-    enqueue_job(Arc::clone(state), prepared, origin);
+    let origin = journal::JournaledStackJob::mono(
+        &ctx.id,
+        project_id,
+        request,
+        &response,
+        placement.automatic,
+    );
+    enqueue_job(Arc::clone(state), prepared, origin, placement.slot);
     Ok(Started {
         job: response,
         cached: None,

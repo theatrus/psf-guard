@@ -19,9 +19,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Version 2 added processing runs to `stack`. A version 1 journal has none
-/// and reads as it is.
-const SCHEMA_VERSION: u32 = 2;
+/// Version 2 added processing runs to `stack`; version 3 added `split` and
+/// `job_id` to mono builds. An older journal has none and reads as it is.
+const SCHEMA_VERSION: u32 = 3;
 const OLDEST_SCHEMA_VERSION: u32 = 1;
 /// How often the writer looks for changes.
 const WRITE_INTERVAL: Duration = Duration::from_secs(3);
@@ -31,7 +31,7 @@ const MAX_ATTEMPTS: u32 = 2;
 /// How long an entry that could not be prepared after a restart (its disk
 /// not mounted yet, say) keeps being retried.
 const RETRY_FOR: Duration = Duration::from_secs(30 * 60);
-const RETRY_EVERY: Duration = Duration::from_secs(60);
+pub(super) const RETRY_EVERY: Duration = Duration::from_secs(60);
 
 /// A stack build or processing run as it was asked for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,7 +41,16 @@ pub enum JournaledStackJob {
         database_id: String,
         project_id: i32,
         automatic: bool,
-        request: StackPreviewRequest,
+        request: Box<StackPreviewRequest>,
+        /// One build per channel (Build stacks): a request still being
+        /// prepared, which becomes its channels' builds.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        split: bool,
+        /// The id the browser follows: the build's, or the one a request
+        /// still being prepared has. It comes back under this id, so a page
+        /// left open finds it again.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        job_id: Option<String>,
         /// Restarts that have cut it off while it ran.
         #[serde(default)]
         attempts: u32,
@@ -119,7 +128,31 @@ impl JournaledStackJob {
             database_id: database_id.to_string(),
             project_id,
             automatic,
-            request,
+            request: Box::new(request),
+            split: false,
+            job_id: Some(job.job_id.clone()),
+            attempts: 0,
+            running: false,
+        }
+    }
+
+    /// A mono build as a person asked for it, before it is prepared: the
+    /// method is the one the server has when it is prepared.
+    pub fn requested(
+        database_id: &str,
+        project_id: i32,
+        request: &StackPreviewRequest,
+        split: bool,
+        job_id: &str,
+        automatic: bool,
+    ) -> Self {
+        Self::Mono {
+            database_id: database_id.to_string(),
+            project_id,
+            automatic,
+            request: Box::new(request.clone()),
+            split,
+            job_id: Some(job_id.to_string()),
             attempts: 0,
             running: false,
         }
@@ -548,40 +581,35 @@ async fn restore_stack_job(
             project_id,
             automatic,
             request,
+            split,
+            job_id,
             ..
         } => {
             let ctx = state
                 .get_database(&database_id)
                 .ok_or_else(|| NotRestored::Skip(format!("database {database_id} is gone")))?;
-            let request_for_prepare = request.clone();
-            let mut prepared = tokio::task::spawn_blocking(move || {
-                super::prepare_job(&ctx, project_id, &request_for_prepare)
-            })
-            .await
-            .map_err(|error| NotRestored::Retry(error.to_string()))?
-            .map_err(|error| NotRestored::Retry(format!("{error:?}")))?;
-            let job_id = prepared.public.job_id.clone();
-            if state.stack_previews.get(&job_id).is_some() {
+            if let Some(job_id) = &job_id
+                && state.stack_previews.get(job_id).is_some()
+            {
                 return Err(NotRestored::Skip(format!("{job_id} is already known")));
             }
-            // A forced rebuild shares the id of the build it replaces, whose
-            // finished manifest stays until the new one lands.
-            if !request.force
-                && let Ok(bytes) =
-                    std::fs::read(super::manifest_path(&prepared.stack_root, &job_id))
-                && let Ok(existing) = serde_json::from_slice::<StackPreviewJob>(&bytes)
-                && existing.state == super::StackJobState::Completed
-            {
-                return Err(NotRestored::Skip(format!(
-                    "{job_id} finished before the restart"
-                )));
-            }
-            prepared.public.automatic = automatic;
-            if !state.stack_previews.insert(prepared.public.clone()) {
-                return Err(NotRestored::Retry("too many stack jobs are active".into()));
-            }
-            super::enqueue_job(Arc::clone(state), prepared, origin);
-            Ok(())
+            // Back in the line as it was asked for, prepared again by the
+            // catalog's runner like any build a person asks for. Nothing is
+            // read here, so the restore holds up nothing.
+            super::build_set::queue(
+                state,
+                &ctx,
+                super::build_set::Asked {
+                    project_id,
+                    request: *request,
+                    split,
+                    automatic,
+                    job_id,
+                    retry_until: Some(Instant::now() + RETRY_FOR),
+                },
+            )
+            .map(|_| ())
+            .map_err(|error| NotRestored::Retry(error.message()))
         }
         JournaledStackJob::Color {
             database_id,
@@ -641,6 +669,8 @@ mod tests {
                 "method": {"final_pass": "draft"}
             }))
             .unwrap(),
+            split: false,
+            job_id: None,
             attempts,
             running,
         }
@@ -688,7 +718,7 @@ mod tests {
         write(&path, &journal).unwrap();
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(written["schema_version"], 2);
+        assert_eq!(written["schema_version"], 3);
         assert_eq!(written["stack"][0]["kind"], "processing");
         assert_eq!(read(&path), Some(journal));
     }
