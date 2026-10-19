@@ -32,11 +32,19 @@ Create an isolated worktree from current `origin/main`. Update:
 - `packaging/rpm/psf-guard.spec` version and changelog; and
 - `docs/releases/vVERSION.md` release highlights.
 
-Write the highlights by renaming `docs/releases/unreleased.md`, which collects
-each user-visible change as it merges. Read it against
+Move the entries from `docs/releases/unreleased.md`, which collects each
+user-visible change as it merges, into `docs/releases/vVERSION.md`. Read them against
 `git log vPREVIOUS..origin/main` and fill in anything that landed without an
-entry. Then rewrite the opening sentence for this version, drop the note about
-renaming the file, and start a fresh `unreleased.md` for the next release.
+entry. If `vVERSION.md` already exists, merge the new entries into it instead
+of replacing it. Keep adding changes to the same version until it is tagged,
+and check for new entries again before tagging. Rewrite the opening sentence
+for this version, drop the note about renaming the file, and reset
+`unreleased.md` after transferring its entries.
+
+Update the website's release notes and overview, the relevant user guides,
+and the bundled in-app highlights in the same pass. Check new prose against
+the writing guide, preserve UI labels, and remove claims that later changes
+made obsolete.
 
 Search for the old version after the edit. Test fixtures and dependency versions
 may still use the same number; inspect each match instead of replacing all of

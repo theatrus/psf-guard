@@ -64,7 +64,7 @@
       },
       {
         "title": "Review images on a laptop or phone",
-        "body": "Browse by each rig’s observing night, show newest frames first and cut Sequence by score, stars or HFR. View choices follow signed-in accounts. A smaller phone header and grading bar leave more room for images."
+        "body": "Browse by each rig’s observing night, show newest frames first and select Sequence frames by score, stars or HFR. View choices follow signed-in accounts. A smaller phone header and grading bar leave more room for images."
       },
       {
         "title": "Resize the desktop UI",
@@ -85,6 +85,18 @@
       {
         "title": "Load the current UI after signing in",
         "body": "Successful browser sign-ins reload the current URL to load the server's current UI after an update. PSF Guard checks that the session was saved before reloading. Failed sign-ins stay on the login form."
+      },
+      {
+        "title": "Keep Sequence charts in view",
+        "body": "The summary, suspect pills and score chart stay below the toolbar while you browse frames. On short windows, they scroll with the page to leave room for frames. Click a Solved pointing point, or focus it and press Enter, to move to its frame without changing your selection. Collapse the chart from its heading; PSF Guard remembers the choice in this browser."
+      },
+      {
+        "title": "Start stack builds without waiting for preparation",
+        "body": "Build stacks, Build current set and Build on a channel card appear immediately as Preparing stack build. PSF Guard prepares the frames in the background and then queues one build per channel. You can stop preparation before channel builds are queued. If the server restarts during preparation, start the build again. Calibration checks and exports also start sooner by reading the library once per request."
+      },
+      {
+        "title": "Process each channel after its build",
+        "body": "With Re-apply processing when a stack refreshes on, each channel’s saved processing runs after a build you start or take over, ahead of your other queued builds. Processing after automatic refreshes still waits for other work. Card previews refreshed after an engine update appear as soon as the refresh finishes."
       }
     ]
   },

@@ -1438,7 +1438,7 @@ const PointingScatter = memo(function PointingScatter({
         {collapsed && (
           <small>
             {points.length} solved frames
-            {flaggedCount > 0 && ` · ${flaggedCount} off target, jumped or drifting`}
+            {flaggedCount > 0 && ` · ${flaggedCount} with pointing issues`}
           </small>
         )}
       </h3>

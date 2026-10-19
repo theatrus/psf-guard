@@ -403,6 +403,9 @@ The desktop app and web server provide the same review tools. Start in the
   or unmark them. Shift+Click selects a range; Ctrl/Cmd+Click toggles one frame.
 - **Sequence:** review scores and evidence across an observing session. Select
   frames by score, HFR, star count, or a quality finding before grading them.
+  The summary and score chart stay below the toolbar while you scroll. Click
+  a **Solved pointing** point to move to its frame, or collapse the chart
+  from its heading.
 - **Stacks:** build a calibrated preview for a target and channel, or send a
   selection from Images with **Stack selected**. Inspect exclusions and
   registration results, then combine channels in color. WBPP master lights
@@ -572,7 +575,14 @@ With a licensed standalone RC-Astro CLI on the server, processing also offers
 BlurXTerminator, NoiseXTerminator, and StarXTerminator. Star removal keeps
 both the stars and starless results. Processing runs show queue position and
 progress, support Stop, and can resume after a restart. Saved processing
-choices remain available when a stack rebuilds.
+choices remain available when a stack rebuilds. With **Re-apply processing
+when a stack refreshes** on, each channel’s processing runs after a build
+you start, ahead of your other queued builds.
+
+Build requests appear immediately as **Preparing stack build** while PSF Guard
+reads the frames and matches calibration in the background. You can stop
+preparation before channel builds are queued. If the server restarts during
+preparation, start the build again.
 
 Short color compositions you start can run alongside stack builds. They reuse
 prepared channels, or need no deconvolution or RC-Astro and no other composition
