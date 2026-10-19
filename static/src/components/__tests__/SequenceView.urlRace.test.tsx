@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+import { configure, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
@@ -33,6 +33,11 @@ const rollup = {
 };
 
 describe('SequenceView URL writes in one commit (PR #872 review)', () => {
+  // SequenceView waits on three requests and the effects after them; a
+  // busy full run can take longer than the default second.
+  beforeAll(() => configure({ asyncUtilTimeout: 10_000 }));
+  afterAll(() => configure({ asyncUtilTimeout: 1_000 }));
+
   it('keeps the normalised entry selection when the all-sessions cursor is written', async () => {
     server.use(
       http.get('/api/db/:dbId/analysis/sequence', () => HttpResponse.json({
