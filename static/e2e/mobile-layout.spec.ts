@@ -251,6 +251,14 @@ test('the phone header takes two rows and tucks away while the page scrolls down
 });
 
 test('a phone grades and steps from the bar under the detail panels', async ({ page, request }) => {
+  // Advance on grade is on by default and moves to the next image 100 ms
+  // after each grade, racing the Next and Previous clicks below.
+  await page.addInitScript(() => {
+    window.localStorage.setItem(
+      'psf-guard.display-preferences',
+      JSON.stringify({ advanceOnGrade: false })
+    );
+  });
   await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
   await expect(page.locator('img.detail-main-image[alt="Alpha M44 - B"]')).toBeVisible({ timeout: 15_000 });
   const bar = page.getByRole('group', { name: 'Grade and step' });
