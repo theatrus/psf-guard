@@ -5902,7 +5902,7 @@ mod tests {
         .unwrap();
         let build = || {
             let job = prepare_job(&ctx, 1, &request).unwrap();
-            crate::server::light_header_writes::wait_until_written(&ctx.database_path);
+            crate::server::light_header_writes::write_pending(&ctx.database_path);
             job.public.job_id
         };
         let kept = || {

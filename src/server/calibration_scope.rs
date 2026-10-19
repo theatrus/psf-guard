@@ -438,8 +438,10 @@ mod tests {
                 path: PathBuf::from("one.fits"),
                 size: 1,
                 modified_ns: 1,
+                changed_ns: 1,
                 meta: readable.clone(),
                 located: false,
+                image_key: None,
             },
         )]);
         let read = BTreeMap::from([

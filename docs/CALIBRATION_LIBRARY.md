@@ -436,21 +436,29 @@ the catalog while the files stand as they were, so a stack build on a large
 project queues without opening thousands of files:
 
 - A calibration file at its row's own path, with the size and modification
-  time import recorded, is that frame without a header read. A file written
-  since, or one found by name after a move, has its header read once; when
-  it is the frame, the catalog remembers that file, size and time, and the
-  next request trusts it too. A row written again, by an import or a
+  time import recorded, is that frame without a header read. Import records
+  no change time, so this cannot tell a header edited in place with both put
+  back. A file written since, or one found by name after a move, has its
+  header read once; when it is the frame, the catalog remembers that file
+  with its size, modification time and change time, and the next request
+  trusts it while all three hold. A row written again, by an import or a
   duplicate repair, is checked afresh.
-- Each light's header is kept with its file's path, size and modification
-  time. Import keeps it as it adds the light, the
-  [calibration health](#calibration-health) pass keeps the ones it reads,
-  and a stack build keeps the ones it had to read once it is prepared.
-  The build also notes where its own file lookup found each light and goes
-  straight there next time. A header is read again when its file changes or
-  moves, or when a new release reads headers another way.
+- Each light's header is kept with its file's path, size, modification time
+  and change time, for that light only: its guid, or, in a catalog without
+  guids, its capture time and file name. Import keeps it as it adds the
+  light, the [calibration health](#calibration-health) pass keeps the ones it
+  reads, and a stack build keeps the ones it had to read once it is
+  prepared. The build also notes where its own file lookup found each light
+  and goes straight there next time. A header is read again when its file
+  changes or moves, including an edit in place that puts the size and
+  modification time back (the change time cannot be put back), when its
+  light is deleted and its id given to another, and once with each release.
 
 These records hold this machine's paths and file times. Transfers and
-`sync pull` never carry them.
+`sync pull` never carry them, and a catalog a newer build has upgraded is
+not written. They are only a cache: deleting the rows of
+`psf_guard_light_header` and `psf_guard_calibration_file_check` costs one
+read of each file.
 
 ### Duplicates and their repair
 

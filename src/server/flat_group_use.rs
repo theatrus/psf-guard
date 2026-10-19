@@ -876,8 +876,10 @@ mod tests {
             path: path.into(),
             size: 1,
             modified_ns: 2,
+            changed_ns: 3,
             meta: FrameMeta::default(),
             located: false,
+            image_key: None,
         };
         let pass = |headers: BTreeMap<i32, crate::calibration::KeptHeader>| {
             crate::light_headers::store(&conn, headers.iter().map(|(id, header)| (*id, header)))

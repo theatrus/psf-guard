@@ -362,6 +362,8 @@ fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
             continue;
         }
         end_preparation(state, &preparation, outcome);
+        // What preparing had to read, kept once the build has its place.
+        crate::server::light_header_writes::write_pending(&preparation.ctx.database_path);
     }
 }
 
@@ -859,11 +861,7 @@ pub(super) fn prepare_whole(
     };
     // Where a build last found each light, and its header, so neither is
     // looked up again while the file stands as it was.
-    let mut lights = {
-        let conn = ctx.db();
-        let conn = conn.lock().map_err(AppError::db)?;
-        crate::server::stack_preview::kept_lights::KeptLights::load(&conn, project_id)
-    };
+    let mut lights = crate::server::stack_preview::kept_lights::KeptLights::load(ctx, project_id);
 
     let quality = quality_results(
         ctx,

@@ -2,13 +2,18 @@
 //!
 //! Preparation reads a light's header when the catalog keeps none that holds
 //! its file, and a calibration file's header when the catalog cannot vouch
-//! for it. It runs on the preparation runner, ahead of the builds it queues,
-//! and on refreshes and restores; keeping what it found must hold up none of
-//! them, nor the shared connection every request waits on. So it hands that
-//! here. One writer per catalog, on a connection of its own, takes what was
-//! queued while it ran and stops when nothing is left. A write that fails,
-//! as on a catalog that cannot be written, loses only a cache: the next
-//! preparation reads those files again.
+//! for it. Writing that must not hold up the builds it prepares, nor the
+//! shared connection, so it only hands what it read here. Threads that run
+//! already write it, each on a connection of its own:
+//!
+//! - the preparation runner, once the build it prepared has taken its place
+//!   in the line, so a person never waits on the write;
+//! - the calibration health pass, a background job, which takes what
+//!   automatic refreshes and restored builds prepared.
+//!
+//! No thread is started for the writes. A write that fails, as on a catalog
+//! that cannot be written, loses only a cache: the next preparation reads
+//! those files again.
 
 use crate::calibration::FileCheck;
 use crate::light_headers::KeptHeader;
@@ -16,17 +21,17 @@ use rusqlite::OpenFlags;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{LazyLock, Mutex};
 
+/// One catalog's headers and file checks waiting to be written.
 #[derive(Default)]
-struct Queue {
+struct Pending {
     headers: BTreeMap<i32, KeptHeader>,
     file_checks: Vec<FileCheck>,
-    writing: bool,
 }
 
-static QUEUES: LazyLock<Mutex<HashMap<String, Queue>>> = LazyLock::new(Default::default);
+static PENDING: LazyLock<Mutex<HashMap<String, Pending>>> = LazyLock::new(Default::default);
 
-/// Keep these headers and calibration file checks in the catalog at
-/// `database_path`, after the caller returns.
+/// Hand these headers and calibration file checks over to be kept in the
+/// catalog at `database_path` by [`write_pending`].
 pub(crate) fn queue(
     database_path: &str,
     headers: Vec<(i32, KeptHeader)>,
@@ -39,66 +44,32 @@ pub(crate) fn queue(
     if !std::path::Path::new(database_path).is_file() {
         return;
     }
-    let mut queues = QUEUES.lock().unwrap_or_else(|p| p.into_inner());
-    let queue = queues.entry(database_path.to_string()).or_default();
-    queue.headers.extend(headers);
-    queue.file_checks.extend(file_checks);
-    if std::mem::replace(&mut queue.writing, true) {
-        // The writer serves this catalog already and takes these next.
+    let mut pending = PENDING.lock().unwrap_or_else(|p| p.into_inner());
+    let entry = pending.entry(database_path.to_string()).or_default();
+    entry.headers.extend(headers);
+    entry.file_checks.extend(file_checks);
+}
+
+/// Write what waits for the catalog at `database_path`, on a connection of
+/// its own, on the caller's thread.
+pub(crate) fn write_pending(database_path: &str) {
+    let Some(Pending {
+        headers,
+        file_checks,
+    }) = PENDING
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(database_path)
+    else {
         return;
-    }
-    let path = database_path.to_string();
-    std::thread::spawn(move || {
-        let _claim = WriterClaim(path.clone());
-        write_queued(&path);
-    });
-}
-
-/// Lets the next queue start a writer should this one panic. A writer that
-/// ends normally lets go under the queue's lock instead.
-struct WriterClaim(String);
-
-impl Drop for WriterClaim {
-    fn drop(&mut self) {
-        if !std::thread::panicking() {
-            return;
-        }
-        if let Some(queue) = QUEUES
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get_mut(&self.0)
-        {
-            queue.writing = false;
-        }
-    }
-}
-
-fn write_queued(path: &str) {
-    loop {
-        let (headers, file_checks) = {
-            let mut queues = QUEUES.lock().unwrap_or_else(|p| p.into_inner());
-            let Some(queue) = queues.get_mut(path) else {
-                return;
-            };
-            if queue.headers.is_empty() && queue.file_checks.is_empty() {
-                // Let go with the lock held, so nothing can queue
-                // between this check and the release.
-                queue.writing = false;
-                return;
-            }
-            (
-                std::mem::take(&mut queue.headers),
-                std::mem::take(&mut queue.file_checks),
-            )
-        };
-        if let Err(error) = write(path, &headers, &file_checks) {
-            tracing::debug!(
-                "Could not keep {} light header(s) and {} calibration file check(s) in {path}: \
-                 {error:#}. They are read again next time.",
-                headers.len(),
-                file_checks.len()
-            );
-        }
+    };
+    if let Err(error) = write(database_path, &headers, &file_checks) {
+        tracing::debug!(
+            "Could not keep {} light header(s) and {} calibration file check(s) in \
+             {database_path}: {error:#}. They are read again next time.",
+            headers.len(),
+            file_checks.len()
+        );
     }
 }
 
@@ -118,39 +89,21 @@ fn write(
     Ok(())
 }
 
-/// Wait until nothing is queued or being written for `path`.
-#[cfg(test)]
-pub(crate) fn wait_until_written(path: &str) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        let idle = QUEUES
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(path)
-            .is_none_or(|queue| !queue.writing);
-        if idle {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("the light header writer did not finish");
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::light_headers::FileStamp;
 
     #[test]
-    fn queued_headers_reach_the_catalog() {
+    fn queued_headers_reach_the_catalog_when_written() {
         let temp = tempfile::tempdir().unwrap();
         let catalog = temp.path().join("catalog.sqlite");
         let conn = rusqlite::Connection::open(&catalog).unwrap();
         crate::ts_schema::apply_schema(&conn).unwrap();
         conn.execute(
             "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
-                 gradingStatus, metadata)
-             VALUES (7, 1, 1, 0, 'Ha', 0, '{}')",
+                 gradingStatus, metadata, guid)
+             VALUES (7, 1, 1, 0, 'Ha', 0, '{}', 'light-seven')",
             [],
         )
         .unwrap();
@@ -171,9 +124,16 @@ mod tests {
         };
         let path = catalog.to_string_lossy().into_owned();
         queue(&path, vec![(7, header)], Vec::new());
-        wait_until_written(&path);
+        assert!(
+            crate::light_headers::project_headers(&conn, 1)
+                .unwrap()
+                .is_empty(),
+            "nothing is written until a runner writes it"
+        );
+        write_pending(&path);
         let kept = crate::light_headers::project_headers(&conn, 1).unwrap();
         assert_eq!(kept[&7].meta.object.as_deref(), Some("M31"));
         assert!(kept[&7].located);
+        write_pending(&path);
     }
 }

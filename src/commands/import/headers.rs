@@ -80,6 +80,11 @@ pub struct FrameMeta {
     /// SITELAT, in degrees. Only read to tell an unset profile (0°, 0°)
     /// from a real site.
     pub site_latitude: Option<f64>,
+    /// The file as it stood just before its header was read, when the reader
+    /// took it, so the header can be kept for that file and no later one
+    /// ([`crate::light_headers`]). Not part of the header.
+    #[serde(skip)]
+    pub file_stamp: Option<crate::light_headers::FileStamp>,
 }
 
 impl FrameMeta {

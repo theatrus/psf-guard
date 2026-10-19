@@ -327,6 +327,7 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
         return Ok(());
     };
     let conn = read_only(path)?;
+    tidy_headers(&conn, path);
     let keys = crate::calibration::health_keys(&conn)?;
     let tree = ctx.get_directory_tree()?;
     let mut files = crate::calibration::health_file_digests(&conn, &ctx.image_dirs, &tree)?;
@@ -432,12 +433,27 @@ fn run_pass(state: &AppState, path: &str, job: &Job) -> anyhow::Result<()> {
     if poor > 0 {
         tracing::info!("{poor} project(s) in {path} hold lights the library cannot calibrate");
     }
-    if let Some(writer) = &writer
-        && let Err(error) = crate::light_headers::prune(writer)
-    {
+    Ok(())
+}
+
+/// Before each pass, whether or not it reads a header: keep what stack
+/// preparation read and nobody has written yet, and forget the headers of
+/// lights the catalog no longer holds, which `conn`, read-only, finds first
+/// so a catalog with none is not opened for writing.
+fn tidy_headers(conn: &Connection, path: &str) {
+    crate::server::light_header_writes::write_pending(path);
+    if !crate::light_headers::has_orphans(conn) {
+        return;
+    }
+    let pruned = crate::server::database_context::open_scheduler_connection_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(anyhow::Error::from)
+    .and_then(|writer| crate::light_headers::prune(&writer));
+    if let Err(error) = pruned {
         tracing::debug!("Could not forget the headers of removed lights in {path}: {error:#}");
     }
-    Ok(())
 }
 
 /// Judge one project's lights on the pool, reusing each kept header whose
@@ -797,6 +813,46 @@ mod tests {
                 .collect::<Vec<_>>(),
             [&7]
         );
+    }
+
+    /// A pass that reads no header still forgets the headers of lights the
+    /// catalog no longer holds.
+    #[test]
+    fn a_pass_forgets_removed_lights_even_when_it_reads_nothing() {
+        let temp = tempfile::tempdir().unwrap();
+        let catalog = temp.path().join("catalog.sqlite");
+        let conn = Connection::open(&catalog).unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
+                 gradingStatus, metadata, guid)
+             VALUES (7, 1, 1, 0, 'Ha', 0, '{}', 'seven'), (8, 1, 1, 0, 'Ha', 0, '{}', 'eight')",
+            [],
+        )
+        .unwrap();
+        let light = temp.path().join("light.fits");
+        std::fs::write(&light, b"bytes").unwrap();
+        let header = KeptHeader::new(
+            &light,
+            crate::light_headers::FileStamp::of(&light).unwrap(),
+            crate::commands::import::headers::FrameMeta::default(),
+        );
+        crate::light_headers::store(&conn, [(7, &header), (8, &header)]).unwrap();
+        conn.execute("DELETE FROM acquiredimage WHERE Id = 8", [])
+            .unwrap();
+        let path = catalog.to_string_lossy().into_owned();
+        let reader = read_only(&path).unwrap();
+        assert!(crate::light_headers::has_orphans(&reader));
+        tidy_headers(&reader, &path);
+        assert!(!crate::light_headers::has_orphans(&reader));
+        let kept: Vec<i32> = conn
+            .prepare("SELECT image_id FROM psf_guard_light_header")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(kept, [7]);
     }
 
     #[test]

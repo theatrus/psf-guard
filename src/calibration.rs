@@ -1026,6 +1026,13 @@ fn add_column_if_missing(
     }
 }
 
+/// Whether a newer build has upgraded this catalog's PSF Guard tables past
+/// what this build knows. Such a catalog is read, never reshaped.
+pub(crate) fn schema_is_newer(conn: &Connection) -> bool {
+    schema_exists(conn)
+        && recorded_schema_version(conn).is_ok_and(|version| version > CALIBRATION_SCHEMA_VERSION)
+}
+
 fn recorded_schema_version(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row(
         "SELECT version FROM psf_guard_calibration_schema WHERE singleton = 1",
@@ -3344,6 +3351,7 @@ pub(crate) const FILE_CHECK_TABLE_SQL: &str = r#"
         path            TEXT NOT NULL,
         size            INTEGER NOT NULL,
         mtime_ns        INTEGER NOT NULL,
+        ctime_ns        INTEGER NOT NULL,
         row_fingerprint TEXT NOT NULL,
         checked_at      INTEGER NOT NULL,
         PRIMARY KEY (frame_uuid, path)
@@ -3377,23 +3385,25 @@ pub(crate) struct FileCheck {
 /// while they stand as they were. Rows of frames the catalog no longer
 /// holds go.
 pub(crate) fn record_file_checks(conn: &Connection, checks: &[FileCheck]) -> Result<()> {
-    if checks.is_empty() || !schema_exists(conn) {
+    // A catalog a newer build upgraded is not reshaped by this one.
+    if checks.is_empty() || !schema_exists(conn) || schema_is_newer(conn) {
         return Ok(());
     }
     conn.execute_batch(FILE_CHECK_TABLE_SQL)?;
     let now = chrono::Utc::now().timestamp();
     let mut statement = conn.prepare(
         "INSERT INTO psf_guard_calibration_file_check
-            (frame_uuid, path, size, mtime_ns, row_fingerprint, checked_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            (frame_uuid, path, size, mtime_ns, ctime_ns, row_fingerprint, checked_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(frame_uuid, path) DO UPDATE SET
-            size = excluded.size, mtime_ns = excluded.mtime_ns,
+            size = excluded.size, mtime_ns = excluded.mtime_ns, ctime_ns = excluded.ctime_ns,
             row_fingerprint = excluded.row_fingerprint, checked_at = excluded.checked_at",
     )?;
     for check in checks {
-        let (Ok(size), Ok(modified_ns)) = (
+        let (Ok(size), Ok(modified_ns), Ok(changed_ns)) = (
             i64::try_from(check.stamp.size),
             i64::try_from(check.stamp.modified_ns),
+            i64::try_from(check.stamp.changed_ns),
         ) else {
             continue;
         };
@@ -3402,6 +3412,7 @@ pub(crate) fn record_file_checks(conn: &Connection, checks: &[FileCheck]) -> Res
             check.path.to_string_lossy(),
             size,
             modified_ns,
+            changed_ns,
             check.row_fingerprint,
             now
         ])?;
@@ -3425,8 +3436,10 @@ pub(crate) fn record_file_checks(conn: &Connection, checks: &[FileCheck]) -> Res
 /// was then. Any other file's header is read, as a frame's file always was.
 #[derive(Debug, Default)]
 struct FileChecks {
-    /// The size and time import recorded of each row's file, by row id.
-    recorded: HashMap<i64, FileStamp>,
+    /// The size and modification time import recorded of each row's file,
+    /// by row id. Import records no change time, so a file whose header was
+    /// edited in place with both kept is still taken for its frame.
+    recorded: HashMap<i64, (u64, u64)>,
     /// Each row's own path, by row id: a selection may follow a moved file.
     sources: HashMap<i64, PathBuf>,
     /// Files header reads found to be frames, by frame and path, with the
@@ -3503,7 +3516,8 @@ impl FileChecks {
     }
 
     fn vouches(&self, frame: &CalibrationFrame, path: &Path, stamp: FileStamp) -> bool {
-        let recorded = path == frame.source_path && self.recorded.get(&frame.id) == Some(&stamp);
+        let recorded = path == frame.source_path
+            && self.recorded.get(&frame.id) == Some(&(stamp.size, stamp.modified_ns));
         recorded
             || self
                 .confirmed
@@ -3524,7 +3538,7 @@ impl FileChecks {
         let fingerprint = match self.stamp(path) {
             Some(stamp)
                 if self.sources.get(&frame.id) == Some(path)
-                    && self.recorded.get(&frame.id) == Some(&stamp) =>
+                    && self.recorded.get(&frame.id) == Some(&(stamp.size, stamp.modified_ns)) =>
             {
                 Some(frame.source_fingerprint.clone())
             }
@@ -3537,7 +3551,7 @@ impl FileChecks {
 
 /// The size and time import recorded of each frame's file, by row id. A
 /// row without them, or with an unknown time, has none.
-fn recorded_file_stamps(conn: &Connection) -> Result<HashMap<i64, FileStamp>> {
+fn recorded_file_stamps(conn: &Connection) -> Result<HashMap<i64, (u64, u64)>> {
     if !schema_exists(conn) {
         return Ok(HashMap::new());
     }
@@ -3561,7 +3575,7 @@ fn recorded_file_stamps(conn: &Connection) -> Result<HashMap<i64, FileStamp>> {
         if modified_ns == 0 {
             continue;
         }
-        stamps.insert(id, FileStamp { size, modified_ns });
+        stamps.insert(id, (size, modified_ns));
     }
     Ok(stamps)
 }
@@ -3572,28 +3586,33 @@ fn confirmed_files(conn: &Connection) -> Result<HashMap<(String, PathBuf), (File
         return Ok(HashMap::new());
     }
     let mut statement = conn.prepare(
-        "SELECT frame_uuid, path, size, mtime_ns, row_fingerprint
+        "SELECT frame_uuid, path, size, mtime_ns, ctime_ns, row_fingerprint
          FROM psf_guard_calibration_file_check",
     )?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, i64>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, String>(4)?,
+            [
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ],
+            row.get::<_, String>(5)?,
         ))
     })?;
     let mut confirmed = HashMap::new();
     for row in rows {
-        let (frame_uuid, path, size, modified_ns, fingerprint) = row?;
-        let (Ok(size), Ok(modified_ns)) = (u64::try_from(size), u64::try_from(modified_ns)) else {
+        let (frame_uuid, path, stamp, fingerprint) = row?;
+        let [Ok(size), Ok(modified_ns), Ok(changed_ns)] = stamp.map(u64::try_from) else {
             continue;
         };
-        confirmed.insert(
-            (frame_uuid, PathBuf::from(path)),
-            (FileStamp { size, modified_ns }, fingerprint),
-        );
+        let stamp = FileStamp {
+            size,
+            modified_ns,
+            changed_ns,
+        };
+        confirmed.insert((frame_uuid, PathBuf::from(path)), (stamp, fingerprint));
     }
     Ok(confirmed)
 }
@@ -15194,7 +15213,8 @@ pub(crate) mod tests {
         let garbage = vec![b'x'; fits.len()];
         let flats = |matcher: &mut LightMatcher| matcher.select_verified(&light, None).flat.len();
 
-        // As import recorded it: trusted, not read.
+        // As import recorded it, by size and modification time: trusted, not
+        // read. (Import records no change time.)
         rewrite_at(&path, &garbage, imported_at);
         assert!(!calibration_file_matches(&frame, &path));
         let mut matcher = LightMatcher::load(&conn, false).unwrap();
@@ -15228,12 +15248,25 @@ pub(crate) mod tests {
         record_file_checks(&conn, &checks).unwrap();
 
         // So the next request trusts it as it stands now.
-        rewrite_at(&path, &garbage, later);
         let mut matcher = LightMatcher::load(&conn, false).unwrap();
         assert_eq!(flats(&mut matcher), 2);
         assert_eq!(matcher.files.header_reads, 0);
 
-        // Unless the row was written again since: it may describe another file.
+        // Not once it is edited in place, even with its size and time put
+        // back: the change time moved.
+        if cfg!(unix) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            rewrite_at(&path, &garbage, later);
+            let mut matcher = LightMatcher::load(&conn, false).unwrap();
+            assert_eq!(flats(&mut matcher), 1);
+            assert_eq!(matcher.files.header_reads, 1);
+            rewrite_at(&path, &fits, later);
+            let mut matcher = LightMatcher::load(&conn, false).unwrap();
+            assert_eq!(flats(&mut matcher), 2);
+            record_file_checks(&conn, &matcher.take_file_checks()).unwrap();
+        }
+
+        // Nor once the row was written again: it may describe another file.
         conn.execute(
             "UPDATE psf_guard_calibration_frame SET source_fingerprint = 'another'
              WHERE frame_uuid = ?1",
@@ -15241,7 +15274,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         let mut matcher = LightMatcher::load(&conn, false).unwrap();
-        assert_eq!(flats(&mut matcher), 1);
+        assert_eq!(flats(&mut matcher), 2);
         assert_eq!(matcher.files.header_reads, 1);
 
         // A frame forgotten takes its checks along.

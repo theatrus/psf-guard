@@ -523,7 +523,11 @@ pub fn scan_frames_counted(
     files
         .par_iter()
         .map(|path| {
-            let meta = headers::read_frame_meta(path);
+            // Taken first, so a file written during the read is not kept
+            // as the header read.
+            let stamp = crate::light_headers::FileStamp::of(path);
+            let mut meta = headers::read_frame_meta(path);
+            meta.file_stamp = stamp;
             progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             meta
         })
@@ -1812,7 +1816,7 @@ fn insert_acquired_image(
     )?;
     // The header was just read: keep it, so a stack or the health pass need
     // not read it again while the file stands as it is.
-    crate::light_headers::record_imported(conn, conn.last_insert_rowid(), frame)?;
+    crate::light_headers::record_imported(conn, conn.last_insert_rowid(), frame);
     Ok(())
 }
 
@@ -2659,6 +2663,7 @@ mod tests {
         let mut conn = fresh_conn();
         let frame = FrameMeta {
             path: path.clone(),
+            file_stamp: crate::light_headers::FileStamp::of(&path),
             ..light("M31", "Ha", 1_000)
         };
         import_frames(&mut conn, vec![frame], &ImportOptions::default()).unwrap();
