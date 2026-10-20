@@ -23,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -31,6 +30,7 @@ use crate::commands::export::wbpp::{
     WbppFiles, WbppOptions, WbppRun, WbppScriptSpec, OUTPUT_DIRECTORY,
 };
 use crate::commands::export::{plan_export, sanitize_component, ExportLayout, ExportOptions};
+use crate::concurrency::Stop;
 use crate::db_registry::{DbRegistry, PixInsightSettings};
 use crate::pixinsight::{
     self, detect, display_plan, Detection, DisplayPlan, OutputFile, PixInsightInstall,
@@ -161,7 +161,7 @@ pub struct PublishOutcome {
 pub struct WbppRunStore {
     pub progress: WbppRunProgress,
     /// Set by a cancel; read by the watcher to name the outcome.
-    cancel: Option<Arc<AtomicBool>>,
+    cancel: Option<Stop>,
     /// What the run under way was asked for, so the job journal can start it
     /// again after a restart cut it off.
     request: Option<StartWbppRunRequest>,
@@ -220,16 +220,12 @@ fn begin_publish(
     Ok((PathBuf::from(&progress.output_dir), progress.project_id))
 }
 
-fn try_begin(
-    store: &RwLock<WbppRunStore>,
-    scope: String,
-    options: WbppOptions,
-) -> Option<Arc<AtomicBool>> {
+fn try_begin(store: &RwLock<WbppRunStore>, scope: String, options: WbppOptions) -> Option<Stop> {
     let mut s = store.write().unwrap();
     if s.progress.running || publish_running(&s.progress) {
         return None;
     }
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = Stop::new();
     s.progress = WbppRunProgress {
         running: true,
         stage: "planning".to_string(),
@@ -1218,7 +1214,7 @@ struct PlanSummary {
 async fn run(
     ctx: Arc<crate::server::database_context::DatabaseContext>,
     store: SharedWbppRun,
-    cancel: Arc<AtomicBool>,
+    cancel: Stop,
     install: PixInsightInstall,
     display: DisplayPlan,
     work_dir: PathBuf,
@@ -1295,7 +1291,7 @@ async fn run(
         progress.flat_warnings = plan_summary.flat_warnings;
         progress.stage = "launching".to_string();
     });
-    if cancel.load(Ordering::SeqCst) {
+    if cancel.requested() {
         return Ok("cancelled");
     }
 
@@ -1341,7 +1337,7 @@ async fn run(
                 let out = output_dir.clone();
                 let poll_store = store.clone();
                 let _ = tokio::task::spawn_blocking(move || refresh_log(&poll_store, &out)).await;
-                if cancel.load(Ordering::SeqCst)
+                if cancel.requested()
                     && let Some(pid) = pid
                 {
                     match cancel_seen_at {
@@ -1366,7 +1362,7 @@ async fn run(
     .await
     .unwrap_or_default();
     let exit_code = status.code();
-    let cancelled = cancel.load(Ordering::SeqCst);
+    let cancelled = cancel.requested();
     let (finished, errors) = {
         let s = store.read().unwrap();
         (
@@ -1605,7 +1601,7 @@ pub async fn cancel_wbpp_run(
     };
     if running {
         if let Some(cancel) = cancel {
-            cancel.store(true, Ordering::SeqCst);
+            cancel.request();
         }
         if let Some(pid) = pid {
             terminate(pid);
