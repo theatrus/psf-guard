@@ -817,7 +817,7 @@ pub(super) fn start_prepared(
         &response,
         placement.automatic,
     );
-    enqueue_job(Arc::clone(state), prepared, origin, placement.slot);
+    enqueue_job(Arc::clone(state), prepared, request, origin, placement.slot);
     Ok(Started {
         job: response,
         cached: None,

@@ -3166,11 +3166,15 @@ pub(crate) fn source_fingerprint(path: &FsPath) -> String {
     output
 }
 
-/// Queue a prepared build: at the back of the line, or in the place `slot`
-/// held while the request it came from was prepared.
+/// Queue a previewed build: at the back of the line, or in the place
+/// `slot` held while the request it came from was previewed. The line
+/// carries `request`, the build's own channel request, and the build is
+/// prepared again from it at its turn; `prepared` is the preview, which
+/// gives the build its record and the keys it holds while it waits.
 fn enqueue_job(
     state: Arc<AppState>,
     prepared: PreparedJob,
+    request: &StackPreviewRequest,
     origin: journal::JournaledStackJob,
     slot: Option<&str>,
 ) {
@@ -3184,11 +3188,19 @@ fn enqueue_job(
         prepared.public.project_id, prepared.public.database_id
     ));
     let (stopped_job, failed_job) = (job_id.clone(), job_id.clone());
+    let spec = BuildRequest {
+        job_id: job_id.clone(),
+        database_id: database_id.clone(),
+        project_id: prepared.public.project_id,
+        request: request.clone(),
+    };
     let submission = Submission::<BuildWork>::new(
         "a stack build",
-        &prepared,
+        &spec,
         move |state, built| match built {
-            Ok(output) => publish_build(state, output),
+            Ok(Some(output)) => publish_build(state, output),
+            // Prepared at its turn into another build, or failed there.
+            Ok(None) => {}
             Err(error) => state.stack_previews.update(&failed_job, |job| {
                 job.state = StackJobState::Failed;
                 job.error = Some(format!("Stack worker failed: {error}"));
@@ -3325,15 +3337,96 @@ fn ensure_dispatching(state: &Arc<AppState>) {
 struct BuildWork;
 
 impl LineWork for BuildWork {
-    type Spec = PreparedJob;
-    type Output = BuildOutput;
-    /// It opens this server's calibration catalog to choose and build
-    /// masters while it runs, and reads its WCS and score caches.
+    type Spec = BuildRequest;
+    /// `None` when the build was prepared at its turn into another build,
+    /// or could not be prepared.
+    type Output = Option<BuildOutput>;
+    /// It reads this server's catalog to prepare the build at its turn,
+    /// opens the calibration catalog to choose and build masters, and
+    /// reads its WCS and score caches.
     const NEEDS: Needs = Needs::ThisServer;
 
-    fn execute(spec: PreparedJob, worker: &Worker<'_>) -> BuildOutput {
-        execute_build(spec, worker)
+    fn execute(spec: BuildRequest, worker: &Worker<'_>) -> Option<BuildOutput> {
+        let prepared = prepare_at_turn(&spec, worker.server())?;
+        Some(execute_build(prepared, worker))
     }
+}
+
+/// A build in the line: its channel request, prepared at its turn.
+#[derive(Serialize, Deserialize)]
+struct BuildRequest {
+    /// The id the build was listed under when it was previewed.
+    job_id: String,
+    database_id: String,
+    project_id: i32,
+    request: StackPreviewRequest,
+}
+
+/// Prepare a build again from its request, as the catalog is now. Returns
+/// the prepared build when it is the one that was previewed. When frames,
+/// grades or calibration changed while it waited, the request becomes
+/// another build: that build is queued at the front of the line, or a
+/// matching finished build is reused, and the previewed record points to
+/// it. A build that cannot be prepared fails with the reason.
+fn prepare_at_turn(spec: &BuildRequest, state: &Arc<AppState>) -> Option<PreparedJob> {
+    let fail = |error: String| {
+        state.stack_previews.update(&spec.job_id, |job| {
+            cancel_unfinished_groups(job);
+            job.state = StackJobState::Failed;
+            job.error = Some(error);
+        });
+    };
+    let Some(ctx) = state.get_database(&spec.database_id) else {
+        fail("The database was removed while the build waited".into());
+        return None;
+    };
+    // It holds the lane from here: listed as running, not as queued.
+    state.stack_previews.update(&spec.job_id, |job| {
+        job.state = StackJobState::Running;
+    });
+    let prepared = match build_set::prepare_job(&ctx, spec.project_id, &spec.request) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            fail(error.message());
+            return None;
+        }
+    };
+    if prepared.public.job_id == spec.job_id {
+        return Some(prepared);
+    }
+    let automatic = state.stack_previews.is_automatic(&spec.job_id);
+    let placement = build_set::Placement {
+        automatic,
+        slot: None,
+    };
+    match build_set::start_prepared(
+        state,
+        &ctx,
+        spec.project_id,
+        &spec.request,
+        prepared,
+        placement,
+    ) {
+        Ok(started) => {
+            let became = started.job.job_id.clone();
+            tracing::info!(
+                job_id = spec.job_id,
+                became,
+                "A queued build's frames changed while it waited; it runs as a new build"
+            );
+            // It keeps the turn the previewed build had.
+            state.stack_previews.move_in_line(&became, 0);
+            state.stack_previews.update(&spec.job_id, |job| {
+                job.state = StackJobState::Replaced;
+                job.replaced_by = vec![became.clone()];
+            });
+            if let Some(cached) = started.cached {
+                automatic::compose_colors_after(state, &ctx, &cached);
+            }
+        }
+        Err(error) => fail(error.message()),
+    }
+    None
 }
 
 /// Where a finished build's outputs are, for publishing.
@@ -8657,6 +8750,46 @@ mod tests {
         assert!(state.stack_previews.get(&expected).is_some());
         // Stopping the stand-in now stops nothing; the build is the one to stop.
         assert!(!state.stack_previews.request_cancel(&job.job_id));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_build_whose_frames_change_while_it_waits_runs_as_a_new_build() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, ctx) = state_with_frames(directory.path());
+        // The worker is busy, so the build waits in line after its preview.
+        let busy = state.stack_previews.line.try_reserve_main().unwrap();
+        let request = build_request(vec![1, 2, 3, 4]);
+        let slot = build_set::queue_preparation(&state, &ctx, 1, request.clone(), false).unwrap();
+        let previewed = prepared(&state, &slot.job_id).await.replaced_by[0].clone();
+        assert_eq!(
+            state.stack_previews.get(&previewed).unwrap().state,
+            StackJobState::Queued
+        );
+        // A frame is rejected while the build waits.
+        ctx.db()
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE acquiredimage SET gradingStatus = 2 WHERE Id = 2",
+                [],
+            )
+            .unwrap();
+        let expected = prepare_job(&ctx, 1, &request).unwrap().public.job_id;
+        assert_ne!(expected, previewed, "the rejection changes the build");
+        drop(busy);
+        let mut done = state.stack_previews.get(&previewed).unwrap();
+        for _ in 0..500 {
+            done = state.stack_previews.get(&previewed).unwrap();
+            if done.state == StackJobState::Replaced {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        // The previewed build points to the build prepared at its turn.
+        assert_eq!(done.state, StackJobState::Replaced);
+        assert_eq!(done.replaced_by, vec![expected.clone()]);
+        assert!(state.stack_previews.get(&expected).is_some());
+        state.stack_previews.request_cancel(&expected);
     }
 
     #[tokio::test(flavor = "multi_thread")]

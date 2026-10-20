@@ -918,7 +918,7 @@ async fn refresh_project(
             &prepared.public,
             true,
         );
-        enqueue_job(Arc::clone(state), prepared, origin, None);
+        enqueue_job(Arc::clone(state), prepared, &request, origin, None);
         started += 1;
     }
     Ok(if started > 0 {
