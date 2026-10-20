@@ -2157,18 +2157,17 @@ fn submit_color(
                 state.stack_previews.forget_job_of(&job_id, &cancel);
                 drop(work);
                 if state.stack_previews.line.take_preempted(&job_id)
+                    && !state.shutdown.is_stopping()
                     && requeue_stopped_color(state, &job_id)
                 {
-                    let (spec, origin) = again;
-                    let first = state.stack_previews.line.first_automatic();
-                    submit_color(
-                        Arc::clone(state),
-                        spec,
-                        lane,
-                        origin,
-                        true,
-                        first.as_deref(),
-                    );
+                    let (spec, mut origin) = again;
+                    // A person may have adopted it while it stopped.
+                    let automatic = state.stack_previews.is_automatic(&job_id);
+                    origin.set_automatic(automatic);
+                    submit_color(Arc::clone(state), spec, lane, origin, automatic, None);
+                    if automatic {
+                        state.stack_previews.line.move_ahead_of_automatic(&job_id);
+                    }
                 }
             })
     });
@@ -2225,7 +2224,7 @@ impl super::LineWork for ColorWork {
 
     fn execute(spec: ColorRequest, worker: &super::Worker<'_>) {
         let state = worker.server();
-        if let Some(prepared) = prepare_color_at_turn(&spec, state) {
+        if let Some(prepared) = prepare_color_at_turn(&spec, state, worker.stop_flag()) {
             run_color_job(state, prepared, worker.stop_flag().clone());
         }
     }
@@ -2247,7 +2246,11 @@ struct ColorRequest {
 /// request becomes another composition: that one is queued, or a matching
 /// finished one is reused, and the previewed record points to it. A
 /// composition that cannot be prepared fails with the reason.
-fn prepare_color_at_turn(spec: &ColorRequest, state: &Arc<AppState>) -> Option<PreparedColorJob> {
+fn prepare_color_at_turn(
+    spec: &ColorRequest,
+    state: &Arc<AppState>,
+    stop: &Stop,
+) -> Option<PreparedColorJob> {
     let fail = |error: String| {
         state.stack_previews.update_color(&spec.job_id, |job| {
             job.state = StackJobState::Failed;
@@ -2270,9 +2273,20 @@ fn prepare_color_at_turn(spec: &ColorRequest, state: &Arc<AppState>) -> Option<P
     if prepared.public.job_id == spec.job_id {
         return Some(prepared);
     }
+    // Stopped while it was read, or the server is stopping: no other
+    // composition takes its place. A preempted one goes back in the line
+    // as its request.
+    if stop.requested() || state.shutdown.is_stopping() {
+        state.stack_previews.update_color(&spec.job_id, |job| {
+            job.state = StackJobState::Cancelled;
+            job.phase = "Stopped before composing".into();
+        });
+        return None;
+    }
+    let automatic = state.stack_previews.is_automatic(&spec.job_id);
     let placement = super::build_set::Placement {
-        automatic: state.stack_previews.is_automatic(&spec.job_id),
-        slot: None,
+        automatic,
+        ..Default::default()
     };
     match start_prepared_color(
         state,
@@ -2293,6 +2307,16 @@ fn prepare_color_at_turn(spec: &ColorRequest, state: &Arc<AppState>) -> Option<P
                 job.replaced_by = vec![became.job_id.clone()];
                 job.phase = "Queued".into();
             });
+            // It keeps the turn the previewed composition had: a person's
+            // next, an automatic one ahead of the other automatic work.
+            if automatic {
+                state
+                    .stack_previews
+                    .line
+                    .move_ahead_of_automatic(&became.job_id);
+            } else {
+                state.stack_previews.move_in_line(&became.job_id, 0);
+            }
         }
         Err(error) => fail(error.message()),
     }
@@ -5287,7 +5311,7 @@ mod tests {
             project_id: previewed.public.project_id,
             request: test_request(),
         };
-        assert!(prepare_color_at_turn(&spec, &state).is_none());
+        assert!(prepare_color_at_turn(&spec, &state, &Stop::new()).is_none());
         let job = state.stack_previews.get_color(&spec.job_id).unwrap();
         assert_eq!(job.state, StackJobState::Failed);
         assert_eq!(job.phase, "Could not be prepared");

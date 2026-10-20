@@ -231,8 +231,10 @@ pub struct ScheduledRefresh {
     pub due_in_seconds: u64,
     /// Changes with every touch, and is never reused.
     pub touches: u64,
-    /// Due, and waiting for a quality analysis to finish before its builds
-    /// join the line. A refresh still settling is not waiting.
+    /// Due, and waiting to be planned: while a person's work runs or ended
+    /// moments ago, while automatic builds wait in the line or run, or while
+    /// a quality analysis of its database runs. A refresh still settling is
+    /// not waiting.
     pub waiting: bool,
 }
 
@@ -526,10 +528,18 @@ async fn tick(state: &Arc<AppState>) {
         }
     }
     let _starting = Starting(refreshes);
-    // Every due refresh puts its builds in the line now. The line runs
-    // them after any person's work, one at a time, and starts none while a
-    // person's work runs elsewhere.
-    for (key, pending) in due {
+    // Planning a refresh reads every light's header on the database's shared
+    // connection, so it waits while a person's work runs, a moment after
+    // it, and while automatic builds already wait in the line or run. The
+    // line, not this hold, decides when the builds run.
+    if planning_held(state) {
+        for (key, pending) in due {
+            refreshes.hold(key, pending);
+        }
+        return;
+    }
+    let mut remaining = due.into_iter();
+    while let Some((key, pending)) = remaining.next() {
         let Some(ctx) = state.get_database(&key.database_id) else {
             continue;
         };
@@ -552,6 +562,30 @@ async fn tick(state: &Arc<AppState>) {
                     // a re-apply touches a refresh, so the two cannot chase
                     // each other.
                     state.stack_previews.yield_automatic_processing();
+                    // One refresh's builds at a time: the rest of this
+                    // database and every other due key are planned once
+                    // these have run, keeping their history so the cap
+                    // still holds.
+                    let rest: Vec<i32> = match key.project_id {
+                        Some(_) => Vec::new(),
+                        None => followed_projects(&ctx)
+                            .into_iter()
+                            .filter(|other| *other > project_id)
+                            .collect(),
+                    };
+                    for other in rest {
+                        refreshes.hold(
+                            RefreshKey {
+                                database_id: key.database_id.clone(),
+                                project_id: Some(other),
+                            },
+                            pending.clone(),
+                        );
+                    }
+                    for (key, pending) in remaining {
+                        refreshes.hold(key, pending);
+                    }
+                    return;
                 }
                 Ok(RefreshOutcome::Unchanged) => {}
                 Ok(RefreshOutcome::Skipped(why)) => {
@@ -571,6 +605,22 @@ async fn tick(state: &Arc<AppState>) {
             }
         }
     }
+}
+
+/// Whether due refreshes wait to be planned: while a person's work runs
+/// or ended moments ago, and while automatic builds wait in the line or
+/// run. A re-apply of processing does not hold a refresh off: the refresh
+/// may bring a newer stack, which the re-apply would only be redone for.
+pub(super) fn planning_held(state: &AppState) -> bool {
+    !quiet_for_automatic_work(state) || automatic_builds_in_line(&state.stack_previews)
+}
+
+/// Whether automatic builds or compositions wait in the line or run.
+pub(super) fn automatic_builds_in_line(manager: &super::StackPreviewManager) -> bool {
+    manager
+        .active()
+        .into_iter()
+        .any(|entry| entry.automatic && entry.kind != super::StackActivityKind::Processing)
 }
 
 /// Whether a person's work has left the worker alone long enough for
@@ -695,13 +745,13 @@ async fn refresh_project(
             &plan.request,
             Some(&plan.channels),
         )?;
-        Ok(Some(channels))
+        Ok(Some((channels, plan.channels)))
     })
     .await
     .map_err(|error| {
         AppError::InternalError(format!("Stack preparation task failed: {error}"))
     })??;
-    let Some(channels) = planned else {
+    let Some((channels, planned_channels)) = planned else {
         return Ok(RefreshOutcome::Skipped(
             "no stacked channel, and no new one to build".into(),
         ));
@@ -805,7 +855,14 @@ async fn refresh_project(
             &prepared.public,
             true,
         );
-        enqueue_job(Arc::clone(state), prepared, &request, origin, None);
+        enqueue_job(
+            Arc::clone(state),
+            prepared,
+            &request,
+            origin,
+            None,
+            super::build_set::PreviewChannels::These(planned_channels.clone()),
+        );
         started += 1;
     }
     Ok(if started > 0 {
@@ -1617,7 +1674,7 @@ mod tests {
     }
 
     #[test]
-    fn a_due_refresh_queues_its_builds_while_a_person_works() {
+    fn a_due_refresh_is_planned_after_a_persons_work() {
         // The policy is held outside the runtime: an async test cannot hold
         // a blocking lock across its awaits.
         let _policy = enabled(5, 15);
@@ -1640,7 +1697,8 @@ mod tests {
             .write()
             .unwrap()
             .insert(ctx.id.clone(), Arc::clone(&ctx));
-        // A person's scan runs while the refresh comes due.
+        // A person's scan runs while the refresh comes due: the refresh is
+        // not planned on the person's time, and is listed as waiting.
         let person = state.begin_named_interactive_job("a quality scan");
         state
             .auto_stacks
@@ -1652,9 +1710,6 @@ mod tests {
         assert!(state.auto_stacks.run_now(&key));
         mark_ready();
         tick(&state).await;
-        // Its build joins the line as automatic work and leaves the list of
-        // scheduled refreshes; the line starts it once the person's work has
-        // been quiet for long enough.
         let automatic_build = || {
             state
                 .stack_previews
@@ -1665,17 +1720,28 @@ mod tests {
                 .find(|job| job.automatic && job.project_id == 1)
                 .cloned()
         };
+        assert!(
+            automatic_build().is_none(),
+            "it was planned on the person's time"
+        );
+        let scheduled = state.auto_stacks.scheduled();
+        assert!(scheduled[0].waiting);
+        let listed =
+            super::super::name_scheduled(&state, scheduled, super::super::RefreshPlanning::Plan);
+        assert_eq!(listed[0].waiting_for.as_deref(), Some("a quality scan"));
+
+        // Quiet for long enough: its build joins the line as automatic
+        // work, and the refresh leaves the list, starting set and all.
+        drop(person);
+        state.interactive_ended_ago(RESUME_QUIET);
+        tick(&state).await;
         let build = automatic_build().expect("the refresh queued no build");
-        assert_eq!(build.state, StackJobState::Queued);
+        assert!(matches!(
+            build.state,
+            StackJobState::Queued | StackJobState::Running
+        ));
         assert!(state.auto_stacks.scheduled().is_empty());
         assert!(state.auto_stacks.starting.lock().unwrap().is_empty());
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        assert_eq!(
-            automatic_build().unwrap().state,
-            StackJobState::Queued,
-            "it started while the person's work ran"
-        );
-        drop(person);
         state.stack_previews.request_cancel(&build.job_id);
     }
 

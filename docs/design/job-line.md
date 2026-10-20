@@ -331,12 +331,13 @@ person's or automatic.
   person's work holds the interactive guard anywhere on the server, such as
   a quality scan (`DispatchRules::automatic_may_start`).
 
-This replaced `cancel_automatic`, the refresh scheduler's list of
-interrupted builds, and its hold of due refreshes: a due refresh puts its
-requests in the line at once, and the line decides when they run. The
-scheduler's 30-second quiet period after a person's work is gone: a
-person's next build that joins after automatic work started preempts it.
-Re-applies of processing still yield outside the line, as before.
+This replaced `cancel_automatic` and the refresh scheduler's list of
+interrupted builds. The scheduler still holds due refreshes before
+*planning* them, because planning reads every light's header on the
+shared connection: it plans one refresh at a time, while no person's work
+has run for 30 seconds and no automatic build waits in the line or runs.
+Once planned, the line decides when the builds run. Re-applies of
+processing still yield outside the line, as before.
 
 Preparation keeps one runner per catalog on this server. A long preparation
 in one catalog then does not hold up another, as now.

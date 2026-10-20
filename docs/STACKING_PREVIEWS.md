@@ -397,8 +397,8 @@ write access. `POST /api/stack-activity/{job_id}/move` with
 `{"position": n}` (0 is next) and `POST /api/stack-activity/{job_id}/cancel`
 do the same from scripts; `GET /api/stack-activity` lists builds running first,
 then the line in order, each waiting one with its `queue_position`; the
-automatic refreshes under `scheduled`, each due one held back by a quality
-analysis marked `waiting` with `waiting_for`;
+automatic refreshes under `scheduled`, each due one not yet planned marked
+`waiting` with `waiting_for`;
 and re-applies of processing waiting for their turn under
 `waiting_reapplies`. A processing run is an entry
 of `kind` `processing` whose `job_id` is its stretch id; its `processing`
@@ -736,15 +736,17 @@ first stack this way gets no first color preview; once one is composed, it
 follows its channels.
 
 A refresh still settling is not in the header's queue or its job count: it
-is not work yet. Once it is due, at the scheduler's next look within 15
-seconds, it puts one build per channel in the line, marked `automatic`.
-The line runs automatic builds after every build you queued, one at a
-time, and starts none while work you started runs anywhere on the server,
-such as a quality scan. The header lists them as queued under
-**Automatic**. Only a quality analysis of its database holds a due refresh
-back: the header then lists it as **Refreshing stacks**, marked
-**waiting**, with what it waits for, and counts it with an hourglass beside
-the running count.
+is not work yet. Once it is due, the scheduler plans it at its next look,
+within 15 seconds, when nothing you started has run for the last 30
+seconds, no automatic build is already queued or running, and no quality
+analysis of its database runs. Planning reads every light's header, so it
+stays off your time. The refresh then puts one build per channel in the
+line, marked `automatic`. The line runs automatic builds after every build
+you queued, one at a time, and starts none while work you started runs
+anywhere on the server, such as a quality scan. The header lists them as
+queued under **Automatic**. Until a due refresh is planned, the header
+lists it as **Refreshing stacks**, marked **waiting**, with what it waits
+for, and counts it with an hourglass beside the running count.
 
 A build you start stops a running automatic build at its checkpoint. The
 automatic build goes back in the line, ahead of the other automatic builds,

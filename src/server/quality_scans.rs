@@ -89,6 +89,14 @@ impl CatalogWork for QualityScans {
         if let Some(scan) = queue.scans.pop_front() {
             queue.analysis_running = false;
             queue.running_ctx = Some(Arc::clone(&scan.ctx));
+            // The previous scan may have just finished: the progress shows
+            // this one from now on, while its frames are gathered.
+            spatial_scan::begin_preparing(
+                &scan.ctx.spatial_metrics,
+                scan.request.target_id,
+                scan.request.filter_name.clone(),
+                false,
+            );
             return Step::Run(Item::Scan(scan));
         }
         let Some(analysis) = &mut queue.analysis else {
@@ -219,6 +227,14 @@ pub(crate) fn queue_scan(
     JOBS.job(&scanner(ctx))
         .stop_if(|queue| queue.analysis_running);
     true
+}
+
+/// Whether a person's scan waits in the queue of the store `ctx` scans
+/// with: the progress then reads as running, though the scan before it has
+/// finished.
+pub(crate) fn scan_queued(ctx: &DatabaseContext) -> bool {
+    JOBS.existing(&scanner(ctx))
+        .is_some_and(|job| !job.queue().scans.is_empty())
 }
 
 /// A second request for a queued scan adds what it forces.

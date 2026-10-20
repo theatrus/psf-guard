@@ -27,12 +27,10 @@
   queued run waited for the copy to finish. Queued runs for the copying
   database still wait, and keep their place in the queue.
 
-- Automatic stack refreshes now queue their builds as soon as they are
-  due, behind everything you started, instead of waiting outside the queue.
-  The header lists them as queued automatic builds. A build you start stops
-  a running automatic build, which goes back in the queue and resumes from
-  its checkpoint after your work, instead of being cancelled and
-  rescheduled.
+- A build you start stops a running automatic build, which goes back in the
+  queue behind your work and resumes from its checkpoint, instead of being
+  cancelled and rescheduled. Automatic builds always wait behind the builds
+  you queued, and the header lists them as queued automatic builds.
 - A queued stack build or color preview reads its frames, grades and
   calibration again when its turn comes. Grades you change while a build
   waits are used, and when the frames changed, the card follows the new

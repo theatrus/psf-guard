@@ -363,9 +363,33 @@ pub fn mark_preparing(
     automatic: bool,
 ) {
     let mut s = store.write().unwrap();
-    if s.progress.running {
-        return;
+    if !s.progress.running {
+        preparing(&mut s, target_id, filter_name, automatic);
     }
+}
+
+/// Show the scan of a target as running and preparing, whatever the store
+/// showed: the runner took it from the queue and gathers its frames now.
+pub fn begin_preparing(
+    store: &RwLock<SpatialMetricsStore>,
+    target_id: i32,
+    filter_name: Option<String>,
+    automatic: bool,
+) {
+    preparing(
+        &mut store.write().unwrap(),
+        target_id,
+        filter_name,
+        automatic,
+    );
+}
+
+fn preparing(
+    s: &mut SpatialMetricsStore,
+    target_id: i32,
+    filter_name: Option<String>,
+    automatic: bool,
+) {
     s.progress = SpatialScanProgress {
         running: true,
         stage: STAGE_PREPARING.to_string(),

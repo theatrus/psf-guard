@@ -304,10 +304,6 @@ impl LineState {
         }
     }
 
-    /// Take out the entry that runs next on `lane`. When a reserved turn
-    /// blocks the lane, return when it expires instead. Held places and
-    /// blocked entries are passed over; a reserved turn that expired is
-    /// removed.
     /// Whether an entry after `index` in the main lane's line could run.
     fn runnable_after(&self, index: usize) -> bool {
         self.order[index + 1..]
@@ -315,6 +311,11 @@ impl LineState {
             .any(|place| matches!(place, Place::Work(entry) if !self.is_blocked(entry)))
     }
 
+    /// Take out the entry that runs next on `lane`. When a reserved turn
+    /// blocks the lane, return when it expires instead. Held places and
+    /// blocked entries are passed over; a reserved turn that expired is
+    /// removed. Automatic entries are passed over while
+    /// `automatic_may_start` is false.
     fn take_next(
         &mut self,
         lane: Lane,
@@ -443,7 +444,11 @@ impl Drop for Lease {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *state.busy(self.lane) = false;
         state.running_holds(self.lane).clear();
-        *state.running(self.lane) = None;
+        // A person's entry that joined after the work's kind asked whether
+        // it was preempted leaves no mark for a later job under the id.
+        if let Some(ran) = state.running(self.lane).take() {
+            state.preempted.remove(&ran.id);
+        }
         drop(state);
         self.wakeup.notify_waiters();
     }
@@ -679,10 +684,9 @@ impl JobLine {
     pub fn submit(&self, entry: Entry, before: Option<&str>) -> Result<(), Entry> {
         {
             let mut state = self.lock();
-            // A person's work stops automatic work running on its lane.
-            if entry.tier == Tier::Person {
-                state.preempt(entry.lane);
-            }
+            // A person's work stops automatic work running on its lane,
+            // once it is in line: a duplicate stops nothing.
+            let (lane, person) = (entry.lane, entry.tier == Tier::Person);
             match entry.lane {
                 Lane::Main => match state.index_of(&entry.id) {
                     Some(index) => match &state.order[index] {
@@ -714,6 +718,9 @@ impl JobLine {
                     };
                     state.quick.insert(index, entry);
                 }
+            }
+            if person {
+                state.preempt(lane);
             }
         }
         self.wake();
@@ -829,6 +836,56 @@ impl JobLine {
             .map(|place| place.id().to_string())
     }
 
+    /// Forget that the entry `id` was preempted: a person's Stop reached it,
+    /// so it ends stopped rather than going back in the line.
+    pub fn forget_preempted(&self, id: &str) {
+        self.lock().preempted.remove(id);
+    }
+
+    /// Move the waiting entry or place `id` ahead of every automatic place
+    /// in the main lane's line, behind the people's places: where automatic
+    /// work stopped for a person's goes back.
+    pub fn move_ahead_of_automatic(&self, id: &str) {
+        {
+            let mut state = self.lock();
+            if let Some(index) = state.index_of(id) {
+                let place = state.order.remove(index);
+                let to = state.place_for(Tier::Person);
+                state.order.insert(to, place);
+            }
+        }
+        self.wake();
+    }
+
+    /// The ids of the places and entries, waiting or running, that hold
+    /// one of `keys`.
+    pub fn holders_of(&self, keys: &[String]) -> Vec<String> {
+        let mut state = self.lock();
+        let held = |holds: &[String]| holds.iter().any(|key| keys.contains(key));
+        let mut ids: Vec<String> = state
+            .order
+            .iter()
+            .filter(|place| held(place.holds()))
+            .map(|place| place.id().to_string())
+            .chain(
+                state
+                    .quick
+                    .iter()
+                    .filter(|entry| held(&entry.holds))
+                    .map(|entry| entry.id.clone()),
+            )
+            .collect();
+        for lane in [Lane::Main, Lane::Quick] {
+            let holds = state.running_holds(lane).clone();
+            if held(&holds)
+                && let Some(running) = state.running(lane)
+            {
+                ids.push(running.id.clone());
+            }
+        }
+        ids
+    }
+
     /// Whether the entry `id` was stopped to make way for a person's work,
     /// rather than by a person's Stop. Asking forgets it, so the kind that
     /// puts the entry back asks once.
@@ -860,8 +917,19 @@ impl JobLine {
                 };
                 state.order.insert(to, place);
             }
-            if let Some(entry) = state.quick.iter_mut().find(|entry| entry.id == id) {
+            if let Some(index) = state.quick.iter().position(|entry| entry.id == id) {
+                let mut entry = state.quick.remove(index).expect("the index is in the lane");
                 entry.tier = tier;
+                let to = if tier == Tier::Person {
+                    state
+                        .quick
+                        .iter()
+                        .position(|queued| queued.tier == Tier::Automatic)
+                        .map_or(index, |first| first.min(index))
+                } else {
+                    index
+                };
+                state.quick.insert(to, entry);
             }
         }
         self.wake();
@@ -1318,6 +1386,25 @@ mod tests {
         assert!(!line.take_preempted("auto running"), "asked once");
         assert_eq!(line.first_automatic().as_deref(), Some("auto 1"));
         drop(running);
+    }
+
+    #[tokio::test]
+    async fn a_preempted_mark_ends_with_the_entry_that_ran() {
+        let (sender, _) = std::sync::mpsc::channel();
+        let line = JobLine::new();
+        line.submit(
+            entry("auto", Lane::Main, &sender).0.tier(Tier::Automatic),
+            None,
+        )
+        .ok()
+        .unwrap();
+        let running = line.next(Lane::Main).await;
+        line.submit(entry("person", Lane::Main, &sender).0, None)
+            .ok()
+            .unwrap();
+        // Its kind never asked: the mark goes when the lane is free.
+        drop(running);
+        assert!(!line.take_preempted("auto"));
     }
 
     #[tokio::test]

@@ -8793,7 +8793,12 @@ pub async fn get_spatial_scan_progress(
     } else {
         None
     };
-    let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
+    let (mut progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
+    // Between one scan's end and the next's start, a queued scan still runs
+    // as far as a page following it is concerned.
+    if !progress.running && crate::server::quality_scans::scan_queued(&ctx) {
+        progress.running = true;
+    }
     Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
         started: progress.running,
         progress,

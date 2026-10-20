@@ -1280,6 +1280,9 @@ impl StackPreviewManager {
             self.line.clear_journal(job_id);
             self.release_place(job_id);
         }
+        // A person's Stop wins over a preemption: the work ends stopped
+        // rather than going back in the line.
+        self.line.forget_preempted(job_id);
         // A build still waiting sees it at once and leaves the line.
         self.line.changed();
         true
@@ -2043,10 +2046,15 @@ fn queue_preview_render(
             // Stopped for a person's work: render what is still out of date
             // again, after it.
             if state.stack_previews.line.take_preempted(&job_id)
+                && !state.shutdown.is_stopping()
                 && let Some(finished) = state.stack_previews.get(&job_id)
                 && let Some(ctx) = state.get_database(&database_id)
             {
-                queue_preview_render(state, &ctx, &finished, true, None);
+                let automatic = state.stack_previews.is_automatic(&job_id);
+                queue_preview_render(state, &ctx, &finished, automatic, None);
+                if automatic {
+                    state.stack_previews.line.move_ahead_of_automatic(&job_id);
+                }
             }
         })
     });
@@ -2305,24 +2313,20 @@ pub(crate) fn stack_activity(state: &Arc<AppState>, planning: RefreshPlanning) -
     }
 }
 
-/// What automatic stack work waits for, in words that fit "Waiting for …".
-/// A due refresh waits only for a quality analysis of its database, which
-/// rewrites the scores it would stack by; its builds then wait in the line.
-/// A re-apply waits for the build or run holding the worker, or the line
-/// ahead of it, a person's work, or a quiet moment after it. `None` when
-/// it is free to start at the scheduler's next look.
+/// What automatic stack work waits for, in words that fit "Waiting for …":
+/// for a due refresh, the automatic builds already in the line, a person's
+/// work, a quiet moment after it, or a quality analysis of its database;
+/// for a re-apply, the build or run holding the worker or the line ahead of
+/// it, a person's work, or a quiet moment after it. `None` when it is free
+/// to start at the scheduler's next look.
 fn automatic_work_waits_for(state: &AppState, database_id: &str, reapply: bool) -> Option<String> {
-    let quality_analysis = || {
-        let ctx = state.get_database(database_id)?;
-        crate::server::quality_backfill::snapshot(&ctx.quality_backfill)
-            .running
-            .then(|| format!("the quality analysis of {}", ctx.name))
-    };
-    if !reapply {
-        return quality_analysis();
-    }
     let manager = &state.stack_previews;
-    let holder = (!manager.active().is_empty()).then(|| {
+    let held = if reapply {
+        !manager.active().is_empty()
+    } else {
+        automatic::automatic_builds_in_line(manager)
+    };
+    let holder = held.then(|| {
         manager
             .worker_holder("")
             .or_else(|| manager.quick_lane_holder())
@@ -2334,7 +2338,12 @@ fn automatic_work_waits_for(state: &AppState, database_id: &str, reapply: bool) 
             (!automatic::quiet_for_automatic_work(state))
                 .then(|| "a quiet moment after your work".to_string())
         })
-        .or_else(quality_analysis)
+        .or_else(|| {
+            let ctx = state.get_database(database_id)?;
+            crate::server::quality_backfill::snapshot(&ctx.quality_backfill)
+                .running
+                .then(|| format!("the quality analysis of {}", ctx.name))
+        })
 }
 
 /// A re-apply whose run has just joined the line is listed as that run,
@@ -3099,6 +3108,7 @@ fn enqueue_job(
     request: &StackPreviewRequest,
     origin: journal::JournaledStackJob,
     slot: Option<&str>,
+    preview: build_set::PreviewChannels,
 ) {
     // While it waits and while it runs, compositions of its targets wait.
     let mut targets = prepared
@@ -3119,6 +3129,7 @@ fn enqueue_job(
         database_id,
         project_id: prepared.public.project_id,
         request: request.clone(),
+        preview,
     };
     submit_build(state, spec, holds, origin, prepared.public.automatic, slot);
 }
@@ -3181,19 +3192,21 @@ fn submit_build(
                 }
                 state.stack_previews.forget_job_of(&job_id, &cancel);
                 drop(work);
+                // Stopped for a person's work: back in the line as its
+                // request, unless the server is stopping, when the journal
+                // keeps it for the next start.
                 if state.stack_previews.line.take_preempted(&job_id)
+                    && !state.shutdown.is_stopping()
                     && requeue_stopped_build(state, &job_id)
                 {
-                    let (spec, holds, origin) = again;
-                    let first = state.stack_previews.line.first_automatic();
-                    submit_build(
-                        Arc::clone(state),
-                        spec,
-                        holds,
-                        origin,
-                        true,
-                        first.as_deref(),
-                    );
+                    let (spec, holds, mut origin) = again;
+                    // A person may have adopted it while it stopped.
+                    let automatic = state.stack_previews.is_automatic(&job_id);
+                    origin.set_automatic(automatic);
+                    submit_build(Arc::clone(state), spec, holds, origin, automatic, None);
+                    if automatic {
+                        state.stack_previews.line.move_ahead_of_automatic(&job_id);
+                    }
                 }
             })
     });
@@ -3339,7 +3352,7 @@ impl LineWork for BuildWork {
     const NEEDS: Needs = Needs::ThisServer;
 
     fn execute(spec: BuildRequest, worker: &Worker<'_>) -> Option<BuildOutput> {
-        let prepared = prepare_at_turn(&spec, worker.server())?;
+        let prepared = prepare_at_turn(&spec, worker.server(), worker.stop_flag())?;
         Some(execute_build(prepared, worker))
     }
 }
@@ -3352,6 +3365,9 @@ struct BuildRequest {
     database_id: String,
     project_id: i32,
     request: StackPreviewRequest,
+    /// Which channels the preview was prepared with.
+    #[serde(default)]
+    preview: build_set::PreviewChannels,
 }
 
 /// Prepare a build again from its request, as the catalog is now. Returns
@@ -3360,7 +3376,7 @@ struct BuildRequest {
 /// another build: that build is queued at the front of the line, or a
 /// matching finished build is reused, and the previewed record points to
 /// it. A build that cannot be prepared fails with the reason.
-fn prepare_at_turn(spec: &BuildRequest, state: &Arc<AppState>) -> Option<PreparedJob> {
+fn prepare_at_turn(spec: &BuildRequest, state: &Arc<AppState>, stop: &Stop) -> Option<PreparedJob> {
     let fail = |error: String| {
         state.stack_previews.update(&spec.job_id, |job| {
             cancel_unfinished_groups(job);
@@ -3376,7 +3392,12 @@ fn prepare_at_turn(spec: &BuildRequest, state: &Arc<AppState>) -> Option<Prepare
     state.stack_previews.update(&spec.job_id, |job| {
         job.state = StackJobState::Running;
     });
-    let prepared = match build_set::prepare_job(&ctx, spec.project_id, &spec.request) {
+    let prepared = match build_set::prepare_like_preview(
+        &ctx,
+        spec.project_id,
+        &spec.request,
+        &spec.preview,
+    ) {
         Ok(prepared) => prepared,
         Err(error) => {
             fail(error.message());
@@ -3386,10 +3407,21 @@ fn prepare_at_turn(spec: &BuildRequest, state: &Arc<AppState>) -> Option<Prepare
     if prepared.public.job_id == spec.job_id {
         return Some(prepared);
     }
+    // Stopped while it was read, by a person or for a person's work, or the
+    // server is stopping: no other build takes its place. A preempted build
+    // goes back in the line as its request.
+    if stop.requested() || state.shutdown.is_stopping() {
+        state.stack_previews.update(&spec.job_id, |job| {
+            cancel_unfinished_groups(job);
+            job.state = StackJobState::Cancelled;
+        });
+        return None;
+    }
     let automatic = state.stack_previews.is_automatic(&spec.job_id);
     let placement = build_set::Placement {
         automatic,
         slot: None,
+        preview: spec.preview.clone(),
     };
     match build_set::start_prepared(
         state,
@@ -3406,8 +3438,13 @@ fn prepare_at_turn(spec: &BuildRequest, state: &Arc<AppState>) -> Option<Prepare
                 became,
                 "A queued build's frames changed while it waited; it runs as a new build"
             );
-            // It keeps the turn the previewed build had.
-            state.stack_previews.move_in_line(&became, 0);
+            // A person's build keeps the turn the previewed build had; an
+            // automatic one goes ahead of the other automatic work only.
+            if automatic {
+                state.stack_previews.line.move_ahead_of_automatic(&became);
+            } else {
+                state.stack_previews.move_in_line(&became, 0);
+            }
             state.stack_previews.update(&spec.job_id, |job| {
                 job.state = StackJobState::Replaced;
                 job.replaced_by = vec![became.clone()];
@@ -8915,6 +8952,28 @@ mod tests {
             )]
         );
         assert!(state.stack_previews.request_cancel("restored"));
+    }
+
+    #[tokio::test]
+    async fn a_persons_stop_after_a_preemption_keeps_the_build_stopped() {
+        let manager = StackPreviewManager::new();
+        let mut job = running_build("auto");
+        job.automatic = true;
+        assert!(manager.insert(job));
+        let stop = manager.track_job("auto");
+        let entry =
+            crate::server::job_line::testing::entry("auto", Lane::Main, stop).tier(Tier::Automatic);
+        assert!(manager.line.submit(entry, None).is_ok());
+        let running = manager.line.next(Lane::Main).await;
+        // A person's build preempts it, then the person stops it too.
+        let person = crate::server::job_line::testing::entry("person", Lane::Main, Stop::new());
+        assert!(manager.line.submit(person, None).is_ok());
+        assert!(manager.request_cancel("auto"));
+        assert!(
+            !manager.line.take_preempted("auto"),
+            "it would go back in the line"
+        );
+        drop(running);
     }
 
     #[test]

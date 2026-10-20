@@ -491,6 +491,16 @@ fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Opt
     manager.update_color(&preparation.job_id, |job| {
         job.phase = "Waiting for the channel builds to finish".into();
     });
+    // A person waits for these builds: automatic ones among them become
+    // the person's, so they run ahead of other automatic work and while
+    // the person's other work runs.
+    if !preparation.automatic {
+        for holder in manager.line.holders_of(&keys) {
+            if manager.is_automatic(&holder) {
+                manager.adopt(&holder);
+            }
+        }
+    }
     let tier = super::tier_of(preparation.automatic);
     let entry = super::Entry::new(
         preparation.job_id.clone(),
@@ -558,6 +568,7 @@ fn prepare_and_queue(
     let placement = Placement {
         automatic: preparation.automatic,
         slot: Some(&preparation.job_id),
+        preview: PreviewChannels::Single,
     };
     let (ctx, project_id) = (&preparation.ctx, preparation.project_id);
     let (request, split) = match &preparation.what {
@@ -603,6 +614,14 @@ fn prepare_and_queue(
             .stack_previews
             .get(&prepared.public.job_id)
             .is_none_or(|job| job.state == StackJobState::Preparing);
+        let placement = Placement {
+            preview: if split {
+                PreviewChannels::All
+            } else {
+                PreviewChannels::Single
+            },
+            ..placement.clone()
+        };
         let started = start_prepared(state, ctx, project_id, &part_request, prepared, placement)
             .map_err(|error| error.message())?;
         if new {
@@ -693,7 +712,7 @@ pub(super) struct Started {
 }
 
 /// Who a prepared build is for, and where it goes in the line.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(super) struct Placement<'a> {
     /// The automatic refresh's, not a person's: it takes no build from
     /// the refresh and stops none.
@@ -701,6 +720,53 @@ pub(super) struct Placement<'a> {
     /// The place its request held while it was prepared; `None` joins the
     /// back of the line.
     pub(super) slot: Option<&'a str>,
+    /// Which channels the preview was prepared with, so the build is
+    /// prepared the same way at its turn and keeps its id.
+    pub(super) preview: PreviewChannels,
+}
+
+/// Which channels a build's preview was prepared with. A channel's id
+/// depends on its siblings' reference frames, so the build is prepared at
+/// its turn with the same set of channels.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PreviewChannels {
+    /// The request alone (`prepare_job`).
+    #[default]
+    Single,
+    /// Every channel of the request (`prepare_channels` with no subset), as
+    /// Build stacks splits it.
+    All,
+    /// These channels of the request, as an automatic refresh plans them.
+    These(Vec<StackChannelKey>),
+}
+
+/// Prepare a build at its turn the way its preview was prepared. A request
+/// for one channel is prepared beside the same sibling channels, and the
+/// prepared build of that channel is returned.
+pub(super) fn prepare_like_preview(
+    ctx: &Arc<DatabaseContext>,
+    project_id: i32,
+    request: &StackPreviewRequest,
+    preview: &PreviewChannels,
+) -> Result<PreparedJob, AppError> {
+    let (Some(channel), Some(only)) = (
+        &request.channel,
+        match preview {
+            PreviewChannels::Single => None,
+            PreviewChannels::All => Some(None),
+            PreviewChannels::These(channels) => Some(Some(channels.as_slice())),
+        },
+    ) else {
+        return prepare_job(ctx, project_id, request);
+    };
+    let mut whole = request.clone();
+    whole.channel = None;
+    prepare_channels(ctx, project_id, &whole, only)?
+        .into_iter()
+        .find(|(part, _)| part.channel.as_ref() == Some(channel))
+        .map(|(_, prepared)| prepared)
+        .map_or_else(|| prepare_job(ctx, project_id, request), Ok)
 }
 
 /// Queue a prepared build, or hand back the same build already queued,
@@ -819,7 +885,14 @@ pub(super) fn start_prepared(
         &response,
         placement.automatic,
     );
-    enqueue_job(Arc::clone(state), prepared, request, origin, placement.slot);
+    enqueue_job(
+        Arc::clone(state),
+        prepared,
+        request,
+        origin,
+        placement.slot,
+        placement.preview,
+    );
     Ok(Started {
         job: response,
         cached: None,
