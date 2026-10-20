@@ -16,6 +16,11 @@
 - The background jobs list also shows when the Calibration page reads
   light headers for a project, with how many it has read, and when it
   matches lights to flat groups.
+- The background jobs list also shows a catalog's own upkeep while it runs:
+  building PSF Guard's query indexes, reading the readout modes of older
+  calibration frames, and pairing calibrated copies with their lights. A
+  database you add or change gets its query indexes and readout modes at
+  once, rather than at the next server start.
 - When Seiza chooses a stack's reference frame and the plate solves show
   frames at more than one rotator angle, the reference now comes from the
   largest group. Before, a reference from a small group could reject every

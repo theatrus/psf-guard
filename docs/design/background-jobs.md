@@ -265,10 +265,25 @@ Then:
   `Interactive`, holding the guard. It reads on a connection of its own,
   shows in the job line with Stop, and stops between frames, keeping the
   frames done.
-- Backups (`backup_job.rs`) run one at a time server-wide rather than one per
-  catalog. A scheduled run is `Background` and yields between files and
-  SQLite steps; a run a person starts does not wait. Stop ends the run
-  rather than pausing it: the schedule tries again at its next time.
+- Backups (`backup_job.rs`) run one at a time server-wide, on one
+  `CatalogJobs` runner keyed by the server's backup manager. A scheduled run
+  is `Background` and yields between files and SQLite steps; a run a person
+  starts does not wait. Stop ends the run rather than pausing it: the
+  schedule tries again at its next time.
+- Target Scheduler imports and syncs (`ts_sync.rs`) run on `CatalogJobs`:
+  one runner per catalog for its sync, and one for imports, which run one
+  at a time. An import is a person's and holds the guard; a sync waits for
+  a person's work. Stop sets the job's `stopping`, which every step checks.
+- Catalog upkeep (`catalog_upkeep.rs`) runs on `CatalogJobs`, one runner
+  per catalog: PSF Guard's query indexes and the readout modes of older
+  calibration frames, asked for at start and whenever a database is added
+  or changed, and calibrated-copy pairing after each directory refresh. Its
+  row appears while it builds indexes, reads readout modes that are
+  missing, or pairs copies.
+- The directory-tree revalidation (`DatabaseContext::get_directory_tree`)
+  stays a single deduplicated thread, marked with an `InFlight` claim. Its
+  callers, request helpers and command-line paths alike, hold only a
+  database context, not the server state that `CatalogJobs` needs.
 - Calibration grading (`calibration_quality.rs`) is a Background runner per
   catalog. Its row in the job line appears once a pass has frames to
   measure; a pass that only regrades the library is quick and gets none.
@@ -302,8 +317,9 @@ Then:
   out what the flat groups feed**, is automatic.
 - Flat measuring, frame sites, the duplicate check, reject removal,
   calibration grading, calibration health, quality scans, arrivals, the
-  calibration scope and flat group use all run on `CatalogJobs`. Their
-  state lives in their job, not in statics of its own.
+  calibration scope, flat group use, catalog upkeep, backups and Target
+  Scheduler syncs all run on `CatalogJobs`. Their state lives in their
+  job, not in statics of its own.
 - Automatic import (`autoimport.rs`) is a schedule rather than a queue: a
   loop looks every 30 s at which databases are due and starts the
   ordinary import job, which has its own row. Its records and the lights
