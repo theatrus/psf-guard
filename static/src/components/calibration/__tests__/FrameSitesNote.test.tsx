@@ -15,7 +15,8 @@ function wrapper() {
 }
 
 const status = (state: FrameSitesStatus['state']): FrameSitesStatus => ({
-  state, active: false, done: 300, total: 1867, waiting_for: null, retry_at: null,
+  state, label: 'Reading frame sites · 300 of 1,867 frames', active: false, done: 300, total: 1867,
+  waiting_for: null, retry_at: null,
   started_at: 1, finished_at: 2, last: null, last_error: null,
 });
 
