@@ -14,13 +14,7 @@
 //! between an image folder and its own trash, so the database-management
 //! gate, which guards client-named paths, does not apply.
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, LazyLock, Mutex, RwLock,
-    },
-};
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 use axum::{
     extract::{Query, State},
@@ -34,12 +28,13 @@ use crate::commands::reject_removal::{
     RemovedFrame, RestoreReport, RestoreSelection, Scope, Stage, StaleRemovalPlan, Stopped,
     TrashReport, Work,
 };
-use crate::concurrency::Priority;
+use crate::concurrency::{Priority, Stop};
 use crate::server::{
     api::ApiResponse,
     database_context::{open_scheduler_connection, DatabaseContext},
     extract::DbContext,
     handlers::AppError,
+    job_line::catalog::{CatalogJob, CatalogWork, Step},
     state::AppState,
 };
 
@@ -84,7 +79,7 @@ pub struct RemovedQuery {
 #[derive(serde::Serialize)]
 pub struct RemovedView {
     pub batches: Vec<RemovedBatch>,
-    /// The frames of the batch asked for; empty without one.
+    /// The frames of the requested batch; empty when no batch was requested.
     pub frames: Vec<RemovedEntry>,
 }
 
@@ -143,6 +138,13 @@ pub struct RemovalJobStatus {
     /// `idle` before the first run, `running`, then `done`, `stopped` or
     /// `failed`.
     pub state: String,
+    /// What the run is, as pages and the header name it, such as
+    /// `Removing rejects`.
+    pub title: String,
+    /// The run's stage and count, such as `Moving to the trash 37 of 203`.
+    pub label: String,
+    /// 0–100 for the run's stage, or `None` before its size is known.
+    pub percent: Option<f64>,
     /// `preview`, `remove`, `restore` or `empty_trash`: what runs, or ran
     /// last.
     pub action: Option<String>,
@@ -167,67 +169,131 @@ pub struct RemovalJobStatus {
     pub priority: Option<String>,
 }
 
+/// Reject removal, run on one thread per catalog.
+pub(crate) struct RejectRemoval;
+
+type Job = CatalogJob<RejectRemoval>;
+
+/// The catalog's removal run. Only one run per catalog is active at a time.
 #[derive(Default)]
-struct Job {
-    status: RwLock<RemovalJobStatus>,
-    stop: AtomicBool,
-    /// Whether the catalog's one runner is at work.
-    busy: Mutex<bool>,
+pub(crate) struct Queue {
+    /// The requested run, until the runner thread starts it.
+    pending: Option<PendingRun>,
+    /// Whether a run is pending or running. A second request fails with a
+    /// conflict until the run ends.
+    run_active: bool,
 }
 
-impl Job {
-    fn status(&self) -> RemovalJobStatus {
-        self.status
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+/// A run that a person requested.
+pub(crate) struct PendingRun {
+    action: Action,
+    ctx: Arc<DatabaseContext>,
+    protected: BTreeSet<String>,
+    /// The server's async runtime, which runs the refreshes that a change
+    /// starts.
+    runtime: tokio::runtime::Handle,
+}
+
+impl CatalogWork for RejectRemoval {
+    type Queue = Queue;
+    type Status = RemovalJobStatus;
+    type Item = PendingRun;
+    const RUNNER: &'static str = "reject-removal";
+    /// Each run registers its own shutdown hold, labelled with its action.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<PendingRun> {
+        queue.pending.take().map_or(Step::Exit, Step::Run)
     }
 
-    fn update(&self, change: impl FnOnce(&mut RemovalJobStatus)) {
-        change(
-            &mut self
-                .status
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    fn run(state: &Arc<AppState>, _: &str, job: &Job, pending: PendingRun, stop: &Stop) {
+        let _runtime = pending.runtime.enter();
+        run(
+            state,
+            &pending.ctx,
+            job,
+            stop,
+            &pending.action,
+            &pending.protected,
         );
     }
 
-    fn progress(&self, stage: Stage, done: usize, total: usize) {
-        self.update(|status| {
-            status.stage = Some(stage.name().into());
-            status.done = done;
-            status.total = total;
-        });
+    fn runner_failed(queue: &mut Queue, status: &mut RemovalJobStatus) {
+        queue.pending = None;
+        queue.run_active = false;
+        if status.state == "running" {
+            status.state = "failed".into();
+            status.stage = None;
+            status.error = Some("the run ended unexpectedly".into());
+        }
     }
 }
 
-static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.reject_removal.job(path)
+}
 
-fn job(path: &str) -> Arc<Job> {
-    let mut jobs = JOBS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    Arc::clone(jobs.entry(path.to_string()).or_default())
+fn progress(job: &Job, stage: Stage, done: usize, total: usize) {
+    job.update(|status| {
+        status.stage = Some(stage.name().into());
+        status.done = done;
+        status.total = total;
+    });
 }
 
 /// Where the reject removal job stands for the catalog at `path`.
-pub fn status(path: &str) -> RemovalJobStatus {
-    let mut status = job(path).status();
+pub fn status(state: &AppState, path: &str) -> RemovalJobStatus {
+    let mut status = job(state, path).status();
     if status.state.is_empty() {
         status.state = "idle".into();
     }
+    status.title = title(status.action.as_deref()).into();
+    status.label = label(status.stage.as_deref(), status.done, status.total);
+    status.percent = crate::server::job_text::percent(status.done, status.total);
     status
 }
 
-/// Stop the run between frames: the frames done stay done.
-pub fn stop(path: &str) -> RemovalJobStatus {
-    let job = job(path);
-    if *job
-        .busy
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-    {
-        job.stop.store(true, Ordering::SeqCst);
+/// What a run is, such as `Removing rejects`.
+pub fn title(action: Option<&str>) -> &'static str {
+    match action {
+        Some("remove") => "Removing rejects",
+        Some("restore") => "Restoring rejects",
+        Some("empty_trash") => "Emptying the reject trash",
+        _ => "Previewing reject removal",
     }
-    status(path)
+}
+
+/// A run's stage and count, such as `Moving to the trash 37 of 203`.
+pub fn label(stage: Option<&str>, done: usize, total: usize) -> String {
+    let verb = match stage {
+        Some("indexing") => "Indexing folders",
+        Some("checking") => "Checking files",
+        Some("moving") => "Moving to the trash",
+        Some("restoring") => "Restoring",
+        Some("deleting") => "Deleting",
+        _ => "Starting",
+    };
+    crate::server::job_text::stage_count(verb, done, total)
+}
+
+/// Stop the run between frames: the frames done stay done.
+pub fn stop(state: &AppState, path: &str) -> RemovalJobStatus {
+    let job = job(state, path);
+    job.stop(|queue| {
+        // A run that is pending, and not started by the runner thread, is
+        // removed so it never starts. The stop of a running run, or of one
+        // that is finishing, is requested as well.
+        if queue.pending.take().is_some() {
+            queue.run_active = false;
+            job.update(|status| {
+                status.state = "stopped".into();
+                status.stage = None;
+                status.priority = None;
+                status.finished_at = Some(now());
+            });
+        }
+    });
+    status(state, path)
 }
 
 /// Frames a collaboration report names: none without Director.
@@ -240,32 +306,6 @@ async fn protected(state: &AppState) -> Result<BTreeSet<String>, AppError> {
     }
 }
 
-/// Frees the runner if a run ends by a panic, or never starts.
-struct RunnerClaim(Option<Arc<Job>>);
-
-impl RunnerClaim {
-    fn disarm(mut self) {
-        self.0 = None;
-    }
-}
-
-impl Drop for RunnerClaim {
-    fn drop(&mut self) {
-        if let Some(job) = self.0.take() {
-            *job.busy
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = false;
-            job.update(|status| {
-                if status.state == "running" {
-                    status.state = "failed".into();
-                    status.stage = None;
-                    status.error = Some("the run ended unexpectedly".into());
-                }
-            });
-        }
-    }
-}
-
 /// Start a run on the catalog's runner, or refuse while one runs.
 fn start(
     state: &Arc<AppState>,
@@ -273,52 +313,40 @@ fn start(
     action: Action,
     protected: BTreeSet<String>,
 ) -> Result<RemovalJobStatus, AppError> {
-    let job = job(&ctx.database_path);
-    {
-        let mut busy = job
-            .busy
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if *busy {
-            return Err(AppError::Conflict(
-                "Reject removal is already running on this catalog. Wait for it, or stop it."
-                    .into(),
-            ));
-        }
-        // Cleared under the runner's lock, so a Stop that comes as the run
-        // starts is never lost.
-        job.stop.store(false, Ordering::SeqCst);
-        *busy = true;
-        job.update(|status| {
-            status.run += 1;
-            status.state = "running".into();
-            status.action = Some(action.name().into());
-            status.stage = None;
-            status.done = 0;
-            status.total = 0;
-            status.started_at = Some(now());
-            status.finished_at = None;
-            status.changed = false;
-            status.error = None;
-            status.priority = Some(Priority::Interactive.label().into());
-        });
-    }
-    let claim = RunnerClaim(Some(Arc::clone(&job)));
-    let (state, ctx, job_for_run) = (Arc::clone(state), Arc::clone(ctx), Arc::clone(&job));
-    // The refreshes a change starts run on the server's runtime.
-    let runtime = tokio::runtime::Handle::current();
-    let spawned = std::thread::Builder::new()
-        .name("reject-removal".into())
-        .spawn(move || {
-            let claim = claim;
-            let _runtime = runtime.enter();
-            run(&state, &ctx, &job_for_run, &action, &protected);
-            claim.disarm();
-        });
-    if let Err(error) = spawned {
-        tracing::warn!("could not start reject removal: {error}");
-    }
-    Ok(job.status())
+    let job = job(state, &ctx.database_path);
+    state
+        .catalog_jobs
+        .reject_removal
+        .request(state, &ctx.database_path, |queue| {
+            if queue.run_active {
+                return Err(AppError::Conflict(
+                    "Reject removal is already running on this catalog. Wait for it, or stop it."
+                        .into(),
+                ));
+            }
+            queue.run_active = true;
+            job.update(|status| {
+                status.run += 1;
+                status.state = "running".into();
+                status.action = Some(action.name().into());
+                status.stage = None;
+                status.done = 0;
+                status.total = 0;
+                status.started_at = Some(now());
+                status.finished_at = None;
+                status.changed = false;
+                status.error = None;
+                status.priority = Some(Priority::Interactive.label().into());
+            });
+            queue.pending = Some(PendingRun {
+                action,
+                ctx: Arc::clone(ctx),
+                protected,
+                runtime: tokio::runtime::Handle::current(),
+            });
+            Ok(())
+        })?;
+    Ok(status(state, &ctx.database_path))
 }
 
 /// How a run ended short of its result.
@@ -344,6 +372,7 @@ fn run(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
     job: &Job,
+    stop: &Stop,
     action: &Action,
     protected: &BTreeSet<String>,
 ) {
@@ -353,8 +382,8 @@ fn run(
         // for. A server stop waits for the frame in hand, then the run ends.
         let _person = state.begin_named_interactive_job(action.waited_for());
         let _hold = state.shutdown.hold(action.waited_for());
-        let progress = |stage: Stage, done: usize, total: usize| job.progress(stage, done, total);
-        let stop = || job.stop.load(Ordering::SeqCst) || state.shutdown.is_stopping();
+        let progress = |stage: Stage, done: usize, total: usize| progress(job, stage, done, total);
+        let stop = || stop.requested() || state.shutdown.is_stopping();
         let work = Work {
             progress: &progress,
             stop: &stop,
@@ -368,11 +397,8 @@ fn run(
     };
     // The runner is free as the status says the run ended: a page that sees
     // the end may start the next run at once.
-    let mut busy = job
-        .busy
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *busy = false;
+    let mut queue = job.queue();
+    queue.run_active = false;
     job.update(|status| {
         status.finished_at = Some(now());
         status.stage = None;
@@ -387,7 +413,7 @@ fn run(
         }
     });
     let status = job.status();
-    drop(busy);
+    drop(queue);
     tracing::info!(
         db = %ctx.id,
         "reject removal: {} {} in {:.2}s{}",
@@ -610,8 +636,11 @@ fn accepted(status: RemovalJobStatus) -> Started {
 
 /// `GET /api/db/{db}/rejects/removal` — where the catalog's reject removal
 /// job stands, with the latest preview and outcome. Never does the work.
-pub async fn get_status(ctx: DbContext) -> Json<ApiResponse<RemovalJobStatus>> {
-    Json(ApiResponse::success(status(&ctx.database_path)))
+pub async fn get_status(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<RemovalJobStatus>> {
+    Json(ApiResponse::success(status(&state, &ctx.database_path)))
 }
 
 /// `POST /api/db/{db}/rejects/removal/preview` — work out what a removal of
@@ -639,11 +668,14 @@ pub async fn apply(
 }
 
 /// `POST /api/db/{db}/rejects/removal/stop` — stop the run between frames.
-pub async fn stop_removal(ctx: DbContext) -> Json<ApiResponse<RemovalJobStatus>> {
-    Json(ApiResponse::success(stop(&ctx.database_path)))
+pub async fn stop_removal(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<RemovalJobStatus>> {
+    Json(ApiResponse::success(stop(&state, &ctx.database_path)))
 }
 
-/// Every removal batch, and the frames of one when asked.
+/// Every removal batch, and the frames of one when pending.
 pub async fn removed(
     ctx: DbContext,
     Query(query): Query<RemovedQuery>,

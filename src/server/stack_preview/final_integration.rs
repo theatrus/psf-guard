@@ -1,13 +1,12 @@
 //! Revisit admitted frames without repeating their registration decisions.
 
 use super::{resume, PreparedGroup, SessionCosmetics};
+use crate::concurrency::Stop;
 use seiza_calibration::MatchTolerances;
 use seiza_stacking::{
     BatchStackOptions, BatchStackPass, BatchStackResult, CalibrationMasters, FitsFrame,
     ImpulseFilterOptions, LinearImage, ReferenceRegion, RegisteredFrameMapping,
 };
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 pub(super) fn integrate(
     group: &PreparedGroup,
@@ -15,7 +14,7 @@ pub(super) fn integrate(
     method: super::StackMethod,
     plan: &crate::calibration::CalibrationPlan,
     cosmetics: &SessionCosmetics,
-    cancel: &Arc<AtomicBool>,
+    cancel: &Stop,
     mut progress: impl FnMut(BatchStackPass, usize, usize),
 ) -> seiza_stacking::Result<BatchStackResult> {
     let admitted = ledger
@@ -24,7 +23,7 @@ pub(super) fn integrate(
         .filter(|(_, frame)| frame.admitted())
         .collect::<Vec<_>>();
     let options = BatchStackOptions {
-        cancel: Some(Arc::clone(cancel).into()),
+        cancel: Some(cancel.clone().into()),
         frame_weights: replay_weights(method.weighting, &admitted)?,
         ..BatchStackOptions::default()
     };
@@ -130,7 +129,6 @@ mod tests {
         BayerLayout, FrameDisposition, LiveStacker, NormalizationMap, NormalizationMode,
         RejectionMode, SimilarityTransform, StackOptions,
     };
-    use std::sync::atomic::Ordering;
 
     fn image(value: f32) -> LinearImage {
         LinearImage::new(9, 9, 1, vec![value; 81]).unwrap()
@@ -416,7 +414,7 @@ mod tests {
             StackMethod::classic(),
             &plan,
             &SessionCosmetics::none(plan.sessions.len()),
-            &Arc::new(AtomicBool::new(false)),
+            &crate::concurrency::Stop::new(),
             |pass, index, count| progress.push((pass, index, count)),
         )
         .unwrap();
@@ -434,7 +432,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let (mut group, ledger) = fixture(directory.path());
         let plan = crate::calibration::CalibrationPlan::without_calibration(group.frames.len());
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = crate::concurrency::Stop::new();
         group.frames[0].source_fingerprint = "changed".into();
         let none = SessionCosmetics::none(plan.sessions.len());
         let error = integrate(
@@ -448,7 +446,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("changed during stacking"));
-        cancel.store(true, Ordering::Relaxed);
+        cancel.request();
         assert!(matches!(
             integrate(
                 &group,
@@ -480,7 +478,7 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&ledger).unwrap()).unwrap();
         let plan = crate::calibration::CalibrationPlan::without_calibration(group.frames.len());
         let none = SessionCosmetics::none(plan.sessions.len());
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = crate::concurrency::Stop::new();
         let weighted = integrate(
             &group,
             &ledger,
@@ -539,7 +537,7 @@ mod tests {
             },
             &plan,
             &SessionCosmetics::none(plan.sessions.len()),
-            &Arc::new(AtomicBool::new(false)),
+            &crate::concurrency::Stop::new(),
             |_, _, _| {},
         )
         .unwrap_err();

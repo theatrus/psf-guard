@@ -351,19 +351,67 @@ fn record_scan_entry_if_current(
     true
 }
 
-/// Try to mark a scan as started. Returns false when one is already running.
-pub fn try_begin_scan(
+/// The stage of a queued scan whose frames the runner has not gathered yet.
+pub const STAGE_PREPARING: &str = "preparing";
+
+/// Show a queued scan of `target_id` as preparing, so a page that polls the
+/// progress follows it from the request on. Leaves a scan that runs alone.
+pub fn mark_preparing(
+    store: &RwLock<SpatialMetricsStore>,
+    target_id: i32,
+    filter_name: Option<String>,
+    automatic: bool,
+) {
+    let mut s = store.write().unwrap();
+    if !s.progress.running {
+        preparing(&mut s, target_id, filter_name, automatic);
+    }
+}
+
+/// Show the scan of a target as running and preparing, whatever the store
+/// showed: the runner took it from the queue and gathers its frames now.
+pub fn begin_preparing(
+    store: &RwLock<SpatialMetricsStore>,
+    target_id: i32,
+    filter_name: Option<String>,
+    automatic: bool,
+) {
+    preparing(
+        &mut store.write().unwrap(),
+        target_id,
+        filter_name,
+        automatic,
+    );
+}
+
+fn preparing(
+    s: &mut SpatialMetricsStore,
+    target_id: i32,
+    filter_name: Option<String>,
+    automatic: bool,
+) {
+    s.progress = SpatialScanProgress {
+        running: true,
+        stage: STAGE_PREPARING.to_string(),
+        target_id: Some(target_id),
+        filter_name,
+        started_at: Some(chrono::Utc::now().timestamp()),
+        automatic,
+        ..Default::default()
+    };
+}
+
+/// Mark a scan as started. The quality scan runner runs one scan per
+/// database at a time, so this replaces a preparing scan's progress.
+pub fn begin_scan(
     store: &RwLock<SpatialMetricsStore>,
     target_id: i32,
     filter_name: Option<String>,
     total: usize,
     skipped_cached: usize,
     automatic: bool,
-) -> bool {
+) {
     let mut s = store.write().unwrap();
-    if s.progress.running {
-        return false;
-    }
     s.progress = SpatialScanProgress {
         running: true,
         stage: "spatial".to_string(),
@@ -375,7 +423,18 @@ pub fn try_begin_scan(
         automatic,
         ..Default::default()
     };
-    true
+}
+
+/// A preparing scan found nothing to compute: mark it finished. A scan in
+/// any other stage is left alone.
+pub fn end_preparing(store: &RwLock<SpatialMetricsStore>) {
+    let preparing = {
+        let s = store.read().unwrap();
+        s.progress.running && s.progress.stage == STAGE_PREPARING
+    };
+    if preparing {
+        finalize_scan(store);
+    }
 }
 
 /// Say what a running automatic scan waits for, or `None` once it goes on.
@@ -1520,18 +1579,28 @@ mod tests {
     }
 
     #[test]
-    fn begin_scan_is_singleton() {
+    fn a_queued_scan_shows_as_preparing_until_it_begins() {
         let store = store_with(vec![]);
-        assert!(try_begin_scan(&store, 5, None, 10, 2, false));
-        assert!(
-            !try_begin_scan(&store, 6, None, 3, 0, true),
-            "second scan must be refused while one is running"
-        );
+        mark_preparing(&store, 5, None, false);
         let (progress, _) = progress_snapshot(&store);
-        assert_eq!(progress.target_id, Some(5));
+        assert!(progress.running);
+        assert_eq!(progress.stage, STAGE_PREPARING);
+        // Another queued scan leaves the first one's progress alone.
+        mark_preparing(&store, 6, None, true);
+        assert_eq!(progress_snapshot(&store).0.target_id, Some(5));
+        begin_scan(&store, 5, None, 10, 2, false);
+        let (progress, _) = progress_snapshot(&store);
+        assert_eq!(progress.stage, "spatial");
         assert_eq!(progress.total, 10);
         assert_eq!(progress.skipped_cached, 2);
         assert!(!progress.automatic);
+        // A running scan is not ended as if it found nothing.
+        end_preparing(&store);
+        assert!(progress_snapshot(&store).0.running);
+        finalize_scan(&store);
+        mark_preparing(&store, 7, None, false);
+        end_preparing(&store);
+        assert!(!progress_snapshot(&store).0.running);
     }
 
     #[test]
@@ -1543,7 +1612,7 @@ mod tests {
             None,
             "no scan runs to wait"
         );
-        assert!(try_begin_scan(&store, 5, None, 10, 0, true));
+        begin_scan(&store, 5, None, 10, 0, true);
         set_waiting_for(&store, Some("a stack build"));
         let (progress, _) = progress_snapshot(&store);
         assert!(progress.automatic);

@@ -12,13 +12,15 @@
 //! A frame the scan tried and could not measure (its file is missing, say)
 //! is not tried again for a day, so a broken file never keeps the scan busy.
 //! That memory lasts until the server restarts. Each start checks every
-//! database that asks, for frames that arrived while it was down.
+//! database that asks, for frames that arrived while it was down. One job
+//! per database waits for arrivals to settle ([`CatalogJobs`]).
 
+use crate::concurrency::Stop;
 use crate::server::database_context::DatabaseContext;
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Settling, Step};
 use crate::server::state::AppState;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long after the last arrival the scan waits, so a batch arriving over
@@ -26,100 +28,125 @@ use std::time::{Duration, Instant};
 const SETTLE: Duration = Duration::from_secs(2 * 60);
 /// How long a frame the scan tried stays out of the next attempts.
 const RETRY_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
-/// How often the queue is looked at.
-const POLL: Duration = Duration::from_secs(30);
+/// How long the job waits before it looks again at a database that could
+/// not take a scan: one already scanning, or a catalog it could not read.
+const RETRY: Duration = Duration::from_secs(30);
 
-/// Databases with arrivals waiting, and when the last one came.
-static PENDING: std::sync::LazyLock<Mutex<HashMap<String, Instant>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-/// Frames queued for a scan, per database, and when.
-static TRIED: std::sync::LazyLock<Mutex<HashMap<String, HashMap<i32, Instant>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Scans of newly arrived frames, run on one thread per database.
+pub(crate) struct Arrivals;
 
-/// Frames arrived in a database. Cheap: the scan starts later, if the
-/// database asks for it.
-pub fn note_arrival(database_id: &str) {
-    PENDING
-        .lock()
-        .unwrap()
-        .insert(database_id.to_string(), Instant::now());
+type Job = CatalogJob<Arrivals>;
+
+/// What waits for one database's scan of arrived frames.
+#[derive(Debug, Default)]
+pub(crate) struct Queue {
+    /// Frames arrived: the scan is queued once arrivals pause for
+    /// [`SETTLE`].
+    arrivals: Settling,
+    /// When to look again at a database that could not take a scan.
+    retry_at: Option<Instant>,
+    /// Frames queued for a scan, and when, so a frame the scan could not
+    /// measure is not queued again for [`RETRY_AFTER`].
+    tried: HashMap<i32, Instant>,
 }
 
-/// Start the scans arrivals asked for, once they settle. Holds the state
-/// weakly, so a server the desktop app restarted stops this with it.
-pub async fn run(state: Arc<AppState>) {
-    // Frames that arrived while the server was down raised no arrival.
+impl CatalogWork for Arrivals {
+    type Queue = Queue;
+    type Status = ();
+    type Item = ();
+    const RUNNER: &'static str = "quality-arrival";
+    /// It reads the catalog and queues a scan; the scan holds shutdown.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> Step<()> {
+        if let Some(at) = queue.retry_at {
+            if now < at {
+                return Step::Sleep(at - now);
+            }
+            queue.retry_at = None;
+            return Step::Run(());
+        }
+        queue.arrivals.step(now, SETTLE, None)
+    }
+
+    fn run(state: &Arc<AppState>, database_id: &str, job: &Job, (): (), _: &Stop) {
+        queue_scan(state, database_id, job);
+    }
+
+    fn has_work(queue: &Queue) -> bool {
+        queue.arrivals.is_pending() || queue.retry_at.is_some()
+    }
+
+    fn runner_failed(queue: &mut Queue, _: &mut ()) {
+        queue.retry_at = None;
+    }
+}
+
+/// Frames arrived in a database. Cheap: the scan is queued later, if the
+/// database asks for it.
+pub fn note_arrival(state: &Arc<AppState>, database_id: &str) {
+    // One job per database id.
+    state
+        .catalog_jobs
+        .arrivals
+        .request(state, database_id, |queue| {
+            queue.arrivals.touch(Instant::now());
+        });
+}
+
+/// Frames that arrived while the server was down raised no arrival: every
+/// database that analyzes new frames is looked at once arrivals settle.
+pub fn note_start(state: &Arc<AppState>) {
     for ctx in state.all_databases() {
-        if ctx.analyze_new_frames.load(Ordering::Relaxed) {
-            note_arrival(&ctx.id);
+        if ctx.analyze_new_frames.is_on() {
+            note_arrival(state, &ctx.id);
         }
     }
-    let shutdown = Arc::clone(&state.shutdown);
-    let state = Arc::downgrade(&state);
-    loop {
-        if !shutdown.sleep(POLL).await {
-            return;
+}
+
+/// Queue the database-wide analysis for the targets that hold unmeasured
+/// frames not tried in the last day. A database that is scanning already,
+/// or whose catalog cannot be read now, is looked at again after [`RETRY`].
+fn queue_scan(state: &Arc<AppState>, database_id: &str, job: &Job) {
+    let Some(ctx) = state.get_database(database_id) else {
+        return;
+    };
+    if !ctx.analyze_new_frames.is_on() {
+        return;
+    }
+    let retry = || job.queue().retry_at = Some(Instant::now() + RETRY);
+    // A backfill or scan under way would refuse this one: wait for it
+    // rather than read the whole catalog meanwhile.
+    if ctx.quality_backfill.read().unwrap().progress.running
+        || ctx.spatial_metrics.read().unwrap().progress.running
+    {
+        retry();
+        return;
+    }
+    let Some(unmeasured) = unmeasured_frames(&ctx) else {
+        retry();
+        return;
+    };
+    let targets = untried(&mut job.queue().tried, &unmeasured, Instant::now());
+    if targets.is_empty() {
+        return;
+    }
+    // A backfill already running keeps the arrival waiting.
+    if crate::server::handlers::spawn_quality_backfill(state, ctx, targets, false, false) {
+        let now = Instant::now();
+        let mut queue = job.queue();
+        for (image_id, _) in &unmeasured {
+            queue.tried.entry(*image_id).or_insert(now);
         }
-        let Some(state) = state.upgrade() else {
-            return;
-        };
-        let settled: Vec<String> = PENDING
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, at)| at.elapsed() >= SETTLE)
-            .map(|(database, _)| database.clone())
-            .collect();
-        for database in settled {
-            let Some(ctx) = state.get_database(&database) else {
-                PENDING.lock().unwrap().remove(&database);
-                continue;
-            };
-            if !ctx.analyze_new_frames.load(Ordering::Relaxed) {
-                PENDING.lock().unwrap().remove(&database);
-                continue;
-            }
-            // A backfill or scan under way would refuse this one: wait for
-            // it rather than read the whole catalog every poll meanwhile.
-            if ctx.quality_backfill.read().unwrap().progress.running
-                || ctx.spatial_metrics.read().unwrap().progress.running
-            {
-                continue;
-            }
-            let lookup = Arc::clone(&ctx);
-            let unmeasured = tokio::task::spawn_blocking(move || unmeasured_frames(&lookup))
-                .await
-                .ok()
-                .flatten();
-            let Some(unmeasured) = unmeasured else {
-                // The catalog could not be read now; try at the next poll.
-                continue;
-            };
-            let targets: Vec<i32> = untried(&database, &unmeasured);
-            if targets.is_empty() {
-                PENDING.lock().unwrap().remove(&database);
-                continue;
-            }
-            // A backfill already running keeps the arrival waiting.
-            if crate::server::handlers::spawn_quality_backfill(&state, ctx, targets, false, false) {
-                PENDING.lock().unwrap().remove(&database);
-                let now = Instant::now();
-                let mut tried = TRIED.lock().unwrap();
-                let tried = tried.entry(database.clone()).or_default();
-                for (image_id, _) in &unmeasured {
-                    tried.entry(*image_id).or_insert(now);
-                }
-                tracing::info!(db = %database, "📐 Analyzing quality of newly arrived frames");
-            }
-        }
+        tracing::info!(db = %database_id, "📐 Analyzing quality of newly arrived frames");
+    } else {
+        retry();
     }
 }
 
 /// The targets of unmeasured frames not tried in the last day.
-fn untried(database: &str, unmeasured: &[(i32, i32)]) -> Vec<i32> {
-    let mut tried = TRIED.lock().unwrap();
-    let tried = tried.entry(database.to_string()).or_default();
-    tried.retain(|_, at| at.elapsed() < RETRY_AFTER);
+fn untried(tried: &mut HashMap<i32, Instant>, unmeasured: &[(i32, i32)], now: Instant) -> Vec<i32> {
+    tried.retain(|_, at| now.saturating_duration_since(*at) < RETRY_AFTER);
     let mut targets: Vec<i32> = unmeasured
         .iter()
         .filter(|(image_id, _)| !tried.contains_key(image_id))
@@ -172,15 +199,42 @@ mod tests {
 
     #[test]
     fn a_frame_tried_today_is_not_queued_again() {
-        let database = "quality-arrival-test";
-        TRIED
-            .lock()
-            .unwrap()
-            .insert(database.into(), [(1, Instant::now())].into_iter().collect());
-
+        let now = Instant::now();
+        let mut tried: HashMap<i32, Instant> = [(1, now)].into_iter().collect();
         // Frame 1 was tried; frame 2 on target 20 was not.
-        assert_eq!(untried(database, &[(1, 10), (2, 20)]), vec![20]);
-        assert!(untried(database, &[(1, 10)]).is_empty());
+        assert_eq!(untried(&mut tried, &[(1, 10), (2, 20)], now), vec![20]);
+        assert!(untried(&mut tried, &[(1, 10)], now).is_empty());
+        // A day on, frame 1 is tried again.
+        assert_eq!(untried(&mut tried, &[(1, 10)], now + RETRY_AFTER), vec![10]);
+    }
+
+    #[test]
+    fn arrivals_queue_a_scan_once_they_settle_and_a_busy_database_is_retried() {
+        let state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+        let start = Instant::now();
+        let mut queue = Queue::default();
+        let next = |queue: &mut Queue, now| Arrivals::next(&state, "db", queue, now);
+        assert_eq!(next(&mut queue, start), Step::Exit);
+        queue.arrivals.touch(start);
+        assert_eq!(next(&mut queue, start), Step::Sleep(SETTLE));
+        assert_eq!(next(&mut queue, start + SETTLE), Step::Run(()));
+        assert_eq!(next(&mut queue, start + SETTLE), Step::Exit);
+        // A busy database is looked at again after the retry wait.
+        queue.retry_at = Some(start + RETRY);
+        assert!(Arrivals::has_work(&queue));
+        assert_eq!(next(&mut queue, start), Step::Sleep(RETRY));
+        assert_eq!(next(&mut queue, start + RETRY), Step::Run(()));
+        assert!(!Arrivals::has_work(&queue));
+    }
+
+    #[test]
+    fn a_failed_runner_drops_its_retry() {
+        let mut queue = Queue {
+            retry_at: Some(Instant::now()),
+            ..Queue::default()
+        };
+        Arrivals::runner_failed(&mut queue, &mut ());
+        assert!(queue.retry_at.is_none());
     }
 
     #[test]

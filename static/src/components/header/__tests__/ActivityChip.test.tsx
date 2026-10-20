@@ -6,7 +6,7 @@ import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../test/msw-server';
-import type { StackActivityEntry, WbppActivity } from '../../../api/types';
+import type { DatabaseJobs, JobRow } from '../../../api/types';
 import { AccessContext } from '../../../auth/access';
 import ActivityChip from '../ActivityChip';
 
@@ -14,55 +14,71 @@ function ok(data: unknown) {
   return HttpResponse.json({ success: true, data, error: null, status: 'ready' });
 }
 
-function scanProgress(running: boolean, processed: number, errors = 0) {
+/** A row as `GET /api/jobs` returns it. */
+function row(overrides: Partial<JobRow> & Pick<JobRow, 'key' | 'title' | 'scope'>): JobRow {
   return {
-    started: false,
-    cached_count: 0,
-    progress: {
-      running, stage: 'astrometry', target_id: 42, filter_name: null, total: 10, processed,
-      skipped_cached: 0, spatial_processed: 10, astrometry_processed: processed, solved: processed,
-      solve_failed: errors, operational_errors: 0, errors, current_file: 'sh2-86-r-004.fits',
-      started_at: 1, finished_at: running ? null : 2,
-      last_error: errors > 0 ? 'no stars found' : null,
-    },
+    kind: 'stack', detail: '', status: 'running', background: false, automatic: false,
+    percent: null, stoppable: false, ...overrides,
   };
 }
 
-function stack(
+/** A mono build's row: running with its frames, or queued at `position`. */
+function stackRow(
   jobId: string,
   state: 'running' | 'queued',
   processed = 0,
   total = 0,
-  queuePosition: number | null = null
-): StackActivityEntry {
+  position: number | null = null,
+  automatic = false
+): JobRow {
+  const queued = state === 'queued';
+  return row({
+    key: `stack:${jobId}`,
+    kind: 'stack',
+    title: 'Stacking',
+    scope: `Alpha M44 · ${jobId}`,
+    detail: queued ? 'Waiting for the build ahead' : total > 0 ? `${processed}/${total} frames` : 'registering',
+    status: queued ? 'queued' : 'running',
+    percent: queued || total === 0 ? null : (processed / total) * 100,
+    queue: 'stack',
+    position: queued ? position ?? undefined : undefined,
+    control: { kind: 'stack', job_id: jobId },
+    stoppable: true,
+    automatic,
+    background: automatic,
+    hint: 'registering',
+    link: { view: 'stacks', db: 'askar', project: 1 },
+  });
+}
+
+/** A quality scan's row on Askar. */
+function scanRow(processed: number, waitingFor?: string): JobRow {
+  const frames = `Solving ${processed}/10 frames`;
+  return row({
+    key: 'scan:askar',
+    kind: 'quality',
+    title: 'Analyzing quality',
+    scope: 'Askar',
+    detail: waitingFor ? `Waiting for ${waitingFor} · ${frames}` : frames,
+    status: waitingFor ? 'waiting' : 'running',
+    waiting_for: waitingFor,
+    percent: processed * 10,
+    automatic: !!waitingFor,
+    background: !!waitingFor,
+    link: { view: 'sequence', db: 'askar', project: 1, target: 42 },
+  });
+}
+
+/** Askar's state: whether a scan runs, and the last scan's frame errors. */
+function askar(scanning = false, errors = 0): DatabaseJobs {
   return {
-    kind: 'mono', job_id: jobId, database_id: 'askar', project_id: 1, state,
-    label: `Alpha M44 · ${jobId}`, detail: 'registering', processed_units: processed,
-    total_units: total, created_unix_seconds: 1, queue_position: queuePosition,
+    id: 'askar', name: 'Askar', busy: scanning, scanning,
+    scan: { errors, last_error: errors > 0 ? 'no stars found' : null, target_id: 42, project_id: 1 },
   };
 }
 
-function mockServer({
-  scan = () => scanProgress(false, 0),
-  stacks = () => [] as StackActivityEntry[],
-  scheduled = () => [] as unknown[],
-  reapplies = () => [] as unknown[],
-}: {
-  scan?: () => unknown;
-  stacks?: () => StackActivityEntry[];
-  scheduled?: () => unknown[];
-  reapplies?: () => unknown[];
-}) {
-  server.use(
-    http.get('/api/databases', () => ok([{ id: 'askar', name: 'Askar', database_path: '/x.sqlite' }])),
-    http.get('/api/db/:dbId/targets', () =>
-      ok([{ id: 42, project_id: 1, name: 'Alpha M44', active: true, has_files: true }])
-    ),
-    http.get('/api/db/:dbId/analysis/quality-scan', () => ok(scan())),
-    http.get('/api/stack-activity', () =>
-      ok({ schema_version: 1, active: stacks(), scheduled: scheduled(), waiting_reapplies: reapplies() })
-    )
-  );
+function mockJobs(jobs: () => JobRow[], databases: () => DatabaseJobs[] = () => [askar()]) {
+  server.use(http.get('/api/jobs', () => ok({ jobs: jobs(), databases: databases() })));
 }
 
 /** The chip's or list's icon counts, by the words each stands for. */
@@ -103,9 +119,9 @@ function renderChip({ showLocation = false, canWrite = true } = {}) {
 
 describe('ActivityChip', () => {
   it('stays out of the header when nothing runs', async () => {
-    mockServer({});
+    mockJobs(() => []);
     const view = renderChip();
-    // Give every status query a chance to answer.
+    // Give the job list a chance to answer.
     await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
     // Only the empty live region stays, for announcements.
     expect(view.container.querySelector('.activity-chip')).toBeNull();
@@ -113,10 +129,7 @@ describe('ActivityChip', () => {
   });
 
   it('shows the overall progress and job count, and the queue on hover', async () => {
-    mockServer({
-      scan: () => scanProgress(true, 4),
-      stacks: () => [stack('B', 'queued'), stack('R', 'running', 8, 10)],
-    });
+    mockJobs(() => [scanRow(4), stackRow('R', 'running', 8, 10), stackRow('B', 'queued', 0, 0, 0)]);
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     // A build a person queued is queued, not waiting, and counted as such.
@@ -131,7 +144,7 @@ describe('ActivityChip', () => {
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(chip).toHaveAttribute('aria-expanded', 'true');
     const rows = within(list).getAllByRole('listitem');
-    expect(rows.map((row) => row.textContent)).toEqual([
+    expect(rows.map((item) => item.textContent)).toEqual([
       expect.stringContaining('Analyzing quality'),
       expect.stringContaining('Alpha M44 · R'),
       expect.stringContaining('Alpha M44 · B'),
@@ -140,8 +153,8 @@ describe('ActivityChip', () => {
     expect(rows[0]).toHaveTextContent('Askar');
     expect(rows[1]).toHaveTextContent('8/10 frames');
     expect(rows[2]).toHaveTextContent('queued');
-    // All of it a person started: one group, named by its heading, with its
-    // counts. The list's heading comes first, then the group's, a level down.
+    // All of it a person started: one group, with its heading and counts.
+    // The list's heading comes first, then the group's, a level down.
     const groups = within(list).getAllByRole('group');
     expect(groups.map((group) => within(group).getByRole('heading', { level: 3 }).textContent))
       .toEqual(['Started by you']);
@@ -153,33 +166,22 @@ describe('ActivityChip', () => {
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Background jobs' })).toBeNull());
   });
 
-  it('lists automatic work waiting for a person\'s build, then shows it running once, after', async () => {
+  it("lists automatic work waiting for a person's build, then shows it running once, after", async () => {
     let personBuilding = true;
-    const refresh = {
-      database_id: 'askar', database_name: 'Askar', project_id: 1, project_name: 'Alpha',
-      reason: 'arrival', due_in_seconds: 0, channels: ['Alpha M44 · Ha'], waiting: true,
-      waiting_for: 'the stack build of Alpha M44 · R', last_progress: {
-        label: 'Alpha M44 · Ha', processed_units: 12, total_units: 40,
-      },
-    };
-    const settling = { ...refresh, project_id: 2, waiting: false, waiting_for: null, last_progress: null };
-    mockServer({
-      scan: () => ({
-        ...scanProgress(true, 4),
-        progress: {
-          ...scanProgress(true, 4).progress,
-          automatic: true,
-          waiting_for: personBuilding ? 'a stack build' : null,
-        },
-      }),
-      stacks: () => (personBuilding
-        ? [stack('R', 'running', 3, 10)]
-        : [{ ...stack('Ha', 'running', 13, 40), automatic: true }]),
-      scheduled: () => (personBuilding ? [refresh, settling] : [settling]),
-      reapplies: () => (personBuilding
-        ? [{ database_id: 'askar', project_id: 1, target_id: 42, label: 'Alpha M44 · G', waiting_for: 'a stack build' }]
-        : []),
+    const refreshWaiting = row({
+      key: 'refresh-waiting:askar:1', kind: 'stack', title: 'Refreshing stacks', scope: 'Askar · Alpha',
+      detail: 'Waiting for the stack build of Alpha M44 · R · stopped at 12/40 frames', status: 'waiting',
+      waiting_for: 'the stack build of Alpha M44 · R', percent: 30, automatic: true, background: true,
+      remaining: '1 channel to stack',
     });
+    const reapply = row({
+      key: 'reapply-waiting:askar:1:Alpha M44 · G', kind: 'processing', title: 'Re-applying processing',
+      scope: 'Alpha M44 · G', detail: 'Waiting for a stack build', status: 'waiting',
+      waiting_for: 'a stack build', automatic: true, background: true,
+    });
+    mockJobs(() => (personBuilding
+      ? [stackRow('R', 'running', 3, 10), scanRow(4, 'a stack build'), refreshWaiting, reapply]
+      : [stackRow('Ha', 'running', 13, 40, null, true), { ...scanRow(4), automatic: true, background: true }]));
     renderChip();
     const chip = () => screen.getByRole('button', { name: /Background jobs/ });
     await waitFor(() => expect(counts(chip())).toEqual(['1 running', '3 waiting']));
@@ -192,8 +194,7 @@ describe('ActivityChip', () => {
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(counts(list.querySelector('.activity-popover-head')!)).toEqual(['1 running', '3 waiting']);
     let rows = within(list).getAllByRole('listitem');
-    // The person's build first; the settling refresh is not work yet.
-    expect(rows.map((row) => row.getAttribute('data-job-state'))).toEqual([
+    expect(rows.map((item) => item.getAttribute('data-job-state'))).toEqual([
       'running', 'waiting', 'waiting', 'waiting',
     ]);
     expect(rows[0]).toHaveTextContent('Alpha M44 · R');
@@ -204,6 +205,7 @@ describe('ActivityChip', () => {
     expect(rows[2]).toHaveTextContent(
       'Waiting for the stack build of Alpha M44 · R · stopped at 12/40 frames'
     );
+    expect(rows[2]).toHaveTextContent('1 channel to stack');
     // Under the automatic heading, apart from the person's build.
     const person = within(list).getByRole('group', { name: 'Started by you' });
     const automatic = within(list).getByRole('group', { name: 'Automatic' });
@@ -221,19 +223,19 @@ describe('ActivityChip', () => {
     await waitFor(() => expect(counts(chip())).toEqual(['2 running']), { timeout: 3000 });
     rows = within(screen.getByRole('region', { name: 'Background jobs' })).getAllByRole('listitem');
     expect(rows).toHaveLength(2);
-    expect(rows.some((row) => row.textContent?.includes('Refreshing stacks'))).toBe(false);
-    expect(rows.find((row) => row.textContent?.includes('Alpha M44 · Ha'))).toHaveAttribute(
+    expect(rows.some((item) => item.textContent?.includes('Refreshing stacks'))).toBe(false);
+    expect(rows.find((item) => item.textContent?.includes('Alpha M44 · Ha'))).toHaveAttribute(
       'data-job-state',
       'running'
     );
   }, 10_000);
 
   it('shows no running count when only waiting work is left', async () => {
-    mockServer({
-      reapplies: () => [
-        { database_id: 'askar', project_id: 1, target_id: 42, label: 'Alpha M44 · G', waiting_for: 'a preview' },
-      ],
-    });
+    mockJobs(() => [row({
+      key: 'reapply-waiting:askar:1:G', kind: 'processing', title: 'Re-applying processing',
+      scope: 'Alpha M44 · G', detail: 'Waiting for a preview', status: 'waiting',
+      waiting_for: 'a preview', automatic: true, background: true,
+    })]);
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     await waitFor(() => expect(counts(chip)).toEqual(['1 waiting']));
@@ -241,7 +243,7 @@ describe('ActivityChip', () => {
   });
 
   it('keeps the queue open after a click until a second click or Escape', async () => {
-    mockServer({ stacks: () => [stack('R', 'running', 1, 4)] });
+    mockJobs(() => [stackRow('R', 'running', 1, 4)]);
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     await userEvent.click(chip);
@@ -260,7 +262,10 @@ describe('ActivityChip', () => {
 
   it('keeps saying a scan finished with errors until they are dismissed', async () => {
     let running = true;
-    mockServer({ scan: () => (running ? scanProgress(true, 9) : scanProgress(false, 10, 2)) });
+    mockJobs(
+      () => (running ? [scanRow(9)] : []),
+      () => [running ? askar(true) : askar(false, 2)]
+    );
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     expect(chip).toHaveTextContent('90%');
@@ -288,15 +293,15 @@ describe('ActivityChip', () => {
 
   it('dismisses scan errors from the busy chip while other work runs', async () => {
     let scanning = true;
-    mockServer({
-      scan: () => (scanning ? scanProgress(true, 9) : scanProgress(false, 10, 2)),
-      stacks: () => [stack('R', 'running', 1, 3)],
-    });
+    mockJobs(
+      () => (scanning ? [scanRow(9), stackRow('R', 'running', 1, 3)] : [stackRow('R', 'running', 1, 3)]),
+      () => [scanning ? askar(true) : askar(false, 2)]
+    );
     renderChip();
     // Looked up each time: the chip may be drawn anew as a poll lands.
     const chip = () => screen.getByRole('button', { name: /Background jobs/ });
     // The scan must be seen running before it ends: frame errors belong only
-    // to a scan the header watched. The build alone shows the chip first.
+    // to a scan the header watched.
     await waitFor(() => expect(chip()).toHaveAccessibleName(/2 running/));
     scanning = false;
     await waitFor(() => expect(chip()).toHaveAccessibleName(/a quality scan had errors/), { timeout: 8000 });
@@ -309,7 +314,7 @@ describe('ActivityChip', () => {
   }, 15_000);
 
   it('takes a row to the view showing what it works on', async () => {
-    mockServer({ stacks: () => [{ ...stack('R', 'running', 1, 3), target_id: 7 }] });
+    mockJobs(() => [{ ...stackRow('R', 'running', 1, 3), link: { view: 'stacks', db: 'askar', project: 1, target: 7 } }]);
     renderChip({ showLocation: true });
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     await userEvent.click(chip);
@@ -325,10 +330,10 @@ describe('ActivityChip', () => {
   it("does not report an old scan's errors when other work finishes", async () => {
     let building = true;
     // The server keeps the last scan's counts until the next scan starts.
-    mockServer({
-      scan: () => scanProgress(false, 10, 3),
-      stacks: () => (building ? [stack('R', 'running', 1, 3)] : []),
-    });
+    mockJobs(
+      () => (building ? [stackRow('R', 'running', 1, 3)] : []),
+      () => [askar(false, 3)]
+    );
     renderChip();
     await screen.findByRole('button', { name: /Background jobs/ });
     building = false;
@@ -339,10 +344,10 @@ describe('ActivityChip', () => {
   it('holds scan errors on the busy chip until the rest of the queue ends', async () => {
     let scanning = true;
     let building = true;
-    mockServer({
-      scan: () => (scanning ? scanProgress(true, 9) : scanProgress(false, 10, 2)),
-      stacks: () => (building ? [stack('R', 'running', 1, 3)] : []),
-    });
+    mockJobs(
+      () => [...(scanning ? [scanRow(9)] : []), ...(building ? [stackRow('R', 'running', 1, 3)] : [])],
+      () => [scanning ? askar(true) : askar(false, 2)]
+    );
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     await waitFor(() => expect(counts(chip)).toEqual(['2 running']));
@@ -361,7 +366,7 @@ describe('ActivityChip', () => {
   }, 12_000);
 
   it('leaves Escape to the view unless the chip has focus', async () => {
-    mockServer({ stacks: () => [stack('R', 'running', 1, 4)] });
+    mockJobs(() => [stackRow('R', 'running', 1, 4)]);
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     const heard: string[] = [];
@@ -386,22 +391,22 @@ describe('ActivityChip', () => {
 
   it('moves a waiting build, removes one, and stops a running one after asking', async () => {
     const calls: string[] = [];
-    let active = [
-      stack('R', 'running', 1, 4),
-      stack('B', 'queued', 0, 0, 0),
-      stack('G', 'queued', 0, 0, 1),
+    let rows = [
+      stackRow('R', 'running', 1, 4),
+      stackRow('B', 'queued', 0, 0, 0),
+      stackRow('G', 'queued', 0, 0, 1),
     ];
-    mockServer({ stacks: () => active });
+    mockJobs(() => rows);
     server.use(
       http.post('/api/stack-activity/:jobId/move', async ({ params, request }) => {
         calls.push(`move ${params.jobId} ${JSON.stringify(await request.json())}`);
-        active = [stack('R', 'running', 1, 4), stack('G', 'queued', 0, 0, 0), stack('B', 'queued', 0, 0, 1)];
-        return ok({ schema_version: 1, active });
+        rows = [stackRow('R', 'running', 1, 4), stackRow('G', 'queued', 0, 0, 0), stackRow('B', 'queued', 0, 0, 1)];
+        return ok({ schema_version: 1, active: [] });
       }),
       http.post('/api/stack-activity/:jobId/cancel', ({ params }) => {
         calls.push(`cancel ${params.jobId}`);
-        active = active.filter((entry) => entry.job_id !== params.jobId);
-        return ok({ schema_version: 1, active });
+        rows = rows.filter((item) => item.key !== `stack:${params.jobId}`);
+        return ok({ schema_version: 1, active: [] });
       })
     );
     renderChip();
@@ -424,19 +429,66 @@ describe('ActivityChip', () => {
     await waitFor(() => expect(calls).toContain('cancel R'));
   });
 
+  it('keeps the move buttons disabled until the job list is read again', async () => {
+    let rows = [
+      stackRow('R', 'running', 1, 4),
+      stackRow('B', 'queued', 0, 0, 0),
+      stackRow('G', 'queued', 0, 0, 1),
+    ];
+    let release: (() => void) | null = null;
+    let moved = false;
+    server.use(
+      http.get('/api/jobs', async () => {
+        // The first read after the move waits until the test releases it.
+        if (moved && release === null) {
+          await new Promise<void>((resolve) => { release = resolve; });
+        }
+        return ok({ jobs: rows, databases: [askar()] });
+      }),
+      http.post('/api/stack-activity/:jobId/move', () => {
+        moved = true;
+        rows = [stackRow('R', 'running', 1, 4), stackRow('G', 'queued', 0, 0, 0), stackRow('B', 'queued', 0, 0, 1)];
+        return ok({ schema_version: 1, active: [] });
+      })
+    );
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    await userEvent.click(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · G earlier' }));
+    await waitFor(() => expect(release).not.toBeNull());
+    // The move answered, but the list still shows the old order: the
+    // controls stay disabled.
+    expect(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · B later' })).toBeDisabled();
+    act(() => release!());
+    await waitFor(() =>
+      expect(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · G later' })).toBeEnabled()
+    );
+  });
+
   it.each(['mono', 'processing'] as const)('moves a user-started %s task straight to the top across both headings', async (kind) => {
-    const promoted: StackActivityEntry = { ...stack('G', 'queued', 0, 0, 2), kind,
-      ...(kind === 'processing' ? { processing: { operation: 'BlurXTerminator', channel: 'G', stoppable: true } } : {}) };
-    let active = [stack('R', 'running', 1, 4),
-      { ...stack('Ha', 'queued', 0, 0, 0), automatic: true },
-      stack('B', 'queued', 0, 0, 1), promoted];
+    const promoted = (position: number): JobRow => ({
+      ...stackRow('G', 'queued', 0, 0, position),
+      ...(kind === 'processing'
+        ? { kind: 'processing' as const, title: 'BlurXTerminator', detail: 'registering' }
+        : {}),
+    });
+    let rows = [
+      stackRow('R', 'running', 1, 4),
+      stackRow('B', 'queued', 0, 0, 1),
+      promoted(2),
+      stackRow('Ha', 'queued', 0, 0, 0, true),
+    ];
     const calls: unknown[] = [];
-    mockServer({ stacks: () => active });
+    mockJobs(() => rows);
     server.use(http.post('/api/stack-activity/:jobId/move', async ({ params, request }) => {
       calls.push({ id: params.jobId, body: await request.json() });
-      active = [active[0], { ...promoted, queue_position: 0 },
-        { ...active[1], queue_position: 1 }, { ...active[2], queue_position: 2 }];
-      return ok({ schema_version: 1, active });
+      rows = [
+        stackRow('R', 'running', 1, 4),
+        promoted(0),
+        stackRow('B', 'queued', 0, 0, 2),
+        stackRow('Ha', 'queued', 0, 0, 1, true),
+      ];
+      return ok({ schema_version: 1, active: [] });
     }));
     renderChip();
     await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
@@ -456,22 +508,28 @@ describe('ActivityChip', () => {
   });
 
   it('moves a queued WBPP run to the top across databases and disables the task already next', async () => {
-    let activity: WbppActivity = {
-      running: [{ db_id: 'askar', db_name: 'Askar', scope: 'Running project', stage: 'running', wbpp_stage: null, wbpp_steps: 1, started_at: 1 }],
-      queued: [1, 2, 3].map((n) => ({ id: `q${n}`, db_id: n === 2 ? 'other' : 'askar',
-        db_name: n === 2 ? 'Other catalog' : 'Askar', scope: `Project ${n}`, project_id: n,
-        target_id: null, queued_at: n, position: n })),
+    const running = row({
+      key: 'wbpp:askar:1', kind: 'wbpp', title: 'WBPP', scope: 'Askar · Running project',
+      detail: 'Running in PixInsight · 1 steps done', queue: 'wbpp', stoppable: true,
+      control: { kind: 'wbpp-running', db_id: 'askar' },
+    });
+    const queued = (n: number, position: number): JobRow => {
+      const dbId = n === 2 ? 'other' : 'askar';
+      return row({
+        key: `wbpp-queued:q${n}`, kind: 'wbpp', title: 'WBPP',
+        scope: `${n === 2 ? 'Other catalog' : 'Askar'} · Project ${n}`, detail: 'Waiting for the run ahead',
+        status: 'queued', queue: 'wbpp', position, stoppable: true,
+        control: { kind: 'wbpp-queued', db_id: dbId, queue_id: `q${n}` },
+      });
     };
+    let rows = [running, queued(1, 0), queued(2, 1), queued(3, 2)];
     const calls: unknown[] = [];
-    mockServer({});
+    mockJobs(() => rows);
     server.use(
-      http.get('/api/info', () => ok({ version: 'test', allow_database_management: false })),
-      http.get('/api/wbpp/activity', () => ok(activity)),
       http.post('/api/wbpp/queue/:queueId/move', async ({ params, request }) => {
         calls.push({ id: params.queueId, body: await request.json() });
-        activity = { ...activity, queued: [activity.queued[2], activity.queued[0], activity.queued[1]]
-          .map((run, index) => ({ ...run, position: index + 1 })) };
-        return ok(activity);
+        rows = [running, queued(3, 0), queued(1, 1), queued(2, 2)];
+        return ok({ running: [], queued: [] });
       }),
     );
     renderChip();
@@ -486,7 +544,7 @@ describe('ActivityChip', () => {
   });
 
   it('does not offer queue controls to a read-only user', async () => {
-    mockServer({ stacks: () => [stack('R', 'running', 1, 4), stack('B', 'queued', 0, 0, 1)] });
+    mockJobs(() => [stackRow('R', 'running', 1, 4), stackRow('B', 'queued', 0, 0, 1)]);
     renderChip({ canWrite: false });
     await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
     const list = await screen.findByRole('region', { name: 'Background jobs' });
@@ -496,13 +554,11 @@ describe('ActivityChip', () => {
 
   it("moves a person's build past an automatic one queued ahead of it, across the headings", async () => {
     const calls: string[] = [];
-    mockServer({
-      stacks: () => [
-        stack('R', 'running', 1, 4),
-        { ...stack('Ha', 'queued', 0, 0, 0), automatic: true },
-        stack('B', 'queued', 0, 0, 1),
-      ],
-    });
+    mockJobs(() => [
+      stackRow('R', 'running', 1, 4),
+      stackRow('B', 'queued', 0, 0, 1),
+      stackRow('Ha', 'queued', 0, 0, 0, true),
+    ]);
     server.use(
       http.post('/api/stack-activity/:jobId/move', async ({ params, request }) => {
         calls.push(`move ${params.jobId} ${JSON.stringify(await request.json())}`);
@@ -526,16 +582,25 @@ describe('ActivityChip', () => {
   });
 
   it('counts a transfer held for review apart from waiting work, first under its heading', async () => {
-    mockServer({ stacks: () => [stack('R', 'running', 1, 4)] });
-    const transfer = (id: string, state: string, automatic: boolean) => ({
+    const transfer = (id: string, state: 'paused' | 'review', automatic: boolean) => ({
       id, connection_id: 'c', revision: 1, state, catalog: 'Askar', label: `M44 ${id}`, total_files: 4,
       completed_files: 1, total_bytes: 4, completed_bytes: 1, current_file: '', sent_bytes: 0,
       error: state === 'review' ? 'Incomplete calibration' : null, next_attempt_ms: 0, warnings: null,
       manifest: null, automatic,
     });
-    server.use(http.get('/api/director/v1/transfers', () => ok({
-      jobs: [transfer('paused', 'paused', true), transfer('held', 'review', true)],
-    })));
+    mockJobs(() => [
+      stackRow('R', 'running', 1, 4),
+      row({
+        key: 'transfer:held', kind: 'transfer', title: 'Transfers', scope: 'Askar · M44 held',
+        detail: 'Incomplete calibration', status: 'attention', state_label: 'Review required',
+        automatic: true, background: true, transfer: transfer('held', 'review', true),
+      }),
+      row({
+        key: 'transfer:paused', kind: 'transfer', title: 'Transfers', scope: 'Askar · M44 paused',
+        detail: '1/4 files · 0.0 MiB', status: 'waiting', state_label: 'Paused',
+        automatic: true, background: true, transfer: transfer('paused', 'paused', true),
+      }),
+    ]);
     renderChip();
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     await waitFor(() => expect(counts(chip)).toEqual(['1 running', '1 waiting', '1 needs attention']));
@@ -545,22 +610,17 @@ describe('ActivityChip', () => {
       .getByRole('group', { name: 'Automatic' });
     expect(counts(automatic.querySelector('.activity-group-head')!)).toEqual(['1 waiting', '1 needs attention']);
     const rows = within(automatic).getAllByRole('listitem');
-    expect(rows.map((row) => row.getAttribute('data-job-state'))).toEqual(['attention', 'waiting']);
+    expect(rows.map((item) => item.getAttribute('data-job-state'))).toEqual(['attention', 'waiting']);
     expect(rows[0]).toHaveTextContent('Review required');
   });
 
   it('shows WBPP runs, and gives their controls to an editor without database management', async () => {
-    mockServer({});
-    server.use(
-      http.get('/api/info', () => ok({ version: 'test', allow_database_management: false })),
-      http.get('/api/wbpp/activity', () => ok({
-        running: [{
-          db_id: 'askar', db_name: 'Askar', scope: 'project Bubble', stage: 'running',
-          wbpp_stage: 'Calibration', wbpp_steps: 2, started_at: 1,
-        }],
-        queued: [],
-      }))
-    );
+    mockJobs(() => [row({
+      key: 'wbpp:askar:1', kind: 'wbpp', title: 'WBPP', scope: 'Askar · project Bubble',
+      detail: 'Running in PixInsight · Calibration · 2 steps done', queue: 'wbpp', stoppable: true,
+      control: { kind: 'wbpp-running', db_id: 'askar' },
+    })]);
+    server.use(http.get('/api/info', () => ok({ version: 'test', allow_database_management: false })));
     renderChip();
     await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
     const list = await screen.findByRole('region', { name: 'Background jobs' });
@@ -570,47 +630,32 @@ describe('ActivityChip', () => {
     expect(await within(list).findByRole('button', { name: 'Stop WBPP: Askar · project Bubble' })).toBeInTheDocument();
   });
 
-  it('neither lists nor counts an automatic refresh still settling', async () => {
+  it('shows the chip once a job appears on a quiet server', async () => {
     let building = false;
-    mockServer({
-      scheduled: () => [{
-        database_id: 'askar', database_name: 'Askar', project_id: 7, project_name: 'Heart',
-        reason: 'arrival', due_in_seconds: 240,
-      }],
-      stacks: () => (building ? [stack('R', 'running', 1, 3)] : []),
-    });
+    mockJobs(() => (building ? [stackRow('R', 'running', 1, 3, null, true)] : []));
     const view = renderChip();
     await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
     // Nothing runs yet: no chip at all.
     expect(view.container.querySelector('.activity-chip')).toBeNull();
 
-    // Once it starts, it is an automatic build like any other.
     building = true;
     const chip = await screen.findByRole('button', { name: /Background jobs/ }, { timeout: 7000 });
     expect(counts(chip)).toEqual(['1 running']);
-    await userEvent.click(chip);
-    const list = await screen.findByRole('region', { name: 'Background jobs' });
-    expect(list).not.toHaveTextContent('Automatic refresh');
   }, 10_000);
 
   it('lists a processing run beside the build it waits for, then its progress, and links to its stacks', async () => {
     let running = false;
-    const blur = (): StackActivityEntry => ({
-      kind: 'processing', job_id: 'b'.repeat(64), database_id: 'askar', project_id: 1, target_id: 42,
-      state: running ? 'running' : 'queued', label: 'Alpha M44 · R',
-      detail: running ? 'BlurXTerminator' : 'Waiting for the stack build of Alpha M44 · Ha to finish',
-      processed_units: running ? 420 : 0, total_units: running ? 1000 : 0, created_unix_seconds: 2,
-      queue_position: running ? null : 0,
-      progress_label: running ? 'BlurXTerminator · 42%' : null,
-      processing: {
-        operation: 'BlurXTerminator', channel: 'R', stoppable: true,
-        stage: running ? 'BlurXTerminator' : null, fraction: running ? 0.42 : null,
-        waiting_for: running ? null : 'the stack build of Alpha M44 · Ha',
-      },
+    const blur = (): JobRow => row({
+      key: `stack:${'b'.repeat(64)}`, kind: 'processing', title: 'BlurXTerminator', scope: 'Alpha M44 · R',
+      detail: running ? '' : 'Waiting for the stack build of Alpha M44 · Ha',
+      status: running ? 'running' : 'queued', percent: running ? 42 : null, queue: 'stack',
+      position: running ? undefined : 0, control: { kind: 'stack', job_id: 'b'.repeat(64) },
+      stoppable: true, started_at: running ? 1_760_000_000 : undefined,
+      link: { view: 'stacks', db: 'askar', project: 1, target: 42 },
     });
-    mockServer({
-      stacks: () => (running ? [blur()] : [{ ...stack('Ha', 'running', 3, 10), target_id: 42 }, blur()]),
-    });
+    mockJobs(() => (running
+      ? [blur()]
+      : [{ ...stackRow('Ha', 'running', 3, 10), link: { view: 'stacks', db: 'askar', project: 1, target: 42 } }, blur()]));
     renderChip({ showLocation: true });
     const chip = await screen.findByRole('button', { name: /Background jobs/ });
     await waitFor(() => expect(chip).toHaveAccessibleName('Background jobs: 30% done, 1 running, 1 queued'));
@@ -629,24 +674,24 @@ describe('ActivityChip', () => {
 
     running = true;
     await waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(1), { timeout: 3000 });
-    const row = within(list).getByRole('listitem');
-    expect(row).toHaveTextContent('42%');
-    expect(row).toHaveTextContent('BlurXTerminator');
-    expect(within(row).getByRole('button', { name: 'Stop BlurXTerminator: Alpha M44 · R' })).toBeInTheDocument();
-    await userEvent.click(within(row).getByRole('link', { name: 'Go to BlurXTerminator: Alpha M44 · R' }));
+    const item = within(list).getByRole('listitem');
+    expect(item).toHaveTextContent('42%');
+    expect(item).toHaveTextContent('BlurXTerminator');
+    // The detail shows when the run started, in local time.
+    expect(item).toHaveTextContent('started');
+    expect(within(item).getByRole('button', { name: 'Stop BlurXTerminator: Alpha M44 · R' })).toBeInTheDocument();
+    await userEvent.click(within(item).getByRole('link', { name: 'Go to BlurXTerminator: Alpha M44 · R' }));
     expect(screen.getByRole('status', { name: 'Location' })).toHaveTextContent(
       '/stacks?db=askar&project=1&target=42'
     );
   }, 10_000);
 
   it('says what a running color composition is doing, and offers Stop', async () => {
-    mockServer({
-      stacks: () => [{
-        ...stack('C', 'running', 125, 400),
-        kind: 'color',
-        progress_label: 'H-alpha: BlurXTerminator (42%)',
-      }],
-    });
+    mockJobs(() => [{
+      ...stackRow('C', 'running', 125, 400),
+      title: 'Composing color',
+      detail: 'H-alpha: BlurXTerminator (42%)',
+    }]);
     renderChip();
     await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
     const list = await screen.findByRole('region', { name: 'Background jobs' });

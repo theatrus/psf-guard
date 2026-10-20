@@ -234,11 +234,7 @@ pub async fn pair_route(
     registry
         .save(&registry_path)
         .map_err(|error| AppError::InternalError(format!("persisting registry: {error}")))?;
-    state
-        .databases
-        .write()
-        .unwrap()
-        .insert(entry.id.clone(), context);
+    state.add_database(context);
 
     audit(&db_id, AuditOutcome::Ok, Some(client_name));
     tracing::info!("remote client \"{client_name}\" paired with catalog {db_id}");
@@ -288,7 +284,7 @@ pub async fn revoke_client_route(
     registry
         .save(&registry_path)
         .map_err(|error| AppError::InternalError(format!("persisting registry: {error}")))?;
-    state.databases.write().unwrap().insert(entry.id, context);
+    state.add_database(context);
     tracing::info!("revoked paired client {client_uuid} on catalog {db_id}");
     Ok(Json(ApiResponse::success(true)))
 }

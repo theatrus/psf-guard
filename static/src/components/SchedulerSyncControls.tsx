@@ -64,7 +64,16 @@ export default function SchedulerSyncControls({
   const [kind, setKind] = useState<SchedulerSyncKind>('pull');
   const [withImageData, setWithImageData] = useState(true);
   const [pending, setPending] = useState<PendingSync | null>(null);
-  const [running, setRunning] = useState(false);
+  // A preview runs while the inputs stay live: a change stops it, and a new
+  // Preview replaces it. Only Apply locks the form.
+  const [previewingDbId, setPreviewingDbId] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+  /** Counts preview requests, so a replaced request's reply is ignored. */
+  const latestPreview = useRef(0);
+  /** The stop sent for a replaced preview. The next preview waits for it,
+   *  so a late stop never reaches the new one. */
+  const pendingStop = useRef<Promise<unknown>>(Promise.resolve());
+  const running = applying || previewingDbId !== null;
   const [message, setMessage] = useState('');
   const recoveryAttempted = useRef(false);
 
@@ -91,7 +100,16 @@ export default function SchedulerSyncControls({
     setMessage('');
   };
 
-  const invalidatePreview = () => forgetPending(true);
+  const invalidatePreview = () => {
+    forgetPending(true);
+    if (previewingDbId !== null) {
+      // The inputs changed: the preview under way answers a question no one
+      // asks any more.
+      latestPreview.current += 1;
+      pendingStop.current = apiClient.stopPreview('sync', previewingDbId).catch(() => undefined);
+      setPreviewingDbId(null);
+    }
+  };
 
   useEffect(() => {
     if (recoveryAttempted.current || databases.length === 0) return;
@@ -161,7 +179,10 @@ export default function SchedulerSyncControls({
   const invalidDirection = kind === 'pull' ? destination?.id.startsWith('ts:') : source?.id.startsWith('ts:');
   const preview = async () => {
     if (!source || !destination || source.id === destination.id || invalidDirection) return;
-    setRunning(true);
+    const request = ++latestPreview.current;
+    const localDbId = kind === 'pull' ? destination.id : source.id;
+    const peerDbId = kind === 'pull' ? source.id : destination.id;
+    setPreviewingDbId(localDbId);
     setMessage('');
     try {
       if (pending) {
@@ -171,8 +192,8 @@ export default function SchedulerSyncControls({
         sessionStorage.removeItem(STORED_PREVIEW_KEY);
         setPending(null);
       }
-      const localDbId = kind === 'pull' ? destination.id : source.id;
-      const peerDbId = kind === 'pull' ? source.id : destination.id;
+      await pendingStop.current;
+      if (request !== latestPreview.current) return;
       const response = await apiClient.previewDatabaseSync(localDbId, {
         peer_db_id: peerDbId,
         kind,
@@ -180,6 +201,14 @@ export default function SchedulerSyncControls({
         with_image_data: withImageData,
         reviewed_only: kind === 'push_grades',
       });
+      if (request !== latestPreview.current) {
+        // Replaced, but finished before its stop arrived: the server kept
+        // it, and no one will apply it.
+        void apiClient
+          .deleteDatabaseSyncPreview(localDbId, response.preview_id)
+          .catch(() => undefined);
+        return;
+      }
       setPending({
         localDbId,
         previewId: response.preview_id,
@@ -191,16 +220,18 @@ export default function SchedulerSyncControls({
         JSON.stringify({ localDbId, previewId: response.preview_id })
       );
     } catch (error) {
+      // A newer preview replaced this one: its failure is not news.
+      if (request !== latestPreview.current) return;
       const detail = error instanceof Error ? error.message : String(error);
       setMessage(`Preview failed: ${detail}`);
     } finally {
-      setRunning(false);
+      if (request === latestPreview.current) setPreviewingDbId(null);
     }
   };
 
   const apply = async () => {
     if (!pending) return;
-    setRunning(true);
+    setApplying(true);
     setMessage('');
     try {
       const result = await apiClient.applyDatabaseSyncPreview(
@@ -222,7 +253,7 @@ export default function SchedulerSyncControls({
       const detail = error instanceof Error ? error.message : String(error);
       setMessage(`Apply failed: ${detail}`);
     } finally {
-      setRunning(false);
+      setApplying(false);
     }
   };
 
@@ -261,7 +292,7 @@ export default function SchedulerSyncControls({
                 setKind(operation);
                 invalidatePreview();
               }}
-              disabled={disabled || running}
+              disabled={disabled || applying}
             >
               {operationLabel(operation)}
             </button>
@@ -276,7 +307,7 @@ export default function SchedulerSyncControls({
             aria-label="Transfer source"
             value={source?.id ?? ''}
             onChange={(event) => changeSource(event.target.value)}
-            disabled={disabled || running}
+            disabled={disabled || applying}
           >
             {databases.map((database) => (
               <option key={database.id} value={database.id}>
@@ -291,7 +322,7 @@ export default function SchedulerSyncControls({
           type="button"
           className="scheduler-sync-swap"
           onClick={swapEndpoints}
-          disabled={disabled || running}
+          disabled={disabled || applying}
           aria-label="Swap source and destination"
           title="Swap source and destination"
         >
@@ -304,7 +335,7 @@ export default function SchedulerSyncControls({
             aria-label="Transfer destination"
             value={destination?.id ?? ''}
             onChange={(event) => changeDestination(event.target.value)}
-            disabled={disabled || running}
+            disabled={disabled || applying}
           >
             {databases.map((database) => (
               <option key={database.id} value={database.id}>
@@ -333,7 +364,7 @@ export default function SchedulerSyncControls({
                   setWithImageData(event.target.checked);
                   invalidatePreview();
                 }}
-                disabled={disabled || running}
+                disabled={disabled || applying}
               />
               Include stored image thumbnails
             </label>
@@ -363,7 +394,7 @@ export default function SchedulerSyncControls({
         <button
           className="browse-button"
           onClick={preview}
-          disabled={disabled || running || !source || !destination || invalidDirection}
+          disabled={disabled || applying || !source || !destination || invalidDirection}
         >
           Preview changes
         </button>

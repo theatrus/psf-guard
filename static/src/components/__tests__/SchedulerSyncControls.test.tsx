@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import SchedulerSyncControls from '../SchedulerSyncControls';
 
@@ -183,6 +183,79 @@ describe('SchedulerSyncControls', () => {
     expect(await screen.findByText(/Send planning complete/)).toBeInTheDocument();
     expect(requests).toHaveLength(2);
     expect(requests[1]).toEqual({ preview_id: 'planning-preview' });
+  });
+
+  it('stops a preview whose inputs changed and ignores its late reply', async () => {
+    let answer: (() => void) | undefined;
+    const stops: string[] = [];
+    server.use(
+      http.post('/api/databases/local/sync/preview', async () => {
+        await new Promise<void>(resolve => {
+          answer = resolve;
+        });
+        return HttpResponse.json(
+          { success: false, error: 'A newer preview of this sync replaced this one.' },
+          { status: 409 }
+        );
+      }),
+      http.post('/api/previews/sync/local/stop', ({ request }) => {
+        stops.push(new URL(request.url).pathname);
+        return HttpResponse.json({ success: true, data: true, error: null, status: 'ready' });
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<SchedulerSyncControls databases={[local, telescope]} />, {
+      wrapper: wrapper(),
+    });
+    await user.click(screen.getByRole('button', { name: 'Send planning' }));
+    await user.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByText('Checking databases…')).toBeInTheDocument();
+    // The form stays live while the preview runs.
+    const grades = screen.getByRole('button', { name: 'Send reviewed grades' });
+    expect(grades).toBeEnabled();
+    await user.click(grades);
+    await vi.waitFor(() => expect(stops).toEqual(['/api/previews/sync/local/stop']));
+    expect(screen.queryByText('Checking databases…')).not.toBeInTheDocument();
+
+    // The stopped request's conflict is not shown.
+    answer?.();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(screen.queryByText(/Preview failed/)).not.toBeInTheDocument();
+  });
+
+  it('sends the next preview only once the stop of the last one is answered', async () => {
+    const order: string[] = [];
+    let answerStop: (() => void) | undefined;
+    let previews = 0;
+    server.use(
+      http.post('/api/databases/local/sync/preview', async () => {
+        previews += 1;
+        order.push(`preview ${previews}`);
+        if (previews === 1) await new Promise(() => undefined);
+        return HttpResponse.json({ success: false, error: 'recorded' }, { status: 400 });
+      }),
+      http.post('/api/previews/sync/local/stop', async () => {
+        await new Promise<void>(resolve => {
+          answerStop = resolve;
+        });
+        order.push('stop');
+        return HttpResponse.json({ success: true, data: true, error: null, status: 'ready' });
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<SchedulerSyncControls databases={[local, telescope]} />, { wrapper: wrapper() });
+    await user.click(screen.getByRole('button', { name: 'Send planning' }));
+    await user.click(screen.getByRole('button', { name: 'Preview changes' }));
+    await vi.waitFor(() => expect(order).toEqual(['preview 1']));
+    await user.click(screen.getByRole('button', { name: 'Send reviewed grades' }));
+    await user.click(screen.getByRole('button', { name: 'Preview changes' }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // The new preview waits for the stop.
+    expect(order).toEqual(['preview 1']);
+    answerStop?.();
+    await vi.waitFor(() => expect(order).toEqual(['preview 1', 'stop', 'preview 2']));
   });
 
   it('offers a full pull with image data by default', async () => {

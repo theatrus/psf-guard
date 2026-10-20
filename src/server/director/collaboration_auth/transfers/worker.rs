@@ -10,37 +10,43 @@ pub(super) fn spawn(state: Arc<AppState>) {
         return;
     };
     let weak = Arc::downgrade(&state);
-    let shutdown = state.shutdown.clone();
     tokio::spawn(async move {
         if let Err(error) = service.clone().run(|s| s.recover_transfers()).await {
             tracing::error!(?error, "Could not recover collaboration transfers");
             return;
         }
-        let mut next_scan = Instant::now();
-        while !shutdown.is_stopping() {
-            let Some(state) = weak.upgrade() else {
-                break;
-            };
-            if state.database_management_allowed() {
-                let work = shutdown.hold("collaboration file transfer");
-                if Instant::now() >= next_scan {
-                    if let Err(error) = automatic(&state, service.clone()).await {
-                        tracing::warn!(reason = error.1, "Automatic transfer scan deferred");
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        // When the next automatic scan is due, across runs.
+        let next_scan = Arc::new(std::sync::Mutex::new(Instant::now()));
+        crate::server::schedule::every(
+            &state,
+            "collaboration transfers",
+            crate::server::schedule::Every::after(Duration::ZERO, Duration::from_secs(2)),
+            move |state| {
+                let (service, next_scan) = (service.clone(), Arc::clone(&next_scan));
+                async move {
+                    if !state.database_management_allowed() {
+                        return;
                     }
-                    next_scan = Instant::now() + Duration::from_secs(30);
+                    let _work = state.shutdown.hold("collaboration file transfer");
+                    let scan_due = Instant::now() >= *next_scan.lock().unwrap();
+                    if scan_due {
+                        if let Err(error) = automatic(&state, service.clone()).await {
+                            tracing::warn!(reason = error.1, "Automatic transfer scan deferred");
+                        }
+                        *next_scan.lock().unwrap() = Instant::now() + Duration::from_secs(30);
+                    }
+                    if let Err(error) = step(&state, service).await {
+                        tracing::warn!(
+                            reason = error.1,
+                            "Collaboration transfer worker retained its queue"
+                        );
+                    }
                 }
-                if let Err(error) = step(&state, service.clone()).await {
-                    tracing::warn!(
-                        reason = error.1,
-                        "Collaboration transfer worker retained its queue"
-                    );
-                }
-                drop(work);
-            }
-            if !shutdown.sleep(Duration::from_secs(2)).await {
-                break;
-            }
-        }
+            },
+        );
     });
 }
 

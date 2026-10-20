@@ -6,8 +6,7 @@
 //! waiting run there. While a run waits or runs, the header's activity list
 //! shows it with what holds the worker or how far it has got.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use crate::concurrency::Stop;
 
 use serde::{Deserialize, Serialize};
 
@@ -135,8 +134,8 @@ impl StackPreviewManager {
         operation: String,
         stoppable: bool,
         origin: super::journal::JournaledStackJob,
-    ) -> (Arc<AtomicBool>, bool) {
-        let cancel = self.track_cancel(run_id);
+    ) -> (Stop, bool) {
+        let cancel = self.track_job(run_id);
         let automatic = origin.automatic();
         self.remember_origin(run_id, origin);
         self.processing.lock().unwrap().insert(
@@ -151,17 +150,18 @@ impl StackPreviewManager {
                 started_unix_seconds: None,
             },
         );
-        self.join_line(run_id);
-        let waits = self.line_position(run_id) != Some(0) || self.permit.available_permits() == 0;
+        // Its place in line until the run itself joins and takes it.
+        self.hold_place(run_id, Vec::new(), automatic);
+        let waits = self.line_position(run_id) != Some(0) || self.line.main_busy();
         (cancel, waits)
     }
 
     /// The run has the worker and starts, unless a stop reached it first.
     /// Read under the list's lock, so a run a stop flags as it takes the
     /// worker never starts.
-    pub(super) fn start_processing(&self, run_id: &str, cancel: &AtomicBool) -> bool {
+    pub(super) fn start_processing(&self, run_id: &str, cancel: &Stop) -> bool {
         let mut processing = self.processing.lock().unwrap();
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.requested() {
             return false;
         }
         if let Some(run) = processing.get_mut(run_id) {
@@ -175,20 +175,15 @@ impl StackPreviewManager {
     /// the journal.
     pub(super) fn finish_processing(&self, run_id: &str) {
         self.processing.lock().unwrap().remove(run_id);
-        self.leave_line(run_id);
-        self.forget_cancel(run_id);
+        self.release_place(run_id);
+        self.forget_job(run_id);
     }
 
     /// The run published its result. During a server stop this keeps it out
     /// of the journal's last write; at any other time a finished run has
     /// already left the journal.
     pub(super) fn processing_completed(&self, run_id: &str) {
-        if self.stopped_for_shutdown.lock().unwrap().is_some() {
-            self.completed_during_stop
-                .lock()
-                .unwrap()
-                .insert(run_id.to_string());
-        }
+        self.stop_record.completed(run_id);
     }
 
     /// The state of a processing run, for the journal: running or queued
@@ -201,11 +196,18 @@ impl StackPreviewManager {
                 StackJobState::Queued
             });
         }
-        self.completed_during_stop
+        self.stop_record
+            .completed_during_stop(run_id)
+            .then_some(StackJobState::Completed)
+    }
+
+    /// The channel a processing run works on.
+    pub(super) fn processing_scope(&self, run_id: &str) -> Option<ProcessingScope> {
+        self.processing
             .lock()
             .unwrap()
-            .contains(run_id)
-            .then_some(StackJobState::Completed)
+            .get(run_id)
+            .map(|run| run.scope.clone())
     }
 
     /// Whether a processing run is the server's re-apply rather than a
@@ -218,13 +220,21 @@ impl StackPreviewManager {
             .is_some_and(|run| run.automatic)
     }
 
-    /// Re-applies queued or running, which step aside for a person's work.
-    pub(super) fn automatic_processing_ids(&self) -> Vec<String> {
+    /// The server's re-applies, queued or running, in one project.
+    pub(super) fn automatic_processing_ids(
+        &self,
+        database_id: &str,
+        project_id: i32,
+    ) -> Vec<String> {
         self.processing
             .lock()
             .unwrap()
             .iter()
-            .filter(|(_, run)| run.automatic)
+            .filter(|(_, run)| {
+                run.automatic
+                    && run.scope.database_id == database_id
+                    && run.scope.project_id == project_id
+            })
             .map(|(run_id, _)| run_id.clone())
             .collect()
     }
@@ -352,7 +362,7 @@ impl StackPreviewManager {
     fn processing_entry(&self, run_id: &str, run: &ProcessingRun) -> StackActivityEntry {
         let progress = run
             .running
-            .then(|| super::stretch::run_progress(run_id))
+            .then(|| self.stretch_runs.progress(run_id))
             .flatten();
         let stage = progress
             .as_ref()
@@ -469,7 +479,7 @@ mod tests {
     #[test]
     fn waiting_runs_are_listed_in_line_order_and_leave_when_done() {
         let manager = StackPreviewManager::new();
-        let busy = Arc::clone(&manager.permit).try_acquire_owned().unwrap();
+        let busy = manager.line.try_reserve_main().unwrap();
         let (_, waits) = manager.queue_processing(
             &"a".repeat(64),
             scope("R"),
@@ -509,7 +519,7 @@ mod tests {
         // A server stop flags the waiting runs; one flagged as the worker
         // frees up never starts.
         manager.stop_for_shutdown();
-        let flag = manager.cancels.lock().unwrap()[&"a".repeat(64)].clone();
+        let flag = manager.line.stop_flag(&"a".repeat(64)).unwrap();
         assert!(!manager.start_processing(&"a".repeat(64), &flag));
         assert_eq!(manager.active()[1].state, StackJobState::Queued);
 
@@ -517,7 +527,7 @@ mod tests {
         manager.finish_processing(&"a".repeat(64));
         manager.finish_processing(&"b".repeat(64));
         assert!(manager.active().is_empty());
-        assert!(manager.waiting.lock().unwrap().is_empty());
+        assert!(manager.line.order().is_empty());
         assert!(!manager.request_cancel(&"a".repeat(64)));
     }
 
@@ -532,9 +542,11 @@ mod tests {
             true,
             test_origin(&run_id),
         );
-        manager.leave_line(&run_id);
+        manager.release_place(&run_id);
         assert!(manager.start_processing(&run_id, &cancel));
-        super::super::stretch::report_progress(&run_id, "RC-Astro BlurXTerminator", 0.42);
+        manager
+            .stretch_runs
+            .report_progress(&run_id, "RC-Astro BlurXTerminator", 0.42);
         let entry = manager.active().remove(0);
         assert_eq!(entry.state, StackJobState::Running);
         assert_eq!(entry.detail, "BlurXTerminator");
@@ -561,7 +573,7 @@ mod tests {
             manager.processing_wait(&other).unwrap().describe(),
             "Waiting for BlurXTerminator on M44 · R to finish"
         );
-        super::super::stretch::clear_progress(&run_id);
+        manager.stretch_runs.clear_progress(&run_id);
         manager.finish_processing(&run_id);
         manager.finish_processing(&other);
     }

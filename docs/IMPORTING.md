@@ -275,6 +275,13 @@ Scheduler will shoot: each existing target's line ends with, for example,
 "adds 1 exposure plan" or "raises acquired on 2 plans", and a line gives any
 new exposure templates. Confirm the preview to write it.
 
+The preview runs at once. Previewing again, for example with other folders,
+stops a preview still running and replaces it, and confirming the import
+replaces it too. While an import writes, a preview is refused until the
+import ends. The header's background jobs list shows the import with
+**Stop**: stopping it before it has written anything leaves the catalog as
+it was, and stopping it while it writes rolls its one transaction back.
+
 The matching rules prevent common duplicates and splits:
 
 - a basename already stored in the database is skipped;

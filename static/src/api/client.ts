@@ -122,6 +122,7 @@ import type { GuidFillReport, GuidReport,
   StackFrameOrder,
   StackMethod,
   WbppActivity,
+  JobsResponse,
   WbppStackImport,
   StackMethodSettings,
   WorkerSettings,
@@ -1327,11 +1328,25 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Stop the star catalog installation under way. Catalogs installed
+   *  before stay. */
+  stopCatalogInstall: async (): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post('/astrometry/catalogs/install/stop');
+  },
+
   /** List every configured database. */
   getDatabases: async (): Promise<DatabaseSummary[]> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<DatabaseSummary[]>>('/databases');
     return data.data || [];
+  },
+
+  /** Stop a preview under way. The request that started it fails with a
+   *  conflict. */
+  stopPreview: async (preview: import('./types').PreviewKind, key: string): Promise<void> => {
+    const api = await getApi();
+    await api.post(`/previews/${preview}/${encodeURIComponent(key)}/stop`);
   },
 
   stopTsSync: async (id: string): Promise<void> => {
@@ -1956,6 +1971,20 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Stop the database's export before its next file. The files placed
+   *  stay, and the next export skips them. */
+  stopServerExport: async (dbId: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post(dbPath(dbId, '/export/server/stop'));
+  },
+
+  /** Stop the database's import or import preview. An import that is
+   *  writing rolls back. */
+  stopImport: async (dbId: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post(dbPath(dbId, '/import/stop'));
+  },
+
   cancelFlatMeasure: async (dbId: string): Promise<FlatMeasureStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<FlatMeasureStatus>>(
@@ -2532,6 +2561,13 @@ export const apiClient = {
     );
     if (!data.data) throw new Error(data.error || 'Failed to stop the build');
     return data.data;
+  },
+
+  /** Every running, queued and waiting job on the server, as the header lists them. */
+  getJobs: async (): Promise<JobsResponse> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<JobsResponse>>('/jobs');
+    return data.data ?? { jobs: [], databases: [] };
   },
 
   getWbppActivity: async (): Promise<WbppActivity> => {

@@ -23,7 +23,7 @@ use crate::server::state::AppState;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 /// How often the scheduler looks for due runs.
@@ -52,6 +52,11 @@ pub enum Reason {
 #[derive(Default)]
 pub struct AutoImportScheduler {
     records: Mutex<HashMap<String, Record>>,
+    /// Lights the light filters left out of runs that import only new
+    /// files, by catalog path. A light the filters leave out stays out of
+    /// the catalog, so every run would read its header again; an unchanged
+    /// file is skipped the way a file the catalog holds is.
+    left_out: Mutex<HashMap<String, LeftOutFiles>>,
 }
 
 /// What `GET /api/db/{db_id}/autoimport` reports.
@@ -160,22 +165,19 @@ struct LeftOutFiles {
     files: HashMap<PathBuf, (Stamp, LeftOutReason)>,
 }
 
-/// By catalog path. A light the filters leave out stays out of the catalog,
-/// so every run would read its header again; an unchanged file is skipped
-/// the way a file the catalog holds is.
-static LEFT_OUT: LazyLock<Mutex<HashMap<String, LeftOutFiles>>> = LazyLock::new(Default::default);
-
 /// Take from `files` the lights an earlier run left out under the same
 /// light filters whose file has not changed since, and return them with
 /// their reasons. Files under `dirs` that the walk no longer found are
 /// forgotten.
 pub(crate) fn take_left_out(
+    scheduler: &AutoImportScheduler,
     database_path: &str,
     filter: &LightFilter,
     dirs: &[PathBuf],
     files: &mut Vec<PathBuf>,
 ) -> Vec<(PathBuf, LeftOutReason)> {
-    let mut all = LEFT_OUT
+    let mut all = scheduler
+        .left_out
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let Some(known) = all.get_mut(database_path) else {
@@ -204,11 +206,13 @@ pub(crate) fn take_left_out(
 
 /// Remember the lights a run left out under `filter`.
 pub(crate) fn remember_left_out(
+    scheduler: &AutoImportScheduler,
     database_path: &str,
     filter: &LightFilter,
     left_out: &[(PathBuf, LeftOutReason)],
 ) {
-    let mut all = LEFT_OUT
+    let mut all = scheduler
+        .left_out
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let known = all.entry(database_path.to_string()).or_default();
@@ -225,14 +229,12 @@ pub(crate) fn remember_left_out(
 
 /// Run the scheduler until the server stops.
 pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            if !state.shutdown.sleep(TICK).await {
-                return;
-            }
-            tick(&state, Instant::now()).await;
-        }
-    })
+    crate::server::schedule::every(
+        &state,
+        "automatic import",
+        crate::server::schedule::Every::period(TICK),
+        |state| async move { tick(&state, Instant::now()).await },
+    )
 }
 
 /// One pass over the open databases. `now` is a parameter so a test can

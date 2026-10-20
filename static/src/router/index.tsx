@@ -1,5 +1,6 @@
 import { createHashRouter, RouterProvider } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { JOBS_QUERY_KEY } from '../api/jobs';
 import App from '../App';
 import MainView from '../components/MainView';
 import Overview from '../components/Overview';
@@ -11,7 +12,14 @@ import PlanPage from '../components/director/PlanPage';
 import LegacyPlanningRedirect from '../components/director/LegacyPlanningRedirect';
 
 // Create React Query client
-const queryClient = new QueryClient({
+const queryClient: QueryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    // Most actions that start, stop or move a job are mutations: the
+    // header reads its job list again when one settles.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
+    },
+  }),
   defaultOptions: {
     queries: {
       staleTime: 30000,

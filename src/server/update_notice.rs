@@ -91,16 +91,16 @@ impl UpdateNoticeManager {
         });
     }
 
-    /// Refresh once at startup, then every 24 hours while the server runs.
-    pub fn start_refresh_loop(&self) {
+    /// Refresh once at startup, then every 24 hours while `state`'s server
+    /// runs.
+    pub fn start_refresh_loop(&self, state: &std::sync::Arc<crate::server::state::AppState>) {
         self.refresh_in_background_if_stale();
-        let manager = self.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(CACHE_TTL).await;
-                manager.refresh_in_background_if_stale();
-            }
-        });
+        crate::server::schedule::every(
+            state,
+            "update notice",
+            crate::server::schedule::Every::period(CACHE_TTL),
+            |state| async move { state.update_notices.refresh_in_background_if_stale() },
+        );
     }
 
     fn mark_refresh_started_if_stale(&self) -> bool {

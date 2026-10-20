@@ -32,6 +32,9 @@ pub struct AppState {
     /// The `/api` router, once built; the MCP tools send their requests
     /// through it as the caller.
     api_router: std::sync::OnceLock<axum::Router>,
+    /// The server's async runtime, once it serves. Work threads enter it to
+    /// start async work such as a quality scan.
+    runtime: std::sync::OnceLock<tokio::runtime::Handle>,
     /// Canonical multi-DB state, keyed by slug.
     pub databases: RwLock<HashMap<String, Arc<DatabaseContext>>>,
     /// Pre-generation configuration (process-global).
@@ -112,6 +115,14 @@ pub struct AppState {
     pub ts_sync: crate::server::ts_sync::Manager,
     /// WBPP runs waiting for PixInsight, across every database.
     pub wbpp_queue: crate::server::wbpp_queue::WbppQueue,
+    /// What the storage passes keep between passes.
+    pub cache_budget: crate::server::cache_budget::CacheBudget,
+    /// What the jobs route keeps between polls.
+    pub jobs_cache: crate::server::jobs::JobsCache,
+    /// The catalog jobs of this server, one per catalog of each kind.
+    pub catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry,
+    /// Previews a person waits for, where the newest request wins.
+    pub previews: crate::server::previews::Previews,
     /// Process-global, single-flight Seiza catalog installation with progress
     /// that survives closing and reopening the Settings page.
     pub catalog_install: crate::server::catalog_install::CatalogInstallManager,
@@ -482,6 +493,18 @@ impl AppState {
     pub fn api_router(&self) -> Option<axum::Router> {
         self.api_router.get().cloned()
     }
+
+    /// Keep the runtime the server runs on. Only the first call counts.
+    pub fn set_runtime(&self, runtime: tokio::runtime::Handle) {
+        let _ = self.runtime.set(runtime);
+    }
+
+    /// The runtime of the calling thread, or else the server's.
+    pub fn runtime(&self) -> Option<tokio::runtime::Handle> {
+        tokio::runtime::Handle::try_current()
+            .ok()
+            .or_else(|| self.runtime.get().cloned())
+    }
 }
 
 impl AppState {
@@ -518,6 +541,7 @@ impl AppState {
 
         Ok(Self {
             api_router: std::sync::OnceLock::new(),
+            runtime: std::sync::OnceLock::new(),
             databases: RwLock::new(map),
             pregeneration_config,
             storage_status: RwLock::new(StorageStatus::defaulting_to(&storage_roots.cache)),
@@ -544,6 +568,10 @@ impl AppState {
             backups: crate::server::backup_job::BackupManager::default(),
             ts_sync: crate::server::ts_sync::Manager::default(),
             wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
+            cache_budget: crate::server::cache_budget::CacheBudget::default(),
+            jobs_cache: crate::server::jobs::JobsCache::default(),
+            catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry::default(),
+            previews: crate::server::previews::Previews::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
             sync_apply_lock: tokio::sync::Mutex::new(()),
@@ -811,6 +839,24 @@ impl AppState {
         self.databases.read().unwrap().get(slug).cloned()
     }
 
+    /// Serve `ctx` under its id, in place of any context there, and start
+    /// its catalog's upkeep: query indexes, readout modes and pairing.
+    pub fn add_database(self: &Arc<Self>, ctx: Arc<DatabaseContext>) {
+        let path = ctx.database_path.clone();
+        self.databases.write().unwrap().insert(ctx.id.clone(), ctx);
+        crate::server::catalog_upkeep::start(self, &path);
+    }
+
+    /// Link every context of the catalog at `path` to this server, so a
+    /// directory refresh the context finishes reaches this server's jobs.
+    pub fn link_contexts(self: &Arc<Self>, path: &str) {
+        for ctx in self.all_databases() {
+            if ctx.database_path == path {
+                ctx.server.attach(self);
+            }
+        }
+    }
+
     /// Get every configured database context.
     pub fn all_databases(&self) -> Vec<Arc<DatabaseContext>> {
         self.databases.read().unwrap().values().cloned().collect()
@@ -830,6 +876,7 @@ impl AppState {
 
         Self {
             api_router: std::sync::OnceLock::new(),
+            runtime: std::sync::OnceLock::new(),
             databases: RwLock::new(databases),
             pregeneration_config: crate::cli::PregenerationConfig::default(),
             storage_roots: crate::server::storage::StorageRoots::single("/tmp/psf-guard-test"),
@@ -856,6 +903,10 @@ impl AppState {
             backups: crate::server::backup_job::BackupManager::default(),
             ts_sync: crate::server::ts_sync::Manager::default(),
             wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
+            cache_budget: crate::server::cache_budget::CacheBudget::default(),
+            jobs_cache: crate::server::jobs::JobsCache::default(),
+            catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry::default(),
+            previews: crate::server::previews::Previews::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(
                 "/tmp/psf-guard-test",

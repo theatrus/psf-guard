@@ -389,14 +389,16 @@ RC-Astro tool at once; the tool steps it finished stay cached. Its row says
 what it is doing, such as `H-alpha: BlurXTerminator (42%)`, and its percent
 moves while a tool runs. An automatic refresh still settling after new
 frames, a sync or grade changes is not listed or counted: nothing runs yet.
-Once due, it is listed as waiting until it starts, as a build marked
-`automatic` (see [Automatic refresh](#automatic-refresh)). These controls need
+Once due, its builds join the line marked `automatic`, behind anything you
+started (see [Automatic refresh](#automatic-refresh)). A queued build reads
+its frames, grades and calibration again when its turn comes. When they
+changed while it waited, it runs as a new build, and the card follows it. These controls need
 write access. `POST /api/stack-activity/{job_id}/move` with
 `{"position": n}` (0 is next) and `POST /api/stack-activity/{job_id}/cancel`
 do the same from scripts; `GET /api/stack-activity` lists builds running first,
 then the line in order, each waiting one with its `queue_position`; the
-automatic refreshes under `scheduled`, each due one marked `waiting` with
-`waiting_for` and the `last_progress` of a build a person's build stopped;
+automatic refreshes under `scheduled`, each due one not yet planned marked
+`waiting` with `waiting_for`;
 and re-applies of processing waiting for their turn under
 `waiting_reapplies`. A processing run is an entry
 of `kind` `processing` whose `job_id` is its stretch id; its `processing`
@@ -734,22 +736,24 @@ first stack this way gets no first color preview; once one is composed, it
 follows its channels.
 
 A refresh still settling is not in the header's queue or its job count: it
-is not work yet. Once it is due it is work. If the stacker is free, and
-nothing you started has run for the last 30 seconds, it starts at the
-scheduler's next look, within 15 seconds, as one build per channel marked
-`automatic`. The quiet period keeps it out of the short gap between two
-builds you start one after the other. If a build of yours, other work you
-started, another build, or a quality analysis of its database holds it
-back, the header lists it as **Refreshing stacks**, marked **waiting**, with
-what it waits for, and counts it with an hourglass beside the running
-count. Builds you queued count as queued, not waiting. A build you start
-stops a running automatic build; that refresh is listed as waiting at once,
-with how far its build had got, and starts again once your work is done and
-quiet, without settling again. When no frame or grade changed meanwhile, it
-resumes from the stopped build's checkpoint; otherwise it restacks what
-changed. New frames that arrive while it waits join it rather than pushing
-it back. An automatic build you stop yourself stays stopped. When it starts,
-its row becomes its builds; it is never listed twice. A refresh that would find only cache hits does
+is not work yet. Once it is due, the scheduler plans it at its next look,
+within 15 seconds, when nothing you started has run for the last 30
+seconds, no automatic build is already queued or running, and no quality
+analysis of its database runs. Planning reads every light's header, so it
+stays off your time. The refresh then puts one build per channel in the
+line, marked `automatic`. The line runs automatic builds after every build
+you queued, one at a time, and starts none while work you started runs
+anywhere on the server, such as a quality scan. The header lists them as
+queued under **Automatic**. Until a due refresh is planned, the header
+lists it as **Refreshing stacks**, marked **waiting**, with what it waits
+for, and counts it with an hourglass beside the running count.
+
+A build you start stops a running automatic build at its checkpoint. The
+automatic build goes back in the line, ahead of the other automatic builds,
+and resumes from its checkpoint after your work when no frame or grade
+changed meanwhile; otherwise it restacks what changed. An automatic build
+you stop yourself stays stopped. A refresh is never listed twice: once its
+builds are in the line, its row becomes those builds. A refresh that would find only cache hits does
 not start a build, nor does one whose channels an earlier refresh of the same
 database already covers. When a refresh finds an older finished build of the
 same frames, the card points back at it instead of stacking again.
@@ -771,11 +775,12 @@ What queues a refresh, and how long it waits first:
 A refresh runs on the same single stacking worker as any other build, as
 background work that yields to previews and quality scans, waits while a
 quality scan of that database runs, and steps aside for you: starting a
-build, a color composition, a stretch, or an artifact search stops every
-automatic build (a color recomposition already running finishes, which is
-minutes at most), and the stopped build's checkpoint resumes when its project
-comes back for a refresh a few minutes later. Starting the very build the
-refresh is already running simply makes it yours. The header's background
+build, a color composition, a stretch, or an artifact search stops the
+automatic build or color recomposition running on the worker, which goes
+back in the line and resumes after your work. A recomposition's finished
+RC-Astro steps stay cached. Starting the very build the refresh queued or
+is running simply makes it yours, and moves it ahead of the automatic
+builds. The header's background
 jobs queue marks automatic builds `automatic`. A refresh follows only the
 cards the grid shows and, with new channels on, projects with recent frames,
 and never changes the calibration library, grades, or files. Target merges, exposure
@@ -1345,11 +1350,14 @@ Reprocessing runs even when no page is open.
   completed channels wait for automatic reprocessing; stopping does not
   immediately start RC-Astro.
 - After an automatic refresh, processing appears under **Automatic** as
-  **Re-applying processing**. It waits for the project's refresh delay and
-  for other builds and work you start to finish. This avoids running
-  RC-Astro after every frame in a burst. The job shows what it is waiting
-  for. New work you start, or another automatic refresh that is due, can
-  interrupt automatic reprocessing. It resumes when the worker is free.
+  **Re-applying processing**. It waits for the project's refresh delay, and
+  joins the queue once no work you started is running. In the queue it
+  waits behind everything you started and behind builds of its own target,
+  which may bring a newer stack. This avoids running RC-Astro after every
+  frame in a burst. The job shows what it is waiting for. A build you start
+  stops running automatic reprocessing, which waits for its turn again; an
+  automatic refresh of the same project does the same. It resumes when its
+  turn comes.
 - PSF Guard processes only the newest stack for a channel. A newer stack
   cancels queued or running reprocessing for the old revision, including
   any running RC-Astro tool. Tool results from the old pixels are not reused.

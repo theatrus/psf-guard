@@ -5,6 +5,7 @@ import {
   resetDatabases,
   waitForCacheReady,
 } from './helpers';
+import { jobRow, stubJobs } from './jobRows';
 
 let dbId: string;
 
@@ -853,6 +854,15 @@ test('Grid starts target quality analysis and keeps progress in the global heade
     }
     await route.continue();
   });
+
+  // The job list, as the server builds it from the scan above.
+  await stubJobs(page, () => (running
+    ? [jobRow({
+        key: `scan:${dbId}`, kind: 'quality', title: 'Analyzing quality', scope: 'Imaging Rig e2e',
+        detail: 'Solving 1/3 frames', percent: 100 / 3, hint: 'alpha-2.fits',
+        link: { view: 'sequence', db: dbId, project: 1, target: 1 },
+      })]
+    : []));
 
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1&target=1`);
   const analyzeQuality = page.getByRole('button', { name: 'Analyze Quality' });

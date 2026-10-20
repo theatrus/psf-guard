@@ -586,6 +586,17 @@ async fn create_preview_inner(
         });
     }
 
+    // A newer push from the same source replaces this preview.
+    // Another server asked for it: work here does not wait for it.
+    let run = state.previews.incoming.start_unattended(
+        crate::server::previews::incoming_key(&catalog.id, &source_id),
+        format!("Previewing a sync from {source_id}"),
+    );
+    let replaced = || {
+        AppError::Conflict(format!(
+            "A newer sync from {source_id} replaced this preview."
+        ))
+    };
     let destination_path = PathBuf::from(&catalog.database_path);
     let snapshot_file = state
         .sync_previews
@@ -616,6 +627,10 @@ async fn create_preview_inner(
         catalog.id,
         operation_label(operation),
     );
+    if !run.is_latest() {
+        state.sync_previews.remove_source_snapshot(&snapshot_file);
+        return Err(replaced());
+    }
     if let Some(job_id) = job_id.as_deref() {
         state.remote_preview_jobs.set_phase(job_id, "comparing");
     }
@@ -628,9 +643,17 @@ async fn create_preview_inner(
         source_id.clone(),
         catalog.id.clone(),
         sync_request.clone(),
-        SyncGuardMode::Preview,
+        SyncGuardMode::Preview {
+            stop: run.stop().clone(),
+        },
     )
     .await;
+    // A replaced preview keeps nothing.
+    let execution = if run.is_latest() {
+        execution
+    } else {
+        Err(replaced())
+    };
     let (result, fingerprint) = match execution {
         Ok((result, Some(fingerprint))) => (result, fingerprint),
         Ok(_) => unreachable!("preview execution returns a fingerprint"),
@@ -852,7 +875,9 @@ pub async fn refresh_preview(
         request.peer_db_id.clone(),
         catalog.id.clone(),
         request,
-        SyncGuardMode::Preview,
+        SyncGuardMode::Preview {
+            stop: crate::concurrency::Stop::new(),
+        },
     )
     .await;
     let (result, fingerprint) = match execution {

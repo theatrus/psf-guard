@@ -12,6 +12,7 @@ use super::{
     LatestStackPreviews, StackJobState, StackPreviewImageQuery, StackPreviewImageSize,
     StackPreviewManager, MAX_REMEMBERED_JOBS, SEIZA_STACKING_OUTPUT_VERSION,
 };
+use crate::concurrency::Stop;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -569,6 +570,7 @@ struct TargetSources {
     unmapped_filters: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub(super) struct PreparedColorJob {
     pub(super) public: StackColorJob,
     pub(super) stack_root: PathBuf,
@@ -1158,7 +1160,7 @@ pub(super) fn start_prepared_color(
     );
     // Real work is queued. A composition in the quick lane runs beside the
     // builds; one in the line takes the worker, so automatic work yields.
-    if !enqueue_color_job(Arc::clone(state), prepared, origin, placement.slot) && person {
+    if !enqueue_color_job(Arc::clone(state), prepared, request, origin, placement.slot) && person {
         super::interrupt_automatic(state);
     }
     Ok(response)
@@ -2072,84 +2074,253 @@ fn composition_label(
 pub(super) fn enqueue_color_job(
     state: Arc<AppState>,
     prepared: PreparedColorJob,
+    request: &StackColorRequest,
     origin: super::journal::JournaledStackJob,
     slot: Option<&str>,
 ) -> bool {
-    let job_id = prepared.public.job_id.clone();
     let quick = takes_quick_lane(&state, &prepared);
+    let spec = ColorRequest {
+        job_id: prepared.public.job_id.clone(),
+        database_id: prepared.public.database_id.clone(),
+        project_id: prepared.public.project_id,
+        request: request.clone(),
+    };
+    let lane = if quick {
+        super::Lane::Quick
+    } else {
+        super::Lane::Main
+    };
+    submit_color(state, spec, lane, origin, prepared.public.automatic, slot);
+    quick
+}
+
+/// Put a composition in the line from its request. An automatic
+/// composition that a person's work stops goes back in the line as its
+/// request, and its finished RC-Astro steps stay cached.
+fn submit_color(
+    state: Arc<AppState>,
+    spec: ColorRequest,
+    lane: super::Lane,
+    origin: super::journal::JournaledStackJob,
+    automatic: bool,
+    slot: Option<&str>,
+) {
+    let job_id = spec.job_id.clone();
     // A composition stops while it waits for the worker, and while it runs
     // at its next channel or step; a running RC-Astro tool is killed.
-    let cancel = state.stack_previews.track_cancel(&job_id);
-    state.stack_previews.remember_origin(&job_id, origin);
-    if quick {
-        state.stack_previews.set_quick(&job_id, true);
-    } else {
-        state.stack_previews.join_line_before(&job_id, slot);
-    }
+    let cancel = state.stack_previews.track_job(&job_id);
+    state
+        .stack_previews
+        .remember_origin(&job_id, origin.clone());
     // A server stop waits for a running composition to reach its next stop
     // point; the journal brings it back, and its finished RC-Astro steps
     // stay cached.
     let work = state.shutdown.hold(format!(
         "color composition for project {} (db={})",
-        prepared.public.project_id, prepared.public.database_id
+        spec.project_id, spec.database_id
     ));
-    tokio::spawn(async move {
-        let _work = work;
-        let _lane = quick.then(|| QuickLaneEntry {
-            state: Arc::clone(&state),
-            job_id: job_id.clone(),
-        });
-        let permit = if quick {
-            state.stack_previews.wait_quick_turn(&cancel).await
-        } else {
-            state.stack_previews.wait_turn(&job_id, &cancel).await
-        };
-        if permit.is_none() && !cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            state.stack_previews.forget_cancel_of(&job_id, &cancel);
-            return;
-        }
-        let _permit = permit;
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            state.stack_previews.update_color(&job_id, |job| {
+    let (failed_job, stopped_job) = (job_id.clone(), job_id.clone());
+    let again = (spec.clone(), origin);
+    let submission = super::Submission::<ColorWork>::new(
+        "a color composition",
+        &spec,
+        move |state, composed| {
+            if let Err(error) = composed {
+                state.stack_previews.update_color(&failed_job, |job| {
+                    job.state = StackJobState::Failed;
+                    job.phase = "Color worker failed".into();
+                    job.error = Some(format!("Color worker failed: {error}"));
+                });
+            }
+        },
+        move |state| {
+            state.stack_previews.update_color(&stopped_job, |job| {
                 job.state = StackJobState::Cancelled;
                 job.phase = "Stopped before composing".into();
             });
-            state.stack_previews.forget_cancel_of(&job_id, &cancel);
-            return;
+        },
+    )
+    .map(|submission| {
+        let (job_id, cancel) = (job_id.clone(), cancel.clone());
+        // A stop that lands as its turn comes still keeps it from starting.
+        let start_stop = cancel.clone();
+        submission
+            .starting_with(move |_| !start_stop.requested())
+            .finally(move |state, ending| {
+                if let crate::server::job_line::Ending::Panicked(error) = ending {
+                    state.stack_previews.update_color(&job_id, |job| {
+                        job.state = StackJobState::Failed;
+                        job.phase = "Color worker failed".into();
+                        job.error = Some(format!("Color worker panicked: {error}"));
+                    });
+                }
+                state.stack_previews.forget_job_of(&job_id, &cancel);
+                drop(work);
+                if state.stack_previews.line.take_preempted(&job_id)
+                    && !state.shutdown.is_stopping()
+                    && requeue_stopped_color(state, &job_id)
+                {
+                    let (spec, mut origin) = again;
+                    // A person may have adopted it while it stopped.
+                    let automatic = state.stack_previews.is_automatic(&job_id);
+                    origin.set_automatic(automatic);
+                    submit_color(Arc::clone(state), spec, lane, origin, automatic, None);
+                    if automatic {
+                        state.stack_previews.line.move_ahead_of_automatic(&job_id);
+                    }
+                }
+            })
+    });
+    match submission {
+        Ok(submission) => {
+            super::submit(
+                &state,
+                &job_id,
+                lane,
+                slot,
+                cancel,
+                Vec::new(),
+                automatic,
+                Box::new(submission),
+            );
         }
-        // Only a composition a person asked for outranks pre-generation and
-        // quality scans; an automatic one is background work like them.
-        let guard = (!state.stack_previews.is_automatic(&job_id))
-            .then(|| state.begin_named_interactive_job("a color composition"));
-        let state_for_job = Arc::clone(&state);
-        let cancel_for_job = Arc::clone(&cancel);
-        let result = tokio::task::spawn_blocking(move || {
-            let _guard = guard;
-            run_color_job(&state_for_job, prepared, cancel_for_job)
-        })
-        .await;
-        if let Err(error) = result {
+        Err(error) => {
             state.stack_previews.update_color(&job_id, |job| {
                 job.state = StackJobState::Failed;
-                job.phase = "Color worker failed".into();
-                job.error = Some(format!("Color worker panicked: {error}"));
+                job.error = Some(error);
             });
+            state.stack_previews.forget_job_of(&job_id, &cancel);
         }
-        state.stack_previews.forget_cancel_of(&job_id, &cancel);
-    });
-    quick
-}
-
-/// Takes a composition out of the quick lane's list however its task ends.
-struct QuickLaneEntry {
-    state: Arc<AppState>,
-    job_id: String,
-}
-
-impl Drop for QuickLaneEntry {
-    fn drop(&mut self) {
-        self.state.stack_previews.set_quick(&self.job_id, false);
     }
+}
+
+/// Make a composition that a person's work stopped queued again. False
+/// when it did not stop, such as one that finished before the stop
+/// reached it: it is not queued again.
+fn requeue_stopped_color(state: &AppState, job_id: &str) -> bool {
+    let mut requeued = false;
+    state.stack_previews.update_color(job_id, |job| {
+        if job.state != StackJobState::Cancelled {
+            return;
+        }
+        job.state = StackJobState::Queued;
+        job.error = None;
+        job.phase = "Queued".into();
+        requeued = true;
+    });
+    requeued
+}
+
+/// A color composition on the line.
+struct ColorWork;
+
+impl super::LineWork for ColorWork {
+    type Spec = ColorRequest;
+    type Output = ();
+    /// It reads this server's catalog to prepare the composition at its
+    /// turn, reads the channel stacks from the stack cache, records its
+    /// progress on the composition, and writes the color index itself.
+    const NEEDS: super::Needs = super::Needs::ThisServer;
+
+    fn execute(spec: ColorRequest, worker: &super::Worker<'_>) {
+        let state = worker.server();
+        if let Some(prepared) = prepare_color_at_turn(&spec, state, worker.stop_flag()) {
+            run_color_job(state, prepared, worker.stop_flag().clone());
+        }
+    }
+}
+
+/// A composition in the line: its request, prepared at its turn.
+#[derive(Clone, Serialize, Deserialize)]
+struct ColorRequest {
+    /// The id the composition was listed under when it was previewed.
+    job_id: String,
+    database_id: String,
+    project_id: i32,
+    request: StackColorRequest,
+}
+
+/// Prepare a composition again from its request, from the channel stacks
+/// as they are now. Returns the prepared composition when it is the one
+/// that was previewed. When its sources changed while it waited, the
+/// request becomes another composition: that one is queued, or a matching
+/// finished one is reused, and the previewed record points to it. A
+/// composition that cannot be prepared fails with the reason.
+fn prepare_color_at_turn(
+    spec: &ColorRequest,
+    state: &Arc<AppState>,
+    stop: &Stop,
+) -> Option<PreparedColorJob> {
+    let fail = |error: String| {
+        state.stack_previews.update_color(&spec.job_id, |job| {
+            job.state = StackJobState::Failed;
+            job.phase = "Could not be prepared".into();
+            job.error = Some(error);
+        });
+    };
+    let Some(ctx) = state.get_database(&spec.database_id) else {
+        fail("The database was removed while the composition waited".into());
+        return None;
+    };
+    let prepared = match prepare_color_job(&ctx, &state.astrometry, spec.project_id, &spec.request)
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            fail(error.message());
+            return None;
+        }
+    };
+    if prepared.public.job_id == spec.job_id {
+        return Some(prepared);
+    }
+    // Stopped while it was read, or the server is stopping: no other
+    // composition takes its place. A preempted one goes back in the line
+    // as its request.
+    if stop.requested() || state.shutdown.is_stopping() {
+        state.stack_previews.update_color(&spec.job_id, |job| {
+            job.state = StackJobState::Cancelled;
+            job.phase = "Stopped before composing".into();
+        });
+        return None;
+    }
+    let automatic = state.stack_previews.is_automatic(&spec.job_id);
+    let placement = super::build_set::Placement {
+        automatic,
+        ..Default::default()
+    };
+    match start_prepared_color(
+        state,
+        &ctx,
+        spec.project_id,
+        &spec.request,
+        prepared,
+        placement,
+    ) {
+        Ok(became) => {
+            tracing::info!(
+                job_id = spec.job_id,
+                became = became.job_id,
+                "A queued composition's sources changed while it waited; it runs as a new composition"
+            );
+            state.stack_previews.update_color(&spec.job_id, |job| {
+                job.state = StackJobState::Replaced;
+                job.replaced_by = vec![became.job_id.clone()];
+                job.phase = "Queued".into();
+            });
+            // It keeps the turn the previewed composition had: a person's
+            // next, an automatic one ahead of the other automatic work.
+            if automatic {
+                state
+                    .stack_previews
+                    .line
+                    .move_ahead_of_automatic(&became.job_id);
+            } else {
+                state.stack_previews.move_in_line(&became.job_id, 0);
+            }
+        }
+        Err(error) => fail(error.message()),
+    }
+    None
 }
 
 /// The error a composition ends with when it is stopped, read back so the
@@ -2158,12 +2329,12 @@ const COLOR_STOPPED: &str = "Stopped";
 
 /// Where a running composition may stop: between channels and steps.
 struct ColorStop {
-    cancel: Arc<std::sync::atomic::AtomicBool>,
+    cancel: Stop,
 }
 
 impl ColorStop {
     fn stopped(&self) -> bool {
-        self.cancel.load(std::sync::atomic::Ordering::Relaxed)
+        self.cancel.requested()
     }
 
     fn check(&self) -> Result<(), String> {
@@ -2176,15 +2347,11 @@ impl ColorStop {
 
     /// Kills a running RC-Astro tool when the composition is stopped.
     fn signal(&self) -> seiza_stacking::CancelSignal {
-        seiza_stacking::CancelSignal::from(Arc::clone(&self.cancel))
+        seiza_stacking::CancelSignal::from(self.cancel.clone())
     }
 }
 
-fn run_color_job(
-    state: &Arc<AppState>,
-    prepared: PreparedColorJob,
-    cancel: Arc<std::sync::atomic::AtomicBool>,
-) {
+fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob, cancel: Stop) {
     let stop = ColorStop { cancel };
     let job_id = prepared.public.job_id.clone();
     state.stack_previews.update_color(&job_id, |job| {
@@ -4891,11 +5058,10 @@ mod tests {
     #[test]
     fn a_stopped_color_composition_stops_at_its_next_check() {
         let stop = ColorStop {
-            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cancel: Stop::new(),
         };
         assert!(stop.check().is_ok());
-        stop.cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        stop.cancel.request();
         assert_eq!(stop.check(), Err(COLOR_STOPPED.to_string()));
     }
 
@@ -5099,9 +5265,15 @@ mod tests {
             manager.worker_holder("other").as_deref(),
             Some("the color composition of Color target · SHO")
         );
-        manager.set_quick(&running.job_id, true);
+        // In the quick lane's line, it does not hold the worker.
+        let quick = crate::server::job_line::testing::entry(
+            &running.job_id,
+            super::super::Lane::Quick,
+            crate::concurrency::Stop::new(),
+        );
+        assert!(manager.line.submit(quick, None).is_ok());
         assert_eq!(manager.worker_holder("other"), None);
-        manager.set_quick(&running.job_id, false);
+        manager.line.remove(&running.job_id);
         assert!(manager.worker_holder("other").is_some());
     }
 
@@ -5125,6 +5297,34 @@ mod tests {
         assert!(takes_quick_lane(&state, &quick));
     }
 
+    #[test]
+    fn a_composition_that_cannot_be_prepared_at_its_turn_fails_with_why() {
+        let cache = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let previewed = prepared_color(cache.path(), &"e".repeat(64), false, false, None);
+        assert!(state.stack_previews.insert_color(previewed.public.clone()));
+        let spec = ColorRequest {
+            job_id: previewed.public.job_id.clone(),
+            database_id: "removed".into(),
+            project_id: previewed.public.project_id,
+            request: test_request(),
+        };
+        assert!(prepare_color_at_turn(&spec, &state, &Stop::new()).is_none());
+        let job = state.stack_previews.get_color(&spec.job_id).unwrap();
+        assert_eq!(job.state, StackJobState::Failed);
+        assert_eq!(job.phase, "Could not be prepared");
+        assert_eq!(
+            job.error.as_deref(),
+            Some("The database was removed while the composition waited")
+        );
+    }
+
+    fn test_request() -> StackColorRequest {
+        serde_json::from_value(serde_json::json!({"target_id": 1, "kind": "rgb"})).unwrap()
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_composition_stopped_while_it_waits_for_the_quick_lane_ends_there() {
         let cache = tempfile::tempdir().unwrap();
@@ -5132,14 +5332,18 @@ mod tests {
             rusqlite::Connection::open_in_memory().unwrap(),
         ));
         // Another composition holds the quick lane.
-        let busy = Arc::clone(&state.stack_previews.quick_permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.try_reserve_quick().unwrap();
         let waiting = prepared_color(cache.path(), &"d".repeat(64), false, false, Some("inputs"));
         let job_id = waiting.public.job_id.clone();
         assert!(state.stack_previews.insert_color(waiting.public.clone()));
         let origin = super::super::processing_queue::test_origin("waiting");
-        assert!(enqueue_color_job(Arc::clone(&state), waiting, origin, None));
+        assert!(enqueue_color_job(
+            Arc::clone(&state),
+            waiting,
+            &test_request(),
+            origin,
+            None
+        ));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert_eq!(
             state.stack_previews.get_color(&job_id).unwrap().state,
@@ -5165,17 +5369,27 @@ mod tests {
             rusqlite::Connection::open_in_memory().unwrap(),
         ));
         // A build holds the stack worker.
-        let busy = Arc::clone(&state.stack_previews.permit)
-            .try_acquire_owned()
-            .unwrap();
+        let busy = state.stack_previews.line.reserve_main().await;
         let quick = prepared_color(cache.path(), &"a".repeat(64), false, false, Some("inputs"));
         let slow = prepared_color(cache.path(), &"b".repeat(64), true, false, Some("other"));
         for prepared in [&quick, &slow] {
             assert!(state.stack_previews.insert_color(prepared.public.clone()));
         }
         let origin = |id: &str| super::super::processing_queue::test_origin(id);
-        enqueue_color_job(Arc::clone(&state), quick, origin("quick"), None);
-        enqueue_color_job(Arc::clone(&state), slow, origin("slow"), None);
+        enqueue_color_job(
+            Arc::clone(&state),
+            quick,
+            &test_request(),
+            origin("quick"),
+            None,
+        );
+        enqueue_color_job(
+            Arc::clone(&state),
+            slow,
+            &test_request(),
+            origin("slow"),
+            None,
+        );
         // The quick one starts at once. Its database is not configured, so it
         // ends there; what matters is that it did not wait for the build.
         let quick_id = "a".repeat(64);

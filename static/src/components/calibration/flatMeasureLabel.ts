@@ -7,20 +7,6 @@ export const FLAT_STAGES = {
   evidence: 'reading lights shot during a change',
 } as const;
 
-const STAGE_WORDS: Record<string, { verb: string; unit: string }> = {
-  [FLAT_STAGES.measuring]: { verb: 'Measuring flats', unit: 'session' },
-  [FLAT_STAGES.comparing]: { verb: 'Comparing flats', unit: 'pair' },
-  [FLAT_STAGES.evidence]: { verb: 'Reading lights shot during a change', unit: 'session' },
-};
-
-/** "Measuring flats · 12 of 40 sessions": what the job does now, in words. */
-export function flatMeasureLabel(status: Pick<FlatMeasureStatus, 'stage' | 'done' | 'total'>): string {
-  const words = STAGE_WORDS[status.stage ?? ''] ?? STAGE_WORDS[FLAT_STAGES.measuring];
-  if (status.total <= 0) return words.verb;
-  const unit = status.total === 1 ? words.unit : `${words.unit}s`;
-  return `${words.verb} · ${Math.min(status.done, status.total)} of ${status.total} ${unit}`;
-}
-
 /** One poll per catalog, shared by the header and the page: fast while a
  *  pass runs, slower while work only waits, and a slow heartbeat at rest,
  *  since the server starts the job on its own after an import or a sync. */

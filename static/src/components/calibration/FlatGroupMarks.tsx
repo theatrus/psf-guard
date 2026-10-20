@@ -10,7 +10,7 @@ import type {
 } from '../../api/types';
 import type { FlatMark, FlatSessionPlace } from './flatGroupIndex';
 import { editFlatLimits } from './flatLimitsLink';
-import { FLAT_STAGES, flatMeasureKey, flatMeasureLabel, stoppedRig } from './flatMeasureLabel';
+import { FLAT_STAGES, flatMeasureKey, stoppedRig } from './flatMeasureLabel';
 import {
   eventSeenIn,
   eventSideLabel,
@@ -37,7 +37,7 @@ export function MeasuringNote({ progress, showRig }: { progress: FlatMeasureStat
     <span className="flat-groups-measuring" aria-hidden="true" data-testid="flat-groups-measuring"
       data-priority={progress.priority ?? undefined}>
       <span className="calibration-spinner" aria-hidden="true" />
-      {flatMeasureLabel(progress)}
+      {progress.label}
       {extra.length > 0 && <span className="calibration-muted"> · {extra.join(' · ')}</span>}
     </span>
   );

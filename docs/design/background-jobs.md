@@ -58,7 +58,7 @@ or grades. A rig the catalog does not record is ignored.
 | The yield point | `AppState::wait_for_interactive_work(nap, note)` before each step: blocks while a person's work runs, and after `WAIT_NOTE_AFTER` (1 s) tells `note` what it waits for, so the job line lists the job as waiting |
 | A quiet moment | `AppState::interactive_quiet_for()`: how long no person's work has run, as automatic stack refreshes wait `RESUME_QUIET` (30 s) before they resume |
 | Holding a stop until a write commits | `state.shutdown.hold(what)` |
-| The job line | `static/src/components/header/activityItems.ts`, polled by `useHeaderActivity.ts` |
+| The job line | `GET /api/jobs` (`src/server/jobs.rs`) builds every row; `useHeaderActivity.ts` polls it and `activityItems.ts` maps each row to the header's item |
 
 ## The job line
 
@@ -82,11 +82,44 @@ Its list groups the rows by tier, each heading with its own counts:
   backups and transfers a connection's policy queued.
 
 Within each, rows that need attention come first, then running work, then
-queued rows, then waiting work. A row's tier comes from what its status
-route reports: `automatic` on a scan, a stack entry, a catalog refresh
-(`cache-progress`) or a transfer; `priority` on a duplicate check;
-`trigger` on a backup. Quality backfill, flat measuring and frame sites
-are always automatic.
+queued rows, then waiting work. A row's tier comes from the job's own
+status: `automatic` on a scan, a stack entry, a catalog refresh or a
+transfer; `priority` on a duplicate check; `trigger` on a backup. Quality
+backfill, flat measuring and frame sites are always automatic.
+
+### The jobs route
+
+`GET /api/jobs` lists every job the header shows as uniform rows, in the
+order above. The server reads each job's in-memory status, the same state
+the job's own status route reads, and builds the row's title, scope,
+progress text, percent, tier, place in its line, what it waits for, the
+control its Stop and move buttons call, and a structured link to the view
+of its work. The server resolves a target's project for the link, so the
+client needs no target list. The route never waits for a database's
+shared connection or plans work:
+
+- The project of a target is cached; an uncached one is read only when
+  the shared connection is free. Until then, the row links to the
+  database's images.
+- The channels a waiting stack refresh would restack come from a cache
+  that the refresh scheduler fills on its own thread. A waiting refresh
+  that is not planned yet is listed without them.
+- The project name of a waiting refresh is left out while the shared
+  connection is busy.
+- The duplicate check's `stale` test stays in its own route.
+- The route waits at most half a second for the Director's transfer list,
+  and otherwise lists the transfers of the last poll.
+
+The route also returns each database's `busy` and `scanning` state and its
+last scan's frame errors. The header uses them to read a database's views
+again when its work finishes, and to keep a scan's error note. Backups and
+Target Scheduler syncs are listed only for an editor on a server that
+allows database management, as their own status routes are.
+
+The header polls the route every second while it lists a job and every
+5 s otherwise. Code that starts, stops or moves a job invalidates the
+`['jobs']` query, and every mutation does so when it settles, so a new job
+shows at once.
 
 The stack line and the WBPP line are each one line, shared by both tiers:
 an automatic refresh's build can wait ahead of a person's. So a queued row
@@ -131,31 +164,48 @@ paused, waits. Scan errors keep their own note above the list.
 
 ## A minimal job
 
-Modelled on `src/server/flat_measure.rs`.
+A job with one runner per catalog implements `CatalogWork`
+(`src/server/job_line/catalog.rs`) and stores its jobs in a
+`CatalogJobs`. Modelled on `src/server/flat_measure.rs`:
 
 ```rust
-#[derive(Default)]
-struct Job {
-    queue: Mutex<Queue>,            // merged requests, retries, what Stop paused
-    status: RwLock<MyJobStatus>,    // what the status route answers
-    cancelled: AtomicBool,
+pub(crate) struct MyJob;
+
+impl CatalogWork for MyJob {
+    type Queue = Queue;             // merged requests, retries, what Stop paused
+    type Status = MyJobStatus;      // what the status route answers
+    type Item = Scope;              // one pass
+    const RUNNER: &'static str = "my-job";
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("my job");
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> Step<Scope> {
+        queue.take_due(now)         // Step::Run, Step::Sleep or Step::Exit
+    }
+
+    fn run(state: &Arc<AppState>, path: &str, job: &CatalogJob<Self>, scope: Scope, stop: &Stop) {
+        for frame in frames(path, &scope) {
+            if stop.requested() || state.shutdown.is_stopping() {
+                break;
+            }
+            step(state, job, &frame, Priority::Background);
+        }
+    }
+
+    fn runner_failed(queue: &mut Queue, status: &mut MyJobStatus) {
+        status.last_error = Some("my job stopped unexpectedly".into());
+    }
 }
-static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
+
+static JOBS: CatalogJobs<MyJob> = CatalogJobs::new();
 
 /// Called by a trigger (an import, a sync, a setting). Never does the work.
 pub fn queue(state: &Arc<AppState>, path: &str, scope: Scope) {
-    let job = job(path);
-    let mut queue = job.queue.lock().unwrap();
-    queue.pending.merge(scope);
-    if std::mem::replace(&mut queue.worker, true) {
-        return; // the runner serves this catalog already; it sees the merge
-    }
-    let (state, path) = (Arc::clone(state), path.to_string());
-    // The job's one runner. Its claim resets on a panic (`RunnerClaim`).
-    std::thread::spawn(move || serve(&state, &path, &job));
+    // Starts the catalog's runner thread unless one exists; a running one
+    // reads the merged scope at its next step.
+    JOBS.request(state, path, |queue| queue.merge(scope));
 }
 
-fn step(state: &AppState, job: &Job, frame: &Frame, priority: Priority) -> anyhow::Result<()> {
+fn step(state: &AppState, job: &CatalogJob<MyJob>, frame: &Frame, priority: Priority) {
     // The one yield point: a person's work first, and the job line shows
     // this job as waiting meanwhile.
     state.wait_for_interactive_work(POLL, |waiting_for| {
@@ -164,11 +214,16 @@ fn step(state: &AppState, job: &Job, frame: &Frame, priority: Priority) -> anyho
     // Leased for this step alone.
     let budget = concurrency::plan_workers(None, &state.worker_policy(), priority, Some(pixels));
     let lease = state.lease_workers(priority, budget.workers);
-    let pool = ComputePool::take("my-job", lease.workers)?;
-    pool.install(|| measure(frame));
-    Ok(())
+    if let Ok(pool) = ComputePool::take("my-job", lease.workers) {
+        pool.install(|| measure(frame));
+    }
 }
 ```
+
+`CatalogJobs` resets the runner state when the thread panics or cannot
+start, gives each item a fresh `Stop` that `CatalogJob::stop_running`
+requests, and makes shutdown wait for an item only when
+`SHUTDOWN_WAITS_FOR` is set.
 
 Then:
 
@@ -176,12 +231,11 @@ Then:
   steps. Stop pauses; it does not forget;
 - work a pass could not finish (files away, a busy catalog) goes back in
   line with a growing wait, not to the next restart;
-- a query in `useHeaderActivity.ts` that polls the status (fast while it
-  runs, slower while it only waits, a slow heartbeat at rest when the server
-  starts the job on its own), shared with any page that shows it, and an
-  item in `activityItems.ts` with a title, scope, progress, `automatic`,
-  `background` for its tier, `remaining` when the status says what is left,
-  and a `control` when it can be stopped;
+- a row builder in `src/server/jobs.rs` with a title, scope, progress,
+  `automatic`, `background` for its tier, `remaining` when the status says
+  what is left, and a `control` when it can be stopped, plus a matching
+  stop call in the header's `ActivityChip.tsx`. A page that shows the job
+  polls its status route on its own;
 - a status that says whether a person started the run, and what waits
   behind the step under way (see [The job line](#the-job-line));
 - a status that turns visible only once the job has found work, so a pass
@@ -211,13 +265,88 @@ Then:
   `Interactive`, holding the guard. It reads on a connection of its own,
   shows in the job line with Stop, and stops between frames, keeping the
   frames done.
-- Backups (`backup_job.rs`) run one at a time server-wide rather than one per
-  catalog. A scheduled run is `Background` and yields between files and
-  SQLite steps; a run a person starts does not wait. Stop ends the run
-  rather than pausing it: the schedule tries again at its next time.
+- Backups (`backup_job.rs`) run one at a time server-wide, on one
+  `CatalogJobs` runner under the fixed key `backups`; each server state has
+  its own `CatalogJobs`, so it is one runner per server. A scheduled run
+  is `Background` and yields between files and SQLite steps; a run a person
+  starts does not wait. Stop ends the run rather than pausing it: the
+  schedule tries again at its next time.
+- Target Scheduler imports and syncs (`ts_sync.rs`) run on `CatalogJobs`:
+  one runner per catalog for its sync, and one for imports, which run one
+  at a time. An import is a person's and holds the guard; a sync waits for
+  a person's work. Stop sets the job's `stopping`, which every step checks.
+- Catalog upkeep (`catalog_upkeep.rs`) runs on `CatalogJobs`, one runner
+  per catalog: PSF Guard's query indexes and the readout modes of older
+  calibration frames, asked for at start and whenever a database is added
+  or changed, and calibrated-copy pairing after each directory refresh. Its
+  row appears while it builds indexes, reads readout modes that are
+  missing, or pairs copies.
+- A database's cache refreshes (`catalog_refresh.rs`) run on `CatalogJobs`,
+  one runner per database: the file-cache refresh the header lists as the
+  database's refresh, and the rebuild of a stale folder index while
+  requests use the stale one. A context reaches its server through its
+  `ServerLink`; a context no server works for, such as in a unit test,
+  keeps a thread of its own.
+- Imports (`import_job.rs`) that write run on `CatalogJobs`, one runner per
+  database, with a row and Stop, which rolls the transaction back. An
+  import preview is a preview, not a job: see
+  [Previews](job-line.md#previews-the-newest-request-wins).
+- Exports into the export folder (`export_job.rs`) run on `CatalogJobs`,
+  one runner per database, as a person's work, with a row and Stop, which
+  ends the export before its next file.
+- A star catalog installation (`catalog_install.rs`) is one download
+  server-wide. It holds the server stop's wait, ends when the server stops,
+  and its row has Stop.
+- The director's planning resends (`director/remote_push.rs`) run once per
+  peer when a site answers. They hold the server stop's wait, and the
+  header lists them as automatic work.
 - Calibration grading (`calibration_quality.rs`) is a Background runner per
-  catalog with a status route, but it has no row in the job line yet.
-- Calibration health (`calibration_health.rs`), quality backfill and scans
-  (`spatial_scan.rs`), preview pre-generation (`preview_queue.rs`), stack
-  builds (`stack_preview.rs`) and WBPP runs (`wbpp_queue.rs`) predate this
-  record; check each before copying its shape.
+  catalog. Its row in the job line appears once a pass has frames to
+  measure; a pass that only regrades the library is quick and gets none.
+- Calibration health (`calibration_health.rs`) runs on `CatalogJobs` like
+  grading. Its row appears once a pass has projects to judge.
+- Quality scans and the database-wide analysis (`quality_scans.rs`) share
+  one runner per catalog, since they share the database's scanner. A
+  person's scans run first, at `Interactive`, in the order requested. The
+  analysis then scans its targets one at a time at `Background`. A person's
+  request stops the analysis's current target scan at its next frame and
+  puts that target back at the front of the analysis. The runner gathers
+  the frames that need computing, so the start route only checks that the
+  target exists and returns at once.
+- Calibration grading also waits on `CatalogJobs` for remote uploads to
+  pause ([`Settling`](../../src/server/job_line/catalog.rs)) before its
+  pass, and counts as busy meanwhile, so flat measuring waits for it.
+- The scan of newly arrived frames (`quality_arrival.rs`) is one job per
+  database: arrivals settle for two minutes, then the job queues the
+  database-wide analysis for the targets with unmeasured frames. A
+  database already scanning, or a catalog it cannot read, is looked at
+  again after 30 s. The frames it queued stay out of the next scans for a
+  day, in the job's own state.
+- The Calibration page's project scope (`calibration_scope.rs`) is one
+  runner per catalog. It refreshes scopes first and reads the light
+  headers the health pass has not kept in chunks of 32 between them, so a
+  scope grows as headers arrive. A project's read stops once no view has
+  asked for its scope for a minute. Its row, **Reading light headers**,
+  is a person's: a view asked for it.
+- What the flat groups feed (`flat_group_use.rs`) is one runner per
+  catalog, with a growing wait after a failed refresh. Its row, **Working
+  out what the flat groups feed**, is automatic.
+- Flat measuring, frame sites, the duplicate check, reject removal,
+  calibration grading, calibration health, quality scans, arrivals, the
+  calibration scope, flat group use, catalog upkeep, backups and Target
+  Scheduler syncs all run on `CatalogJobs`. Their state lives in their
+  job, not in statics of its own.
+- Automatic import (`autoimport.rs`) is a schedule rather than a queue: a
+  timer looks every 30 s at which databases are due and starts the
+  ordinary import job, which has its own row. Every timer runs through
+  `schedule::every`; see [Timers](job-line.md#timers). Its records and the lights
+  its runs left out live on `AppState`.
+- The storage budget (`cache_budget.rs`) keeps its volume limits, last
+  reports and cache sizes on `AppState` (`CacheBudget`). The limits a
+  person sets are a process-wide setting, applied from the registry like
+  the calibration and stacking settings.
+- Preview pre-generation (`preview_queue.rs`) is a bounded pool of short
+  tasks and stays as it is, and so does the director's sky-image
+  generation, which renders on demand for display like an image preview.
+- Stack builds and WBPP runs wait in job lines rather than per-catalog
+  queues; see [One job line](job-line.md).

@@ -6,6 +6,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Instant;
 
+use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+
 use super::*;
 
 /// `POST /api/db/{db}/projects/{project}/stack-previews` — one build of
@@ -51,44 +53,90 @@ pub async fn start_stack_preview_channels(
     ))
 }
 
-/// Builds a person asked for that wait to be prepared: one line and one
-/// runner per catalog, so a long preparation in one catalog never holds up
-/// another's.
+/// Builds and compositions waiting to be previewed: one queue and one
+/// runner thread per catalog, so a long preparation in one catalog never
+/// holds up another's.
+pub(super) struct Preparations;
+
+/// One catalog's requests, in the order they were made, and those waiting
+/// to be tried again.
+#[derive(Default)]
+pub(super) struct PreparationQueue {
+    pending: VecDeque<Preparation>,
+    /// Requests whose storage was not readable yet, with when to try again.
+    retries: Vec<(Instant, Preparation)>,
+}
+
+impl CatalogWork for Preparations {
+    type Queue = PreparationQueue;
+    type Status = ();
+    type Item = Preparation;
+    const RUNNER: &'static str = "stack-preparation";
+    /// Each preparation registers its own shutdown hold.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+    fn next(
+        _: &AppState,
+        _: &str,
+        queue: &mut PreparationQueue,
+        now: Instant,
+    ) -> Step<Preparation> {
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut queue.retries)
+            .into_iter()
+            .partition(|(at, _)| *at <= now);
+        queue.retries = waiting;
+        queue
+            .pending
+            .extend(due.into_iter().map(|(_, preparation)| preparation));
+        if let Some(preparation) = queue.pending.pop_front() {
+            return Step::Run(preparation);
+        }
+        match queue.retries.iter().map(|(at, _)| *at).min() {
+            Some(at) => Step::Sleep(at - now),
+            None => Step::Exit,
+        }
+    }
+
+    fn run(
+        state: &Arc<AppState>,
+        _: &str,
+        _: &CatalogJob<Self>,
+        preparation: Preparation,
+        _: &Stop,
+    ) {
+        // Queueing what it prepares starts work on the async runtime.
+        let _runtime = preparation.runtime.enter();
+        prepare_one(state, preparation);
+    }
+
+    /// The requests stay queued; the next request starts a new runner.
+    fn runner_failed(_: &mut PreparationQueue, _: &mut ()) {}
+}
+
+/// The preparation line of every catalog, and the build each request
+/// waiting or being prepared became, by request, so the same click twice
+/// joins one build.
 #[derive(Default)]
 pub(super) struct PreparationLine {
-    catalogs: HashMap<String, CatalogLine>,
-    /// The build each request waiting or being prepared became, by
-    /// request, so the same click twice joins one build.
-    by_request: HashMap<String, String>,
-    /// Compositions waiting for their target's channels to build, by
-    /// catalog. A build that ends puts them back in the line to look again.
-    waiting_for_channels: HashMap<String, Vec<Preparation>>,
+    catalogs: CatalogJobs<Preparations>,
+    by_request: Mutex<HashMap<String, String>>,
 }
 
 impl PreparationLine {
+    fn by_request(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+        self.by_request
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Whether a catalog's runner has nothing in hand or waiting.
     #[cfg(test)]
     pub(super) fn is_idle(&self, database_id: &str) -> bool {
-        self.catalogs
-            .get(database_id)
-            .is_none_or(|catalog| !catalog.running && catalog.pending.is_empty())
+        self.catalogs.existing(database_id).is_none_or(|job| {
+            let queue = job.queue();
+            !queue.has_runner() && queue.pending.is_empty() && queue.retries.is_empty()
+        })
     }
-
-    /// How many compositions of a catalog wait for their channels.
-    #[cfg(test)]
-    pub(super) fn waiting_for_channels(&self, database_id: &str) -> usize {
-        self.waiting_for_channels
-            .get(database_id)
-            .map_or(0, Vec::len)
-    }
-}
-
-/// One catalog's requests, in click order, and whether its runner is
-/// preparing them.
-#[derive(Default)]
-struct CatalogLine {
-    pending: VecDeque<Preparation>,
-    running: bool,
 }
 
 /// What a request asks for.
@@ -151,7 +199,7 @@ impl What {
     }
 }
 
-struct Preparation {
+pub(super) struct Preparation {
     job_id: String,
     request_key: String,
     ctx: Arc<DatabaseContext>,
@@ -162,12 +210,15 @@ struct Preparation {
     /// Until when a preparation that fails is tried again; see
     /// [`Asked::retry_until`].
     retry_until: Option<Instant>,
-    cancel: Arc<AtomicBool>,
+    cancel: Stop,
     /// The channel families of the stacks a composition names, read before
     /// it waited for its channels; see [`color::with_newest_sources`].
     families: Option<BTreeMap<color::StackColorRole, color::SourceFamily>>,
     /// It waited for its target's channels to build.
     waited: bool,
+    /// The server's async runtime: queueing what it prepares starts work
+    /// there.
+    runtime: tokio::runtime::Handle,
 }
 
 /// A build or composition asked for: by a click, or by the job journal after
@@ -249,10 +300,11 @@ pub(super) fn queue(
     asked: Asked,
 ) -> Result<String, AppError> {
     let manager = &state.stack_previews;
+    let runtime = tokio::runtime::Handle::try_current()
+        .map_err(|_| AppError::InternalError("No runtime to prepare the stack build on".into()))?;
     let request_key = asked.what.key(&ctx.id, asked.project_id);
-    let mut line = manager.preparing.lock().unwrap();
+    let mut line = manager.preparing.by_request();
     if let Some(job_id) = line
-        .by_request
         .get(&request_key)
         .filter(|job_id| manager.job_state(job_id) == Some(StackJobState::Preparing))
     {
@@ -281,15 +333,21 @@ pub(super) fn queue(
              {MAX_REMEMBERED_JOBS} may be running or kept"
         )));
     }
-    let cancel = manager.track_cancel(&job_id);
+    let cancel = manager.track_job(&job_id);
     manager.remember_origin(
         &job_id,
         asked
             .what
             .origin(&ctx.id, asked.project_id, &job_id, asked.automatic),
     );
-    manager.join_line(&job_id);
-    line.by_request.insert(request_key.clone(), job_id.clone());
+    // A build being prepared holds every target of its project: which
+    // channels it stacks is not known yet.
+    let holds = match &asked.what {
+        What::Mono { .. } => vec![project_channels_key(&ctx.id, asked.project_id)],
+        What::Color(_) => Vec::new(),
+    };
+    manager.hold_place(&job_id, holds, asked.automatic);
+    line.insert(request_key.clone(), job_id.clone());
     drop(line);
     line_up(
         state,
@@ -304,41 +362,23 @@ pub(super) fn queue(
             cancel,
             families: None,
             waited: false,
+            runtime,
         },
     );
     Ok(job_id)
 }
 
 /// Put a preparation at the back of its catalog's line, and start the
-/// catalog's runner if it is idle.
+/// catalog's runner if none runs.
 fn line_up(state: &Arc<AppState>, preparation: Preparation) {
     let database_id = preparation.ctx.id.clone();
-    let mut line = state.stack_previews.preparing.lock().unwrap();
-    let catalog = line.catalogs.entry(database_id.clone()).or_default();
-    catalog.pending.push_back(preparation);
-    if !catalog.running {
-        catalog.running = true;
-        drop(line);
-        start_preparing(state, &database_id);
-    }
-}
-
-/// Put the compositions waiting on a catalog's channels back in its line,
-/// to look again. Called whenever a build of the catalog ends and whenever
-/// one of its requests has been prepared.
-pub(super) fn release_waiting_colors(state: &Arc<AppState>, database_id: &str) {
-    let waiting = state
+    state
         .stack_previews
         .preparing
-        .lock()
-        .unwrap()
-        .waiting_for_channels
-        .remove(database_id)
-        .unwrap_or_default();
-    for mut preparation in waiting {
-        preparation.waited = true;
-        line_up(state, preparation);
-    }
+        .catalogs
+        .request(state, &database_id, |queue| {
+            queue.pending.push_back(preparation)
+        });
 }
 
 /// A request's own id while it is prepared: not the id what it becomes
@@ -387,118 +427,46 @@ fn preparing_job(
     }
 }
 
-/// A catalog's runner thread prepares its line, in click order, until it
-/// is empty. It runs on the async runtime's handle: queueing a prepared
-/// build spawns its task there.
-fn start_preparing(state: &Arc<AppState>, database_id: &str) {
-    let runner_state = Arc::clone(state);
-    let runner_database = database_id.to_string();
-    let handle = tokio::runtime::Handle::current();
-    let spawned = std::thread::Builder::new()
-        .name("stack-preparation".into())
-        .spawn(move || {
-            let _runtime = handle.enter();
-            serve_preparations(&runner_state, &runner_database);
-        });
-    if let Err(error) = spawned {
-        tracing::warn!("could not start preparing stack builds: {error}");
-        let pending = {
-            let mut line = state.stack_previews.preparing.lock().unwrap();
-            line.catalogs
-                .remove(database_id)
-                .map(|catalog| catalog.pending)
-                .unwrap_or_default()
-        };
-        for preparation in pending {
-            end_preparation(
-                state,
-                &preparation,
-                Err(format!("Could not start preparing the build: {error}")),
-            );
-        }
-    }
-}
-
-/// Frees a catalog's line if its runner ends any way but an empty line, so
-/// the next click starts another rather than waiting on a runner that is
-/// gone. What waits stays in the line for it.
-struct RunnerClaim<'a> {
-    state: &'a AppState,
-    database_id: &'a str,
-    released: bool,
-}
-
-impl Drop for RunnerClaim<'_> {
-    fn drop(&mut self) {
-        if self.released {
-            return;
-        }
-        let mut line = self
-            .state
-            .stack_previews
-            .preparing
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(catalog) = line.catalogs.get_mut(self.database_id) {
-            catalog.running = false;
-        }
-    }
-}
-
-fn serve_preparations(state: &Arc<AppState>, database_id: &str) {
-    let mut claim = RunnerClaim {
-        state,
-        database_id,
-        released: false,
+/// Preview one request: wait for its channels when it is a composition
+/// whose channels still build, then prepare it and queue what it became.
+/// A request whose storage is not readable yet is tried again later.
+fn prepare_one(state: &Arc<AppState>, preparation: Preparation) {
+    let Some(preparation) = wait_for_channels(state, preparation) else {
+        return;
     };
-    loop {
-        let Some(preparation) = ({
-            let mut line = state.stack_previews.preparing.lock().unwrap();
-            let catalog = line.catalogs.entry(database_id.to_string()).or_default();
-            let next = catalog.pending.pop_front();
-            if next.is_none() {
-                catalog.running = false;
-                claim.released = true;
-            }
-            next
-        }) else {
-            return;
-        };
-        let Some(preparation) = wait_for_channels(state, preparation) else {
-            continue;
-        };
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prepare_and_queue(state, &preparation)
-        }))
-        .unwrap_or_else(|_| Err("Preparing the build failed unexpectedly".into()));
-        if let Err(error) = &outcome
-            && preparation
-                .retry_until
-                .is_some_and(|until| Instant::now() < until)
-            && !preparation_stopped(state, &preparation)
-        {
-            tracing::info!("A queued stack build will be prepared again: {error}");
-            retry_later(state, preparation);
-            continue;
-        }
-        end_preparation(state, &preparation, outcome);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        prepare_and_queue(state, &preparation)
+    }))
+    .unwrap_or_else(|_| Err("Preparing the build failed unexpectedly".into()));
+    if let Err(error) = &outcome
+        && preparation
+            .retry_until
+            .is_some_and(|until| Instant::now() < until)
+        && !preparation_stopped(state, &preparation)
+    {
+        tracing::info!("A queued stack build will be prepared again: {error}");
+        retry_later(state, preparation);
+        return;
     }
+    end_preparation(state, &preparation, outcome);
 }
 
-/// Hold a composition back while its target's channels are queued, building
-/// or being prepared, so it composes from their new stacks; `None` once it
-/// waits. The check and the wait happen under the line's lock, which a
-/// build that ends takes to put it back, so no ending is missed.
+/// Hold a composition back while builds of its target's channels are
+/// queued, running or being prepared, so it composes from their new stacks.
+/// Returns `None` when the composition waits: it joins the quick lane,
+/// blocked by its target's channel keys, and goes back to its catalog's
+/// preparation line when no build holds them.
 fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Option<Preparation> {
     let What::Color(request) = &preparation.what else {
         return Some(preparation);
     };
     let manager = &state.stack_previews;
     let database_id = preparation.ctx.id.clone();
-    let target_id = request.target_id;
-    if preparation_stopped(state, &preparation)
-        || !manager.channels_pending(&database_id, preparation.project_id, target_id)
-    {
+    let keys = vec![
+        channel_key(&database_id, preparation.project_id, request.target_id),
+        project_channels_key(&database_id, preparation.project_id),
+    ];
+    if preparation_stopped(state, &preparation) || !manager.line.holds_any(&keys) {
         return Some(preparation);
     }
     // The stacks it names, as they stand before their channels rebuild.
@@ -509,34 +477,71 @@ fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Opt
             request,
         ));
     }
-    let mut line = manager.preparing.lock().unwrap();
-    if !manager.channels_pending(&database_id, preparation.project_id, target_id) {
-        return Some(preparation);
-    }
     manager.update_color(&preparation.job_id, |job| {
         job.phase = "Waiting for the channel builds to finish".into();
     });
-    line.waiting_for_channels
-        .entry(database_id)
-        .or_default()
-        .push(preparation);
+    // A person waits for these builds: automatic ones among them become
+    // the person's, so they run ahead of other automatic work and while
+    // the person's other work runs.
+    if !preparation.automatic {
+        for holder in manager.line.holders_of(&keys) {
+            if manager.is_automatic(&holder) {
+                manager.adopt(&holder);
+            }
+        }
+    }
+    let tier = super::tier_of(preparation.automatic);
+    let entry = super::Entry::new(
+        preparation.job_id.clone(),
+        super::Lane::Quick,
+        preparation.cancel.clone(),
+        Box::new(ChannelWait(preparation)),
+    )
+    .blocked_by(keys)
+    .tier(tier);
+    super::submit_entry(state, entry, None);
     None
+}
+
+/// A composition waiting in the quick lane for its target's channel builds.
+/// When the line runs it, no build holds the channels, and the composition
+/// goes back to its catalog's preparation line to be prepared from the new
+/// stacks. A stopped composition goes back too, and preparation ends it.
+struct ChannelWait(Preparation);
+
+impl super::Task for ChannelWait {
+    fn what(&self) -> &'static str {
+        "a color composition"
+    }
+
+    fn run(self: Box<Self>, state: &Arc<AppState>, _worker: &super::Worker<'_>) {
+        let mut preparation = self.0;
+        preparation.waited = true;
+        line_up(state, preparation);
+    }
+
+    fn stopped(self: Box<Self>, state: &Arc<AppState>) {
+        line_up(state, self.0);
+    }
 }
 
 /// Prepare it again in a minute, keeping its place and journal entry
 /// meanwhile. A stop leaves it in the journal for the next start.
 fn retry_later(state: &Arc<AppState>, preparation: Preparation) {
-    let state = Arc::clone(state);
-    tokio::spawn(async move {
-        if state.shutdown.sleep(journal::RETRY_EVERY).await {
-            line_up(&state, preparation);
-        }
-    });
+    let database_id = preparation.ctx.id.clone();
+    let due = Instant::now() + journal::RETRY_EVERY;
+    state
+        .stack_previews
+        .preparing
+        .catalogs
+        .request(state, &database_id, |queue| {
+            queue.retries.push((due, preparation))
+        });
 }
 
 /// Whether a preparation was stopped, or the server is stopping.
 fn preparation_stopped(state: &AppState, preparation: &Preparation) -> bool {
-    preparation.cancel.load(Ordering::Relaxed) || state.shutdown.is_stopping()
+    preparation.cancel.requested() || state.shutdown.is_stopping()
 }
 
 /// Prepare one request and queue what it became, or hand back the same
@@ -555,6 +560,7 @@ fn prepare_and_queue(
     let placement = Placement {
         automatic: preparation.automatic,
         slot: Some(&preparation.job_id),
+        preview: PreviewChannels::Single,
     };
     let (ctx, project_id) = (&preparation.ctx, preparation.project_id);
     let (request, split) = match &preparation.what {
@@ -600,6 +606,14 @@ fn prepare_and_queue(
             .stack_previews
             .get(&prepared.public.job_id)
             .is_none_or(|job| job.state == StackJobState::Preparing);
+        let placement = Placement {
+            preview: if split {
+                PreviewChannels::All
+            } else {
+                PreviewChannels::Single
+            },
+            ..placement.clone()
+        };
         let started = start_prepared(state, ctx, project_id, &part_request, prepared, placement)
             .map_err(|error| error.message())?;
         if new {
@@ -670,21 +684,15 @@ fn end_preparation(
             }),
         }
     }
-    // What it became holds its place now, unless it is one of them, queued
-    // in the line.
-    if manager.job_state(slot) != Some(StackJobState::Queued) || manager.is_quick(slot) {
-        manager.leave_line(slot);
-    }
-    manager.forget_cancel_of(slot, &preparation.cancel);
+    // What it became holds its place now; one prepared under the slot's
+    // own id took it.
+    manager.release_place(slot);
+    manager.forget_job_of(slot, &preparation.cancel);
     {
-        let mut line = manager.preparing.lock().unwrap();
-        if line.by_request.get(&preparation.request_key) == Some(&preparation.job_id) {
-            line.by_request.remove(&preparation.request_key);
+        let mut line = manager.preparing.by_request();
+        if line.get(&preparation.request_key) == Some(&preparation.job_id) {
+            line.remove(&preparation.request_key);
         }
-    }
-    // A build's preparation may have been what a composition waited on.
-    if matches!(preparation.what, What::Mono { .. }) {
-        release_waiting_colors(state, &preparation.ctx.id);
     }
 }
 
@@ -696,7 +704,7 @@ pub(super) struct Started {
 }
 
 /// Who a prepared build is for, and where it goes in the line.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub(super) struct Placement<'a> {
     /// The automatic refresh's, not a person's: it takes no build from
     /// the refresh and stops none.
@@ -704,6 +712,53 @@ pub(super) struct Placement<'a> {
     /// The place its request held while it was prepared; `None` joins the
     /// back of the line.
     pub(super) slot: Option<&'a str>,
+    /// Which channels the preview was prepared with, so the build is
+    /// prepared the same way at its turn and keeps its id.
+    pub(super) preview: PreviewChannels,
+}
+
+/// Which channels a build's preview was prepared with. A channel's id
+/// depends on its siblings' reference frames, so the build is prepared at
+/// its turn with the same set of channels.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum PreviewChannels {
+    /// The request alone (`prepare_job`).
+    #[default]
+    Single,
+    /// Every channel of the request (`prepare_channels` with no subset), as
+    /// Build stacks splits it.
+    All,
+    /// These channels of the request, as an automatic refresh plans them.
+    These(Vec<StackChannelKey>),
+}
+
+/// Prepare a build at its turn the way its preview was prepared. A request
+/// for one channel is prepared beside the same sibling channels, and the
+/// prepared build of that channel is returned.
+pub(super) fn prepare_like_preview(
+    ctx: &Arc<DatabaseContext>,
+    project_id: i32,
+    request: &StackPreviewRequest,
+    preview: &PreviewChannels,
+) -> Result<PreparedJob, AppError> {
+    let (Some(channel), Some(only)) = (
+        &request.channel,
+        match preview {
+            PreviewChannels::Single => None,
+            PreviewChannels::All => Some(None),
+            PreviewChannels::These(channels) => Some(Some(channels.as_slice())),
+        },
+    ) else {
+        return prepare_job(ctx, project_id, request);
+    };
+    let mut whole = request.clone();
+    whole.channel = None;
+    prepare_channels(ctx, project_id, &whole, only)?
+        .into_iter()
+        .find(|(part, _)| part.channel.as_ref() == Some(channel))
+        .map(|(_, prepared)| prepared)
+        .map_or_else(|| prepare_job(ctx, project_id, request), Ok)
 }
 
 /// Queue a prepared build, or hand back the same build already queued,
@@ -822,7 +877,14 @@ pub(super) fn start_prepared(
         &response,
         placement.automatic,
     );
-    enqueue_job(Arc::clone(state), prepared, origin, placement.slot);
+    enqueue_job(
+        Arc::clone(state),
+        prepared,
+        request,
+        origin,
+        placement.slot,
+        placement.preview,
+    );
     Ok(Started {
         job: response,
         cached: None,

@@ -12,6 +12,9 @@ pub mod calibration_quality;
 pub mod calibration_scope;
 pub mod calibration_settings;
 pub mod catalog_install;
+pub mod catalog_jobs;
+pub mod catalog_refresh;
+pub mod catalog_upkeep;
 pub mod database_context;
 pub mod director;
 pub mod embedded_static;
@@ -28,6 +31,9 @@ pub mod frame_shapes;
 pub mod frame_sites;
 pub mod handlers;
 pub mod import_job;
+pub mod job_line;
+pub mod job_text;
+pub mod jobs;
 pub mod master_cleanup;
 pub mod mcp;
 pub mod mosaic_scope;
@@ -36,14 +42,17 @@ pub mod page_build;
 pub mod pairing;
 pub mod peers;
 pub mod preview_queue;
+pub mod previews;
 pub mod processing_setups;
 pub mod quality_arrival;
 pub mod quality_backfill;
+pub mod quality_scans;
 pub mod reject_removal;
 pub mod remote_audit;
 pub mod remote_sync;
 pub mod remote_upload;
 pub mod remote_upload_layout;
+pub mod schedule;
 pub mod scheduler;
 pub mod shutdown;
 pub mod sky_coverage;
@@ -586,6 +595,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
         )
+        .route("/import/stop", post(handlers::stop_import_route))
         .route(
             "/calibrated-copies",
             get(handlers::get_calibrated_copies).put(handlers::update_calibrated_copies),
@@ -632,6 +642,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/export/server",
             post(handlers::start_server_export_route).get(handlers::get_server_export_progress),
+        )
+        .route(
+            "/export/server/stop",
+            post(handlers::stop_server_export_route),
         );
 
     // Top-level API: global endpoints + nested per-DB routes.
@@ -662,6 +676,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
                 )),
         )
         .route("/info", get(handlers::get_server_info))
+        .route("/jobs", get(jobs::get_jobs))
         .route("/stack-activity", get(stack_preview::get_stack_activity))
         .route(
             "/stack-activity/scheduled/skip",
@@ -760,6 +775,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
                 .post(handlers::start_astrometry_catalog_install),
         )
         .route(
+            "/astrometry/catalogs/install/stop",
+            post(handlers::stop_astrometry_catalog_install),
+        )
+        .route(
             "/databases",
             get(handlers::list_databases).post(handlers::add_database_route),
         )
@@ -771,6 +790,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/databases/import-ts", post(ts_sync::import_route))
         .route("/ts-sync", get(ts_sync::status_route))
         .route("/ts-sync/{job_id}/stop", post(ts_sync::stop_route))
+        .route("/previews/{kind}/{key}/stop", post(previews::stop_route))
         .route(
             "/databases/{db_id}/sync",
             post(handlers::sync_database_route),
@@ -865,6 +885,9 @@ pub fn api_router(state: Arc<AppState>) -> Router {
     // The MCP tools send their requests through this same router, as the
     // caller, so every gate the UI meets applies to an agent too.
     state.set_api_router(api_routes.clone());
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        state.set_runtime(runtime);
+    }
     api_routes
 }
 
@@ -1071,7 +1094,7 @@ async fn run_server_internal(
 
     // Release feeds are process-global. Refresh once now and then every 24
     // hours; browser reloads only read this cache through the API.
-    state.update_notices.start_refresh_loop();
+    state.update_notices.start_refresh_loop(&state);
 
     // For the job journal's last write at shutdown; the router takes `state`.
     let journal_state = Arc::clone(&state);
@@ -1107,11 +1130,12 @@ async fn run_server_internal(
     crate::server::backup_job::spawn(Arc::clone(&state));
     crate::server::director::spawn_collaboration(Arc::clone(&state));
 
-    // Build PSF Guard's query indexes on each configured catalog, once, off
-    // the request path and before cache refreshes start long-lived reads.
-    // Startup is the quietest moment: no PSF Guard import or database
-    // management is in flight. An external writer can still win the race; the
-    // short index attempt then skips safely. See `spawn_query_index_build`.
+    // Each catalog's upkeep (query indexes, then readout modes) on its
+    // runner, off the request path and before cache refreshes start
+    // long-lived reads. A database added or changed later asks again
+    // (`AppState::add_database`). Each step uses a short busy timeout, so a
+    // writer holding the catalog wins and the step waits for the next
+    // request.
     {
         let paths: Vec<String> = state
             .databases
@@ -1124,11 +1148,7 @@ async fn run_server_internal(
             })
             .unwrap_or_default();
         for path in paths {
-            crate::server::database_context::spawn_query_index_build(path.clone(), &state.shutdown);
-            crate::server::database_context::spawn_calibration_header_backfill(
-                path.clone(),
-                &state.shutdown,
-            );
+            crate::server::catalog_upkeep::start(&state, &path);
             // Frames imported before the catalog kept their sites: a rig
             // whose sites it reads is graded again and its flats planned
             // again as each chunk commits.
@@ -1165,16 +1185,11 @@ async fn run_server_internal(
     }
 
     // Keep the cache's volume under its limit, culling previews first.
-    {
-        let state_clone = Arc::clone(&state);
-        tokio::spawn(async move {
-            cache_budget::run(state_clone).await;
-        });
-    }
+    cache_budget::spawn(&state);
     // Remove superseded stacks in every database, not only those building.
-    tokio::spawn(stack_preview::run_janitor(Arc::clone(&state)));
+    stack_preview::spawn_janitor(&state);
     // Scan newly arrived frames where a database asks for it.
-    tokio::spawn(quality_arrival::run(Arc::clone(&state)));
+    quality_arrival::note_start(&state);
     frame_sites::spawn_away_watch(&state);
 
     // Start background image pre-generation if enabled
@@ -1374,7 +1389,7 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
             }
             // The cache volume is near its limit: previews made now would be
             // culled by the next pass and made again by the next scan.
-            if !cache_budget::room_for_previews(&ctx.cache_dir_path) {
+            if !cache_budget::room_for_previews(&state.cache_budget, &ctx.cache_dir_path) {
                 tracing::debug!(
                     "⏸️ Pre-generation paused (db={}): the cache volume is near its limit",
                     ctx.id
@@ -1468,7 +1483,7 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 }
                 // And as soon as the volume nears its limit, so one scan
                 // cannot write a whole catalog past it.
-                if !cache_budget::room_for_previews(&ctx.cache_dir_path) {
+                if !cache_budget::room_for_previews(&state.cache_budget, &ctx.cache_dir_path) {
                     yielded_early = true;
                     break;
                 }

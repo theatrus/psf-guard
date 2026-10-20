@@ -5,7 +5,7 @@ import { isAxiosError } from 'axios';
 import { apiClient } from '../api/client';
 import type { RejectRemovalPlan, RejectRemovalStatus } from '../api/types';
 import Dialog from './Dialog';
-import { rejectRemovalKey, rejectRemovalLabel, rejectRemovalPollMs, rejectRemovalTitle } from './rejectRemovalJob';
+import { rejectRemovalKey, rejectRemovalPollMs } from './rejectRemovalJob';
 import './RejectRemovalControls.css';
 
 const DEFAULT_DAYS = 7;
@@ -152,7 +152,7 @@ export default function RejectRemovalControls({ dbId, canManage }: { dbId: strin
         </button>
       </div>
       {running && status && <div className="reject-removal-progress" role="status" aria-label="Reject removal progress">
-        <span>{rejectRemovalTitle(status)} · {rejectRemovalLabel(status)}</span>
+        <span>{status.title} · {status.label}</span>
         <button type="button" className="browse-button" disabled={stop.isPending} onClick={() => stop.mutate()}
           title="Stop between frames: the frames already done stay done">
           Stop

@@ -789,9 +789,17 @@ describe('CalibrationPage', () => {
         plans += 1;
         return applied ? report(`t${plans}`, []) : report(`t${plans}`);
       };
+      // The words the server sends with each stage.
+      const verbs: Record<string, string> = {
+        checking_files: 'Checking files', comparing_copies: 'Comparing copies', merging: 'Merging',
+      };
       const begin = (action: 'check' | 'repair', stage: string, total: number, then: () => void) => {
+        const done = Math.floor(total / 2);
         status = {
-          ...status, state: 'running', action, stage, done: Math.floor(total / 2), total,
+          ...status, state: 'running', action, stage, done, total,
+          title: action === 'repair' ? 'Repairing duplicates' : 'Checking for duplicates',
+          label: `${verbs[stage]} ${done.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`,
+          percent: (100 * done) / total,
           run: (status.run as number) + 1, changed: null, error: null,
         };
         finish = then;

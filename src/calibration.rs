@@ -5766,7 +5766,7 @@ fn build_fraction(
 #[derive(Clone, Default)]
 pub(crate) struct MasterBuildWatch {
     pub report: Option<std::sync::Arc<dyn Fn(MasterBuildProgress) + Send + Sync>>,
-    pub stop: Option<std::sync::Arc<AtomicBool>>,
+    pub stop: Option<crate::concurrency::Stop>,
     /// Builds started so far, shared by every clone of the watch.
     pub builds: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -10618,20 +10618,20 @@ pub(crate) mod tests {
         }
         let build = |cache: &Path, stop_at: Option<usize>| {
             let reports = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-            let stop = std::sync::Arc::new(AtomicBool::new(false));
+            let stop = crate::concurrency::Stop::new();
             let watch = MasterBuildWatch {
                 report: Some({
                     let reports = std::sync::Arc::clone(&reports);
-                    let stop = std::sync::Arc::clone(&stop);
+                    let stop = stop.clone();
                     std::sync::Arc::new(move |progress: MasterBuildProgress| {
                         let mut reports = reports.lock().unwrap();
                         reports.push(progress);
                         if Some(reports.len()) == stop_at {
-                            stop.store(true, Ordering::Relaxed);
+                            stop.request();
                         }
                     })
                 }),
-                stop: Some(std::sync::Arc::clone(&stop)),
+                stop: Some(stop.clone()),
                 ..Default::default()
             };
             let plan = resolve_or_build_master_plan_with_options(
@@ -10639,7 +10639,7 @@ pub(crate) mod tests {
                 cache,
                 std::slice::from_ref(&light_path),
                 None,
-                Some(&stop),
+                Some(stop.as_flag()),
                 CalibrationPlanOptions {
                     mode: CalibrationMode::Auto,
                     pinned: &[],
@@ -13879,17 +13879,17 @@ pub(crate) mod tests {
         let temp = tempfile::tempdir().unwrap();
         let (conn, cache, light) =
             spotted_flat_library(&temp, 6, |index| if index < 4 { 0.5 } else { 1.0 }, 0);
-        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = crate::concurrency::Stop::new();
         let watch = MasterBuildWatch {
             report: Some({
-                let stop = std::sync::Arc::clone(&stop);
+                let stop = stop.clone();
                 std::sync::Arc::new(move |progress: MasterBuildProgress| {
                     if progress.kind == CalibrationKind::Flat && progress.total == 4 {
-                        stop.store(true, Ordering::Relaxed);
+                        stop.request();
                     }
                 })
             }),
-            stop: Some(std::sync::Arc::clone(&stop)),
+            stop: Some(stop.clone()),
             ..Default::default()
         };
         let plan = resolve_or_build_master_plan_with_options(
@@ -13897,7 +13897,7 @@ pub(crate) mod tests {
             &cache,
             std::slice::from_ref(&light),
             None,
-            Some(&stop),
+            Some(stop.as_flag()),
             CalibrationPlanOptions {
                 mode: CalibrationMode::Auto,
                 pinned: &[],
@@ -13905,7 +13905,7 @@ pub(crate) mod tests {
                 watch,
             },
         );
-        assert!(stop.load(Ordering::Relaxed), "the retry must have started");
+        assert!(stop.requested(), "the retry must have started");
         // The flat is the last master, so the plan may come back without it;
         // the stack sees its stop flag next and stops the channel.
         if let Ok(plan) = &plan {

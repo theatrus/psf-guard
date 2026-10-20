@@ -81,7 +81,7 @@ fn response(state: &AppState) -> StorageSettingsResponse {
             .map(|_| cache_budget::limit_for(StorageKind::Calibration)),
         default_max_volume_percent: cache_budget::DEFAULT_MAX_VOLUME_PERCENT,
         min_max_volume_percent: cache_budget::MIN_MAX_VOLUME_PERCENT,
-        volumes: cache_budget::last_reports(),
+        volumes: cache_budget::last_reports(&state.cache_budget),
         folders,
         folder_notes: status.notes,
         can_choose_folders: registry.is_some(),
@@ -188,7 +188,7 @@ pub async fn update_storage_settings(
         tokio::task::spawn_blocking(move || cache_budget::pass_after_limit_change(&state_for_pass))
             .await
             .map_err(|error| AppError::InternalError(format!("storage check failed: {error}")))?;
-    cache_budget::record(reports);
+    cache_budget::record(&state.cache_budget, reports);
     Ok(Json(ApiResponse::success(response(&state))))
 }
 

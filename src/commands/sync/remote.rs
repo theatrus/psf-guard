@@ -56,6 +56,9 @@ pub struct RemoteSyncOptions {
     /// Show what would change and stop.
     pub dry_run: bool,
     pub with_image_data: bool,
+    /// Interrupts the local merge of a pull. The caller drops the future to
+    /// stop a request to the peer.
+    pub stop: crate::concurrency::Stop,
 }
 
 pub struct RemoteSyncOutcome {
@@ -132,27 +135,40 @@ async fn pull_from(
         .suffix(".sqlite")
         .tempfile()
         .context("creating a staging file for the peer's bundle")?;
-    let staged_path = staged.path().to_path_buf();
-    materialize(&bundle, &staged_path, &options.local_path)
-        .context("staging the peer's bundle as a scheduler database")?;
+    let (local_path, dry_run, with_image_data, stop) = (
+        options.local_path.clone(),
+        options.dry_run,
+        options.with_image_data,
+        options.stop.clone(),
+    );
+    // Staging and merging are SQLite work: off the async runtime.
+    tokio::task::spawn_blocking(move || {
+        let staged_path = staged.path().to_path_buf();
+        materialize(&bundle, &staged_path, &local_path)
+            .context("staging the peer's bundle as a scheduler database")?;
 
-    let source =
-        open_scheduler_connection_with_flags(&staged_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context("opening the staged bundle")?;
-    let destination = open_local(&options.local_path, options.dry_run)?;
-    require_pull_capable(&source).context("the peer's catalog")?;
-    require_pull_capable(&destination).context("the local database")?;
+        let source =
+            open_scheduler_connection_with_flags(&staged_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .context("opening the staged bundle")?;
+        let destination = open_local(&local_path, dry_run)?;
+        stop.interrupts(&source);
+        stop.interrupts(&destination);
+        require_pull_capable(&source).context("the peer's catalog")?;
+        require_pull_capable(&destination).context("the local database")?;
 
-    let summary = sync_pull(
-        &source,
-        &destination,
-        &PullOptions {
-            dry_run: options.dry_run,
-            with_image_data: options.with_image_data,
-            project_filter: None,
-        },
-    )?;
-    Ok(pull_summary(&summary))
+        let summary = sync_pull(
+            &source,
+            &destination,
+            &PullOptions {
+                dry_run,
+                with_image_data,
+                project_filter: None,
+            },
+        )?;
+        Ok(pull_summary(&summary))
+    })
+    .await
+    .context("the merge task")?
 }
 
 /// Here → peer. The peer reviews and holds the preview; nothing is written

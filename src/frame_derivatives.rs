@@ -1188,6 +1188,7 @@ pub fn pair_files_on_disk(
     conn: &mut Connection,
     files: &[std::path::PathBuf],
     checked: &mut HashMap<std::path::PathBuf, FileStamp>,
+    keep_going: impl Fn() -> bool,
 ) -> Result<PairingReport> {
     let files: Vec<std::path::PathBuf> = files
         .iter()
@@ -1214,9 +1215,12 @@ pub fn pair_files_on_disk(
     if fresh.is_empty() {
         return Ok(PairingReport::default());
     }
+    // A stop ends the header reads; the headers already read are paired.
     let frames: Vec<crate::commands::import::headers::FrameMeta> = fresh
         .iter()
-        .map(|path| crate::commands::import::headers::read_frame_meta(path))
+        .map_while(|path| {
+            keep_going().then(|| crate::commands::import::headers::read_frame_meta(path))
+        })
         .collect();
     for frame in &frames {
         if !(frame.class.kind.is_derivative() && frame.is_light()) {
@@ -1814,7 +1818,7 @@ mod tests {
 
         let files = vec![raw.clone(), calibrated.clone(), lookalike.clone()];
         let mut checked = HashMap::new();
-        let report = pair_files_on_disk(&mut conn, &files, &mut checked).unwrap();
+        let report = pair_files_on_disk(&mut conn, &files, &mut checked, || true).unwrap();
         assert_eq!(report.paired, 1);
         assert_eq!(checked.len(), 1, "the lookalike is remembered as read");
         assert!(checked.contains_key(&lookalike));
@@ -1828,12 +1832,42 @@ mod tests {
         assert!(records[0].size.is_some());
 
         // Nothing new on the next pass: no header is read again.
-        let again = pair_files_on_disk(&mut conn, &files, &mut checked).unwrap();
+        let again = pair_files_on_disk(&mut conn, &files, &mut checked, || true).unwrap();
         assert_eq!(again, PairingReport::default());
         let lights: i64 = conn
             .query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))
             .unwrap();
         assert_eq!(lights, 1, "the pass never adds a light");
+    }
+
+    #[test]
+    fn a_stopped_pass_reads_no_more_headers() {
+        let folder = tempfile::tempdir().unwrap();
+        let raw = write_light(folder.path(), "frame_0115.fits", 16, &[]);
+        let calibrated = write_light(folder.path(), "frame_0115_c.fits", -32, &[]);
+        let mut conn = Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        let frames = crate::commands::import::scan_frames(std::slice::from_ref(&raw));
+        crate::commands::import::import_frames(
+            &mut conn,
+            frames,
+            &crate::commands::import::ImportOptions::default(),
+        )
+        .unwrap();
+
+        let mut checked = HashMap::new();
+        let report = pair_files_on_disk(
+            &mut conn,
+            std::slice::from_ref(&calibrated),
+            &mut checked,
+            || false,
+        )
+        .unwrap();
+        assert_eq!(report, PairingReport::default());
+        assert!(checked.is_empty(), "no header was read");
+        // The next pass pairs it.
+        let report = pair_files_on_disk(&mut conn, &[calibrated], &mut checked, || true).unwrap();
+        assert_eq!(report.paired, 1);
     }
 
     #[test]

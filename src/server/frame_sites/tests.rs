@@ -12,13 +12,13 @@ fn requests_settle_and_unfinished_passes_wait_longer_each_time() {
     let mut queue = Queue::default();
     assert_eq!(queue.next_step(start), Step::Exit);
     queue.add(start);
-    assert!(matches!(queue.next_step(start), Step::Nap(_)), "settling");
-    assert_eq!(queue.next_step(start + SETTLE), Step::Run);
+    assert!(matches!(queue.next_step(start), Step::Sleep(_)), "settling");
+    assert_eq!(queue.next_step(start + SETTLE), Step::Run(()));
     // The volume was away: tried again a minute later, then two.
     let now = start + SETTLE;
     assert!(queue.retry(now));
-    assert!(matches!(queue.next_step(now), Step::Nap(_)));
-    assert_eq!(queue.next_step(now + RETRY_FIRST), Step::Run);
+    assert!(matches!(queue.next_step(now), Step::Sleep(_)));
+    assert_eq!(queue.next_step(now + RETRY_FIRST), Step::Run(()));
     assert!(queue.retry(now));
     assert_eq!(queue.due, Some(now + RETRY_FIRST * 2));
     for _ in 2..RETRY_LIMIT {
@@ -44,7 +44,7 @@ fn the_watch_respects_stop_and_a_waiting_retry() {
     // A retry waits after an unfinished pass: the watch leaves it be.
     let mut queue = Queue::default();
     queue.add(now);
-    assert_eq!(queue.next_step(now + SETTLE), Step::Run);
+    assert_eq!(queue.next_step(now + SETTLE), Step::Run(()));
     assert!(queue.retry(now));
     assert!(queue.retry(now));
     let due = queue.due;
@@ -54,7 +54,7 @@ fn the_watch_respects_stop_and_a_waiting_retry() {
     let mut queue = Queue::default();
     queue.nudge(now);
     assert!(queue.pending);
-    assert_eq!(queue.next_step(now + SETTLE), Step::Run);
+    assert_eq!(queue.next_step(now + SETTLE), Step::Run(()));
 }
 
 /// A stopped job is not started by the watch's request either.
@@ -64,14 +64,14 @@ fn the_watch_starts_no_runner_for_a_stopped_job() {
     let (path, _files) = library(temp.path(), 1);
     let state = test_state();
     {
-        let job = job(&path);
+        let job = job(&state, &path);
         let mut queue = job.queue();
         queue.stopped = true;
     }
     nudge(&state, &path);
-    let job = job(&path);
+    let job = job(&state, &path);
     let queue = job.queue();
-    assert!(!queue.worker && !queue.pending && queue.stopped);
+    assert!(!queue.has_runner() && !queue.pending && queue.stopped);
 }
 
 #[test]
@@ -90,16 +90,17 @@ fn stop_pauses_until_resume_or_a_change() {
 /// says so.
 #[test]
 fn the_status_says_when_another_pass_waits() {
+    let state = test_state();
     let path = "/next-pass/frame-sites.sqlite";
-    let job = job(path);
+    let job = job(&state, path);
     job.queue().running = true;
-    assert!(!status(path).next_pass);
+    assert!(!status(&state, path).next_pass);
     job.queue().add(Instant::now());
-    let running = status(path);
+    let running = status(&state, path);
     assert_eq!(running.state, "running");
     assert!(running.next_pass);
     job.queue().running = false;
-    let queued = status(path);
+    let queued = status(&state, path);
     assert_eq!(queued.state, "queued");
     assert!(!queued.next_pass, "only behind a pass under way");
     job.queue().pending = false;
@@ -165,8 +166,8 @@ fn a_volume_away_is_tried_again_and_its_frames_read_once_back() {
         std::fs::rename(file, away.join(file.file_name().unwrap())).unwrap();
     }
     job.queue().running = true;
-    run_logged(&state, &path, &job);
-    let last = job.status.read().unwrap().clone();
+    run_logged(&state, &path, &job, &Stop::new());
+    let last = job.status().clone();
     assert!(last.last.as_ref().unwrap().volume_away);
     assert!(last.last_error.is_some());
     assert_eq!(job.queue().attempts, 1);
@@ -189,15 +190,17 @@ fn a_volume_away_is_tried_again_and_its_frames_read_once_back() {
         std::fs::rename(away.join(file.file_name().unwrap()), file).unwrap();
     }
     job.queue().running = true;
-    run_logged(&state, &path, &job);
-    let done = job.status.read().unwrap().clone();
+    run_logged(&state, &path, &job, &Stop::new());
+    let done = job.status().clone();
     let outcome = done.last.unwrap();
     assert_eq!((outcome.clocked, outcome.volume_away), (3, false));
     assert_eq!((done.done, done.total), (3, 3));
     assert_eq!(done.last_error, None);
     assert_eq!(job.queue().attempts, 0);
     // Its rig went to flat measuring, which waits for grading.
-    assert!(!crate::server::flat_measure::status(&path).rigs.is_empty());
+    assert!(!crate::server::flat_measure::status(&state, &path)
+        .rigs
+        .is_empty());
 }
 
 fn wait_until(what: &str, done: impl Fn() -> bool) {
@@ -219,15 +222,20 @@ fn the_runner_exits_when_idle_and_starts_again_on_request() {
     let (path, _files) = library(temp.path(), 2);
     let state = test_state();
     queue(&state, &path);
-    assert!(job(&path).queue().worker);
-    wait_until("the runner never let go", || !job(&path).queue().worker);
-    let done = status(&path);
+    assert!(job(&state, &path).queue().has_runner());
+    wait_until("the runner never let go", || {
+        !job(&state, &path).queue().has_runner()
+    });
+    let done = status(&state, &path);
     assert_eq!(done.state, "idle");
     assert_eq!(done.last.unwrap().clocked, 2);
     queue(&state, &path);
-    assert!(job(&path).queue().worker, "a new request starts a runner");
+    assert!(
+        job(&state, &path).queue().has_runner(),
+        "a new request starts a runner"
+    );
     wait_until("the second runner never let go", || {
-        !job(&path).queue().worker
+        !job(&state, &path).queue().has_runner()
     });
 }
 
@@ -240,30 +248,27 @@ fn the_runner_ends_with_the_server() {
     queue(&state, &path);
     state.shutdown.begin();
     wait_until("the runner outlived the server", || {
-        !job(&path).queue().worker
+        !job(&state, &path).queue().has_runner()
     });
     queue(&state, &path);
-    assert!(!job(&path).queue().worker);
+    assert!(!job(&state, &path).queue().has_runner());
 }
 
-/// A runner that panics lets go of its claim, so the next request starts
-/// another, and says it stopped.
+/// When the runner thread fails, the status shows an error and no pass is
+/// running.
 #[test]
-fn a_runner_that_panics_lets_go() {
-    let job = Job::default();
-    {
-        let mut queue = job.queue();
-        queue.worker = true;
-        queue.running = true;
-    }
-    drop(RunnerClaim {
-        job: &job,
-        released: false,
-    });
-    let queue = job.queue();
-    assert!(!queue.worker && !queue.running);
-    drop(queue);
-    assert!(job.status.read().unwrap().last_error.is_some());
+fn a_failed_runner_reports_an_error() {
+    let mut queue = Queue {
+        running: true,
+        ..Queue::default()
+    };
+    let mut status = FrameSitesStatus {
+        active: true,
+        ..FrameSitesStatus::default()
+    };
+    FrameSites::runner_failed(&mut queue, &mut status);
+    assert!(!queue.running && !status.active);
+    assert!(status.last_error.is_some());
 }
 
 /// Stop during a pass ends it at its next chunk and pauses it, unless a
@@ -278,10 +283,11 @@ fn stop_during_a_pass_pauses_it_unless_a_change_came_after() {
     let state = test_state();
     let job = Job::default();
     job.queue().running = true;
-    job.cancelled.store(true, Ordering::SeqCst);
-    run_logged(&state, &path, &job);
+    let stopped = Stop::new();
+    stopped.request();
+    run_logged(&state, &path, &job, &stopped);
     assert!(job.queue().stopped);
-    assert_eq!(job.status.read().unwrap().last.as_ref().unwrap().done, 0);
+    assert_eq!(job.status().last.as_ref().unwrap().done, 0);
     // Stopped, then an import: the import's request runs.
     let job = Job::default();
     {
@@ -289,8 +295,7 @@ fn stop_during_a_pass_pauses_it_unless_a_change_came_after() {
         queue.running = true;
         queue.pending = true;
     }
-    job.cancelled.store(true, Ordering::SeqCst);
-    run_logged(&state, &path, &job);
+    run_logged(&state, &path, &job, &stopped);
     let queue = job.queue();
     assert!(!queue.stopped && queue.pending);
 }

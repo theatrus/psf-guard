@@ -53,6 +53,7 @@ fn build_app(state: Arc<AppState>) -> Router {
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
         )
+        .route("/import/stop", post(handlers::stop_import_route))
         .route("/export", get(handlers::export_archive_route))
         .route("/export/local", post(handlers::export_local_route));
 
@@ -495,6 +496,106 @@ async fn import_dry_run_writes_nothing() {
         .query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))
         .unwrap();
     assert_eq!(rows, 0, "dry run must not write");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_newest_import_request_replaces_a_preview_and_stop_rolls_back() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("lights");
+    std::fs::create_dir_all(&images).unwrap();
+    write_fits(
+        &images.join("m45_l_0001.fits"),
+        "M45",
+        "L",
+        "2026-03-01T02:00:00.000",
+        56.75,
+    );
+    let state = state_with_management(dir.path());
+    let empty_dir = dir.path().join("empty");
+    std::fs::create_dir_all(&empty_dir).unwrap();
+    let (_, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "Latest",
+            "image_dirs": [empty_dir.to_string_lossy()],
+            "backfill": false,
+        })),
+    )
+    .await;
+    let slug = body["data"]["database"]["id"].as_str().unwrap().to_string();
+    let db_path = body["data"]["database"]["database_path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_for_import(&state, &slug).await;
+
+    let import = |dry_run: bool| {
+        let (state, slug, images) = (state.clone(), slug.clone(), images.clone());
+        async move {
+            let (status, body) = json_request(
+                build_app(state),
+                "POST",
+                &format!("/api/db/{slug}/import"),
+                Some(serde_json::json!({
+                    "image_dirs": [images.to_string_lossy()],
+                    "dry_run": dry_run,
+                    "backfill": false,
+                })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            body["data"]["started"].as_bool().unwrap()
+        }
+    };
+    // Hold the import lock, so each run waits where it can be replaced.
+    let ctx = state.get_database(&slug).unwrap();
+    let hold = ctx.image_import_mutex.clone().lock_owned().await;
+
+    assert!(import(true).await);
+    assert!(import(true).await, "a newer preview replaces the first");
+    let previews = state.previews.running();
+    assert_eq!(previews.len(), 1, "{previews:?}");
+    assert!(import(false).await, "an import replaces the preview");
+    let (_, body) = json_request(
+        build_app(state.clone()),
+        "GET",
+        &format!("/api/db/{slug}/import"),
+        None,
+    )
+    .await;
+    let progress = &body["data"]["progress"];
+    assert!(
+        progress["running"] == true && progress["preview"] == false,
+        "{progress}"
+    );
+    assert!(!import(true).await, "a preview never replaces an import");
+
+    // Stop the import before it writes; the catalog stays as it was.
+    let (_, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        &format!("/api/db/{slug}/import/stop"),
+        None,
+    )
+    .await;
+    assert_eq!(body["data"], true);
+    drop(hold);
+    let progress = wait_for_import(&state, &slug).await;
+    assert_eq!(progress["stage"], "error", "{progress}");
+    assert_eq!(progress["preview"], false);
+    // Stop reaches the run queued or under way, depending on whether its
+    // runner has taken it; both messages say the import stopped.
+    assert!(
+        progress["error"].as_str().unwrap().contains("stopped"),
+        "{progress}"
+    );
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(rows, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

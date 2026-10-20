@@ -39,20 +39,20 @@ use axum::{
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::calibration::{
     self, CheckStage, Checking, DuplicateReport, FileAccess, RepairError, RepairLockError,
     RepairOutcome, TwinGroup,
 };
-use crate::concurrency::{plan_workers, Priority};
+use crate::concurrency::{plan_workers, Priority, Stop};
 use crate::server::api::ApiResponse;
 use crate::server::calibration_browser::ReadableRoots;
 use crate::server::database_context::DatabaseContext;
 use crate::server::extract::DbContext;
 use crate::server::handlers::{require_database_management_allowed, AppError};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::state::AppState;
 
 /// The stages a status names, for the page's words.
@@ -72,6 +72,13 @@ pub struct DuplicateJobStatus {
     /// `idle` before the first run, `running`, then `done`, `stopped` or
     /// `failed`.
     pub state: String,
+    /// What the run is, as pages and the header name it: `Checking for
+    /// duplicates` or `Repairing duplicates`.
+    pub title: String,
+    /// The run's stage and count, such as `Merging 37 of 203`.
+    pub label: String,
+    /// 0–100 for the run's stage, or `None` before its size is known.
+    pub percent: Option<f64>,
     /// `check` or `repair`: what runs, or ran last.
     pub action: Option<String>,
     /// [`STAGE_FILES`], [`STAGE_COPIES`] or [`STAGE_MERGING`], while it runs.
@@ -132,36 +139,77 @@ pub struct PlanChange {
     pub altered_count: usize,
 }
 
+/// The duplicate check and repair, run on one thread per catalog.
+pub(crate) struct Duplicates;
+
+type Job = CatalogJob<Duplicates>;
+
+/// The catalog's duplicate run. Only one run per catalog is active at a time.
 #[derive(Default)]
-struct Job {
-    status: RwLock<DuplicateJobStatus>,
-    stop: AtomicBool,
-    /// Whether a person asked for the run: it runs at `Interactive`. A
+pub(crate) struct Queue {
+    /// The requested run, until the runner thread starts it.
+    pending: Option<(Action, Arc<DatabaseContext>)>,
+    /// Whether a run is pending or running. A second request fails with a
+    /// conflict until the run ends.
+    run_active: bool,
+    /// Whether a person requested the run, which then runs at `Interactive`. A
     /// background check a person joins turns interactive at its next step.
-    interactive: AtomicBool,
-    /// Whether the catalog's one runner is at work.
-    busy: Mutex<bool>,
+    interactive: bool,
     /// Holds a run at its next step until released or stopped, so a test
     /// can stop it there.
     #[cfg(test)]
-    hold: AtomicBool,
+    hold: bool,
 }
 
-impl Job {
+impl CatalogWork for Duplicates {
+    type Queue = Queue;
+    type Status = DuplicateJobStatus;
+    type Item = (Action, Arc<DatabaseContext>);
+    const RUNNER: &'static str = "calibration-duplicates";
+    /// Shutdown does not wait for a check, which stops at once. A repair
+    /// registers its own shutdown hold around its write.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Self::Item> {
+        queue.pending.take().map_or(Step::Exit, Step::Run)
+    }
+
+    fn run(state: &Arc<AppState>, _: &str, job: &Job, (action, ctx): Self::Item, stop: &Stop) {
+        run(state, &ctx, &CurrentRun { job, stop }, &action);
+    }
+
+    fn runner_failed(queue: &mut Queue, status: &mut DuplicateJobStatus) {
+        queue.pending = None;
+        queue.run_active = false;
+        if status.state == "running" {
+            status.state = "failed".into();
+            status.stage = None;
+            status.error = Some("the run ended unexpectedly".into());
+        }
+    }
+}
+
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.duplicates.job(path)
+}
+
+/// The running check or repair, and its stop flag.
+struct CurrentRun<'a> {
+    job: &'a Job,
+    stop: &'a Stop,
+}
+
+impl CurrentRun<'_> {
     fn status(&self) -> DuplicateJobStatus {
-        self.status
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        self.job.status()
     }
 
     fn update(&self, change: impl FnOnce(&mut DuplicateJobStatus)) {
-        change(
-            &mut self
-                .status
-                .write()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        );
+        self.job.update(change);
+    }
+
+    fn interactive(&self) -> bool {
+        self.job.queue().interactive
     }
 
     fn progress(&self, stage: &str, done: usize, total: usize) {
@@ -176,17 +224,10 @@ impl Job {
             status.total = total;
         });
         #[cfg(test)]
-        while self.hold.load(Ordering::SeqCst) && !self.stop.load(Ordering::SeqCst) {
+        while self.job.queue().hold && !self.stop.requested() {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
-}
-
-static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
-
-fn job(path: &str) -> Arc<Job> {
-    let mut jobs = JOBS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    Arc::clone(jobs.entry(path.to_string()).or_default())
 }
 
 fn now() -> i64 {
@@ -194,30 +235,59 @@ fn now() -> i64 {
 }
 
 /// Where the duplicate check or repair stands for the catalog at `path`.
-pub fn status(path: &str) -> DuplicateJobStatus {
-    let mut status = job(path).status();
+pub fn status(state: &AppState, path: &str) -> DuplicateJobStatus {
+    let mut status = job(state, path).status();
     if status.state.is_empty() {
         status.state = "idle".into();
     }
+    status.title = title(status.action.as_deref()).into();
+    status.label = label(status.stage.as_deref(), status.done, status.total);
+    status.percent = crate::server::job_text::percent(status.done, status.total);
     status
+}
+
+/// What a run is: `Checking for duplicates` or `Repairing duplicates`.
+pub fn title(action: Option<&str>) -> &'static str {
+    if action == Some("repair") {
+        "Repairing duplicates"
+    } else {
+        "Checking for duplicates"
+    }
+}
+
+/// A run's stage and count, such as `Merging 37 of 203`.
+pub fn label(stage: Option<&str>, done: usize, total: usize) -> String {
+    let verb = match stage {
+        Some(STAGE_COPIES) => "Comparing copies",
+        Some(STAGE_MERGING) => "Merging",
+        _ => "Checking files",
+    };
+    crate::server::job_text::stage_count(verb, done, total)
 }
 
 /// Stop: a check ends at its next file, a repair at its next exposure,
 /// rolled back whole.
-pub fn stop(path: &str) -> DuplicateJobStatus {
-    let job = job(path);
-    if *job
-        .busy
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-    {
-        job.stop.store(true, Ordering::SeqCst);
-    }
-    status(path)
+pub fn stop(state: &AppState, path: &str) -> DuplicateJobStatus {
+    let job = job(state, path);
+    job.stop(|queue| {
+        // A run that is pending, and not started by the runner thread, is
+        // removed so it never starts. The stop of a running run, or of one
+        // that is finishing, is requested as well.
+        if queue.pending.take().is_some() {
+            queue.run_active = false;
+            job.update(|status| {
+                status.state = "stopped".into();
+                status.stage = None;
+                status.priority = None;
+                status.finished_at = Some(now());
+            });
+        }
+    });
+    status(state, path)
 }
 
 #[derive(Debug, Clone)]
-enum Action {
+pub(crate) enum Action {
     /// `automatic` when a page starts it on its own.
     Check {
         automatic: bool,
@@ -277,106 +347,63 @@ fn open_read_only(path: &str) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-/// Frees the runner if a run ends by a panic, or never starts. A run that
-/// ends as it should frees the runner itself, as it says so.
-struct RunnerClaim(Option<Arc<Job>>);
-
-impl RunnerClaim {
-    /// The run ended as it should, and freed the runner itself.
-    fn disarm(mut self) {
-        self.0 = None;
-    }
-}
-
-impl Drop for RunnerClaim {
-    fn drop(&mut self) {
-        if let Some(job) = self.0.take() {
-            *job.busy
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = false;
-            job.update(|status| {
-                if status.state == "running" {
-                    status.state = "failed".into();
-                    status.stage = None;
-                    status.error = Some("the run ended unexpectedly".into());
-                }
-            });
-        }
-    }
-}
-
-/// Start a run on the catalog's runner. A check asked for while a check
-/// runs joins it; anything else asked for while one runs is refused.
+/// Start a run on the catalog's runner thread. A check requested while a
+/// check runs joins that check. Any other request while a run is active
+/// fails with a conflict.
 fn start(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
     action: Action,
 ) -> Result<DuplicateJobStatus, AppError> {
-    let job = job(&ctx.database_path);
-    {
-        let mut busy = job
-            .busy
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if *busy {
-            let running = job.status();
-            if matches!(action, Action::Check { .. }) && running.action.as_deref() == Some("check")
-            {
-                // A person joining a background check lifts it.
-                if !action.automatic() {
-                    job.interactive.store(true, Ordering::SeqCst);
+    let job = job(state, &ctx.database_path);
+    state
+        .catalog_jobs
+        .duplicates
+        .request(state, &ctx.database_path, |queue| {
+            if queue.run_active {
+                let running = job.status();
+                if matches!(action, Action::Check { .. })
+                    && running.action.as_deref() == Some("check")
+                {
+                    // A person joining a background check lifts it.
+                    if !action.automatic() {
+                        queue.interactive = true;
+                    }
+                    return Ok(());
                 }
-                return Ok(running);
+                return Err(AppError::Conflict(format!(
+                    "A duplicate {} is running on this catalog. Wait for it, or stop it.",
+                    running.action.as_deref().unwrap_or("check")
+                )));
             }
-            return Err(AppError::Conflict(format!(
-                "A duplicate {} is running on this catalog. Wait for it, or stop it.",
-                running.action.as_deref().unwrap_or("check")
-            )));
-        }
-        // Cleared under the runner's lock, so a Stop that comes as the run
-        // starts, which takes the same lock, is never lost.
-        job.stop.store(false, Ordering::SeqCst);
-        job.interactive.store(!action.automatic(), Ordering::SeqCst);
-        *busy = true;
-        job.update(|status| {
-            status.run += 1;
-            status.state = "running".into();
-            status.action = Some(action.name().into());
-            status.stage = Some(STAGE_FILES.into());
-            status.done = 0;
-            status.total = 0;
-            status.started_at = Some(now());
-            status.finished_at = None;
-            status.changed = None;
-            status.error = None;
-            status.waiting_for = None;
-            status.priority = Some(
-                if action.automatic() {
-                    Priority::Background
-                } else {
-                    Priority::Interactive
-                }
-                .label()
-                .into(),
-            );
-        });
-    }
-    let claim = RunnerClaim(Some(Arc::clone(&job)));
-    let (state_for_run, ctx_for_run, job_for_run) =
-        (Arc::clone(state), Arc::clone(ctx), Arc::clone(&job));
-    let spawned = std::thread::Builder::new()
-        .name("calibration-duplicates".into())
-        .spawn(move || {
-            let claim = claim;
-            run(&state_for_run, &ctx_for_run, &job_for_run, &action);
-            claim.disarm();
-        });
-    if let Err(error) = spawned {
-        // The closure, and with it the claim, was dropped: the runner is
-        // free and the status failed.
-        tracing::warn!("could not start a duplicate check or repair: {error}");
-    }
-    Ok(job.status())
+            queue.interactive = !action.automatic();
+            queue.run_active = true;
+            job.update(|status| {
+                status.run += 1;
+                status.state = "running".into();
+                status.action = Some(action.name().into());
+                status.stage = Some(STAGE_FILES.into());
+                status.done = 0;
+                status.total = 0;
+                status.started_at = Some(now());
+                status.finished_at = None;
+                status.changed = None;
+                status.error = None;
+                status.waiting_for = None;
+                status.priority = Some(
+                    if action.automatic() {
+                        Priority::Background
+                    } else {
+                        Priority::Interactive
+                    }
+                    .label()
+                    .into(),
+                );
+            });
+            queue.pending = Some((action, Arc::clone(ctx)));
+            Ok(())
+        })?;
+    Ok(status(state, &ctx.database_path))
 }
 
 /// How a run ended short of its result.
@@ -397,7 +424,7 @@ impl From<anyhow::Error> for Ended {
     }
 }
 
-fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &Job, action: &Action) {
+fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &CurrentRun, action: &Action) {
     let began = std::time::Instant::now();
     // Let go of any guard before the status says the run is done.
     let ended = match action {
@@ -412,11 +439,8 @@ fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &Job, action: &Action)
     let elapsed = began.elapsed();
     // The runner is free as the status says the run ended, not after: a
     // page that sees the end may start the next run at once.
-    let mut busy = job
-        .busy
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *busy = false;
+    let mut queue = job.job.queue();
+    queue.run_active = false;
     job.update(|status| {
         status.finished_at = Some(now());
         status.stage = None;
@@ -432,7 +456,7 @@ fn run(state: &Arc<AppState>, ctx: &DatabaseContext, job: &Job, action: &Action)
         }
     });
     let status = job.status();
-    drop(busy);
+    drop(queue);
     tracing::info!(
         "calibration duplicates: {} of {} {} in {:.2}s{}",
         action.name(),
@@ -453,12 +477,12 @@ const WAIT_NAP: Duration = Duration::from_millis(250);
 /// A background check waits while a person's work runs, saying what for,
 /// until it may go on, a person asks for it (it turns interactive), Stop,
 /// or the server stops.
-fn wait_for_people(state: &AppState, job: &Job) -> Result<(), Ended> {
+fn wait_for_people(state: &AppState, job: &CurrentRun) -> Result<(), Ended> {
     while let Some(name) = state.interactive_job_name() {
-        if job.interactive.load(Ordering::SeqCst) {
+        if job.interactive() {
             break;
         }
-        if job.stop.load(Ordering::SeqCst) || state.shutdown.is_stopping() {
+        if job.stop.requested() || state.shutdown.is_stopping() {
             return Err(Ended::Stopped);
         }
         job.update(|status| {
@@ -478,18 +502,18 @@ fn wait_for_people(state: &AppState, job: &Job) -> Result<(), Ended> {
 fn plan(
     state: &AppState,
     ctx: &DatabaseContext,
-    job: &Job,
+    job: &CurrentRun,
 ) -> Result<(DuplicateReport, String), Ended> {
-    if !job.interactive.load(Ordering::SeqCst) {
+    if !job.interactive() {
         wait_for_people(state, job)?;
     }
-    let priority = if job.interactive.load(Ordering::SeqCst) {
+    let priority = if job.interactive() {
         Priority::Interactive
     } else {
         Priority::Background
     };
     job.update(|status| status.priority = Some(priority.label().into()));
-    // A check a person asked for holds the guard, so background work steps
+    // A check that a person requested holds the guard, so background work steps
     // aside for it. A repair holds its own as well.
     let _person = (priority == Priority::Interactive)
         .then(|| state.begin_named_interactive_job(waited_for("check")));
@@ -512,7 +536,7 @@ fn plan(
     let checking = Checking {
         workers: lease.workers,
         progress: &progress,
-        stop: &job.stop,
+        stop: job.stop.as_flag(),
     };
     let report = calibration::plan_duplicate_repair_checked(&snapshot, &files, &checking)
         .map_err(|_| Ended::Stopped)?;
@@ -520,7 +544,7 @@ fn plan(
 }
 
 /// Keep `report` as the latest plan, made from `revision`.
-fn keep_plan(job: &Job, report: DuplicateReport, revision: String) {
+fn keep_plan(job: &CurrentRun, report: DuplicateReport, revision: String) {
     job.update(|status| {
         status.report = Some(report);
         status.revision = Some(revision);
@@ -528,7 +552,7 @@ fn keep_plan(job: &Job, report: DuplicateReport, revision: String) {
     });
 }
 
-fn check(state: &AppState, ctx: &DatabaseContext, job: &Job) -> Result<(), Ended> {
+fn check(state: &AppState, ctx: &DatabaseContext, job: &CurrentRun) -> Result<(), Ended> {
     let (report, revision) = plan(state, ctx, job)?;
     keep_plan(job, report, revision);
     Ok(())
@@ -537,7 +561,7 @@ fn check(state: &AppState, ctx: &DatabaseContext, job: &Job) -> Result<(), Ended
 fn repair(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
-    job: &Job,
+    job: &CurrentRun,
     token: &str,
 ) -> Result<(), Ended> {
     let _lock = calibration::repair_lock(std::path::Path::new(&ctx.database_path)).map_err(
@@ -570,7 +594,7 @@ fn repair(
             &mut conn,
             &report,
             &|done, total| job.progress(STAGE_MERGING, done, total),
-            &job.stop,
+            job.stop.as_flag(),
         )
     };
     let outcome = match outcome {
@@ -705,8 +729,11 @@ fn after_repair(state: &Arc<AppState>, ctx: &DatabaseContext, rigs: Vec<String>)
 
 /// GET /api/db/{db}/calibrations/duplicates — where the check or repair
 /// stands, with the latest plan. Never does the work itself.
-pub async fn get_duplicates(ctx: DbContext) -> Json<ApiResponse<DuplicateJobStatus>> {
-    let mut status = status(&ctx.database_path);
+pub async fn get_duplicates(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<DuplicateJobStatus>> {
+    let mut status = status(&state, &ctx.database_path);
     // Whether the plan still describes the catalog: one aggregate query on
     // a connection of its own, and none while a run is going.
     if status.state != "running"
@@ -775,8 +802,11 @@ pub async fn repair_duplicates(
 
 /// POST /api/db/{db}/calibrations/duplicates/stop — stop the check or
 /// repair running.
-pub async fn stop_duplicates(ctx: DbContext) -> Json<ApiResponse<DuplicateJobStatus>> {
-    Json(ApiResponse::success(stop(&ctx.database_path)))
+pub async fn stop_duplicates(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<DuplicateJobStatus>> {
+    Json(ApiResponse::success(stop(&state, &ctx.database_path)))
 }
 
 #[cfg(test)]

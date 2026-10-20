@@ -379,6 +379,9 @@ pub struct ExportOptions {
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ExportSummary {
     pub planned: usize,
+    /// Stopped before every planned file was placed.
+    #[serde(default)]
+    pub stopped: bool,
     pub copied: usize,
     pub linked: usize,
     /// Placed as copy-on-write clones (reflink). A clone is an independent
@@ -830,6 +833,20 @@ pub fn execute_plan_with(
     dry_run: bool,
     progress: &mut dyn FnMut(usize, usize),
 ) -> ExportSummary {
+    execute_plan_until(plan, dest_root, placement, dry_run, progress, &|| true)
+}
+
+/// [`execute_plan_with`] that stops before the next item once `keep_going`
+/// turns false, with [`ExportSummary::stopped`] set. The files placed stay,
+/// and a later export skips them.
+pub fn execute_plan_until(
+    plan: &ExportPlan,
+    dest_root: &Path,
+    placement: Placement,
+    dry_run: bool,
+    progress: &mut dyn FnMut(usize, usize),
+    keep_going: &dyn Fn() -> bool,
+) -> ExportSummary {
     let mut summary = ExportSummary {
         planned: plan.items.len(),
         missing: plan.missing.len(),
@@ -842,6 +859,10 @@ pub fn execute_plan_with(
 
     let total = plan.items.len();
     for (index, item) in plan.items.iter().enumerate() {
+        if !keep_going() {
+            summary.stopped = true;
+            break;
+        }
         if placement == Placement::Reference {
             // Nothing lands here; the runner names the original.
             summary.referenced += 1;
@@ -1410,6 +1431,30 @@ mod tests {
             script.contains("var psfSessionGrouping = true;"),
             "{script}"
         );
+    }
+
+    #[test]
+    fn a_stopped_export_places_nothing_more_and_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let conn = seed(dir.path());
+        let dirs = vec![dir.path().to_string_lossy().into_owned()];
+        let plan = plan_export(&conn, &dirs, &ExportOptions::default()).unwrap();
+        assert!(!plan.items.is_empty());
+
+        let summary = execute_plan_until(
+            &plan,
+            dest.path(),
+            Placement::Copy,
+            false,
+            &mut |_, _| {},
+            &|| false,
+        );
+        assert!(summary.stopped);
+        assert_eq!((summary.copied, summary.errors), (0, 0));
+        assert_eq!(std::fs::read_dir(dest.path()).unwrap().count(), 0);
+        let summary = execute_plan_with(&plan, dest.path(), Placement::Copy, false, &mut |_, _| {});
+        assert!(!summary.stopped && summary.copied > 0);
     }
 
     /// A symlinked export costs no space and can point across filesystems,

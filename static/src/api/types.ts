@@ -1069,12 +1069,10 @@ export interface ScheduledRefresh {
    * to do nothing.
    */
   channels?: string[];
-  /** Due, and waiting for the stacking worker rather than settling. */
+  /** Due, and waiting for a quality analysis to finish rather than settling. */
   waiting?: boolean;
   /** What it waits for, in words that fit "Waiting for …". */
   waiting_for?: string | null;
-  /** How far its build had got when a person's build stopped it. */
-  last_progress?: { label: string; processed_units: number; total_units: number } | null;
 }
 
 /** Processing re-applied to a refreshed stack, waiting for its turn. */
@@ -2037,6 +2035,85 @@ export interface WbppActivity {
   queued: WbppQueuedActivity[];
 }
 
+/** The route a job row's Stop and move buttons call. Mirrors `RowControl`
+ *  in `src/server/jobs.rs`. */
+export type JobControl =
+  | { kind: 'stack'; job_id: string }
+  | { kind: 'flats'; db_id: string }
+  | { kind: 'sites'; db_id: string }
+  | { kind: 'duplicates'; db_id: string }
+  | { kind: 'rejects'; db_id: string }
+  | { kind: 'backup' }
+  | { kind: 'ts-sync'; job_id: string }
+  | { kind: 'wbpp-running'; db_id: string }
+  | { kind: 'wbpp-queued'; db_id: string; queue_id: string }
+  | { kind: 'preview'; preview: PreviewKind; key: string }
+  | { kind: 'import'; db_id: string }
+  | { kind: 'export'; db_id: string }
+  | { kind: 'catalog-install' };
+
+/** What a preview previews. Mirrors `PreviewKind` in
+ *  `src/server/previews.rs`. */
+export type PreviewKind = 'sync' | 'import' | 'export' | 'peer_sync' | 'incoming';
+
+/** The view that shows what a job works on: `/{view}?db=…&project=…&target=…`,
+ *  then `params` in order. */
+export interface JobLink {
+  view: 'grid' | 'sequence' | 'stacks' | 'calibration';
+  db: string;
+  project?: number;
+  target?: number;
+  params?: [string, string][];
+}
+
+/** One job in the header's list, as `GET /api/jobs` returns it. */
+export interface JobRow {
+  key: string;
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import' | 'export' | 'artifact_search' | 'planning_push';
+  title: string;
+  scope: string;
+  detail: string;
+  status: 'attention' | 'running' | 'queued' | 'waiting';
+  /** Automatic or database-wide work, listed after a person's work. */
+  background: boolean;
+  automatic: boolean;
+  waiting_for?: string;
+  percent: number | null;
+  remaining?: string;
+  hint?: string;
+  queue?: 'stack' | 'wbpp';
+  position?: number;
+  control?: JobControl;
+  stoppable: boolean;
+  state_label?: string;
+  transfer?: import('./transferTypes').TransferJob;
+  link?: JobLink;
+  /** When a running processing run started, Unix seconds. */
+  started_at?: number;
+}
+
+/** One database's state, for the header's effects. */
+export interface DatabaseJobs {
+  id: string;
+  name: string;
+  /** Whether work that changes the database's images, metrics or grades runs. */
+  busy: boolean;
+  /** Whether a quality scan or analysis runs. */
+  scanning: boolean;
+  /** The last quality scan's frame errors. */
+  scan: {
+    errors: number;
+    last_error: string | null;
+    target_id: number | null;
+    project_id: number | null;
+  };
+}
+
+export interface JobsResponse {
+  jobs: JobRow[];
+  databases: DatabaseJobs[];
+}
+
 export interface WbppRunStatus {
   /** POST: whether PixInsight started now. GET: whether a run is under way. */
   started: boolean;
@@ -2322,6 +2399,8 @@ export interface AutoImportStatus {
 
 /** What one export placed, and how. */
 export interface ExportSummary {
+  /** Stopped before every planned file was placed. */
+  stopped?: boolean;
   planned: number;
   copied: number;
   linked: number;
@@ -3336,6 +3415,12 @@ export interface CalibrationPlanChange {
 export interface CalibrationDuplicateStatus {
   /** `idle` before the first run. */
   state: 'idle' | 'running' | 'done' | 'stopped' | 'failed';
+  /** What the run is: `Checking for duplicates` or `Repairing duplicates`. */
+  title: string;
+  /** The stage and count, such as `Merging 37 of 203`. */
+  label: string;
+  /** 0–100 for the stage, or null before its size is known. */
+  percent: number | null;
   action: 'check' | 'repair' | null;
   /** `checking_files`, `comparing_copies` or `merging`, while it runs. */
   stage: string | null;
@@ -3366,6 +3451,9 @@ export interface CalibrationDuplicateStatus {
 /** Progress of the singleton per-DB import job (poll ~1s while running). */
 export interface ImportJobProgress {
   running: boolean;
+  /** Whether the run is a preview, which writes nothing. A newer preview,
+   *  or an import, replaces it. */
+  preview?: boolean;
   /** scanning | importing | complete | error | "" (never ran) */
   stage: string;
   image_dirs: string[];
@@ -4431,6 +4519,12 @@ export interface RejectRemovalOutcome {
  *  read the image folders and move files, so each runs as a job. */
 export interface RejectRemovalStatus {
   state: 'idle' | 'running' | 'done' | 'stopped' | 'failed';
+  /** What the run is, such as `Removing rejects`. */
+  title: string;
+  /** The stage and count, such as `Moving to the trash 37 of 203`. */
+  label: string;
+  /** 0–100 for the stage, or null before its size is known. */
+  percent: number | null;
   action: 'preview' | 'remove' | 'restore' | 'empty_trash' | null;
   stage: 'indexing' | 'checking' | 'moving' | 'restoring' | 'deleting' | null;
   done: number;
@@ -4791,6 +4885,8 @@ export interface FrameSitesOutcome {
  *  frame imported before the catalog kept one. */
 export interface FrameSitesStatus {
   state: 'idle' | 'queued' | 'running' | 'stopped';
+  /** The progress in words, such as `Reading frame sites · 812 of 1,867 frames`. */
+  label: string;
   /** A pass is reading frames: what the job line shows. */
   active: boolean;
   done: number;
@@ -4812,6 +4908,8 @@ export interface FlatMeasureStatus {
   /** `queued` while requests settle, grading runs or a retry waits;
    *  `stopped` when Stop paused work. */
   state: 'idle' | 'queued' | 'running' | 'stopped';
+  /** The step in words, such as `Measuring flats · 12 of 40 sessions`. */
+  label: string;
   /** A pass found work and is doing it: what the job line shows. */
   active: boolean;
   rig_uuid: string | null;

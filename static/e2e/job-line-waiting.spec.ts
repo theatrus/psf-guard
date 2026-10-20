@@ -1,11 +1,13 @@
-import { expect, test, type Page, type Route } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+import type { JobRow } from '../src/api/types';
 import { registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
+import { jobRow, stubJobs } from './jobRows';
 
 /**
  * The header's job line while a person's build runs: automatic work that
  * stepped aside stays listed, marked waiting, and runs again once the
- * build ends, listed once. The activity endpoints are stubbed with what the
- * server reports in that moment, since holding real automatic work behind a
+ * build ends, listed once. The job list is stubbed with the rows the
+ * server builds in that moment, since holding real automatic work behind a
  * real build would take minutes of stacking.
  */
 
@@ -21,72 +23,67 @@ test.beforeEach(async ({ request }) => {
   dbId = entry.id;
   await waitForCacheReady(request, dbId);
   personBuilding = true;
+  transfers = [];
 });
 
-function fulfil(route: Route, data: unknown) {
-  return route.fulfill({ json: { success: true, data, error: null, status: 'ready' } });
+/** Transfer rows a spec adds to the job list. */
+let transfers: JobRow[] = [];
+
+/** The job list while a person's build runs, or after it ends. */
+function activityRows(): JobRow[] {
+  const rows: JobRow[] = personBuilding
+    ? [
+        jobRow({
+          key: `stack:${'p'.repeat(64)}`, kind: 'stack', title: 'Stacking', scope: 'Alpha M44 · B',
+          detail: '2/3 frames', percent: (2 / 3) * 100, queue: 'stack', stoppable: true,
+          control: { kind: 'stack', job_id: 'p'.repeat(64) }, hint: 'Registering frames',
+          link: { view: 'stacks', db: dbId, project: 1, target: 1 },
+        }),
+        jobRow({
+          key: `backfill:${dbId}`, kind: 'quality', title: 'Analyzing database quality', scope: 'Imaging Rig e2e',
+          detail: 'Waiting for a stack build · 2/8 targets · Scanning 4/10 frames', status: 'waiting',
+          waiting_for: 'a stack build', percent: 25, background: true,
+          link: { view: 'grid', db: dbId },
+        }),
+        jobRow({
+          key: `refresh-waiting:${dbId}:2`, kind: 'stack', title: 'Refreshing stacks',
+          scope: 'Imaging Rig e2e · Project Beta',
+          detail: 'Waiting for the stack build of Alpha M44 · B · stopped at 12/40 frames', status: 'waiting',
+          waiting_for: 'the stack build of Alpha M44 · B', percent: 30, automatic: true, background: true,
+          remaining: '1 channel to stack', hint: 'Restacks Beta Field · L',
+          link: { view: 'stacks', db: dbId, project: 2 },
+        }),
+        jobRow({
+          key: `reapply-waiting:${dbId}:1:Alpha M44 · R`, kind: 'processing', title: 'Re-applying processing',
+          scope: 'Alpha M44 · R', detail: 'Waiting for the stack build of Alpha M44 · B', status: 'waiting',
+          waiting_for: 'the stack build of Alpha M44 · B', automatic: true, background: true,
+          link: { view: 'stacks', db: dbId, project: 1, target: 1 },
+        }),
+      ]
+    : [
+        jobRow({
+          key: `stack:${'a'.repeat(64)}`, kind: 'stack', title: 'Stacking', scope: 'Beta Field · L',
+          detail: '13/40 frames', percent: 32.5, queue: 'stack', stoppable: true, automatic: true,
+          background: true, control: { kind: 'stack', job_id: 'a'.repeat(64) },
+          link: { view: 'stacks', db: dbId, project: 2, target: 2 },
+        }),
+        jobRow({
+          key: `backfill:${dbId}`, kind: 'quality', title: 'Analyzing database quality', scope: 'Imaging Rig e2e',
+          detail: '2/8 targets · Scanning 4/10 frames', percent: 25, background: true,
+          link: { view: 'grid', db: dbId },
+        }),
+      ];
+  // The server lists work needing attention first in each tier.
+  return [
+    ...rows.filter((row) => !row.background),
+    ...transfers.filter((row) => !row.background),
+    ...transfers.filter((row) => row.background),
+    ...rows.filter((row) => row.background),
+  ];
 }
 
 async function stubActivity(page: Page) {
-  // The fixture's catalog refresh has settled; keep a late poll of it out
-  // of the count.
-  await page.route('**/cache-progress', (route) => fulfil(route, {
-    is_refreshing: false, stage: 'completed', progress_percentage: 100, elapsed_seconds: 0,
-    directories_total: 0, directories_processed: 0, current_directory_name: null, files_scanned: 0,
-    projects_total: 0, projects_processed: 0, current_project_name: null, targets_total: 0,
-    targets_processed: 0, files_found: 0, files_missing: 0,
-  }));
-  await page.route('**/api/stack-activity', (route) => fulfil(route, {
-    schema_version: 1,
-    active: personBuilding
-      ? [{
-          kind: 'mono', job_id: 'p'.repeat(64), database_id: dbId, project_id: 1, target_id: 1,
-          state: 'running', label: 'Alpha M44 · B', detail: 'Registering frames',
-          processed_units: 2, total_units: 3, created_unix_seconds: 1_760_000_000, automatic: false,
-        }]
-      : [{
-          kind: 'mono', job_id: 'a'.repeat(64), database_id: dbId, project_id: 2, target_id: 2,
-          state: 'running', label: 'Beta Field · L', detail: 'Stacking frames',
-          processed_units: 13, total_units: 40, created_unix_seconds: 1_760_000_100, automatic: true,
-        }],
-    scheduled: personBuilding
-      ? [{
-          database_id: dbId, database_name: 'Imaging Rig e2e', project_id: 2,
-          project_name: 'Project Beta', reason: 'arrival', due_in_seconds: 0,
-          channels: ['Beta Field · L'], waiting: true,
-          waiting_for: 'the stack build of Alpha M44 · B',
-          last_progress: { label: 'Beta Field · L', processed_units: 12, total_units: 40 },
-        }]
-      : [],
-    waiting_reapplies: personBuilding
-      ? [{
-          database_id: dbId, project_id: 1, target_id: 1, label: 'Alpha M44 · R',
-          waiting_for: 'the stack build of Alpha M44 · B',
-        }]
-      : [],
-  }));
-  await page.route('**/analysis/quality-backfill', (route) => route.request().method() === 'GET'
-    ? fulfil(route, {
-        started: false,
-        progress: {
-          running: true, force: false, total_targets: 8, processed_targets: 2,
-          current_target_id: 2, started_at: 1, finished_at: null,
-        },
-      })
-    : route.fallback());
-  await page.route(/\/analysis\/quality-scan(\?.*)?$/, (route) => route.request().method() === 'GET'
-    ? fulfil(route, {
-        started: false,
-        cached_count: 0,
-        progress: {
-          running: true, stage: 'spatial', target_id: 2, filter_name: null, total: 10, processed: 4,
-          skipped_cached: 0, spatial_processed: 4, astrometry_processed: 0, solved: 0, solve_failed: 0,
-          operational_errors: 0, errors: 0, current_file: null, started_at: 1, finished_at: null,
-          last_error: null, automatic: true,
-          waiting_for: personBuilding ? 'a stack build' : null,
-        },
-      })
-    : route.fallback());
+  await stubJobs(page, activityRows);
 }
 
 test('lists automatic work as waiting while a person builds, then running once', async ({ page }) => {
@@ -166,28 +163,30 @@ test('keeps the waiting count on a phone without widening the page', async ({ pa
 
 /** A transfer held for review: its row needs attention, and its controls
  *  sit on one line beside a long error, on a desktop and on a phone. */
-async function stubHeldTransfers(page: Page) {
-  const transfer = (id: string, state: string, error: string | null) => ({
-    id, connection_id: 'c1', revision: 1, state, catalog: 'Imaging Rig e2e',
-    label: `Alpha M44 · ${id}`, total_files: 24, completed_files: 6, total_bytes: 24_000_000,
-    completed_bytes: 6_000_000, current_file: '', sent_bytes: 0, error, next_attempt_ms: 0,
-    warnings: null, manifest: null, automatic: true,
+function heldTransfers(): JobRow[] {
+  const transfer = (id: string, state: 'review' | 'needs_review', error: string) => jobRow({
+    key: `transfer:${id}`, kind: 'transfer', title: 'Transfers', scope: `Imaging Rig e2e · Alpha M44 · ${id}`,
+    detail: error, status: 'attention', state_label: state === 'review' ? 'Review required' : 'Needs attention',
+    automatic: true, background: true,
+    transfer: {
+      id, connection_id: 'c1', revision: 1, state, catalog: 'Imaging Rig e2e',
+      label: `Alpha M44 · ${id}`, total_files: 24, completed_files: 6, total_bytes: 24_000_000,
+      completed_bytes: 6_000_000, current_file: '', sent_bytes: 0, error, next_attempt_ms: 0,
+      warnings: null, manifest: null, automatic: true,
+    },
   });
-  await page.route('**/director/v1/transfers', (route) => fulfil(route, {
-    jobs: [
-      transfer('review', 'review',
-        'Incomplete calibration: no flats for OIII on the nights of 2026-10-12 and 2026-10-14, and no darks at this gain'),
-      transfer('failed', 'needs_review', 'The collaboration server refused the upload: the panel was closed for new frames'),
-    ],
-    policies: [],
-  }));
+  return [
+    transfer('review', 'review',
+      'Incomplete calibration: no flats for OIII on the nights of 2026-10-12 and 2026-10-14, and no darks at this gain'),
+    transfer('failed', 'needs_review', 'The collaboration server refused the upload: the panel was closed for new frames'),
+  ];
 }
 
 for (const width of [1440, 390]) {
   test(`keeps a held transfer's controls on one line at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
+    transfers = heldTransfers();
     await stubActivity(page);
-    await stubHeldTransfers(page);
     await page.goto('/');
     const chip = page.getByRole('button', { name: /^Background jobs/ });
     await expect(chip).toHaveAccessibleName(/2 need attention/);

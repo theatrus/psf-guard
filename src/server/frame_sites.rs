@@ -23,16 +23,16 @@
 //! - **Tracked.** [`status`] feeds the header's job line.
 
 use crate::calibration::{backfill_frame_sites, SiteBackfill, SiteBackfillOutcome};
+use crate::concurrency::Stop;
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::State;
 use axum::Json;
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long requests must pause before a pass starts.
@@ -64,6 +64,9 @@ pub struct FrameSitesStatus {
     /// `idle`; `queued` while requests settle or a retry waits; `running`;
     /// or `stopped` when Stop paused it.
     pub state: String,
+    /// The pass's progress in words, such as `Reading frame sites · 812 of
+    /// 1,867 frames`, as pages and the header show it.
+    pub label: String,
     /// Whether a pass found frames to read and reads them: what the job
     /// line shows.
     pub active: bool,
@@ -84,7 +87,7 @@ pub struct FrameSitesStatus {
 }
 
 #[derive(Debug, Default)]
-struct Queue {
+pub(crate) struct Queue {
     pending: bool,
     /// When the last request came.
     last: Option<Instant>,
@@ -93,16 +96,6 @@ struct Queue {
     due: Option<Instant>,
     attempts: u32,
     stopped: bool,
-    /// Whether a thread serves this catalog.
-    worker: bool,
-}
-
-/// What the runner does next.
-#[derive(Debug, PartialEq)]
-enum Step {
-    Exit,
-    Nap(Duration),
-    Run,
 }
 
 fn backoff(attempt: u32) -> Duration {
@@ -131,7 +124,7 @@ impl Queue {
         self.due = None;
     }
 
-    fn next_step(&mut self, now: Instant) -> Step {
+    fn next_step(&mut self, now: Instant) -> Step<()> {
         if let Some(due) = self.due
             && due <= now
         {
@@ -140,7 +133,7 @@ impl Queue {
         }
         if !self.pending {
             return match self.due {
-                Some(due) => Step::Nap(due.saturating_duration_since(now).clamp(POLL, NAP_MAX)),
+                Some(due) => Step::Sleep(due.saturating_duration_since(now).clamp(POLL, NAP_MAX)),
                 None => Step::Exit,
             };
         }
@@ -148,11 +141,11 @@ impl Queue {
             .last
             .map_or(SETTLE, |last| now.saturating_duration_since(last));
         if quiet < SETTLE {
-            return Step::Nap((SETTLE - quiet).clamp(POLL, NAP_MAX));
+            return Step::Sleep((SETTLE - quiet).clamp(POLL, NAP_MAX));
         }
         self.pending = false;
         self.last = None;
-        Step::Run
+        Step::Run(())
     }
 
     /// Try again later; false once the tries are spent.
@@ -175,33 +168,44 @@ impl Queue {
     }
 }
 
-#[derive(Default)]
-struct Job {
-    queue: Mutex<Queue>,
-    status: RwLock<FrameSitesStatus>,
-    /// Set by [`cancel`]: the running pass stops at its next chunk.
-    cancelled: AtomicBool,
-}
+/// Frame site reads, run on one thread per catalog.
+pub(crate) struct FrameSites;
 
-impl Job {
-    fn update(&self, edit: impl FnOnce(&mut FrameSitesStatus)) {
-        edit(&mut self.status.write().unwrap_or_else(|p| p.into_inner()));
+type Job = CatalogJob<FrameSites>;
+
+impl CatalogWork for FrameSites {
+    type Queue = Queue;
+    type Status = FrameSitesStatus;
+    type Item = ();
+    const RUNNER: &'static str = "frame-sites";
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("frame sites");
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> Step<()> {
+        let step = queue.next_step(now);
+        if step == Step::Run(()) {
+            queue.running = true;
+        }
+        step
     }
 
-    fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {
-        self.queue.lock().unwrap_or_else(|p| p.into_inner())
+    fn run(state: &Arc<AppState>, path: &str, job: &Job, (): (), stop: &Stop) {
+        run_logged(state, path, job, stop);
+    }
+
+    fn has_work(queue: &Queue) -> bool {
+        queue.pending || queue.due.is_some()
+    }
+
+    fn runner_failed(queue: &mut Queue, status: &mut FrameSitesStatus) {
+        queue.running = false;
+        status.active = false;
+        status.waiting_for = None;
+        status.last_error = Some("reading frame sites stopped unexpectedly".into());
     }
 }
 
-static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
-
-fn job(path: &str) -> Arc<Job> {
-    Arc::clone(
-        JOBS.lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .entry(path.to_string())
-            .or_default(),
-    )
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.frame_sites.job(path)
 }
 
 fn unix_at(at: Instant) -> i64 {
@@ -210,10 +214,10 @@ fn unix_at(at: Instant) -> i64 {
 }
 
 /// Where the frame-sites job stands for the catalog at `path`.
-pub fn status(path: &str) -> FrameSitesStatus {
-    let job = job(path);
+pub fn status(state: &AppState, path: &str) -> FrameSitesStatus {
+    let job = job(state, path);
+    let mut status = job.status();
     let queue = job.queue();
-    let mut status = job.status.read().unwrap_or_else(|p| p.into_inner()).clone();
     status.retry_at = queue.due.map(unix_at);
     status.next_pass = queue.running && queue.pending;
     status.state = if queue.running {
@@ -229,7 +233,22 @@ pub fn status(path: &str) -> FrameSitesStatus {
     if !queue.running {
         status.active = false;
     }
+    status.label = label(status.done, status.total);
     status
+}
+
+/// `Reading frame sites · 812 of 1,867 frames`.
+pub fn label(done: usize, total: usize) -> String {
+    use crate::server::job_text::{grouped, plural};
+    if total == 0 {
+        return "Reading frame sites".to_string();
+    }
+    format!(
+        "Reading frame sites · {} of {} {}",
+        grouped(done.min(total)),
+        grouped(total),
+        plural(total, "frame", "frames")
+    )
 }
 
 /// Read the sites of the catalog at `path`'s frames that have none yet.
@@ -247,110 +266,29 @@ fn request(state: &Arc<AppState>, path: &str, ask: fn(&mut Queue, Instant)) {
     if state.shutdown.is_stopping() {
         return;
     }
-    let job = job(path);
-    let spawn = {
-        let mut queue = job.queue();
-        ask(&mut queue, Instant::now());
-        if !queue.pending && queue.due.is_none() {
-            return;
-        }
-        !std::mem::replace(&mut queue.worker, true)
-    };
-    if !spawn {
-        return;
-    }
-    let state = Arc::clone(state);
-    let path = path.to_string();
-    let runner = Arc::clone(&job);
-    let started = std::thread::Builder::new()
-        .name("frame-sites".into())
-        .spawn(move || serve(&state, &path, &runner));
-    if let Err(error) = started {
-        tracing::warn!("Could not start reading frame sites: {error}");
-        job.queue().worker = false;
-    }
+    state
+        .catalog_jobs
+        .frame_sites
+        .request(state, path, |queue| ask(queue, Instant::now()));
 }
 
 /// Stop: the running pass ends at its next chunk, and nothing more runs
 /// until a change, [`resume`], or the next start.
-pub fn cancel(path: &str) -> FrameSitesStatus {
-    let job = job(path);
-    job.queue().stop();
-    job.cancelled.store(true, Ordering::SeqCst);
-    status(path)
+pub fn cancel(state: &AppState, path: &str) -> FrameSitesStatus {
+    job(state, path).stop(|queue| queue.stop());
+    status(state, path)
 }
 
 /// Take up what Stop paused.
 pub fn resume(state: &Arc<AppState>, path: &str) -> FrameSitesStatus {
-    let stopped = std::mem::take(&mut job(path).queue().stopped);
+    let stopped = std::mem::take(&mut job(state, path).queue().stopped);
     if stopped {
         queue(state, path);
     }
-    status(path)
+    status(state, path)
 }
 
-/// Lets go of the runner's claim if it ends without doing so, as on a
-/// panic, so the next request starts another.
-struct RunnerClaim<'a> {
-    job: &'a Job,
-    released: bool,
-}
-
-impl Drop for RunnerClaim<'_> {
-    fn drop(&mut self) {
-        if self.released {
-            return;
-        }
-        let mut queue = self.job.queue();
-        queue.worker = false;
-        queue.running = false;
-        drop(queue);
-        self.job.update(|status| {
-            status.active = false;
-            status.waiting_for = None;
-            status.last_error = Some("reading frame sites stopped unexpectedly".into());
-        });
-    }
-}
-
-fn serve(state: &Arc<AppState>, path: &str, job: &Job) {
-    let mut claim = RunnerClaim {
-        job,
-        released: false,
-    };
-    loop {
-        if state.shutdown.is_stopping() {
-            job.queue().worker = false;
-            claim.released = true;
-            return;
-        }
-        let step = {
-            let mut queue = job.queue();
-            let step = queue.next_step(Instant::now());
-            match step {
-                Step::Exit => {
-                    queue.worker = false;
-                    claim.released = true;
-                    return;
-                }
-                Step::Run => {
-                    queue.running = true;
-                    job.cancelled.store(false, Ordering::SeqCst);
-                }
-                Step::Nap(_) => {}
-            }
-            step
-        };
-        if let Step::Nap(wait) = step {
-            std::thread::sleep(wait);
-            continue;
-        }
-        let _work = state.shutdown.hold(format!("frame sites ({path})"));
-        run_logged(state, path, job);
-    }
-}
-
-fn run_logged(state: &Arc<AppState>, path: &str, job: &Job) {
+fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, stop: &Stop) {
     job.update(|status| {
         *status = FrameSitesStatus {
             started_at: Some(chrono::Utc::now().timestamp()),
@@ -358,8 +296,8 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job) {
             ..Default::default()
         };
     });
-    let result = run(state, path, job);
-    let cancelled = job.cancelled.load(Ordering::SeqCst);
+    let result = run(state, path, job, stop);
+    let cancelled = stop.requested();
     let unfinished = match &result {
         Ok(outcome) => outcome.volume_away || outcome.error.is_some(),
         Err(_) => true,
@@ -420,7 +358,12 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job) {
     });
 }
 
-fn run(state: &Arc<AppState>, path: &str, job: &Job) -> anyhow::Result<SiteBackfillOutcome> {
+fn run(
+    state: &Arc<AppState>,
+    path: &str,
+    job: &Job,
+    stop: &Stop,
+) -> anyhow::Result<SiteBackfillOutcome> {
     let conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -429,16 +372,17 @@ fn run(state: &Arc<AppState>, path: &str, job: &Job) -> anyhow::Result<SiteBackf
     if conn.is_readonly(rusqlite::MAIN_DB)? {
         return Ok(Default::default());
     }
-    run_on(state, path, job, &conn)
+    run_on(state, path, job, stop, &conn)
 }
 
 fn run_on(
     state: &Arc<AppState>,
     path: &str,
     job: &Job,
+    stop: &Stop,
     conn: &Connection,
 ) -> anyhow::Result<SiteBackfillOutcome> {
-    let keep_going = || !state.shutdown.is_stopping() && !job.cancelled.load(Ordering::SeqCst);
+    let keep_going = || !state.shutdown.is_stopping() && !stop.requested();
     let yield_now = || {
         state.wait_for_interactive_work(POLL, |waiting_for| {
             job.update(|status| status.waiting_for = waiting_for.map(str::to_string));
@@ -473,9 +417,11 @@ pub const AWAY_WATCH: Duration = Duration::from_secs(60 * 60);
 /// away a week or more ago, so they are read again without waiting for an
 /// import or a restart.
 pub fn spawn_away_watch(state: &Arc<AppState>) {
-    let state = Arc::clone(state);
-    tokio::spawn(async move {
-        while state.shutdown.sleep(AWAY_WATCH).await {
+    crate::server::schedule::every(
+        state,
+        "away-frame watch",
+        crate::server::schedule::Every::period(AWAY_WATCH),
+        |state| async move {
             let paths: Vec<String> = state
                 .all_databases()
                 .into_iter()
@@ -498,21 +444,27 @@ pub fn spawn_away_watch(state: &Arc<AppState>) {
             for path in due {
                 nudge(&state, &path);
             }
-        }
-    });
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
 // Routes.
 
 /// `GET /api/db/{db}/calibrations/frame-sites` — where the job stands.
-pub async fn get_status(ctx: DbContext) -> Json<ApiResponse<FrameSitesStatus>> {
-    Json(ApiResponse::success(status(&ctx.database_path)))
+pub async fn get_status(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<FrameSitesStatus>> {
+    Json(ApiResponse::success(status(&state, &ctx.database_path)))
 }
 
 /// `POST /api/db/{db}/calibrations/frame-sites/cancel` — Stop.
-pub async fn post_cancel(ctx: DbContext) -> Json<ApiResponse<FrameSitesStatus>> {
-    Json(ApiResponse::success(cancel(&ctx.database_path)))
+pub async fn post_cancel(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<FrameSitesStatus>> {
+    Json(ApiResponse::success(cancel(&state, &ctx.database_path)))
 }
 
 /// `POST /api/db/{db}/calibrations/frame-sites/resume` — take up what

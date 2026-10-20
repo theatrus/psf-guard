@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
-import type { StackActivityEntry, WbppActivity } from '../src/api/types';
+import type { JobRow } from '../src/api/types';
 import { registerFixtureDb, resetDatabases } from './helpers';
+import { jobRow, stubJobs } from './jobRows';
 
 for (const width of [1280, 390]) {
   for (const queue of ['stack', 'wbpp'] as const) {
@@ -8,37 +9,46 @@ for (const width of [1280, 390]) {
       await resetDatabases(request);
       const db = await registerFixtureDb(request, { slug: 'queue-rig' });
       const ids = ['a', 'b', 'c', 'd'].map(letter => letter.repeat(64));
-      let stacks: StackActivityEntry[] = ids.map((id, index) => ({
-        kind: index === 3 ? 'processing' : 'mono', job_id: id, database_id: db.id,
-        project_id: 1, target_id: 1, state: index === 0 ? 'running' : 'queued',
-        label: `Queue target ${index}`, detail: index === 0 ? 'Registering frames' : 'Waiting for the current task',
-        processed_units: index === 0 ? 1 : 0, total_units: 4,
-        created_unix_seconds: index + 1, queue_position: index === 0 ? null : index - 1,
-        automatic: index === 1,
-        ...(index === 3 ? { processing: { operation: 'BlurXTerminator', channel: 'R', stoppable: true } } : {}),
-      }));
-      let wbpp: WbppActivity = {
-        running: [{ db_id: db.id, db_name: 'Queue rig', scope: 'Running project', stage: 'running',
-          wbpp_stage: 'Calibration', wbpp_steps: 1, started_at: 1 }],
-        queued: [1, 2, 3].map(n => ({ id: `q${n}`, db_id: db.id, db_name: 'Queue rig', scope: `Project ${n}`,
-          project_id: n, target_id: null, position: n, queued_at: n })),
+      // The stack line: one build running, an automatic build, a build and a
+      // processing run queued. Positions are places in the whole line.
+      const stackRow = (index: number, position: number | null): JobRow => jobRow({
+        key: `stack:${ids[index]}`, kind: index === 3 ? 'processing' : 'stack',
+        title: index === 3 ? 'BlurXTerminator' : 'Stacking', scope: `Queue target ${index}`,
+        detail: index === 0 ? '1/4 frames' : 'Waiting for the build ahead',
+        status: index === 0 ? 'running' : 'queued', percent: index === 0 ? 25 : null,
+        queue: 'stack', position: position ?? undefined, stoppable: true,
+        automatic: index === 1, background: index === 1,
+        control: { kind: 'stack', job_id: ids[index] },
+        link: { view: 'stacks', db: db.id, project: 1, target: 1 },
+      });
+      let stackPositions = [null, 0, 1, 2];
+      const stackRows = () => {
+        const rows = [0, 1, 2, 3].map((index) => stackRow(index, stackPositions[index]));
+        const person = rows.filter((row) => !row.background);
+        // A person's queued rows in line order, then the automatic build.
+        return [person[0], ...person.slice(1).sort((a, b) => a.position! - b.position!), rows[1]];
       };
+      const wbppRow = (n: number, position: number): JobRow => jobRow({
+        key: `wbpp-queued:q${n}`, kind: 'wbpp', title: 'WBPP', scope: `Queue rig · Project ${n}`,
+        detail: 'Waiting for the run ahead', status: 'queued', queue: 'wbpp', position, stoppable: true,
+        control: { kind: 'wbpp-queued', db_id: db.id, queue_id: `q${n}` },
+        link: { view: 'stacks', db: db.id, project: n },
+      });
+      const running = jobRow({
+        key: `wbpp:${db.id}:1`, kind: 'wbpp', title: 'WBPP', scope: 'Queue rig · Running project',
+        detail: 'Running in PixInsight · Calibration · 1 steps done', queue: 'wbpp', stoppable: true,
+        control: { kind: 'wbpp-running', db_id: db.id },
+      });
+      let wbppOrder = [1, 2, 3];
+      const wbppRows = () => [running, ...wbppOrder.map((n, index) => wbppRow(n, index))];
       const moves: unknown[] = [];
-      const stackActivity = () => ({ schema_version: 1, active: queue === 'stack' ? stacks : [] });
-      const wbppActivity = () => queue === 'wbpp' ? wbpp : { running: [], queued: [] };
-      await page.route('**/api/stack-activity', route => route.fulfill({ json: { success: true, data: stackActivity(), error: null } }));
-      await page.route('**/api/wbpp/activity', route => route.fulfill({ json: { success: true, data: wbppActivity(), error: null } }));
+      await stubJobs(page, () => (queue === 'stack' ? stackRows() : wbppRows()));
       const endpoint = queue === 'stack' ? `/api/stack-activity/${ids[3]}/move` : '/api/wbpp/queue/q3/move';
       await page.route(`**${endpoint}`, async route => {
         moves.push(route.request().postDataJSON());
-        if (queue === 'stack') {
-          stacks = [stacks[0], { ...stacks[3], queue_position: 0 },
-            { ...stacks[1], queue_position: 1 }, { ...stacks[2], queue_position: 2 }];
-        } else {
-          wbpp = { ...wbpp, queued: [wbpp.queued[2], wbpp.queued[0], wbpp.queued[1]]
-            .map((run, index) => ({ ...run, position: index + 1 })) };
-        }
-        await route.fulfill({ json: { success: true, data: queue === 'stack' ? stackActivity() : wbppActivity(), error: null } });
+        if (queue === 'stack') stackPositions = [null, 1, 2, 0];
+        else wbppOrder = [3, 1, 2];
+        await route.fulfill({ json: { success: true, data: queue === 'stack' ? { schema_version: 1, active: [] } : { running: [], queued: [] }, error: null } });
       });
       await page.setViewportSize({ width, height: 1000 });
       await page.goto('/');

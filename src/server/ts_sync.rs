@@ -1,12 +1,18 @@
-//! Owned TS imports and automatic file sync. One runner per catalog; HTTP
-//! handlers only enqueue imports. File copies use SQLite's online backup API.
+//! Owned TS imports and automatic file sync, on [`CatalogJobs`]: one runner
+//! per catalog for its sync, and one for imports, which run one at a time.
+//! HTTP handlers only enqueue imports. File copies use SQLite's online
+//! backup API.
 
 use super::{
     api::ApiResponse,
     handlers::{require_database_management_allowed, require_registry_path, AppError},
     state::AppState,
 };
-use crate::{db_registry::DbRegistry, ts_sync::Settings};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
+use crate::{
+    db_registry::{DbEntry, DbRegistry},
+    ts_sync::Settings,
+};
 use anyhow::{Context, Result};
 use axum::{
     extract::{Path as UrlPath, State},
@@ -141,6 +147,12 @@ pub async fn status_route(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<Vec<Job>>>, AppError> {
     require_database_management_allowed(&state)?;
+    Ok(Json(ApiResponse::success(listed_jobs(&state))))
+}
+
+/// The sync and import jobs the status route lists, by id: every running
+/// job, and finished jobs whose catalog is still registered.
+pub(crate) fn listed_jobs(state: &AppState) -> Vec<Job> {
     let mut jobs: Vec<_> = state
         .ts_sync
         .jobs
@@ -157,7 +169,7 @@ pub async fn status_route(
         .cloned()
         .collect();
     jobs.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(Json(ApiResponse::success(jobs)))
+    jobs
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,26 +221,14 @@ pub async fn import_route(
         stored.source_connected = request.connect_source
     });
     let returned = job.clone();
-    let runtime = tokio::runtime::Handle::current();
-    std::thread::spawn(move || {
-        let _runtime = runtime.enter();
-        let label = if request.connect_source {
-            "Target Scheduler import"
-        } else {
-            "Catalog import"
-        };
-        let _hold = state.shutdown.hold(label);
-        let _interactive = state.begin_named_interactive_job(label);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            import(&state, &key, request)
-        }))
-        .unwrap_or_else(|_| {
-            Err(anyhow::anyhow!(
-                "Target Scheduler import stopped unexpectedly."
-            ))
-        });
-        state.ts_sync.finish(&key, result);
-    });
+    queue_work(
+        &state,
+        IMPORT_RUNNER,
+        Work::Import {
+            job_id: key,
+            request,
+        },
+    );
     Ok((StatusCode::ACCEPTED, Json(ApiResponse::success(returned))))
 }
 
@@ -385,11 +385,7 @@ fn import(state: &Arc<AppState>, job: &str, request: ImportRequest) -> Result<()
             return Err(e);
         }
     };
-    state
-        .databases
-        .write()
-        .unwrap()
-        .insert(entry.id.clone(), context.clone());
+    state.add_database(context.clone());
     state.ts_sync.update(job, |j| {
         j.catalog_id = Some(entry.id.clone());
         j.name = entry.name.clone();
@@ -438,97 +434,269 @@ fn due(settings: &Settings, previous: Option<(&Stamp, Duration)>, current: &Stam
 }
 
 pub fn spawn(state: Arc<AppState>) {
-    tokio::spawn(async move {
-        let mut observed: HashMap<String, (Stamp, Instant)> = HashMap::new();
-        loop {
-            if state.shutdown.is_stopping() {
-                break;
+    // When each database's files were last seen, and when a sync was last
+    // tried, across runs.
+    let observed: Arc<Mutex<HashMap<String, (Stamp, Instant)>>> = Arc::default();
+    crate::server::schedule::every(
+        &state,
+        "Target Scheduler sync",
+        crate::server::schedule::Every::after(Duration::ZERO, Duration::from_secs(10)),
+        move |state| {
+            let observed = Arc::clone(&observed);
+            async move {
+                // It reads the registry and stamps files: off the runtime.
+                let _ = tokio::task::spawn_blocking(move || {
+                    queue_due_syncs(&state, &mut observed.lock().unwrap())
+                })
+                .await;
             }
-            if let Some(path) = state.registry_path.read().unwrap().clone()
-                && let Ok(registry) = DbRegistry::load_or_init(&path)
-            {
-                for entry in registry.databases {
-                    let Some(settings) = entry.ts_sync.clone() else {
-                        continue;
-                    };
-                    if settings.validate(Path::new(&entry.db_path)).is_err() {
-                        continue;
-                    }
-                    let current = [stamp(&settings.source_path), stamp(&entry.db_path)].concat();
-                    let now = Instant::now();
-                    let run = due(
-                        &settings,
-                        observed
-                            .get(&entry.id)
-                            .map(|(stamp, attempt)| (stamp, attempt.elapsed())),
-                        &current,
-                    );
-                    if !observed.contains_key(&entry.id) {
-                        observed.insert(entry.id.clone(), (current.clone(), now));
-                    }
-                    if !run {
-                        continue;
-                    }
-                    if let Some(job) = state.ts_sync.begin(
-                        entry.id.clone(),
-                        Some(entry.id.clone()),
-                        entry.name.clone(),
-                        true,
-                    ) {
-                        observed.insert(entry.id.clone(), (current, now));
-                        let state = state.clone();
-                        let runtime = tokio::runtime::Handle::current();
-                        std::thread::spawn(move || {
-                            let _runtime = runtime.enter();
-                            let _hold = state.shutdown.hold(format!("TS sync ({})", entry.name));
-                            state.wait_for_interactive_work_unless(
-                                Duration::from_millis(250),
-                                || state.ts_sync.stopped(&job.id),
-                                |waiting| {
-                                    state.ts_sync.update(&job.id, |j| {
-                                        j.waiting_for = waiting.map(str::to_owned)
-                                    })
-                                },
-                            );
-                            let result =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    let captures =
-                                        synchronize(&state, &job.id, &entry.db_path, &settings);
-                                    if captures
-                                        .as_ref()
-                                        .is_err_and(|e| e.is::<crate::backup::Cancelled>())
-                                    {
-                                        return captures;
-                                    }
-                                    // Grade conflicts and capture errors do not revoke a
-                                    // separate, already reviewed planning delivery.
-                                    current_settings(&state, &job.id, &entry.db_path, &settings)?;
-                                    let planning = runtime.block_on(
-                                        super::director::retry_ts_planning(&state, &entry.id),
-                                    );
-                                    if state.shutdown.is_stopping()
-                                        || state.ts_sync.stopped(&job.id)
-                                    {
-                                        return Err(crate::backup::Cancelled.into());
-                                    }
-                                    match (captures, planning) {
-                                        (Ok(()), result) | (result, Ok(())) => result,
-                                        (Err(captures), Err(planning)) => {
-                                            Err(anyhow::anyhow!("{captures:#}; {planning:#}"))
-                                        }
-                                    }
-                                }))
-                                .unwrap_or_else(|_| {
-                                    Err(anyhow::anyhow!("TS sync stopped unexpectedly."))
-                                });
-                            state.ts_sync.finish(&job.id, result);
-                        });
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(10)).await;
+        },
+    );
+}
+
+/// Queue a sync for each database whose Target Scheduler connection is due.
+fn queue_due_syncs(state: &Arc<AppState>, observed: &mut HashMap<String, (Stamp, Instant)>) {
+    let Some(path) = state.registry_path.read().unwrap().clone() else {
+        return;
+    };
+    let Ok(registry) = DbRegistry::load_or_init(&path) else {
+        return;
+    };
+    for entry in registry.databases {
+        let Some(settings) = entry.ts_sync.clone() else {
+            continue;
+        };
+        if settings.validate(Path::new(&entry.db_path)).is_err() {
+            continue;
         }
+        let current = [stamp(&settings.source_path), stamp(&entry.db_path)].concat();
+        let now = Instant::now();
+        let run = due(
+            &settings,
+            observed
+                .get(&entry.id)
+                .map(|(stamp, attempt)| (stamp, attempt.elapsed())),
+            &current,
+        );
+        if !observed.contains_key(&entry.id) {
+            observed.insert(entry.id.clone(), (current.clone(), now));
+        }
+        if !run {
+            continue;
+        }
+        if let Some(job) = state.ts_sync.begin(
+            entry.id.clone(),
+            Some(entry.id.clone()),
+            entry.name.clone(),
+            true,
+        ) {
+            observed.insert(entry.id.clone(), (current, now));
+            let runner = entry.id.clone();
+            queue_work(
+                state,
+                &runner,
+                Work::Sync {
+                    job_id: job.id,
+                    entry: Box::new(entry),
+                    settings,
+                },
+            );
+        }
+    }
+}
+
+/// Target Scheduler imports and syncs as a job: one runner per catalog for
+/// its sync, and [`IMPORT_RUNNER`] for imports, which run one at a time.
+pub(crate) struct TsSyncWork;
+
+/// The runner of every import. No catalog id contains a colon, so it never
+/// shares a runner with a sync.
+const IMPORT_RUNNER: &str = "import:";
+
+/// The work asked for, until the runner takes it.
+#[derive(Default)]
+pub(crate) struct Queue {
+    pending: Option<Work>,
+    /// The runtime the pending work's async steps run on.
+    runtime: Option<tokio::runtime::Handle>,
+    /// The job the runner holds, so a failed runner records that one.
+    current: Option<String>,
+    /// The server that asked, so a failed runner can record how the job
+    /// ended.
+    server: std::sync::Weak<AppState>,
+}
+
+/// An import or a sync to run.
+pub(crate) enum Work {
+    Import {
+        job_id: String,
+        request: ImportRequest,
+    },
+    Sync {
+        job_id: String,
+        entry: Box<DbEntry>,
+        settings: Settings,
+    },
+}
+
+impl Work {
+    fn job_id(&self) -> &str {
+        match self {
+            Self::Import { job_id, .. } | Self::Sync { job_id, .. } => job_id,
+        }
+    }
+}
+
+/// A queued item, with the runtime its async steps run on.
+pub(crate) struct Item {
+    work: Work,
+    runtime: tokio::runtime::Handle,
+}
+
+impl CatalogWork for TsSyncWork {
+    type Queue = Queue;
+    type Status = ();
+    type Item = Item;
+    const RUNNER: &'static str = "ts-sync";
+    /// Each import or sync holds the server's stop itself, labelled with
+    /// what it is.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Item> {
+        queue.current = None;
+        match (queue.pending.take(), queue.runtime.clone()) {
+            (Some(work), Some(runtime)) => {
+                queue.current = Some(work.job_id().to_string());
+                Step::Run(Item { work, runtime })
+            }
+            _ => Step::Exit,
+        }
+    }
+
+    fn run(
+        state: &Arc<AppState>,
+        _: &str,
+        _: &CatalogJob<Self>,
+        item: Item,
+        _: &crate::concurrency::Stop,
+    ) {
+        let _runtime = item.runtime.enter();
+        let job_id = item.work.job_id().to_string();
+        let result = match item.work {
+            Work::Import { job_id, request } => run_import(state, &job_id, request),
+            Work::Sync {
+                job_id,
+                entry,
+                settings,
+            } => run_sync(state, &job_id, &entry, &settings, &item.runtime),
+        };
+        state.ts_sync.finish(&job_id, result);
+    }
+
+    fn has_work(queue: &Queue) -> bool {
+        queue.pending.is_some()
+    }
+
+    /// Record the job the runner held, and the one it had not taken yet,
+    /// as failed.
+    fn runner_failed(queue: &mut Queue, _: &mut ()) {
+        let lost = queue
+            .current
+            .take()
+            .into_iter()
+            .chain(queue.pending.take().map(|work| work.job_id().to_string()));
+        if let Some(state) = queue.server.upgrade() {
+            for job_id in lost {
+                state.ts_sync.finish(
+                    &job_id,
+                    Err(anyhow::anyhow!(
+                        "Target Scheduler sync stopped unexpectedly."
+                    )),
+                );
+            }
+        }
+    }
+}
+
+/// Queue `work` on `runner`. Call from the async runtime: the work's async
+/// steps run on it.
+fn queue_work(state: &Arc<AppState>, runner: &str, work: Work) {
+    let runtime = tokio::runtime::Handle::current();
+    let job_id = work.job_id().to_string();
+    // Each server state has its own runners, so two servers in one
+    // process keep apart.
+    state.catalog_jobs.ts_sync.request(state, runner, |queue| {
+        queue.server = Arc::downgrade(state);
+        queue.pending = Some(work);
+        queue.runtime = Some(runtime);
     });
+    // A stopping server starts no runner: the job ends as stopped.
+    if state.shutdown.is_stopping() {
+        state
+            .ts_sync
+            .finish(&job_id, Err(crate::backup::Cancelled.into()));
+    }
+}
+
+/// An import on its runner: a person's, so background work waits for it.
+fn run_import(state: &Arc<AppState>, job_id: &str, request: ImportRequest) -> Result<()> {
+    let label = if request.connect_source {
+        "Target Scheduler import"
+    } else {
+        "Catalog import"
+    };
+    let _hold = state.shutdown.hold(label);
+    let _interactive = state.begin_named_interactive_job(label);
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        import(state, job_id, request)
+    }))
+    .unwrap_or_else(|_| {
+        Err(anyhow::anyhow!(
+            "Target Scheduler import stopped unexpectedly."
+        ))
+    })
+}
+
+/// A catalog's automatic sync on its runner: it waits while a person's
+/// work runs, then copies the captures and delivers pending planning.
+fn run_sync(
+    state: &Arc<AppState>,
+    job_id: &str,
+    entry: &DbEntry,
+    settings: &Settings,
+    runtime: &tokio::runtime::Handle,
+) -> Result<()> {
+    let _hold = state.shutdown.hold(format!("TS sync ({})", entry.name));
+    state.wait_for_interactive_work_unless(
+        Duration::from_millis(250),
+        || state.ts_sync.stopped(job_id),
+        |waiting| {
+            state
+                .ts_sync
+                .update(job_id, |j| j.waiting_for = waiting.map(str::to_owned))
+        },
+    );
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let captures = synchronize(state, job_id, &entry.db_path, settings);
+        if captures
+            .as_ref()
+            .is_err_and(|e| e.is::<crate::backup::Cancelled>())
+        {
+            return captures;
+        }
+        // Grade conflicts and capture errors do not revoke a separate,
+        // already reviewed planning delivery.
+        current_settings(state, job_id, &entry.db_path, settings)?;
+        let planning = runtime.block_on(super::director::retry_ts_planning(state, &entry.id));
+        if state.shutdown.is_stopping() || state.ts_sync.stopped(job_id) {
+            return Err(crate::backup::Cancelled.into());
+        }
+        match (captures, planning) {
+            (Ok(()), result) | (result, Ok(())) => result,
+            (Err(captures), Err(planning)) => Err(anyhow::anyhow!("{captures:#}; {planning:#}")),
+        }
+    }))
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("TS sync stopped unexpectedly.")))
 }
 
 /// Validate again between independent sync phases: a stopped job or a
@@ -593,7 +761,7 @@ fn synchronize(state: &Arc<AppState>, job: &str, catalog: &str, settings: &Setti
         context.register_remote_image_arrivals(&report.arrivals);
         let _ = context.ensure_cache_available();
         if report.inserted > 0 || report.updated > 0 {
-            super::quality_arrival::note_arrival(job);
+            super::quality_arrival::note_arrival(state, job);
             state
                 .auto_stacks
                 .touch_database(job, super::stack_preview::automatic::RefreshReason::Sync);
@@ -616,6 +784,36 @@ fn synchronize(state: &Arc<AppState>, job: &str, catalog: &str, settings: &Setti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_runner_records_only_the_job_it_held_as_failed() {
+        let state = Arc::new(AppState::new_for_test(
+            Connection::open_in_memory().unwrap(),
+        ));
+        let held = state
+            .ts_sync
+            .begin("db-a".into(), Some("db-a".into()), "A".into(), true)
+            .unwrap();
+        let other = state
+            .ts_sync
+            .begin("db-b".into(), Some("db-b".into()), "B".into(), true)
+            .unwrap();
+        let mut queue = Queue {
+            current: Some(held.id.clone()),
+            server: Arc::downgrade(&state),
+            ..Queue::default()
+        };
+        TsSyncWork::runner_failed(&mut queue, &mut ());
+        let jobs = state.ts_sync.jobs.lock().unwrap();
+        let held = &jobs[&held.id];
+        assert!(!held.running);
+        assert_eq!(held.stage, "error");
+        assert_eq!(
+            held.error.as_deref(),
+            Some("Target Scheduler sync stopped unexpectedly.")
+        );
+        assert!(jobs[&other.id].running, "another catalog's sync goes on");
+    }
 
     #[test]
     fn startup_change_detection_and_schedule_are_independent() {

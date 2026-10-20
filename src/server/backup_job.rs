@@ -1,8 +1,9 @@
 //! Backups from Settings › Backups and on a schedule.
 //!
-//! One backup runs at a time, server-wide, on a runner thread of its own.
-//! A handler only checks the request and queues the run; the plan, the
-//! copies and the archive are made on the runner. A scheduled run is
+//! One backup runs at a time, server-wide, on the server's one backup
+//! runner ([`RUNNER_KEY`] in its catalog jobs). A handler only checks the request
+//! and queues the run; the plan, the copies and the archive are made on the
+//! runner. A scheduled run is
 //! `Background` work: before each file and each SQLite step it waits while a
 //! person's work runs, and the job line lists it as waiting meanwhile. A run
 //! a person starts does not wait. Stop and the server's stop end a run at its
@@ -17,12 +18,14 @@ use crate::backup::{
     self, schedule::BackupSettings, secrets::SecretsSummary, BackupScope, Listing, Locations,
     Trigger,
 };
+use crate::concurrency::Stop;
 use crate::db_registry::DbRegistry;
 use crate::server::api::ApiResponse;
 use crate::server::auth::RequestAccess;
 use crate::server::handlers::{
     require_database_management_allowed, require_registry_path, update_registry, AppError,
 };
+use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
 use crate::server::state::AppState;
 use anyhow::Context;
 use axum::{
@@ -34,7 +37,6 @@ use axum::{
 use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -81,6 +83,74 @@ pub struct JobStatus {
     pub started_at: i64,
     /// Stop was asked; the run ends at its next step.
     pub stopping: bool,
+    /// The run's step in words, as Settings and the job list show it:
+    /// `Copying catalog imaging-rig · 2/9 files`, or what it waits for.
+    pub description: String,
+    /// The stage alone, such as `Backup: Copying`, for a screen reader: it
+    /// changes a few times a run, where the counts change every second.
+    pub stage_label: String,
+    /// 0–100 by bytes, or `None` before the total is known.
+    pub percent: Option<f64>,
+}
+
+/// Each stage's words.
+fn stage_words(stage: &str) -> &str {
+    match stage {
+        "preparing" => "Preparing",
+        "copying" => "Copying",
+        "compressing" => "Compressing",
+        "finishing" => "Finishing",
+        "pruning" => "Removing older backups",
+        other => other,
+    }
+}
+
+impl JobStatus {
+    /// `Copying catalog imaging-rig · 2/9 files`, or what the run waits
+    /// for, or `Stopping…`.
+    pub fn description(&self) -> String {
+        if self.stopping {
+            return "Stopping…".into();
+        }
+        if let Some(what) = &self.waiting_for {
+            return format!("Waiting for {what}");
+        }
+        let stage = stage_words(&self.stage);
+        let what = match &self.current {
+            Some(current) => format!("{stage} {current}"),
+            None => stage.to_string(),
+        };
+        if self.files_total > 0 {
+            format!("{what} · {}/{} files", self.files_done, self.files_total)
+        } else {
+            what
+        }
+    }
+
+    /// The stage alone: `Backup: Copying`, `Backup waiting for …` or
+    /// `Stopping the backup`.
+    pub fn stage_label(&self) -> String {
+        if self.stopping {
+            return "Stopping the backup".into();
+        }
+        if let Some(what) = &self.waiting_for {
+            return format!("Backup waiting for {what}");
+        }
+        format!("Backup: {}", stage_words(&self.stage))
+    }
+
+    /// 0–100 by bytes, or `None` before the total is known.
+    pub fn percent(&self) -> Option<f64> {
+        crate::server::job_text::percent_u64(self.bytes_done, self.bytes_total)
+    }
+
+    /// The status with its words filled in, as a client reads it.
+    fn with_text(mut self) -> Self {
+        self.description = self.description();
+        self.stage_label = self.stage_label();
+        self.percent = self.percent();
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,7 +206,6 @@ struct Inner {
 #[derive(Default)]
 pub struct BackupManager {
     inner: Mutex<Inner>,
-    cancel: AtomicBool,
     server_config: RwLock<Option<PathBuf>>,
     director_meta: RwLock<Option<PathBuf>>,
     /// Pause between SQLite steps; tests slow it down.
@@ -246,24 +315,39 @@ impl BackupManager {
     }
 
     pub fn job(&self) -> Option<JobStatus> {
-        self.inner.lock().unwrap().job.clone()
+        self.inner
+            .lock()
+            .unwrap()
+            .job
+            .clone()
+            .map(JobStatus::with_text)
     }
 
     pub fn last_run(&self) -> Option<LastRun> {
         self.inner.lock().unwrap().last.clone()
     }
 
-    /// Ask the run under way to stop. False when none runs.
-    pub fn stop(&self) -> bool {
-        let mut inner = self.inner.lock().unwrap();
-        match inner.job.as_mut() {
+    /// Ask the run under way to stop. False when none runs. `runners` is
+    /// the server's backup runners, which hold a run not taken yet.
+    pub(crate) fn stop(&self, runners: &CatalogJobs<Backups>) -> bool {
+        let running = match self.inner.lock().unwrap().job.as_mut() {
             Some(job) => {
                 job.stopping = true;
-                self.cancel.store(true, Ordering::SeqCst);
                 true
             }
             None => false,
+        };
+        // The run's record is unlocked first: a failed runner frees the run's
+        // slot from under the queue lock.
+        if running && let Some(runner) = runners.existing(RUNNER_KEY) {
+            // A run the runner has not taken yet starts stopped.
+            runner.stop(|queue| {
+                if let Some(pending) = &mut queue.pending {
+                    pending.stopped = true;
+                }
+            });
         }
+        running
     }
 
     #[cfg(test)]
@@ -361,7 +445,7 @@ fn warnings_for(state: &AppState, registry: &DbRegistry, folder: &Path) -> Vec<S
     backup::destination_warnings(folder, registry, &generated)
 }
 
-/// Queue a run on its own thread. Returns its status as it starts.
+/// Queue a run on the backup runner. Returns its status as it starts.
 pub fn start(state: &Arc<AppState>, request: RunRequest) -> Result<JobStatus, StartError> {
     let registry_path = require_registry_path(state)
         .map_err(|_| StartError::Invalid("this server keeps no registry to back up".into()))?;
@@ -402,71 +486,134 @@ pub fn start(state: &Arc<AppState>, request: RunRequest) -> Result<JobStatus, St
         waiting_for: None,
         started_at: Utc::now().timestamp(),
         stopping: false,
+        description: String::new(),
+        stage_label: String::new(),
+        percent: None,
     };
+    // A stopping server starts no runner, so it takes no run either.
+    if state.shutdown.is_stopping() {
+        return Err(StartError::Invalid("the server is stopping".into()));
+    }
     {
         let mut inner = state.backups.inner.lock().unwrap();
         if inner.job.is_some() {
             return Err(StartError::Busy);
         }
         inner.job = Some(status.clone());
-        state.backups.cancel.store(false, Ordering::SeqCst);
     }
-    let runner_state = Arc::clone(state);
-    let spawned = std::thread::Builder::new()
-        .name("backup".into())
-        .spawn(move || {
-            let claim = RunnerClaim(&runner_state);
-            run(
-                &runner_state,
-                &request,
+    state
+        .catalog_jobs
+        .backups
+        .request(state, RUNNER_KEY, |queue| {
+            queue.server = Arc::downgrade(state);
+            queue.pending = Some(PendingRun {
+                request,
                 registry_path,
                 destination,
                 location,
-            );
-            drop(claim);
+                stopped: false,
+            });
         });
-    if let Err(error) = spawned {
-        state.backups.inner.lock().unwrap().job = None;
-        return Err(StartError::Invalid(format!(
-            "could not start the backup: {error}"
-        )));
-    }
-    Ok(status)
+    Ok(status.with_text())
 }
 
-/// Clears the run's slot however the runner ends, a panic included.
-struct RunnerClaim<'a>(&'a AppState);
+/// Backups as a job with one runner per server.
+pub(crate) struct Backups;
 
-impl Drop for RunnerClaim<'_> {
-    fn drop(&mut self) {
-        self.0.backups.remember(|inner| {
-            if let Some(job) = inner.job.take()
-                && inner
-                    .last
-                    .as_ref()
-                    .is_none_or(|last| last.started_at != job.started_at)
-            {
-                // The runner did not get to record how it went.
-                inner.last = Some(LastRun {
-                    trigger: job.trigger,
-                    scope: job.scope,
-                    started_at: job.started_at,
-                    finished_at: Utc::now().timestamp(),
-                    outcome: Outcome::Failed,
-                    location: job.location,
-                    destination: job.destination,
-                    file_name: None,
-                    bytes: None,
-                    error: Some("the backup stopped unexpectedly".into()),
-                    problems: Vec::new(),
-                    pruned: Vec::new(),
-                    prune_kept: Vec::new(),
-                    prune_kept_for: Vec::new(),
-                    prune_skipped: None,
-                });
-            }
-        });
+/// The run asked for, until the runner takes it.
+#[derive(Default)]
+pub(crate) struct Queue {
+    pending: Option<PendingRun>,
+    /// The server whose backup it is, so a failed runner can record how
+    /// the run ended.
+    server: std::sync::Weak<AppState>,
+}
+
+/// A run asked for.
+pub(crate) struct PendingRun {
+    request: RunRequest,
+    registry_path: PathBuf,
+    destination: PathBuf,
+    location: Location,
+    /// Stop came before the runner took it: it starts stopped and ends at
+    /// its first step.
+    stopped: bool,
+}
+
+impl CatalogWork for Backups {
+    type Queue = Queue;
+    type Status = ();
+    type Item = PendingRun;
+    const RUNNER: &'static str = "backup";
+    /// Each run holds the server's stop itself, labelled as a backup.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, _: std::time::Instant) -> Step<PendingRun> {
+        queue.pending.take().map_or(Step::Exit, Step::Run)
     }
+
+    fn run(state: &Arc<AppState>, _: &str, _: &CatalogJob<Self>, run: PendingRun, stop: &Stop) {
+        if run.stopped {
+            stop.request();
+        }
+        self::run(
+            state,
+            &run.request,
+            run.registry_path,
+            run.destination,
+            run.location,
+            stop,
+        );
+        free_slot(state);
+    }
+
+    fn has_work(queue: &Queue) -> bool {
+        queue.pending.is_some()
+    }
+
+    /// Free the run's slot, recording the run as failed.
+    fn runner_failed(queue: &mut Queue, _: &mut ()) {
+        queue.pending = None;
+        if let Some(state) = queue.server.upgrade() {
+            free_slot(&state);
+        }
+    }
+}
+
+/// The key of the server's one backup runner. Each server state has its
+/// own catalog jobs, so two servers in one process run separate backups.
+const RUNNER_KEY: &str = "backups";
+
+/// Free the slot of the run that ended, so the next run can start. A run
+/// that ended without recording how it went, as on a panic, is recorded as
+/// failed.
+fn free_slot(state: &AppState) {
+    state.backups.remember(|inner| {
+        if let Some(job) = inner.job.take()
+            && inner
+                .last
+                .as_ref()
+                .is_none_or(|last| last.started_at != job.started_at)
+        {
+            inner.last = Some(LastRun {
+                trigger: job.trigger,
+                scope: job.scope,
+                started_at: job.started_at,
+                finished_at: Utc::now().timestamp(),
+                outcome: Outcome::Failed,
+                location: job.location,
+                destination: job.destination,
+                file_name: None,
+                bytes: None,
+                error: Some("the backup stopped unexpectedly".into()),
+                problems: Vec::new(),
+                pruned: Vec::new(),
+                prune_kept: Vec::new(),
+                prune_kept_for: Vec::new(),
+                prune_skipped: None,
+            });
+        }
+    });
 }
 
 fn run(
@@ -475,12 +622,13 @@ fn run(
     registry_path: PathBuf,
     destination: PathBuf,
     location: Location,
+    stop: &Stop,
 ) {
     let manager = &state.backups;
     let _hold = state.shutdown.hold("a backup");
     let started = Utc::now();
     let scheduled = request.trigger == Trigger::Schedule;
-    let cancelled = || manager.cancel.load(Ordering::SeqCst) || state.shutdown.is_stopping();
+    let cancelled = || stop.requested() || state.shutdown.is_stopping();
     // A scheduled run waits while a person's work runs, but Stop ends the
     // wait as it ends the run.
     let yield_now = || {
@@ -698,20 +846,18 @@ pub fn spawn(state: Arc<AppState>) {
     if let Ok(registry) = require_registry_path(&state) {
         state.backups.load_state(&registry);
     }
-    tokio::spawn(async move {
-        let sweeping = Arc::clone(&state);
-        let _ = tokio::task::spawn_blocking(move || {
-            tidy_downloads(&downloads_folder(&sweeping), None, Utc::now().timestamp())
-        })
-        .await;
-        loop {
-            if !state.shutdown.sleep(TICK).await {
-                return;
-            }
-            let ticking = Arc::clone(&state);
-            let _ = tokio::task::spawn_blocking(move || tick(&ticking, Utc::now())).await;
-        }
+    let sweeping = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || {
+        tidy_downloads(&downloads_folder(&sweeping), None, Utc::now().timestamp())
     });
+    crate::server::schedule::every(
+        &state,
+        "backup",
+        crate::server::schedule::Every::period(TICK),
+        |state| async move {
+            let _ = tokio::task::spawn_blocking(move || tick(&state, Utc::now())).await;
+        },
+    );
 }
 
 // ---- Routes ----------------------------------------------------------------
@@ -988,7 +1134,7 @@ pub async fn stop_backup(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<BackupJobView>>, AppError> {
     require_backups(&state)?;
-    state.backups.stop();
+    state.backups.stop(&state.catalog_jobs.backups);
     Ok(Json(ApiResponse::success(BackupJobView {
         job: state.backups.job(),
         last_run: state.backups.last_run(),

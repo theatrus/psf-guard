@@ -42,18 +42,20 @@ pub fn enabled() -> bool {
 
 /// How long a re-apply waits after the work that freed the worker ends,
 /// so that work's own bookkeeping is done before it looks. A person's
-/// re-apply has the next turn held for it instead, and looks at once.
+/// re-apply has a turn kept for it instead, and looks at once.
 const SETTLE: Duration = Duration::from_secs(3);
 
-/// The longest the next turn is held for a person's re-apply that has not
-/// queued its run yet. Probing the tools takes seconds; past this, the line
-/// moves on without it.
+/// The longest a turn is reserved for a person's re-apply that has not
+/// queued its run yet, counted from when an entry waits behind the turn.
+/// Probing the tools takes seconds; past this, the turn expires and the
+/// next entry runs.
 pub(super) const TURN_HELD_FOR: Duration = Duration::from_secs(60);
 
 /// One look for a re-apply to start at a time. A look a re-apply asked for
-/// runs after one under way rather than not at all: the next turn is held
-/// for a person's until a look starts it.
-static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// runs after one under way rather than not at all: a person's keeps its
+/// turn until a look starts it.
+#[derive(Default)]
+pub(super) struct Looks(tokio::sync::Mutex<()>);
 
 /// A re-apply waiting for its turn, or queued as a run.
 #[derive(Debug, Clone)]
@@ -74,9 +76,6 @@ pub(super) struct Reapply {
     /// The run, once queued.
     pub run_id: Option<String>,
     pub since: Instant,
-    /// When the next turn began to be held for it, if it is a person's:
-    /// when it began to wait, or when their re-apply ahead of it ended.
-    pub held_since: Instant,
 }
 
 /// How a processing run ended, for the re-apply it may be.
@@ -125,6 +124,12 @@ fn channel_of(
         "{database_id}\0{project_id}\0{target_id}\0{filter}\0{}",
         exposure.unwrap_or_default()
     )
+}
+
+/// The turn kept in the line for a person's re-apply of `channel` until its
+/// run joins.
+fn kept_turn(channel: &str) -> String {
+    format!("re-apply turn {channel}")
 }
 
 fn source_key(job_id: &str, group_index: usize) -> String {
@@ -223,65 +228,47 @@ impl StackPreviewManager {
             .any(|reapply| reapply.personal && reapply.run_id.is_none())
     }
 
-    /// Until when the next turn of the worker is held for a person's
-    /// re-apply that is about to queue its run, so the build next in line
-    /// does not take the worker first. Nothing is held while one of their
-    /// re-apply runs waits in the line: the line serves it, wherever it
-    /// stands. While one of theirs runs, the hold starts over, and it covers
-    /// the moment that run lets go of the worker. Otherwise it lasts
-    /// [`TURN_HELD_FOR`] from when it began, so a re-apply that never
-    /// starts cannot stall the line.
-    pub(super) fn turn_held_until(&self) -> Option<Instant> {
-        let (runs, held_since) = {
-            let reapplies = self.reapplies.lock().unwrap();
-            let personal = reapplies.values().filter(|reapply| reapply.personal);
-            let runs = personal
-                .clone()
-                .filter_map(|reapply| reapply.run_id.clone())
-                .collect::<Vec<_>>();
-            let held_since = personal
-                .filter(|reapply| reapply.run_id.is_none())
-                .map(|reapply| reapply.held_since)
-                .min();
-            (runs, held_since?)
-        };
-        let mut running = false;
-        for run_id in &runs {
-            match self.processing_state(run_id) {
-                Some(StackJobState::Queued) => return None,
-                Some(StackJobState::Running) => running = true,
-                _ => {}
-            }
-        }
-        let now = Instant::now();
-        let from = if running { now } else { held_since };
-        Some(from + self.turn_held_for).filter(|until| *until > now)
+    /// The place in line of a person's other re-apply that comes last: its
+    /// run, or the turn kept for it. Theirs take turns in the order they
+    /// began to wait.
+    fn last_personal_in_line(&self, except: &str) -> Option<String> {
+        let ids = self
+            .reapplies
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(channel, reapply)| reapply.personal && channel.as_str() != except)
+            .map(|(channel, reapply)| reapply.run_id.clone().unwrap_or_else(|| kept_turn(channel)))
+            .collect::<Vec<_>>();
+        ids.into_iter()
+            .filter_map(|id| Some((self.line.position(&id)?, id)))
+            .max_by_key(|(position, _)| *position)
+            .map(|(_, id)| id)
     }
 
     /// Note a re-apply waiting for its turn, in place of any other for its
     /// channel.
+    /// A person's that has no run yet has a turn kept for it: at the front,
+    /// or after their other re-apply that comes last, which goes first.
     fn record_reapply(&self, channel: String, reapply: Reapply) {
-        self.reapplies.lock().unwrap().insert(channel, reapply);
-        // A build first in line looks again: the next turn may be held now.
-        self.turn.notify_waiters();
+        let keep_turn = reapply.personal && reapply.run_id.is_none();
+        let after = keep_turn
+            .then(|| self.last_personal_in_line(&channel))
+            .flatten();
+        self.reapplies
+            .lock()
+            .unwrap()
+            .insert(channel.clone(), reapply);
+        if keep_turn {
+            self.line
+                .reserve_turn(&kept_turn(&channel), self.turn_held_for, after.as_deref());
+        }
     }
 
     fn forget_reapply(&self, channel: &str) {
-        let forgotten = self.reapplies.lock().unwrap().remove(channel);
-        if forgotten
-            .as_ref()
-            .is_some_and(|reapply| reapply.personal && reapply.run_id.is_some())
-        {
-            // Their next re-apply's hold starts as this one ends.
-            let now = Instant::now();
-            for reapply in self.reapplies.lock().unwrap().values_mut() {
-                if reapply.personal && reapply.run_id.is_none() {
-                    reapply.held_since = now;
-                }
-            }
-        }
-        // A build held up for it looks again.
-        self.turn.notify_waiters();
+        self.reapplies.lock().unwrap().remove(channel);
+        // A turn kept for it is let go.
+        self.line.release_place(&kept_turn(channel));
     }
 
     /// Re-applies the server is waiting to start or running.
@@ -366,7 +353,6 @@ pub(super) fn after_build(
                         personal,
                         run_id: None,
                         since: Instant::now(),
-                        held_since: Instant::now(),
                     },
                 );
                 added = true;
@@ -446,26 +432,31 @@ pub(super) fn kick(state: &Arc<AppState>) {
 /// to do and no refresh of its project is still settling. One at a time:
 /// the run it queues keeps the next one waiting.
 pub(super) async fn start_due(state: Arc<AppState>) {
-    let _starting = STARTING.lock().await;
+    let _starting = state.stack_previews.reapply_looks.0.lock().await;
     start_waiting(&state).await;
 }
 
 /// The scheduler's periodic look: skipped while another is under way, such
 /// as one probing the tools, since the next tick looks again.
 pub(super) async fn look_unless_busy(state: Arc<AppState>) {
-    if let Ok(_starting) = STARTING.try_lock() {
+    if let Ok(_starting) = state.stack_previews.reapply_looks.0.try_lock() {
         start_waiting(&state).await;
     }
 }
 
 async fn start_waiting(state: &Arc<AppState>) {
-    if !enabled() || !super::journal::restored() || state.shutdown.is_stopping() {
+    if !enabled()
+        || !state.stack_previews.journal_restored.is_done()
+        || state.shutdown.is_stopping()
+    {
         return;
     }
-    // An automatic one waits behind anything a person started and every
-    // build. A person's own is theirs: it goes next.
+    // An automatic one is probed and queued while no person's work runs;
+    // in the line it waits behind a person's work by tier, and behind
+    // builds of its own target by their channel key. A person's own is
+    // theirs: it goes next.
     let personal_turn = state.stack_previews.personal_reapply_in_line().is_none();
-    let busy = state.interactive_job_active() || !state.stack_previews.active().is_empty();
+    let busy = state.interactive_job_active();
     let scheduled = state.auto_stacks.scheduled();
     let mut waiting = state
         .stack_previews
@@ -485,12 +476,10 @@ async fn start_waiting(state: &Arc<AppState>) {
         .collect::<Vec<_>>();
     waiting.sort_by_key(|(_, reapply)| (!reapply.personal, reapply.since));
     for (channel, reapply) in waiting {
-        // Each automatic one takes seconds to probe. Once other work or a
-        // person's re-apply is waiting, this look gives way to it.
+        // Each automatic one takes seconds to probe. Once a person's work
+        // runs or a person's re-apply waits, this look gives way to it.
         if !reapply.personal
-            && (state.stack_previews.personal_reapply_waiting()
-                || state.interactive_job_active()
-                || !state.stack_previews.active().is_empty())
+            && (state.stack_previews.personal_reapply_waiting() || state.interactive_job_active())
         {
             return;
         }
@@ -586,16 +575,15 @@ async fn start_waiting(state: &Arc<AppState>) {
                     settle_ended_run(&ctx, &reapply);
                     continue;
                 }
-                // A person's goes first, before the held turn is let go.
+                // A person's takes the turn kept for it.
                 if reapply.personal {
-                    manager.move_in_line(&run_id, 0);
+                    manager.line.fill_reservation(&kept_turn(&channel), &run_id);
                 }
                 if let Some(entry) = manager.reapplies.lock().unwrap().get_mut(&channel)
                     && entry.revision == reapply.revision
                 {
                     entry.run_id = Some(run_id.clone());
                 }
-                manager.turn.notify_waiters();
                 // The run may have ended before it was recorded, too late for
                 // its end to find this re-apply: settle it here.
                 let ended = !matches!(
@@ -660,7 +648,10 @@ fn settle_ended_run(ctx: &DatabaseContext, reapply: &Reapply) {
 /// carried. One that stepped aside for a person's work waits again.
 pub(super) fn run_finished(state: &Arc<AppState>, run_id: &str, outcome: RunOutcome) {
     let manager = &state.stack_previews;
-    let yielded = manager.take_yielded(run_id);
+    // Stopped for a person's work, by the line or by the yield below: it
+    // waits again rather than ending.
+    let preempted = manager.line.take_preempted(run_id);
+    let yielded = manager.take_yielded(run_id) || preempted;
     let Some((channel, reapply)) = manager.reapply_for_run(run_id) else {
         // Any run ending frees the worker for a re-apply waiting on it.
         if !manager.reapplies.lock().unwrap().is_empty() {
@@ -854,7 +845,6 @@ pub(super) fn restored(
             personal,
             run_id: Some(run_id.into()),
             since: Instant::now(),
-            held_since: Instant::now(),
         },
     );
 }
@@ -917,7 +907,6 @@ pub(super) fn recover(state: &Arc<AppState>) {
                     personal: waiting.personal,
                     run_id: None,
                     since: Instant::now(),
-                    held_since: Instant::now(),
                 },
             );
             recovered += 1;
@@ -950,7 +939,6 @@ mod tests {
             personal: true,
             run_id: run_id.map(Into::into),
             since: Instant::now(),
-            held_since: Instant::now(),
         }
     }
 
@@ -970,10 +958,15 @@ mod tests {
         manager: &Arc<StackPreviewManager>,
         job_id: &'static str,
     ) -> tokio::task::JoinHandle<bool> {
-        let cancel = manager.track_cancel(job_id);
-        manager.join_line(job_id);
+        manager.queue_test_build(job_id);
         let manager = Arc::clone(manager);
-        tokio::spawn(async move { manager.wait_turn(job_id, &cancel).await.is_some() })
+        tokio::spawn(async move {
+            loop {
+                if manager.dispatch_next().await == (true, job_id.to_string()) {
+                    return true;
+                }
+            }
+        })
     }
 
     #[tokio::test]
@@ -981,15 +974,15 @@ mod tests {
         let manager = Arc::new(StackPreviewManager::new());
         // B1 holds the worker. The person's re-apply run R waits in the
         // line, and they moved build B2 above it.
-        let busy = Arc::clone(&manager.permit).try_acquire_owned().unwrap();
+        let busy = manager.line.try_reserve_main().unwrap();
         manager.queue_processing("r", scope("R"), "Stretch".into(), false, test_origin("r"));
         manager.record_reapply("R".into(), theirs("R", Some("r")));
         let b2 = waiting_build(&manager, "b2");
         assert!(manager.move_in_line("b2", 0));
         // Another of their re-applies begins to wait. It cannot start while
-        // R waits, so nothing is held for it: the line serves R.
+        // R waits, so its turn is kept after R's: the line serves B2, then R.
         manager.record_reapply("G".into(), theirs("G", None));
-        assert_eq!(manager.turn_held_until(), None);
+        assert_eq!(manager.line.order(), ["b2", "r", &kept_turn("G")]);
 
         drop(busy);
         let took = tokio::time::timeout(Duration::from_secs(2), b2).await;
@@ -1004,14 +997,14 @@ mod tests {
         let manager = Arc::new(manager);
         // Their re-apply waits to start, and never does.
         manager.record_reapply("R".into(), theirs("R", None));
-        assert!(manager.turn_held_until().is_some());
+        assert_eq!(manager.line.order(), [kept_turn("R")]);
         let build = waiting_build(&manager, "build");
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(!build.is_finished(), "the turn is held for the re-apply");
 
         let took = tokio::time::timeout(Duration::from_secs(2), build).await;
         assert!(matches!(took, Ok(Ok(true))), "the build takes the worker");
-        assert_eq!(manager.turn_held_until(), None);
+        assert!(manager.line.order().is_empty(), "the kept turn ran out");
     }
 
     #[tokio::test]
@@ -1019,22 +1012,26 @@ mod tests {
         let mut manager = StackPreviewManager::new();
         manager.turn_held_for = Duration::from_millis(300);
         let manager = Arc::new(manager);
-        // Their re-apply of R runs; G waits for it, and a build waits.
+        // Their re-apply of R runs, holding the worker; G waits for it, and
+        // a build waits.
+        let running = manager.line.try_reserve_main().unwrap();
         let (cancel, _) =
             manager.queue_processing("r", scope("R"), "Stretch".into(), false, test_origin("r"));
-        manager.leave_line("r");
+        manager.release_place("r");
         assert!(manager.start_processing("r", &cancel));
         manager.record_reapply("R".into(), theirs("R", Some("r")));
         manager.record_reapply("G".into(), theirs("G", None));
         let build = waiting_build(&manager, "build");
-        // However long R runs, the turn after it stays G's.
+        // However long R runs, the turn after it stays G's: the kept turn
+        // counts only once it holds anything up.
         tokio::time::sleep(Duration::from_millis(500)).await;
-        assert!(manager.turn_held_until().is_some());
+        assert_eq!(manager.line.order(), [kept_turn("G"), "build".to_string()]);
         assert!(!build.is_finished());
 
-        // R ends: G's hold starts over from there, then runs out.
+        // R ends: G's turn holds the worker from there, then runs out.
         manager.finish_processing("r");
         manager.forget_reapply("R");
+        drop(running);
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert!(!build.is_finished(), "the turn is G's");
         let took = tokio::time::timeout(Duration::from_secs(2), build).await;

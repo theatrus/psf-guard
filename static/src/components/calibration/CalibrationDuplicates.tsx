@@ -11,9 +11,6 @@ import Dialog from '../Dialog';
 import { KIND_LABELS, formatTime, plural, serverTime } from './calibrationLabels';
 import { useRigClocks } from './useRigClocks';
 import {
-  duplicateJobLabel,
-  duplicateJobPercent,
-  duplicateJobTitle,
   duplicatesKey,
   duplicatesPollMs,
 } from './duplicateJob';
@@ -88,14 +85,13 @@ function JobProgress({ status, onStop, stopping, canStop }: {
   stopping: boolean;
   canStop: boolean;
 }) {
-  const percent = duplicateJobPercent(status);
-  const label = duplicateJobLabel(status);
+  const { percent, label } = status;
   return (
     <div className="calibration-dup-progress" data-testid="duplicates-progress">
       <div className="calibration-dup-progress-copy">
         <span className="calibration-spinner" aria-hidden="true" />
         <span className="calibration-dup-progress-label">
-          <strong>{duplicateJobTitle(status)}</strong> · {label}
+          <strong>{status.title}</strong> · {label}
           {status.waiting_for && <span className="calibration-muted"> · waiting for {status.waiting_for}</span>}
         </span>
         {canStop && (
@@ -105,7 +101,7 @@ function JobProgress({ status, onStop, stopping, canStop }: {
           </button>
         )}
       </div>
-      <div className="calibration-dup-progress-track" role="progressbar" aria-label={duplicateJobTitle(status)}
+      <div className="calibration-dup-progress-track" role="progressbar" aria-label={status.title}
         aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent == null ? undefined : Math.round(percent)}
         aria-valuetext={label}>
         <span style={{ width: `${percent ?? 0}%` }} />

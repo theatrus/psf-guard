@@ -18,17 +18,17 @@
 //! alone, and each frame waits while interactive work runs.
 
 use crate::calibration::{GradeOutcome, MeasureOutcome};
-use crate::concurrency::{ComputePool, Priority};
+use crate::concurrency::{ComputePool, Priority, Stop};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Settling, Step};
 use crate::server::state::AppState;
 use axum::Json;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long the pass waits after the last calibration frame a remote client
@@ -65,119 +65,99 @@ pub struct CalibrationQualityProgress {
     pub last_error: Option<String>,
 }
 
-/// Whether a pass runs, and whether another was asked for meanwhile.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct Flags {
-    running: bool,
-    again: bool,
+/// Calibration grading passes, run on one thread per catalog.
+pub(crate) struct CalibrationQuality;
+
+type Job = CatalogJob<CalibrationQuality>;
+
+/// What waits for a pass of one catalog.
+#[derive(Debug, Default)]
+pub(crate) struct Queue {
+    /// Whether a pass was requested after the last pass started.
+    pass_requested: bool,
+    /// Frames uploaded to the catalog: a pass runs once uploads pause for
+    /// [`UPLOAD_SETTLE`].
+    uploads: Settling,
 }
 
-/// Start a pass, or, when one runs already, ask it to run again.
-fn claim(flags: &mut Flags) -> bool {
-    if flags.running {
-        flags.again = true;
-        false
-    } else {
-        flags.running = true;
-        true
+impl CatalogWork for CalibrationQuality {
+    type Queue = Queue;
+    type Status = CalibrationQualityProgress;
+    type Item = ();
+    const RUNNER: &'static str = "calibration-quality";
+    /// Shutdown waits until the batch being measured is committed.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("calibration grading");
+
+    /// A pass measures only the frames that existed when it started, so a
+    /// request during a pass starts one more pass after it ends. Uploads
+    /// start a pass once they pause for [`UPLOAD_SETTLE`].
+    fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> Step<()> {
+        if std::mem::take(&mut queue.pass_requested) {
+            // The pass reads every frame the uploads brought as well.
+            queue.uploads = Settling::default();
+            return Step::Run(());
+        }
+        queue.uploads.step(now, UPLOAD_SETTLE, None)
+    }
+
+    fn run(state: &Arc<AppState>, path: &str, job: &Job, (): (), _: &Stop) {
+        run_logged(state, path, job);
+    }
+
+    /// Grades decide which calibration frames each project's lights use, so
+    /// health is judged again after the last pass of a batch.
+    fn after_queue_empty(state: &Arc<AppState>, path: &str) {
+        crate::server::calibration_health::request(state, path);
+    }
+
+    fn has_work(queue: &Queue) -> bool {
+        queue.pass_requested || queue.uploads.is_pending()
+    }
+
+    fn runner_failed(_: &mut Queue, progress: &mut CalibrationQualityProgress) {
+        progress.running = false;
+        progress.stage = None;
+        progress.last_error = Some("calibration grading stopped unexpectedly".into());
     }
 }
 
-/// End a pass. True when another was asked for while it ran; the catalog
-/// then stays claimed for that pass.
-fn finish(flags: &mut Flags) -> bool {
-    if flags.again {
-        flags.again = false;
-        true
-    } else {
-        flags.running = false;
-        false
-    }
-}
-
-#[derive(Default)]
-struct Job {
-    flags: Mutex<Flags>,
-    progress: RwLock<CalibrationQualityProgress>,
-}
-
-/// One job per catalog file, whichever database context asks: a database
-/// edit replaces its context, and two passes over one file would measure
-/// every frame twice.
-static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
-
-fn job(path: &str) -> Arc<Job> {
-    Arc::clone(
-        JOBS.lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .entry(path.to_string())
-            .or_default(),
-    )
+/// The job of the catalog file at `path`, whichever database context
+/// asks: a database edit replaces its context, and two passes over one file
+/// would measure every frame twice.
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.calibration_quality.job(path)
 }
 
 /// Whether a grading pass runs over the catalog at `path`. It commits
 /// grades in batches, and each batch changes every project's calibration
 /// health key.
-pub fn running(path: &str) -> bool {
-    job(path)
-        .flags
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .running
+pub fn running(state: &AppState, path: &str) -> bool {
+    let job = job(state, path);
+    let queue = job.queue();
+    queue.running() || queue.pass_requested
 }
 
 /// Whether grading runs over the catalog at `path`, or waits for uploads
 /// to it to stop: flat measuring waits for it, since grades decide which
 /// flats are in use.
-pub fn busy(path: &str) -> bool {
-    running(path)
-        || UPLOADS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains_key(path)
+pub fn busy(state: &AppState, path: &str) -> bool {
+    let job = job(state, path);
+    let queue = job.queue();
+    queue.running() || queue.pass_requested || queue.uploads.is_pending()
 }
 
 /// Where grading stands for the catalog at `path`.
-pub fn progress(path: &str) -> CalibrationQualityProgress {
-    job(path)
-        .progress
-        .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
+pub fn progress(state: &AppState, path: &str) -> CalibrationQualityProgress {
+    job(state, path).status()
 }
 
 /// Measure what is new in the catalog at `path` and grade it, on a thread
 /// of its own.
 pub fn request(state: &Arc<AppState>, path: &str) {
-    if state.shutdown.is_stopping() {
-        return;
-    }
-    let job = job(path);
-    if !claim(&mut job.flags.lock().unwrap_or_else(|p| p.into_inner())) {
-        return;
-    }
-    let state = Arc::clone(state);
-    let path = path.to_string();
-    // A stop waits for the batch being measured to be committed.
-    let work = state.shutdown.hold(format!("calibration grading ({path})"));
-    std::thread::spawn(move || {
-        let _work = work;
-        loop {
-            run_logged(&state, &path, &job);
-            let mut flags = job.flags.lock().unwrap_or_else(|p| p.into_inner());
-            if state.shutdown.is_stopping() {
-                // Let go of the catalog: the next start grades the rest.
-                flags.running = false;
-                flags.again = false;
-                return;
-            }
-            if !finish(&mut flags) {
-                break;
-            }
-        }
-        // Grades decide what each project's lights get; judge them again.
-        crate::server::calibration_health::request(&state, &path);
-    });
+    state
+        .catalog_jobs
+        .calibration_quality
+        .request(state, path, |queue| queue.pass_requested = true);
 }
 
 /// Grade every database's library again, after a grade limit changed. A
@@ -189,50 +169,15 @@ pub fn request_all(state: &Arc<AppState>) {
     }
 }
 
-/// Catalogs with uploaded frames waiting for a pass, and when the last one
-/// came.
-static UPLOADS: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
-
 /// A frame reached the catalog at `path` by remote upload: a calibration
 /// frame to grade, or a light whose project's calibration health the pass
 /// that follows judges again. The pass starts once uploads to it pause for
 /// [`UPLOAD_SETTLE`]; each new frame before then pushes it back.
 pub fn note_upload(state: &Arc<AppState>, path: &str) {
-    let uploads = || UPLOADS.lock().unwrap_or_else(|p| p.into_inner());
-    if uploads().insert(path.to_string(), Instant::now()).is_some() {
-        // A thread already waits for this catalog.
-        return;
-    }
-    let state = Arc::clone(state);
-    let path = path.to_string();
-    std::thread::spawn(move || {
-        loop {
-            // The lock is let go before the wait, or every upload in the
-            // meantime would block behind it.
-            let wait = upload_wait(&mut uploads(), &path, Instant::now());
-            match wait {
-                Some(wait) => std::thread::sleep(wait),
-                None => break,
-            }
-        }
-        request(&state, &path);
-    });
-}
-
-/// How much longer uploads to `path` must stay quiet before its pass, or
-/// `None` once they have, which clears the entry for the next upload.
-fn upload_wait(
-    uploads: &mut HashMap<String, Instant>,
-    path: &str,
-    now: Instant,
-) -> Option<Duration> {
-    let quiet = now.saturating_duration_since(*uploads.get(path)?);
-    if quiet >= UPLOAD_SETTLE {
-        uploads.remove(path);
-        None
-    } else {
-        Some(UPLOAD_SETTLE - quiet)
-    }
+    state
+        .catalog_jobs
+        .calibration_quality
+        .request(state, path, |queue| queue.uploads.touch(Instant::now()));
 }
 
 fn run_logged(state: &AppState, path: &str, job: &Job) {
@@ -255,25 +200,16 @@ fn run_logged(state: &AppState, path: &str, job: &Job) {
                 "Paused grading calibration frames in {path}: {error:#}. \
                  The next pass continues where this left off."
             );
-            update(job, |progress| {
+            job.update(|progress| {
                 progress.last_error = Some(format!("{error:#}"));
             });
         }
     }
-    update(job, |progress| {
+    job.update(|progress| {
         progress.running = false;
         progress.stage = None;
         progress.finished_at = Some(chrono::Utc::now().timestamp());
     });
-}
-
-fn update(job: &Job, edit: impl FnOnce(&mut CalibrationQualityProgress)) {
-    edit(
-        &mut job
-            .progress
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
-    );
 }
 
 /// One pass on its own connection: measure, then grade.
@@ -282,7 +218,7 @@ fn run_pass(
     path: &str,
     job: &Job,
 ) -> anyhow::Result<(MeasureOutcome, GradeOutcome)> {
-    update(job, |progress| {
+    job.update(|progress| {
         *progress = CalibrationQualityProgress {
             running: true,
             stage: Some("measuring".into()),
@@ -301,7 +237,7 @@ fn run_pass(
         return Ok(Default::default());
     }
     let pending = crate::calibration::pending_measurements(&conn)?;
-    update(job, |progress| progress.to_measure = pending.len());
+    job.update(|progress| progress.to_measure = pending.len());
     let measured = if pending.is_empty() {
         MeasureOutcome::default()
     } else {
@@ -314,7 +250,7 @@ fn run_pass(
         );
         let lease = state.lease_workers(Priority::Background, budget.workers);
         let pool = ComputePool::take("calibration-quality", lease.workers)?;
-        update(job, |progress| progress.workers = lease.workers);
+        job.update(|progress| progress.workers = lease.workers);
         tracing::info!(
             "Measuring {} calibration frame(s) in {path} to grade them — {}; {}",
             pending.len(),
@@ -326,11 +262,11 @@ fn run_pass(
         let measure = |frame: &crate::calibration::PendingFrame| {
             // Interactive work comes first; this frame waits for it.
             if state.interactive_job_active() {
-                update(job, |progress| progress.stage = Some("waiting".into()));
+                job.update(|progress| progress.stage = Some("waiting".into()));
                 while state.interactive_job_active() && !state.shutdown.is_stopping() {
                     std::thread::sleep(YIELD_POLL);
                 }
-                update(job, |progress| progress.stage = Some("measuring".into()));
+                job.update(|progress| progress.stage = Some("measuring".into()));
             }
             crate::calibration::measure_frame(frame)
         };
@@ -339,19 +275,19 @@ fn run_pass(
             &pending,
             |frames| pool.install(|| frames.par_iter().map(measure).collect()),
             || !state.shutdown.is_stopping(),
-            |done, _| update(job, |progress| progress.done = done),
+            |done, _| job.update(|progress| progress.done = done),
         )?
     };
     if state.shutdown.is_stopping() {
         // Grading reads the whole library; the next start does it.
         return Ok((measured, Default::default()));
     }
-    update(job, |progress| {
+    job.update(|progress| {
         progress.stage = Some("grading".into());
         progress.last_measured = Some(measured.clone());
     });
     let graded = crate::calibration::grade_library(&conn)?;
-    update(job, |progress| progress.last_graded = Some(graded.clone()));
+    job.update(|progress| progress.last_graded = Some(graded.clone()));
     Ok((measured, graded))
 }
 
@@ -364,6 +300,7 @@ pub struct CalibrationQualityResponse {
 /// `GET /api/db/{db}/calibrations/quality` — the grading job's progress and
 /// how the library's frames are graded.
 pub async fn get_progress(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<CalibrationQualityResponse>>, AppError> {
     let path = ctx.database_path.clone();
@@ -381,7 +318,7 @@ pub async fn get_progress(
     .map_err(|error| AppError::InternalError(format!("counting calibration grades: {error}")))?
     .map_err(|error| AppError::InternalError(format!("counting calibration grades: {error:#}")))?;
     Ok(Json(ApiResponse::success(CalibrationQualityResponse {
-        progress: progress(&path),
+        progress: progress(&state, &path),
         counts,
     })))
 }
@@ -414,18 +351,23 @@ mod tests {
     }
 
     #[test]
-    fn a_waiting_upload_does_not_hold_up_the_next() {
+    fn an_upload_starts_a_pass_once_uploads_pause() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("uploads.sqlite");
         let path = path.to_string_lossy();
         let state = Arc::new(test_state());
-        note_upload(&state, &path);
-        // Give the waiting thread time to start its wait.
-        std::thread::sleep(Duration::from_millis(200));
         let started = Instant::now();
         note_upload(&state, &path);
-        assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(UPLOADS.lock().unwrap().contains_key(path.as_ref()));
+        note_upload(&state, &path);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a note never waits"
+        );
+        // The catalog's runner waits for the uploads to settle; grading
+        // counts as busy meanwhile, and as not yet running.
+        assert!(busy(&state, &path));
+        assert!(!running(&state, &path));
+        assert!(job(&state, &path).queue().has_runner());
     }
 
     #[test]
@@ -435,7 +377,7 @@ mod tests {
         let job = Job::default();
         let (measured, graded) = run_pass(&test_state(), &path, &job).unwrap();
         assert_eq!((measured.measured, graded.poor), (4, 1));
-        let progress = job.progress.read().unwrap().clone();
+        let progress = job.status();
         assert_eq!((progress.to_measure, progress.done), (4, 4));
         assert!(progress.workers >= 1);
         assert_eq!(progress.last_graded, Some(graded));
@@ -457,11 +399,11 @@ mod tests {
             std::thread::spawn(move || run_pass(&state, &path, &job).unwrap())
         };
         let deadline = Instant::now() + Duration::from_secs(20);
-        while job.progress.read().unwrap().stage.as_deref() != Some("waiting") {
+        while job.status().stage.as_deref() != Some("waiting") {
             assert!(Instant::now() < deadline, "the pass never waited");
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(job.progress.read().unwrap().done, 0, "nothing read yet");
+        assert_eq!(job.status().done, 0, "nothing read yet");
         drop(interactive);
         let (measured, _) = pass.join().unwrap();
         assert_eq!(measured.measured, 4);
@@ -471,10 +413,11 @@ mod tests {
     fn a_request_runs_the_pass_in_the_background() {
         let temp = tempfile::tempdir().unwrap();
         let path = dark_catalog(temp.path());
-        request(&Arc::new(test_state()), &path);
+        let state = Arc::new(test_state());
+        request(&state, &path);
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            let progress = progress(&path);
+            let progress = progress(&state, &path);
             if !progress.running
                 && let Some(graded) = &progress.last_graded
             {
@@ -489,38 +432,41 @@ mod tests {
 
     #[test]
     fn a_request_during_a_pass_runs_one_more() {
-        let mut flags = Flags::default();
-        assert!(claim(&mut flags));
-        // Requests while it runs collapse into one more pass.
-        assert!(!claim(&mut flags));
-        assert!(!claim(&mut flags));
-        assert!(finish(&mut flags), "one more pass");
-        assert!(!finish(&mut flags), "then it stops");
-        assert_eq!(flags, Flags::default());
-        // Once it stops, the next request starts a pass.
-        assert!(claim(&mut flags));
+        let state = test_state();
+        let mut queue = Queue {
+            pass_requested: true,
+            ..Queue::default()
+        };
+        let next = |queue: &mut Queue| CalibrationQuality::next(&state, "c", queue, Instant::now());
+        assert_eq!(next(&mut queue), Step::Run(()));
+        // Two requests arrive during the pass.
+        queue.pass_requested = true;
+        queue.pass_requested = true;
+        assert_eq!(next(&mut queue), Step::Run(()), "one more pass");
+        assert_eq!(next(&mut queue), Step::Exit, "then it stops");
     }
 
     #[test]
     fn uploads_wait_for_the_catalog_to_go_quiet() {
+        let state = test_state();
         let start = Instant::now();
-        let mut uploads = HashMap::from([("a.sqlite".to_string(), start)]);
-        assert_eq!(
-            upload_wait(&mut uploads, "a.sqlite", start),
-            Some(UPLOAD_SETTLE)
-        );
+        let mut queue = Queue::default();
+        queue.uploads.touch(start);
+        let next = |queue: &mut Queue, now| CalibrationQuality::next(&state, "a", queue, now);
+        assert_eq!(next(&mut queue, start), Step::Sleep(UPLOAD_SETTLE));
         // A frame a minute later pushes the pass back.
         let later = start + Duration::from_secs(60);
-        uploads.insert("a.sqlite".into(), later);
+        queue.uploads.touch(later);
         assert_eq!(
-            upload_wait(&mut uploads, "a.sqlite", start + UPLOAD_SETTLE),
-            Some(Duration::from_secs(60))
+            next(&mut queue, start + UPLOAD_SETTLE),
+            Step::Sleep(Duration::from_secs(60))
         );
-        assert_eq!(
-            upload_wait(&mut uploads, "a.sqlite", later + UPLOAD_SETTLE),
-            None
-        );
-        assert!(uploads.is_empty(), "the next upload starts a new wait");
-        assert_eq!(upload_wait(&mut uploads, "other.sqlite", later), None);
+        assert_eq!(next(&mut queue, later + UPLOAD_SETTLE), Step::Run(()));
+        assert_eq!(next(&mut queue, later + UPLOAD_SETTLE), Step::Exit);
+        // A pass requested meanwhile also reads the uploaded frames.
+        queue.uploads.touch(later);
+        queue.pass_requested = true;
+        assert_eq!(next(&mut queue, later), Step::Run(()));
+        assert!(!queue.uploads.is_pending());
     }
 }
