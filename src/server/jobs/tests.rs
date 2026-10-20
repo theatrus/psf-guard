@@ -1007,6 +1007,47 @@ fn an_export_shows_its_files_placed_and_stop() {
 }
 
 #[test]
+fn an_artifact_search_waits_in_the_stack_line_and_stops() {
+    let search: crate::server::stack_preview::artifact::ArtifactSearchJob =
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "search_id": "s1",
+            "database_id": "db-1",
+            "source_job_id": "job",
+            "source_kind": "mono",
+            "group_index": 0,
+            "artifact_revision": "r",
+            "region": {"x": 0, "y": 0, "width": 8, "height": 8},
+            "state": "queued",
+            "phase": "",
+            "total_work_units": 10,
+            "completed_work_units": 0,
+            "created_unix_seconds": 1,
+            "results": [],
+            "error": null
+        }))
+        .unwrap();
+    let row = row_list(&Snapshot {
+        databases: vec![db("db-1", "Home")],
+        artifact_searches: vec![(search, Some(2))],
+        ..Snapshot::default()
+    })
+    .into_iter()
+    .find(|row| row.kind == RowKind::ArtifactSearch)
+    .unwrap();
+    assert_eq!(row.status, RowStatus::Queued);
+    assert_eq!((row.queue, row.position), (Some(RowQueue::Stack), Some(2)));
+    assert_eq!(row.scope, "Home");
+    assert!(row.stoppable && !row.background);
+    assert_eq!(
+        row.control,
+        Some(RowControl::Stack {
+            job_id: "s1".into()
+        })
+    );
+}
+
+#[test]
 fn a_preview_is_a_persons_work_that_stop_ends() {
     let row = row_list(&Snapshot {
         databases: vec![db("db-1", "Home")],

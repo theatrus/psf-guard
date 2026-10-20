@@ -1518,6 +1518,33 @@ impl StackPreviewManager {
     }
 
     /// [`Self::try_maintenance_permit`], waiting for the worker to come free.
+    /// Artifact searches waiting in the line or running, each with its
+    /// place in line while it waits.
+    pub fn artifact_searches_under_way(&self) -> Vec<(artifact::ArtifactSearchJob, Option<usize>)> {
+        let searches: Vec<_> = self
+            .artifact_jobs
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|job| {
+                matches!(
+                    job.state,
+                    artifact::ArtifactSearchState::Queued | artifact::ArtifactSearchState::Running
+                )
+            })
+            .cloned()
+            .collect();
+        searches
+            .into_iter()
+            .map(|job| {
+                let position = (job.state == artifact::ArtifactSearchState::Queued)
+                    .then(|| self.line_position(&job.search_id))
+                    .flatten();
+                (job, position)
+            })
+            .collect()
+    }
+
     pub(crate) async fn acquire_maintenance_permit(&self) -> Result<Lease, String> {
         Ok(self.line.reserve_main().await)
     }

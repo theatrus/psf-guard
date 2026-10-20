@@ -36,6 +36,7 @@ use crate::server::previews::{PreviewKind, PreviewRun};
 use crate::server::quality_backfill::QualityBackfillProgress;
 use crate::server::reject_removal::RemovalJobStatus;
 use crate::server::spatial_scan::SpatialScanProgress;
+use crate::server::stack_preview::artifact::{ArtifactSearchJob, ArtifactSearchState};
 use crate::server::stack_preview::{
     ScheduledRefreshView, StackActivity, StackActivityEntry, StackActivityKind, StackJobState,
     WaitingReapplyView,
@@ -92,6 +93,7 @@ pub enum RowKind {
     Preview,
     Import,
     Export,
+    ArtifactSearch,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -364,6 +366,9 @@ pub struct Snapshot {
     pub backup: Option<BackupJob>,
     pub catalog_install: Option<CatalogInstallProgress>,
     pub previews: Vec<PreviewRun>,
+    /// Artifact searches in the stack line, with their places while they
+    /// wait.
+    pub artifact_searches: Vec<(ArtifactSearchJob, Option<usize>)>,
     /// The person's work that background jobs wait for, if any runs.
     pub interactive: Option<String>,
 }
@@ -387,6 +392,7 @@ impl Default for Snapshot {
             backup: None,
             catalog_install: None,
             previews: Vec::new(),
+            artifact_searches: Vec::new(),
             interactive: None,
         }
     }
@@ -1413,6 +1419,49 @@ fn backup_row(job: &BackupJob) -> JobRow {
 
 /// A Seiza catalog installation a person started in Settings › Catalogs.
 /// Settings is a dialog, not a view, so the row has no link.
+/// A source-frame search for an artifact, in the stack line. Stop ends it
+/// before its next frame.
+fn artifact_search_row(
+    search: &ArtifactSearchJob,
+    position: Option<usize>,
+    names: &HashMap<&str, &str>,
+) -> JobRow {
+    let queued = search.state == ArtifactSearchState::Queued;
+    JobRow {
+        detail: if queued {
+            String::new()
+        } else {
+            search.phase.clone()
+        },
+        status: if queued {
+            RowStatus::Queued
+        } else {
+            RowStatus::Running
+        },
+        percent: if queued {
+            None
+        } else {
+            percent(search.completed_work_units, search.total_work_units)
+        },
+        queue: Some(RowQueue::Stack),
+        position,
+        control: Some(RowControl::Stack {
+            job_id: search.search_id.clone(),
+        }),
+        stoppable: true,
+        link: Some(RowLink::view(LinkView::Stacks, &search.database_id)),
+        ..JobRow::new(
+            format!("artifact:{}", search.search_id),
+            RowKind::ArtifactSearch,
+            "Searching source frames for an artifact",
+            names
+                .get(search.database_id.as_str())
+                .copied()
+                .unwrap_or(&search.database_id),
+        )
+    }
+}
+
 /// A preview a person waits for. It runs at once and Stop ends it.
 fn preview_row(run: &PreviewRun, names: &HashMap<&str, &str>) -> JobRow {
     JobRow {
@@ -1575,6 +1624,12 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         .map(|db| (db.id.as_str(), db.name.as_str()))
         .collect();
     rows.extend(snapshot.previews.iter().map(|run| preview_row(run, &names)));
+    rows.extend(
+        snapshot
+            .artifact_searches
+            .iter()
+            .map(|(search, position)| artifact_search_row(search, *position, &names)),
+    );
     // A stable sort: rows that compare equal keep the order above.
     rows.sort_by(compare);
     rows
@@ -1669,6 +1724,7 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
         backup: backups_allowed.then(|| state.backups.job()).flatten(),
         catalog_install: Some(state.catalog_install.status().progress),
         previews: state.previews.running(),
+        artifact_searches: state.stack_previews.artifact_searches_under_way(),
         interactive: state.interactive_job_name(),
     }
 }

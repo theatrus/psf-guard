@@ -632,34 +632,77 @@ fn prepare_search(
     })
 }
 
-fn enqueue_search(state: Arc<AppState>, prepared: PreparedSearch) {
-    // A person is waiting on this: an automatic build in the way yields.
-    super::interrupt_automatic(&state);
-    tokio::spawn(async move {
-        // It holds the stack worker without a place in the line.
-        let Ok(_worker) = state.stack_previews.acquire_maintenance_permit().await else {
-            return;
-        };
-        let guard = state.begin_named_interactive_job("an artifact search");
-        let state_for_job = Arc::clone(&state);
+/// A search waiting in the stack line, as a person's work: it reads and
+/// calibrates source frames on the stack worker.
+struct SearchTask {
+    prepared: PreparedSearch,
+    /// The entry's stop flag, which the line tracks until the search ends.
+    stop: crate::concurrency::Stop,
+}
+
+impl super::Task for SearchTask {
+    fn what(&self) -> &'static str {
+        "an artifact search"
+    }
+
+    fn run(self: Box<Self>, state: &Arc<AppState>, worker: &super::Worker<'_>) {
+        let SearchTask {
+            prepared,
+            stop: own,
+        } = *self;
         let search_id = prepared.public.search_id.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            let _guard = guard;
-            run_search(&state_for_job, prepared)
-        })
-        .await;
-        if let Err(error) = result {
+        let stop = worker.stop_flag();
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_search(state, prepared, stop)
+        }));
+        state
+            .stack_previews
+            .line
+            .forget_if_current(&search_id, &own);
+        if ran.is_err() {
             state
                 .stack_previews
                 .update_artifact_search(&search_id, |job| {
                     job.state = ArtifactSearchState::Failed;
-                    job.error = Some(format!("Artifact search worker panicked: {error}"));
+                    job.error = Some("The artifact search stopped unexpectedly.".into());
                 });
         }
-    });
+    }
+
+    fn stopped(self: Box<Self>, state: &Arc<AppState>) {
+        let search_id = &self.prepared.public.search_id;
+        state
+            .stack_previews
+            .line
+            .forget_if_current(search_id, &self.stop);
+        state
+            .stack_previews
+            .update_artifact_search(search_id, |job| {
+                job.state = ArtifactSearchState::Failed;
+                job.phase = "Stopped before it started".into();
+                job.error = Some("Stopped.".into());
+            });
+    }
 }
 
-fn run_search(state: &Arc<AppState>, prepared: PreparedSearch) {
+/// Queue the search in the stack line. A person is waiting on it: it goes
+/// ahead of automatic work, and stops an automatic build that is running.
+fn enqueue_search(state: Arc<AppState>, prepared: PreparedSearch) {
+    let search_id = prepared.public.search_id.clone();
+    // Tracked, so Stop in the header reaches it by its id.
+    let stop = state.stack_previews.line.track(&search_id);
+    let entry = super::Entry::new(
+        search_id.as_str(),
+        super::Lane::Main,
+        stop.clone(),
+        Box::new(SearchTask { prepared, stop }),
+    )
+    .tier(super::tier_of(false));
+    super::submit_entry(&state, entry, None);
+    super::interrupt_automatic(&state);
+}
+
+fn run_search(state: &Arc<AppState>, prepared: PreparedSearch, stop: &crate::concurrency::Stop) {
     let search_id = prepared.public.search_id.clone();
     let database_id = prepared.public.database_id.clone();
     let stack_root = prepared.stack_root.clone();
@@ -669,7 +712,7 @@ fn run_search(state: &Arc<AppState>, prepared: PreparedSearch) {
             job.state = ArtifactSearchState::Running;
             job.phase = "Preparing source frames".into();
         });
-    let result = run_search_inner(state, &prepared);
+    let result = run_search_inner(state, &prepared, stop);
     state
         .stack_previews
         .update_artifact_search(&search_id, |job| match result {
@@ -696,6 +739,7 @@ fn run_search(state: &Arc<AppState>, prepared: PreparedSearch) {
 fn run_search_inner(
     state: &Arc<AppState>,
     prepared: &PreparedSearch,
+    stop: &crate::concurrency::Stop,
 ) -> Result<Vec<ArtifactSearchResult>, String> {
     let ctx = state
         .get_database(&prepared.public.database_id)
@@ -786,6 +830,9 @@ fn run_search_inner(
             (MAX_TOTAL_ANALYSIS_SAMPLES / group.sources.len()).clamp(1, MAX_ANALYSIS_SAMPLES);
         let mut crops = Vec::with_capacity(group.sources.len());
         for (source_index, source) in group.sources.iter().enumerate() {
+            if stop.requested() {
+                return Err("Stopped.".into());
+            }
             if source_fingerprint(&source.path) != source.fingerprint {
                 return Err(format!(
                     "Image {} changed while the source-frame search was waiting; rebuild the stack before searching",
@@ -1377,6 +1424,78 @@ mod tests {
     use super::*;
     use crate::server::stack_preview::StackFrameDecision;
     use seiza_stacking::LinearImage;
+
+    fn queued_search(state: &AppState, search_id: &str) -> PreparedSearch {
+        let ctx = state.all_databases().remove(0);
+        let public = ArtifactSearchJob {
+            schema_version: 1,
+            search_id: search_id.into(),
+            database_id: ctx.id.clone(),
+            source_job_id: "job".into(),
+            source_kind: "mono".into(),
+            group_index: Some(0),
+            artifact_revision: "revision".into(),
+            region: ReferenceRegion {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            },
+            state: ArtifactSearchState::Queued,
+            phase: String::new(),
+            total_work_units: 1,
+            completed_work_units: 0,
+            created_unix_seconds: 0,
+            notes: Vec::new(),
+            results: Vec::new(),
+            error: None,
+        };
+        assert!(state.stack_previews.insert_artifact_search(public.clone()));
+        PreparedSearch {
+            public,
+            groups: Vec::new(),
+            reference_width: 8,
+            reference_height: 8,
+            stack_root: ctx.stack_root.clone(),
+            calibration_root: ctx.calibration_root.clone(),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_search_waits_in_the_stack_line_and_stop_settles_it() {
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        // The worker is busy: the search waits in line, listed with its
+        // place.
+        let busy = state.stack_previews.line.reserve_main().await;
+        let prepared = queued_search(&state, "s1");
+        enqueue_search(Arc::clone(&state), prepared);
+        let under_way = state.stack_previews.artifact_searches_under_way();
+        assert_eq!(under_way.len(), 1);
+        assert_eq!(under_way[0].1, Some(0), "first in line");
+
+        assert!(state.stack_previews.request_cancel("s1"));
+        drop(busy);
+        let started = std::time::Instant::now();
+        loop {
+            let job = state.stack_previews.get_artifact_search("s1").unwrap();
+            if job.state != ArtifactSearchState::Queued {
+                assert_eq!(job.state, ArtifactSearchState::Failed);
+                assert_eq!(job.error.as_deref(), Some("Stopped."));
+                break;
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "{job:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(state
+            .stack_previews
+            .artifact_searches_under_way()
+            .is_empty());
+    }
 
     fn crop(image_id: i32, values: Vec<f32>) -> LoadedCrop {
         crop_grid(image_id, 1, values.len(), values)
