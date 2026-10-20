@@ -94,6 +94,7 @@ pub enum RowKind {
     Import,
     Export,
     ArtifactSearch,
+    PlanningPush,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -370,6 +371,8 @@ pub struct Snapshot {
     /// Artifact searches in the stack line, with their places while they
     /// wait.
     pub artifact_searches: Vec<(ArtifactSearchJob, Option<usize>)>,
+    /// Peers the director is resending planning to, by name.
+    pub planning_pushes: Vec<String>,
     /// The person's work that background jobs wait for, if any runs.
     pub interactive: Option<String>,
 }
@@ -394,6 +397,7 @@ impl Default for Snapshot {
             catalog_install: None,
             previews: Vec::new(),
             artifact_searches: Vec::new(),
+            planning_pushes: Vec::new(),
             interactive: None,
         }
     }
@@ -1627,6 +1631,19 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         .map(|db| (db.id.as_str(), db.name.as_str()))
         .collect();
     rows.extend(snapshot.previews.iter().map(|run| preview_row(run, &names)));
+    rows.extend(snapshot.planning_pushes.iter().map(|peer| {
+        // A site answered: the plans it was not sent go to it now.
+        JobRow {
+            background: true,
+            automatic: true,
+            ..JobRow::new(
+                format!("planning-push:{peer}"),
+                RowKind::PlanningPush,
+                "Sending planning",
+                peer,
+            )
+        }
+    }));
     rows.extend(
         snapshot
             .artifact_searches
@@ -1728,6 +1745,11 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
         catalog_install: Some(state.catalog_install.status().progress),
         previews: state.previews.running(),
         artifact_searches: state.stack_previews.artifact_searches_under_way(),
+        planning_pushes: if manages {
+            crate::server::director::resends_under_way(state)
+        } else {
+            Vec::new()
+        },
         interactive: state.interactive_job_name(),
     }
 }

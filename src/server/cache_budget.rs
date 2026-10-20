@@ -185,27 +185,26 @@ pub fn note_served(path: &Path) {
     }
 }
 
-/// Read every cache volume every few minutes and cull when one is over.
-pub async fn run(state: Arc<AppState>) {
-    // Let startup settle first.
-    if !state.shutdown.sleep(Duration::from_secs(60)).await {
-        return;
-    }
-    loop {
-        // A pass under way finishes the files it is removing.
-        let work = state.shutdown.hold("cache budget pass");
-        let pass_state = Arc::clone(&state);
-        let reports = tokio::task::spawn_blocking(move || {
-            let _work = work;
-            pass(&pass_state)
-        })
-        .await
-        .unwrap_or_default();
-        record(&state.cache_budget, reports);
-        if !state.shutdown.sleep(PASS_INTERVAL).await {
-            return;
-        }
-    }
+/// Read every cache volume every few minutes and cull when one is over,
+/// once startup has settled.
+pub fn spawn(state: &Arc<AppState>) {
+    crate::server::schedule::every(
+        state,
+        "cache budget",
+        crate::server::schedule::Every::after(Duration::from_secs(60), PASS_INTERVAL),
+        |state| async move {
+            // A pass under way finishes the files it is removing.
+            let work = state.shutdown.hold("cache budget pass");
+            let pass_state = Arc::clone(&state);
+            let reports = tokio::task::spawn_blocking(move || {
+                let _work = work;
+                pass(&pass_state)
+            })
+            .await
+            .unwrap_or_default();
+            record(&state.cache_budget, reports);
+        },
+    );
 }
 
 /// Keep a pass's findings for Settings.

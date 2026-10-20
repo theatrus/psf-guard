@@ -52,6 +52,7 @@ pub mod remote_audit;
 pub mod remote_sync;
 pub mod remote_upload;
 pub mod remote_upload_layout;
+pub mod schedule;
 pub mod scheduler;
 pub mod shutdown;
 pub mod sky_coverage;
@@ -1093,7 +1094,7 @@ async fn run_server_internal(
 
     // Release feeds are process-global. Refresh once now and then every 24
     // hours; browser reloads only read this cache through the API.
-    state.update_notices.start_refresh_loop();
+    state.update_notices.start_refresh_loop(&state);
 
     // For the job journal's last write at shutdown; the router takes `state`.
     let journal_state = Arc::clone(&state);
@@ -1184,14 +1185,9 @@ async fn run_server_internal(
     }
 
     // Keep the cache's volume under its limit, culling previews first.
-    {
-        let state_clone = Arc::clone(&state);
-        tokio::spawn(async move {
-            cache_budget::run(state_clone).await;
-        });
-    }
+    cache_budget::spawn(&state);
     // Remove superseded stacks in every database, not only those building.
-    tokio::spawn(stack_preview::run_janitor(Arc::clone(&state)));
+    stack_preview::spawn_janitor(&state);
     // Scan newly arrived frames where a database asks for it.
     quality_arrival::note_start(&state);
     frame_sites::spawn_away_watch(&state);

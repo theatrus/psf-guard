@@ -50,24 +50,16 @@ pub(crate) fn spawn(state: Arc<AppState>) {
     if state.director.is_none() {
         return;
     }
-    let shutdown = Arc::clone(&state.shutdown);
-    let weak = Arc::downgrade(&state);
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(30));
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            tokio::select! {
-                _ = tick.tick() => {}
-                _ = shutdown.begun() => break,
-            }
-            let Some(state) = weak.upgrade() else {
-                break;
-            };
+    crate::server::schedule::every(
+        &state,
+        "collaboration refresh",
+        crate::server::schedule::Every::after(Duration::ZERO, Duration::from_secs(30)),
+        |state| async move {
             if let Err(error) = sweep(&state).await {
                 tracing::warn!(reason = error.1, "Collaboration background refresh failed");
             }
-        }
-    });
+        },
+    );
 }
 
 pub(super) async fn sweep(state: &Arc<AppState>) -> Result<(), Failure> {

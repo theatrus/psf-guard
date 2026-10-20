@@ -434,60 +434,75 @@ fn due(settings: &Settings, previous: Option<(&Stamp, Duration)>, current: &Stam
 }
 
 pub fn spawn(state: Arc<AppState>) {
-    tokio::spawn(async move {
-        let mut observed: HashMap<String, (Stamp, Instant)> = HashMap::new();
-        loop {
-            if state.shutdown.is_stopping() {
-                break;
+    // When each database's files were last seen, and when a sync was last
+    // tried, across runs.
+    let observed: Arc<Mutex<HashMap<String, (Stamp, Instant)>>> = Arc::default();
+    crate::server::schedule::every(
+        &state,
+        "Target Scheduler sync",
+        crate::server::schedule::Every::after(Duration::ZERO, Duration::from_secs(10)),
+        move |state| {
+            let observed = Arc::clone(&observed);
+            async move {
+                // It reads the registry and stamps files: off the runtime.
+                let _ = tokio::task::spawn_blocking(move || {
+                    queue_due_syncs(&state, &mut observed.lock().unwrap())
+                })
+                .await;
             }
-            if let Some(path) = state.registry_path.read().unwrap().clone()
-                && let Ok(registry) = DbRegistry::load_or_init(&path)
-            {
-                for entry in registry.databases {
-                    let Some(settings) = entry.ts_sync.clone() else {
-                        continue;
-                    };
-                    if settings.validate(Path::new(&entry.db_path)).is_err() {
-                        continue;
-                    }
-                    let current = [stamp(&settings.source_path), stamp(&entry.db_path)].concat();
-                    let now = Instant::now();
-                    let run = due(
-                        &settings,
-                        observed
-                            .get(&entry.id)
-                            .map(|(stamp, attempt)| (stamp, attempt.elapsed())),
-                        &current,
-                    );
-                    if !observed.contains_key(&entry.id) {
-                        observed.insert(entry.id.clone(), (current.clone(), now));
-                    }
-                    if !run {
-                        continue;
-                    }
-                    if let Some(job) = state.ts_sync.begin(
-                        entry.id.clone(),
-                        Some(entry.id.clone()),
-                        entry.name.clone(),
-                        true,
-                    ) {
-                        observed.insert(entry.id.clone(), (current, now));
-                        let runner = entry.id.clone();
-                        queue_work(
-                            &state,
-                            &runner,
-                            Work::Sync {
-                                job_id: job.id,
-                                entry: Box::new(entry),
-                                settings,
-                            },
-                        );
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(10)).await;
+        },
+    );
+}
+
+/// Queue a sync for each database whose Target Scheduler connection is due.
+fn queue_due_syncs(state: &Arc<AppState>, observed: &mut HashMap<String, (Stamp, Instant)>) {
+    let Some(path) = state.registry_path.read().unwrap().clone() else {
+        return;
+    };
+    let Ok(registry) = DbRegistry::load_or_init(&path) else {
+        return;
+    };
+    for entry in registry.databases {
+        let Some(settings) = entry.ts_sync.clone() else {
+            continue;
+        };
+        if settings.validate(Path::new(&entry.db_path)).is_err() {
+            continue;
         }
-    });
+        let current = [stamp(&settings.source_path), stamp(&entry.db_path)].concat();
+        let now = Instant::now();
+        let run = due(
+            &settings,
+            observed
+                .get(&entry.id)
+                .map(|(stamp, attempt)| (stamp, attempt.elapsed())),
+            &current,
+        );
+        if !observed.contains_key(&entry.id) {
+            observed.insert(entry.id.clone(), (current.clone(), now));
+        }
+        if !run {
+            continue;
+        }
+        if let Some(job) = state.ts_sync.begin(
+            entry.id.clone(),
+            Some(entry.id.clone()),
+            entry.name.clone(),
+            true,
+        ) {
+            observed.insert(entry.id.clone(), (current, now));
+            let runner = entry.id.clone();
+            queue_work(
+                state,
+                &runner,
+                Work::Sync {
+                    job_id: job.id,
+                    entry: Box::new(entry),
+                    settings,
+                },
+            );
+        }
+    }
 }
 
 /// Target Scheduler imports and syncs as a job: one runner per catalog for

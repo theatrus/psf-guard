@@ -2069,7 +2069,7 @@ export interface JobLink {
 /** One job in the header's list, as `GET /api/jobs` returns it. */
 export interface JobRow {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import' | 'export' | 'artifact_search';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import' | 'export' | 'artifact_search' | 'planning_push';
   title: string;
   scope: string;
   detail: string;

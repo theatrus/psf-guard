@@ -2814,40 +2814,32 @@ fn manifest_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
 /// indices of projects a catalog no longer has. The first pass waits ten
 /// minutes, past the journal restore. Holds the state weakly, so a server
 /// the desktop app restarted stops its janitor with it.
-pub async fn run_janitor(state: Arc<AppState>) {
-    let shutdown = Arc::clone(&state.shutdown);
-    let state = Arc::downgrade(&state);
-    if !shutdown
-        .sleep(std::time::Duration::from_secs(10 * 60))
-        .await
-    {
-        return;
-    }
-    loop {
-        let Some(live) = state.upgrade() else {
-            return;
-        };
-        for ctx in live.all_databases() {
-            if shutdown.is_stopping() {
-                return;
+pub fn spawn_janitor(state: &Arc<AppState>) {
+    crate::server::schedule::every(
+        state,
+        "stack folder sweep",
+        crate::server::schedule::Every::after(
+            std::time::Duration::from_secs(10 * 60),
+            std::time::Duration::from_secs(60 * 60),
+        ),
+        |state| async move {
+            for ctx in state.all_databases() {
+                if state.shutdown.is_stopping() {
+                    return;
+                }
+                // A sweep under way finishes the files it is moving.
+                let work = state
+                    .shutdown
+                    .hold(format!("stack folder sweep (db={})", ctx.id));
+                let state = Arc::clone(&state);
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _work = work;
+                    sweep_database(&state, &ctx)
+                })
+                .await;
             }
-            // A sweep under way finishes the files it is moving.
-            let work = shutdown.hold(format!("stack folder sweep (db={})", ctx.id));
-            let state = Arc::clone(&live);
-            let _ = tokio::task::spawn_blocking(move || {
-                let _work = work;
-                sweep_database(&state, &ctx)
-            })
-            .await;
-        }
-        drop(live);
-        if !shutdown
-            .sleep(std::time::Duration::from_secs(60 * 60))
-            .await
-        {
-            return;
-        }
-    }
+        },
+    );
 }
 
 /// Move a merged project's stacks onto the project it merged into, so the

@@ -486,25 +486,28 @@ pub fn spawn_writer(state: Arc<AppState>) {
     let Some(path) = path_for(&state) else {
         return;
     };
-    tokio::spawn(async move {
-        let mut last = read(&path).unwrap_or_default();
-        loop {
-            if !state.shutdown.sleep(WRITE_INTERVAL).await {
-                return;
+    // The journal last written, which a run compares the current one with.
+    let last = Arc::new(Mutex::new(read(&path).unwrap_or_default()));
+    crate::server::schedule::every(
+        &state,
+        "job journal",
+        crate::server::schedule::Every::period(WRITE_INTERVAL),
+        move |state| {
+            let (path, last) = (path.clone(), Arc::clone(&last));
+            async move {
+                let current = snapshot(&state);
+                if current == *last.lock().unwrap() {
+                    return;
+                }
+                let journal = current.clone();
+                match tokio::task::spawn_blocking(move || write(&path, &journal)).await {
+                    Ok(Ok(())) => *last.lock().unwrap() = current,
+                    Ok(Err(error)) => tracing::warn!("Could not save the job journal: {error}"),
+                    Err(error) => tracing::warn!("Job journal task failed: {error}"),
+                }
             }
-            let current = snapshot(&state);
-            if current == last {
-                continue;
-            }
-            let write_path = path.clone();
-            let journal = current.clone();
-            match tokio::task::spawn_blocking(move || write(&write_path, &journal)).await {
-                Ok(Ok(())) => last = current,
-                Ok(Err(error)) => tracing::warn!("Could not save the job journal: {error}"),
-                Err(error) => tracing::warn!("Job journal task failed: {error}"),
-            }
-        }
-    });
+        },
+    );
 }
 
 /// Write the journal now, for a clean shutdown.

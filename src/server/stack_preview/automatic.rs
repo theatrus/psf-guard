@@ -481,11 +481,11 @@ impl AutomaticStackRefresh {
 
 /// Run the scheduler until the server stops.
 pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            if !state.shutdown.sleep(TICK).await {
-                return;
-            }
+    crate::server::schedule::every(
+        &state,
+        "stack refresh scheduler",
+        crate::server::schedule::Every::period(TICK),
+        |state| async move {
             // Refreshes first: a build they start keeps re-applies waiting.
             if ENABLED.load(Ordering::Relaxed) {
                 tick(&state).await;
@@ -494,8 +494,8 @@ pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
             // Re-applying processing follows a person's rebuilds too, so it
             // looks whether automatic refreshes are on or not.
             super::reapply::look_unless_busy(Arc::clone(&state)).await;
-        }
-    })
+        },
+    )
 }
 
 async fn tick(state: &Arc<AppState>) {

@@ -229,14 +229,12 @@ pub(crate) fn remember_left_out(
 
 /// Run the scheduler until the server stops.
 pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            if !state.shutdown.sleep(TICK).await {
-                return;
-            }
-            tick(&state, Instant::now()).await;
-        }
-    })
+    crate::server::schedule::every(
+        &state,
+        "automatic import",
+        crate::server::schedule::Every::period(TICK),
+        |state| async move { tick(&state, Instant::now()).await },
+    )
 }
 
 /// One pass over the open databases. `now` is a parameter so a test can

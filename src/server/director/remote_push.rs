@@ -229,12 +229,38 @@ pub(crate) fn peer_reached(
 ) -> Option<JoinHandle<Vec<(String, bool)>>> {
     let service = writable(state).ok()?;
     let claim = Claim::take(&service, peer_id)?;
+    // A push under way finishes before the server stops: the peer may be
+    // applying it.
+    let work = state.shutdown.hold(format!("planning push to {peer_id}"));
     let state = state.clone();
     Some(tokio::spawn(async move {
+        let _work = work;
         let sent = resend(state, service, &claim.peer).await;
         drop(claim);
         sent
     }))
+}
+
+/// The names of the peers a background resend is sending planning to now,
+/// for the jobs route.
+pub(crate) fn resends_under_way(state: &AppState) -> Vec<String> {
+    let Some(service) = state.director.as_ref() else {
+        return Vec::new();
+    };
+    let peers = match service.resending.lock() {
+        Ok(peers) if !peers.is_empty() => peers.clone(),
+        _ => return Vec::new(),
+    };
+    let registered = registered_peers(state);
+    peers
+        .into_iter()
+        .map(|id| {
+            registered
+                .iter()
+                .find(|peer| peer.id == id)
+                .map_or(id, |peer| peer.name.clone())
+        })
+        .collect()
 }
 
 async fn resend(state: Arc<AppState>, service: Arc<Service>, peer_id: &str) -> Vec<(String, bool)> {

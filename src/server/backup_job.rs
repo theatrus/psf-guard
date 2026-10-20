@@ -846,20 +846,18 @@ pub fn spawn(state: Arc<AppState>) {
     if let Ok(registry) = require_registry_path(&state) {
         state.backups.load_state(&registry);
     }
-    tokio::spawn(async move {
-        let sweeping = Arc::clone(&state);
-        let _ = tokio::task::spawn_blocking(move || {
-            tidy_downloads(&downloads_folder(&sweeping), None, Utc::now().timestamp())
-        })
-        .await;
-        loop {
-            if !state.shutdown.sleep(TICK).await {
-                return;
-            }
-            let ticking = Arc::clone(&state);
-            let _ = tokio::task::spawn_blocking(move || tick(&ticking, Utc::now())).await;
-        }
+    let sweeping = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || {
+        tidy_downloads(&downloads_folder(&sweeping), None, Utc::now().timestamp())
     });
+    crate::server::schedule::every(
+        &state,
+        "backup",
+        crate::server::schedule::Every::period(TICK),
+        |state| async move {
+            let _ = tokio::task::spawn_blocking(move || tick(&state, Utc::now())).await;
+        },
+    );
 }
 
 // ---- Routes ----------------------------------------------------------------

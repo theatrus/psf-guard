@@ -417,9 +417,11 @@ pub const AWAY_WATCH: Duration = Duration::from_secs(60 * 60);
 /// away a week or more ago, so they are read again without waiting for an
 /// import or a restart.
 pub fn spawn_away_watch(state: &Arc<AppState>) {
-    let state = Arc::clone(state);
-    tokio::spawn(async move {
-        while state.shutdown.sleep(AWAY_WATCH).await {
+    crate::server::schedule::every(
+        state,
+        "away-frame watch",
+        crate::server::schedule::Every::period(AWAY_WATCH),
+        |state| async move {
             let paths: Vec<String> = state
                 .all_databases()
                 .into_iter()
@@ -442,8 +444,8 @@ pub fn spawn_away_watch(state: &Arc<AppState>) {
             for path in due {
                 nudge(&state, &path);
             }
-        }
-    });
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
